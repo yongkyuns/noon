@@ -98,12 +98,10 @@ class ManimSemanticHandleColorTests(unittest.TestCase):
             # adapter installs first, then semantic handles take ownership of detached
             # authoring objects.
             import _manim_compat
-            _manim_compat.install()
+
             import _manim_rate_functions
-            _manim_rate_functions.install()
-            import _manim_phase_b  # noqa: F401
             import _manim_semantic_handles
-            _manim_semantic_handles.install()
+
 
             import _noon_ir as _ir
             import noon as _base

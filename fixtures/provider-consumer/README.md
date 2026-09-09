@@ -85,6 +85,30 @@ cells. Existing all-feature Rust and normal browser/native checks remain in plac
 Artifacts distinguish `qualification.json` from opt-in `measurements.json`; no
 fixed speed/size promise is encoded here.
 
+## Public authoring boundary
+
+The `public_facade` target depends on `noon` alone. It qualifies the ordinary
+constructor/live-query/edit/completion path, immutable effective observations, and
+an explicitly opted-in raw integration edit that must retain typed stale-publication
+rejection and leave the old runtime/frame unchanged. It runs in the existing
+native provider cells and is compiled (not executed) in WASM cells.
+
+```sh
+cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --test public_facade
+cargo test -p noon --no-default-features --doc
+cargo run -p noon --no-default-features --example shared_authoring
+```
+
+The doc tests reject accidental root exports, the private implementation module,
+and unqualified raw-store access. These boundary checks complement typed membership
+and provider qualification; they do not claim all geometry/animation errors or
+Python exception producers have been converted to structured errors.
+
+The geometry program copied by `--baseline` uses the ordinary geometry API common
+to both revisions. Shared text-contract visibility and arena assertions live in
+`public_facade` rather than adding a dependency on new integration accessor names
+to the historical-build workload. No historical baseline code is rewritten.
+
 ## Public authoring error contract
 
 The provider-free `authoring_errors` integration tests exercise typed handle
@@ -98,7 +122,7 @@ publications; its `Authoring` variant retains the membership or handle cause.
 
 This is a bounded R2 slice, not a claim that every authoring API is typed yet.
 Other geometry/animation APIs and the current language bridge may still expose
-strings, and public export/raw-store narrowing remains under #958. Ordinary
+strings. Public export/raw-store narrowing is retained from #1290. Ordinary
 post-bootstrap edits should use `scene.live(&mut session)`. Direct authored/raw
 store edits invalidate an existing execution revision; rejection is intentional,
 not a signal to bypass revision checks. Tests use raw access only to construct

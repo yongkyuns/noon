@@ -1,8 +1,9 @@
 //! Sequential counterpart of the exact Python RotationUpdater gallery source.
 use crate::{
-    ContinuationStep, HostCallbackId, LiveContinuation, LiveProgram, LiveSession, Mobject,
-    RustHostCallbackTable, Scene, SemanticMutationTransaction, Vec2,
+    ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject, RustHostCallbackTable,
+    Scene, Vec2,
 };
+use noon_core::{HostCallbackId, SemanticMutationTransaction};
 
 const FORTH: HostCallbackId = HostCallbackId::new(1);
 const BACK: HostCallbackId = HostCallbackId::new(2);
@@ -62,7 +63,7 @@ pub fn program() -> Result<(LiveProgram<RotationUpdater>, RustHostCallbackTable)
     }
     callbacks
         .add_updater(
-            &mut scene.store().borrow_mut(),
+            &mut scene.integration_store().borrow_mut(),
             moving.node_id(),
             FORTH,
             0.0,

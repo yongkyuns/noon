@@ -3,7 +3,6 @@ members = [
     "crates/noon",
     "crates/noon-core",
     "crates/noon-geometry",
-    "crates/noon-ir",
     "crates/noon-compile",
     "crates/noon-runtime",
     "crates/noon-render-wgpu",
@@ -12,7 +11,5 @@ members = [
     "crates/noon-typst",
     "crates/noon-text-native",
     "crates/noon-text-raster",
-    "crates/noon-text-atlas",
-    "crates/noon-text-render-wgpu",
 ]
 resolver = "2"

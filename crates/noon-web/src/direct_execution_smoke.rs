@@ -27,6 +27,34 @@ pub async fn create_direct_analytic_profile_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Filled path interpolation uses the shared native renderer qualification scene.
+#[wasm_bindgen(js_name = createDirectFilledPathTransformRenderer)]
+pub async fn create_direct_filled_path_transform_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session =
+        noon::example_scenes::renderer_fixtures::filled_path_transform().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Analytic and vector-path Create endpoints use the same typed native scene.
+#[wasm_bindgen(js_name = createDirectCreateShapesRenderer)]
+pub async fn create_direct_create_shapes_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::renderer_fixtures::create_shapes().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Repeated filled-path topology changes use the same typed workload as native.
+#[wasm_bindgen(js_name = createDirectMorphStressRenderer)]
+pub async fn create_direct_morph_stress_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::renderer_fixtures::morph_stress(1000).map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// The native membership example runs unchanged inside the direct WASM engine.
 #[wasm_bindgen(js_name = createDirectOrdinaryMembershipSmokeRenderer)]
 pub async fn create_direct_ordinary_membership_smoke_renderer(
@@ -51,6 +79,33 @@ pub async fn create_direct_painter_order_smoke_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::painter_order_overlap::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Shared family mutation semantics run directly through the Rust/WASM engine.
+#[wasm_bindgen(js_name = createDirectFamilyAffineSmokeRenderer)]
+pub async fn create_direct_family_affine_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::family_affine::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Shared family mutation semantics run directly through the Rust/WASM engine.
+#[wasm_bindgen(js_name = createDirectFamilyPaintSmokeRenderer)]
+pub async fn create_direct_family_paint_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::family_paint::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Row/column grid placement uses the shared family transaction planner.
+#[wasm_bindgen(js_name = createDirectFamilyGridSmokeRenderer)]
+pub async fn create_direct_family_grid_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::family_grid::session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
@@ -659,4 +714,13 @@ pub async fn create_direct_live_updater_lifecycle_smoke_renderer(
         noon::example_scenes::live_updater_lifecycle::program().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_live_program_with_callbacks(canvas, program, callbacks)
         .await
+}
+
+/// Shared dimension fitting uses the same typed native and Rust/WASM session.
+#[wasm_bindgen(js_name = createDirectDimensionFittingSmokeRenderer)]
+pub async fn create_direct_dimension_fitting_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::dimension_fitting::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }

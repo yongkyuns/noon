@@ -9,10 +9,9 @@ use noon_core::{
 };
 use noon_runtime::{EffectivePropertyWrite, FrameState, RuntimeIdentity};
 
-use crate::{
-    CallbackTermination, ExecutionSegment, ExecutionSegmentToken, ExecutionSession,
-    ExecutionSessionPublicationError,
-};
+use crate::execution_segment::ExecutionSegmentToken;
+use crate::execution_session::CallbackTermination;
+use crate::{ExecutionSegment, ExecutionSession, ExecutionSessionPublicationError};
 
 use super::callback::{CALLBACK_STYLE_DOMAIN, CALLBACK_TRANSFORM_DOMAIN};
 
@@ -1233,8 +1232,10 @@ mod tests {
             ExecutionSegmentCompletionError::CallbackNotCoherent,
         );
         let overlay = match session.advance_to_callback_barrier(0.0).unwrap() {
-            crate::CallbackAdvance::HostRequired { overlay, .. } => overlay,
-            crate::CallbackAdvance::Ready(_) => panic!("time-zero callback phase is required"),
+            crate::execution_session::CallbackAdvance::HostRequired { overlay, .. } => overlay,
+            crate::execution_session::CallbackAdvance::Ready(_) => {
+                panic!("time-zero callback phase is required")
+            }
         };
         assert_eq!(
             session.complete_segment(&mut store, wait).unwrap_err(),
@@ -1276,15 +1277,19 @@ mod tests {
             .unwrap();
 
         let initial = match session.advance_to_callback_barrier(1.0).unwrap() {
-            crate::CallbackAdvance::HostRequired { overlay, .. } => overlay,
-            crate::CallbackAdvance::Ready(_) => panic!("time-zero callback phase is required"),
+            crate::execution_session::CallbackAdvance::HostRequired { overlay, .. } => overlay,
+            crate::execution_session::CallbackAdvance::Ready(_) => {
+                panic!("time-zero callback phase is required")
+            }
         };
         session
             .commit_required_callback_phase(initial.finish())
             .unwrap();
         let mut endpoint = match session.advance_to_callback_barrier(1.0).unwrap() {
-            crate::CallbackAdvance::HostRequired { overlay, .. } => overlay,
-            crate::CallbackAdvance::Ready(_) => panic!("endpoint callback phase is required"),
+            crate::execution_session::CallbackAdvance::HostRequired { overlay, .. } => overlay,
+            crate::execution_session::CallbackAdvance::Ready(_) => {
+                panic!("endpoint callback phase is required")
+            }
         };
         endpoint
             .set_transform(
@@ -1315,7 +1320,7 @@ mod tests {
         assert!(session.segment_state(segment).is_complete());
         assert!(matches!(
             session.advance_to_callback_barrier(1.0).unwrap(),
-            crate::CallbackAdvance::Ready(_)
+            crate::execution_session::CallbackAdvance::Ready(_)
         ));
     }
 

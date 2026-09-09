@@ -47,7 +47,7 @@ impl LiveContinuation for TextFamilyWrite {
                 if rejected.is_ok()
                     || !self
                         .family
-                        .store()
+                        .integration_store()
                         .borrow()
                         .node(self.family.node_id())
                         .unwrap()
@@ -102,7 +102,7 @@ impl LiveContinuation for TextFamilyWrite {
                 {
                     return Err("family Write did not complete its disjoint transform".into());
                 }
-                let store = self.family.store().borrow();
+                let store = self.family.integration_store().borrow();
                 let family = store
                     .node(self.family.node_id())
                     .ok_or("Text family identity disappeared after Write")?;
@@ -132,7 +132,7 @@ impl LiveContinuation for TextFamilyWrite {
                 .map_err(|error| error.to_string())
             }
             2 => {
-                let store = self.family.store().borrow();
+                let store = self.family.integration_store().borrow();
                 let family = store
                     .node(self.family.node_id())
                     .ok_or("Text family identity disappeared after Unwrite")?;

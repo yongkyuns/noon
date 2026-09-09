@@ -19,11 +19,11 @@ class ManimLiveTextConstructorTests(unittest.TestCase):
         source = textwrap.dedent(
             r"""
             import _manim_compat
-            _manim_compat.install()
+
             import _manim_semantic_handles as handles
             import _typed_geometry_test_support as _geometry_test
             _geometry_test.install_module_bridge(handles, lambda *args: object())
-            handles.install()
+
             import _manim_typst as typst
             import noon
 

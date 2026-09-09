@@ -84,6 +84,11 @@ jobs:
           --config '${{ matrix.config }}'
           --target '${{ matrix.target }}'
           --output '${{ runner.temp }}/provider-results'
+      - name: Qualify the minimal public facade documentation and example
+        if: matrix.config == 'minimal' && matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          cargo test -p noon --no-default-features --doc
+          cargo run -p noon --no-default-features --example shared_authoring
       - name: Publish evidence
         if: always()
         uses: actions/upload-artifact@v7

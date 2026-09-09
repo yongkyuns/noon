@@ -71,7 +71,7 @@ impl LiveContinuation for AffineFade {
 
 pub fn program() -> Result<LiveProgram<AffineFade>, String> {
     let scene = Scene::new();
-    let mut circle = Mobject::manim_circle(Rc::clone(scene.store()), 0.4)?;
+    let mut circle = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.4)?;
     circle.set_fill(
         f64::from(Color::BLUE.red),
         f64::from(Color::BLUE.green),

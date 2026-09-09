@@ -1,6 +1,7 @@
-use noon_compile::CompiledScene;
+use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    Color, Easing, GeometryRef, ObjectSnapshot, SceneDefinition, TrackTiming, Transform2D, Vec2,
+    Color, CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, Style,
+    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
     VectorPath,
 };
 use noon_runtime::SceneInstance;
@@ -23,8 +24,8 @@ fn diamond() -> VectorPath {
         .close()
 }
 
-fn filled_snapshot(path: VectorPath, fill: Color) -> ObjectSnapshot {
-    let mut snapshot = ObjectSnapshot::new(GeometryRef::path(path));
+fn filled_snapshot(path: VectorPath, fill: Color) -> TransformTrackEndpoint {
+    let mut snapshot = TransformTrackEndpoint::new(GeometryRef::path(path));
     snapshot.transform = Transform2D::IDENTITY;
     snapshot.style.fill = Some(fill);
     snapshot.style.stroke = None;
@@ -47,20 +48,31 @@ fn filled_transform_seek_forward_parity_and_exact_semantic_endpoints() {
     to.transform.rotation = 0.6;
     to.transform.scale = Vec2::new(1.4, 0.7);
 
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(from.geometry.clone());
-    scene.object_mut(object).unwrap().transform = from.transform;
-    scene.object_mut(object).unwrap().style = from.style;
-    scene
-        .animate_transform(
-            object,
-            from.clone(),
-            to.clone(),
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
-        .unwrap();
+    let mut objects = Vec::new();
+    let mut tracks = Vec::new();
+    let object = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        object,
+        from.geometry.clone(),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    objects[object.get() as usize].base_transform = from.transform;
+    objects[object.get() as usize].base_style = from.style;
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: from.clone(),
+            to: to.clone(),
+        },
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    let compiled = CompiledScene::compile(&scene).expect("certified filled Transform must compile");
+    let compiled = CompiledScene::compile_objects(objects, &tracks)
+        .expect("certified filled Transform must compile");
     let mut direct = SceneInstance::new(compiled.clone());
     let mut sequential = SceneInstance::new(compiled);
 

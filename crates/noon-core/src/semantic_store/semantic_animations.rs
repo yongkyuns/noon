@@ -1,0 +1,1543 @@
+use crate::{
+    AnimationOptions, AnimationOptionsError, SemanticNodeId, SemanticNodeKind,
+    SemanticSceneOperationError, SemanticSignalError, SemanticStore, SemanticVec3,
+};
+use crate::{Color, CompositionTimeMap, FamilyAnimationMode, RateFunction, TrackTiming};
+
+/// Renderer-independent property driven by one exact authored object track.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SemanticObjectTrackProperty {
+    Presence,
+    Transform,
+    Position,
+    Rotation,
+    Scale,
+    Fill,
+    Stroke,
+    StrokeWidth,
+    Opacity,
+    Appearance,
+    Reveal,
+    Morph,
+}
+
+/// High-precision authored endpoints for one exact object track.
+///
+/// Object-valued endpoints retain semantic object identity until compiler lowering;
+/// execution snapshots and prepared morph payloads do not enter the semantic store.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SemanticObjectTrackValues<R = SemanticNodeId> {
+    Bool {
+        from: bool,
+        to: bool,
+    },
+    Scalar {
+        from: f64,
+        to: f64,
+    },
+    Vec3 {
+        from: SemanticVec3,
+        to: SemanticVec3,
+    },
+    Color {
+        from: Option<Color>,
+        to: Option<Color>,
+    },
+    Object {
+        from: R,
+        to: R,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SemanticObjectTrackValueKind {
+    Bool,
+    Scalar,
+    Vec3,
+    Color,
+    Object,
+}
+
+impl SemanticObjectTrackProperty {
+    const fn value_kind(self) -> SemanticObjectTrackValueKind {
+        match self {
+            Self::Presence => SemanticObjectTrackValueKind::Bool,
+            Self::Transform => SemanticObjectTrackValueKind::Object,
+            Self::Position | Self::Scale => SemanticObjectTrackValueKind::Vec3,
+            Self::Fill | Self::Stroke => SemanticObjectTrackValueKind::Color,
+            Self::Rotation
+            | Self::StrokeWidth
+            | Self::Opacity
+            | Self::Appearance
+            | Self::Reveal
+            | Self::Morph => SemanticObjectTrackValueKind::Scalar,
+        }
+    }
+
+    const fn is_instant(self) -> bool {
+        matches!(self, Self::Presence)
+    }
+}
+
+impl<R> SemanticObjectTrackValues<R> {
+    const fn value_kind(&self) -> SemanticObjectTrackValueKind {
+        match self {
+            Self::Bool { .. } => SemanticObjectTrackValueKind::Bool,
+            Self::Scalar { .. } => SemanticObjectTrackValueKind::Scalar,
+            Self::Vec3 { .. } => SemanticObjectTrackValueKind::Vec3,
+            Self::Color { .. } => SemanticObjectTrackValueKind::Color,
+            Self::Object { .. } => SemanticObjectTrackValueKind::Object,
+        }
+    }
+}
+
+/// Ordered composition semantics authored before execution scheduling/lowering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticAnimationCompositionKind {
+    /// Children share the same composition start; A1.6 resolves their durations.
+    Parallel,
+    /// Children execute in authored order; A1.6 resolves concrete intervals.
+    Sequence,
+}
+
+/// Direction of one canonical single-leaf fade.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticFadeDirection {
+    In,
+    Out,
+}
+
+/// Exact threshold rule for one ordered family subset display.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticSubsetDisplayMode {
+    /// Keep every member whose one-based index is at most `floor(progress * count)`.
+    IncreasingFloor,
+    /// Keep only the member selected by `ceil(progress * count)`, with zero selecting none.
+    OneByOneCeil,
+}
+
+/// Authoritative family position used to derive a leaf's global member span.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SemanticFamilyAnimationMember {
+    pub family: SemanticNodeId,
+    pub leaf_index: usize,
+}
+
+/// Manim Write's shared total duration default for a derived glyph cardinality.
+pub const fn text_write_default_duration(member_count: u32) -> f64 {
+    if member_count < 15 {
+        1.0
+    } else {
+        2.0
+    }
+}
+
+/// Manim Write's shared lag default for one globally ordered glyph sequence.
+pub fn text_write_default_lag_ratio(member_count: u32) -> f64 {
+    (4.0 / f64::from(member_count.max(1))).min(0.2)
+}
+
+pub(crate) fn normalize_text_write_options(
+    reverse_member_order: bool,
+    mut options: AnimationOptions,
+) -> AnimationOptions {
+    options.introducer.get_or_insert(!reverse_member_order);
+    options.remover.get_or_insert(reverse_member_order);
+    options
+}
+
+pub(crate) fn normalize_text_reveal_options(
+    reverse: bool,
+    mut options: AnimationOptions,
+) -> AnimationOptions {
+    options.run_time.get_or_insert(1.0);
+    options.rate_func.get_or_insert(crate::RateFunction::Smooth);
+    options.lag_ratio.get_or_insert(1.0);
+    options.reverse_rate_function.get_or_insert(reverse);
+    options.introducer.get_or_insert(!reverse);
+    options.remover.get_or_insert(reverse);
+    options
+}
+
+/// Directional translation of a faded affine endpoint relative to activation state.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SemanticFadeTranslation {
+    /// FadeOut moves by this vector; FadeIn starts at its negation.
+    Shift(SemanticVec3),
+    /// Offset from the activation-effective center to an explicitly chosen point.
+    PointOffset(SemanticVec3),
+}
+
+/// Activation-relative affine endpoint paired with one canonical Fade lifecycle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SemanticFadeEndpoint {
+    pub scale_factor: f64,
+    pub translation: SemanticFadeTranslation,
+    pub scale_center: SemanticVec3,
+}
+
+impl SemanticFadeEndpoint {
+    pub const fn identity() -> Self {
+        Self {
+            scale_factor: 1.0,
+            translation: SemanticFadeTranslation::Shift(SemanticVec3::ZERO),
+            scale_center: SemanticVec3::ZERO,
+        }
+    }
+
+    pub(crate) fn is_valid(self) -> bool {
+        let translation = match self.translation {
+            SemanticFadeTranslation::Shift(value) | SemanticFadeTranslation::PointOffset(value) => {
+                value
+            }
+        };
+        self.scale_factor.is_finite()
+            && self.scale_factor.abs() <= f32::MAX as f64
+            && translation.lower_xy_f32().is_ok()
+            && translation.z == 0.0
+            && self.scale_center.lower_xy_f32().is_ok()
+            && self.scale_center.z == 0.0
+    }
+}
+
+impl Default for SemanticFadeEndpoint {
+    fn default() -> Self {
+        Self::identity()
+    }
+}
+
+/// Membership direction for one content-preserving affine lifecycle animation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticAffineLifecycleDirection {
+    IntroduceFrom,
+    RemoveTo,
+}
+
+/// Collapsed affine endpoint resolved at the activation barrier.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SemanticAffineLifecycleEndpoint {
+    pub point: SemanticVec3,
+    pub rotation_offset: f64,
+    pub point_color: Option<Color>,
+}
+
+impl SemanticAffineLifecycleEndpoint {
+    pub(crate) fn is_valid(self) -> bool {
+        let color_is_finite = self.point_color.is_none_or(|color| {
+            color.red.is_finite()
+                && color.green.is_finite()
+                && color.blue.is_finite()
+                && color.alpha.is_finite()
+        });
+        self.point.lower_xy_f32().is_ok()
+            && self.point.z == 0.0
+            && self.rotation_offset.is_finite()
+            && self.rotation_offset.abs() <= f32::MAX as f64
+            && color_is_finite
+    }
+}
+
+/// Geometry interpolation chosen explicitly by an authored TransformTo operation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SemanticTransformInterpolation {
+    /// Interpolate the object's semantic affine and style properties.
+    #[default]
+    Affine,
+    /// Interpolate corresponding analytic path points while retaining semantic affine channels.
+    PointCorrespondence,
+}
+
+/// One authored animation operation before execution scheduling/lowering.
+///
+/// Targets and composition children are semantic identities. Execution tracks,
+/// runtime slots, retained object IDs, transport IDs, and resolved intervals are
+/// deliberately absent.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SemanticAnimationIntent {
+    /// Drive one renderer-independent object channel with exact authored timing.
+    ///
+    /// The animation node is the semantic identity and timing authority. Compiler
+    /// lowering turns this into an ordinary execution track before runtime creation.
+    ObjectPropertyTrack {
+        target: SemanticNodeId,
+        property: SemanticObjectTrackProperty,
+        values: SemanticObjectTrackValues,
+        timing: TrackTiming,
+        time_map: CompositionTimeMap,
+    },
+    /// Transform one semantic object toward the authored state of another semantic
+    /// object. The target-state node is a semantic reference, not an execution
+    /// snapshot; A1.6 lowering decides when/how to snapshot and interpolate it.
+    TransformTo {
+        target: SemanticNodeId,
+        target_state: SemanticNodeId,
+        interpolation: SemanticTransformInterpolation,
+    },
+    /// Temporarily scale and recolor one object around a shared activation center.
+    /// The compiler captures the effective source and lowers a restoring track.
+    Indicate {
+        target: SemanticNodeId,
+        scale_factor: f64,
+        color: Color,
+        scale_center: SemanticVec3,
+    },
+    /// Reveal one vector outline, then restore its activation-effective style.
+    DrawBorderThenFill {
+        target: SemanticNodeId,
+        stroke_width: f64,
+        stroke_color: Option<Color>,
+        phase_rate_function: RateFunction,
+    },
+    /// Show a moving partial window over one exact analytic Line.
+    PassingFlash {
+        target: SemanticNodeId,
+        time_width: f64,
+    },
+    /// Switch one direct family member at its exact ordered subset threshold.
+    SubsetDisplayMember {
+        target: SemanticNodeId,
+        index: usize,
+        count: usize,
+        mode: SemanticSubsetDisplayMode,
+    },
+    /// Draw one plain Text object's derived glyph members in retained painter order.
+    TextGlyph {
+        target: SemanticNodeId,
+        mode: FamilyAnimationMode,
+        reverse_member_order: bool,
+        family_member: Option<SemanticFamilyAnimationMember>,
+    },
+    /// Rotate one centered 2D object along an angular path. This remains distinct
+    /// from TransformTo point correspondence even when both share affine endpoints.
+    Rotate {
+        target: SemanticNodeId,
+        angle: f64,
+        hold_origin: bool,
+    },
+    /// Fade one semantic leaf through the shared runtime appearance channel.
+    /// Membership entry/exit is applied atomically by live activation/completion.
+    Fade {
+        target: SemanticNodeId,
+        direction: SemanticFadeDirection,
+        endpoint: SemanticFadeEndpoint,
+    },
+    /// Introduce or remove one leaf through activation-relative affine/style channels.
+    AffineLifecycle {
+        target: SemanticNodeId,
+        direction: SemanticAffineLifecycleDirection,
+        endpoint: SemanticAffineLifecycleEndpoint,
+    },
+    /// Introduce one detached semantic leaf through the shared geometry reveal channel.
+    Create { target: SemanticNodeId },
+    /// Admit one detached semantic leaf at its scheduled composition position.
+    ///
+    /// Membership is prepared atomically with the enclosing activation; the
+    /// execution plan resolves the leaf's mapped Presence transition.
+    Add { target: SemanticNodeId },
+    /// Drive one existing scalar input signal through the shared authored timeline.
+    SetScalar { signal: SemanticNodeId, target: f64 },
+    /// Consume authored composition time without targeting an execution object.
+    Wait,
+    /// Compose existing semantic animation declarations in stable authored order.
+    ///
+    /// Children use the same scene-global animation identities as leaf animations;
+    /// this is not a second animation graph or scheduler. Concrete timing remains
+    /// an A1.6 lowering product.
+    Composition {
+        kind: SemanticAnimationCompositionKind,
+        children: Vec<SemanticNodeId>,
+    },
+}
+
+impl SemanticAnimationIntent {
+    pub const fn target(&self) -> Option<SemanticNodeId> {
+        match self {
+            Self::ObjectPropertyTrack { target, .. }
+            | Self::TransformTo { target, .. }
+            | Self::Indicate { target, .. }
+            | Self::DrawBorderThenFill { target, .. }
+            | Self::PassingFlash { target, .. }
+            | Self::SubsetDisplayMember { target, .. }
+            | Self::TextGlyph { target, .. }
+            | Self::Rotate { target, .. }
+            | Self::Fade { target, .. }
+            | Self::AffineLifecycle { target, .. }
+            | Self::Create { target }
+            | Self::Add { target } => Some(*target),
+            Self::SetScalar { signal, .. } => Some(*signal),
+            Self::Wait | Self::Composition { .. } => None,
+        }
+    }
+
+    pub const fn target_state(&self) -> Option<SemanticNodeId> {
+        match self {
+            Self::TransformTo { target_state, .. } => Some(*target_state),
+            Self::ObjectPropertyTrack { .. }
+            | Self::Rotate { .. }
+            | Self::Indicate { .. }
+            | Self::DrawBorderThenFill { .. }
+            | Self::PassingFlash { .. }
+            | Self::SubsetDisplayMember { .. }
+            | Self::TextGlyph { .. }
+            | Self::Fade { .. }
+            | Self::AffineLifecycle { .. }
+            | Self::Create { .. }
+            | Self::Add { .. }
+            | Self::SetScalar { .. }
+            | Self::Wait
+            | Self::Composition { .. } => None,
+        }
+    }
+
+    pub const fn composition_kind(&self) -> Option<SemanticAnimationCompositionKind> {
+        match self {
+            Self::ObjectPropertyTrack { .. }
+            | Self::TransformTo { .. }
+            | Self::Indicate { .. }
+            | Self::DrawBorderThenFill { .. }
+            | Self::PassingFlash { .. }
+            | Self::SubsetDisplayMember { .. }
+            | Self::TextGlyph { .. }
+            | Self::Rotate { .. }
+            | Self::Fade { .. }
+            | Self::AffineLifecycle { .. }
+            | Self::Create { .. }
+            | Self::Add { .. }
+            | Self::SetScalar { .. }
+            | Self::Wait => None,
+            Self::Composition { kind, .. } => Some(*kind),
+        }
+    }
+
+    pub fn children(&self) -> &[SemanticNodeId] {
+        match self {
+            Self::ObjectPropertyTrack { .. }
+            | Self::TransformTo { .. }
+            | Self::Indicate { .. }
+            | Self::DrawBorderThenFill { .. }
+            | Self::PassingFlash { .. }
+            | Self::SubsetDisplayMember { .. }
+            | Self::TextGlyph { .. }
+            | Self::Rotate { .. }
+            | Self::Fade { .. }
+            | Self::AffineLifecycle { .. }
+            | Self::Create { .. }
+            | Self::Add { .. }
+            | Self::SetScalar { .. }
+            | Self::Wait => &[],
+            Self::Composition { children, .. } => children,
+        }
+    }
+}
+
+/// Authored animation declaration owned by the Semantic Scene.
+///
+/// Options intentionally remain unresolved so frontend-local defaults and
+/// `Scene.play` overrides do not become a second animation authority. Lowering
+/// resolves defaults and may reject execution capabilities it cannot yet express.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SemanticAnimationState {
+    intent: SemanticAnimationIntent,
+    options: AnimationOptions,
+}
+
+impl SemanticAnimationState {
+    pub const fn new(intent: SemanticAnimationIntent, options: AnimationOptions) -> Self {
+        Self { intent, options }
+    }
+
+    pub const fn intent(&self) -> &SemanticAnimationIntent {
+        &self.intent
+    }
+
+    pub const fn options(&self) -> AnimationOptions {
+        self.options
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SemanticAnimationError {
+    UnknownAnimation(SemanticNodeId),
+    NotAnimation(SemanticNodeId),
+    EmptyComposition,
+    Target(SemanticSceneOperationError),
+    Options(AnimationOptionsError),
+    SameTargetAndTargetState(SemanticNodeId),
+    InvalidRotationAngle(f64),
+    InvalidIndicateEndpoint,
+    InvalidDrawBorderThenFillOutline,
+    InvalidPassingFlash,
+    InvalidSubsetDisplayMember,
+    InvalidTextWriteTarget,
+    InvalidFadeEndpoint,
+    InvalidAffineLifecycleEndpoint,
+    Signal(SemanticSignalError),
+    NotScalarInputSignal(SemanticNodeId),
+    NativeOwnedSignal(SemanticNodeId),
+    InvalidScalarTarget(f64),
+    InvalidObjectPropertyTrack,
+}
+
+impl std::fmt::Display for SemanticAnimationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownAnimation(id) => write!(
+                formatter,
+                "unknown semantic animation {}:{}",
+                id.slot(),
+                id.generation()
+            ),
+            Self::NotAnimation(id) => write!(
+                formatter,
+                "semantic node {}:{} is not an animation",
+                id.slot(),
+                id.generation()
+            ),
+            Self::EmptyComposition => {
+                formatter.write_str("semantic animation composition requires at least one child")
+            }
+            Self::Target(error) => error.fmt(formatter),
+            Self::Options(error) => error.fmt(formatter),
+            Self::SameTargetAndTargetState(id) => write!(
+                formatter,
+                "semantic animation target {}:{} must use a distinct target-state node",
+                id.slot(),
+                id.generation()
+            ),
+            Self::InvalidRotationAngle(angle) => {
+                write!(formatter, "rotation angle must be finite, got {angle}")
+            }
+            Self::InvalidIndicateEndpoint => formatter.write_str(
+                "Indicate scale, color, and shared scale center must be finite 2D values",
+            ),
+            Self::InvalidDrawBorderThenFillOutline => {
+                formatter.write_str("DrawBorderThenFill outline width and color must be finite")
+            }
+            Self::InvalidPassingFlash => formatter
+                .write_str("PassingFlash requires an analytic Line and a finite positive width"),
+            Self::InvalidSubsetDisplayMember => formatter
+                .write_str("subset display member requires a nonempty count and an in-range index"),
+            Self::InvalidTextWriteTarget => {
+                formatter.write_str("TextWrite requires one plain Text semantic object")
+            }
+            Self::InvalidFadeEndpoint => formatter
+                .write_str("Fade scale, translation, and scale center must be finite 2D values"),
+            Self::InvalidAffineLifecycleEndpoint => formatter.write_str(
+                "affine lifecycle endpoint point and rotation offset must be finite 2D values",
+            ),
+            Self::Signal(error) => error.fmt(formatter),
+            Self::NotScalarInputSignal(signal) => write!(
+                formatter,
+                "semantic signal {}:{} is not a scalar input",
+                signal.slot(),
+                signal.generation()
+            ),
+            Self::NativeOwnedSignal(signal) => write!(
+                formatter,
+                "semantic signal {}:{} is owned by a native input",
+                signal.slot(),
+                signal.generation()
+            ),
+            Self::InvalidScalarTarget(value) => {
+                write!(
+                    formatter,
+                    "scalar animation target must be finite, got {value}"
+                )
+            }
+            Self::InvalidObjectPropertyTrack => formatter.write_str(
+                "object property track requires matching finite endpoints and valid exact timing",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SemanticAnimationError {}
+
+impl From<SemanticSceneOperationError> for SemanticAnimationError {
+    fn from(value: SemanticSceneOperationError) -> Self {
+        Self::Target(value)
+    }
+}
+
+impl From<AnimationOptionsError> for SemanticAnimationError {
+    fn from(value: AnimationOptionsError) -> Self {
+        Self::Options(value)
+    }
+}
+
+pub(crate) fn validate_object_property_track<R>(
+    property: SemanticObjectTrackProperty,
+    values: &SemanticObjectTrackValues<R>,
+    timing: TrackTiming,
+    time_map: &CompositionTimeMap,
+) -> Result<(), SemanticAnimationError> {
+    if property.value_kind() != values.value_kind()
+        || !timing.start_time.is_finite()
+        || !timing.duration.is_finite()
+        || timing.duration < 0.0
+        || (!property.is_instant() && timing.duration == 0.0)
+        || time_map.validate().is_err()
+        || (property.is_instant()
+            && if time_map.is_identity() {
+                timing.duration != 0.0
+            } else {
+                timing.duration == 0.0 || time_map.monotone_event_alpha().is_err()
+            })
+    {
+        return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+    }
+    match values {
+        SemanticObjectTrackValues::Scalar { from, to } => {
+            if !from.is_finite()
+                || !to.is_finite()
+                || (property == SemanticObjectTrackProperty::StrokeWidth
+                    && (*from < 0.0 || *to < 0.0))
+            {
+                return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+            }
+        }
+        SemanticObjectTrackValues::Vec3 { from, to } => {
+            if !from.is_finite() || !to.is_finite() || from.z != 0.0 || to.z != 0.0 {
+                return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+            }
+        }
+        SemanticObjectTrackValues::Color { from, to } => {
+            if [from, to].into_iter().flatten().any(|color| {
+                !color.red.is_finite()
+                    || !color.green.is_finite()
+                    || !color.blue.is_finite()
+                    || !color.alpha.is_finite()
+            }) {
+                return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+            }
+        }
+        SemanticObjectTrackValues::Bool { .. } | SemanticObjectTrackValues::Object { .. } => {}
+    }
+    Ok(())
+}
+
+fn validate_authored_add_animation_options(
+    options: AnimationOptions,
+) -> Result<(), AnimationOptionsError> {
+    if let Some(run_time) = options.run_time {
+        if !run_time.is_finite() || run_time < 0.0 {
+            return Err(AnimationOptionsError::InvalidRunTime(run_time));
+        }
+    }
+    validate_authored_animation_options(AnimationOptions {
+        run_time: None,
+        ..options
+    })
+}
+
+fn validate_authored_animation_options(
+    options: AnimationOptions,
+) -> Result<(), AnimationOptionsError> {
+    if let Some(run_time) = options.run_time {
+        if !run_time.is_finite() || run_time <= 0.0 {
+            return Err(AnimationOptionsError::InvalidRunTime(run_time));
+        }
+    }
+    if let Some(lag_ratio) = options.lag_ratio {
+        if !lag_ratio.is_finite() || lag_ratio < 0.0 {
+            return Err(AnimationOptionsError::InvalidLagRatio(lag_ratio));
+        }
+    }
+    if let Some(path_arc) = options.path_arc {
+        if !path_arc.is_finite() {
+            return Err(AnimationOptionsError::InvalidPathArc(path_arc));
+        }
+    }
+    Ok(())
+}
+
+impl SemanticStore {
+    /// Insert one exact object-channel declaration into the semantic animation arena.
+    pub(crate) fn insert_semantic_object_property_track(
+        &mut self,
+        target: SemanticNodeId,
+        property: SemanticObjectTrackProperty,
+        values: SemanticObjectTrackValues,
+        timing: TrackTiming,
+        time_map: CompositionTimeMap,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        validate_object_property_track(property, &values, timing, &time_map)?;
+        if let SemanticObjectTrackValues::Object { from, to } = &values {
+            for endpoint in [*from, *to] {
+                self.semantic_object_state_checked(endpoint)?;
+                let node = self
+                    .node(endpoint)
+                    .expect("checked semantic object remains live");
+                if node.is_scene_owned() || !node.parents().is_empty() {
+                    return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+                }
+            }
+        }
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::ObjectPropertyTrack {
+                    target,
+                    property,
+                    values,
+                    timing,
+                    time_map,
+                },
+                AnimationOptions::new(),
+            )),
+        )
+    }
+
+    /// Insert one activation-relative restoring Indicate declaration.
+    pub fn insert_semantic_indicate_animation(
+        &mut self,
+        target: SemanticNodeId,
+        scale_factor: f64,
+        color: Color,
+        scale_center: SemanticVec3,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        let color_is_finite = color.red.is_finite()
+            && color.green.is_finite()
+            && color.blue.is_finite()
+            && color.alpha.is_finite();
+        if !scale_factor.is_finite()
+            || scale_factor < 0.0
+            || scale_factor > f32::MAX as f64
+            || scale_center.lower_xy_f32().is_err()
+            || scale_center.z != 0.0
+            || !color_is_finite
+        {
+            return Err(SemanticAnimationError::InvalidIndicateEndpoint);
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::Indicate {
+                    target,
+                    scale_factor,
+                    color,
+                    scale_center,
+                },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one target-state transform declaration into the scene-global semantic
+    /// identity arena.
+    ///
+    /// This does not schedule or lower anything. Both endpoints must be target
+    /// semantic objects, validation completes before insertion, and successful
+    /// insertion writes exactly one new semantic slot.
+    pub fn insert_semantic_transform_animation(
+        &mut self,
+        target: SemanticNodeId,
+        target_state: SemanticNodeId,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_transform_animation_with_interpolation(
+            target,
+            target_state,
+            SemanticTransformInterpolation::Affine,
+            options,
+        )
+    }
+
+    /// Insert one TransformTo declaration with an explicit geometry interpolation contract.
+    pub fn insert_semantic_transform_animation_with_interpolation(
+        &mut self,
+        target: SemanticNodeId,
+        target_state: SemanticNodeId,
+        interpolation: SemanticTransformInterpolation,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        self.semantic_object_state_checked(target_state)?;
+        if target == target_state {
+            return Err(SemanticAnimationError::SameTargetAndTargetState(target));
+        }
+        validate_authored_animation_options(options)?;
+
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::TransformTo {
+                    target,
+                    target_state,
+                    interpolation,
+                },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one activation-relative two-phase vector outline/fill declaration.
+    pub fn insert_semantic_draw_border_then_fill_animation(
+        &mut self,
+        target: SemanticNodeId,
+        stroke_width: f64,
+        stroke_color: Option<Color>,
+        phase_rate_function: RateFunction,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        let color_is_finite = stroke_color.is_none_or(|color| {
+            color.red.is_finite()
+                && color.green.is_finite()
+                && color.blue.is_finite()
+                && color.alpha.is_finite()
+        });
+        if !stroke_width.is_finite()
+            || stroke_width < 0.0
+            || stroke_width > f32::MAX as f64
+            || !color_is_finite
+        {
+            return Err(SemanticAnimationError::InvalidDrawBorderThenFillOutline);
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::DrawBorderThenFill {
+                    target,
+                    stroke_width,
+                    stroke_color,
+                    phase_rate_function,
+                },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one moving partial-window animation over an exact analytic Line.
+    pub fn insert_semantic_passing_flash_animation(
+        &mut self,
+        target: SemanticNodeId,
+        time_width: f64,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        let state = self.semantic_object_state_checked(target)?;
+        if !time_width.is_finite()
+            || time_width <= 0.0
+            || !matches!(
+                state.content.geometry(),
+                Some(crate::StoredGeometry::Line { .. })
+            )
+        {
+            return Err(SemanticAnimationError::InvalidPassingFlash);
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::PassingFlash { target, time_width },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one ordered leaf of a shared subset display declaration.
+    pub fn insert_semantic_subset_display_member_animation(
+        &mut self,
+        target: SemanticNodeId,
+        index: usize,
+        count: usize,
+        mode: SemanticSubsetDisplayMode,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        if count == 0 || index >= count {
+            return Err(SemanticAnimationError::InvalidSubsetDisplayMember);
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::SubsetDisplayMember {
+                    target,
+                    index,
+                    count,
+                    mode,
+                },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one forward plain-Text Write declaration.
+    pub fn insert_semantic_text_write_animation(
+        &mut self,
+        target: SemanticNodeId,
+        reverse_member_order: bool,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_text_glyph_animation(
+            target,
+            FamilyAnimationMode::DrawBorderThenFill,
+            reverse_member_order,
+            None,
+            normalize_text_write_options(reverse_member_order, options),
+        )
+    }
+
+    pub(crate) fn insert_semantic_text_glyph_animation(
+        &mut self,
+        target: SemanticNodeId,
+        mode: FamilyAnimationMode,
+        reverse_member_order: bool,
+        family_member: Option<SemanticFamilyAnimationMember>,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        let state = self.semantic_object_state_checked(target)?;
+        match (mode, state.content) {
+            (_, crate::SemanticObjectContent::Geometry(_)) if family_member.is_some() => {}
+            (_, crate::SemanticObjectContent::Text(handle)) => {
+                let resource = self
+                    .text_resources()
+                    .get(handle)
+                    .ok_or(SemanticAnimationError::InvalidTextWriteTarget)?;
+                if resource.kind != crate::TextSourceKind::Plain {
+                    return Err(SemanticAnimationError::InvalidTextWriteTarget);
+                }
+            }
+            _ => {
+                return Err(SemanticAnimationError::InvalidTextWriteTarget);
+            }
+        }
+        if let Some(member) = family_member {
+            if !matches!(
+                self.node(member.family).map(|node| node.kind()),
+                Some(crate::SemanticNodeKind::Family)
+            ) || !crate::semantic_scene_root_contains(self, member.family, target)
+                .map_err(|_| SemanticAnimationError::InvalidTextWriteTarget)?
+            {
+                return Err(SemanticAnimationError::InvalidTextWriteTarget);
+            }
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::TextGlyph {
+                    target,
+                    mode,
+                    reverse_member_order,
+                    family_member,
+                },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one single-leaf fade declaration into the scene-global semantic arena.
+    pub fn insert_semantic_fade_animation(
+        &mut self,
+        target: SemanticNodeId,
+        direction: SemanticFadeDirection,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_fade_animation_with_endpoint(
+            target,
+            direction,
+            SemanticFadeEndpoint::default(),
+            options,
+        )
+    }
+
+    /// Insert one Fade declaration with an activation-relative affine endpoint.
+    pub fn insert_semantic_fade_animation_with_endpoint(
+        &mut self,
+        target: SemanticNodeId,
+        direction: SemanticFadeDirection,
+        endpoint: SemanticFadeEndpoint,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        if !endpoint.is_valid() {
+            return Err(SemanticAnimationError::InvalidFadeEndpoint);
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::Fade {
+                    target,
+                    direction,
+                    endpoint,
+                },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one content-preserving affine lifecycle declaration.
+    pub fn insert_semantic_affine_lifecycle_animation(
+        &mut self,
+        target: SemanticNodeId,
+        direction: SemanticAffineLifecycleDirection,
+        endpoint: SemanticAffineLifecycleEndpoint,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        if !endpoint.is_valid() {
+            return Err(SemanticAnimationError::InvalidAffineLifecycleEndpoint);
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::AffineLifecycle {
+                    target,
+                    direction,
+                    endpoint,
+                },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one centered 2D angular-path rotation declaration.
+    pub fn insert_semantic_rotate_animation(
+        &mut self,
+        target: SemanticNodeId,
+        angle: f64,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_rotate_animation_with_origin_constraint(target, angle, false, options)
+    }
+
+    /// Hold the activation-time world origin while following the angular path.
+    pub fn insert_semantic_rotate_animation_with_origin_constraint(
+        &mut self,
+        target: SemanticNodeId,
+        angle: f64,
+        hold_origin: bool,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        if !angle.is_finite() {
+            return Err(SemanticAnimationError::InvalidRotationAngle(angle));
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::Rotate {
+                    target,
+                    angle,
+                    hold_origin,
+                },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one single-leaf Create declaration into the scene-global semantic arena.
+    pub fn insert_semantic_create_animation(
+        &mut self,
+        target: SemanticNodeId,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::Create { target },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one scalar input animation declaration without allocating object identity.
+    pub fn insert_semantic_scalar_animation(
+        &mut self,
+        signal: SemanticNodeId,
+        target: f64,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.validate_semantic_scalar_animation_target(signal, target)
+            .map_err(|error| match error {
+                super::SemanticScalarSignalTrackError::Signal(error) => {
+                    SemanticAnimationError::Signal(error)
+                }
+                super::SemanticScalarSignalTrackError::NotInputSignal(_)
+                | super::SemanticScalarSignalTrackError::NonScalarSignal(_) => {
+                    SemanticAnimationError::NotScalarInputSignal(signal)
+                }
+                super::SemanticScalarSignalTrackError::NativeOwnedSignal(_) => {
+                    SemanticAnimationError::NativeOwnedSignal(signal)
+                }
+                super::SemanticScalarSignalTrackError::NonFiniteValue { value, .. } => {
+                    SemanticAnimationError::InvalidScalarTarget(value)
+                }
+                _ => unreachable!("scalar animation validation does not inspect timeline shape"),
+            })?;
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::SetScalar { signal, target },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one timed detached-membership declaration.
+    pub fn insert_semantic_add_animation(
+        &mut self,
+        target: SemanticNodeId,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_object_state_checked(target)?;
+        validate_authored_add_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::Add { target },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one targetless timed composition leaf.
+    pub fn insert_semantic_wait_animation(
+        &mut self,
+        duration: f64,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        let options = AnimationOptions::new().run_time(duration);
+        self.set_last_mutation_writes(0);
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::Wait,
+                options,
+            )),
+        )
+    }
+
+    /// Insert an ordered parallel composition using existing semantic animation IDs.
+    pub fn insert_semantic_parallel_animation(
+        &mut self,
+        children: &[SemanticNodeId],
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_animation_composition(
+            SemanticAnimationCompositionKind::Parallel,
+            children,
+            options,
+        )
+    }
+
+    /// Insert an ordered strict-sequence composition using existing semantic animation IDs.
+    pub fn insert_semantic_sequence_animation(
+        &mut self,
+        children: &[SemanticNodeId],
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_animation_composition(
+            SemanticAnimationCompositionKind::Sequence,
+            children,
+            options,
+        )
+    }
+
+    fn insert_semantic_animation_composition(
+        &mut self,
+        kind: SemanticAnimationCompositionKind,
+        children: &[SemanticNodeId],
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        if children.is_empty() {
+            return Err(SemanticAnimationError::EmptyComposition);
+        }
+        validate_authored_animation_options(options)?;
+        for &child in children {
+            self.semantic_animation_state(child)?;
+        }
+
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::Composition {
+                    kind,
+                    children: children.to_vec(),
+                },
+                options,
+            )),
+        )
+    }
+
+    pub fn semantic_animation_state(
+        &self,
+        id: SemanticNodeId,
+    ) -> Result<&SemanticAnimationState, SemanticAnimationError> {
+        let node = self
+            .node(id)
+            .ok_or(SemanticAnimationError::UnknownAnimation(id))?;
+        match node.kind() {
+            SemanticNodeKind::Animation(state) => Ok(state),
+            _ => Err(SemanticAnimationError::NotAnimation(id)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{RateFunction, SemanticObjectState, StoredGeometry};
+
+    fn object(store: &mut SemanticStore, radius: f32) -> SemanticNodeId {
+        store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle { radius }))
+    }
+
+    fn transform(store: &mut SemanticStore, radius: f32) -> SemanticNodeId {
+        let target = object(store, radius);
+        let target_state = object(store, radius + 0.5);
+        store
+            .insert_semantic_transform_animation(target, target_state, AnimationOptions::new())
+            .unwrap()
+    }
+
+    #[test]
+    fn transform_intent_uses_scene_global_semantic_identity() {
+        let mut store = SemanticStore::new();
+        let target = object(&mut store, 1.0);
+        let target_state = object(&mut store, 2.0);
+        let options = AnimationOptions::new()
+            .run_time(1.5)
+            .rate_func(RateFunction::Linear)
+            .lag_ratio(0.25);
+
+        let animation = store
+            .insert_semantic_transform_animation(target, target_state, options)
+            .unwrap();
+        let state = store.semantic_animation_state(animation).unwrap();
+
+        assert_eq!(
+            state.intent(),
+            &SemanticAnimationIntent::TransformTo {
+                target,
+                target_state,
+                interpolation: SemanticTransformInterpolation::Affine,
+            }
+        );
+        assert_eq!(state.options(), options);
+        assert!(!store.node(animation).unwrap().is_scene_owned());
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+    }
+
+    #[test]
+    fn create_intent_uses_the_existing_target_identity() {
+        let mut store = SemanticStore::new();
+        let target = object(&mut store, 1.0);
+        let revision = store.scene_revision();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+
+        let animation = store
+            .insert_semantic_create_animation(target, options)
+            .unwrap();
+        assert_eq!(
+            store.semantic_animation_state(animation).unwrap().intent(),
+            &SemanticAnimationIntent::Create { target }
+        );
+        assert_eq!(
+            store.semantic_animation_state(animation).unwrap().options(),
+            options
+        );
+        // A detached declaration does not publish a change to any scene.
+        assert_eq!(store.scene_revision(), revision);
+        assert!(!store.node(animation).unwrap().is_scene_owned());
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+    }
+
+    #[test]
+    fn semantic_layer_preserves_valid_unresolved_options_lowering_may_not_support_yet() {
+        let mut store = SemanticStore::new();
+        let target = object(&mut store, 1.0);
+        let target_state = object(&mut store, 2.0);
+        let options = AnimationOptions::new()
+            .path_arc(0.75)
+            .reverse_rate_function(true);
+
+        let animation = store
+            .insert_semantic_transform_animation(target, target_state, options)
+            .unwrap();
+        assert_eq!(
+            store.semantic_animation_state(animation).unwrap().options(),
+            options
+        );
+    }
+
+    #[test]
+    fn parallel_composition_preserves_child_order_and_unresolved_options() {
+        let mut store = SemanticStore::new();
+        let first = transform(&mut store, 1.0);
+        let second = transform(&mut store, 2.0);
+        let third = transform(&mut store, 3.0);
+        let options = AnimationOptions::new()
+            .run_time(4.0)
+            .rate_func(RateFunction::ThereAndBack)
+            .lag_ratio(0.25);
+
+        let composition = store
+            .insert_semantic_parallel_animation(&[second, first, third], options)
+            .unwrap();
+        let state = store.semantic_animation_state(composition).unwrap();
+
+        assert_eq!(
+            state.intent().composition_kind(),
+            Some(SemanticAnimationCompositionKind::Parallel)
+        );
+        assert_eq!(state.intent().children(), &[second, first, third]);
+        assert_eq!(state.options(), options);
+        assert!(!store.node(composition).unwrap().is_scene_owned());
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+    }
+
+    #[test]
+    fn sequence_composition_can_nest_existing_compositions() {
+        let mut store = SemanticStore::new();
+        let first = transform(&mut store, 1.0);
+        let second = transform(&mut store, 2.0);
+        let parallel = store
+            .insert_semantic_parallel_animation(
+                &[first, second],
+                AnimationOptions::new().run_time(2.0),
+            )
+            .unwrap();
+        let third = transform(&mut store, 3.0);
+
+        let sequence = store
+            .insert_semantic_sequence_animation(
+                &[parallel, third],
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let state = store.semantic_animation_state(sequence).unwrap();
+
+        assert_eq!(
+            state.intent().composition_kind(),
+            Some(SemanticAnimationCompositionKind::Sequence)
+        );
+        assert_eq!(state.intent().children(), &[parallel, third]);
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+    }
+
+    #[test]
+    fn malformed_authored_options_fail_before_allocation() {
+        let mut store = SemanticStore::new();
+        let target = object(&mut store, 1.0);
+        let target_state = object(&mut store, 2.0);
+        let before_len = store.len();
+
+        assert_eq!(
+            store.insert_semantic_transform_animation(
+                target,
+                target_state,
+                AnimationOptions::new().run_time(0.0),
+            ),
+            Err(SemanticAnimationError::Options(
+                AnimationOptionsError::InvalidRunTime(0.0)
+            ))
+        );
+        assert_eq!(store.len(), before_len);
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+
+        assert_eq!(
+            store.insert_semantic_transform_animation(
+                target,
+                target_state,
+                AnimationOptions::new().lag_ratio(-0.1),
+            ),
+            Err(SemanticAnimationError::Options(
+                AnimationOptionsError::InvalidLagRatio(-0.1)
+            ))
+        );
+        assert_eq!(store.len(), before_len);
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+    }
+
+    #[test]
+    fn composition_validation_is_atomic_and_generation_safe() {
+        let mut store = SemanticStore::new();
+        let child = transform(&mut store, 1.0);
+        let not_animation = object(&mut store, 4.0);
+        let before_len = store.len();
+
+        assert_eq!(
+            store.insert_semantic_parallel_animation(&[], AnimationOptions::new()),
+            Err(SemanticAnimationError::EmptyComposition)
+        );
+        assert_eq!(store.len(), before_len);
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+
+        assert_eq!(
+            store.insert_semantic_parallel_animation(
+                &[child, not_animation],
+                AnimationOptions::new(),
+            ),
+            Err(SemanticAnimationError::NotAnimation(not_animation))
+        );
+        assert_eq!(store.len(), before_len);
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+
+        store.remove_node(child).unwrap();
+        let replacement = object(&mut store, 5.0);
+        assert_eq!(child.slot(), replacement.slot());
+        assert_ne!(child.generation(), replacement.generation());
+        let before_stale_insert = store.len();
+
+        assert_eq!(
+            store.insert_semantic_sequence_animation(&[child], AnimationOptions::new()),
+            Err(SemanticAnimationError::UnknownAnimation(child))
+        );
+        assert_eq!(store.len(), before_stale_insert);
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+    }
+
+    #[test]
+    fn deleted_composition_child_never_retargets_after_slot_reuse() {
+        let mut store = SemanticStore::new();
+        let first = transform(&mut store, 1.0);
+        let second = transform(&mut store, 2.0);
+        let composition = store
+            .insert_semantic_parallel_animation(&[first, second], AnimationOptions::new())
+            .unwrap();
+
+        store.remove_node(second).unwrap();
+        let replacement = object(&mut store, 8.0);
+        assert_eq!(second.slot(), replacement.slot());
+        assert_ne!(second.generation(), replacement.generation());
+
+        let intent = store
+            .semantic_animation_state(composition)
+            .unwrap()
+            .intent();
+        assert_eq!(intent.children(), &[first, second]);
+        assert_eq!(
+            store.semantic_animation_state(second),
+            Err(SemanticAnimationError::UnknownAnimation(second))
+        );
+    }
+
+    #[test]
+    fn targets_must_be_distinct_live_semantic_objects() {
+        let mut store = SemanticStore::new();
+        let target = object(&mut store, 1.0);
+        let family = store.insert_family();
+
+        assert_eq!(
+            store.insert_semantic_transform_animation(target, target, AnimationOptions::new(),),
+            Err(SemanticAnimationError::SameTargetAndTargetState(target))
+        );
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+
+        assert!(matches!(
+            store.insert_semantic_transform_animation(
+                target,
+                family,
+                AnimationOptions::new(),
+            ),
+            Err(SemanticAnimationError::Target(
+                SemanticSceneOperationError::NotSemanticObject(id)
+            )) if id == family
+        ));
+        assert_eq!(store.last_mutation_stats().slots_written, 0);
+    }
+
+    #[test]
+    fn deleted_target_state_never_retargets_after_slot_reuse() {
+        let mut store = SemanticStore::new();
+        let target = object(&mut store, 1.0);
+        let target_state = object(&mut store, 2.0);
+        let animation = store
+            .insert_semantic_transform_animation(target, target_state, AnimationOptions::new())
+            .unwrap();
+
+        store.remove_node(target_state).unwrap();
+        let replacement = object(&mut store, 3.0);
+        assert_eq!(target_state.slot(), replacement.slot());
+        assert_ne!(target_state.generation(), replacement.generation());
+
+        let intent = store.semantic_animation_state(animation).unwrap().intent();
+        assert_eq!(intent.target_state(), Some(target_state));
+        assert!(matches!(
+            store.semantic_object_state_checked(intent.target_state().unwrap()),
+            Err(SemanticSceneOperationError::UnknownNode(id)) if id == target_state
+        ));
+    }
+
+    #[test]
+    fn animation_identity_uses_the_same_generation_safe_arena() {
+        let mut store = SemanticStore::new();
+        let target = object(&mut store, 1.0);
+        let target_state = object(&mut store, 2.0);
+        let first = store
+            .insert_semantic_transform_animation(target, target_state, AnimationOptions::new())
+            .unwrap();
+        store.remove_node(first).unwrap();
+        let replacement = object(&mut store, 4.0);
+
+        assert_eq!(first.slot(), replacement.slot());
+        assert_ne!(first.generation(), replacement.generation());
+        assert_eq!(
+            store.semantic_animation_state(first),
+            Err(SemanticAnimationError::UnknownAnimation(first))
+        );
+    }
+
+    #[test]
+    fn animation_insertion_cost_is_independent_of_unrelated_scene_size() {
+        let mut store = SemanticStore::new();
+        for index in 0..10_000 {
+            object(&mut store, index as f32 + 1.0);
+        }
+        let first = transform(&mut store, 0.5);
+        let second = transform(&mut store, 0.75);
+        let third = transform(&mut store, 1.0);
+
+        store
+            .insert_semantic_parallel_animation(&[first, second, third], AnimationOptions::new())
+            .unwrap();
+        assert_eq!(store.last_mutation_stats().slots_written, 1);
+    }
+
+    #[test]
+    fn text_write_defaults_follow_global_glyph_thresholds() {
+        assert_eq!(text_write_default_duration(0), 1.0);
+        assert_eq!(text_write_default_duration(14), 1.0);
+        assert_eq!(text_write_default_duration(15), 2.0);
+        assert_eq!(text_write_default_duration(200), 2.0);
+        assert_eq!(text_write_default_lag_ratio(0), 0.2);
+        assert_eq!(text_write_default_lag_ratio(5), 0.2);
+        assert_eq!(text_write_default_lag_ratio(40), 0.1);
+    }
+
+    #[test]
+    fn text_conveniences_normalize_lifecycle_without_overriding_explicit_reversal() {
+        let write = normalize_text_write_options(true, AnimationOptions::new().remover(false));
+        assert_eq!(write.introducer, Some(false));
+        assert_eq!(write.remover, Some(false));
+
+        let reveal = normalize_text_reveal_options(
+            true,
+            AnimationOptions::new()
+                .reverse_rate_function(false)
+                .introducer(true)
+                .remover(false),
+        );
+        assert_eq!(reveal.run_time, Some(1.0));
+        assert_eq!(reveal.rate_func, Some(RateFunction::Smooth));
+        assert_eq!(reveal.lag_ratio, Some(1.0));
+        assert_eq!(reveal.reverse_rate_function, Some(false));
+        assert_eq!(reveal.introducer, Some(true));
+        assert_eq!(reveal.remover, Some(false));
+    }
+}

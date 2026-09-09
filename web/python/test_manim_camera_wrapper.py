@@ -22,8 +22,6 @@ class MovingCameraWrapperTests(unittest.TestCase):
                 sys.modules[name] = module
 
             import _manim_compat as compat
-            compat.install()
-            import _manim_phase_b
 
             import _manim_camera as camera
 

@@ -1,5 +1,5 @@
-use noon_compile::CompiledScene;
-use noon_core::{Color, GeometryRef, SceneDefinition, Style, Vec2, VectorPath};
+use noon_compile::{CompiledObject, CompiledScene};
+use noon_core::{Color, GeometryRef, ObjectId, Style, Transform2D, Vec2, VectorPath};
 use noon_render_wgpu::FramePreparer;
 use noon_runtime::SceneInstance;
 
@@ -11,18 +11,27 @@ fn path(seed: f32) -> VectorPath {
 }
 
 fn path_scene(paths: &[VectorPath]) -> SceneInstance {
-    let mut scene = SceneDefinition::new();
-    for path in paths {
-        let object = scene.add(GeometryRef::path(path.clone()));
-        scene.object_mut(object).expect("path object exists").style = Style {
-            fill: None,
-            stroke: Some(Color::WHITE),
-            stroke_width: 0.2,
-            stroke_width_mode: Default::default(),
-            ..Style::default()
-        };
-    }
-    SceneInstance::new(CompiledScene::compile(&scene).expect("path scene compiles"))
+    let objects = paths
+        .iter()
+        .enumerate()
+        .map(|(index, path)| {
+            CompiledObject::new(
+                ObjectId::new(index as u64),
+                GeometryRef::path(path.clone()),
+                Transform2D::IDENTITY,
+                Style {
+                    fill: None,
+                    stroke: Some(Color::WHITE),
+                    stroke_width: 0.2,
+                    stroke_width_mode: Default::default(),
+                    ..Style::default()
+                },
+            )
+        })
+        .collect();
+    SceneInstance::new(
+        CompiledScene::compile_objects(objects, &[]).expect("path execution data compiles"),
+    )
 }
 
 #[test]

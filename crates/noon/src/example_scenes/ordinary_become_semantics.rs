@@ -153,7 +153,7 @@ fn rectangle(
     options.set_translation(x, 0.0)?;
     options.set_fill(red, green, blue, 1.0)?;
     options.disable_stroke();
-    Mobject::from_manim_geometry(Rc::clone(scene.store()), options)
+    Mobject::from_manim_geometry(Rc::clone(scene.integration_store()), options)
 }
 
 pub fn program() -> Result<LiveProgram<OrdinaryBecomeSemantics>, String> {
@@ -167,15 +167,17 @@ pub fn program() -> Result<LiveProgram<OrdinaryBecomeSemantics>, String> {
     stretched_target_options.set_translation(-3.5, 0.0)?;
     stretched_target_options.set_fill(1.0, 0.0, 1.0, 1.0)?;
     stretched_target_options.disable_stroke();
-    let stretched_target =
-        Mobject::from_manim_geometry(Rc::clone(scene.store()), stretched_target_options)?;
+    let stretched_target = Mobject::from_manim_geometry(
+        Rc::clone(scene.integration_store()),
+        stretched_target_options,
+    )?;
     let mut ellipse_target_options = ManimGeometryOptions::ellipse(4.0, 1.5)?;
     ellipse_target_options.set_translation(0.0, 2.5)?;
     ellipse_target_options.set_rotation(std::f64::consts::PI / 6.0)?;
     ellipse_target_options.set_fill(0.0, 1.0, 1.0, 1.0)?;
     ellipse_target_options.disable_stroke();
     let ellipse_target =
-        Mobject::from_manim_geometry(Rc::clone(scene.store()), ellipse_target_options)?;
+        Mobject::from_manim_geometry(Rc::clone(scene.integration_store()), ellipse_target_options)?;
     let ellipse_target_bounds = ellipse_target
         .layout_bounds()?
         .ok_or("ellipse target has no authored layout bounds")?;

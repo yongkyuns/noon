@@ -56,7 +56,6 @@ jobs:
           fallback: none
       - name: Build browser package
         env:
-          NOON_SKIP_PLAYGROUND_TEST: "1"
           NOON_WASM_SKIP_OPT: "1"
         run: bash scripts/build-web-demo.sh
       - name: Cache Playwright Chromium

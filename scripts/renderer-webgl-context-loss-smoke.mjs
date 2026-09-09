@@ -62,20 +62,14 @@ function collectBrowserErrors(page) {
 }
 
 async function waitForHarness(page) {
-  await page.goto(`${baseUrl}/web/browser-smoke.html`, { waitUntil: "load" });
+  await page.goto(`${baseUrl}/web/browser-smoke.html?fixture=four-animated`, { waitUntil: "load" });
   await page.waitForFunction(() => window.noonSmoke?.state.ready === true, null, {
     timeout: 30_000,
   });
   const metrics = await page.evaluate(() => window.noonSmoke.metrics());
   assert.equal(metrics.error, null, `renderer failed to initialize: ${metrics.error}`);
   assert.equal(metrics.rendererBackend, "WebGL2", `expected WebGL2, got ${metrics.rendererBackend}`);
-  const loaded = await page.evaluate(async () => {
-    const { loadExecutionTransportFixture } = await import(
-      "../scripts/explicit-transport-scene-fixture.js"
-    );
-    return window.noonSmoke.loadScene(await loadExecutionTransportFixture("four_animated"));
-  });
-  assert.equal(loaded.objectCount, 4, "context-loss fixture must contain visible geometry");
+  assert.equal(metrics.objectCount, 4, "context-loss fixture must contain visible geometry");
   return page.evaluate(() => window.noonSmoke.metrics());
 }
 

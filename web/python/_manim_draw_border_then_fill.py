@@ -5,20 +5,18 @@ from __future__ import annotations
 import math
 from typing import Any
 
-import noon as _base
 import _manim_compat as _compat
-import _manim_phase_b as _phase_b
+import _manim_rate_functions as _rate_functions
 
 
-_INSTALLED = False
 
 
 def _double_smooth(t: float) -> float:
     """Pinned ManimCE v0.21 callable used only as an authoring sentinel."""
     value = float(t)
     if value < 0.5:
-        return 0.5 * _compat.smooth(2.0 * value)
-    return 0.5 * (1.0 + _compat.smooth(2.0 * value - 1.0))
+        return 0.5 * _rate_functions.smooth(2.0 * value)
+    return 0.5 * (1.0 + _rate_functions.smooth(2.0 * value - 1.0))
 
 
 _double_smooth.__name__ = "double_smooth"
@@ -47,22 +45,9 @@ class DrawBorderThenFill:
         self.mobject = vmobject
         self.target = vmobject
         self.stroke_width = width
-        self.stroke_color = None if stroke_color is None else _phase_b._as_color(
+        self.stroke_color = None if stroke_color is None else _compat._as_color(
             "stroke_color", stroke_color
         )
         self.introducer = bool(introducer)
         self.anim_args = dict(kwargs)
         self.anim_args["run_time"] = float(run_time)
-
-
-def install() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-    setattr(_base, "DrawBorderThenFill", DrawBorderThenFill)
-    if "DrawBorderThenFill" not in _base.__all__:
-        _base.__all__.append("DrawBorderThenFill")
-
-
-install()

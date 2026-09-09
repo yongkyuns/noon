@@ -64,11 +64,10 @@ class ManimAnimationConstructorOptionsTests(unittest.TestCase):
             fake_js.noonResolveAnimationOptions = resolve_animation_options
             sys.modules["js"] = fake_js
 
+            from _typed_geometry_test_support import identity_only_wrapper as identity
             import _manim_compat
-            _manim_compat.install()
+
             import _manim_rate_functions
-            _manim_rate_functions.install()
-            import _manim_phase_b  # noqa: F401
             from noon import Scene
             play_before = Scene.play
             import _manim_animate
@@ -82,10 +81,10 @@ class ManimAnimationConstructorOptionsTests(unittest.TestCase):
 
             # Constructor options are part of the public animation object, not a
             # Noon-only Scene.play workaround.
-            transform = Transform(Square(), Circle(), run_time=1.25, path_arc=0.3)
+            transform = Transform(identity(Square), identity(Circle), run_time=1.25, path_arc=0.3)
             assert transform.anim_args == {"run_time": 1.25, "path_arc": 0.3}
 
-            square, circle = Square(), Circle()
+            square, circle = identity(Square), identity(Circle)
             create = Create(square, run_time=2.0, rate_func=linear)
             fade = FadeIn(circle, run_time=0.5)
             assert create.anim_args == {"run_time": 2.0, "rate_func": linear}

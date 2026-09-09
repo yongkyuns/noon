@@ -123,18 +123,19 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
             _geometry_test.install_js_bridge(fake_js, FakeHandle)
             sys.modules["js"] = fake_js
 
+            import noon
+            animate_property = noon.Mobject.animate
             import _manim_compat
-            _manim_compat.install()
+
             from _test_manim_membership import install_test_membership
             install_test_membership(_manim_compat)
             import _manim_rate_functions
-            _manim_rate_functions.install()
-            import _manim_phase_b  # noqa: F401
             import _manim_semantic_handles as handles
             import _typed_geometry_test_support as _geometry_test
             _geometry_test.install_module_bridge(handles, FakeHandle)
-            handles.install()
+
             import _manim_animate as animate
+            assert noon.Mobject.animate is animate_property
 
             from noon import BLUE, LEFT, ORANGE, Scene, Square, VGroup
 
@@ -144,7 +145,7 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
             detached_source_handle = detached._semantic_handle
             detached_before = detached._current_raw().to_ir()
             detached_source_handle.snapshot_requests = 0
-            detached_builder = animate._AlignedAnimationBuilder(detached)
+            detached_builder = detached.animate
             detached_target = detached_builder.target
             detached_target_handle = detached_target._semantic_handle
             assert detached._raw is None
@@ -176,7 +177,7 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
             source_before = square._current_raw().to_ir()
             source_handle.snapshot_requests = 0
             source_handle.calls.clear()
-            builder = animate._AlignedAnimationBuilder(square)
+            builder = square.animate
             target = builder.target
             target_handle = target._semantic_handle
 
@@ -212,13 +213,14 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
             assert square.get_center().x == 0.0
             assert square.get_center().y == 0.0
 
-            # Group wrapper identity remains Python metadata while the installed
-            # shared-family adapter owns membership and target topology in browsers.
-            group = VGroup(Square(), Square().shift(LEFT))
-            group_builder = group.animate
-            assert isinstance(group_builder.target, VGroup)
-            assert group_builder.target is not group
-            assert len(group_builder.target.submobjects) == 2
+            # A geometry-only host cannot create a valid family in Python.
+            # Shared family target behavior is covered by the family bridge tests.
+            try:
+                VGroup(Square(), Square().shift(LEFT))
+            except RuntimeError as error:
+                assert "Group construction requires the shared Rust authoring host" in str(error)
+            else:
+                raise AssertionError("Group construction bypassed shared Rust")
             """
         )
         completed = subprocess.run(

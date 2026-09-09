@@ -4,8 +4,9 @@ use std::{cell::RefCell, rc::Rc};
 use crate::{
     ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject, MobjectFamily,
     MobjectFamilyMember::{Family, Mobject as Leaf},
-    Scene, SemanticNodeId, SemanticStore,
+    Scene, SemanticNodeId,
 };
+use noon_core::SemanticStore;
 
 pub struct OrdinaryMembership {
     red: Mobject,
@@ -95,7 +96,7 @@ pub fn program() -> Result<LiveProgram<OrdinaryMembership>, String> {
         blue,
         green,
         family,
-        store: Rc::clone(scene.store()),
+        store: Rc::clone(scene.integration_store()),
         root: scene.root(),
         stage: 0,
     };

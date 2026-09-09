@@ -1,6 +1,6 @@
+use noon::integration::{ExecutionViewportQuery, RendererPublication, TimelineWakeState};
 use noon::{
-    ExecutionSession, ExecutionViewportQuery, LiveContinuation, LiveProgram, LiveProgramStatus,
-    RendererPublication, RustHostCallbackTable, TimelineWakeState,
+    ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RustHostCallbackTable,
 };
 use noon_core::{
     Camera2DState, NativeEventOccurrence, NativeInputValue, NativeStateSource, PublicationContext,

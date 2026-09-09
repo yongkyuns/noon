@@ -1,8 +1,4 @@
-import { loadExecutionTransportFixture } from "../scripts/explicit-transport-scene-fixture.js";
-import init, {
-  EngineScenePlayer,
-  ExecutionCanvasRenderer,
-} from "./pkg/noon_web.js";
+import init, { createDirectRecoverySmokeRenderer } from "./pkg/noon_web.js";
 
 const state = {
   ready: false,
@@ -14,10 +10,8 @@ window.noonExecutionRendererSmoke = state;
 
 async function start() {
   await init();
-  const engine = new EngineScenePlayer(await loadExecutionTransportFixture("circle"), 4.0, 1);
-  const initialDelta = engine.initialDeltaJson();
   const canvas = new OffscreenCanvas(960, 540);
-  const renderer = await ExecutionCanvasRenderer.create(canvas, initialDelta);
+  const renderer = await createDirectRecoverySmokeRenderer(canvas, "circle");
   renderer.resize(canvas.width, canvas.height);
 
   let presented = false;

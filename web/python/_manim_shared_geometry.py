@@ -1,8 +1,7 @@
 """Thin Manim geometry adapters backed by shared Rust semantics.
 
-This module patches only operations whose full observable geometry/layout contract is
-already owned by Rust. Class identity and inheritance remain unchanged where an
-established compatibility class already exists.
+Geometry and layout operations delegate to Rust. Python owns constructor signatures
+and argument conversion.
 """
 
 from __future__ import annotations
@@ -15,15 +14,9 @@ import _manim_compat as _compat
 import _manim_geometry as _geometry
 import _manim_semantic_handles as _shared
 
-_ORIGINAL_DOT_INIT = _geometry.Dot.__init__
-_ORIGINAL_ELLIPSE_INIT = _geometry.Ellipse.__init__
-_ORIGINAL_TRIANGLE_INIT = _geometry.Triangle.__init__
-_INSTALLED = False
-
-
 def _apply_candidate_color(candidate: object, color: object) -> None:
     if color is not None:
-        parsed = _shared._phase_b._as_color("color", color)
+        parsed = _shared._compat._as_color("color", color)
         _shared._apply_constructor_color(candidate, parsed)
 
 
@@ -92,43 +85,6 @@ def _match_coord(
     )
 
 
-def _match_x(
-    self: _base.Mobject,
-    mobject: _base.Mobject,
-    direction: object = _base.ORIGIN,
-) -> _base.Mobject:
-    """Match a directional x coordinate through shared ``match_coord`` semantics."""
-
-    return _match_coord(self, mobject, 0, direction)
-
-
-def _match_y(
-    self: _base.Mobject,
-    mobject: _base.Mobject,
-    direction: object = _base.ORIGIN,
-) -> _base.Mobject:
-    """Match a directional y coordinate through shared ``match_coord`` semantics."""
-
-    return _match_coord(self, mobject, 1, direction)
-
-
-def _rotate_about_origin(
-    self: _base.Mobject,
-    angle: float,
-    axis: object = _compat.OUT,
-    **kwargs: Any,
-) -> _base.Mobject:
-    """Rotate through the shared Rust transform path around Manim's origin."""
-
-    return _shared._rotate(
-        self,
-        angle,
-        axis,
-        about_point=_base.ORIGIN,
-        **kwargs,
-    )
-
-
 def _dot_init(
     self: _geometry.Dot,
     point: object = _base.ORIGIN,
@@ -139,18 +95,9 @@ def _dot_init(
     **kwargs: Any,
 ) -> None:
     if _shared._create_geometry_handle is None:
-        _ORIGINAL_DOT_INIT(
-            self,
-            point=point,
-            radius=radius,
-            stroke_width=stroke_width,
-            fill_opacity=fill_opacity,
-            color=color,
-            **kwargs,
-        )
-        return
+        raise RuntimeError("Geometry construction requires the shared Rust authoring host")
 
-    point_value = _compat._as_vec2(point)
+    point_value = _base._as_vec2(point)
     radius_value = _shared._ir._positive_number("radius", radius)
     options = dict(kwargs)
     options["stroke_width"] = stroke_width
@@ -166,8 +113,7 @@ def _dot_init(
 
 def _triangle_init(self: _geometry.Triangle, **kwargs: Any) -> None:
     if _shared._create_geometry_handle is None:
-        _ORIGINAL_TRIANGLE_INIT(self, **kwargs)
-        return
+        raise RuntimeError("Geometry construction requires the shared Rust authoring host")
 
     options = dict(kwargs)
     color = options.pop("color", None)
@@ -184,8 +130,7 @@ def _ellipse_init(
     **kwargs: Any,
 ) -> None:
     if _shared._create_geometry_handle is None:
-        _ORIGINAL_ELLIPSE_INIT(self, width=width, height=height, **kwargs)
-        return
+        raise RuntimeError("Geometry construction requires the shared Rust authoring host")
 
     width_value = _shared._ir._positive_number("width", width)
     height_value = _shared._ir._positive_number("height", height)
@@ -247,7 +192,7 @@ def _shape_matcher_buff(buff: object) -> tuple[float, float]:
     if isinstance(buff, (int, float)) and not isinstance(buff, bool):
         value = _shared._ir._finite_number("buff", buff)
         return value, value
-    value = _compat._as_vec2(buff)
+    value = _base._as_vec2(buff)
     return (
         _shared._ir._finite_number("buff.x", value.x),
         _shared._ir._finite_number("buff.y", value.y),
@@ -330,7 +275,7 @@ class BackgroundRectangle(SurroundingRectangle):
             "corner_radius", options.pop("corner_radius", 0.0)
         )
         buff_x, buff_y = _shape_matcher_buff(buff)
-        fill_value = _shared._phase_b._opacity("fill_opacity", fill_opacity)
+        fill_value = _shared._compat._opacity("fill_opacity", fill_opacity)
         candidate = _shape_matcher_options(
             mobject,
             "beginBackgroundRectangle",
@@ -402,7 +347,7 @@ def _sector_options(
 ) -> tuple[dict[str, Any], int, _base.Vec2]:
     options = dict(kwargs)
     component_count = _sector_component_count(options.pop("num_components", 9))
-    center = _compat._as_vec2(options.pop("arc_center", _base.ORIGIN))
+    center = _base._as_vec2(options.pop("arc_center", _base.ORIGIN))
     return options, component_count, center
 
 
@@ -548,40 +493,3 @@ class Annulus(_compat.VMobject):
         self.mark_paths_closed = bool(mark_paths_closed)
         self.num_components = component_count
         self.arc_center = center
-
-
-def install() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-    _base.Mobject.set_coord = _set_coord
-    _base.Mobject.set_x = _set_x
-    _base.Mobject.set_y = _set_y
-    _base.Mobject.match_coord = _match_coord
-    _base.Mobject.match_x = _match_x
-    _base.Mobject.match_y = _match_y
-    _base.Mobject.rotate_about_origin = _rotate_about_origin
-    if _shared._create_geometry_handle is not None:
-        _geometry.Dot.__init__ = _dot_init
-        _geometry.Ellipse.__init__ = _ellipse_init
-        _geometry.Triangle.__init__ = _triangle_init
-
-    public = {
-        "Elbow": Elbow,
-        "RoundedRectangle": RoundedRectangle,
-        "SurroundingRectangle": SurroundingRectangle,
-        "BackgroundRectangle": BackgroundRectangle,
-        "Underline": Underline,
-        "AnnularSector": AnnularSector,
-        "Sector": Sector,
-        "Annulus": Annulus,
-    }
-    for name, value in public.items():
-        setattr(_base, name, value)
-        setattr(_compat, name, value)
-        if name not in _base.__all__:
-            _base.__all__.append(name)
-
-
-install()

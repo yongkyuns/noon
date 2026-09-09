@@ -87,7 +87,6 @@ jobs:
     name: Web static and unit checks
     runs-on: ubuntu-latest
     env:
-      NOON_SKIP_PLAYGROUND_TEST: "1"
       NOON_WEB_PREFLIGHT_ONLY: "1"
     steps:
       - name: Checkout
@@ -148,6 +147,9 @@ jobs:
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
 
+      - name: Check editor input and Reset without engine startup
+        run: node scripts/python-editor-input-smoke.mjs
+
       - name: Check preloaded cold-start footprint
         if: steps.browser-risk.outputs.cold_start == 'true'
         id: cold-start
@@ -206,7 +208,7 @@ jobs:
         run: |
           SECONDS=0
           set +e
-          timeout --signal=TERM 120s node scripts/retained-execution-worker-smoke.mjs
+          timeout --signal=TERM 120s node scripts/execution-worker-smoke.mjs
           status=$?
           set -e
           echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"

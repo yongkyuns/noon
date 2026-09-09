@@ -4,9 +4,13 @@ pub mod affine_fade;
 pub mod analytic_profile;
 #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
 pub mod automatic_wait_text;
+pub mod dimension_fitting;
 pub mod draw_border_then_fill;
 pub mod exact_property_tracks;
+pub mod family_affine;
 pub mod family_arrangement;
+pub mod family_grid;
+pub mod family_paint;
 pub mod family_placement;
 pub mod family_transform_indicate;
 pub mod line_passing_flash;
@@ -19,6 +23,8 @@ pub mod ordinary_membership;
 pub mod ordinary_subset_display;
 pub mod ordinary_uncreate_options;
 pub mod painter_order_overlap;
+pub mod renderer_fixtures;
+pub mod renderer_recovery;
 pub mod specialized_geometry;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_family_fade;
@@ -36,12 +42,13 @@ use std::{error::Error, rc::Rc};
 
 use crate::{
     AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
-    AnimationOptions, Color, ExecutionSession, HostCallbackId, LiveContinuation, LiveProgram,
-    LiveSession, Mobject, RateFunction, RustHostCallbackTable, Scene,
-    SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticNodeId, SemanticPaint,
-    SemanticStyle, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode,
-    TransformToRequest, ValueTracker, Vec2, VectorPath,
+    AnimationOptions, Color, ExecutionSession, LiveContinuation, LiveProgram, LiveSession, Mobject,
+    RateFunction, RustHostCallbackTable, Scene, SemanticAnimationCompositionKind,
+    SemanticFadeDirection, SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3,
+    StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, TransformToRequest, ValueTracker, Vec2,
+    VectorPath,
 };
+use noon_core::HostCallbackId;
 
 /// Direct counterpart of Manim's DifferentRotations example.
 pub struct OrdinaryDifferentRotations {
@@ -235,7 +242,7 @@ pub fn live_affine_callbacks() -> Result<(ExecutionSession, RustHostCallbackTabl
     })?;
 
     {
-        let mut store = scene.store().borrow_mut();
+        let mut store = scene.integration_store().borrow_mut();
         callbacks.add_updater(&mut store, label.node_id(), ACCUMULATE_TEXT_DT, 0.0, None)?;
         callbacks.add_updater(&mut store, source.node_id(), SET_Y, 0.0, None)?;
         callbacks.add_updater(&mut store, source.node_id(), SET_OPACITY, 0.0, None)?;
@@ -304,7 +311,7 @@ pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable)
             .map_err(|error| std::io::Error::other(error.to_string()))
     })?;
     {
-        let mut store = scene.store().borrow_mut();
+        let mut store = scene.integration_store().borrow_mut();
         callbacks.add_updater(&mut store, source.node_id(), RECOLOR_PAINT, 0.0, None)?;
         callbacks.add_updater(
             &mut store,
@@ -361,7 +368,7 @@ pub fn live_line_callback_rotation(
             .map_err(|error| std::io::Error::other(error.to_string()))
     })?;
     {
-        let mut store = scene.store().borrow_mut();
+        let mut store = scene.integration_store().borrow_mut();
         callbacks.add_updater(&mut store, moving.node_id(), ROTATE_LINE_FORWARD, 0.0, None)?;
         callbacks.add_updater(
             &mut store,
@@ -435,7 +442,7 @@ pub fn live_line_match_callback(
             .map_err(|error| std::io::Error::other(error.to_string()))
     })?;
     {
-        let mut store = scene.store().borrow_mut();
+        let mut store = scene.integration_store().borrow_mut();
         callbacks.add_updater(&mut store, left_id, MOVE_MATCH_DOT, 0.0, None)?;
         callbacks.add_updater(&mut store, line.node_id(), MATCH_LINE_ENDPOINTS, 0.0, None)?;
     }
@@ -872,7 +879,7 @@ pub fn ordinary_value_tracker_continuation_program(
     // Model a host-language tracker constructed before its eventual Scene body:
     // the shared store owns its identity/value while it is detached. The first
     // continuation step enrolls this same handle through LiveSession.
-    let tracker = ValueTracker::detached(Rc::clone(scene.store()), 0.0)?;
+    let tracker = ValueTracker::detached(Rc::clone(scene.integration_store()), 0.0)?;
     let position = scene
         .position_from_tracker(
             &tracker,
@@ -1211,7 +1218,7 @@ pub fn ordinary_callback_continuation_program() -> Result<
 
     let callbacks = ordered_affine_callbacks(Some(0.75)).map_err(|error| error.to_string())?;
     {
-        let mut store = scene.store().borrow_mut();
+        let mut store = scene.integration_store().borrow_mut();
         callbacks
             .add_updater(&mut store, circle.node_id(), SET_Y, 0.0, None)
             .map_err(|error| error.to_string())?;
@@ -1361,7 +1368,7 @@ pub fn ordinary_callback_sparse_reads_program() -> Result<
         .map_err(|error| error.to_string())?;
     callbacks
         .add_updater(
-            &mut scene.store().borrow_mut(),
+            &mut scene.integration_store().borrow_mut(),
             circle.node_id(),
             FOLLOW_SPARSE_READS,
             0.0,
@@ -1663,7 +1670,7 @@ impl LiveContinuation for OrdinaryAffineLifecycleContinuation {
 pub fn ordinary_affine_lifecycle_program(
 ) -> Result<LiveProgram<OrdinaryAffineLifecycleContinuation>, String> {
     let scene = Scene::new();
-    let mut square = Mobject::manim_square(Rc::clone(scene.store()), 1.0)?;
+    let mut square = Mobject::manim_square(Rc::clone(scene.integration_store()), 1.0)?;
     square.set_fill(
         f64::from(Color::BLUE.red),
         f64::from(Color::BLUE.green),
@@ -2390,7 +2397,8 @@ pub fn live_native_signals() -> Result<ExecutionSession, Box<dyn Error>> {
 #[cfg(test)]
 mod continuation_tests {
     use super::*;
-    use crate::{LiveProgramStatus, TimelineWakeState};
+    use crate::LiveProgramStatus;
+    use noon_runtime::TimelineWakeState;
 
     #[test]
     fn different_rotations_keeps_point_transform_distinct_from_angular_path() {

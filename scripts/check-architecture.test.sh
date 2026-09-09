@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory(prefix='noon architecture gate ') as directory:
     (root / 'scripts').mkdir()
     names = ['check.sh', 'check-architecture.sh', 'layer-dependency-ratchet.sh',
              'layer_dependencies.py', 'architecture-ratchet.sh',
-             'architecture_migration_relocations.py', 'architecture_migration_relocations.json',
+             'architecture_retired_models.py',
              'noon-core-module-ownership-ratchet.sh', 'renderer-host-boundary-ratchet.sh',
              'active-perf-frontend-ratchet.sh']
     for name in names:
@@ -86,7 +86,7 @@ with tempfile.TemporaryDirectory(prefix='noon architecture gate ') as directory:
         ('crate-private export', 'crates/noon-web/src/lib.rs', 'pub use legacy::*;\n', 'ScenePlayer must remain crate-private'),
         ('migration growth', 'crates/noon-runtime/src/new.rs', 'struct SceneDocument;\n', 'architecture ratchet:'),
         ('identity authority', 'crates/noon-core/src/duplicate.rs', 'struct SemanticNodeId;\n', 'SemanticNodeId definition must exist exactly once'),
-        ('structural consumer', 'crates/noon-web/src/consumer.rs', 'use crate::legacy::ScenePlayer;\n', 'ScenePlayer consumer outside migration allowlist'),
+        ('structural consumer', 'crates/noon-web/src/consumer.rs', 'use crate::legacy::ScenePlayer;\n', 'retired ScenePlayer consumer'),
     ]
     for label, relative, addition, diagnostic in cases:
         path = root / relative

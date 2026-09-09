@@ -1,28 +1,34 @@
-use noon_compile::CompiledScene;
-use noon_core::{Easing, GeometryRef, Property, SceneDefinition, TrackTiming};
+use noon_compile::{CompiledObject, CompiledScene};
+use noon_core::{
+    GeometryRef, ObjectId, Property, RateFunction, Style, TrackDefinition, TrackId, TrackTiming,
+    TrackValues, Transform2D,
+};
 use noon_render_wgpu::FramePreparer;
 use noon_runtime::SceneInstance;
 
 #[test]
 fn appearance_multiplies_semantic_opacity_in_packed_instances() {
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(GeometryRef::circle(1.0));
-    scene
-        .object_mut(object)
-        .expect("object exists")
-        .style
-        .opacity = 0.4;
-    scene
-        .animate_scalar(
+    let object = ObjectId::new(0);
+    let compiled = CompiledScene::compile_objects(
+        vec![CompiledObject::new(
             object,
-            Property::Appearance,
-            1.0,
-            0.0,
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
-        .expect("appearance track is valid");
-
-    let compiled = CompiledScene::compile(&scene).expect("scene compiles");
+            GeometryRef::circle(1.0),
+            Transform2D::IDENTITY,
+            Style {
+                opacity: 0.4,
+                ..Style::default()
+            },
+        )],
+        &[TrackDefinition {
+            id: TrackId::new(0),
+            object,
+            property: Property::Appearance,
+            values: TrackValues::Scalar { from: 1.0, to: 0.0 },
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+            time_map: Default::default(),
+        }],
+    )
+    .expect("execution data compiles");
     let mut instance = SceneInstance::new(compiled);
     instance.seek(1.0).expect("valid time");
     let mut preparer = FramePreparer::new();

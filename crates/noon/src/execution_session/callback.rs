@@ -1162,10 +1162,13 @@ mod tests {
             .unwrap();
         let mut hold = SemanticMutationTransaction::new();
         hold.set_scalar_signal_at(tracker.node_id(), 3.0, 1.0);
-        hold.apply(&mut scene.store().borrow_mut()).unwrap();
+        hold.apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let mut callbacks = SemanticMutationTransaction::new();
         callbacks.add_updater(active.node_id(), HostCallbackId::new(7), 0.0, None);
-        callbacks.apply(&mut scene.store().borrow_mut()).unwrap();
+        callbacks
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let mut session = scene.execution_session().unwrap();
 
         let CallbackAdvance::HostRequired { overlay, .. } =

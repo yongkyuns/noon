@@ -109,8 +109,8 @@ impl LiveContinuation for FamilyArrangement {
 
 pub fn program() -> Result<LiveProgram<FamilyArrangement>, String> {
     let mut scene = Scene::new();
-    let mut first = Mobject::manim_circle(Rc::clone(scene.store()), 0.2)?;
-    let mut second = Mobject::manim_circle(Rc::clone(scene.store()), 0.2)?;
+    let mut first = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.2)?;
+    let mut second = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.2)?;
     for (object, color) in [(&mut first, Color::BLUE), (&mut second, Color::YELLOW)] {
         object.set_fill(
             f64::from(color.red),

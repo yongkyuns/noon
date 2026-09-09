@@ -6,6 +6,7 @@ import _manim_compat as compat
 import _manim_typst as typst
 import _manim_updaters as updaters
 from _test_manim_membership import install_test_membership
+from _typed_geometry_test_support import identity_only_wrapper
 
 
 def _object(index: int) -> dict:
@@ -29,6 +30,26 @@ def _object(index: int) -> dict:
 
 
 class CanonicalCallbackPropertyRowTests(unittest.TestCase):
+    def test_geometry_adapter_keeps_coordinate_writes_in_callback_phase(self) -> None:
+        import _manim_shared_geometry as geometry
+
+        scene, mobject, context = self._mobject_and_context()
+        public_set_x = updaters._base.Mobject.set_x
+        public_set_y = updaters._base.Mobject.set_y
+        public_set_color = updaters._base.Mobject.set_color
+        import _manim_rate_functions as rates
+        self.assertFalse(hasattr(geometry, "install"))
+        self.assertIs(updaters._base.Mobject.set_color, public_set_color)
+        self.assertIs(updaters._base.Mobject.set_x, public_set_x)
+        self.assertIs(updaters._base.Mobject.set_y, public_set_y)
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            self.assertIs(mobject.set_x(5.0).set_y(4.0), mobject)
+            self.assertEqual(mobject.get_center(), updaters._base.Vec2(5.0, 4.0))
+            self.assertTrue(context.effective_batch()["writes"])
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
     def test_style_wire_uses_rust_default_and_preserves_explicit_mode(self) -> None:
         omitted_default = _object(0)["style"]
         self.assertNotIn("stroke_width_mode", omitted_default)
@@ -49,18 +70,14 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
 
     @staticmethod
     def _mobject_and_context() -> tuple[object, object, object]:
-        compat.install()
+
         install_test_membership(compat)
-        import _manim_semantic_handles as semantic_handles
+        # Public paint methods always enter the phase dispatcher; no final
+        # installer is needed to reclaim VMobject's overrides.
+        assert not hasattr(updaters, "install")
 
-        if not updaters._INSTALLED:
-            # Mirror the production final method that otherwise bypasses the
-            # base Mobject patch. Updater installation must reclaim it.
-
-            compat.VMobject.set_opacity = semantic_handles._set_opacity
-            updaters.install()
         scene = updaters._base.Scene()
-        mobject = compat.Circle(1.0)
+        mobject = identity_only_wrapper(compat.Circle)
         scene.add(mobject)
         mobject._semantic_handle = type(
             "SemanticHandle", (), {"semanticSlot": 11, "semanticGeneration": 3}
@@ -286,7 +303,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             updaters._canonical_callback_time(mobject)
 
-        self.assertIs(compat.VMobject.set_opacity, updaters._canonical_vmobject_set_opacity)
+        self.assertEqual(compat.VMobject.set_opacity.__module__, "_manim_compat")
         self.assertEqual(
             [write["kind"] for write in writes],
             ["transform", "style", "style", "transform"],
@@ -301,11 +318,11 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
     def test_callback_bound_copy_uses_canonical_target_editor_without_copying_callbacks(
         self,
     ) -> None:
-        compat.install()
+
         import _manim_semantic_handles as semantic_handles
 
         scene = updaters._base.Scene()
-        circle = compat.Circle(1.0)
+        circle = identity_only_wrapper(compat.Circle)
         scene.add(circle)
         source_handle = object()
         target_handle = object()
@@ -346,6 +363,46 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         self.assertFalse(hasattr(target, "_noon_updater_registration_history"))
         self.assertIs(circle._noon_updater_registrations[0], registration)
 
+    def test_copy_before_live_bootstrap_does_not_traverse_registration_backreferences(self):
+        import _manim_semantic_handles as semantic_handles
+
+        circle = identity_only_wrapper(compat.Circle)
+        scene = updaters._base.Scene()
+        scene.add(circle)
+        target_handle = object()
+        class Handle:
+            def cloneHandle(self):
+                return target_handle
+        circle._semantic_handle = Handle()
+        circle._semantic_handle_fresh = True
+        registration = updaters._UpdaterRegistration(circle, lambda m: None, None)
+        circle._noon_updaters = [registration.callback]
+        circle._noon_updater_registrations = [registration]
+        circle._noon_updater_registration_history = [registration]
+        self.assertIsNone(semantic_handles._live_mutation_context(circle))
+        copied = semantic_handles._copy_mobject(circle)
+        self.assertIs(copied._semantic_handle, target_handle)
+        self.assertFalse(hasattr(copied, "_noon_updaters"))
+        self.assertFalse(hasattr(copied, "_noon_updater_registrations"))
+        self.assertFalse(hasattr(copied, "_noon_updater_registration_history"))
+        self.assertIs(registration.mobject, circle)
+
+    def test_only_active_callback_phase_masks_the_shared_handle(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        import _manim_semantic_handles as semantic_handles
+
+        handle = object()
+        mobject._semantic_handle = handle
+        mobject._semantic_handle_fresh = True
+        # Captured objects without their own updater still belong to the overlay.
+        self.assertIs(semantic_handles._handle_for(mobject), handle)
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            self.assertIsNone(semantic_handles._handle_for(mobject))
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+        self.assertIs(semantic_handles._handle_for(mobject), handle)
+
     def test_callback_bound_copy_rejects_inside_the_active_phase(self) -> None:
         scene, mobject, context = self._mobject_and_context()
         import _manim_semantic_handles as semantic_handles
@@ -370,11 +427,11 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
                 mobject.rotate(0.5)
             with self.assertRaises(NotImplementedError):
                 mobject.scale(2.0)
-            with self.assertRaises(NotImplementedError):
+            with self.assertRaisesRegex(RuntimeError, "shared Rust"):
                 mobject.width
             with self.assertRaises(NotImplementedError):
                 mobject.geometry
-            with self.assertRaises(NotImplementedError):
+            with self.assertRaisesRegex(RuntimeError, "shared Rust semantic handle"):
                 mobject.copy()
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
@@ -407,7 +464,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         import _manim_shared_geometry
 
         scene, _, context = self._mobject_and_context()
-        line = compat.Line((0.0, 0.0, 0.0), (1.0, 0.0, 0.0))
+        line = identity_only_wrapper(compat.Line)
         scene.add(line)
         line._semantic_handle = type(
             "SemanticHandle", (), {"semanticSlot": 11, "semanticGeneration": 3}
@@ -419,7 +476,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         line._noon_updaters = []
         updaters._ACTIVE_CONTEXTS[id(scene)] = context
         try:
-            _manim_shared_geometry._rotate_about_origin(line, math.pi / 2.0)
+            line.rotate_about_origin(math.pi / 2.0)
             writes = context.effective_batch()["writes"]
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)

@@ -11,7 +11,6 @@ on:
       - "crates/noon/**"
       - "crates/noon-core/**"
       - "crates/noon-compile/**"
-      - "crates/noon-ir/**"
       - "crates/noon-runtime/**"
       - "crates/noon-web/**"
       - "crates/noon-render-wgpu/**"
@@ -42,7 +41,6 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       NOON_SKIP_WEB_PREFLIGHT: "1"
-      NOON_SKIP_PLAYGROUND_TEST: "1"
       NOON_WASM_PROFILE: "release"
       NOON_WASM_SKIP_OPT: "1"
     steps:
@@ -89,6 +87,8 @@ jobs:
         env:
           # Separate checkout mtimes must not reuse baseline workspace artifacts.
           CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target/candidate
+          # Exercise release code with only the typed recovery fixture exported.
+          NOON_RENDERER_SMOKE: "1"
         run: bash scripts/build-web-demo.sh
 
       - name: Cache Playwright Chromium

@@ -31,6 +31,11 @@ expect_rejected() {
   fi
 }
 
+# The retired reactive-to-semantic-store seam must not return.
+printf '#[path = "semantic_store.rs"]\nmod semantic_store;\n' > crates/noon-core/src/reactive.rs
+expect_rejected 'retired semantic-store path indirection'
+printf 'mod ordinary;\n' > crates/noon-core/src/reactive.rs
+
 # A failed scanner must not be interpreted as an empty/valid source tree.
 mkdir -p "$TMP/failing-tools"
 printf '#!/usr/bin/env bash\nexit 2\n' > "$TMP/failing-tools/grep"

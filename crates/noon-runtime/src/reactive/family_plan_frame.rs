@@ -3,7 +3,21 @@ use noon_core::{
     RetainedFamilyAnimationPlan,
 };
 
-use crate::RetainedFamilyFrame;
+use crate::FrameState;
+use noon_core::FamilyAnimationState;
+
+/// Evaluated retained frame plus content-independent family animation state.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RetainedFamilyFrame<'a> {
+    pub retained: &'a FrameState,
+    pub family_animations: &'a [Option<FamilyAnimationState>],
+}
+
+impl RetainedFamilyFrame<'_> {
+    pub fn family_animation(&self, object_index: usize) -> Option<FamilyAnimationState> {
+        self.family_animations.get(object_index).copied().flatten()
+    }
+}
 
 /// Failure while binding one runtime family-animation slot to a prepared retained leaf.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -75,9 +89,9 @@ mod tests {
     use noon_core::{
         FamilyAnimationMode, FamilyAnimationState, FontFaceIdentity, GeometryRef, GlyphRun,
         ObjectContentRef, ObjectId, PositionedGlyph, RateFunction, Rect,
-        RetainedFamilyAnimationPlanBuilder, RetainedObjectDefinition, SemanticStore, Style,
-        TextAffineTransform, TextClusterIdentity, TextDirection, TextRenderItem, TextResource,
-        TextResourceArena, TextSourceKind, TextSourceSpan, Transform2D, Vec2,
+        RetainedFamilyAnimationPlanBuilder, SemanticStore, Style, TextAffineTransform,
+        TextClusterIdentity, TextDirection, TextRenderItem, TextResource, TextResourceArena,
+        TextSourceKind, TextSourceSpan, Transform2D, Vec2,
     };
 
     use crate::{FrameObjectState, FrameState};
@@ -154,12 +168,29 @@ mod tests {
 
         let mut texts = TextResourceArena::new();
         let text_handle = texts.insert(text_resource()).unwrap();
-        let text = RetainedObjectDefinition::text(ObjectId::new(10), text_handle);
-        let circle =
-            RetainedObjectDefinition::geometry(ObjectId::new(11), GeometryRef::circle(1.0));
+        let text = crate::FrameObjectState {
+            id: ObjectId::new(10),
+            content: noon_core::ObjectContentRef::Text(text_handle),
+            transform: noon_core::Transform2D::IDENTITY,
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
+        let circle = crate::FrameObjectState {
+            id: ObjectId::new(11),
+            content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+            transform: noon_core::Transform2D::IDENTITY,
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&store, family).unwrap();
-        builder.accept_leaf(text_leaf, &text, &texts).unwrap();
-        builder.accept_leaf(circle_leaf, &circle, &texts).unwrap();
+        builder
+            .accept_leaf(text_leaf, text.id, &text.content, &texts)
+            .unwrap();
+        builder
+            .accept_leaf(circle_leaf, circle.id, &circle.content, &texts)
+            .unwrap();
         let plan = builder.finish().unwrap();
 
         let frame = FrameState {

@@ -11,10 +11,12 @@ fn observe(object: &Mobject) -> Value {
 
 fn main() {
     let mut scene = Scene::new();
-    let dot = Mobject::manim_dot(Rc::clone(scene.store()), 0.0, 0.0, 0.08).unwrap();
-    let shifted = Mobject::manim_dot(Rc::clone(scene.store()), -2.0, 0.75, 0.18).unwrap();
-    let ellipse = Mobject::manim_ellipse(Rc::clone(scene.store()), 2.0, 1.0).unwrap();
-    let mut transformed = Mobject::manim_ellipse(Rc::clone(scene.store()), 4.0, 1.5).unwrap();
+    let dot = Mobject::manim_dot(Rc::clone(scene.integration_store()), 0.0, 0.0, 0.08).unwrap();
+    let shifted =
+        Mobject::manim_dot(Rc::clone(scene.integration_store()), -2.0, 0.75, 0.18).unwrap();
+    let ellipse = Mobject::manim_ellipse(Rc::clone(scene.integration_store()), 2.0, 1.0).unwrap();
+    let mut transformed =
+        Mobject::manim_ellipse(Rc::clone(scene.integration_store()), 4.0, 1.5).unwrap();
     transformed.rotate(std::f64::consts::PI / 6.0).unwrap();
     transformed.shift(1.25, -0.5).unwrap();
     for object in [&dot, &shifted, &ellipse, &transformed] {

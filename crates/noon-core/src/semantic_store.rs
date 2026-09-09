@@ -1,3 +1,9 @@
+//! One generational semantic identity space and its authored scene state.
+//!
+//! Declarations, membership, object/family operations and atomic transactions
+//! live with the store they mutate. Immutable resources are shared contracts in
+//! the sibling resources module; execution and rendering remain downstream.
+
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
@@ -20,10 +26,44 @@ impl std::hash::Hash for SemanticStoreIdentity {
     }
 }
 
-use crate::{ObjectDefinition, ObjectId, SceneDefinition};
-use crate::{
-    SemanticAnimationState, SemanticObjectState, SemanticSignalState, SemanticUpdaterRegistration,
+mod semantic_scene_operations;
+pub use semantic_scene_operations::*;
+
+mod semantic_scene_restructure;
+pub use semantic_scene_restructure::{
+    plan_semantic_scene_membership, semantic_scene_root_contains, SemanticSceneMembershipRequest,
 };
+
+mod semantic_declarations;
+
+mod semantic_signals;
+pub use semantic_signals::*;
+
+mod semantic_bindings;
+pub use semantic_bindings::*;
+
+mod semantic_animations;
+pub use semantic_animations::*;
+
+mod semantic_transaction;
+pub use semantic_transaction::*;
+
+mod semantic_family;
+pub use semantic_family::*;
+
+mod semantic_model;
+pub use semantic_model::*;
+
+mod object_content;
+pub use object_content::*;
+
+mod lifecycle;
+pub use lifecycle::*;
+
+mod host_callbacks;
+pub use host_callbacks::*;
+
+mod camera;
 
 mod semantic_references;
 mod semantic_text_resources;
@@ -255,8 +295,6 @@ impl OrderedFamilyMembers {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticNodeKind {
-    /// Compatibility payload while `SceneDefinition` consumers migrate.
-    Object(ObjectDefinition),
     /// Semantic object identity. Target objects carry `SemanticObjectState`
     /// directly on the node. State-less instances exist only for the temporary
     /// frontend identity seam and are owned for migration by #61/#959.
@@ -277,8 +315,8 @@ pub struct SemanticNode {
     kind: SemanticNodeKind,
     /// Authoritative authored object payload for target semantic objects.
     ///
-    /// `None` is valid for families, signals, animations, legacy compatibility
-    /// objects, and the temporary state-less frontend identity seam only.
+    /// `None` is valid for families, signals, animations, and the temporary
+    /// state-less frontend identity seam only.
     object_state: Option<SemanticObjectState>,
     source_identity: Option<SourceIdentity>,
     scene_membership: SemanticSceneMembership,
@@ -317,26 +355,6 @@ impl SemanticNode {
         match &mut self.kind {
             SemanticNodeKind::Signal(state) => Some(state),
             _ => None,
-        }
-    }
-
-    pub fn object(&self) -> Option<&ObjectDefinition> {
-        match &self.kind {
-            SemanticNodeKind::Object(object) => Some(object),
-            SemanticNodeKind::AuthoringObject
-            | SemanticNodeKind::Family
-            | SemanticNodeKind::Signal(_)
-            | SemanticNodeKind::Animation(_) => None,
-        }
-    }
-
-    pub fn object_mut(&mut self) -> Option<&mut ObjectDefinition> {
-        match &mut self.kind {
-            SemanticNodeKind::Object(object) => Some(object),
-            SemanticNodeKind::AuthoringObject
-            | SemanticNodeKind::Family
-            | SemanticNodeKind::Signal(_)
-            | SemanticNodeKind::Animation(_) => None,
         }
     }
 
@@ -461,7 +479,6 @@ pub struct SemanticStore {
     scene_tail: Option<SemanticNodeId>,
     scene_nodes: usize,
     next_insertion_order: u64,
-    object_nodes: HashMap<ObjectId, SemanticNodeId>,
     source_nodes: HashMap<SourceIdentity, SemanticNodeId>,
     incoming_references: HashMap<SemanticNodeId, Vec<SemanticIncomingReference>>,
     last_mutation: SemanticMutationStats,
@@ -517,7 +534,6 @@ impl Clone for SemanticStore {
             scene_tail: self.scene_tail,
             scene_nodes: self.scene_nodes,
             next_insertion_order: self.next_insertion_order,
-            object_nodes: self.object_nodes.clone(),
             source_nodes: self.source_nodes.clone(),
             incoming_references: self.incoming_references.clone(),
             last_mutation: self.last_mutation,
@@ -558,29 +574,6 @@ impl SemanticStore {
 
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Compatibility adapter for the current flat scene model.
-    ///
-    /// This adapter is migration-only and is owned for deletion by #959/A4.
-    /// Objects are attached in legacy authored order so current callers remain
-    /// coherent while the authoritative semantic authoring path replaces it.
-    pub fn from_scene_definition(scene: &SceneDefinition) -> Self {
-        let mut store = Self::new();
-        for object in scene.objects() {
-            let id = store.insert_object(object.clone());
-            store
-                .attach_to_scene(id)
-                .expect("newly inserted compatibility node exists");
-        }
-        store
-    }
-
-    pub fn insert_object(&mut self, object: ObjectDefinition) -> SemanticNodeId {
-        let legacy_id = object.id;
-        let id = self.insert_kind(SemanticNodeKind::Object(object));
-        self.object_nodes.insert(legacy_id, id);
-        id
     }
 
     /// Insert a target semantic object whose authored payload is owned directly by
@@ -695,13 +688,6 @@ impl SemanticStore {
             return None;
         }
         slot.node.as_mut()
-    }
-
-    pub fn node_for_object(&self, object: ObjectId) -> Option<SemanticNodeId> {
-        self.object_nodes
-            .get(&object)
-            .copied()
-            .filter(|id| self.node(*id).is_some())
     }
 
     pub fn node_for_source(&self, source: &SourceIdentity) -> Option<SemanticNodeId> {
@@ -1237,9 +1223,6 @@ impl SemanticStore {
                 writes += 1;
             }
         }
-        if let SemanticNodeKind::Object(object) = &node.kind {
-            self.object_nodes.remove(&object.id);
-        }
         if let Some(source) = &node.source_identity {
             self.source_nodes.remove(source);
         }
@@ -1376,7 +1359,7 @@ impl std::error::Error for SemanticStoreError {}
 
 #[cfg(test)]
 mod tests {
-    use crate::GeometryRef;
+    use crate::StoredGeometry;
 
     use super::*;
 
@@ -1471,8 +1454,8 @@ mod tests {
         ));
     }
 
-    fn object(id: u64) -> ObjectDefinition {
-        ObjectDefinition::new(ObjectId::new(id), GeometryRef::circle(1.0))
+    fn object() -> SemanticObjectState {
+        SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 })
     }
 
     #[test]
@@ -1575,7 +1558,7 @@ mod tests {
     fn deletion_does_not_renumber_unrelated_semantic_handles() {
         let mut store = SemanticStore::new();
         let ids = (0..100_000)
-            .map(|index| store.insert_object(object(index)))
+            .map(|_| store.insert_semantic_object(object()))
             .collect::<Vec<_>>();
         let tail = ids[99_999];
         store.remove_node(ids[10]).unwrap();
@@ -1675,10 +1658,10 @@ mod tests {
     #[test]
     fn reused_slot_invalidates_stale_generation_for_all_lifecycle_operations() {
         let mut store = SemanticStore::new();
-        let first = store.insert_object(object(1));
+        let first = store.insert_semantic_object(object());
         store.attach_to_scene(first).unwrap();
         store.remove_node(first).unwrap();
-        let second = store.insert_object(object(2));
+        let second = store.insert_semantic_object(object());
 
         assert_eq!(first.slot(), second.slot());
         assert_ne!(first.generation(), second.generation());
@@ -1720,7 +1703,7 @@ mod tests {
         let mut store = SemanticStore::new();
         let first_family = store.insert_family();
         let second_family = store.insert_family();
-        let child = store.insert_object(object(1));
+        let child = store.insert_semantic_object(object());
         store.add_member(first_family, child).unwrap();
         store.add_member(second_family, child).unwrap();
         assert_eq!(
@@ -1783,8 +1766,8 @@ mod tests {
     #[test]
     fn source_identity_is_unique_stable_and_released_on_delete() {
         let mut store = SemanticStore::new();
-        let first = store.insert_object(object(1));
-        let second = store.insert_object(object(2));
+        let first = store.insert_semantic_object(object());
+        let second = store.insert_semantic_object(object());
         let source = SourceIdentity::ExplicitKey("hero".into());
 
         store
@@ -1804,23 +1787,5 @@ mod tests {
             .set_source_identity(second, Some(source.clone()))
             .unwrap();
         assert_eq!(store.node_for_source(&source), Some(second));
-    }
-
-    #[test]
-    fn flat_scene_adapter_preserves_legacy_lookup_and_root_order() {
-        // Compatibility-only regression owned for deletion by #959/A4.
-        let mut scene = SceneDefinition::new();
-        let first = scene.add(GeometryRef::circle(1.0));
-        let second = scene.add(GeometryRef::rectangle(2.0, 1.0));
-        let store = SemanticStore::from_scene_definition(&scene);
-        let first_node = store.node_for_object(first).unwrap();
-        let second_node = store.node_for_object(second).unwrap();
-
-        assert!(store.node(first_node).unwrap().is_scene_owned());
-        assert!(store.node(second_node).unwrap().is_scene_owned());
-        assert_eq!(
-            store.scene_roots().collect::<Vec<_>>(),
-            vec![first_node, second_node]
-        );
     }
 }

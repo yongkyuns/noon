@@ -83,7 +83,33 @@ assert_eq!(session.frame().objects.len(), 2);
 
 Constructors are scene-bound factories, `Scene::add` attaches the existing node, and handle queries return errors for stale identities. Copies allocate independent nodes in the same store. See [`shared_authoring.rs`](crates/noon/examples/shared_authoring.rs) for typed lowering and runtime execution.
 
-The older fluent snapshot authoring API is available explicitly through `noon::legacy`, including `noon::legacy::prelude`; it is migration code owned for deletion by #959. Its advanced animation examples have not yet all moved to the canonical public API. Initial membership changes prepare subsequent sessions; they do not implicitly mutate an already running session.
+### Ordinary API versus integration
+
+The crate root and `noon::prelude` deliberately export authoring handles, values,
+live operations, completion and errors. Implementation modules and blanket
+lower-layer exports are not public authoring APIs. `noon::integration` explicitly
+exposes the raw semantic/resource types and host/callback/renderer plumbing needed
+by adapters. `noon::diagnostics` is feature-gated debug/export access. None of these
+namespaces introduces another scene, runtime, scheduler or integration crate.
+
+`Scene::revision()` reads the authored revision without mutable arena access.
+`Scene::geometry(ManimGeometryOptions)` constructs a detached specialized shape;
+after lowering, use `LiveSession::create_manim_geometry` instead. The
+[`shared_authoring` example](crates/noon/examples/shared_authoring.rs) shows
+construction, authored/effective queries, live edits and two logical completions
+using only ordinary public APIs. It is the direct Rust counterpart of
+[`live_affine_completion.py`](web/python/examples/live_affine_completion.py), which
+remains in the browser authoring qualification suite.
+
+Raw integration is deliberately named: `Scene::with_integration_store` accepts a
+shared arena; `Scene`, `Mobject` and `MobjectFamily` expose it through
+`integration_store()`. This is not a snapshot or a live-mutation shortcut. Release
+RefCell borrows before calling authoring/session APIs. Edits made outside coherent
+publication can stale the existing session; its identity/revision checks still
+reject them. A consumer that already made such an edit must explicitly discard
+and rebuild that session, not alter its revision bookkeeping. No old-name aliases
+are retained. The `RetainedScene` text adapter in `noon::integration` remains a
+transport-consumer facility owned for deletion by #959, not the ordinary Scene API.
 
 After creating a session, use `scene.live(&mut session)` for shared property edits, append-compatible membership changes, predeclared affine animations, and replacement with content already owned by the semantic store. Property and structural edits use `ExecutionSession::apply_semantic_transaction` to prepare semantic changes and typed execution publication together, so a failed edit leaves authored and live states unchanged.
 
@@ -159,21 +185,23 @@ python3 -m http.server --directory web 8080
 
 Then open `http://localhost:8080`.
 
-Every scene exposed by the playground picker is executed by Python and compiled through the native Rust `ScenePlayer` in CI before deployment.
+Every scene exposed by the playground picker is authored through the shared Rust semantic operations and executed by the common runtime in CI before deployment.
 
 ## Workspace
 
-The active implementation lives under `crates/`. The target ownership is:
+The active implementation lives under `crates/`. Current responsibilities are:
 
-- `noon` — public Rust API, authoritative Semantic Scene, and shared authoring semantics;
-- `noon-core` — normalized renderer-independent execution-plan data;
+- `noon` — public Rust API, shared authoring operations, and execution-session orchestration;
+- `noon-core` — shared semantic identity/store, declarations, resources, and renderer-independent data contracts;
 - `noon-compile` — semantic analysis, specialization, lowering, and geometry preparation;
 - `noon-runtime` — deterministic mutable execution, reactive evaluation, scheduling, and incremental updates;
 - `noon-render-wgpu` — retained WebGPU renderer;
 - `noon-web` — WASM/browser integration;
 - supporting geometry/text crates only where a real dependency or compilation boundary justifies them.
 
-The current `noon-ir` and migration-era scene/transport models are transitional and are scheduled for removal by the architecture-consolidation phase. Serialization/transport is a codec concern, not a permanent scene layer.
+`noon-ir` and the obsolete browser scene/execution mirrors have been deleted. Remaining core legacy scene/codec and frontend migration surfaces are tracked by #959 and #61. Serialization is reserved for explicit codecs and genuine cross-context transport; it is not an in-process engine boundary.
+
+The target boundary remains defined by `docs/architecture.md`; #960 tracks the remaining separation of semantic and execution definitions currently housed in `noon-core`.
 
 Crates should correspond to real dependency or compilation boundaries. Prefer modules over crates until an independent build/dependency/reuse boundary exists.
 

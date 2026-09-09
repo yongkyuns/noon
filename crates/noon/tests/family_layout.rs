@@ -1,4 +1,4 @@
-use noon::{semantic_mobject::ManimNextToArgs, FamilyLayoutTarget as Target, Scene};
+use noon::{FamilyLayoutTarget as Target, ManimNextToArgs, Scene};
 
 #[test]
 fn placement_shares_object_family_and_point_targets_with_masks_and_nonunit_directions() {
@@ -60,7 +60,7 @@ fn invalid_or_foreign_placement_targets_do_not_publish() {
         .layout()
         .unwrap();
     let observation = family.layout().unwrap();
-    let before = scene.store().borrow().scene_revision();
+    let before = scene.integration_store().borrow().scene_revision();
     for target in [
         Target::Mobject(&foreign),
         Target::Family(&foreign_family),
@@ -79,7 +79,7 @@ fn invalid_or_foreign_placement_targets_do_not_publish() {
             }
         )
         .is_err());
-    assert_eq!(scene.store().borrow().scene_revision(), before);
+    assert_eq!(scene.integration_store().borrow().scene_revision(), before);
     assert_eq!(object.center().unwrap(), (0.0, 0.0));
 }
 
@@ -87,11 +87,29 @@ fn invalid_or_foreign_placement_targets_do_not_publish() {
 fn empty_family_observation_has_origin_bounds_without_scene_changes() {
     let scene = Scene::new();
     let family = scene.family(&[]).unwrap();
-    let before = scene.store().borrow().scene_revision();
+    let before = scene.integration_store().borrow().scene_revision();
     let observation = family.layout().unwrap();
     assert_eq!(observation.bounds(), None);
     assert_eq!(observation.critical_point(1.0, -1.0), (0.0, 0.0));
     assert_eq!((observation.width(), observation.height()), (0.0, 0.0));
     observation.shift(3.0, 4.0).unwrap();
-    assert_eq!(scene.store().borrow().scene_revision(), before);
+    assert_eq!(scene.integration_store().borrow().scene_revision(), before);
+}
+
+#[test]
+fn object_next_to_and_frame_corner_use_shared_bounds_and_buffers() {
+    let scene = Scene::new();
+    let mut left = scene.circle(1.0).unwrap();
+    left.shift(-2.0, 0.0).unwrap();
+    let mut right = scene.square(1.0).unwrap();
+    let buffer = f64::from(noon_core::DEFAULT_MOBJECT_TO_MOBJECT_BUFFER);
+    right.next_to_handle(&left, 1.0, 0.0, buffer).unwrap();
+    let gap = right.critical_point(-1.0, 0.0).unwrap().0 - left.critical_point(1.0, 0.0).unwrap().0;
+    assert!((gap - buffer).abs() < 1e-6);
+
+    let buffer = f64::from(noon_core::DEFAULT_MOBJECT_TO_EDGE_BUFFER);
+    right.align_on_frame(1.0, 1.0, buffer).unwrap();
+    let corner = right.critical_point(1.0, 1.0).unwrap();
+    assert!((corner.0 - (f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5 - buffer)).abs() < 1e-5);
+    assert!((corner.1 - (f64::from(noon_core::DEFAULT_FRAME_HEIGHT) * 0.5 - buffer)).abs() < 1e-5);
 }

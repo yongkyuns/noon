@@ -1,5 +1,4 @@
 import init, {
-  ExecutionCanvasRenderer,
   RetainedExecutionCanvasRenderer,
 } from "./pkg/noon_web.js";
 import {
@@ -15,7 +14,6 @@ import {
 
 const RENDER_CHANNEL = "noon.render";
 const RENDER_PROTOCOL_VERSION = 1;
-const MODE_LEGACY = "legacy";
 const MODE_RETAINED = "retained";
 const BOOTSTRAP_QUEUE_LIMIT = 1;
 
@@ -140,8 +138,9 @@ export function createAuthoringRenderController(host) {
 
   async function initialize(message) {
     validateEnginePort(message.port, "authoring render init");
+    const requestedMode = validateMode(message.mode);
     if (!(await prepareSurface(message, "authoring render init"))) return;
-    mode = validateMode(message.mode ?? MODE_LEGACY);
+    mode = requestedMode;
     attachRenderPort(message.port);
   }
 
@@ -572,28 +571,18 @@ export function createAuthoringRenderController(host) {
     const bootstrapGeneration = frameLoopGeneration;
     surfaceCreationError = null;
     try {
-      let createdRenderer;
-      if (mode === MODE_RETAINED) {
-        createdRenderer = await RetainedExecutionCanvasRenderer.create(canvas, resourceBytes);
-        if (stopped) {
-          createdRenderer.free?.();
-          return;
-        }
-        renderer = createdRenderer;
-        resourceBytes = null;
-        const applied = renderer.applyDeltaJson(initial);
-        if (!applied) {
-          throw new Error("retained authoring renderer must begin from an applied snapshot");
-        }
-        armRendererObservation(publication);
-      } else {
-        createdRenderer = await ExecutionCanvasRenderer.create(canvas, initial);
-        if (stopped) {
-          createdRenderer.free?.();
-          return;
-        }
-        renderer = createdRenderer;
+      const createdRenderer = await RetainedExecutionCanvasRenderer.create(canvas, resourceBytes);
+      if (stopped) {
+        createdRenderer.free?.();
+        return;
       }
+      renderer = createdRenderer;
+      resourceBytes = null;
+      const applied = renderer.applyDeltaJson(initial);
+      if (!applied) {
+        throw new Error("retained authoring renderer must begin from an applied snapshot");
+      }
+      armRendererObservation(publication);
       renderer.resize(width, height);
       if (!drainGpuDiagnostics()) return;
       pendingPresentationPublication = publication;
@@ -975,7 +964,7 @@ export function createAuthoringRenderController(host) {
   }
 
   function validateMode(candidate) {
-    if (candidate !== MODE_LEGACY && candidate !== MODE_RETAINED) {
+    if (candidate !== MODE_RETAINED) {
       throw new Error(`unsupported authoring render mode ${candidate}`);
     }
     return candidate;

@@ -1,7 +1,8 @@
-use noon_compile::CompiledScene;
+use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    Color, Easing, GeometryRef, ObjectSnapshot, Property, SceneDefinition, Style, TrackTiming,
-    Transform2D, Vec2, VectorPath,
+    Color, CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, Style,
+    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
+    VectorPath,
 };
 use noon_runtime::SceneInstance;
 
@@ -35,8 +36,8 @@ fn path_c() -> VectorPath {
         .line_to(Vec2::new(1.0, 1.0))
 }
 
-fn snapshot(path: VectorPath, transform: Transform2D, style: Style) -> ObjectSnapshot {
-    ObjectSnapshot {
+fn snapshot(path: VectorPath, transform: Transform2D, style: Style) -> TransformTrackEndpoint {
+    TransformTrackEndpoint {
         geometry: GeometryRef::path(path),
         transform,
         style,
@@ -56,20 +57,31 @@ fn generic_transform_has_exact_semantic_endpoints_and_detached_render_geometry()
     let from = snapshot(path_a(), transform_a, style_a);
     let to = snapshot(path_b(), transform_b, style_b);
 
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(from.geometry.clone());
-    scene.object_mut(object).unwrap().transform = from.transform;
-    scene.object_mut(object).unwrap().style = from.style;
-    scene
-        .animate_transform(
-            object,
-            from.clone(),
-            to.clone(),
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
-        .unwrap();
+    let mut objects = Vec::new();
+    let mut tracks = Vec::new();
+    let object = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        object,
+        from.geometry.clone(),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    objects[object.get() as usize].base_transform = from.transform;
+    objects[object.get() as usize].base_style = from.style;
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: from.clone(),
+            to: to.clone(),
+        },
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+    let mut instance =
+        SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap());
 
     let start = instance.seek(0.0).unwrap().clone();
     assert_eq!(start.objects.len(), 1);
@@ -130,14 +142,27 @@ fn steady_generic_transform_reuses_path_allocations() {
     let style = stroke_style(Color::WHITE);
     let from = snapshot(path_a(), Transform2D::IDENTITY, style);
     let to = snapshot(path_b(), Transform2D::IDENTITY, style);
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(from.geometry.clone());
-    scene.object_mut(object).unwrap().style = style;
-    scene
-        .animate_transform(object, from, to, TrackTiming::new(0.0, 2.0, Easing::Linear))
-        .unwrap();
+    let mut objects = Vec::new();
+    let mut tracks = Vec::new();
+    let object = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        object,
+        from.geometry.clone(),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    objects[object.get() as usize].base_style = style;
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object { from, to },
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+    let mut instance =
+        SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap());
     instance.advance_to(0.25).unwrap();
     let first = path_command_buffers(instance.frame());
     instance.advance_to(0.50).unwrap();
@@ -162,18 +187,25 @@ fn direct_seek_and_forward_playback_match_for_generic_transform() {
         },
         stroke_style(Color::rgb(0.8, 0.2, 0.4)),
     );
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(from.geometry.clone());
-    scene.object_mut(object).unwrap().style = from.style;
-    scene
-        .animate_transform(
-            object,
-            from,
-            to,
-            TrackTiming::new(0.0, 2.0, Easing::EaseInOutCubic),
-        )
-        .unwrap();
-    let compiled = CompiledScene::compile(&scene).unwrap();
+    let mut objects = Vec::new();
+    let mut tracks = Vec::new();
+    let object = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        object,
+        from.geometry.clone(),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    objects[object.get() as usize].base_style = from.style;
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object { from, to },
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::EaseInOutCubic),
+        time_map: CompositionTimeMap::identity(),
+    });
+    let compiled = CompiledScene::compile_objects(objects, &tracks).unwrap();
     let mut sequential = SceneInstance::new(compiled.clone());
     let mut direct = SceneInstance::new(compiled);
 
@@ -206,27 +238,40 @@ fn sequential_transforms_are_continuous_and_choose_new_pair_at_boundary() {
         stroke_style(Color::rgb(0.2, 0.8, 0.3)),
     );
 
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(a.geometry.clone());
-    scene.object_mut(object).unwrap().style = a.style;
-    scene
-        .animate_transform(
-            object,
-            a.clone(),
-            b.clone(),
-            TrackTiming::new(0.0, 1.0, Easing::Linear),
-        )
-        .unwrap();
-    scene
-        .animate_transform(
-            object,
-            b.clone(),
-            c.clone(),
-            TrackTiming::new(1.0, 1.0, Easing::Linear),
-        )
-        .unwrap();
+    let mut objects = Vec::new();
+    let mut tracks = Vec::new();
+    let object = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        object,
+        a.geometry.clone(),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    objects[object.get() as usize].base_style = a.style;
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: a.clone(),
+            to: b.clone(),
+        },
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: b.clone(),
+            to: c.clone(),
+        },
+        timing: TrackTiming::new(1.0, 1.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    let compiled = CompiledScene::compile(&scene).unwrap();
+    let compiled = CompiledScene::compile_objects(objects, &tracks).unwrap();
     let mut direct = SceneInstance::new(compiled.clone());
     let boundary = direct.seek(1.0).unwrap().clone();
     assert_eq!(boundary.objects[0].geometry(), Some(&b.geometry));
@@ -246,35 +291,54 @@ fn sequential_transforms_are_continuous_and_choose_new_pair_at_boundary() {
 
 #[test]
 fn narrow_tracks_override_corresponding_generic_transform_channels() {
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(GeometryRef::circle(1.0));
-    let from = ObjectSnapshot::from(scene.object(object).unwrap());
+    let mut objects = Vec::new();
+    let mut tracks = Vec::new();
+    let object = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        object,
+        GeometryRef::circle(1.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    let from = TransformTrackEndpoint {
+        geometry: objects[object.get() as usize].geometry().unwrap().clone(),
+        transform: objects[object.get() as usize].base_transform,
+        style: objects[object.get() as usize].base_style,
+    };
     let mut to = from.clone();
     to.transform.translation = Vec2::new(10.0, 0.0);
     to.transform.rotation = 1.0;
     to.style.opacity = 0.2;
-    scene
-        .animate_transform(object, from, to, TrackTiming::new(0.0, 2.0, Easing::Linear))
-        .unwrap();
-    scene
-        .animate_position(
-            object,
-            Vec2::ZERO,
-            Vec2::new(20.0, 0.0),
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
-        .unwrap();
-    scene
-        .animate_scalar(
-            object,
-            Property::Opacity,
-            1.0,
-            0.8,
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
-        .unwrap();
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object { from, to },
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Position,
+        values: TrackValues::Vec2 {
+            from: Vec2::ZERO,
+            to: Vec2::new(20.0, 0.0),
+        },
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Opacity,
+        values: TrackValues::Scalar { from: 1.0, to: 0.8 },
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+    let mut instance =
+        SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap());
     let frame = instance.seek(1.0).unwrap();
     assert_eq!(frame.objects[0].transform.translation, Vec2::new(10.0, 0.0));
     assert_eq!(frame.objects[0].transform.rotation, 0.5);
@@ -286,17 +350,35 @@ fn generic_path_transform_does_not_reuse_reveal_channel() {
     let style = stroke_style(Color::WHITE);
     let from = snapshot(path_a(), Transform2D::IDENTITY, style);
     let to = snapshot(path_b(), Transform2D::IDENTITY, style);
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(from.geometry.clone());
-    scene.object_mut(object).unwrap().style = style;
-    scene
-        .animate_transform(object, from, to, TrackTiming::new(0.0, 2.0, Easing::Linear))
-        .unwrap();
-    scene
-        .animate_reveal(object, 0.0, 1.0, TrackTiming::new(0.0, 4.0, Easing::Linear))
-        .unwrap();
+    let mut objects = Vec::new();
+    let mut tracks = Vec::new();
+    let object = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        object,
+        from.geometry.clone(),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    objects[object.get() as usize].base_style = style;
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object { from, to },
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Reveal,
+        values: TrackValues::Scalar { from: 0.0, to: 1.0 },
+        timing: TrackTiming::new(0.0, 4.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+    let mut instance =
+        SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap());
     let frame = instance.seek(1.0).unwrap();
     assert_eq!(frame.morph(0), 0.5);
     assert_eq!(frame.reveal(0), 0.25);
@@ -304,20 +386,34 @@ fn generic_path_transform_does_not_reuse_reveal_channel() {
 
 #[test]
 fn rotation_transform_interpolates_source_and_target_points_not_angle() {
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(GeometryRef::rectangle(2.0, 1.0));
-    let from = ObjectSnapshot::from(scene.object(object).unwrap());
+    let mut objects = Vec::new();
+    let mut tracks = Vec::new();
+    let object = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        object,
+        GeometryRef::rectangle(2.0, 1.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    let from = TransformTrackEndpoint {
+        geometry: objects[object.get() as usize].geometry().unwrap().clone(),
+        transform: objects[object.get() as usize].base_transform,
+        style: objects[object.get() as usize].base_style,
+    };
     let mut to = from.clone();
     to.transform.translation = Vec2::new(2.0, -1.0);
     to.transform.rotation = std::f32::consts::PI;
-    scene
-        .animate_transform(
-            object,
-            from.clone(),
-            to.clone(),
-            TrackTiming::new(0.0, 1.0, Easing::Linear),
-        )
-        .unwrap();
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: from.clone(),
+            to: to.clone(),
+        },
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
     fn world(transform: Transform2D, point: Vec2) -> Vec2 {
         let scaled = Vec2::new(point.x * transform.scale.x, point.y * transform.scale.y);
@@ -328,7 +424,7 @@ fn rotation_transform_interpolates_source_and_target_points_not_angle() {
         )
     }
 
-    let compiled = CompiledScene::compile(&scene).unwrap();
+    let compiled = CompiledScene::compile_objects(objects, &tracks).unwrap();
     let mut instance = SceneInstance::new(compiled);
     let point = Vec2::new(1.0, 0.5);
     for progress in [0.25_f32, 0.5, 0.75] {

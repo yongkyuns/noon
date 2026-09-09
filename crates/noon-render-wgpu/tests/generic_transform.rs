@@ -1,7 +1,7 @@
-use noon_compile::CompiledScene;
+use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    Color, Easing, GeometryRef, ObjectSnapshot, SceneDefinition, Style, TrackTiming, Transform2D,
-    Vec2, VectorPath,
+    Color, GeometryRef, ObjectId, Property, RateFunction, Style, TrackDefinition, TrackId,
+    TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2, VectorPath,
 };
 use noon_render_wgpu::FramePreparer;
 use noon_runtime::SceneInstance;
@@ -36,8 +36,8 @@ fn path_c() -> VectorPath {
         .line_to(Vec2::new(1.0, 1.0))
 }
 
-fn snapshot(path: VectorPath) -> ObjectSnapshot {
-    ObjectSnapshot {
+fn endpoint(path: VectorPath) -> TransformTrackEndpoint {
+    TransformTrackEndpoint {
         geometry: GeometryRef::path(path),
         transform: Transform2D::IDENTITY,
         style: style(),
@@ -51,8 +51,8 @@ fn steady_generic_path_transform_updates_instance_without_retessellation() {
 }
 
 fn assert_steady_transform(stroke_mode: noon_core::StrokeWidthMode) {
-    let mut from = snapshot(path_a());
-    let mut to = snapshot(path_b());
+    let mut from = endpoint(path_a());
+    let mut to = endpoint(path_b());
     from.style.stroke_width_mode = stroke_mode;
     to.style.stroke_width_mode = stroke_mode;
     to.style.stroke = Some(Color::rgb(0.2, 0.7, 0.9));
@@ -62,14 +62,23 @@ fn assert_steady_transform(stroke_mode: noon_core::StrokeWidthMode) {
     to.transform.translation = Vec2::new(3.0, -1.0);
     to.transform.scale = Vec2::new(0.6, 1.9);
 
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(from.geometry.clone());
-    scene.object_mut(object).unwrap().style = from.style;
-    scene
-        .animate_transform(object, from, to, TrackTiming::new(0.0, 2.0, Easing::Linear))
-        .unwrap();
-
-    let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+    let object = ObjectId::new(0);
+    let objects = vec![CompiledObject::new(
+        object,
+        from.geometry.clone(),
+        Transform2D::IDENTITY,
+        from.style,
+    )];
+    let tracks = [TrackDefinition {
+        id: TrackId::new(0),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object { from, to },
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+        time_map: Default::default(),
+    }];
+    let mut instance =
+        SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap());
     let mut preparer = FramePreparer::new();
     instance.seek(0.1).unwrap();
 
@@ -97,25 +106,39 @@ fn assert_steady_transform(stroke_mode: noon_core::StrokeWidthMode) {
 
 #[test]
 fn sequential_path_pair_transition_prepares_new_geometry_once() {
-    let a = snapshot(path_a());
-    let b = snapshot(path_b());
-    let c = snapshot(path_c());
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(a.geometry.clone());
-    scene.object_mut(object).unwrap().style = a.style;
-    scene
-        .animate_transform(
+    let a = endpoint(path_a());
+    let b = endpoint(path_b());
+    let c = endpoint(path_c());
+    let object = ObjectId::new(0);
+    let objects = vec![CompiledObject::new(
+        object,
+        a.geometry.clone(),
+        Transform2D::IDENTITY,
+        a.style,
+    )];
+    let tracks = [
+        TrackDefinition {
+            id: TrackId::new(0),
             object,
-            a,
-            b.clone(),
-            TrackTiming::new(0.0, 1.0, Easing::Linear),
-        )
-        .unwrap();
-    scene
-        .animate_transform(object, b, c, TrackTiming::new(1.0, 1.0, Easing::Linear))
-        .unwrap();
-
-    let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+            property: Property::Transform,
+            values: TrackValues::Object {
+                from: a,
+                to: b.clone(),
+            },
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            time_map: Default::default(),
+        },
+        TrackDefinition {
+            id: TrackId::new(1),
+            object,
+            property: Property::Transform,
+            values: TrackValues::Object { from: b, to: c },
+            timing: TrackTiming::new(1.0, 1.0, RateFunction::Linear),
+            time_map: Default::default(),
+        },
+    ];
+    let mut instance =
+        SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap());
     let mut preparer = FramePreparer::new();
     let changes = instance.take_frame_changes();
     let first = preparer.prepare_incremental(instance.frame(), &changes);

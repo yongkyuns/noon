@@ -5,6 +5,12 @@ use std::{
     sync::Arc,
 };
 
+use crate::text::atlas::{GlyphAtlasPlane, GpuGlyphAtlas};
+use crate::text::{
+    GlyphQuadInstance, PreparedRetainedTextFrame, PreparedTextItem, RetainedTextPrepareStats,
+    RetainedTextQuadPreparer, TextCamera2D, TextDeviceMetrics, TextGlyphGpuRenderer,
+    TextGpuDrawError, TextGpuDrawStats, TextGpuUploadStats, TextPrepareError,
+};
 use noon_core::{
     Color, FontResourceHandle, FontResourceLookup, GeometryRef, GeometryResource,
     GeometryResourceLookup, GlyphRun, ObjectContentRef, ObjectId, PathCommand, PublicationContext,
@@ -14,12 +20,6 @@ use noon_core::{
 #[cfg(test)]
 use noon_core::{FontResourceArena, GeometryResourceArena, TextResourceArena, TextVectorStyle};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState, RendererPublication};
-use noon_text_atlas::{GlyphAtlasPlane, GpuGlyphAtlas};
-use noon_text_render_wgpu::{
-    GlyphQuadInstance, PreparedRetainedTextFrame, PreparedTextItem, RetainedTextPrepareStats,
-    RetainedTextQuadPreparer, TextCamera2D, TextDeviceMetrics, TextGlyphGpuRenderer,
-    TextGpuDrawError, TextGpuDrawStats, TextGpuUploadStats, TextPrepareError,
-};
 #[cfg(test)]
 use noon_typst::{compile_typst_resource, TypstMode};
 use swash::{
@@ -375,13 +375,13 @@ fn observed_glyph_ranges(
                 return None;
             };
             let dirty_ranges = match plane {
-                noon_text_atlas::GlyphAtlasPlane::Mask => text.dirty_mask_ranges,
-                noon_text_atlas::GlyphAtlasPlane::Color => text.dirty_color_ranges,
+                crate::text::atlas::GlyphAtlasPlane::Mask => text.dirty_mask_ranges,
+                crate::text::atlas::GlyphAtlasPlane::Color => text.dirty_color_ranges,
             };
             Some(RetainedPreparedGlyphRange {
                 plane: match plane {
-                    noon_text_atlas::GlyphAtlasPlane::Mask => RetainedGlyphPlane::Mask,
-                    noon_text_atlas::GlyphAtlasPlane::Color => RetainedGlyphPlane::Color,
+                    crate::text::atlas::GlyphAtlasPlane::Mask => RetainedGlyphPlane::Mask,
+                    crate::text::atlas::GlyphAtlasPlane::Color => RetainedGlyphPlane::Color,
                 },
                 page: *page,
                 instance_range: instance_range.clone(),
@@ -1298,11 +1298,7 @@ impl RetainedFramePreparer {
             &self.snapshot_text_items,
             &geometry,
         );
-        reorder_mixed_items(
-            &mut self.render_items,
-            frame,
-            &self.painter_order_indices,
-        );
+        reorder_mixed_items(&mut self.render_items, frame, &self.painter_order_indices);
         rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
         if let Some(indices) = visible_object_indices {
             if let Some(projected) = project_mixed_visibility_cached(
@@ -1648,11 +1644,7 @@ impl RetainedFramePreparer {
                 &self.snapshot_text_items,
                 &geometry,
             );
-            reorder_mixed_items(
-                &mut self.render_items,
-                frame,
-                &self.painter_order_indices,
-            );
+            reorder_mixed_items(&mut self.render_items, frame, &self.painter_order_indices);
             rebuild_render_item_ranges(&mut self.render_item_ranges, &self.render_items);
             self.incremental_stats.mixed_order_rebuilds = self
                 .incremental_stats
@@ -2219,11 +2211,11 @@ fn copy_local_text_snapshot_updates(
             let start = instance_range.start as usize;
             let end = instance_range.end as usize;
             match plane {
-                noon_text_atlas::GlyphAtlasPlane::Mask => {
+                crate::text::atlas::GlyphAtlasPlane::Mask => {
                     mask_destination[start..end].copy_from_slice(&mask_source[start..end]);
                     push_coalesced_range(dirty_mask_ranges, instance_range.clone());
                 }
-                noon_text_atlas::GlyphAtlasPlane::Color => {
+                crate::text::atlas::GlyphAtlasPlane::Color => {
                     color_destination[start..end].copy_from_slice(&color_source[start..end]);
                     push_coalesced_range(dirty_color_ranges, instance_range.clone());
                 }
@@ -2713,7 +2705,13 @@ impl GpuRenderer {
         if prepared.geometry_only {
             return Ok(RetainedDrawStats {
                 geometry: match query_set {
-                    Some(queries) => self.encode_profiled(encoder, view, &prepared.geometry, clear_color, queries),
+                    Some(queries) => self.encode_profiled(
+                        encoder,
+                        view,
+                        &prepared.geometry,
+                        clear_color,
+                        queries,
+                    ),
                     None => self.encode(encoder, view, &prepared.geometry, clear_color),
                 },
                 text: TextGpuDrawStats::default(),
@@ -3614,40 +3612,88 @@ mod tests {
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
         preparer.set_painter_order(&[0]);
-        assert!(!preparer.prepare_with_changes(
-            &device, &queue, &frame, &FrameChanges::all(),
-            &texts, &fonts, &geometries, metrics,
-        ).unwrap().geometry_only);
+        assert!(
+            !preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::all(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                )
+                .unwrap()
+                .geometry_only
+        );
 
         frame.presences[1] = true;
         preparer.set_painter_order_range(&[0, 1], 1..2);
         let changes = FrameChanges::objects(vec![1]).with_painter_order(1..2);
-        assert!(!preparer.prepare_with_changes(
-            &device, &queue, &frame, &changes,
-            &texts, &fonts, &geometries, metrics,
-        ).unwrap().geometry_only);
+        assert!(
+            !preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &changes,
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                )
+                .unwrap()
+                .geometry_only
+        );
         assert_eq!(preparer.geometry_only_classification, Some(true));
         preparer.set_painter_order_range(&[0, 1], 0..1);
-        assert!(preparer.prepare_with_changes(
-            &device, &queue, &frame, &FrameChanges::painter_order(0..1),
-            &texts, &fonts, &geometries, metrics,
-        ).unwrap().geometry_only);
+        assert!(
+            preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::painter_order(0..1),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                )
+                .unwrap()
+                .geometry_only
+        );
         assert_eq!(preparer.geometry.painter_order_indices, [0, 1]);
 
         preparer.set_painter_order_range(&[1, 0], 0..2);
-        preparer.prepare_with_changes(
-            &device, &queue, &frame, &FrameChanges::painter_order(0..2),
-            &texts, &fonts, &geometries, metrics,
-        ).unwrap();
+        preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::painter_order(0..2),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
         assert_eq!(preparer.geometry.painter_order_indices, [1, 0]);
 
         frame.presences[1] = false;
         preparer.set_painter_order_range(&[0], 0..2);
-        let prepared = preparer.prepare_with_changes(
-            &device, &queue, &frame,
-            &FrameChanges::structural(vec![], vec![1]).with_painter_order(0..2),
-            &texts, &fonts, &geometries, metrics,
-        ).unwrap();
+        let prepared = preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::structural(vec![], vec![1]).with_painter_order(0..2),
+                &texts,
+                &fonts,
+                &geometries,
+                metrics,
+            )
+            .unwrap();
         assert!(!prepared.geometry_only);
         assert_eq!(prepared.geometry.ordered_render_batches().count(), 1);
     }
@@ -3968,3 +4014,15 @@ mod tests {
         ));
     }
 }
+
+mod family_prepare;
+pub use family_prepare::*;
+
+mod family_draw_border_prepare;
+pub use family_draw_border_prepare::*;
+
+mod family_animation_prepare;
+pub use family_animation_prepare::*;
+
+mod family_plan_set_prepare;
+pub use family_plan_set_prepare::*;

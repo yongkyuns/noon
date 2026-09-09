@@ -2,8 +2,8 @@ use noon_compile::{
     CompilePatchError, CompiledResources, ExecutionMutationTransaction, ExecutionPatch,
 };
 use noon_core::{
-    ExecutionRevision, FrameEpoch, MutationTransaction, ObjectId, PublicationContext,
-    ReactiveValue, SceneRevision, SignalId, Transform2D,
+    ExecutionRevision, FrameEpoch, ObjectId, PublicationContext, ReactiveValue, SceneRevision,
+    SignalId, Transform2D,
 };
 use std::collections::HashSet;
 
@@ -317,14 +317,6 @@ impl SceneInstance {
     /// identity/channel metadata before any frame-visible mutation occurs. Once that
     /// succeeds, each existing patch application is infallible by the compiled
     /// preflight contract, so no partially applied transaction can escape this call.
-    pub fn apply_transaction(
-        &mut self,
-        transaction: &MutationTransaction,
-    ) -> Result<&FrameState, CompilePatchError> {
-        let transaction = ExecutionMutationTransaction::decode(transaction);
-        self.apply_execution_transaction(&transaction)
-    }
-
     pub fn apply_execution_transaction(
         &mut self,
         transaction: &ExecutionMutationTransaction,
@@ -343,21 +335,6 @@ impl SceneInstance {
     /// scene revision may remain current for execution-only work or advance by exactly
     /// one for a committed authored transaction. All compile validation and revision
     /// capacity checks finish before the first runtime write.
-    pub fn apply_authored_transaction(
-        &mut self,
-        transaction: &MutationTransaction,
-        expected: PublicationContext,
-        scene_revision: SceneRevision,
-    ) -> Result<&FrameState, AuthoredPublicationError> {
-        let transaction = ExecutionMutationTransaction::decode(transaction);
-        self.apply_authored_execution_transaction(
-            &transaction,
-            CompiledResources::default(),
-            expected,
-            scene_revision,
-        )
-    }
-
     pub fn apply_authored_execution_transaction(
         &mut self,
         transaction: &ExecutionMutationTransaction,
@@ -521,8 +498,8 @@ mod tests {
     use noon_compile::{lower_semantic_execution, SemanticExecutionIndex};
     use noon_core::{
         CompositionTimeMap, FontResourceArena, GeometryResourceArena, Property, RateFunction, Rect,
-        ScenePatch, SemanticObjectState, SemanticStore, StoredGeometry, Style, TextResource,
-        TextSourceKind, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
+        SemanticObjectState, SemanticStore, StoredGeometry, Style, TextResource, TextSourceKind,
+        TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
     };
 
     use super::*;
@@ -558,7 +535,7 @@ mod tests {
         };
 
         instance
-            .apply_patch(&ScenePatch::SetTransform { object, transform })
+            .apply_execution_patch(&ExecutionPatch::SetTransform { object, transform })
             .unwrap();
 
         assert_eq!(instance.effective_transform(object), Some(transform));
@@ -571,22 +548,24 @@ mod tests {
         let before = instance.frame().clone();
         let publication_before = instance.publication_context();
         let missing = ObjectId::new(999);
-        let transaction = MutationTransaction::from_mutations([
-            ScenePatch::SetTransform {
+        let transaction = ExecutionMutationTransaction::from_mutations([
+            ExecutionPatch::SetTransform {
                 object,
                 transform: Transform2D {
                     translation: Vec2::new(4.0, 0.0),
                     ..Transform2D::IDENTITY
                 },
             },
-            ScenePatch::SetStyle {
+            ExecutionPatch::SetStyle {
                 object: missing,
                 style: Style::default(),
             },
         ]);
 
         assert_eq!(
-            instance.apply_transaction(&transaction).unwrap_err(),
+            instance
+                .apply_execution_transaction(&transaction)
+                .unwrap_err(),
             CompilePatchError::UnknownObject(missing)
         );
         assert_eq!(instance.frame(), &before);
@@ -629,12 +608,12 @@ mod tests {
             opacity: 0.25,
             ..Style::default()
         };
-        let transaction = MutationTransaction::from_mutations([
-            ScenePatch::SetStyle {
+        let transaction = ExecutionMutationTransaction::from_mutations([
+            ExecutionPatch::SetStyle {
                 object,
                 style: changed_style,
             },
-            ScenePatch::AddTrack(TrackDefinition {
+            ExecutionPatch::AddTrack(TrackDefinition {
                 id: TrackId::new(9),
                 object,
                 property: Property::Morph,
@@ -645,7 +624,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            instance.apply_transaction(&transaction),
+            instance.apply_execution_transaction(&transaction),
             Err(CompilePatchError::GeometryTrackTargetsText {
                 track: TrackId::new(9),
                 property: Property::Morph,
@@ -666,7 +645,12 @@ mod tests {
         // identical. The empty execution transaction still publishes that authored
         // revision without claiming an executable change or dirtying a render row.
         instance
-            .apply_authored_transaction(&MutationTransaction::default(), before, next_scene)
+            .apply_authored_execution_transaction(
+                &ExecutionMutationTransaction::default(),
+                CompiledResources::default(),
+                before,
+                next_scene,
+            )
             .unwrap();
 
         let after = instance.publication_context();
@@ -679,8 +663,9 @@ mod tests {
         assert!(instance.take_frame_changes().is_empty());
 
         instance
-            .apply_authored_transaction(
-                &MutationTransaction::default(),
+            .apply_authored_execution_transaction(
+                &ExecutionMutationTransaction::default(),
+                CompiledResources::default(),
                 after,
                 after.scene_revision(),
             )
@@ -694,17 +679,19 @@ mod tests {
         let (mut instance, object) = semantic_instance();
         instance.take_frame_changes();
         let before = instance.publication_context();
-        let transaction = MutationTransaction::from_mutations([ScenePatch::SetTransform {
-            object,
-            transform: Transform2D {
-                translation: Vec2::new(2.0, -1.0),
-                ..Transform2D::IDENTITY
-            },
-        }]);
+        let transaction =
+            ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetTransform {
+                object,
+                transform: Transform2D {
+                    translation: Vec2::new(2.0, -1.0),
+                    ..Transform2D::IDENTITY
+                },
+            }]);
 
         instance
-            .apply_authored_transaction(
+            .apply_authored_execution_transaction(
                 &transaction,
+                CompiledResources::default(),
                 before,
                 before.scene_revision().checked_next().unwrap(),
             )
@@ -731,16 +718,22 @@ mod tests {
         let (mut instance, object) = semantic_instance();
         instance.take_frame_changes();
         let before = instance.publication_context();
-        let transaction = MutationTransaction::from_mutations([ScenePatch::SetStyle {
-            object,
-            style: Style {
-                opacity: 0.25,
-                ..Style::default()
-            },
-        }]);
+        let transaction =
+            ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetStyle {
+                object,
+                style: Style {
+                    opacity: 0.25,
+                    ..Style::default()
+                },
+            }]);
 
         instance
-            .apply_authored_transaction(&transaction, before, before.scene_revision())
+            .apply_authored_execution_transaction(
+                &transaction,
+                CompiledResources::default(),
+                before,
+                before.scene_revision(),
+            )
             .unwrap();
 
         let after = instance.publication_context();
@@ -768,8 +761,9 @@ mod tests {
         );
 
         assert_eq!(
-            instance.apply_authored_transaction(
-                &MutationTransaction::default(),
+            instance.apply_authored_execution_transaction(
+                &ExecutionMutationTransaction::default(),
+                CompiledResources::default(),
                 stale,
                 before.scene_revision(),
             ),
@@ -780,7 +774,12 @@ mod tests {
         );
         let skipped = SceneRevision::new(before.scene_revision().get() + 2);
         assert_eq!(
-            instance.apply_authored_transaction(&MutationTransaction::default(), before, skipped,),
+            instance.apply_authored_execution_transaction(
+                &ExecutionMutationTransaction::default(),
+                CompiledResources::default(),
+                before,
+                skipped,
+            ),
             Err(AuthoredPublicationError::InvalidSceneRevision {
                 current: before.scene_revision(),
                 proposed: skipped,
@@ -797,23 +796,24 @@ mod tests {
         let frame_before = instance.frame().clone();
         let before = instance.publication_context();
         let missing = ObjectId::new(999);
-        let transaction = MutationTransaction::from_mutations([
-            ScenePatch::SetTransform {
+        let transaction = ExecutionMutationTransaction::from_mutations([
+            ExecutionPatch::SetTransform {
                 object,
                 transform: Transform2D {
                     translation: Vec2::new(4.0, 0.0),
                     ..Transform2D::IDENTITY
                 },
             },
-            ScenePatch::SetStyle {
+            ExecutionPatch::SetStyle {
                 object: missing,
                 style: Style::default(),
             },
         ]);
 
         assert_eq!(
-            instance.apply_authored_transaction(
+            instance.apply_authored_execution_transaction(
                 &transaction,
+                CompiledResources::default(),
                 before,
                 before.scene_revision().checked_next().unwrap(),
             ),
@@ -831,13 +831,14 @@ mod tests {
         let (mut instance, object) = semantic_instance();
         instance.take_frame_changes();
         let base = instance.publication_context();
-        let transaction = MutationTransaction::from_mutations([ScenePatch::SetTransform {
-            object,
-            transform: Transform2D {
-                translation: Vec2::new(1.0, 0.0),
-                ..Transform2D::IDENTITY
-            },
-        }]);
+        let transaction =
+            ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetTransform {
+                object,
+                transform: Transform2D {
+                    translation: Vec2::new(1.0, 0.0),
+                    ..Transform2D::IDENTITY
+                },
+            }]);
 
         let execution_max = PublicationContext::new(
             base.scene_revision(),
@@ -847,8 +848,9 @@ mod tests {
         instance.publication = execution_max;
         let frame_before = instance.frame().clone();
         assert_eq!(
-            instance.apply_authored_transaction(
+            instance.apply_authored_execution_transaction(
                 &transaction,
+                CompiledResources::default(),
                 execution_max,
                 execution_max.scene_revision(),
             ),
@@ -867,8 +869,9 @@ mod tests {
         );
         instance.publication = frame_max;
         assert_eq!(
-            instance.apply_authored_transaction(
-                &MutationTransaction::default(),
+            instance.apply_authored_execution_transaction(
+                &ExecutionMutationTransaction::default(),
+                CompiledResources::default(),
                 frame_max,
                 frame_max.scene_revision().checked_next().unwrap(),
             ),
@@ -884,15 +887,16 @@ mod tests {
     fn successful_execution_transaction_advances_execution_and_frame_once() {
         let (mut instance, object) = semantic_instance();
         let before = instance.publication_context();
-        let transaction = MutationTransaction::from_mutations([ScenePatch::SetTransform {
-            object,
-            transform: Transform2D {
-                translation: Vec2::new(4.0, 0.0),
-                ..Transform2D::IDENTITY
-            },
-        }]);
+        let transaction =
+            ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetTransform {
+                object,
+                transform: Transform2D {
+                    translation: Vec2::new(4.0, 0.0),
+                    ..Transform2D::IDENTITY
+                },
+            }]);
 
-        instance.apply_transaction(&transaction).unwrap();
+        instance.apply_execution_transaction(&transaction).unwrap();
         let after = instance.publication_context();
         assert_eq!(after.scene_revision(), before.scene_revision());
         assert_eq!(
@@ -905,7 +909,7 @@ mod tests {
         );
 
         instance.take_frame_changes();
-        instance.apply_transaction(&transaction).unwrap();
+        instance.apply_execution_transaction(&transaction).unwrap();
         assert_eq!(instance.publication_context(), after);
         assert_eq!(
             instance.last_patch_stats(),
@@ -920,21 +924,22 @@ mod tests {
         instance.take_frame_changes();
         let before = instance.publication_context();
         let original = instance.effective_object(object).unwrap().clone();
-        let transaction = MutationTransaction::from_mutations([
-            ScenePatch::SetTransform {
+        let transaction = ExecutionMutationTransaction::from_mutations([
+            ExecutionPatch::SetTransform {
                 object,
                 transform: original.transform,
             },
-            ScenePatch::SetStyle {
+            ExecutionPatch::SetStyle {
                 object,
                 style: original.style,
             },
-            ScenePatch::SetGeometry {
+            ExecutionPatch::SetContent {
                 object,
-                geometry: original.geometry().unwrap().clone(),
+                content: original.content.clone(),
+                text_bounds: None,
             },
         ]);
-        instance.apply_transaction(&transaction).unwrap();
+        instance.apply_execution_transaction(&transaction).unwrap();
         assert_eq!(instance.publication_context(), before);
         assert!(instance.take_frame_changes().is_empty());
     }
@@ -944,20 +949,20 @@ mod tests {
         let (mut instance, object) = semantic_instance();
         instance.take_frame_changes();
         let before = instance.publication_context();
-        let transaction = MutationTransaction::from_mutations([
-            ScenePatch::SetTransform {
+        let transaction = ExecutionMutationTransaction::from_mutations([
+            ExecutionPatch::SetTransform {
                 object,
                 transform: Transform2D {
                     translation: Vec2::new(4.0, 0.0),
                     ..Transform2D::IDENTITY
                 },
             },
-            ScenePatch::SetTransform {
+            ExecutionPatch::SetTransform {
                 object,
                 transform: Transform2D::IDENTITY,
             },
         ]);
-        instance.apply_transaction(&transaction).unwrap();
+        instance.apply_execution_transaction(&transaction).unwrap();
         assert_eq!(instance.publication_context(), before);
         assert_eq!(
             instance.effective_transform(object),
@@ -971,20 +976,20 @@ mod tests {
         let (mut instance, object) = semantic_instance();
         instance.take_frame_changes();
         let before = instance.publication_context();
-        let transaction = MutationTransaction::from_mutations([
-            ScenePatch::SetTransform {
+        let transaction = ExecutionMutationTransaction::from_mutations([
+            ExecutionPatch::SetTransform {
                 object,
                 transform: Transform2D {
                     translation: Vec2::new(f32::NAN, 0.0),
                     ..Transform2D::IDENTITY
                 },
             },
-            ScenePatch::SetTransform {
+            ExecutionPatch::SetTransform {
                 object,
                 transform: Transform2D::IDENTITY,
             },
         ]);
-        assert!(instance.apply_transaction(&transaction).is_err());
+        assert!(instance.apply_execution_transaction(&transaction).is_err());
         assert_eq!(instance.publication_context(), before);
         assert!(instance.take_frame_changes().is_empty());
     }
@@ -993,14 +998,14 @@ mod tests {
     fn direct_patch_publishes_once_and_repeated_or_failed_patch_does_not() {
         let (mut instance, object) = semantic_instance();
         let before = instance.publication_context();
-        let patch = ScenePatch::SetTransform {
+        let patch = ExecutionPatch::SetTransform {
             object,
             transform: Transform2D {
                 translation: Vec2::new(2.0, 3.0),
                 ..Transform2D::IDENTITY
             },
         };
-        instance.apply_patch(&patch).unwrap();
+        instance.apply_execution_patch(&patch).unwrap();
         let committed = instance.publication_context();
         assert_eq!(
             committed.execution_revision(),
@@ -1011,11 +1016,11 @@ mod tests {
             before.frame_epoch().checked_next().unwrap()
         );
         instance.take_frame_changes();
-        instance.apply_patch(&patch).unwrap();
+        instance.apply_execution_patch(&patch).unwrap();
         assert_eq!(instance.publication_context(), committed);
         assert!(instance.take_frame_changes().is_empty());
         assert!(instance
-            .apply_patch(&ScenePatch::RemoveObject(ObjectId::new(999)))
+            .apply_execution_patch(&ExecutionPatch::RemoveObject(ObjectId::new(999)))
             .is_err());
         assert_eq!(instance.publication_context(), committed);
     }
@@ -1025,7 +1030,7 @@ mod tests {
         let (mut instance, [first, later]) = semantic_instances([1.0, 2.0]);
         let expected = instance.effective_object(later).unwrap().clone();
         instance
-            .apply_patch(&ScenePatch::RemoveObject(first))
+            .apply_execution_patch(&ExecutionPatch::RemoveObject(first))
             .unwrap();
         assert!(instance.effective_object(first).is_none());
         assert_eq!(instance.effective_object(later), Some(&expected));

@@ -20,8 +20,8 @@ if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
 fi
 
 # Local gates inspect staged and unstaged code as well as committed changes.
-# Exact #959 relocation permissions are validated before the growth scan.
-relocation_permissions="$(python3 scripts/architecture_migration_relocations.py "$base")"
+# Retired authorities and namespaces stay absent throughout the working tree.
+python3 scripts/architecture_retired_models.py
 range="$base"
 fixture_path='crates/noon-compile/src/transaction_preflight/tests.rs'
 if [[ -f "$fixture_path" ]] && [[ "$(sed -n '1p' "$fixture_path")" != '#![cfg(test)]' ]]; then
@@ -35,45 +35,22 @@ include_indirection_pattern='(^|[^[:alnum:]_])include![[:space:]]*(\(|\{|\[)'
 migration_found=0
 module_indirection_found=0
 current_file=""
-fixture_payload_allowed=0
 while IFS= read -r line; do
   case "$line" in
     "+++ b/"*)
       current_file="${line#+++ b/}"
-      fixture_payload_allowed=0
-      current_relocation_tokens=""
-      while IFS=$'\t' read -r allowed_path allowed_token; do
-        if [[ "$allowed_path" == "$current_file" ]]; then
-          current_relocation_tokens+=" $allowed_token"
-        fi
-      done <<< "$relocation_permissions"
-      if [[ "$current_file" == 'crates/noon-compile/src/transaction_preflight/tests.rs' ]] &&
-         [[ "$(sed -n '1p' "$current_file")" == '#![cfg(test)]' ]]; then
-        fixture_payload_allowed=1
-      fi
       ;;
     +*)
       [[ "$line" == "+++ "* ]] && continue
       added="${line:1}"
 
-      # A4/#959 permits only the existing CreateObject payload in this
-      # explicitly test-only regression fixture. All other migration tokens
-      # and all other files remain covered by the normal growth check.
       migration_checked="$added"
-      if (( fixture_payload_allowed != 0 )); then
-        migration_checked="$(printf '%s\n' "$migration_checked" | sed -E 's/(^|[^[:alnum:]_])ObjectDefinition([^[:alnum:]_]|$)/\1\2/g')"
-      fi
       # The checker is tooling, not an engine consumer: its own enforcement
       # vocabulary necessarily names the forbidden types it checks. No product
       # path receives this exemption.
-      if [[ "$current_file" == 'scripts/architecture_migration_relocations.py' ]]; then
+      if [[ "$current_file" == 'scripts/architecture_retired_models.py' ]]; then
         migration_checked=""
       fi
-      # Each permission is bounded by a full-working-tree count and an exact
-      # reviewed file/symbol inventory; it cannot authorize new consumer paths.
-      for token in $current_relocation_tokens; do
-        migration_checked="${migration_checked//"$token"/}"
-      done
       if [[ "$migration_checked" =~ $forbidden ]]; then
         printf 'architecture ratchet: %s: +%s\n' "${current_file:-unknown}" "$added" >&2
         migration_found=1
@@ -122,25 +99,25 @@ make that absence structural. See #960/A5 and #961/A6.8.
 EOF
 fi
 
-normalized_runtime_module_indirection_found=0
-normalized_runtime_module_indirections="$(
+normalized_engine_module_indirection_found=0
+normalized_engine_module_indirections="$(
   git grep -nE \
     '^[[:space:]]*#\[[[:space:]]*path[[:space:]]*=|(^|[^[:alnum:]_])include![[:space:]]*(\(|\{|\[)' \
-    -- 'crates/noon-runtime/src' || true
+    -- 'crates/noon-runtime/src' 'crates/noon-render-wgpu/src' || true
 )"
 
-if [[ -n "$normalized_runtime_module_indirections" ]]; then
-  printf '%s\n' "$normalized_runtime_module_indirections" >&2
-  normalized_runtime_module_indirection_found=1
+if [[ -n "$normalized_engine_module_indirections" ]]; then
+  printf '%s\n' "$normalized_engine_module_indirections" >&2
+  normalized_engine_module_indirection_found=1
 fi
 
-if (( normalized_runtime_module_indirection_found != 0 )); then
+if (( normalized_engine_module_indirection_found != 0 )); then
   cat >&2 <<'EOF'
 
-noon-runtime module ownership was normalized by #983 and must stay explicit.
+Runtime and renderer module ownership must stay explicit.
 Organizational #[path] / include! indirection is structurally forbidden anywhere
-under crates/noon-runtime/src, including indirection that predates the current
-diff. Use ordinary Rust module layout instead. See #960/A5.2 and #961/A6.8.
+under noon-runtime/src and noon-render-wgpu/src, including indirection that predates
+the current diff. Use ordinary Rust modules. See #960/A5 and #961/A6.8.
 EOF
 fi
 
@@ -180,11 +157,8 @@ while IFS= read -r reference; do
   [[ -z "$reference" ]] && continue
   reference_file="${reference%%:*}"
   case "$reference_file" in
-    crates/noon-web/src/legacy.rs|\
-    crates/noon-web/src/execution_transport.rs)
-      ;;
     *.rs)
-      printf 'architecture ratchet: ScenePlayer consumer outside migration allowlist: %s\n' "$reference" >&2
+      printf 'architecture ratchet: retired ScenePlayer consumer: %s\n' "$reference" >&2
       scene_player_consumer_spread_found=1
       ;;
   esac
@@ -193,17 +167,15 @@ done <<< "$scene_player_references"
 if (( scene_player_consumer_spread_found != 0 )); then
   cat >&2 <<'EOF'
 
-ScenePlayer is a shrinking migration authority. New noon-web Rust modules must not
-consume it. The temporary allowlist is limited to its definition plus the live
-execution transport seam; remove entries as that caller migrates rather than
-adding consumers. See #959/A4 and #961/A6.8.
+ScenePlayer and its last consumers have been deleted. No noon-web Rust module may
+restore this retired scene authority. See #959/A4 and #961/A6.8.
 EOF
 fi
 
 deleted_legacy_web_surface_found=0
 deleted_legacy_web_references="$(
   git grep -nE \
-    '(^|[^[:alnum:]_])(NoonCanvasPlayer|demoSceneJson|WasmAuthoringFamilyMemberHandle|FrontendFamilyBoundsPlan|noonCreateAuthoringFamilyMemberHandle|evaluateSceneSnapshot|evaluateScenePlaybackSnapshot|scene_snapshot_json|playback_snapshot_json|normalized_frame_json|materialize_legacy_geometry|_legacy_geometry_materialized)([^[:alnum:]_]|$)' \
+    '(^|[^[:alnum:]_])(ExecutionFrameMirror|ExecutionDeltaEncoder|ExecutionDeltaEnvelope|CanvasExecutionSource|NoonCanvasPlayer|demoSceneJson|WasmAuthoringFamilyMemberHandle|FrontendFamilyBoundsPlan|noonCreateAuthoringFamilyMemberHandle|evaluateSceneSnapshot|evaluateScenePlaybackSnapshot|scene_snapshot_json|playback_snapshot_json|normalized_frame_json|materialize_legacy_geometry|_legacy_geometry_materialized)([^[:alnum:]_]|$)' \
     -- \
     'crates/noon-web/src' \
     'web/python-worker.source.js' \
@@ -245,6 +217,11 @@ if [[ -e 'crates/noon-web/src/legacy/clock.rs' ]]; then
 fi
 
 deleted_legacy_validation_paths=(
+  'scripts/explicit-transport-scene-fixture.js'
+  'web/fixtures/execution-transport.json'
+  'crates/noon-ir'
+  'web/python/_manim_canonical_scene.py'
+  'crates/noon-web/src/legacy.rs'
   'crates/noon/src/legacy.rs'
   'crates/noon/src/legacy/semantic_snapshot.rs'
   'crates/noon/src/analytic_geometry_authoring.rs'
@@ -288,6 +265,18 @@ fi
 identity_authority_found=0
 canonical_identity_file='crates/noon-core/src/semantic_store.rs'
 
+# The semantic store no longer admits a second object payload or execution-ID map.
+if retired_store_payloads="$(grep -nE 'ObjectDefinition|from_scene_definition|object_nodes' "$canonical_identity_file")"; then
+  printf 'architecture ratchet: retired semantic-store payload or ID lookup:\n%s\n' "$retired_store_payloads" >&2
+  exit 1
+else
+  scan_status=$?
+  if (( scan_status != 1 )); then
+    echo 'architecture ratchet: semantic-store source scan failed' >&2
+    exit "$scan_status"
+  fi
+fi
+
 semantic_node_defs="$(git grep -nE '^[[:space:]]*(pub([[:space:]]*\([^)]*\))?[[:space:]]+)?struct[[:space:]]+SemanticNodeId([[:space:]{(;]|$)' -- '*.rs' || true)"
 semantic_store_defs="$(git grep -nE '^[[:space:]]*(pub([[:space:]]*\([^)]*\))?[[:space:]]+)?struct[[:space:]]+SemanticStore([[:space:]{(;]|$)' -- '*.rs' || true)"
 semantic_node_impls="$(git grep -nE '^[[:space:]]*impl[[:space:]]+SemanticNodeId([[:space:]{]|$)' -- '*.rs' || true)"
@@ -326,8 +315,8 @@ creating a second identity/store definition elsewhere. See #961/A6.3.
 EOF
 fi
 
-if (( migration_found != 0 || module_indirection_found != 0 || normalized_runtime_module_indirection_found != 0 || normalized_web_tool_player_dependency_found != 0 || scene_player_consumer_spread_found != 0 || deleted_legacy_web_surface_found != 0 || identity_authority_found != 0 )); then
+if (( migration_found != 0 || module_indirection_found != 0 || normalized_engine_module_indirection_found != 0 || normalized_web_tool_player_dependency_found != 0 || scene_player_consumer_spread_found != 0 || deleted_legacy_web_surface_found != 0 || identity_authority_found != 0 )); then
   exit 1
 fi
 
-echo "architecture migration-growth, module-growth, normalized-runtime-module, normalized-web-tool-player, ScenePlayer-consumer, deleted-legacy-web-surface, and semantic-identity ratchets passed"
+echo "architecture migration-growth, module-growth, normalized-engine-module, normalized-web-tool-player, ScenePlayer-consumer, deleted-legacy-web-surface, and semantic-identity ratchets passed"

@@ -10,6 +10,7 @@ from js import noonResolveAnimationOptions as _resolve_shared_animation_options
 
 import noon as _base
 import _manim_compat as _compat
+import _manim_rate_functions as _rate_functions
 
 
 _SUPPORTED_BUILDER_ARGS = {
@@ -53,7 +54,7 @@ def _optional_number(args: dict[str, Any], name: str) -> float:
 def _optional_rate_func(args: dict[str, Any]) -> str:
     if "rate_func" not in args:
         return ""
-    return _compat._easing_from_rate_func(args["rate_func"])
+    return _rate_functions.easing_from_rate_func(args["rate_func"])
 
 
 def _optional_reverse(args: dict[str, Any]) -> int:
@@ -75,7 +76,7 @@ def resolve(
     if play_easing is not None:
         play_rate_id = str(play_easing)
     elif play_rate_func is not None:
-        play_rate_id = _compat._easing_from_rate_func(play_rate_func)
+        play_rate_id = _rate_functions.easing_from_rate_func(play_rate_func)
 
     result = _resolve_shared_animation_options(
         float(default_lag_ratio),

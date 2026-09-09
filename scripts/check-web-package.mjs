@@ -174,12 +174,10 @@ const expectedJavascriptSurface = [
   "manimMoveToPoint(",
   "appendCreate(",
   "appendRotate(",
-  "sceneJson(",
   "export function resolveAnimationOptions(",
 ];
 const expectedTypeSurface = [
   "constructor()",
-  "sceneJson(): string",
   "export class WasmAuthoringStore",
   "createManimCircle(radius: number): WasmAuthoringMobjectHandle",
   "createManimText(source: string, font_family: string, font_size: number, line_spacing: number): WasmAuthoringMobjectHandle",
@@ -391,6 +389,10 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectMixedScalarCompositionSmokeRenderer(",
     "export function createDirectFamilyTransformIndicateSmokeRenderer(",
     "export function createDirectFamilyArrangementSmokeRenderer(",
+    "export function createDirectDimensionFittingSmokeRenderer(",
+    "export function createDirectFamilyAffineSmokeRenderer(",
+    "export function createDirectFamilyPaintSmokeRenderer(",
+    "export function createDirectFamilyGridSmokeRenderer(",
     "export function createDirectFamilyPlacementSmokeRenderer(",
     "export function createDirectDrawBorderThenFillSmokeRenderer(",
     "export function createDirectOrdinaryMembershipSmokeRenderer(",
@@ -436,6 +438,10 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectMixedScalarCompositionSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyTransformIndicateSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyArrangementSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectDimensionFittingSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectFamilyAffineSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectFamilyPaintSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectFamilyGridSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyPlacementSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectDrawBorderThenFillSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryMembershipSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
@@ -455,6 +461,21 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectOrdinarySuccessionSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryPaintPlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryStylePlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectFilledPathTransformRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectCreateShapesRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectMorphStressRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+
+  );
+}
+
+// Recovery qualification also runs with release optimizations. Its explicit
+// fixture feature does not enable the rest of the debug example surface.
+if (process.env.NOON_RENDERER_SMOKE === "1"
+    || javascript.includes("export function createDirectRecoverySmokeRenderer(")) {
+  expectedJavascriptSurface.push("export function createDirectRecoverySmokeRenderer(");
+  expectedTypeSurface.push(
+    "export function createDirectRecoverySmokeRenderer(canvas: OffscreenCanvas, fixture: string): Promise<ExecutionCanvasRenderer>",
+    "directSceneRevision(): bigint",
   );
 }
 
@@ -468,13 +489,14 @@ for (const fragment of expectedTypeSurface) {
     throw new Error(`Generated declarations are missing: ${fragment}`);
   }
 }
-for (const retired of ["ReactiveScenePlayer", "ReactiveCanvasPlayer",
+for (const retired of ["EngineScenePlayer", "ReactiveScenePlayer", "ReactiveCanvasPlayer",
   "AuthoringSceneCore", "DetachedMobjectCore", "AnimateCore", "PlayBatchCore"]) {
   if (javascript.includes(`export class ${retired}`) || declarations.includes(`export class ${retired}`)) {
     throw new Error(`Deleted browser API returned to the package: ${retired}`);
   }
 }
 for (const retired of [
+  "sceneJson(",
   "export function verifySceneReplay(",
   "export function resolveUniformCompositionSchedule(",
   "export function resolveLifecyclePlan(",

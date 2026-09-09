@@ -1,10 +1,35 @@
 #[cfg(target_arch = "wasm32")]
-use noon::semantic_mobject::authoring_render_f64 as render_f64;
-pub use noon::semantic_mobject::{ManimNextToArgs, Mobject};
+use noon::integration::authoring_render_f64 as render_f64;
+pub use noon::{ManimNextToArgs, Mobject};
 #[cfg(target_arch = "wasm32")]
 use noon_core::SemanticNodeId;
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::SemanticStore;
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn family_color(
+    enabled: bool,
+    red: f64,
+    green: f64,
+    blue: f64,
+    alpha: f64,
+) -> Result<Option<noon::Color>, String> {
+    if !enabled {
+        return Ok(None);
+    }
+    if ![red, green, blue, alpha]
+        .iter()
+        .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+    {
+        return Err("family color components must be finite and between zero and one".into());
+    }
+    Ok(Some(noon::Color::rgba(
+        red as f32,
+        green as f32,
+        blue as f32,
+        alpha as f32,
+    )))
+}
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn text_authoring_f32(field: &str, value: f64) -> Result<f32, String> {
@@ -216,6 +241,34 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmLayoutAnchor {
+        #[wasm_bindgen(js_name = rescaleToFit)]
+        pub fn rescale_to_fit(
+            &self,
+            length: f64,
+            dimension: u32,
+            stretch: bool,
+        ) -> Result<(), JsValue> {
+            self.anchor
+                .rescale_to_fit(length, dimension.try_into().map_err(js_error)?, stretch)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = matchDimSize)]
+        pub fn match_dim_size(
+            &self,
+            target: &WasmLayoutAnchor,
+            dimension: u32,
+            stretch: bool,
+        ) -> Result<(), JsValue> {
+            self.anchor
+                .match_dim_size(
+                    &target.anchor,
+                    dimension.try_into().map_err(js_error)?,
+                    stretch,
+                )
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = nextTo)]
         #[allow(clippy::too_many_arguments)]
         pub fn next_to(
@@ -234,7 +287,7 @@ mod wasm {
                 .next_to_aligned(
                     noon::FamilyLayoutTarget::Anchor(&target.anchor),
                     &aligner.anchor,
-                    noon::semantic_mobject::ManimNextToArgs {
+                    noon::ManimNextToArgs {
                         direction: (direction_x, direction_y),
                         buff,
                         aligned_edge: (edge_x, edge_y),
@@ -262,7 +315,7 @@ mod wasm {
                 .next_to_aligned(
                     noon::FamilyLayoutTarget::Point(x, y),
                     &aligner.anchor,
-                    noon::semantic_mobject::ManimNextToArgs {
+                    noon::ManimNextToArgs {
                         direction: (direction_x, direction_y),
                         buff,
                         aligned_edge: (edge_x, edge_y),
@@ -467,7 +520,7 @@ mod wasm {
     impl WasmAuthoringFamilyHandle {
         pub(crate) fn from_semantic_family(family: noon::MobjectFamily) -> Self {
             Self {
-                semantics: Rc::clone(family.store()),
+                semantics: Rc::clone(family.integration_store()),
                 id: family.node_id(),
             }
         }
@@ -479,6 +532,98 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = setColor)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_color(
+            &self,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_color(red, green, blue, alpha)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setFill)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_fill(
+            &self,
+            has_color: bool,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
+                .map_err(js_error)?;
+            self.semantic_family()?
+                .set_fill(color, opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setStroke)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_stroke(
+            &self,
+            has_color: bool,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            width: Option<f64>,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
+                .map_err(js_error)?;
+            self.semantic_family()?
+                .set_stroke(color, width, opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setOpacity)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_opacity(&self, opacity: f64) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_opacity(opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = arrangeInGrid)]
+        pub fn arrange_in_grid(
+            &self,
+            rows: Option<u32>,
+            columns: Option<u32>,
+            gap_x: f64,
+            gap_y: f64,
+        ) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .arrange_in_grid(
+                    rows.map(|v| v as usize),
+                    columns.map(|v| v as usize),
+                    gap_x,
+                    gap_y,
+                )
+                .map_err(js_error)
+        }
+
+        pub fn scale(&self, x: f64, y: f64) -> Result<(), JsValue> {
+            self.semantic_family()?.scale(x, y).map_err(js_error)
+        }
+
+        pub fn rotate(&self, angle: f64, x: f64, y: f64, about_point: bool) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
+            self.semantic_family()?
+                .rotate(angle, pivot)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = layoutAnchor)]
         pub fn layout_anchor(&self, index: Option<i32>) -> Result<WasmLayoutAnchor, JsValue> {
             let anchor = noon::LayoutAnchor::from(&self.semantic_family()?);
@@ -691,7 +836,7 @@ mod wasm {
             semantics: &SharedSemanticStore,
             context: &str,
         ) -> Result<SemanticNodeId, JsValue> {
-            if !Rc::ptr_eq(semantics, self.handle.store()) {
+            if !Rc::ptr_eq(semantics, self.handle.integration_store()) {
                 return Err(js_error(format!(
                     "{context} and mobject belong to different authoring stores"
                 )));
@@ -1548,7 +1693,7 @@ mod tests {
     #[test]
     fn wire_projection_matches_typed_runtime_after_shared_edits() {
         let mut scene = noon::Scene::new();
-        let authoring_store = std::rc::Rc::clone(scene.store());
+        let authoring_store = std::rc::Rc::clone(scene.integration_store());
         let mut options = ManimGeometryOptions::rectangle(2.0, 1.0).unwrap();
         options.set_fill(0.2, 0.3, 0.4, 0.5).unwrap();
         options.set_stroke(0.6, 0.7, 0.8, 0.9).unwrap();

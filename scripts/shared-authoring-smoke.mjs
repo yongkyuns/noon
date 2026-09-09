@@ -97,7 +97,8 @@ class SharedAuthoringSmoke(Scene):
 
         # These compatibility views are deliberately corrupt after the typed scene
         # is complete. Semantic finalization must neither inspect nor export them.
-        self._objects[:] = [{"poison": object()}]
+        assert not hasattr(self, "_objects")
+        self._objects = [{"poison": object()}]
         def reject_export(*_args, **_kwargs):
             raise AssertionError("semantic execution must not export legacy scene state")
         self.to_document = reject_export
@@ -111,6 +112,11 @@ import builtins
 scene = Scene()
 circle = Circle(radius=1.0)
 scene.add(circle)
+# Empty/cleared updater metadata must not disable ordinary typed mutations.
+circle.clear_updaters()
+circle.shift(RIGHT)
+assert circle.get_center() == (1.0, 0.0)
+circle.shift(LEFT)
 # A handle-less wrapper must fail before binding can project existing geometry
 # into Python state. The same scene must remain usable afterward.
 # Unsupported native bindings cannot append legacy declarations on an empty Scene.
@@ -123,7 +129,7 @@ for operation in ("bind_rotation", "bind_opacity", "bind_presence", "bind_positi
         pass
     else:
         raise AssertionError(operation + " admitted a legacy binding")
-assert not unsupported._tracks
+assert not hasattr(unsupported, "_tracks")
 color_probe = Circle().set_fill(BLUE, opacity=0.35).set_stroke(BLUE, opacity=0.2)
 color_probe.set_color(GREEN)
 assert abs(color_probe.get_fill_opacity() - 0.35) < 1e-6
@@ -135,7 +141,7 @@ rotation_probe = Circle()
 angle = 0.123456789012345
 rotation_probe._semantic_handle.setRotation(angle)
 assert float(rotation_probe._semantic_handle.rotation) == angle
-objects_before = [dict(row) for row in scene._objects]
+bindings_before = dict(scene._binding_handles)
 next_id = scene._next_object_id
 untyped = Circle(radius=0.2)
 untyped._semantic_handle = None
@@ -146,9 +152,9 @@ except NotImplementedError as error:
 else:
     raise AssertionError("shared binding admitted a handle-less wrapper")
 assert untyped._scene is None
-assert scene._objects == objects_before
+assert scene._binding_handles == bindings_before
 assert scene._next_object_id == next_id
-assert len(scene._semantic_geometry_handles) == 1
+assert len(scene._binding_handles) == 1
 assert circle.get_center() == (0.0, 0.0)
 builtins.__noon_persisted_scene = scene
 builtins.__noon_persisted_circle = circle
@@ -764,6 +770,13 @@ try {
       expectedDuration: 4,
       endpointTime: null,
     },
+    { filename: "ordinary_filled_path_transform.py", objectCount: 1, expectedDuration: 3.2, endpointTime: null },
+    { filename: "ordinary_dimension_fitting.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_family_affine.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_family_paint.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_family_grid.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_create_shapes.py", objectCount: 4, expectedDuration: 3.2, endpointTime: null },
+    { filename: "ordinary_morph_stress.py", objectCount: 96, expectedDuration: 3.4, endpointTime: null },
     {
       filename: "ordinary_composition_play.py",
       objectCount: 2,
@@ -1005,46 +1018,25 @@ try {
     }
   }
 
-  // Reject legacy finalization without entering the document engine. Every
-  // rejected source uses the same worker, which must remain reusable.
-  const rejectedFinalizations = await page.evaluate(async () => {
-    const failures = [];
-    const corruptions = [
-      'scene._semantic_geometry_handles.clear()',
-      'scene._tracks.append({"property": "position"})',
-    ];
-    for (const corruption of corruptions) {
-      const source = `from noon import Circle, Scene
+  // Derived Python bookkeeping cannot become finalization authority or force
+  // the shared scene into a document/export path.
+  const typedFinalization = await page.evaluate(async () => {
+    const result = await window.sharedAuthoringSmoke.authoring.run(`from noon import Circle, Scene
 scene = Scene()
 scene.add(Circle(radius=0.4))
 assert scene._canonical_authoring_context is not None
 assert not hasattr(scene._canonical_authoring_context, "checkpoint")
 assert not hasattr(scene._canonical_authoring_context, "restore")
-${corruption}
+scene._binding_handles.clear()
 def reject_export(*args, **kwargs):
     raise AssertionError("normal shared finalization invoked the document exporter")
 scene.to_document = reject_export
 assert not hasattr(scene, "to_scene_spec")
 result = scene
-`;
-      try {
-        await window.sharedAuthoringSmoke.authoring.run(source, {});
-        failures.push("unexpected success");
-      } catch (error) {
-        failures.push(String(error));
-      }
-    }
-    const recovered = await window.sharedAuthoringSmoke.authoring.run(
-      'from noon import Circle, Scene\nscene = Scene()\nscene.add(Circle(radius=0.4))\nresult = scene',
-      {},
-    );
-    return { failures, recovered: Object.hasOwn(recovered, "semanticExecution") };
+`, {});
+    return Object.hasOwn(result, "semanticExecution");
   });
-  for (const failure of rejectedFinalizations.failures) {
-    assert.match(failure, /shared Scene cannot fall back to scene-document execution/u);
-    assert.doesNotMatch(failure, /invoked the document exporter/u);
-  }
-  assert.equal(rejectedFinalizations.recovered, true);
+  assert.equal(typedFinalization, true);
 
   // Top-level source and helper calls share the existing wait/play continuation.
   // Selecting result must not implicitly run its construct again.

@@ -1,8 +1,10 @@
+use noon_compile::CompiledObject;
 use noon_compile::{CompileError, CompiledScene, TransformGeometryPlan};
 use noon_core::{
-    Color, Easing, GeometryRef, ObjectSnapshot, Property, SceneDefinition, Style, TrackTiming,
-    TrackValues, Transform2D, Vec2, VectorPath,
+    Color, GeometryRef, Property, RateFunction, Style, TrackTiming, TrackValues, Transform2D,
+    TransformTrackEndpoint, Vec2, VectorPath,
 };
+use noon_core::{CompositionTimeMap, ObjectId, TrackDefinition, TrackId};
 
 fn stroke_style() -> Style {
     Style {
@@ -28,8 +30,8 @@ fn target_path() -> VectorPath {
         .line_to(Vec2::new(0.0, 1.0))
 }
 
-fn snapshot(geometry: GeometryRef, style: Style) -> ObjectSnapshot {
-    ObjectSnapshot {
+fn snapshot(geometry: GeometryRef, style: Style) -> TransformTrackEndpoint {
+    TransformTrackEndpoint {
         geometry,
         transform: Transform2D::IDENTITY,
         style,
@@ -39,19 +41,30 @@ fn snapshot(geometry: GeometryRef, style: Style) -> ObjectSnapshot {
 #[test]
 fn path_transform_compiles_to_one_prepared_geometry_pair() {
     let style = stroke_style();
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(GeometryRef::path(source_path()));
-    scene.object_mut(object).unwrap().style = style;
-    let track = scene
-        .animate_transform(
-            object,
-            snapshot(GeometryRef::path(source_path()), style),
-            snapshot(GeometryRef::path(target_path()), style),
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
-        .unwrap();
+    let mut source_objects = Vec::new();
+    let mut source_tracks = Vec::new();
+    let object = ObjectId::new(source_objects.len() as u64);
+    source_objects.push(CompiledObject::new(
+        object,
+        GeometryRef::path(source_path()),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    source_objects[object.get() as usize].base_style = style;
+    let track = TrackId::new(source_tracks.len() as u64);
+    source_tracks.push(TrackDefinition {
+        id: track,
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: snapshot(GeometryRef::path(source_path()), style),
+            to: snapshot(GeometryRef::path(target_path()), style),
+        },
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    let compiled = CompiledScene::compile(&scene).unwrap();
+    let compiled = CompiledScene::compile_objects(source_objects, &source_tracks).unwrap();
     assert!(compiled.objects()[0].dynamic.transform);
     let compiled_track = compiled
         .tracks()
@@ -73,17 +86,36 @@ fn path_transform_compiles_to_one_prepared_geometry_pair() {
 
 #[test]
 fn identical_geometry_transform_needs_no_render_geometry_override() {
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(GeometryRef::circle(1.0));
-    let from = ObjectSnapshot::from(scene.object(object).unwrap());
+    let mut source_objects = Vec::new();
+    let mut source_tracks = Vec::new();
+    let object = ObjectId::new(source_objects.len() as u64);
+    source_objects.push(CompiledObject::new(
+        object,
+        GeometryRef::circle(1.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    let from = TransformTrackEndpoint {
+        geometry: source_objects[object.get() as usize]
+            .geometry()
+            .unwrap()
+            .clone(),
+        transform: source_objects[object.get() as usize].base_transform,
+        style: source_objects[object.get() as usize].base_style,
+    };
     let mut to = from.clone();
     to.transform.translation = Vec2::new(3.0, -2.0);
     to.style.opacity = 0.25;
-    scene
-        .animate_transform(object, from, to, TrackTiming::new(0.0, 1.0, Easing::Linear))
-        .unwrap();
+    source_tracks.push(TrackDefinition {
+        id: TrackId::new(source_tracks.len() as u64),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object { from, to },
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    let compiled = CompiledScene::compile(&scene).unwrap();
+    let compiled = CompiledScene::compile_objects(source_objects, &source_tracks).unwrap();
     assert!(matches!(
         compiled.tracks()[0].transform_geometry_plan,
         Some(TransformGeometryPlan::Static)
@@ -92,21 +124,40 @@ fn identical_geometry_transform_needs_no_render_geometry_override() {
 
 #[test]
 fn circle_to_rectangle_transform_uses_renderer_only_path_pair() {
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(GeometryRef::circle(1.0));
-    let from = ObjectSnapshot::from(scene.object(object).unwrap());
+    let mut source_objects = Vec::new();
+    let mut source_tracks = Vec::new();
+    let object = ObjectId::new(source_objects.len() as u64);
+    source_objects.push(CompiledObject::new(
+        object,
+        GeometryRef::circle(1.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    let from = TransformTrackEndpoint {
+        geometry: source_objects[object.get() as usize]
+            .geometry()
+            .unwrap()
+            .clone(),
+        transform: source_objects[object.get() as usize].base_transform,
+        style: source_objects[object.get() as usize].base_style,
+    };
     let mut to = from.clone();
     to.geometry = GeometryRef::rectangle(2.0, 2.0);
-    let track = scene
-        .animate_transform(
-            object,
-            from.clone(),
-            to.clone(),
-            TrackTiming::new(0.0, 1.0, Easing::Linear),
-        )
-        .unwrap();
+    let track = TrackId::new(source_tracks.len() as u64);
+    source_tracks.push(TrackDefinition {
+        id: track,
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: from.clone(),
+            to: to.clone(),
+        },
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    let compiled = CompiledScene::compile(&scene).expect("closed analytic shapes should morph");
+    let compiled = CompiledScene::compile_objects(source_objects, &source_tracks)
+        .expect("closed analytic shapes should morph");
     let compiled_track = compiled
         .tracks()
         .iter()
@@ -158,19 +209,38 @@ fn circle_to_rectangle_transform_uses_renderer_only_path_pair() {
 
 #[test]
 fn unsupported_open_closed_cross_geometry_transform_is_rejected_before_runtime() {
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(GeometryRef::circle(1.0));
-    let from = ObjectSnapshot::from(scene.object(object).unwrap());
+    let mut source_objects = Vec::new();
+    let mut source_tracks = Vec::new();
+    let object = ObjectId::new(source_objects.len() as u64);
+    source_objects.push(CompiledObject::new(
+        object,
+        GeometryRef::circle(1.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    let from = TransformTrackEndpoint {
+        geometry: source_objects[object.get() as usize]
+            .geometry()
+            .unwrap()
+            .clone(),
+        transform: source_objects[object.get() as usize].base_transform,
+        style: source_objects[object.get() as usize].base_style,
+    };
     let to = snapshot(
         GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)),
         Style::default(),
     );
-    scene
-        .animate_transform(object, from, to, TrackTiming::new(0.0, 1.0, Easing::Linear))
-        .unwrap();
+    source_tracks.push(TrackDefinition {
+        id: TrackId::new(source_tracks.len() as u64),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object { from, to },
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
     assert!(matches!(
-        CompiledScene::compile(&scene),
+        CompiledScene::compile_objects(source_objects, &source_tracks),
         Err(CompileError::UnsupportedTransformGeometry(_))
     ));
 }
@@ -178,18 +248,30 @@ fn unsupported_open_closed_cross_geometry_transform_is_rejected_before_runtime()
 #[test]
 fn path_stroke_width_change_is_rejected_even_when_geometry_is_identical() {
     let style = stroke_style();
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(GeometryRef::path(source_path()));
-    scene.object_mut(object).unwrap().style = style;
+    let mut source_objects = Vec::new();
+    let mut source_tracks = Vec::new();
+    let object = ObjectId::new(source_objects.len() as u64);
+    source_objects.push(CompiledObject::new(
+        object,
+        GeometryRef::path(source_path()),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    source_objects[object.get() as usize].base_style = style;
     let from = snapshot(GeometryRef::path(source_path()), style);
     let mut to = from.clone();
     to.style.stroke_width = 0.2;
-    scene
-        .animate_transform(object, from, to, TrackTiming::new(0.0, 1.0, Easing::Linear))
-        .unwrap();
+    source_tracks.push(TrackDefinition {
+        id: TrackId::new(source_tracks.len() as u64),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object { from, to },
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
     assert!(matches!(
-        CompiledScene::compile(&scene),
+        CompiledScene::compile_objects(source_objects, &source_tracks),
         Err(CompileError::PathTransformRequiresRetessellation(_))
     ));
 }
@@ -217,19 +299,30 @@ fn certified_closed_filled_path_transform_compiles() {
         .line_to(Vec2::new(0.0, 1.4))
         .line_to(Vec2::new(-1.2, 0.0))
         .close();
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(GeometryRef::path(source.clone()));
-    scene.object_mut(object).unwrap().style = style;
-    scene
-        .animate_transform(
-            object,
-            snapshot(GeometryRef::path(source), style),
-            snapshot(GeometryRef::path(target), style),
-            TrackTiming::new(0.0, 1.0, Easing::Linear),
-        )
-        .unwrap();
+    let mut source_objects = Vec::new();
+    let mut source_tracks = Vec::new();
+    let object = ObjectId::new(source_objects.len() as u64);
+    source_objects.push(CompiledObject::new(
+        object,
+        GeometryRef::path(source.clone()),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    source_objects[object.get() as usize].base_style = style;
+    source_tracks.push(TrackDefinition {
+        id: TrackId::new(source_tracks.len() as u64),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: snapshot(GeometryRef::path(source), style),
+            to: snapshot(GeometryRef::path(target), style),
+        },
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    let compiled = CompiledScene::compile(&scene).expect("certified filled path Transform");
+    let compiled = CompiledScene::compile_objects(source_objects, &source_tracks)
+        .expect("certified filled path Transform");
     assert!(matches!(
         compiled.tracks()[0].transform_geometry_plan,
         Some(TransformGeometryPlan::PathPair { .. })
@@ -259,20 +352,30 @@ fn unsafe_filled_path_transform_is_rejected_before_runtime() {
         .line_to(Vec2::new(1.0, -1.0))
         .line_to(Vec2::new(-1.0, 1.0))
         .close();
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(GeometryRef::path(source.clone()));
-    scene.object_mut(object).unwrap().style = style;
-    scene
-        .animate_transform(
-            object,
-            snapshot(GeometryRef::path(source), style),
-            snapshot(GeometryRef::path(bow_tie), style),
-            TrackTiming::new(0.0, 1.0, Easing::Linear),
-        )
-        .unwrap();
+    let mut source_objects = Vec::new();
+    let mut source_tracks = Vec::new();
+    let object = ObjectId::new(source_objects.len() as u64);
+    source_objects.push(CompiledObject::new(
+        object,
+        GeometryRef::path(source.clone()),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    source_objects[object.get() as usize].base_style = style;
+    source_tracks.push(TrackDefinition {
+        id: TrackId::new(source_tracks.len() as u64),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: snapshot(GeometryRef::path(source), style),
+            to: snapshot(GeometryRef::path(bow_tie), style),
+        },
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
     assert!(matches!(
-        CompiledScene::compile(&scene),
+        CompiledScene::compile_objects(source_objects, &source_tracks),
         Err(CompileError::UnsafeFilledPathTransform(_))
     ));
 }
@@ -286,9 +389,23 @@ fn path_transform_rejects_join_or_cap_topology_changes() {
         .move_to(Vec2::new(0.0, -1.0))
         .line_to(Vec2::new(0.0, 1.0));
     for change_join in [true, false] {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::path(source_path.clone()));
-        let mut from = ObjectSnapshot::from(scene.object(object).unwrap());
+        let mut source_objects = Vec::new();
+        let mut source_tracks = Vec::new();
+        let object = ObjectId::new(source_objects.len() as u64);
+        source_objects.push(CompiledObject::new(
+            object,
+            GeometryRef::path(source_path.clone()),
+            Transform2D::IDENTITY,
+            Style::default(),
+        ));
+        let mut from = TransformTrackEndpoint {
+            geometry: source_objects[object.get() as usize]
+                .geometry()
+                .unwrap()
+                .clone(),
+            transform: source_objects[object.get() as usize].base_transform,
+            style: source_objects[object.get() as usize].base_style,
+        };
         from.style.fill = None;
         from.style.stroke = Some(Color::WHITE);
         from.style.stroke_width = 0.1;
@@ -299,11 +416,16 @@ fn path_transform_rejects_join_or_cap_topology_changes() {
         } else {
             to.style.stroke_cap = noon_core::StrokeCap::Butt;
         }
-        scene
-            .animate_transform(object, from, to, TrackTiming::new(0.0, 1.0, Easing::Linear))
-            .unwrap();
+        source_tracks.push(TrackDefinition {
+            id: TrackId::new(source_tracks.len() as u64),
+            object,
+            property: Property::Transform,
+            values: TrackValues::Object { from, to },
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        });
         assert!(matches!(
-            CompiledScene::compile(&scene),
+            CompiledScene::compile_objects(source_objects, &source_tracks),
             Err(CompileError::PathTransformRequiresRetessellation(_))
         ));
     }

@@ -1,14 +1,14 @@
 use noon_compile::{
     is_semantic_updater_publication, prepare_semantic_publication,
-    prepare_semantic_publication_with_scalar_timeline, prepare_semantic_updater_publication,
-    semantic_execution_object_id, validate_semantic_publication, ExecutionMutationTransaction,
-    ExecutionPatch, SemanticPublicationLoweringError, SemanticPublicationPreparationStats,
+    prepare_semantic_publication_with_scalar_timeline, prepare_semantic_root_order,
+    prepare_semantic_updater_publication, validate_semantic_publication,
+    ExecutionMutationTransaction, ExecutionPatch, SemanticPublicationLoweringError,
+    SemanticPublicationPreparationStats,
 };
 use noon_core::{
     PreparedSemanticMutationTransaction, PublicationContext, SceneRevision, SemanticMutation,
     SemanticMutationTransaction, SemanticMutationTransactionError,
-    SemanticMutationTransactionResult, SemanticNodeId, SemanticNodeKind, SemanticStore,
-    SemanticTransactionNodeRef,
+    SemanticMutationTransactionResult, SemanticNodeId, SemanticStore,
 };
 use noon_runtime::{
     apply_execution_slot_membership_changes, preflight_execution_slot_membership_shape,
@@ -22,84 +22,6 @@ use super::ExecutionSession;
 pub(crate) enum SemanticPublicationPurpose {
     AuthoredMutation,
     SegmentCompletion,
-}
-
-fn lower_root_order_patches(
-    prepared: &PreparedSemanticMutationTransaction<'_>,
-    root: SemanticNodeId,
-) -> Result<Vec<ExecutionPatch>, SemanticPublicationLoweringError> {
-    fn leaves(
-        store: &SemanticStore,
-        node: SemanticNodeId,
-        output: &mut Vec<SemanticNodeId>,
-    ) -> Result<(), SemanticPublicationLoweringError> {
-        let node_state = store.node(node).ok_or_else(|| {
-            SemanticPublicationLoweringError::from(noon_compile::SemanticLoweringError::Store(
-                noon_core::SemanticStoreError::UnknownNode(node),
-            ))
-        })?;
-        match node_state.kind() {
-            SemanticNodeKind::Object(_) | SemanticNodeKind::AuthoringObject => output.push(node),
-            SemanticNodeKind::Family => {
-                for member in node_state.members() {
-                    leaves(store, member, output)?;
-                }
-            }
-            SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => {}
-        }
-        Ok(())
-    }
-
-    let mut patches = Vec::new();
-    for mutation in prepared.candidate_mutations() {
-        match mutation {
-            SemanticMutation::AddMember { family, member } if family.existing() == Some(root) => {
-                let Some(member) = member.existing() else {
-                    continue;
-                };
-                let mut member_leaves = Vec::new();
-                leaves(prepared.store(), member, &mut member_leaves)?;
-                for leaf in member_leaves {
-                    patches.push(ExecutionPatch::ReorderObject {
-                        object: semantic_execution_object_id(leaf),
-                        before: None,
-                    });
-                }
-            }
-            SemanticMutation::ReorderMember {
-                family,
-                member,
-                before,
-            } if family.existing() == Some(root) => {
-                let Some(member) = member.existing() else {
-                    continue;
-                };
-                let mut member_leaves = Vec::new();
-                leaves(prepared.store(), member, &mut member_leaves)?;
-                let mut anchor =
-                    if let Some(before) = before.and_then(SemanticTransactionNodeRef::existing) {
-                        let mut anchor_leaves = Vec::new();
-                        leaves(prepared.store(), before, &mut anchor_leaves)?;
-                        anchor_leaves
-                            .first()
-                            .copied()
-                            .map(semantic_execution_object_id)
-                    } else {
-                        None
-                    };
-                for leaf in member_leaves.into_iter().rev() {
-                    let object = semantic_execution_object_id(leaf);
-                    patches.push(ExecutionPatch::ReorderObject {
-                        object,
-                        before: anchor,
-                    });
-                    anchor = Some(object);
-                }
-            }
-            _ => {}
-        }
-    }
-    Ok(patches)
 }
 
 pub(crate) struct PreparedReactiveEnrollmentBatch {
@@ -434,7 +356,7 @@ impl ExecutionSession {
             };
         let preparation_stats = publication.stats();
         let order_patches = order_root
-            .map(|root| lower_root_order_patches(&prepared, root))
+            .map(|root| prepare_semantic_root_order(&prepared, root))
             .transpose()
             .map_err(ExecutionSessionPublicationError::Lowering)?;
         let (execution_suffix, execution_prefix): (Vec<_>, Vec<_>) =

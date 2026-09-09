@@ -112,8 +112,8 @@ impl FamilyTransformIndicate {
 
 pub fn program() -> Result<LiveProgram<FamilyTransformIndicate>, String> {
     let mut scene = Scene::new();
-    let mut left = Mobject::manim_square(Rc::clone(scene.store()), 0.6)?;
-    let mut right = Mobject::manim_circle(Rc::clone(scene.store()), 0.3)?;
+    let mut left = Mobject::manim_square(Rc::clone(scene.integration_store()), 0.6)?;
+    let mut right = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.3)?;
     left.set_translation(-2.0, 0.0)?;
     right.set_translation(0.0, 0.0)?;
     for (object, color) in [(&mut left, Color::PINK), (&mut right, Color::BLUE)] {

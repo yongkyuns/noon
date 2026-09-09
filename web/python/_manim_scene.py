@@ -1,0 +1,2475 @@
+"""Bind geometry handles directly into the shared Rust Scene.
+
+Static geometry lowers to one ExecutionSession in the authoring worker. Python
+keeps derived identity metadata; geometry values are projected only for explicit
+diagnostic exports. Binding never materializes a Python-owned scene.
+"""
+
+from __future__ import annotations
+
+import copy
+import inspect
+import json
+import math
+import sys
+from dataclasses import dataclass
+from typing import Any
+
+import _manim_typst as _typst
+import _manim_animation_options as _options
+import _manim_animate as _animate
+import _manim_compat as _compat
+import _manim_composition as _composition
+import _manim_draw_border_then_fill as _draw_border_then_fill
+import _manim_family_creation as _family_creation
+import _manim_indication as _indication
+import _manim_lifecycle as _lifecycle
+import _manim_rate_functions as _rate_functions
+import _manim_reactive as _reactive
+import _manim_semantic_handles as _semantic_handles
+from _manim_source_execution import current_source_invocation
+import _noon_ir as _ir
+import noon as _base
+
+try:
+    from js import noonCreateCanonicalAuthoringSceneContext as _create_context
+except ImportError:  # pragma: no cover - native import smoke only
+    _create_context = None
+
+_ASYNC_CONTINUATION_MODE = "_noon_async_continuation_mode"
+_ASYNC_CONTINUATION_PENDING = "_noon_async_continuation_pending"
+_SYNCHRONOUS_CONTINUATION_MODE = "_noon_synchronous_continuation_mode"
+_PORTABLE_CONSTRUCT_MODE = "_noon_portable_construct_mode"
+_PORTABLE_BARRIER_CALL = "_noon_portable_barrier_call"
+_DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE = (
+    "_noon_default_synchronous_continuation_candidate"
+)
+
+
+def _json(value: object) -> str:
+    # Encode tokens for the existing host-callback bridge.
+    return json.dumps(value, separators=(",", ":"), allow_nan=False)
+
+
+def _context(scene: _base.Scene):
+    context = getattr(scene, "_canonical_authoring_context", None)
+    if context is not None:
+        return context
+    if _create_context is None:
+        raise RuntimeError(
+            "shared semantic authoring requires the Noon browser Rust/WASM context"
+        )
+    context = _create_context()
+    scene._canonical_authoring_context = context
+    return context
+
+
+@dataclass(frozen=True)
+class _TypedBindingReservation:
+    object: _ir.Object
+    key: str
+    reuse_existing_identity: bool = False
+
+
+def _reserve_typed_binding(
+    mobject: _base.Mobject,
+    scene: _base.Scene,
+    handle: object,
+    key: str | None,
+    *,
+    object_id: int | None = None,
+) -> _TypedBindingReservation:
+    if mobject._scene is not None:
+        if mobject._scene is scene:
+            raise ValueError("Mobject is already bound to this Scene")
+        raise ValueError("Mobject already belongs to another Scene")
+
+    # A completed canonical FadeOut removes shared root membership but retains
+    # the semantic handle and this wrapper's derived ObjectId. Re-adding that
+    # exact handle must use liveAdd, not allocate a second export identity.
+    prior = getattr(mobject, "_object", None)
+    if prior is not None and prior.id in scene._binding_handles:
+        prior_key = scene._object_keys.get(prior.id)
+        prior_handle = scene._binding_handles[prior.id]
+        if prior_key is not None and prior_handle is handle:
+            if key is not None and _ir._authoring_key("key", key, prior_key) != prior_key:
+                raise ValueError("a re-added canonical Mobject keeps its existing key")
+            return _TypedBindingReservation(
+                prior, prior_key, reuse_existing_identity=True
+            )
+
+    object_id = scene._next_object_id if object_id is None else object_id
+    authoring_key = _ir._authoring_key("key", key, f"@object:{object_id}")
+    if object_id in scene._object_keys:
+        raise ValueError(f"canonical wrapper object identity is already bound: {object_id}")
+    if authoring_key in scene._object_key_ids:
+        raise ValueError(f"duplicate object key: {authoring_key}")
+
+    return _TypedBindingReservation(
+        _ir.Object(object_id, scene._owner), authoring_key
+    )
+
+
+def _commit_typed_binding(
+    mobject: _base.Mobject,
+    scene: _base.Scene,
+    reservation: _TypedBindingReservation,
+    handle: object,
+) -> _ir.Object:
+    """Commit derived wrapper bookkeeping after the shared Rust bind succeeded."""
+    obj = reservation.object
+    if reservation.reuse_existing_identity:
+        mobject._bind(scene, obj)
+        return obj
+    scene._object_keys[obj.id] = reservation.key
+    scene._object_key_ids[reservation.key] = obj.id
+    scene._next_object_id = obj.id + 1
+    _record_mobject_binding(mobject, scene, obj, handle)
+    return obj
+
+
+def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
+    handle = getattr(self, "_semantic_handle", None)
+    if handle is None:
+        raise NotImplementedError("shared Scene binding requires a typed semantic Mobject")
+    reservation = _reserve_typed_binding(self, scene, handle, key)
+    context = _context(scene)
+    if reservation.reuse_existing_identity:
+        context.liveAdd(str(reservation.object.id), handle)
+    elif str(context.liveExecutionOwnership()) in {"active", "returned", "transferred"}:
+        # A resumed source continuation may introduce an object after a
+        # play/wait barrier. Rust atomically publishes both root membership and execution-slot
+        # enrollment before Python records its derived wrapper identity.
+        context.liveAdd(str(reservation.object.id), handle)
+    else:
+        context.bindMobject(str(reservation.object.id), handle)
+    return _commit_typed_binding(self, scene, reservation, handle)
+
+
+def _semantic_wrapper_key(value: object) -> str:
+    if not isinstance(value, (_base.Mobject, _compat.Group)):
+        raise TypeError("Scene membership accepts Mobjects and Groups")
+    handle = getattr(value, "_semantic_family_handle", None)
+    if handle is None:
+        handle = getattr(value, "_semantic_handle", None)
+    if handle is None:
+        raise NotImplementedError(
+            "standard Scene membership requires an ordinary typed Mobject or Group"
+        )
+    return f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
+
+
+def _membership_registry(scene: _base.Scene) -> dict[str, object]:
+    registry = getattr(scene, "_canonical_membership_wrappers", None)
+    if registry is None:
+        registry = scene._canonical_membership_wrappers = {}
+    return registry
+
+
+def _register_membership_wrappers(scene: _base.Scene, value: object) -> None:
+    registry = _membership_registry(scene)
+    registry[_semantic_wrapper_key(value)] = value
+    if isinstance(value, _compat.Group):
+        for member in value.submobjects:
+            _register_membership_wrappers(scene, member)
+
+
+def _membership_wrapper_leaves(candidate: object):
+    """Visit affected Python identities; Rust alone decides scene membership."""
+    if isinstance(candidate, _compat.Group):
+        for child in candidate.submobjects:
+            yield from _membership_wrapper_leaves(child)
+    elif isinstance(candidate, _base.Mobject):
+        yield candidate
+
+
+def _membership_leaf_bindings(
+    scene: _base.Scene,
+    batch: object,
+    value: object,
+    *,
+    next_object_id: int,
+    key: str | None,
+    binding_keys: set[str],
+) -> tuple[int, list[tuple[_base.Mobject, _TypedBindingReservation, object]]]:
+    # This walk reserves Python wrapper IDs only. The family handle below remains
+    # the sole membership/order input; Rust resolves authoritative family leaves.
+    leaves = list(_membership_wrapper_leaves(value))
+    if not leaves:
+        raise ValueError("Scene membership target must contain at least one Mobject")
+    reservations = []
+    for index, member in enumerate(leaves):
+        handle = getattr(member, "_semantic_handle", None)
+        if handle is None:
+            raise NotImplementedError(
+                "standard Scene membership does not support retained-only Mobjects"
+            )
+        semantic_key = _semantic_wrapper_key(member)
+        if semantic_key in binding_keys:
+            continue
+        binding_keys.add(semantic_key)
+        if member._scene is not None and member._scene is not scene:
+            raise ValueError("Mobject already belongs to another Scene")
+        if member._scene is scene:
+            reservation = _TypedBindingReservation(
+                member._object,
+                scene._object_keys[member._object.id],
+                reuse_existing_identity=True,
+            )
+        else:
+            reservation = _reserve_typed_binding(
+                member,
+                scene,
+                handle,
+                key if index == 0 else None,
+                object_id=next_object_id,
+            )
+            if not reservation.reuse_existing_identity:
+                next_object_id += 1
+                reservations.append((member, reservation, handle))
+            else:
+                reservations.append((member, reservation, handle))
+        batch.reserveMobjectBinding(str(reservation.object.id), handle)
+    return next_object_id, reservations
+
+
+def _append_membership_value(
+    scene: _base.Scene,
+    batch: object,
+    value: object,
+    *,
+    next_object_id: int,
+    binding_keys: set[str],
+    reserve_bindings: bool,
+    key: str | None = None,
+) -> tuple[int, list[tuple[_base.Mobject, _TypedBindingReservation, object]]]:
+    reservations = []
+    if reserve_bindings:
+        next_object_id, reservations = _membership_leaf_bindings(
+            scene,
+            batch,
+            value,
+            next_object_id=next_object_id,
+            key=key,
+            binding_keys=binding_keys,
+        )
+    if isinstance(value, _compat.Group):
+        family = getattr(value, "_semantic_family_handle", None)
+        if family is None:
+            raise NotImplementedError("standard Scene membership requires a typed Group")
+        batch.appendFamily(family)
+    elif isinstance(value, _base.Mobject):
+        handle = getattr(value, "_semantic_handle", None)
+        if handle is None:
+            raise NotImplementedError(
+                "standard Scene membership does not support retained-only Mobjects"
+            )
+        object_id = ""
+        if reserve_bindings:
+            assert value._object is not None or reservations
+            object_id = str(
+                value._object.id
+                if value._object is not None
+                else reservations[0][1].object.id
+            )
+        batch.appendMobject(object_id, handle)
+    else:
+        raise TypeError("Scene membership accepts Mobjects and Groups")
+    return next_object_id, reservations
+
+
+def _sync_membership_wrapper_attachments(
+    scene: _base.Scene, kind: str, values: tuple[object, ...]
+) -> None:
+    if kind == "add":
+        return
+    context = _context(scene)
+    # Clear affects every root; other operations only reconsider their old targets.
+    candidates = (
+        _membership_registry(scene).values()
+        if kind == "clear"
+        else (
+            leaf
+            for value in (values[:1] if kind == "replace" else values)
+            for leaf in _membership_wrapper_leaves(value)
+        )
+    )
+    seen = set()
+    for wrapper in candidates:
+        if isinstance(wrapper, _compat.Group) or wrapper._scene is not scene:
+            continue
+        semantic_key = _semantic_wrapper_key(wrapper)
+        if semantic_key in seen:
+            continue
+        seen.add(semantic_key)
+        if kind == "clear" or not bool(context.containsMobject(wrapper._semantic_handle)):
+            # A removed wrapper keeps its stable semantic identity. Preserve the
+            # session that owns that identity so a later copy/animate target and
+            # its edits publish through the same semantic/runtime revision.
+            wrapper._canonical_live_target_context = context
+            wrapper._scene = None
+
+
+def _canonical_scene_mobjects(scene: _base.Scene) -> list[object]:
+    registry = _membership_registry(scene)
+    return [
+        registry[str(key)]
+        for key in _context(scene).rootMembershipKeys()
+        if str(key) in registry
+    ]
+
+
+def _canonical_edit_membership(
+    scene: _base.Scene,
+    kind: str,
+    values: tuple[object, ...] = (),
+    *,
+    key: str | None = None,
+) -> None:
+    if key is not None and (kind != "add" or len(values) != 1 or isinstance(values[0], _compat.Group)):
+        raise ValueError("an explicit key requires one ordinary Mobject add")
+    context = _context(scene)
+    batch = context.beginMembershipBatch(kind)
+    next_object_id = scene._next_object_id
+    reservations = []
+    binding_keys = set()
+    request_keys = set()
+    for index, value in enumerate(values):
+        request_key = _semantic_wrapper_key(value)
+        if request_key in request_keys:
+            raise ValueError("membership request contains a duplicate Mobject or Group")
+        request_keys.add(request_key)
+        next_object_id, appended = _append_membership_value(
+            scene,
+            batch,
+            value,
+            next_object_id=next_object_id,
+            binding_keys=binding_keys,
+            reserve_bindings=kind in {"add", "replace"},
+            key=key if index == 0 else None,
+        )
+        reservations.extend(appended)
+    context.editMembership(batch)
+    for member, reservation, handle in reservations:
+        _commit_typed_binding(member, scene, reservation, handle)
+    for value in values:
+        _register_membership_wrappers(scene, value)
+    _sync_membership_wrapper_attachments(scene, kind, values)
+
+
+def _bind_camera_frame(scene: _base.Scene, mobject: _base.Mobject) -> _ir.Object:
+    """Bind one context-created semantic camera without constructing Python geometry state."""
+    if getattr(mobject, "_scene", None) is not None:
+        raise ValueError("camera frame is already bound")
+    object_id = scene._next_object_id
+    authoring_key = _ir._authoring_key("key", None, f"@object:{object_id}")
+    if object_id in scene._object_keys or authoring_key in scene._object_key_ids:
+        raise ValueError("camera frame wrapper identity is already bound")
+    reservation = _TypedBindingReservation(
+        _ir.Object(object_id, scene._owner), authoring_key
+    )
+    handle = _context(scene).createCameraFrame(str(object_id))
+    _semantic_handles._attach_shared_handle(mobject, handle)
+    return _commit_typed_binding(mobject, scene, reservation, handle)
+
+
+def _record_mobject_binding(
+    mobject: _base.Mobject,
+    scene: _base.Scene,
+    obj: _ir.Object,
+    handle: object,
+) -> None:
+    scene._binding_handles[obj.id] = handle
+    mobject._bind(scene, obj)
+
+
+def _canonical_tracker_builder(builder: object) -> bool:
+    return (
+        isinstance(builder, _reactive._ValueAnimationBuilder)
+        and (
+            builder.tracker._canonical_context_handle() is not None
+            or builder.tracker._detached_canonical_handle() is not None
+        )
+    )
+
+
+def _associate_tracker(scene: _base.Scene, tracker: _reactive.ValueTracker) -> None:
+    if tracker._canonical_context_handle() is not None:
+        return
+    handle = tracker._detached_canonical_handle()
+    if handle is None:
+        return
+    tracker._associate_canonical(scene, _context(scene))
+
+
+def _canonical_scene_time(scene: _base.Scene) -> float:
+    """Observe the shared Rust cursor, including an empty scene at time zero."""
+    return float(_context(scene).authoredDuration())
+
+
+def _begin_async_continuation_construct(scene: _base.Scene) -> None:
+    if getattr(scene, _ASYNC_CONTINUATION_MODE, False):
+        raise RuntimeError("canonical async construct is already active")
+    setattr(scene, _ASYNC_CONTINUATION_MODE, True)
+    setattr(scene, _ASYNC_CONTINUATION_PENDING, set())
+
+
+def _finish_async_continuation_construct(scene: _base.Scene) -> None:
+    pending = getattr(scene, _ASYNC_CONTINUATION_PENDING, set())
+    try:
+        if pending:
+            raise RuntimeError(
+                "async construct must await every supported Scene.play/Scene.wait continuation"
+            )
+    finally:
+        setattr(scene, _ASYNC_CONTINUATION_MODE, False)
+        setattr(scene, _ASYNC_CONTINUATION_PENDING, set())
+
+
+def _async_continuation_active(scene: _base.Scene) -> bool:
+    return bool(getattr(scene, _ASYNC_CONTINUATION_MODE, False))
+
+
+def _default_synchronous_continuation_candidate(scene: _base.Scene) -> bool:
+    """Whether this ordinary host stack may enter a supported JSPI barrier."""
+    invocation = current_source_invocation()
+    return bool(
+        getattr(scene, _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE, False)
+        or (invocation is not None
+            and not _async_continuation_active(scene))
+    )
+
+
+def _start_default_synchronous_continuation(scene: _base.Scene) -> None:
+    """Enter the existing synchronous continuation only before Rust mutation."""
+    if (
+        not _default_synchronous_continuation_candidate(scene)
+    ):
+        return
+    if _synchronous_continuation_active(scene):
+        return
+    if _async_continuation_active(scene):
+        raise RuntimeError("canonical async and synchronous constructs cannot overlap")
+    from pyodide.ffi import can_run_sync
+
+    if not can_run_sync():
+        raise RuntimeError(
+            "ordinary synchronous canonical play/wait requires Pyodide JS Promise "
+            "Integration in this browser; use async construct or a JSPI-capable browser"
+        )
+    setattr(scene, _SYNCHRONOUS_CONTINUATION_MODE, True)
+    invocation = current_source_invocation()
+    if invocation is not None:
+        invocation.cleanup.callback(_finish_synchronous_continuation_construct, scene)
+        if _reactive._current_authoring_scene() is not scene:
+            token = _reactive._enter_authoring_scene(scene)
+            invocation.cleanup.callback(_reactive._leave_authoring_scene, token)
+
+
+def _finish_synchronous_continuation_construct(scene: _base.Scene) -> None:
+    setattr(scene, _SYNCHRONOUS_CONTINUATION_MODE, False)
+
+
+def _synchronous_continuation_active(scene: _base.Scene) -> bool:
+    return bool(getattr(scene, _SYNCHRONOUS_CONTINUATION_MODE, False))
+
+
+def _semantic_continuation_active(scene: _base.Scene) -> bool:
+    return _async_continuation_active(scene) or _synchronous_continuation_active(scene)
+
+
+async def execute_construct(
+    scene: _base.Scene, *, portable_constructs=None
+) -> None:
+    """Run one Scene construct lifecycle with its canonical continuation mode."""
+    canonical = (
+        _create_context is not None
+        or getattr(scene, "_canonical_authoring_context", None) is not None
+    )
+    token = _reactive._enter_authoring_scene(scene if canonical else None)
+    try:
+        scene.setup()
+        try:
+            portable_construct = None
+            if canonical and portable_constructs:
+                from _manim_source_execution import (
+                    bind_portable_construct, has_portable_scene_methods,
+                )
+
+                # Inspect the instance after setup(), without executing getters.
+                # Overrides and dynamic lookup retain the original call path.
+                if has_portable_scene_methods(
+                    scene, play=_base.Scene.play, wait=_base.Scene.wait,
+                    add=_base.Scene.add, remove=_base.Scene.remove, clear=_base.Scene.clear,
+                ):
+                    portable_construct = bind_portable_construct(
+                        scene.construct, portable_constructs
+                    )
+            if portable_construct is not None:
+                _begin_async_continuation_construct(scene)
+                setattr(scene, _PORTABLE_CONSTRUCT_MODE, True)
+                try:
+                    await portable_construct()
+                finally:
+                    setattr(scene, _PORTABLE_CONSTRUCT_MODE, False)
+                    setattr(scene, _PORTABLE_BARRIER_CALL, False)
+                    _finish_async_continuation_construct(scene)
+            elif inspect.iscoroutinefunction(scene.construct):
+                _begin_async_continuation_construct(scene)
+                try:
+                    await scene.construct()
+                finally:
+                    _finish_async_continuation_construct(scene)
+            else:
+                # Do not probe JSPI for a static or legacy-only ordinary construct.
+                # The first supported canonical segment preflights it before Rust
+                # creates or activates that segment, so unsupported browsers fail
+                # without selecting endpoint-only execution for the same operation.
+                setattr(scene, _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE, True)
+                try:
+                    scene.construct()
+                finally:
+                    setattr(scene, _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE, False)
+                    _finish_synchronous_continuation_construct(scene)
+        finally:
+            scene.tear_down()
+    finally:
+        _reactive._leave_authoring_scene(token)
+
+
+def _require_portable_barrier_admission(scene: _base.Scene) -> None:
+    if (getattr(scene, _PORTABLE_CONSTRUCT_MODE, False)
+            and not getattr(scene, _PORTABLE_BARRIER_CALL, False)):
+        raise RuntimeError(
+            "indirect synchronous Scene.play/wait cannot suspend in a portable construct; "
+            "use explicit async construct and await the helper's barriers"
+        )
+
+
+async def await_source_barrier(method, /, *args, **kwargs):
+    """Yield at one compiled host call, using the existing canonical awaitable."""
+    scene = getattr(method, "__self__", None)
+    if (not isinstance(scene, _base.Scene)
+            or not getattr(scene, _PORTABLE_CONSTRUCT_MODE, False)
+            or getattr(method, "__func__", None) not in (_base.Scene.play, _base.Scene.wait)):
+        raise RuntimeError("portable barrier must be the current Scene's canonical play/wait")
+    setattr(scene, _PORTABLE_BARRIER_CALL, True)
+    try:
+        pending = method(*args, **kwargs)
+    finally:
+        # Callbacks and helpers must not inherit admission to a different call.
+        setattr(scene, _PORTABLE_BARRIER_CALL, False)
+    if isinstance(pending, _SemanticContinuationAwaitable):
+        return await pending
+    return pending
+
+
+async def await_module_source_barrier(method, /, *args, **kwargs):
+    """Adapt a module-level call without replay or changes to arbitrary callables."""
+    if not inspect.ismethod(method):
+        return method(*args, **kwargs)
+    scene = method.__self__
+    invocation = current_source_invocation()
+    from _manim_source_execution import has_portable_scene_methods
+
+    if (invocation is None
+            or not isinstance(scene, _base.Scene)
+            or getattr(method, "__func__", None) not in (_base.Scene.play, _base.Scene.wait)
+            or not has_portable_scene_methods(
+                scene, play=_base.Scene.play, wait=_base.Scene.wait,
+                add=_base.Scene.add, remove=_base.Scene.remove, clear=_base.Scene.clear,
+            )
+            or (_create_context is None
+                and getattr(scene, "_canonical_authoring_context", None) is None)):
+        return method(*args, **kwargs)
+    if not _async_continuation_active(scene):
+        if _synchronous_continuation_active(scene):
+            # Never switch a source stack that already entered synchronous execution.
+            return method(*args, **kwargs)
+        _begin_async_continuation_construct(scene)
+        setattr(scene, _PORTABLE_CONSTRUCT_MODE, True)
+        invocation.cleanup.callback(_finish_async_continuation_construct, scene)
+        invocation.cleanup.callback(setattr, scene, _PORTABLE_CONSTRUCT_MODE, False)
+        invocation.cleanup.callback(setattr, scene, _PORTABLE_BARRIER_CALL, False)
+    invocation.select_authoring_scene(scene)
+    return await await_source_barrier(method, *args, **kwargs)
+
+
+class _SemanticContinuationAwaitable:
+    """One consumed Python await over the worker-owned semantic endpoint lease."""
+
+    def __init__(self, scene: _base.Scene, on_complete=None) -> None:
+        self._scene = scene
+        self._on_complete = on_complete
+        self._consumed = False
+        getattr(scene, _ASYNC_CONTINUATION_PENDING).add(self)
+
+    def __await__(self):
+        if self._consumed:
+            raise RuntimeError("a Scene.play/Scene.wait continuation can be awaited only once")
+        self._consumed = True
+        return self._wait().__await__()
+
+    async def _wait(self) -> _base.Scene:
+        try:
+            await _await_semantic_continuation(self._scene)
+            if self._on_complete is not None:
+                self._on_complete()
+            return self._scene
+        finally:
+            getattr(self._scene, _ASYNC_CONTINUATION_PENDING).discard(self)
+
+
+def _continuation_awaitable(
+    scene: _base.Scene, on_complete=None
+) -> _SemanticContinuationAwaitable:
+    if not _async_continuation_active(scene):
+        raise RuntimeError("semantic continuation awaitable requires async construct")
+    return _SemanticContinuationAwaitable(scene, on_complete)
+
+
+def _require_semantic_continuation_active(scene: _base.Scene) -> None:
+    if not _semantic_continuation_active(scene):
+        return
+    from js import noonRequireSemanticContinuationActive
+
+    noonRequireSemanticContinuationActive(_context(scene))
+
+
+def _prepare_semantic_continuation_callbacks(
+    scene: _base.Scene, context: object
+) -> None:
+    """Publish Python callable identity before Rust lowers the live session.
+
+    Rust owns callback occurrence selection, phase timing, and the token that
+    accepts this one batch. Python supplies only its existing callable table so
+    a suspended source stack can service a Rust-issued phase without opening a
+    second interpreter turn.
+    """
+
+    import _manim_updaters
+
+    session_id = _manim_updaters.prepare_canonical_callbacks(scene, context)
+    if session_id is None:
+        session_id = _manim_updaters.canonical_callback_session_id(scene)
+    if session_id is None:
+        return
+    from js import noonSetSemanticContinuationCallbackSession
+
+    noonSetSemanticContinuationCallbackSession(context, int(session_id))
+
+
+def _continuation_event(event_json: object) -> dict[str, object]:
+    try:
+        event = json.loads(str(event_json))
+    except (TypeError, ValueError) as error:
+        raise RuntimeError("semantic continuation returned invalid event JSON") from error
+    if not isinstance(event, dict) or not isinstance(event.get("kind"), str):
+        raise RuntimeError("semantic continuation event is missing its kind")
+    return event
+
+
+def _service_semantic_continuation_event(
+    scene: _base.Scene, event_json: object, *, prepared_callback=None
+) -> object | None:
+    """Service one Rust-issued callback phase on the suspended source stack.
+
+    The returned JavaScript promise resolves to the next Rust event. ``None``
+    means the segment completed and the user construct may continue. This keeps
+    no Python cursor, callback schedule, or phase identity.
+    """
+
+    event = _continuation_event(event_json)
+    kind = event["kind"]
+    if kind == "complete":
+        return None
+    if kind != "callback":
+        raise RuntimeError(f"unsupported semantic continuation event: {kind}")
+    phase = event.get("phase")
+    if not isinstance(phase, dict) or not isinstance(phase.get("token"), dict):
+        raise RuntimeError("semantic continuation callback event is missing its phase token")
+
+    import _manim_updaters
+    from js import (
+        noonCompleteSemanticContinuationCallback,
+        noonFailSemanticContinuationCallback,
+    )
+
+    session_id = _manim_updaters.canonical_callback_session_id(scene)
+    if session_id is None:
+        raise RuntimeError("semantic continuation callback event has no callable session")
+    context = _context(scene)
+    token_json = _json(phase["token"])
+    try:
+        batch_json = _manim_updaters.run_canonical_callback_phase(
+            session_id, phase, prepared_context=prepared_callback
+        )
+    except Exception as error:
+        # Failing the exact pending phase latches terminal Rust state. Its
+        # returned promise rejects this suspended construct; no retry occurs.
+        return noonFailSemanticContinuationCallback(context, token_json, str(error))
+    return noonCompleteSemanticContinuationCallback(context, token_json, batch_json)
+
+
+async def _await_semantic_continuation(scene: _base.Scene) -> None:
+    from js import noonAwaitSemanticContinuation
+
+    event_json = await noonAwaitSemanticContinuation(_context(scene))
+    while True:
+        prepared = None
+        event = _continuation_event(event_json)
+        if event["kind"] == "callback":
+            import _manim_updaters
+            from js import noonFailSemanticContinuationCallback
+
+            try:
+                prepared = await _manim_updaters.prepare_canonical_callback_phase(
+                    _manim_updaters.canonical_callback_session_id(scene), event["phase"]
+                )
+            except Exception as error:
+                event_json = await noonFailSemanticContinuationCallback(
+                    _context(scene), _json(event["phase"]["token"]), str(error)
+                )
+                continue
+        next_event = _service_semantic_continuation_event(
+            scene, event_json, prepared_callback=prepared
+        )
+        if next_event is None:
+            return
+        event_json = await next_event
+
+
+def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
+    """Suspend the current JSPI-enabled Python stack on the worker lease."""
+    if not _synchronous_continuation_active(scene):
+        raise RuntimeError("synchronous semantic continuation is not active")
+    from js import noonAwaitSemanticContinuation
+    from pyodide.ffi import run_sync
+
+    event_json = run_sync(noonAwaitSemanticContinuation(_context(scene)))
+    while True:
+        next_event = _service_semantic_continuation_event(scene, event_json)
+        if next_event is None:
+            break
+        event_json = run_sync(next_event)
+    return scene
+
+
+def _canonical_wait(
+    scene: _base.Scene, duration: float = 1.0
+) -> _base.Scene | _SemanticContinuationAwaitable:
+    _require_portable_barrier_admission(scene)
+    if (
+        _default_synchronous_continuation_candidate(scene)
+        and (
+            _create_context is not None
+            or getattr(scene, "_canonical_authoring_context", None) is not None
+        )
+    ):
+        execution_context(scene)
+        _start_default_synchronous_continuation(scene)
+    if _semantic_continuation_active(scene):
+        try:
+            _require_semantic_continuation_active(scene)
+            context = _context(scene)
+            _prepare_semantic_continuation_callbacks(scene, context)
+            context.beginOrdinaryWait(float(duration))
+        except Exception as error:
+            raise ValueError(str(error)) from None
+        if _async_continuation_active(scene):
+            return _continuation_awaitable(scene)
+        return _synchronous_continuation_wait(scene)
+    context = _context(scene)
+    try:
+        context.ordinaryWait(float(duration))
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return scene
+
+
+def _declare_wait(scene: _base.Scene, duration: float = 1.0) -> _base.Scene:
+    """Declare a pre-execution interval on the shared Rust authoring cursor."""
+    _context(scene).authoredWait(float(duration))
+    return scene
+
+
+def _canonical_affine_animation(
+    scene: _base.Scene, animation: object
+) -> tuple[_base.Mobject, _base.Mobject, object] | None:
+    """Classify one supported ordinary leaf-affine animation without lowering it.
+
+    The returned detached target is already an opaque same-store handle.  Python
+    does not create a track, timeline entry, or target snapshot for this path.
+    """
+    # Do not accept subclasses here. Several compatibility operations inherit the
+    # builder solely to reuse option handling and materialize a target lazily;
+    # reading that property before their own dispatcher runs can be invalid.
+    if type(animation) is _animate._AlignedAnimationBuilder:
+        source, target = animation.source, animation.target
+    elif type(animation) is _base.Transform:
+        source, target = animation.source, animation.target
+    else:
+        return None
+    if not isinstance(source, _base.Mobject) or source._scene not in (None, scene):
+        return None
+    if getattr(source, "_semantic_handle", None) is None:
+        return None
+    if not isinstance(target, _base.Mobject):
+        raise NotImplementedError("canonical ordinary animation target must be a Mobject")
+    if target._scene is not None:
+        raise NotImplementedError("canonical ordinary animation target must be detached")
+    if getattr(target, "_semantic_handle", None) is None:
+        raise NotImplementedError(
+            "canonical ordinary animation requires typed semantic Mobject handles"
+        )
+    # A detached target may have been authored before live execution began, as in
+    # Manim's ordinary `circle = Circle(); Transform(square, circle)` pattern.
+    # Rust validates its generational identity, shared-store provenance, detached
+    # status, payload, and current publication revision before activation.
+    return source, target, animation
+
+
+def _canonical_affine_options(
+    animation: object,
+    kwargs: dict[str, object],
+    *,
+    builder_args: dict[str, object] | None = None,
+    allow_family_lag: bool = False,
+) -> object | None:
+    """Resolve the existing Python play ergonomics before typed Rust preflight."""
+    duration = kwargs.get("duration")
+    run_time = kwargs.get("run_time")
+    easing = kwargs.get("easing")
+    rate_func = kwargs.get("rate_func")
+    lag_ratio = kwargs.get("lag_ratio")
+    if duration is not None and run_time is not None:
+        raise ValueError("use either duration or run_time, not both")
+    if easing is not None and rate_func is not None:
+        raise ValueError("use either rate_func or the low-level easing alias, not both")
+    if kwargs.keys() - {"duration", "run_time", "start_time", "easing", "rate_func", "lag_ratio"}:
+        return None
+    if kwargs.get("start_time") is not None:
+        return None
+    try:
+        resolved = _options.resolve(
+            builder_args=(
+                _options.builder_args(animation) if builder_args is None else builder_args
+            ),
+            default_lag_ratio=0.0,
+            play_run_time=(run_time if run_time is not None else duration),
+            play_easing=easing,
+            play_rate_func=rate_func,
+            play_lag_ratio=lag_ratio,
+        )
+    except NotImplementedError:
+        return None
+    if (
+        (resolved.lag_ratio != 0.0 and not allow_family_lag)
+        or resolved.path_arc != 0.0
+        or resolved.reverse_rate_function
+    ):
+        return None
+    return resolved
+
+
+def _canonical_affine_lifecycle_animation(
+    scene: _base.Scene, animation: object
+) -> tuple[_base.Mobject, object] | None:
+    """Classify one inert Grow/Spin/Shrink leaf for shared Rust lifecycle playback."""
+    growing = sys.modules.get("_manim_growing")
+    if growing is not None and isinstance(animation, growing.GrowFromPoint):
+        target = animation.mobject
+        if target._scene is not None or getattr(target, "_semantic_handle", None) is None:
+            return None
+        return target, animation
+    if getattr(animation, "_canonical_affine_lifecycle", None) == "shrink":
+        target = animation.mobject
+        if target._scene not in (None, scene) or getattr(target, "_semantic_handle", None) is None:
+            return None
+        return target, animation
+    return None
+
+
+def _canonical_fade_animation(
+    scene: _base.Scene, animation: object
+) -> tuple[_base.Mobject, str] | None:
+    """Classify one exact basic FadeIn/FadeOut without legacy lifecycle setup."""
+    if type(animation) is _base.FadeIn:
+        direction = "in"
+    elif type(animation) is _base.FadeOut:
+        direction = "out"
+    else:
+        return None
+    target = getattr(animation, "target", None)
+    if not isinstance(target, _base.Mobject):
+        raise NotImplementedError("canonical ordinary Fade target must be a Mobject")
+    if getattr(target, "_semantic_handle", None) is None:
+        # Group/retained targets still belong to the existing #959 migration
+        # consumer. The leaf classifier must not claim their lifecycle; the
+        # shared play boundary rejects fallback once canonical execution starts.
+        return None
+    if direction == "in":
+        if target._scene is not None and target._scene is not scene:
+            raise ValueError("FadeIn target already belongs to another Scene")
+        if target._scene is scene:
+            raise NotImplementedError(
+                "canonical FadeIn requires a detached Mobject at activation"
+            )
+    elif target._scene is not scene:
+        raise NotImplementedError(
+            "canonical FadeOut target must be bound to this Scene"
+        )
+    return target, direction
+
+
+def _canonical_family_fade_animation(
+    scene: _base.Scene, animation: object
+) -> tuple[_compat.Group, list[_base.Mobject], str] | None:
+    """Classify one shared geometry/Text family fade without expanding animations."""
+    if type(animation) is _base.FadeIn:
+        direction = "in"
+    elif type(animation) is _base.FadeOut:
+        direction = "out"
+    else:
+        return None
+    family = getattr(animation, "target", None)
+    if not isinstance(family, _compat.Group):
+        return None
+    leaves = _compat._leaf_mobjects(family)
+    if not leaves:
+        raise ValueError("canonical family Fade requires at least one leaf")
+    if any(isinstance(member, _typst._RetainedTextMobject) and not isinstance(member, _typst.Text)
+           for member in leaves):
+        raise NotImplementedError("canonical family Fade does not yet support Typst or MathTypst")
+    if any(getattr(member, "_semantic_handle", None) is None for member in leaves):
+        raise NotImplementedError("canonical family Fade requires shared semantic leaves")
+    if getattr(family, "_semantic_family_handle", None) is None:
+        raise NotImplementedError("canonical family Fade requires a shared family handle")
+    endpoint = _canonical_fade_endpoint(animation)
+    if endpoint != (1.0, "shift", 0.0, 0.0):
+        raise NotImplementedError(
+            "canonical family Fade does not support shift, scale, or target_position"
+        )
+    if direction == "in":
+        if any(member._scene is not None for member in leaves):
+            raise ValueError("family FadeIn requires a detached family")
+    elif any(member._scene is not scene for member in leaves):
+        raise ValueError("family FadeOut requires a family in this Scene")
+    return family, leaves, direction
+
+
+def _canonical_create_animation(
+    scene: _base.Scene, animation: object
+) -> _base.Mobject | None:
+    """Classify one exact detached single-leaf Create."""
+    if type(animation) is not _base.Create:
+        return None
+    target = getattr(animation, "target", None)
+    if not isinstance(target, _base.Mobject):
+        raise NotImplementedError("canonical ordinary Create target must be a Mobject")
+    if getattr(target, "_semantic_handle", None) is None:
+        return None
+    if target._scene is not None:
+        if target._scene is scene:
+            raise NotImplementedError("canonical Create requires a detached Mobject")
+        raise ValueError("Create target already belongs to another Scene")
+    return target
+
+
+def _canonical_uncreate_animation(
+    scene: _base.Scene, animation: object
+) -> _base.Mobject | None:
+    """Classify one exact detached or direct-bound single-leaf Uncreate."""
+    if type(animation) is not _base.Uncreate:
+        return None
+    target = getattr(animation, "target", None)
+    if not isinstance(target, _base.Mobject):
+        raise NotImplementedError("canonical ordinary Uncreate target must be a Mobject")
+    if getattr(target, "_semantic_handle", None) is None:
+        return None
+    if target._scene is not None and target._scene is not scene:
+        raise ValueError("Uncreate target already belongs to another Scene")
+    return target
+
+
+def _canonical_create_options(animation: object, kwargs: dict[str, object]) -> object | None:
+    args = dict(getattr(animation, "anim_args", {}))
+    if "introducer" in args and args.pop("introducer") is not True:
+        return None
+    if "remover" in args and args.pop("remover") is not False:
+        return None
+    return _canonical_affine_options(animation, kwargs, builder_args=args)
+
+
+def _canonical_uncreate_options(animation: object, kwargs: dict[str, object]) -> object | None:
+    return _canonical_affine_options(animation, kwargs)
+
+
+def _canonical_fade_endpoint(animation: object) -> tuple[float, str, float, float] | None:
+    """Return the inert endpoint values that Rust resolves at activation."""
+    shift = getattr(animation, "_fade_shift_vector", None)
+    scale_factor = float(getattr(animation, "_fade_scale_factor", float("nan")))
+    if shift is None or not math.isfinite(scale_factor):
+        return None
+    if bool(getattr(animation, "_fade_point_target", False)):
+        point = getattr(animation, "_fade_point", None)
+        if point is None:
+            return None
+        return scale_factor, "point", float(point.x), float(point.y)
+    return scale_factor, "shift", float(shift.x), float(shift.y)
+
+
+def _canonical_fade_options(
+    animation: object,
+    kwargs: dict[str, object],
+    *,
+    allow_family_lag: bool = False,
+) -> object | None:
+    """Resolve timing while Rust retains all fade endpoint meaning."""
+    if _canonical_fade_endpoint(animation) is None:
+        return None
+    args = dict(getattr(animation, "anim_args", {}))
+    lifecycle = "introducer" if type(animation) is _base.FadeIn else "remover"
+    for name in ("introducer", "remover"):
+        if name not in args:
+            continue
+        if name != lifecycle or args.pop(name) is not True:
+            return None
+    return _canonical_affine_options(
+        animation,
+        kwargs,
+        builder_args=args,
+        allow_family_lag=allow_family_lag,
+    )
+
+
+def _reconcile_fade_membership(
+    scene: _base.Scene, target: _base.Mobject, direction: str
+) -> None:
+    """Reflect completed shared membership in Python's derived wrapper attachment."""
+    if direction != "out":
+        return
+    context = _context(scene)
+    if bool(context.liveContainsMobject(getattr(target, "_semantic_handle"))):
+        raise RuntimeError("completed FadeOut still belongs to the canonical Scene")
+    if target._scene is not scene:
+        raise RuntimeError("FadeOut wrapper binding changed before completion")
+    # Preserve ObjectId/key/opaque handle for a same-handle `Scene.add` re-entry.
+    # The context's membership query is authoritative; this is only wrapper state.
+    target._scene = None
+
+
+def _canonical_play_options(kwargs: dict[str, object]) -> float | None:
+    duration = kwargs.pop("duration", None)
+    run_time = kwargs.pop("run_time", None)
+    start_time = kwargs.pop("start_time", None)
+    easing = kwargs.pop("easing", None)
+    rate_func = kwargs.pop("rate_func", None)
+    lag_ratio = kwargs.pop("lag_ratio", None)
+    if duration is not None and run_time is not None:
+        raise ValueError("use either duration or run_time, not both")
+    if easing is not None and rate_func is not None:
+        raise ValueError("use either rate_func or the low-level easing alias, not both")
+    if start_time is not None:
+        raise NotImplementedError(
+            "canonical ordinary Scene.play uses the shared session cursor"
+        )
+    if kwargs:
+        unsupported = ", ".join(sorted(kwargs))
+        raise NotImplementedError(f"unsupported Manim Scene.play option(s): {unsupported}")
+    if lag_ratio is not None and float(lag_ratio) != 0.0:
+        raise NotImplementedError("Scene.play lag_ratio overrides are not supported")
+    value = run_time if run_time is not None else duration
+    return None if value is None else float(value)
+
+
+def _canonical_composition_rate_id(kwargs: dict[str, object]) -> str | None:
+    easing = kwargs.get("easing")
+    rate_func = kwargs.get("rate_func")
+    if easing is None and rate_func is None:
+        return None
+    if easing is not None and rate_func is not None:
+        raise ValueError("use either easing or rate_func, not both")
+    return str(easing) if easing is not None else (
+        _rate_functions.easing_from_rate_func(rate_func) if rate_func is not None else "linear"
+    )
+
+
+def _canonical_composition_child_options(animation: object, kwargs: dict[str, object]):
+    resolved = _canonical_affine_options(animation, kwargs)
+    if resolved is None:
+        raise NotImplementedError("unsupported shared animation options")
+    return resolved
+
+
+def _canonical_family_transform_animation(
+    scene: _base.Scene, animation: object
+) -> tuple[_compat.Group, _compat.Group, object] | None:
+    if isinstance(animation, _animate._AlignedGroupAnimationBuilder):
+        source, target = animation.source, animation.target
+    elif type(animation) is _base.Transform and isinstance(animation.source, _compat.Group):
+        source, target = animation.source, animation.target
+    else:
+        return None
+    if not isinstance(source, _compat.Group):
+        return None
+    source_leaves = _compat._leaf_mobjects(source)
+    if not source_leaves or any(member._scene is not scene for member in source_leaves):
+        return None
+    if not isinstance(target, _compat.Group) or any(
+        member._scene is not None for member in _compat._leaf_mobjects(target)
+    ):
+        raise NotImplementedError("canonical family Transform target must be detached")
+    if getattr(source, "_semantic_family_handle", None) is None or getattr(
+        target, "_semantic_family_handle", None
+    ) is None:
+        raise NotImplementedError("canonical family Transform requires shared family handles")
+    return source, target, animation
+
+
+def _canonical_indicate_animation(
+    scene: _base.Scene, animation: object
+) -> tuple[object, bool] | None:
+    if not isinstance(animation, _animate.Indicate):
+        return None
+    target = animation.mobject
+    family = isinstance(target, _compat.Group)
+    handle_name = "_semantic_family_handle" if family else "_semantic_handle"
+    bound = (
+        bool(_compat._leaf_mobjects(target))
+        and all(member._scene is scene for member in _compat._leaf_mobjects(target))
+        if family
+        else getattr(target, "_scene", None) is scene
+    )
+    if not isinstance(target, (_base.Mobject, _compat.Group)) or not bound:
+        raise ValueError("Indicate target must belong to this Scene")
+    if getattr(target, handle_name, None) is None:
+        raise NotImplementedError("canonical Indicate requires a shared semantic handle")
+    return target, family
+
+
+def _canonical_passing_flash_animation(
+    scene: _base.Scene, animation: object
+) -> _base.Mobject | None:
+    """Classify one exact-Line PassingFlash without deriving its window tracks."""
+    if not isinstance(animation, _indication.ShowPassingFlash):
+        return None
+    target = animation.mobject
+    if not isinstance(target, _base.Mobject) or isinstance(target, _compat.Group):
+        raise NotImplementedError("canonical ShowPassingFlash requires one typed Line")
+    if target._scene not in (None, scene):
+        raise ValueError("ShowPassingFlash target belongs to another Scene")
+    if getattr(target, "_semantic_handle", None) is None:
+        raise NotImplementedError("canonical ShowPassingFlash requires a typed Line")
+    if not _semantic_handles._require_typed_manim_line(target):
+        raise NotImplementedError("canonical ShowPassingFlash requires an exact Line")
+    return target
+
+
+def _canonical_passing_flash_options(
+    animation: object, play_kwargs: dict[str, object] | None = None
+):
+    """Pass explicit Python timing while Rust owns the moving-window schedule."""
+    args = dict(_options.builder_args(animation))
+    lag_ratio = args.get("lag_ratio")
+    if lag_ratio is not None and not math.isclose(
+        float(lag_ratio), 0.0, abs_tol=1e-15
+    ):
+        raise NotImplementedError("canonical ShowPassingFlash does not support lag_ratio")
+    if bool(args.get("reverse_rate_function", False)):
+        raise NotImplementedError(
+            "ShowPassingFlash reverse_rate_function=True remains partial"
+        )
+    if "path_arc" in args:
+        raise TypeError("ShowPassingFlash does not accept path_arc")
+    run_time = args.get("run_time")
+    rate_func = args.get("rate_func")
+    play_rate = _canonical_composition_rate_id(
+        {} if play_kwargs is None else play_kwargs
+    )
+    return (
+        None if run_time is None else float(run_time),
+        play_rate
+        if play_rate is not None
+        else None if rate_func is None else _rate_functions.easing_from_rate_func(rate_func),
+    )
+
+
+def _canonical_draw_border_then_fill_animation(scene: _base.Scene, animation: object):
+    """Classify leaf DrawBorderThenFill and forward ordinary-vector Write."""
+    if isinstance(animation, _draw_border_then_fill.DrawBorderThenFill):
+        target = animation.target
+        leaves = [target]
+        family = None
+        phase_rate = "smooth"
+    elif type(animation) is _family_creation.Write:
+        if animation.reverse or animation.remover or animation.reverse_rate_function:
+            return None
+        target = animation.target
+        leaves = _compat._leaf_mobjects(target)
+        if not leaves or any(isinstance(member, _typst._RetainedTextMobject) for member in leaves):
+            return None
+        family = target if isinstance(target, _compat.Group) else getattr(
+            animation, "_ordinary_write_family", None
+        )
+        if family is None:
+            family = _compat.Group(target)
+            animation._ordinary_write_family = family
+        phase_rate = "linear"
+    else:
+        return None
+    if any(
+        not isinstance(member, _compat.VMobject)
+        or getattr(member, "_semantic_handle", None) is None
+        or (member._scene is not None and member._scene is not scene)
+        for member in leaves
+    ):
+        raise NotImplementedError(
+            "canonical DrawBorderThenFill requires ordinary typed vector leaves"
+        )
+    return target, family, leaves, phase_rate
+
+
+def _canonical_text_write_animation(scene: _base.Scene, animation: object):
+    """Classify single plain-Text Write/Unwrite without deriving glyph state."""
+    if not isinstance(animation, _family_creation.Write):
+        return None
+    target = animation.target
+    if not isinstance(target, _typst.Text) or isinstance(target, _compat.Group):
+        return None
+    if getattr(target, "_semantic_handle", None) is None:
+        raise NotImplementedError("canonical Text Write requires a typed plain Text target")
+    if animation.introducer:
+        if target._scene is not None and target._scene is not scene:
+            raise ValueError("Text Write target belongs to another Scene")
+    elif target._scene is not scene:
+        raise ValueError("reverse Text Write requires a plain Text target in this Scene")
+    return target
+
+
+def _canonical_text_family_write_animation(scene: _base.Scene, animation: object):
+    """Classify a plain-Text family Write/Unwrite without traversing glyphs."""
+    if not isinstance(animation, _family_creation.Write):
+        return None
+    family = animation.target
+    if not isinstance(family, _compat.Group):
+        return None
+    leaves = _compat._leaf_mobjects(family)
+    if not leaves:
+        raise ValueError("canonical Text family Write requires at least one leaf")
+    if not all(isinstance(member, _typst.Text) for member in leaves):
+        if any(isinstance(member, _typst._RetainedTextMobject) for member in leaves):
+            raise NotImplementedError(
+                "canonical family Write supports plain Text; Typst and MathTypst remain #959"
+            )
+        return None
+    if getattr(family, "_semantic_family_handle", None) is None:
+        raise NotImplementedError("canonical Text family Write requires a shared family handle")
+    if animation.introducer:
+        if any(member._scene is not None for member in leaves):
+            raise ValueError("Text family Write requires a detached family")
+    elif any(member._scene is not scene for member in leaves):
+        raise ValueError("Text family Unwrite requires a family in this Scene")
+    return family, leaves
+
+
+def _canonical_text_reveal_animation(scene: _base.Scene, animation: object):
+    """Classify one plain-Text Create/Uncreate without deriving glyph state."""
+    if type(animation) not in (_base.Create, _base.Uncreate):
+        return None
+    target = getattr(animation, "target", None)
+    if isinstance(target, _compat.Group):
+        return None
+    if isinstance(target, _typst._RetainedTextMobject) and not isinstance(
+        target, _typst.Text
+    ):
+        raise NotImplementedError(
+            "canonical Text Create/Uncreate supports plain Text; "
+            "Typst and MathTypst remain #959"
+        )
+    if not isinstance(target, _typst.Text):
+        return None
+    if getattr(target, "_semantic_handle", None) is None:
+        raise NotImplementedError(
+            "canonical Text Create/Uncreate requires a typed plain Text target"
+        )
+    reverse = type(animation) is _base.Uncreate
+    if not reverse and target._scene is not None:
+        if target._scene is scene:
+            raise ValueError("Text Create requires a detached target")
+        raise ValueError("Text Create target belongs to another Scene")
+    if reverse and target._scene not in (None, scene):
+        raise ValueError("Text Uncreate target belongs to another Scene")
+    return target, reverse
+
+
+def _canonical_family_reveal_animation(scene: _base.Scene, animation: object):
+    """Classify one typed family Create/Uncreate without scheduling its leaves."""
+    if type(animation) not in (_base.Create, _base.Uncreate):
+        return None
+    family = getattr(animation, "target", None)
+    if not isinstance(family, _compat.Group):
+        return None
+    leaves = _compat._leaf_mobjects(family)
+    if not leaves:
+        raise ValueError("canonical family Create/Uncreate requires at least one leaf")
+    if any(
+        isinstance(member, _typst._RetainedTextMobject)
+        and not isinstance(member, _typst.Text)
+        for member in leaves
+    ):
+        raise NotImplementedError(
+            "canonical family Create/Uncreate supports plain Text and ordinary vector "
+            "leaves; Typst and MathTypst remain #959"
+        )
+    if any(
+        not isinstance(member, _base.Mobject)
+        or getattr(member, "_semantic_handle", None) is None
+        for member in leaves
+    ):
+        raise NotImplementedError(
+            "canonical family Create/Uncreate requires typed ordinary leaves"
+        )
+    if getattr(family, "_semantic_family_handle", None) is None:
+        raise NotImplementedError(
+            "canonical family Create/Uncreate requires a shared family handle"
+        )
+    reverse = type(animation) is _base.Uncreate
+    if not reverse and any(member._scene is not None for member in leaves):
+        raise ValueError("family Create requires detached leaves")
+    if reverse and any(member._scene not in (None, scene) for member in leaves):
+        raise ValueError("family Uncreate target belongs to another Scene")
+    return family, leaves, reverse
+
+
+def _canonical_text_write_options(animation: object):
+    """Return only explicitly authored leaf options; Rust resolves omitted timing."""
+    args = dict(_options.builder_args(animation))
+    path_arc = float(args.get("path_arc", 0.0))
+    if not math.isfinite(path_arc):
+        raise ValueError("Text Write path_arc must be finite")
+    if not math.isclose(path_arc, 0.0, abs_tol=1e-15):
+        raise NotImplementedError("canonical Text Write does not support path_arc")
+    run_time = args.get("run_time")
+    lag_ratio = args.get("lag_ratio")
+    rate_func = args.get("rate_func")
+    return (
+        None if run_time is None else float(run_time),
+        None if rate_func is None else _rate_functions.easing_from_rate_func(rate_func),
+        None if lag_ratio is None else float(lag_ratio),
+    )
+
+
+def _canonical_text_reveal_options(animation: object):
+    """Pass authored reveal overrides while Rust owns Create/Uncreate defaults."""
+    args = dict(_options.builder_args(animation))
+    path_arc = float(args.get("path_arc", 0.0))
+    if not math.isfinite(path_arc):
+        raise ValueError("Text Create/Uncreate path_arc must be finite")
+    if not math.isclose(path_arc, 0.0, abs_tol=1e-15):
+        raise NotImplementedError("canonical Text Create/Uncreate does not support path_arc")
+    reverse = type(animation) is _base.Uncreate
+    introducer = args.get("introducer")
+    if reverse:
+        remover = None if bool(getattr(animation, "remover", True)) else False
+        reverse_rate = (
+            None
+            if bool(getattr(animation, "reverse_rate_function", True))
+            else False
+        )
+    else:
+        remover = args.get("remover")
+        reverse_rate = args.get("reverse_rate_function")
+    run_time = args.get("run_time")
+    lag_ratio = args.get("lag_ratio")
+    rate_func = args.get("rate_func")
+    return (
+        None if run_time is None else float(run_time),
+        None if rate_func is None else _rate_functions.easing_from_rate_func(rate_func),
+        None if lag_ratio is None else float(lag_ratio),
+        None if introducer is None else bool(introducer),
+        None if remover is None else bool(remover),
+        None if reverse_rate is None else bool(reverse_rate),
+    )
+
+
+def _canonical_subset_display_animation(scene: _base.Scene, animation: object):
+    """Classify a prepared ordinary family without inspecting member snapshots."""
+    if not isinstance(animation, _lifecycle.ShowIncreasingSubsets):
+        return None
+    family = animation.group
+    leaves = list(family.submobjects)
+    if (
+        not isinstance(family, _compat.Group)
+        or getattr(family, "_semantic_family_handle", None) is None
+        or not leaves
+        or any(
+            not isinstance(member, _base.Mobject)
+            or isinstance(member, _compat.Group)
+            or getattr(member, "_semantic_handle", None) is None
+            or (member._scene is not None and member._scene is not scene)
+            for member in leaves
+        )
+    ):
+        raise NotImplementedError(
+            "canonical subset display requires one ordinary typed direct-member family"
+        )
+    return family, leaves, animation.mode
+
+
+def _build_canonical_composition_candidate(
+    self: _base.Scene,
+    kind: str,
+    animations: tuple[object, ...],
+    group: object | None,
+    kwargs: dict[str, object],
+):
+    """Build one inert recursive composition tree owned by the WASM context."""
+    import _manim_rotate as _rotate
+
+    play_run_time = _canonical_play_options(dict(kwargs))
+    composition_run_time = None if group is None else group.run_time
+    composition_lag_ratio = 0.0 if group is None else float(group.lag_ratio)
+    context = _context(self)
+    candidate = context.beginOrdinaryCompositionBuilder(
+        kind, composition_run_time, composition_lag_ratio, play_run_time,
+    )
+    candidate.setCompositionRateFunction(
+        _rate_functions.easing_from_rate_func(group.rate_func) if group is not None else "linear"
+    )
+    # For flat Scene.play arguments, shared child option resolution already
+    # applies the play rate. Only an explicit group gets a root rate override.
+    play_rate = _canonical_composition_rate_id(kwargs) if group is not None else None
+    if play_rate is not None:
+        candidate.setPlayRateFunction(play_rate)
+    reservations: list[tuple[_base.Mobject, object]] = []
+    family_registrations: list[_compat.Group] = []
+    removals: list[_base.Mobject] = []
+    tracker_associations: list[_reactive.ValueTracker] = []
+    next_object_id = self._next_object_id
+
+    def reserve(target: _base.Mobject):
+        nonlocal next_object_id
+        reservation = _reserve_typed_binding(
+            target, self, getattr(target, "_semantic_handle"), None, object_id=next_object_id,
+        )
+        reservations.append((target, reservation))
+        if not reservation.reuse_existing_identity:
+            next_object_id += 1
+        return reservation
+
+    def append_leaf(builder: object, animation: object, child_kwargs: dict[str, object]) -> None:
+        nonlocal next_object_id
+        if isinstance(animation, _composition.AnimationGroup):
+            nested_kind = "sequence" if isinstance(animation, _composition.Succession) else "parallel"
+            nested = build(nested_kind, tuple(animation.animations), animation, {})
+            builder.appendComposition(nested)
+            return
+        if type(animation) is _options.ScaleInPlace:
+            # Resolve options before creating a target. Copy/scale and effective
+            # play-begin state belong to the shared semantic operations.
+            _canonical_composition_child_options(animation, child_kwargs)
+            source = animation.source
+            if isinstance(source, _compat.Group):
+                if not _compat._leaf_mobjects(source) or any(
+                    member._scene is not self for member in _compat._leaf_mobjects(source)
+                ):
+                    raise NotImplementedError("ScaleInPlace family must belong to this Scene")
+            elif source._scene not in (None, self):
+                raise ValueError("ScaleInPlace target belongs to another Scene")
+            target = source._copy_for_animate_target()
+            target.scale(animation.scale_factor)
+            transform = _base.Transform(source, target, **animation.anim_args)
+            append_leaf(builder, transform, child_kwargs)
+            return
+        if _canonical_tracker_builder(animation):
+            tracker = animation.tracker
+            if animation.target_value is None:
+                raise ValueError("ValueTracker.animate must call set_value or increment_value")
+            canonical = tracker._canonical_context_handle()
+            if canonical is not None:
+                tracker_context, handle = canonical
+                if tracker._scene is not self or tracker_context is not context:
+                    raise ValueError("ValueTracker belongs to another Scene")
+            else:
+                if tracker._scene is not None:
+                    raise ValueError("ValueTracker belongs to another Scene")
+                handle = tracker._detached_canonical_handle()
+                tracker_associations.append(tracker)
+            child = _canonical_composition_child_options(animation, child_kwargs)
+            builder.appendValueTracker(
+                handle, float(animation.target_value), float(child.run_time), str(child.rate_func),
+            )
+            return
+        if isinstance(animation, _composition.Wait):
+            if child_kwargs:
+                raise NotImplementedError("Wait inside a composition does not accept play timing overrides")
+            builder.appendWait(float(animation.run_time))
+            return
+        if isinstance(animation, _rotate.FocusOn):
+            if animation.focus_mobject is not None and (group is not None or len(animations) != 1):
+                raise NotImplementedError("FocusOn of a Mobject requires an isolated fixed-center play")
+            if animation.focus_mobject is not None and not _rotate._points_close(
+                animation.focus_mobject.get_center(), animation.focus_point
+            ):
+                raise NotImplementedError("FocusOn requires a fixed focus Mobject center")
+            child = _canonical_composition_child_options(animation, child_kwargs)
+            x, y = animation.focus_point
+            color = animation.color
+            builder.appendFocusOn(
+                float(x), float(y), float(animation.opacity),
+                float(color.red), float(color.green), float(color.blue),
+                float(child.run_time), str(child.rate_func),
+            )
+            return
+        passing_flash = _canonical_passing_flash_animation(self, animation)
+        if passing_flash is not None:
+            child_run_time, rate_function = _canonical_passing_flash_options(
+                animation, child_kwargs
+            )
+            reservation = reserve(passing_flash) if passing_flash._scene is None else None
+            entering_id = (
+                ""
+                if reservation is None or reservation.reuse_existing_identity
+                else str(reservation.object.id)
+            )
+            builder.appendPassingFlash(
+                entering_id,
+                passing_flash._semantic_handle,
+                float(animation.time_width),
+                child_run_time,
+                rate_function,
+            )
+            removals.append(passing_flash)
+            return
+        family_reveal = _canonical_family_reveal_animation(self, animation)
+        if family_reveal is not None:
+            family, leaves, reverse = family_reveal
+            (
+                child_run_time,
+                rate_function,
+                child_lag_ratio,
+                introducer,
+                remover,
+                reverse_rate_function,
+            ) = _canonical_text_reveal_options(animation)
+            builder.appendFamilyReveal(
+                family._semantic_family_handle,
+                reverse,
+                introducer,
+                remover,
+                reverse_rate_function,
+                child_run_time,
+                rate_function,
+                child_lag_ratio,
+            )
+            detached = [member for member in leaves if member._scene is None]
+            if detached:
+                family_registrations.append(family)
+                for member in detached:
+                    reservation = reserve(member)
+                    if not reservation.reuse_existing_identity:
+                        builder.appendFamilyRevealEntering(
+                            str(reservation.object.id), member._semantic_handle
+                        )
+            removes = reverse if remover is None else remover
+            if removes:
+                removals.extend(leaves)
+            return
+        text_reveal = _canonical_text_reveal_animation(self, animation)
+        if text_reveal is not None:
+            target, reverse = text_reveal
+            (
+                child_run_time,
+                rate_function,
+                child_lag_ratio,
+                introducer,
+                remover,
+                reverse_rate_function,
+            ) = _canonical_text_reveal_options(animation)
+            reservation = reserve(target) if target._scene is None else None
+            builder.appendTextReveal(
+                ""
+                if reservation is None or reservation.reuse_existing_identity
+                else str(reservation.object.id),
+                target._semantic_handle,
+                reverse,
+                introducer,
+                remover,
+                reverse_rate_function,
+                child_run_time,
+                rate_function,
+                child_lag_ratio,
+            )
+            removes = reverse if remover is None else remover
+            if removes:
+                removals.append(target)
+            return
+        family_fade = _canonical_family_fade_animation(self, animation)
+        if family_fade is not None:
+            family, leaves, direction = family_fade
+            child = _canonical_fade_options(
+                animation, child_kwargs, allow_family_lag=True
+            )
+            if child is None:
+                raise NotImplementedError("unsupported canonical family Fade options")
+            builder.appendFamilyFade(
+                family._semantic_family_handle,
+                direction,
+                float(child.run_time),
+                str(child.rate_func),
+                float(child.lag_ratio),
+            )
+            if direction == "in":
+                family_registrations.append(family)
+                for member in leaves:
+                    reservation = reserve(member)
+                    if not reservation.reuse_existing_identity:
+                        builder.appendFamilyFadeEntering(
+                            str(reservation.object.id), member._semantic_handle
+                        )
+            else:
+                removals.extend(leaves)
+            return
+        family_write = _canonical_text_family_write_animation(self, animation)
+        if family_write is not None:
+            family, leaves = family_write
+            if child_kwargs:
+                unsupported = set(child_kwargs) - {
+                    "duration",
+                    "run_time",
+                    "easing",
+                    "rate_func",
+                }
+                if unsupported:
+                    names = ", ".join(sorted(unsupported))
+                    raise NotImplementedError(
+                        f"unsupported canonical Text family Write play option(s): {names}"
+                    )
+            child_run_time, rate_function, child_lag_ratio = (
+                _canonical_text_write_options(animation)
+            )
+            builder.appendFamilyTextWrite(
+                family._semantic_family_handle,
+                bool(animation.reverse),
+                bool(animation.introducer),
+                bool(animation.remover),
+                bool(animation.reverse_rate_function),
+                child_run_time,
+                rate_function,
+                child_lag_ratio,
+            )
+            if animation.introducer:
+                family_registrations.append(family)
+                for member in leaves:
+                    reservation = reserve(member)
+                    if not reservation.reuse_existing_identity:
+                        builder.appendFamilyTextWriteEntering(
+                            str(reservation.object.id), member._semantic_handle
+                        )
+            if animation.remover:
+                removals.extend(leaves)
+            return
+        text_write = _canonical_text_write_animation(self, animation)
+        if text_write is not None:
+            if child_kwargs:
+                # Flat Scene.play options are already carried by the root request;
+                # nested groups pass their timing through their composition node.
+                unsupported = set(child_kwargs) - {"duration", "run_time", "easing", "rate_func"}
+                if unsupported:
+                    names = ", ".join(sorted(unsupported))
+                    raise NotImplementedError(
+                        f"unsupported canonical Text Write play option(s): {names}"
+                    )
+            child_run_time, rate_function, child_lag_ratio = (
+                _canonical_text_write_options(animation)
+            )
+            reservation = reserve(text_write) if animation.introducer and text_write._scene is None else None
+            if animation.remover:
+                removals.append(text_write)
+            builder.appendTextWrite(
+                "" if reservation is None else str(reservation.object.id),
+                text_write._semantic_handle,
+                bool(animation.reverse),
+                bool(animation.introducer),
+                bool(animation.remover),
+                bool(animation.reverse_rate_function),
+                child_run_time,
+                rate_function,
+                child_lag_ratio,
+            )
+            return
+        subset = _canonical_subset_display_animation(self, animation)
+        if subset is not None:
+            family, leaves, mode = subset
+            resolved = _options.resolve(
+                builder_args=_options.builder_args(animation),
+                default_lag_ratio=0.0,
+                play_run_time=child_kwargs.get("run_time", child_kwargs.get("duration")),
+                play_easing=child_kwargs.get("easing"),
+                play_rate_func=child_kwargs.get("rate_func"),
+                play_lag_ratio=child_kwargs.get("lag_ratio"),
+            )
+            if (
+                resolved.lag_ratio != 0.0
+                or resolved.path_arc != 0.0
+                or resolved.reverse_rate_function
+            ):
+                raise NotImplementedError(
+                    "canonical subset display does not support lag, path, or reverse options"
+                )
+            builder.appendFamilySubsetDisplay(
+                family._semantic_family_handle,
+                mode,
+                float(resolved.run_time),
+                str(resolved.rate_func),
+            )
+            for member in leaves:
+                if member._scene is None:
+                    reservation = reserve(member)
+                    builder.appendFamilySubsetDisplayEntering(
+                        str(reservation.object.id), member._semantic_handle
+                    )
+            return
+        border_fill = _canonical_draw_border_then_fill_animation(self, animation)
+        if border_fill is not None:
+            target, family, leaves, phase_rate = border_fill
+            args = dict(getattr(animation, "anim_args", {}))
+            args["rate_func"] = _rate_functions.linear
+            child = _canonical_affine_options(
+                animation, child_kwargs, builder_args=args, allow_family_lag=family is not None
+            )
+            if child is None or child.rate_func != "linear":
+                raise NotImplementedError(
+                    "canonical DrawBorderThenFill requires linear outer timing"
+                )
+            color = getattr(animation, "stroke_color", None)
+            rgba = (None, None, None, None) if color is None else tuple(
+                float(getattr(color, name)) for name in ("red", "green", "blue", "alpha")
+            )
+            width = _compat._manim_stroke_width(animation.stroke_width)
+            introducer = bool(getattr(animation, "introducer", True))
+            detached = [member for member in leaves if member._scene is None]
+            if family is None:
+                member = leaves[0]
+                reservation = reserve(member) if detached else None
+                object_id = "" if reservation is None else str(reservation.object.id)
+                builder.appendDrawBorderThenFillMobject(
+                    object_id, member._semantic_handle, width, *rgba, phase_rate,
+                    introducer, float(child.run_time), "linear",
+                )
+            else:
+                builder.appendDrawBorderThenFillFamily(
+                    family._semantic_family_handle, width, *rgba, phase_rate,
+                    introducer, float(child.run_time), "linear", float(child.lag_ratio),
+                )
+                for member in detached:
+                    reservation = reserve(member)
+                    builder.appendDrawBorderThenFillFamilyEntering(
+                        str(reservation.object.id), member._semantic_handle
+                    )
+            return
+        indicate = _canonical_indicate_animation(self, animation)
+        if indicate is not None:
+            target, family = indicate
+            resolved = _options.resolve(
+                builder_args=_options.builder_args(animation),
+                default_lag_ratio=0.0,
+                play_run_time=child_kwargs.get("run_time", child_kwargs.get("duration")),
+                play_easing=child_kwargs.get("easing"),
+                play_rate_func=child_kwargs.get("rate_func"),
+                play_lag_ratio=child_kwargs.get("lag_ratio"),
+            )
+            if resolved.path_arc != 0.0 or resolved.reverse_rate_function:
+                raise NotImplementedError("canonical Indicate does not support path options")
+            if resolved.rate_func != "there_and_back":
+                raise NotImplementedError(
+                    "canonical restoring Indicate requires there_and_back easing"
+                )
+            color = animation.color
+            rgba = tuple(
+                float(getattr(color, name))
+                for name in ("red", "green", "blue", "alpha")
+            )
+            method = builder.appendIndicateFamily if family else builder.appendIndicateMobject
+            handle = getattr(
+                target,
+                "_semantic_family_handle" if family else "_semantic_handle",
+            )
+            method(
+                handle,
+                float(animation.scale_factor),
+                *rgba,
+                float(resolved.run_time),
+                str(resolved.rate_func),
+                float(resolved.lag_ratio),
+            )
+            return
+        family_transform = _canonical_family_transform_animation(self, animation)
+        if family_transform is not None:
+            source, target, leaf = family_transform
+            child = _canonical_affine_options(leaf, child_kwargs, allow_family_lag=True)
+            if child is None or child.path_arc != 0.0 or child.reverse_rate_function:
+                raise NotImplementedError("unsupported canonical family Transform options")
+            if child.rate_func not in ("linear", "smooth"):
+                raise NotImplementedError(
+                    "canonical family Transform requires linear or smooth easing"
+                )
+            builder.appendFamilyTransformTo(
+                source._semantic_family_handle,
+                target._semantic_family_handle,
+                float(child.run_time),
+                str(child.rate_func),
+                float(child.lag_ratio),
+            )
+            return
+        if isinstance(animation, _composition.Add):
+            if child_kwargs:
+                raise NotImplementedError("Add inside a composition does not accept play timing overrides")
+            if not isinstance(animation.mobject, _base.Mobject) or isinstance(animation.mobject, _compat.Group):
+                raise NotImplementedError("canonical Add requires one detached typed leaf")
+            member = animation.mobject
+            if getattr(member, "_semantic_handle", None) is None or member._scene is not None:
+                raise NotImplementedError("canonical Add requires one detached typed leaf")
+            reservation = reserve(member)
+            builder.appendAdd(str(reservation.object.id), getattr(member, "_semantic_handle"), float(animation.run_time), "linear")
+            return
+        lifecycle = _canonical_affine_lifecycle_animation(self, animation)
+        if lifecycle is not None:
+            target, lifecycle_animation = lifecycle
+            child = _canonical_composition_child_options(lifecycle_animation, child_kwargs)
+            if child.lag_ratio != 0.0 or child.path_arc != 0.0 or child.reverse_rate_function:
+                raise NotImplementedError("canonical lifecycle leaves do not support lag or path options")
+            if getattr(lifecycle_animation, "_canonical_affine_lifecycle", None) == "shrink":
+                direction, endpoint, x, y, rotation_offset, color = "remove-to", "effective-center", 0.0, 0.0, 0.0, None
+            else:
+                direction, endpoint = "introduce-from", "point"
+                point = lifecycle_animation.point
+                x, y = float(point.x), float(point.y)
+                rotation_offset = -float(lifecycle_animation.angle) if type(lifecycle_animation).__name__ == "SpinInFromNothing" else 0.0
+                color = getattr(lifecycle_animation, "point_color", None)
+            rgba = (None, None, None, None) if color is None else tuple(float(getattr(color, name)) for name in ("red", "green", "blue", "alpha"))
+            reservation = reserve(target) if target._scene is None else None
+            if direction == "remove-to":
+                removals.append(target)
+            object_id = str(reservation.object.id) if reservation is not None else ""
+            builder.appendAffineLifecycle(object_id, getattr(target, "_semantic_handle"), direction, endpoint, x, y, rotation_offset, *rgba, float(child.run_time), str(child.rate_func))
+            return
+        fade = _canonical_fade_animation(self, animation)
+        if fade is not None:
+            target, direction = fade
+            child = _canonical_fade_options(animation, child_kwargs)
+            if child is None:
+                raise NotImplementedError("unsupported canonical fade options")
+            endpoint = _canonical_fade_endpoint(animation)
+            assert endpoint is not None
+            scale_factor, translation, x, y = endpoint
+            if direction == "in":
+                reservation = reserve(target)
+                object_id = (
+                    ""
+                    if reservation.reuse_existing_identity
+                    else str(reservation.object.id)
+                )
+            else:
+                object_id = ""
+                removals.append(target)
+            builder.appendFade(
+                object_id,
+                getattr(target, "_semantic_handle"),
+                direction,
+                scale_factor,
+                translation,
+                x,
+                y,
+                float(child.run_time),
+                str(child.rate_func),
+            )
+            return
+        uncreated = _canonical_uncreate_animation(self, animation)
+        if uncreated is not None:
+            child = _canonical_uncreate_options(animation, child_kwargs)
+            if child is None:
+                raise NotImplementedError("unsupported shared Uncreate options")
+            reservation = reserve(uncreated) if uncreated._scene is None else None
+            entering_id = "" if reservation is None or reservation.reuse_existing_identity else str(reservation.object.id)
+            remover = bool(getattr(animation, "remover", True))
+            builder.appendUncreate(
+                entering_id, uncreated._semantic_handle,
+                float(child.run_time), str(child.rate_func),
+                remover, bool(getattr(animation, "reverse_rate_function", True)),
+            )
+            if remover:
+                removals.append(uncreated)
+            return
+        created = _canonical_create_animation(self, animation)
+        if created is not None:
+            child = _canonical_create_options(animation, child_kwargs)
+            if child is None:
+                raise NotImplementedError("unsupported canonical Create options")
+            reservation = reserve(created)
+            builder.appendCreate(str(reservation.object.id), getattr(created, "_semantic_handle"), float(child.run_time), str(child.rate_func))
+            return
+        affine = _canonical_affine_animation(self, animation)
+        if affine is not None:
+            source, target, leaf = affine
+            child = _canonical_composition_child_options(leaf, child_kwargs)
+            source_handle = getattr(source, "_semantic_handle")
+            target_handle = getattr(target, "_semantic_handle")
+            # Resource-backed text has no vector point correspondence. Its
+            # transform uses the same Rust affine channels as native Text.
+            point_correspondence = (
+                not isinstance(source, _typst._RetainedTextMobject)
+                and type(leaf) is _animate._AlignedAnimationBuilder
+                and not math.isclose(
+                    float(source_handle.rotation),
+                    float(target_handle.rotation),
+                    abs_tol=1e-12,
+                )
+            )
+            if source._scene is None:
+                reservation = reserve(source)
+                method = builder.appendEnteringPointTransformTo if point_correspondence else builder.appendEnteringTransformTo
+                method(str(reservation.object.id), source_handle, target_handle, float(child.run_time), str(child.rate_func))
+            else:
+                method = builder.appendPointTransformTo if point_correspondence else builder.appendTransformTo
+                method(source_handle, target_handle, float(child.run_time), str(child.rate_func))
+            return
+        if type(animation) in (_rotate.Rotate, _rotate.Rotating):
+            target = animation.mobject
+            if not isinstance(target, _base.Mobject) or getattr(target, "_semantic_handle", None) is None:
+                raise NotImplementedError("canonical Rotate requires a typed Mobject")
+            child = _canonical_composition_child_options(animation, child_kwargs)
+            angle = float(animation.angle) * _rotate._axis_sign(animation.axis)
+            if animation.about_point is not None:
+                point = _base._as_vec2(animation.about_point)
+                pivot_kind, pivot_x, pivot_y = "point", point.x, point.y
+            elif animation.about_edge is not None:
+                edge = _base._as_vec2(animation.about_edge)
+                pivot_kind, pivot_x, pivot_y = "edge", edge.x, edge.y
+            else:
+                pivot_kind, pivot_x, pivot_y = "center", 0.0, 0.0
+            entering_id = str(reserve(target).object.id) if target._scene is None else None
+            builder.appendManimRotate(
+                entering_id, target._semantic_handle, angle,
+                pivot_kind, float(pivot_x), float(pivot_y),
+                float(child.run_time), str(child.rate_func),
+            )
+            return
+        raise NotImplementedError(f"canonical composition does not support {type(animation).__name__}")
+
+    def build(root_kind: str, root_animations: tuple[object, ...], root_group: object | None, root_kwargs: dict[str, object]):
+        # Recursion uses a fresh inert builder while one reservation accumulator is shared.
+        nested = context.beginOrdinaryCompositionBuilder(
+            root_kind,
+            None if root_group is None else root_group.run_time,
+            0.0 if root_group is None else float(root_group.lag_ratio),
+            None if root_group is not None else _canonical_play_options(dict(root_kwargs)),
+        )
+        nested.setCompositionRateFunction(
+            _rate_functions.easing_from_rate_func(root_group.rate_func) if root_group is not None else "linear"
+        )
+        play_rate = _canonical_composition_rate_id(root_kwargs)
+        if play_rate is not None:
+            nested.setPlayRateFunction(play_rate)
+        for child_animation in root_animations:
+            append_leaf(nested, child_animation, {} if root_group is not None else root_kwargs)
+        return nested
+
+    for animation in animations:
+        append_leaf(candidate, animation, {} if group is not None else kwargs)
+    try:
+        supported = bool(context.ordinaryCanPlayComposition(candidate))
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return (
+        candidate,
+        reservations,
+        family_registrations,
+        removals,
+        tracker_associations,
+    ) if supported else False
+
+
+def _play_canonical_composition(
+    self: _base.Scene,
+    candidate: object,
+    reservations: list[tuple[_base.Mobject, object]],
+    family_registrations: list[_compat.Group],
+    removals: list[_base.Mobject],
+    tracker_associations: list[_reactive.ValueTracker],
+) -> _base.Scene | _SemanticContinuationAwaitable:
+    _start_default_synchronous_continuation(self)
+    context = _context(self)
+    try:
+        if _semantic_continuation_active(self):
+            _require_semantic_continuation_active(self)
+            _prepare_semantic_continuation_callbacks(self, context)
+            context.beginOrdinaryComposition(candidate)
+        else:
+            context.ordinaryPlayComposition(candidate)
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    for tracker in tracker_associations:
+        tracker._commit_canonical_association(self, context)
+    for source, reservation in reservations:
+        handle = getattr(source, "_semantic_handle")
+        _commit_typed_binding(source, self, reservation, handle)
+        register = getattr(self, "_register_top_level", None)
+        if register is not None:
+            register(source)
+    register = getattr(self, "_register_top_level", None)
+    if register is not None:
+        for family in family_registrations:
+            register(family)
+    def completed() -> None:
+        for target in removals:
+            _reconcile_fade_membership(self, target, "out")
+
+    if _async_continuation_active(self):
+        return _continuation_awaitable(self, completed)
+    if _synchronous_continuation_active(self):
+        _synchronous_continuation_wait(self)
+        completed()
+        return self
+    completed()
+    return self
+
+
+def _play(self, *args, **kwargs):
+    _require_portable_barrier_admission(self)
+    group = args[0] if len(args) == 1 and isinstance(args[0], _composition.AnimationGroup) else None
+    kind = "sequence" if isinstance(group, _composition.Succession) else "parallel"
+    animations = tuple(group.animations) if group is not None else args
+    candidate = _build_canonical_composition_candidate(self, kind, animations, group, kwargs)
+    if candidate is False:
+        raise NotImplementedError("Scene.play request is unsupported by the shared Rust engine")
+    return _play_canonical_composition(self, *candidate)
+
+
+def _canonical_value_tracker(self: _base.Scene, value: float = 0.0) -> _reactive.ValueTracker:
+    context = _context(self)
+    return _reactive.ValueTracker._from_canonical(
+        self, context, context.createValueTracker(float(value))
+    )
+
+
+def _canonical_vector_signal(scene: _base.Scene, method: str) -> _reactive.NativeVectorSignal:
+    context = _context(scene)
+    try:
+        handle = getattr(context, method)()
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return _reactive.NativeVectorSignal._from_canonical(scene, context, handle)
+
+
+def _canonical_tracker_signal(
+    scene: _base.Scene, method: str, *args: object
+) -> _reactive.ValueTracker:
+    context = _context(scene)
+    try:
+        handle = getattr(context, method)(*args)
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return _reactive.ValueTracker._from_canonical(scene, context, handle)
+
+
+def _canonical_pointer_position_signal(self: _base.Scene) -> _reactive.NativeVectorSignal:
+    return _canonical_vector_signal(self, "pointerPositionSignal")
+
+
+def _canonical_viewport_size_signal(self: _base.Scene) -> _reactive.NativeVectorSignal:
+    return _canonical_vector_signal(self, "viewportSizeSignal")
+
+
+def _canonical_wheel_delta_signal(self: _base.Scene) -> _reactive.NativeVectorSignal:
+    return _canonical_vector_signal(self, "wheelDeltaSignal")
+
+
+def _canonical_key_state_signal(
+    self: _base.Scene, code: str, initial: bool = False
+) -> _reactive.NativeBoolSignal:
+    code = _reactive._nonempty_string("code", code)
+    if not isinstance(initial, bool):
+        raise TypeError("initial must be a bool")
+    context = _context(self)
+    try:
+        handle = context.keyStateSignal(code, initial)
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return _reactive.NativeBoolSignal._from_canonical(self, context, handle)
+
+
+def _canonical_control_signal(
+    self: _base.Scene, name: str, value: float = 0.0
+) -> _reactive.ValueTracker:
+    name = _reactive._nonempty_string("name", name)
+    value = _reactive._finite_scalar("value", value)
+    return _canonical_tracker_signal(self, "controlSignal", name, value)
+
+
+def _canonical_pointer_down_events(
+    self: _base.Scene, button: int = 0
+) -> _reactive.ValueTracker:
+    button = _reactive._button(button)
+    return _canonical_tracker_signal(self, "pointerDownEvents", button)
+
+
+def _canonical_wheel_events(self: _base.Scene) -> _reactive.ValueTracker:
+    return _canonical_tracker_signal(self, "wheelEvents")
+
+
+def _canonical_control_commit_events(
+    self: _base.Scene, name: str
+) -> _reactive.ValueTracker:
+    name = _reactive._nonempty_string("name", name)
+    return _canonical_tracker_signal(self, "controlCommitEvents", name)
+
+
+def _is_canonical_scene(scene: _base.Scene) -> bool:
+    return getattr(scene, "_canonical_authoring_context", None) is not None
+
+
+def _canonical_bound_mobject(
+    scene: _base.Scene, mobject: object, operation: str
+) -> object:
+    if not isinstance(mobject, _base.Mobject) or mobject._scene is not scene:
+        raise ValueError(f"{operation} target must belong to this Scene")
+    handle = getattr(mobject, "_semantic_handle", None)
+    if handle is None:
+        raise ValueError(f"{operation} requires a typed semantic Mobject")
+    return handle
+
+
+def _canonical_signal_handle(
+    scene: _base.Scene, signal: object, expected: type, operation: str
+) -> tuple[object, object]:
+    if not isinstance(signal, expected):
+        raise TypeError(f"{operation} expects a {expected.__name__}")
+    if isinstance(signal, _reactive.ValueTracker):
+        _associate_tracker(scene, signal)
+    canonical = signal._canonical_context_handle()
+    if canonical is None:
+        if _is_canonical_scene(scene):
+            raise ValueError(f"{operation} cannot mix legacy and canonical signals")
+        raise TypeError(f"{operation} expects a canonical {expected.__name__}")
+    context, handle = canonical
+    if context is not getattr(scene, "_canonical_authoring_context", None):
+        raise ValueError(f"{expected.__name__} belongs to another canonical Scene context")
+    return context, handle
+
+
+def _canonical_bind_signal(
+    self: _base.Scene,
+    mobject: object,
+    signal: object,
+    expected: type,
+    operation: str,
+    method: str,
+) -> _base.Scene:
+    handle = _canonical_bound_mobject(self, mobject, operation)
+    context, signal_handle = _canonical_signal_handle(self, signal, expected, operation)
+    try:
+        getattr(context, method)(handle, signal_handle)
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return self
+
+
+def _unsupported_native_source(operation: str) -> None:
+    raise NotImplementedError(
+        f"{operation} is not supported by canonical native input authoring"
+    )
+
+
+def _canonical_pointer_button_signal(
+    self: _base.Scene, button: int = 0, initial: bool = False
+) -> _reactive.NativeBoolSignal:
+    _unsupported_native_source("pointer_button_signal")
+
+
+def _canonical_gesture_delta_signal(
+    self: _base.Scene, name: str
+) -> _reactive.NativeVectorSignal:
+    _unsupported_native_source("gesture_delta_signal")
+
+
+def _canonical_pointer_up_events(self: _base.Scene, button: int = 0) -> _reactive.ValueTracker:
+    _unsupported_native_source("pointer_up_events")
+
+
+def _canonical_key_press_events(self: _base.Scene, code: str) -> _reactive.ValueTracker:
+    _unsupported_native_source("key_press_events")
+
+
+def _canonical_key_release_events(self: _base.Scene, code: str) -> _reactive.ValueTracker:
+    _unsupported_native_source("key_release_events")
+
+
+def _canonical_gesture_events(self: _base.Scene, name: str) -> _reactive.ValueTracker:
+    _unsupported_native_source("gesture_events")
+
+
+def _canonical_bind_rotation_dispatch(
+    self: _base.Scene, mobject: object, tracker: object
+) -> _base.Scene:
+    if isinstance(tracker, _reactive.ValueTracker) and (
+        tracker._canonical_context_handle() is not None
+        or tracker._detached_canonical_handle() is not None
+    ):
+        return _canonical_bind_signal(
+            self, mobject, tracker, _reactive.ValueTracker, "bind_rotation", "bindRotation"
+        )
+    _unsupported_native_source("bind_rotation")
+
+
+def _canonical_bind_opacity_dispatch(
+    self: _base.Scene, mobject: object, tracker: object
+) -> _base.Scene:
+    if isinstance(tracker, _reactive.ValueTracker) and (
+        tracker._canonical_context_handle() is not None
+        or tracker._detached_canonical_handle() is not None
+    ):
+        return _canonical_bind_signal(
+            self, mobject, tracker, _reactive.ValueTracker, "bind_opacity", "bindOpacity"
+        )
+    _unsupported_native_source("bind_opacity")
+
+
+def _canonical_bind_presence_dispatch(
+    self: _base.Scene, mobject: object, signal: object
+) -> _base.Scene:
+    if isinstance(signal, _reactive.NativeBoolSignal) and signal._canonical_context_handle() is not None:
+        return _canonical_bind_signal(
+            self, mobject, signal, _reactive.NativeBoolSignal, "bind_presence", "bindPresence"
+        )
+    _unsupported_native_source("bind_presence")
+
+
+def _canonical_bind_appearance_dispatch(
+    self: _base.Scene, mobject: object, tracker: object
+) -> _base.Scene:
+    _unsupported_native_source("bind_appearance")
+
+
+def _canonical_bind_reveal_dispatch(
+    self: _base.Scene, mobject: object, tracker: object
+) -> _base.Scene:
+    _unsupported_native_source("bind_reveal")
+
+
+def _canonical_bind_morph_dispatch(
+    self: _base.Scene, mobject: object, tracker: object
+) -> _base.Scene:
+    _unsupported_native_source("bind_morph")
+
+
+def _canonical_bind_position(
+    self: _base.Scene,
+    mobject: object,
+    tracker: object,
+    direction: object = None,
+    offset: object = None,
+) -> _base.Scene:
+    if isinstance(tracker, _reactive.NativeVectorSignal):
+        if tracker._canonical_context_handle() is not None:
+            if direction is not None or offset is not None:
+                raise ValueError("direction/offset are not valid for a native vector signal")
+            return _canonical_bind_signal(
+                self,
+                mobject,
+                tracker,
+                _reactive.NativeVectorSignal,
+                "bind_position",
+                "bindNativeTranslation",
+            )
+        _unsupported_native_source("bind_position")
+    if not isinstance(tracker, _reactive.ValueTracker):
+        _unsupported_native_source("bind_position")
+    if not isinstance(mobject, _base.Mobject) or mobject._scene is not self:
+        raise ValueError("bind_position target must belong to this Scene")
+    handle = getattr(mobject, "_semantic_handle", None)
+    if handle is None:
+        raise ValueError("canonical ValueTracker binding requires a typed semantic Mobject")
+    direction_ir = _reactive._vec2_ir(_base.RIGHT if direction is None else direction)
+    offset_ir = _reactive._vec2_ir(_base.ORIGIN if offset is None else offset)
+    _associate_tracker(self, tracker)
+    canonical = tracker._canonical_context_handle()
+    if canonical is None:
+        _unsupported_native_source("bind_position")
+    context, tracker_handle = canonical
+    if context is not _context(self):
+        raise ValueError("ValueTracker belongs to another canonical Scene context")
+    position = context.trackerPosition(
+        tracker_handle,
+        float(direction_ir["x"]),
+        float(direction_ir["y"]),
+        float(offset_ir["x"]),
+        float(offset_ir["y"]),
+    )
+    context.bindTrackerPosition(handle, position)
+    return self
+
+
+def execution_context(scene):
+    """Prepare callbacks on this Scene's one shared Rust execution context."""
+    context = _context(scene)
+    # Python keeps callable identity only. This bootstrap writes the authored
+    # occurrence intervals into the one shared Rust semantic store before the
+    # execution session is lowered; it does not construct slots or a scheduler.
+    import _manim_updaters
+
+    _manim_updaters.prepare_canonical_callbacks(scene, context)
+    return context
+
+
+class LiveExecution:
+    """Explicit live property/query facade over one Rust/WASM execution session.
+
+    The wrapper retains only Python object ergonomics. The canonical context
+    owns the semantic store and its one runtime session until normal execution
+    leases that same session to the renderer; no Python snapshot is consulted
+    for a live read or write.
+    """
+
+    def __init__(self, scene: _base.Scene, duration: float | None = None) -> None:
+        context = execution_context(scene)
+        self._scene = scene
+        if duration is None:
+            handoff = context.liveHandoffDuration()
+            duration = (
+                1.0 if handoff is None or float(handoff) <= 0.0 else float(handoff)
+            )
+        context.beginLiveExecution(float(duration))
+        self._context = context
+
+    def _handle(self, mobject: _base.Mobject, *, allow_detached: bool = False) -> object:
+        if not isinstance(mobject, _base.Mobject):
+            raise ValueError("live Mobject must belong to this Scene")
+        if mobject._scene is not self._scene and not (
+            allow_detached and mobject._scene is None
+        ):
+            raise ValueError("live Mobject must belong to this Scene")
+        handle = getattr(mobject, "_semantic_handle", None)
+        if handle is None:
+            raise ValueError("live execution requires a typed semantic Mobject handle")
+        return handle
+
+    def add(self, mobject: _base.Mobject) -> None:
+        handle = self._handle(mobject, allow_detached=True)
+        if mobject._scene is self._scene:
+            self._context.liveAdd(str(mobject.id), handle)
+            return
+        reservation = _reserve_typed_binding(mobject, self._scene, handle, None)
+        self._context.liveAdd(str(reservation.object.id), handle)
+        _commit_typed_binding(mobject, self._scene, reservation, handle)
+
+    def remove(self, mobject: _base.Mobject) -> None:
+        self._context.liveRemove(self._handle(mobject))
+
+    def replace_content(self, target: _base.Mobject, source: _base.Mobject) -> None:
+        """Use preauthored source content while preserving target identity and state."""
+        self._context.liveReplaceContent(
+            self._handle(target),
+            self._handle(source, allow_detached=True),
+        )
+
+    def set_translation(self, mobject: _base.Mobject, x: float, y: float) -> None:
+        self._context.liveSetTranslation(self._handle(mobject), float(x), float(y))
+
+    def shift(self, mobject: _base.Mobject, x: float, y: float) -> None:
+        self._context.liveShift(self._handle(mobject), float(x), float(y))
+
+    def set_scale(self, mobject: _base.Mobject, x: float, y: float) -> None:
+        self._context.liveSetScale(self._handle(mobject), float(x), float(y))
+
+    def set_rotation(self, mobject: _base.Mobject, angle: float) -> None:
+        self._context.liveSetRotation(self._handle(mobject), float(angle))
+
+    def effective_center(self, mobject: _base.Mobject) -> _base.Vec2:
+        observed = self._context.liveEffectiveMobject(self._handle(mobject))
+        return _base.Vec2(
+            float(observed.translationX),
+            float(observed.translationY),
+        )
+
+    def play(self, animation: "LiveAnimation") -> float:
+        """Activate one declaration that was authored before this session began."""
+        if not isinstance(animation, LiveAnimation) or animation._scene is not self._scene:
+            raise ValueError("live animation must belong to this Scene")
+        return float(self._context.livePlayAnimation(animation._handle))
+
+    def wait(self, duration: float) -> float:
+        """Start a session-owned continuation wait after the active segment completes."""
+        return float(self._context.liveWait(float(duration)))
+
+    def advance_to(self, time: float) -> bool:
+        """Drive the current segment; affine endpoints require ``complete()``."""
+        return bool(self._context.liveAdvanceSegmentTo(float(time)))
+
+    def evaluate(self, time: float) -> None:
+        """Evaluate canonical deterministic tracks at one session-owned time."""
+        self._context.liveEvaluate(float(time))
+
+    def complete(self) -> None:
+        """Publish the active endpoint before sequential authoring continues."""
+        self._context.liveCompleteSegment()
+
+
+class LiveAnimation:
+    """Opaque Python identity for a predeclared shared semantic animation."""
+
+    def __init__(self, scene: _base.Scene, handle: object) -> None:
+        self._scene = scene
+        self._handle = handle
+
+
+def _live_rate_function_id(rate_func: object) -> str:
+    """Resolve only the established deterministic Python rate-function vocabulary."""
+    if isinstance(rate_func, str):
+        return rate_func
+    import _manim_rate_functions as _rate_functions
+
+    return _rate_functions.easing_from_rate_func(rate_func)
+
+
+def _declare_live_transform_to(
+    self: _base.Scene,
+    source: _base.Mobject,
+    target: _base.Mobject,
+    *,
+    run_time: float = 1.0,
+    rate_func: object = "smooth",
+) -> LiveAnimation:
+    """Declare a replayable affine TransformTo before lowering a live session.
+
+    ``target`` is an ordinary detached Mobject handle in the same Rust store,
+    usually built with ``source.copy()`` and transformed before this call. This
+    wrapper declares no scheduler and does not create animation meaning during
+    ``LiveExecution.play``.
+    """
+    context = execution_context(self)
+    if not isinstance(source, _base.Mobject) or source._scene is not self:
+        raise ValueError("live animation source must belong to this Scene")
+    if not isinstance(target, _base.Mobject) or target._scene is not None:
+        raise ValueError("live animation target must be a detached Mobject")
+    source_handle = getattr(source, "_semantic_handle", None)
+    target_handle = getattr(target, "_semantic_handle", None)
+    if source_handle is None or target_handle is None:
+        raise ValueError("live animation requires typed semantic Mobject handles")
+    return LiveAnimation(
+        self,
+        context.declareLiveTransformTo(
+            source_handle,
+            target_handle,
+            float(run_time),
+            _live_rate_function_id(rate_func),
+        ),
+    )
+
+
+def _live_execution(
+    self: _base.Scene, duration: float | None = None
+) -> LiveExecution:
+    """Create an explicit typed live session for the currently supported subset."""
+    return LiveExecution(self, duration)

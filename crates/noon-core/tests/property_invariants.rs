@@ -1,9 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
+use noon_core::{SemanticObjectState, StoredGeometry};
+
 use noon_core::{
-    CompositionTimeMap, CompositionTimeMapStep, GeometryRef, MutationTransaction, ObjectDefinition,
-    ObjectId, RateFunction, SceneDefinition, ScenePatch, SemanticNodeId, SemanticStore,
-    SemanticStoreError, SourceIdentity, Style, Transform2D, Vec2,
+    CompositionTimeMap, CompositionTimeMapStep, RateFunction, SemanticMutationTransaction,
+    SemanticNodeCreation, SemanticNodeId, SemanticObjectProperty, SemanticSignalValue,
+    SemanticStore, SemanticStoreError, SemanticVec3, SourceIdentity,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -43,8 +45,8 @@ struct ModelNode {
     source: Option<String>,
 }
 
-fn object(id: u64) -> ObjectDefinition {
-    ObjectDefinition::new(ObjectId::new(id), GeometryRef::circle(1.0))
+fn object() -> SemanticObjectState {
+    SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 })
 }
 
 fn model_index(nodes: &[ModelNode], id: SemanticNodeId) -> usize {
@@ -142,7 +144,6 @@ fn semantic_store_matches_reference_model_across_seeded_mutation_sequences() {
         let mut rng = Rng::new(seed);
         let mut store = SemanticStore::new();
         let mut nodes: Vec<ModelNode> = Vec::new();
-        let mut next_object = 0_u64;
 
         for step in 0..750 {
             let live_indices = nodes
@@ -162,9 +163,7 @@ fn semantic_store_matches_reference_model_across_seeded_mutation_sequences() {
                     let id = if family {
                         store.insert_family()
                     } else {
-                        let id = store.insert_object(object(next_object));
-                        next_object += 1;
-                        id
+                        store.insert_semantic_object(object())
                     };
                     nodes.push(ModelNode {
                         id,
@@ -265,99 +264,128 @@ fn semantic_store_matches_reference_model_across_seeded_mutation_sequences() {
     }
 }
 
-fn generated_property_patches(seed: u64, object_ids: &[ObjectId]) -> Vec<ScenePatch> {
+fn generated_property_writes(
+    seed: u64,
+    object_ids: &[SemanticNodeId],
+) -> Vec<(SemanticNodeId, SemanticObjectProperty, SemanticSignalValue)> {
     let mut rng = Rng::new(seed);
-    let mut patches = Vec::new();
-    for _ in 0..96 {
-        let object = object_ids[rng.index(object_ids.len())];
-        if rng.next().is_multiple_of(2) {
-            patches.push(ScenePatch::SetTransform {
+    let mut writes = Vec::new();
+    for &object in object_ids {
+        // One write per object/property is the shared transaction contract.
+        writes.extend([
+            (
                 object,
-                transform: Transform2D {
-                    translation: Vec2::new(rng.scalar(), rng.scalar()),
-                    rotation: rng.scalar(),
-                    scale: Vec2::new(rng.scalar().abs() + 0.1, rng.scalar().abs() + 0.1),
-                },
-            });
-        } else {
-            patches.push(ScenePatch::SetStyle {
+                SemanticObjectProperty::Translation,
+                SemanticVec3::new(rng.scalar().into(), rng.scalar().into(), 0.0).into(),
+            ),
+            (
                 object,
-                style: Style {
-                    opacity: ((rng.next() % 1001) as f32) / 1000.0,
-                    stroke_width: ((rng.next() % 500) as f32) / 100.0,
-                    stroke_width_mode: Default::default(),
-                    ..Style::default()
-                },
-            });
-        }
+                SemanticObjectProperty::RotationZ,
+                f64::from(rng.scalar()).into(),
+            ),
+            (
+                object,
+                SemanticObjectProperty::Scale,
+                SemanticVec3::new(
+                    f64::from(rng.scalar().abs()) + 0.1,
+                    f64::from(rng.scalar().abs()) + 0.1,
+                    1.0,
+                )
+                .into(),
+            ),
+            (
+                object,
+                SemanticObjectProperty::ObjectOpacity,
+                ((rng.next() % 1001) as f64 / 1000.0).into(),
+            ),
+        ]);
     }
-    patches
+    for index in (1..writes.len()).rev() {
+        let other = rng.index(index + 1);
+        writes.swap(index, other);
+    }
+    writes
 }
 
 #[test]
 fn generated_property_transactions_match_sequential_application_and_rollback() {
     for seed in 1_u64..=48 {
-        let mut base = SceneDefinition::new();
+        let mut base = SemanticStore::new();
         let ids = (0..12)
             .map(|index| {
-                if index % 2 == 0 {
-                    base.add(GeometryRef::circle(index as f32 + 1.0))
-                } else {
-                    base.add(GeometryRef::rectangle(index as f32 + 1.0, 2.0))
-                }
+                base.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                    radius: index as f32 + 1.0,
+                }))
             })
             .collect::<Vec<_>>();
-        let patches = generated_property_patches(seed, &ids);
-
+        let writes = generated_property_writes(seed, &ids);
         let mut sequential = base.clone();
-        for patch in &patches {
-            sequential.apply_patch(patch.clone()).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        for (object, property, value) in &writes {
+            let mut single = SemanticMutationTransaction::new();
+            single.set_property(*object, *property, value.clone());
+            single.apply(&mut sequential).unwrap();
+            transaction.set_property(*object, *property, value.clone());
         }
-
         let mut transactional = base.clone();
-        transactional
-            .apply_transaction(&MutationTransaction::from_mutations(patches.clone()))
-            .unwrap();
-        assert_eq!(
-            transactional, sequential,
-            "seed={seed}: property fast path diverged from sequential semantics"
-        );
-
-        for failure_position in [0, 1, patches.len() / 2, patches.len()] {
-            let mut mutations = patches[..failure_position].to_vec();
-            mutations.push(ScenePatch::SetStyle {
-                object: ObjectId::new(u64::MAX - seed),
-                style: Style::default(),
-            });
-            mutations.extend_from_slice(&patches[failure_position..]);
-
-            let mut rejected = base.clone();
-            let before = rejected.clone();
-            assert!(
-                rejected
-                    .apply_transaction(&MutationTransaction::from_mutations(mutations))
-                    .is_err(),
-                "seed={seed}: invalid property transaction unexpectedly committed"
-            );
+        transaction.apply(&mut transactional).unwrap();
+        for &id in &ids {
             assert_eq!(
-                rejected, before,
-                "seed={seed}: failure_position={failure_position}: property rollback was partial"
+                transactional.semantic_object_state_checked(id).unwrap(),
+                sequential.semantic_object_state_checked(id).unwrap(),
+                "seed={seed}: atomic and sequential publication diverged"
             );
+        }
+        assert_eq!(transactional.last_mutation_stats().slots_written, ids.len());
+
+        let stale = SemanticNodeId::new(u32::MAX - seed as u32, 0);
+        for failure_position in [0, 1, writes.len() / 2, writes.len()] {
+            let mut rejected = base.clone();
+            let before_revision = rejected.scene_revision();
+            let mut transaction = SemanticMutationTransaction::new();
+            for (index, (object, property, value)) in writes.iter().enumerate() {
+                if index == failure_position {
+                    transaction.set_property(stale, SemanticObjectProperty::ObjectOpacity, 0.5_f64);
+                }
+                transaction.set_property(*object, *property, value.clone());
+            }
+            if failure_position == writes.len() {
+                transaction.set_property(stale, SemanticObjectProperty::ObjectOpacity, 0.5_f64);
+            }
+            assert!(
+                transaction.apply(&mut rejected).is_err(),
+                "seed={seed}: invalid write committed"
+            );
+            assert_eq!(rejected.scene_revision(), before_revision);
+            assert_eq!(rejected.len(), base.len());
+            for &id in &ids {
+                assert_eq!(
+                    rejected.semantic_object_state_checked(id).unwrap(),
+                    base.semantic_object_state_checked(id).unwrap(),
+                    "seed={seed}: failure_position={failure_position}: partial property rollback"
+                );
+            }
         }
 
         let mut structural = base.clone();
-        let before = structural.clone();
-        let transaction = MutationTransaction::from_mutations([
-            ScenePatch::CreateObject(ObjectDefinition::new(
-                ObjectId::new(10_000 + seed),
-                GeometryRef::circle(1.0),
-            )),
-            ScenePatch::RemoveObject(ObjectId::new(u64::MAX - seed)),
-        ]);
-        assert!(structural.apply_transaction(&transaction).is_err());
+        let before_revision = structural.scene_revision();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction
+            .add_node(SemanticNodeCreation::object(object()))
+            .remove_node(stale);
+        assert!(transaction.apply(&mut structural).is_err());
+        assert_eq!(structural.scene_revision(), before_revision);
+        assert_eq!(structural.len(), base.len());
+        for &id in &ids {
+            assert_eq!(
+                structural.semantic_object_state_checked(id).unwrap(),
+                base.semantic_object_state_checked(id).unwrap()
+            );
+        }
+        // A rejected creation must not consume a generational identity.
         assert_eq!(
-            structural, before,
-            "seed={seed}: conservative structural transaction failed to roll back"
+            structural.insert_semantic_object(object()),
+            base.insert_semantic_object(object())
         );
     }
 }
@@ -441,13 +469,13 @@ fn source_identity_uniqueness_survives_reassignment_and_slot_reuse() {
         let mut live = Vec::new();
         let mut expected_owner: HashMap<String, SemanticNodeId> = HashMap::new();
 
-        for object_id in 0..40_u64 {
-            live.push(store.insert_object(object(object_id)));
+        for _ in 0..40_u64 {
+            live.push(store.insert_semantic_object(object()));
         }
 
         for step in 0..300 {
             if live.is_empty() {
-                live.push(store.insert_object(object(10_000 + step)));
+                live.push(store.insert_semantic_object(object()));
             }
             let index = rng.index(live.len());
             let id = live[index];
@@ -493,7 +521,7 @@ fn source_identity_uniqueness_survives_reassignment_and_slot_reuse() {
                 }
                 store.remove_node(removed).unwrap();
                 assert!(store.node(removed).is_none(), "seed={seed} step={step}");
-                let replacement = store.insert_object(object(20_000 + step));
+                let replacement = store.insert_semantic_object(object());
                 assert_eq!(
                     replacement.slot(),
                     removed.slot(),

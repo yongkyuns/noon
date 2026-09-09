@@ -7,9 +7,9 @@ use std::rc::Rc;
 
 pub fn session() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
-    let mut first = Mobject::manim_circle(Rc::clone(scene.store()), 0.2)?;
-    let mut second = Mobject::manim_circle(Rc::clone(scene.store()), 0.2)?;
-    let mut anchor = Mobject::manim_square(Rc::clone(scene.store()), 1.0)?;
+    let mut first = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.2)?;
+    let mut second = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.2)?;
+    let mut anchor = Mobject::manim_square(Rc::clone(scene.integration_store()), 1.0)?;
     for (object, color) in [
         (&mut first, Color::BLUE),
         (&mut second, Color::YELLOW),

@@ -1,7 +1,7 @@
 # CI evidence tooling
 
-Implementation tooling for #1265, not another architecture or roadmap. The engine
-contract remains `docs/architecture.md`.
+Development qualification and CI evidence tooling, not another architecture or
+roadmap. The engine contract remains `docs/architecture.md`.
 
 ## Local architecture and iteration gate
 
@@ -88,6 +88,28 @@ clean/staged/untracked edit-to-result timings. Record checkout, toolchain, comma
 candidate and cache state when comparing development latency. Fixture times measure
 guard feedback, not Rust recompilation or a claimed speedup. Cold/warm compiler and
 mixed-change measurements remain #1265 work; no checks are omitted to claim faster CI.
+
+### Public facade qualification
+
+The R2 public-surface checks reuse `fixtures/provider-consumer` rather than adding
+another harness. Its `public_facade` target tests ordinary construction, authored
+versus effective observations, coherent live edits/completion, and typed rejection
+of stale publication after explicitly opted-in raw integration. Provider CI runs
+the consumer in native cells and compile-checks it in WASM cells. Only the
+minimal/native cell additionally runs the facade's compile-fail documentation and
+the paired `shared_authoring` Rust example:
+
+```sh
+cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --test public_facade
+cargo test -p noon --no-default-features --doc
+cargo run -p noon --no-default-features --example shared_authoring
+```
+
+WASM compilation is not browser execution; existing product/browser and paired
+Python tests still qualify the host path. See the consumer README for the public
+versus integration boundary and the unchanged historical geometry-cost workload.
+These tests do not claim all authoring error producers or Python exception mapping
+have been converted; remaining R2 ownership stays with #958/#61.
 
 ## Focused public authoring error qualification
 

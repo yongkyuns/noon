@@ -1,27 +1,41 @@
-use noon_compile::CompiledScene;
-use noon_core::{Easing, GeometryRef, ObjectSnapshot, SceneDefinition, TrackTiming};
+use noon_compile::{CompiledObject, CompiledScene};
+use noon_core::{
+    CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, Style, TrackDefinition,
+    TrackId, TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint,
+};
 use noon_runtime::SceneInstance;
 
-fn scene() -> SceneDefinition {
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(GeometryRef::circle(1.0));
-    let from = ObjectSnapshot::from(scene.object(object).unwrap());
+fn scene() -> CompiledScene {
+    let mut objects = Vec::new();
+    let mut tracks = Vec::new();
+    let object = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        object,
+        GeometryRef::circle(1.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    let from = TransformTrackEndpoint {
+        geometry: objects[object.get() as usize].geometry().unwrap().clone(),
+        transform: objects[object.get() as usize].base_transform,
+        style: objects[object.get() as usize].base_style,
+    };
     let mut to = from.clone();
     to.geometry = GeometryRef::rectangle(2.0, 2.0);
-    scene
-        .animate_transform(
-            object,
-            from,
-            to,
-            TrackTiming::new(0.0, 2.0, Easing::EaseInOutCubic),
-        )
-        .unwrap();
-    scene
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object { from, to },
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::EaseInOutCubic),
+        time_map: CompositionTimeMap::identity(),
+    });
+    CompiledScene::compile_objects(objects, &tracks).unwrap()
 }
 
 #[test]
 fn circle_to_rectangle_keeps_semantic_endpoints_and_renderer_only_morph() {
-    let compiled = CompiledScene::compile(&scene()).expect("cross-kind Transform must compile");
+    let compiled = scene();
     let mut instance = SceneInstance::new(compiled.clone());
 
     let start = instance.seek(0.0).unwrap().clone();

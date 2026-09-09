@@ -1,13 +1,14 @@
 //! Geometry boundary regressions exercise shared handles and their typed lowering.
 use noon::{
-    GeometryRef, GeometryResource, GeometryResourceLookup, ManimGeometryOptions as Options,
-    Mobject, PathCommand, Scene, Vec2, VectorPath,
+    GeometryRef, ManimGeometryOptions as Options, Mobject, PathCommand, Scene, Vec2, VectorPath,
 };
+use noon_core::{GeometryResource, GeometryResourceLookup};
 use std::rc::Rc;
 
 fn path(options: Options) -> (Mobject, VectorPath) {
     let mut scene = Scene::new();
-    let object = Mobject::from_manim_geometry(Rc::clone(scene.store()), options).unwrap();
+    let object =
+        Mobject::from_manim_geometry(Rc::clone(scene.integration_store()), options).unwrap();
     scene.add(&object).unwrap();
     let session = scene.execution_session().unwrap();
     let geometry = match session.frame().render_geometry(0).unwrap() {

@@ -5,12 +5,10 @@ from __future__ import annotations
 import math
 from typing import Any
 
-import noon as _base
 import _manim_compat as _compat
 import _manim_semantic_handles as _semantic_handles
 
 
-_INSTALLED = False
 
 
 class ShowPassingFlash:
@@ -63,14 +61,3 @@ class ShowPassingFlash:
         self.remover = True
         self.introducer = True
         self.anim_args = dict(kwargs)
-
-
-def install() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _base.ShowPassingFlash = ShowPassingFlash
-    _compat.ShowPassingFlash = ShowPassingFlash
-    if "ShowPassingFlash" not in _base.__all__:
-        _base.__all__.append("ShowPassingFlash")
-    _INSTALLED = True

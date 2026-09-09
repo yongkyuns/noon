@@ -120,7 +120,8 @@ mod tests {
     fn debug_capture_resolves_retained_paths_and_effective_transforms() {
         let mut scene = Scene::new();
         let mut shape =
-            crate::Mobject::manim_square(std::rc::Rc::clone(scene.store()), 2.0).unwrap();
+            crate::Mobject::manim_square(std::rc::Rc::clone(scene.integration_store()), 2.0)
+                .unwrap();
         shape.set_fill_color(0.25, 0.5, 0.75, 0.4).unwrap();
         shape.set_fill_opacity(0.4).unwrap();
         shape.set_object_opacity(0.5).unwrap();

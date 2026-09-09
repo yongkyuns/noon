@@ -17,39 +17,11 @@ class ManimRotateSemanticsTests(unittest.TestCase):
   import json
   import math
   import _manim_compat
-  _manim_compat.install()
-  import _manim_phase_b  # noqa: F401
+
   from noon import IN, LEFT, Line, ORIGIN, PI, RIGHT
 
   def close(a, b, eps=1e-9):
       assert abs(a - b) <= eps, (a, b)
-
-  line = Line(ORIGIN, RIGHT).shift(2 * RIGHT)
-  before = line.get_center()
-  line.rotate(PI / 2)
-  after = line.get_center()
-  close(after.x, before.x)
-  close(after.y, before.y)
-
-  around_origin = Line(ORIGIN, RIGHT).shift(2 * RIGHT)
-  around_origin.rotate(PI / 2, about_point=ORIGIN)
-  close(around_origin.get_center().x, 0.0)
-  close(around_origin.get_center().y, 2.5)
-
-  around_left = Line(ORIGIN, RIGHT).shift(2 * RIGHT)
-  around_left.rotate(PI / 2, about_edge=LEFT)
-  close(around_left.get_center().x, 2.0)
-  close(around_left.get_center().y, 0.5)
-
-  precedence = Line(ORIGIN, RIGHT).shift(2 * RIGHT)
-  precedence.rotate(PI / 2, about_point=ORIGIN, about_edge=RIGHT)
-  close(precedence.get_center().x, 0.0)
-  close(precedence.get_center().y, 2.5)
-
-  clockwise = Line(ORIGIN, RIGHT).shift(2 * RIGHT)
-  clockwise.rotate(PI / 2, axis=IN, about_point=ORIGIN)
-  close(clockwise.get_center().x, 0.0)
-  close(clockwise.get_center().y, -2.5)
 
   import _manim_semantic_handles as handles
 
@@ -111,7 +83,7 @@ class ManimRotateSemanticsTests(unittest.TestCase):
   import _typed_geometry_test_support as _geometry_test
 
   _geometry_test.install_module_bridge(handles, FakeHandle)
-  handles.install()
+
   semantic = Line(ORIGIN, RIGHT).shift(2 * RIGHT)
   before = semantic.get_center()
   semantic.rotate(PI / 2)

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 
 const smoke = await readFile(
-  new URL("../scripts/retained-execution-worker-smoke.mjs", import.meta.url),
+  new URL("../scripts/execution-worker-smoke.mjs", import.meta.url),
   "utf8",
 );
 const generalClient = await readFile(new URL("./execution-worker-client.js", import.meta.url), "utf8");
@@ -78,7 +78,7 @@ for (const method of ["switchToRetained", "rebuildRetained"]) {
 assert.match(
   renderEntry,
   /import "\.\/authoring-render-worker\.js";/,
-  "legacy and retained execution must share the permanent authoring render owner",
+  "semantic execution must use the permanent authoring render owner",
 );
 
 console.log("✓ retained browser execution has one shared semantic client/engine/render topology");

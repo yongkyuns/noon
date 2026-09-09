@@ -21,8 +21,7 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
             import json
 
             import _manim_compat
-            _manim_compat.install()
-            import _manim_phase_b
+
             import _manim_geometry
             import _manim_semantic_handles as handles
 
@@ -268,7 +267,7 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
             _geometry_test.install_module_bridge(handles, store.createMobject)
             import _typed_family_test_support as _family_test
             _family_test.install_bridge(handles, store.createFamily, FakeFamilyHandle, FakeHandle)
-            handles.install()
+
 
             import noon as _base
             _base._bounds = lambda *args, **kwargs: (_ for _ in ()).throw(
@@ -276,7 +275,6 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
             )
 
             import _manim_shared_geometry
-            _manim_shared_geometry.install()
             from noon import BackgroundRectangle, BLUE, Rectangle, SurroundingRectangle, VGroup
 
             leaf = Rectangle(width=4.0, height=2.0)

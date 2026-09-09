@@ -48,7 +48,7 @@ impl LiveContinuation for TextFamilyReveal {
                 );
                 if rejected.is_ok()
                     || noon_core::semantic_scene_root_contains(
-                        &self.family.store().borrow(),
+                        &self.family.integration_store().borrow(),
                         self.root,
                         self.left.node_id(),
                     )
@@ -111,7 +111,7 @@ impl LiveContinuation for TextFamilyReveal {
                 {
                     return Err("Text Create did not complete its disjoint composition".into());
                 }
-                let store = self.family.store().borrow();
+                let store = self.family.integration_store().borrow();
                 let family = store
                     .node(self.family.node_id())
                     .ok_or("Text family identity disappeared after Create")?;
@@ -162,7 +162,7 @@ impl LiveContinuation for TextFamilyReveal {
                 .map_err(|error| error.to_string())
             }
             2 => {
-                let store = self.family.store().borrow();
+                let store = self.family.integration_store().borrow();
                 let family = store
                     .node(self.family.node_id())
                     .ok_or("Text family identity disappeared after Uncreate")?;

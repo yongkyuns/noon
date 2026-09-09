@@ -89,8 +89,8 @@ impl LiveContinuation for MixedScalarComposition {
 
 pub fn program() -> Result<LiveProgram<MixedScalarComposition>, String> {
     let mut scene = Scene::new();
-    let mut circle = Mobject::manim_circle(Rc::clone(scene.store()), 0.3)?;
-    let mut square = Mobject::manim_square(Rc::clone(scene.store()), 1.0)?;
+    let mut circle = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.3)?;
+    let mut square = Mobject::manim_square(Rc::clone(scene.integration_store()), 1.0)?;
     for (object, color) in [(&mut circle, Color::BLUE), (&mut square, Color::PINK)] {
         object.set_fill(
             f64::from(color.red),

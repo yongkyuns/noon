@@ -65,30 +65,32 @@ class ManimFadeEndpointTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_compat
-            _manim_compat.install()
+
             from _test_manim_membership import install_test_membership
             install_test_membership(_manim_compat)
             import _manim_rate_functions
-            _manim_rate_functions.install()
-            import _manim_phase_b  # noqa: F401
             import _manim_animate  # noqa: F401
 
             from noon import ORIGIN, FadeIn, FadeOut, RIGHT, Scene, Square, UP
 
+            from _typed_geometry_test_support import identity_only_wrapper as identity
+
             class CenterCountingSquare(Square):
                 def __init__(self):
-                    super().__init__()
+                    self._scene = None
+                    self.point = ORIGIN
                     self.center_reads = 0
 
                 def get_center(self):
                     self.center_reads += 1
-                    return super().get_center()
+                    return self.point
 
             # Canonical target_position records the absolute point without
             # evaluating the fade target's center in Python. Mobject coercion
             # still resolves the referenced object's center at construction.
             canonical_target = CenterCountingSquare()
-            point_reference = CenterCountingSquare().shift(RIGHT * 3.0)
+            point_reference = CenterCountingSquare()
+            point_reference.point = RIGHT * 3.0
             canonical_target._semantic_handle = object()
             canonical_target.center_reads = 0
             point_reference.center_reads = 0
@@ -97,7 +99,7 @@ class ManimFadeEndpointTests(unittest.TestCase):
             assert point_reference.center_reads == 1
             assert point_fade._fade_point == RIGHT * 3.0
 
-            target = Square().shift(RIGHT * 2.0)
+            target = identity(Square)
             fade_in = FadeIn(target, shift=UP, scale=0.5, run_time=2.0)
             assert fade_in.target is target and target._scene is None
             assert fade_in._fade_shift_vector == UP

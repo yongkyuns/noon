@@ -27,13 +27,13 @@ class MovingDotsPrimitiveTests(unittest.TestCase):
             fake_js.noonResolveAnimationOptions = lambda *args: None
             sys.modules["js"] = fake_js
 
+            from _typed_geometry_test_support import identity_only_wrapper as identity
             import _manim_compat as manim
             import _manim_geometry  # noqa: F401 - installs match_points/layout semantics
             import _manim_reactive as reactive
             import _manim_updaters as updaters
             import noon as api
 
-            updaters.install()
 
             # Read the pinned callback view during the ordered phase and the
             # shared published value afterwards; Python owns neither value.
@@ -62,8 +62,8 @@ class MovingDotsPrimitiveTests(unittest.TestCase):
 
             # Raw geometry replacement is no longer a callback compatibility path.
             # The canonical opaque-handle proof lives in test_canonical_line_match.
-            source_line = manim.Line((-1.0, 0.0), (1.0, 0.0)).set_color(api.RED)
-            target_line = manim.Line((2.0, 3.0), (4.0, 5.0))
+            source_line = identity(manim.Line)
+            target_line = identity(manim.Line)
             try:
                 source_line.match_points(target_line)
             except NotImplementedError as error:

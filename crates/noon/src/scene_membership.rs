@@ -25,7 +25,7 @@ pub(crate) fn prepare_scene_membership(
     request: SceneMembershipRequest<'_>,
 ) -> Result<SemanticMutationTransaction, AuthoringError> {
     let validate = |member: MobjectFamilyMember<'_>| -> Result<SemanticNodeId, AuthoringError> {
-        if !Rc::ptr_eq(owner, member.store()) {
+        if !Rc::ptr_eq(owner, member.integration_store()) {
             return Err(AuthoringError::ForeignStore);
         }
         member.validate()?;
@@ -87,11 +87,11 @@ mod tests {
     fn transaction_application_keeps_preflight_error_and_commits_nothing() {
         let scene = crate::Scene::new();
         let object = scene.circle(1.0).unwrap();
-        let revision = scene.store().borrow().scene_revision();
+        let revision = scene.integration_store().borrow().scene_revision();
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_member(scene.root(), object.node_id());
         transaction.add_member(object.node_id(), scene.root());
-        let error = apply_scene_membership(scene.store(), transaction).unwrap_err();
+        let error = apply_scene_membership(scene.integration_store(), transaction).unwrap_err();
         let AuthoringError::Transaction(cause) = &error else {
             panic!("transaction errors must retain their category")
         };
@@ -106,9 +106,12 @@ mod tests {
                 .downcast_ref::<noon_core::SemanticMutationTransactionError>(),
             Some(cause)
         );
-        assert_eq!(scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
         assert!(scene
-            .store()
+            .integration_store()
             .borrow()
             .node(scene.root())
             .unwrap()

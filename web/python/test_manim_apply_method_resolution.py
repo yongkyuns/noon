@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 class ManimApplyMethodResolutionTests(unittest.TestCase):
-    def test_monkey_patched_bound_method_resolves_public_name(self) -> None:
+    def test_public_and_reassigned_methods_resolve_public_names(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()
         existing_pythonpath = env.get("PYTHONPATH")
@@ -19,17 +19,21 @@ class ManimApplyMethodResolutionTests(unittest.TestCase):
 
         source = textwrap.dedent(
             """
+            from _typed_geometry_test_support import identity_only_wrapper as identity
             import _manim_compat
-            _manim_compat.install()
-            import _manim_phase_b  # noqa: F401
+
             import _manim_geometry
 
             from noon import Dot
 
-            dot = Dot()
-            assert dot.set_color.__name__ == "_vmobject_set_color"
+            dot = identity(Dot)
+            assert dot.set_color.__name__ == "set_color"
             assert _manim_geometry._public_bound_method_name(dot, dot.set_color) == "set_color"
             assert _manim_geometry._public_bound_method_name(dot, dot.shift) == "shift"
+            def alternate_color_implementation(self, color):
+                raise AssertionError("method resolution must not invoke the method")
+            Dot.set_color = alternate_color_implementation
+            assert _manim_geometry._public_bound_method_name(dot, dot.set_color) == "set_color"
             """
         )
         completed = subprocess.run(

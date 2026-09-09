@@ -133,16 +133,16 @@ impl<'a> From<&'a MobjectFamily> for MobjectFamilyMember<'a> {
 
 impl MobjectFamilyMember<'_> {
     fn require_store(&self, store: &Rc<RefCell<SemanticStore>>) -> Result<(), String> {
-        if !Rc::ptr_eq(self.store(), store) {
+        if !Rc::ptr_eq(self.integration_store(), store) {
             return Err("family members belong to different authoring stores".into());
         }
         self.validate().map_err(|error| error.to_string())
     }
 
-    pub(crate) fn store(&self) -> &Rc<RefCell<SemanticStore>> {
+    pub(crate) fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
         match self {
-            Self::Mobject(member) => member.store(),
-            Self::Family(member) => member.store(),
+            Self::Mobject(member) => member.integration_store(),
+            Self::Family(member) => member.integration_store(),
         }
     }
 
@@ -194,9 +194,9 @@ pub(crate) fn family_membership_transaction(
 ) -> Result<(SemanticMutationTransaction, Vec<bool>), String> {
     family.validate().map_err(|error| error.to_string())?;
     for member in members {
-        member.require_store(family.store())?;
+        member.require_store(family.integration_store())?;
     }
-    let store = family.store().borrow();
+    let store = family.integration_store().borrow();
     let node = store
         .semantic_family_checked(family.node_id())
         .map_err(|e| e.to_string())?;
@@ -278,7 +278,13 @@ impl MobjectFamily {
         Ok(Self { store, node })
     }
 
-    pub fn store(&self) -> &Rc<RefCell<SemanticStore>> {
+    /// Raw shared arena access for explicit integration, not live mutation.
+    ///
+    /// External edits can invalidate generational handles and leave an existing
+    /// execution session on a stale scene revision. Use `Scene::live` and its
+    /// coherent publication operations for edits after lowering. No revision
+    /// validation is bypassed by this accessor; see [`crate::integration`].
+    pub fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
         &self.store
     }
 
@@ -347,14 +353,14 @@ mod tests {
         let first = scene.square(0.4).unwrap();
         let second = scene.circle(0.2).unwrap();
         let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
-        let before = scene.store().borrow().scene_revision();
+        let before = scene.integration_store().borrow().scene_revision();
 
         family.arrange(1.0, 0.0, 0.2, true).unwrap();
 
         let first_center = first.center().unwrap();
         let second_center = second.center().unwrap();
         assert_eq!(
-            scene.store().borrow().scene_revision(),
+            scene.integration_store().borrow().scene_revision(),
             before.checked_next().unwrap()
         );
         assert!((second_center.0 - first_center.0 - 0.6).abs() < 1e-6);
@@ -372,20 +378,20 @@ mod tests {
         let nested = scene.family(&[(&first).into(), (&second).into()]).unwrap();
         let outer = scene.family(&[(&first).into()]).unwrap();
         scene
-            .store()
+            .integration_store()
             .borrow_mut()
             .add_member(outer.node_id(), nested.node_id())
             .unwrap();
-        let before = scene.store().borrow().scene_revision();
+        let before = scene.integration_store().borrow().scene_revision();
 
         assert!(outer.arrange(1.0, 0.0, f64::NAN, true).is_err());
-        assert_eq!(scene.store().borrow().scene_revision(), before);
+        assert_eq!(scene.integration_store().borrow().scene_revision(), before);
         assert_eq!(first.center().unwrap(), (0.0, 0.0));
         assert_eq!(second.center().unwrap(), (2.0, 0.0));
 
         outer.arrange(1.0, 0.0, 0.2, true).unwrap();
         assert_eq!(
-            scene.store().borrow().scene_revision(),
+            scene.integration_store().borrow().scene_revision(),
             before.checked_next().unwrap()
         );
         assert!((first.center().unwrap().0 + 1.0).abs() < 1e-6);
@@ -402,7 +408,7 @@ mod tests {
         second.shift(2.0, 1.0).unwrap();
 
         let outer = {
-            let mut store = scene.store().borrow_mut();
+            let mut store = scene.integration_store().borrow_mut();
             let nested = store.insert_family();
             store.add_member(nested, first.node_id()).unwrap();
             store.add_member(nested, second.node_id()).unwrap();
@@ -411,7 +417,7 @@ mod tests {
             store.add_member(outer, nested).unwrap();
             outer
         };
-        let family = MobjectFamily::from_node(Rc::clone(scene.store()), outer).unwrap();
+        let family = MobjectFamily::from_node(Rc::clone(scene.integration_store()), outer).unwrap();
 
         assert_eq!(
             family.layout_bounds().unwrap(),

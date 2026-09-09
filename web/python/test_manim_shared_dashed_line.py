@@ -63,16 +63,14 @@ class ManimSharedDashedLineTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_compat
-            _manim_compat.install()
-            import _manim_phase_b
+
             import _manim_geometry
             import _manim_semantic_handles as handles
-            handles.install()
+
 
             _manim_compat._ir.Path = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Python path reconstruction was called"))
 
             import _manim_dashed_line
-            _manim_dashed_line.install()
             from noon import DashedLine, Line
 
             line = DashedLine(start=(-2, 1), end=(3, -1), dash_length=0.2, dashed_ratio=0.25)

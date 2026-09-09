@@ -11,18 +11,10 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 noon-core = { path = "../crates/noon-core" }
 noon-geometry = { path = "../crates/noon-geometry" }
-noon-ir = { path = "../crates/noon-ir" }
 
 [[bin]]
-name = "scene_decode"
-path = "fuzz_targets/scene_decode.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "patch_transaction"
-path = "fuzz_targets/patch_transaction.rs"
+name = "semantic_transaction"
+path = "fuzz_targets/semantic_transaction.rs"
 test = false
 doc = false
 bench = false

@@ -81,6 +81,19 @@ class CapabilityTests(unittest.TestCase):
         self.assertTrue(report["symbols"]["Create"]["exported"])
         self.assertNotIn("manim", sys.modules)
 
+    def test_static_module_exports_preserve_literal_and_unpacked_names(self):
+        (self.root / "web/python/noon.py").write_text(
+            '_PUBLIC_EXPORTS = {"Text": "_manim_typst", "Square": "_manim_compat"}\n'
+            '_PRIVATE = {"Hidden": "internal"}\n'
+            '__all__ = ["Circle", "NewThing", *_PUBLIC_EXPORTS]\n'
+            'raise RuntimeError("must not import noon")\n', encoding="utf-8",
+        )
+        symbols = self.report()["symbols"]
+        for name in ("Circle", "Text", "Square", "NewThing"):
+            self.assertTrue(symbols[name]["exported"])
+        self.assertNotIn("Hidden", symbols)
+        self.assertFalse(symbols["Square"]["runtime_verified"])
+
     def test_unclassified_export_cannot_be_promoted(self):
         row = self.report()["symbols"]["NewThing"]
         self.assertEqual(row["policy"]["status"], "partial")

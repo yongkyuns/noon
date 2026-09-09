@@ -8,7 +8,6 @@ import noon as _base
 import _manim_compat as _compat
 import _manim_semantic_handles as _shared
 
-_INSTALLED = False
 
 
 class DashedLine(_compat.Line):
@@ -25,8 +24,8 @@ class DashedLine(_compat.Line):
         if _shared._create_geometry_handle is None:
             raise RuntimeError("DashedLine requires the shared browser geometry bridge")
 
-        start_value = _compat._as_vec2(start)
-        end_value = _compat._as_vec2(end)
+        start_value = _base._as_vec2(start)
+        end_value = _base._as_vec2(end)
         dash_length_value = _shared._ir._positive_number("dash_length", dash_length)
         dashed_ratio_value = _shared._ir._finite_number("dashed_ratio", dashed_ratio)
         if not 0.0 <= dashed_ratio_value <= 1.0:
@@ -44,22 +43,8 @@ class DashedLine(_compat.Line):
         )
         _shared._apply_shared_constructor_options(candidate, options)
         if color is not None:
-            parsed = _shared._phase_b._as_color("color", color)
+            parsed = _shared._compat._as_color("color", color)
             _shared._apply_constructor_color(candidate, parsed)
         _shared._attach_geometry_options(self, candidate, "DashedLine")
         self.dash_length = dash_length_value
         self.dashed_ratio = dashed_ratio_value
-
-
-def install() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-    _base.DashedLine = DashedLine
-    _compat.DashedLine = DashedLine
-    if "DashedLine" not in _base.__all__:
-        _base.__all__.append("DashedLine")
-
-
-install()

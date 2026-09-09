@@ -64,11 +64,10 @@ class ManimScaleInPlaceTests(unittest.TestCase):
             fake_js.noonResolveAnimationOptions = resolve_animation_options
             sys.modules["js"] = fake_js
 
+            from _typed_geometry_test_support import identity_only_wrapper as identity
             import _manim_compat
-            _manim_compat.install()
+
             import _manim_rate_functions
-            _manim_rate_functions.install()
-            import _manim_phase_b  # noqa: F401
             import _manim_animate  # noqa: F401
             import _manim_animation_options  # installs the public ScaleInPlace request
 
@@ -82,7 +81,7 @@ class ManimScaleInPlaceTests(unittest.TestCase):
                 linear,
             )
 
-            rect = Rectangle(width=2.0, height=1.0)
+            rect = identity(Rectangle)
             animation = ScaleInPlace(rect, 1.75, run_time=2.0, rate_func=linear)
             assert type(animation) is ScaleInPlace
             assert animation.source is rect
@@ -91,11 +90,11 @@ class ManimScaleInPlaceTests(unittest.TestCase):
             # Construction is metadata only; shared play owns target creation.
             assert not hasattr(animation, "target")
             assert rect._scene is None
-            family = VGroup(Square(), Square())
+            family = identity(VGroup, submobjects=[])
             assert ScaleInPlace(family, 2.0).source is family
 
             try:
-                ScaleInPlace(Square(), float("nan"))
+                ScaleInPlace(identity(Square), float("nan"))
             except ValueError:
                 pass
             else:

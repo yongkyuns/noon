@@ -1,11 +1,14 @@
 //! Exercise the public Rust error contract as an external, provider-free consumer.
 use std::error::Error;
 
+use noon::integration::{
+    CallbackAdvance, FrameState, HostCallbackId, SemanticMutationTransaction,
+    SemanticSceneOperationError, SemanticStoreError,
+};
 use noon::{
-    AnimationOptions, AuthoringError, CallbackAdvance, ExecutionSession,
-    ExecutionSessionPublicationError, HostCallbackId, LiveSessionError, MobjectFamilyMember,
-    RateFunction, Scene, SceneRevision, SemanticMutationTransaction, SemanticNodeId,
-    SemanticSceneOperationError, SemanticStoreError, Vec2,
+    AnimationOptions, AuthoringError, ExecutionSession, ExecutionSessionPublicationError,
+    LiveSessionError, MobjectFamilyMember, RateFunction, Scene, SceneRevision, SemanticNodeId,
+    Vec2,
 };
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -20,7 +23,7 @@ struct AuthoredSnapshot {
 }
 
 fn authored_snapshot(scene: &Scene) -> AuthoredSnapshot {
-    let store = scene.store().borrow();
+    let store = scene.integration_store().borrow();
     AuthoredSnapshot {
         revision: store.scene_revision(),
         nodes: store.len(),
@@ -37,7 +40,7 @@ fn assert_live_unchanged(
     scene: &Scene,
     session: &mut ExecutionSession,
     authored: AuthoredSnapshot,
-    frame: noon::FrameState,
+    frame: FrameState,
     publication: noon::PublicationContext,
 ) {
     assert_eq!(authored_snapshot(scene), authored);
@@ -54,7 +57,7 @@ fn foreign_handle_in_authored_batch_is_typed_and_atomic() -> TestResult {
     // Same slot/generation is not the same identity in a different store.
     assert_eq!(local.node_id(), foreign.node_id());
     let before = authored_snapshot(&scene);
-    let error = scene
+    let error: noon::prelude::AuthoringError = scene
         .add_many(&[
             MobjectFamilyMember::Mobject(&local),
             MobjectFamilyMember::Mobject(&foreign),
@@ -72,7 +75,10 @@ fn foreign_handle_in_authored_batch_is_typed_and_atomic() -> TestResult {
 fn stale_object_and_family_generations_retain_the_rejected_identity() -> TestResult {
     let mut scene = Scene::new();
     let stale = scene.circle(1.0)?;
-    scene.store().borrow_mut().remove_node(stale.node_id())?;
+    scene
+        .integration_store()
+        .borrow_mut()
+        .remove_node(stale.node_id())?;
     let replacement = scene.square(1.0)?;
     assert_eq!(stale.node_id().slot(), replacement.node_id().slot());
     assert_ne!(
@@ -89,7 +95,7 @@ fn stale_object_and_family_generations_retain_the_rejected_identity() -> TestRes
 
     let stale_family = scene.family(&[])?;
     scene
-        .store()
+        .integration_store()
         .borrow_mut()
         .remove_node(stale_family.node_id())?;
     let new_family = scene.family(&[])?;
@@ -256,7 +262,10 @@ fn live_foreign_handle_and_foreign_runtime_are_distinct_and_atomic() -> TestResu
 fn live_stale_handle_is_not_reduced_to_a_mobject_string() -> TestResult {
     let mut scene = Scene::new();
     let stale = scene.circle(1.0)?;
-    scene.store().borrow_mut().remove_node(stale.node_id())?;
+    scene
+        .integration_store()
+        .borrow_mut()
+        .remove_node(stale.node_id())?;
     let valid = scene.square(1.0)?;
     scene.add(&valid)?;
     // Lower the valid revision so this is a handle failure, not a stale-publication failure.
@@ -297,9 +306,9 @@ fn external_authored_edit_keeps_the_stale_publication_category() -> TestResult {
     session.take_frame_changes();
     let frame = session.frame().clone();
     let publication = session.publication_context();
-    let expected = scene.store().borrow().scene_revision();
+    let expected = scene.integration_store().borrow().scene_revision();
     local.set_translation(3.0, 0.0)?;
-    let actual = scene.store().borrow().scene_revision();
+    let actual = scene.integration_store().borrow().scene_revision();
     let before = authored_snapshot(&scene);
     let error = scene.live(&mut session).add(&detached).unwrap_err();
     assert_eq!(
@@ -389,7 +398,7 @@ fn pending_callback_preserves_publication_and_can_resume_after_rejection() -> Te
     scene.add(&local)?;
     let mut callbacks = SemanticMutationTransaction::new();
     callbacks.add_updater(local.node_id(), HostCallbackId::new(9), 0.0, None);
-    callbacks.apply(&mut scene.store().borrow_mut())?;
+    callbacks.apply(&mut scene.integration_store().borrow_mut())?;
     let mut session = scene.execution_session()?;
     let overlay = match session.advance_to_callback_barrier(0.0)? {
         CallbackAdvance::HostRequired { overlay, .. } => overlay,
@@ -430,7 +439,8 @@ fn semantic_store_error_remains_an_inspectable_cause() {
 
 #[test]
 fn invalid_live_batch_preserves_transaction_cause_and_rolls_back_prior_writes() -> TestResult {
-    use noon::{SemanticMutationTransactionError, SemanticObjectProperty, SemanticVec3};
+    use noon::integration::SemanticMutationTransactionError;
+    use noon::{SemanticObjectProperty, SemanticVec3};
     let mut scene = Scene::new();
     let local = scene.circle(1.0)?;
     scene.add(&local)?;

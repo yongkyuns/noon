@@ -47,21 +47,17 @@ class ManimShowPassingFlashTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_compat
-            _manim_compat.install()
+
             import _manim_rate_functions
-            _manim_rate_functions.install()
-            import _manim_phase_b  # noqa: F401
             import _manim_animate  # noqa: F401
             import _manim_composition
             play_before_composition = _manim_compat.Scene.play
-            _manim_composition.install()
             assert _manim_compat.Scene.play is play_before_composition
             import _manim_semantic_handles as handles
-            handles.install()
+
             import _manim_indication
 
             play_before = _manim_compat.Scene.play
-            _manim_indication.install()
             assert _manim_compat.Scene.play is play_before
 
             from noon import Line, ShowPassingFlash, Square, linear
