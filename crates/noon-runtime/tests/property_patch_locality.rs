@@ -1,5 +1,5 @@
-use noon_compile::CompiledScene;
-use noon_core::{GeometryRef, SceneDefinition, ScenePatch, Transform2D, Vec2};
+use noon_compile::{CompiledObject, CompiledScene, ExecutionPatch};
+use noon_core::{GeometryRef, ObjectId, Style, Transform2D, Vec2};
 use noon_runtime::SceneInstance;
 
 const OBJECT_COUNT: usize = 100_000;
@@ -8,13 +8,22 @@ const UNTOUCHED_INDEX: usize = TARGET_INDEX + 1;
 
 #[test]
 fn property_patches_touch_only_one_object_in_a_100k_scene() {
-    let mut definition = SceneDefinition::new();
-    let mut objects = Vec::with_capacity(OBJECT_COUNT);
-    for _ in 0..OBJECT_COUNT {
-        objects.push(definition.add(GeometryRef::circle(1.0)));
-    }
-
-    let compiled = CompiledScene::compile(&definition).expect("large static scene must compile");
+    let objects: Vec<_> = (0..OBJECT_COUNT)
+        .map(|index| ObjectId::new(index as u64))
+        .collect();
+    let compiled_objects = objects
+        .iter()
+        .map(|&id| {
+            CompiledObject::new(
+                id,
+                GeometryRef::circle(1.0),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )
+        })
+        .collect();
+    let compiled = CompiledScene::compile_objects(compiled_objects, &[])
+        .expect("static execution data compiles");
     let mut live = SceneInstance::new(compiled);
     live.take_frame_changes();
 
@@ -24,7 +33,7 @@ fn property_patches_touch_only_one_object_in_a_100k_scene() {
         translation: Vec2::new(3.0, -2.0),
         ..Transform2D::IDENTITY
     };
-    live.apply_patch(&ScenePatch::SetTransform {
+    live.apply_execution_patch(&ExecutionPatch::SetTransform {
         object: target,
         transform,
     })
@@ -45,7 +54,7 @@ fn property_patches_touch_only_one_object_in_a_100k_scene() {
 
     let mut style = live.frame().objects[TARGET_INDEX].style;
     style.opacity = 0.25;
-    live.apply_patch(&ScenePatch::SetStyle {
+    live.apply_execution_patch(&ExecutionPatch::SetStyle {
         object: target,
         style,
     })

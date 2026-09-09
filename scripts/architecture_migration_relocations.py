@@ -154,6 +154,7 @@ def main() -> int:
         } or path.startswith((
             'crates/noon-compile/src/semantic_lowering/',
             'crates/noon/src/execution_session/',
+            'crates/noon-runtime/src/',
         ))
         if canonical_execution:
             code = re.sub(r'/\*.*?\*/|//[^\n]*', '', source, flags=re.S)

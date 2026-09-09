@@ -511,7 +511,7 @@ for canonical in crates/noon-render-wgpu/src/probe.rs crates/noon-render-wgpu/te
 done
 # Lowering and live publication must stay typed even when an old patch-codec
 # dependency already exists at the comparison base.
-for canonical in crates/noon-compile/src/semantic_lowering.rs crates/noon-compile/src/semantic_lowering/publication.rs crates/noon/src/execution_session.rs crates/noon/src/execution_session/publication.rs crates/noon/src/live_session.rs; do
+for canonical in crates/noon-compile/src/semantic_lowering.rs crates/noon-compile/src/semantic_lowering/publication.rs crates/noon/src/execution_session.rs crates/noon/src/execution_session/publication.rs crates/noon/src/live_session.rs crates/noon-runtime/src/execution_slots/probe.rs crates/noon-runtime/src/probe/tests.rs; do
   mkdir -p "$(dirname "$canonical")"
   printf 'use noon_core::{ScenePatch, MutationTransaction};\n' > "$canonical"
   git add "$canonical"

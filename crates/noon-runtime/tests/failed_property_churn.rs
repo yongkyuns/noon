@@ -1,7 +1,7 @@
-use noon_compile::CompiledScene;
+use noon_compile::{CompiledObject, CompiledScene, ExecutionPatch};
 use noon_core::{
-    CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, SceneDefinition, ScenePatch,
-    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
+    CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId,
+    TrackTiming, TrackValues, Transform2D, Vec2,
 };
 use noon_runtime::{RuntimePatchStats, SceneInstance};
 
@@ -11,13 +11,22 @@ const TARGET_INDEX: usize = SCENE_OBJECTS / 2;
 
 #[test]
 fn rejected_patch_churn_preserves_runtime_and_allows_recovery() {
-    let mut definition = SceneDefinition::new();
-    let mut objects = Vec::with_capacity(SCENE_OBJECTS);
-    for _ in 0..SCENE_OBJECTS {
-        objects.push(definition.add(GeometryRef::circle(0.25)));
-    }
-
-    let compiled = CompiledScene::compile(&definition).expect("large static scene must compile");
+    let objects: Vec<_> = (0..SCENE_OBJECTS)
+        .map(|index| ObjectId::new(index as u64))
+        .collect();
+    let compiled_objects = objects
+        .iter()
+        .map(|&id| {
+            CompiledObject::new(
+                id,
+                GeometryRef::circle(0.25),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )
+        })
+        .collect();
+    let compiled = CompiledScene::compile_objects(compiled_objects, &[])
+        .expect("static execution data compiles");
     let mut live = SceneInstance::new(compiled);
     live.take_frame_changes();
 
@@ -28,7 +37,7 @@ fn rejected_patch_churn_preserves_runtime_and_allows_recovery() {
 
     for iteration in 0..FAILURE_ITERATIONS {
         let patch = if iteration % 2 == 0 {
-            ScenePatch::SetTransform {
+            ExecutionPatch::SetTransform {
                 object: ObjectId::new(1_000_000 + iteration),
                 transform: Transform2D {
                     translation: Vec2::new(1.0, -1.0),
@@ -36,7 +45,7 @@ fn rejected_patch_churn_preserves_runtime_and_allows_recovery() {
                 },
             }
         } else {
-            ScenePatch::AddTrack(TrackDefinition {
+            ExecutionPatch::AddTrack(TrackDefinition {
                 id: TrackId::new(2_000_000 + iteration),
                 object: target,
                 property: Property::Opacity,
@@ -50,7 +59,7 @@ fn rejected_patch_churn_preserves_runtime_and_allows_recovery() {
         };
 
         assert!(
-            live.apply_patch(&patch).is_err(),
+            live.apply_execution_patch(&patch).is_err(),
             "iteration {iteration} must reject the invalid patch"
         );
         assert_eq!(live.frame().objects.len(), frame_slots);
@@ -63,14 +72,14 @@ fn rejected_patch_churn_preserves_runtime_and_allows_recovery() {
         );
     }
 
-    let valid = ScenePatch::SetTransform {
+    let valid = ExecutionPatch::SetTransform {
         object: target,
         transform: Transform2D {
             translation: Vec2::new(3.0, -2.0),
             ..Transform2D::IDENTITY
         },
     };
-    live.apply_patch(&valid)
+    live.apply_execution_patch(&valid)
         .expect("runtime must remain usable after rejected churn");
 
     assert_eq!(

@@ -31,8 +31,8 @@ use noon_core::{
     PublicationContext, RetainedFamilyAnimationPlan, TrackTiming,
 };
 use noon_core::{
-    Color, GeometryRef, ObjectId, PathCommand, Property, ScenePatch, StrokeWidthMode, Style,
-    TrackDefinition, TrackValues, Transform2D, TransformTrackEndpoint, Vec2, VectorPath,
+    Color, GeometryRef, ObjectId, PathCommand, Property, StrokeWidthMode, Style, TrackDefinition,
+    TrackValues, Transform2D, TransformTrackEndpoint, Vec2, VectorPath,
 };
 use noon_core::{ObjectContentRef, TextResourceHandle};
 
@@ -968,11 +968,6 @@ impl SceneInstance {
             self.advance_unchecked(time);
         }
         Ok(&self.frame)
-    }
-
-    pub fn apply_patch(&mut self, patch: &ScenePatch) -> Result<&FrameState, CompilePatchError> {
-        let patch = ExecutionPatch::decode(patch);
-        self.apply_execution_patch(&patch)
     }
 
     pub fn apply_execution_patch(
@@ -3158,17 +3153,27 @@ mod tests {
 
     #[test]
     fn live_patch_matches_recompile_of_equivalent_definition() {
-        let mut definition = SceneDefinition::new();
-        let object = definition.add(GeometryRef::circle(1.0));
-        let track_id = definition
-            .animate_position(
-                object,
-                Vec2::ZERO,
-                Vec2::new(4.0, 0.0),
-                TrackTiming::new(0.0, 4.0, Easing::Linear),
-            )
-            .expect("valid track");
-        let compiled = CompiledScene::compile(&definition).expect("scene must compile");
+        let object = ObjectId::new(0);
+        let mut source = CompiledObject::new(
+            object,
+            GeometryRef::circle(1.0),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        let track_id = noon_core::TrackId::new(0);
+        let initial_track = TrackDefinition {
+            id: track_id,
+            object,
+            property: Property::Position,
+            values: TrackValues::Vec2 {
+                from: Vec2::ZERO,
+                to: Vec2::new(4.0, 0.0),
+            },
+            timing: TrackTiming::new(0.0, 4.0, Easing::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let compiled =
+            CompiledScene::compile_objects(vec![source.clone()], &[initial_track]).unwrap();
         let mut live = SceneInstance::new(compiled);
         live.seek(2.0).expect("valid time");
         let replacement = TrackDefinition {
@@ -3182,26 +3187,23 @@ mod tests {
             timing: TrackTiming::new(0.0, 4.0, Easing::Linear),
             time_map: CompositionTimeMap::identity(),
         };
-        let track_patch = ScenePatch::ReplaceTrack(replacement);
-        let style_patch = ScenePatch::SetStyle {
-            object,
-            style: Style {
-                opacity: 0.75,
-                stroke_join: noon_core::StrokeJoin::Round,
-                stroke_cap: noon_core::StrokeCap::Round,
-                ..Style::default()
-            },
+        let track_patch = ExecutionPatch::ReplaceTrack(replacement.clone());
+        source.base_style = Style {
+            opacity: 0.75,
+            stroke_join: noon_core::StrokeJoin::Round,
+            stroke_cap: noon_core::StrokeCap::Round,
+            ..Style::default()
         };
-        live.apply_patch(&track_patch).expect("valid patch");
-        live.apply_patch(&style_patch).expect("valid patch");
-        definition
-            .apply_patch(track_patch)
-            .expect("valid definition patch");
-        definition
-            .apply_patch(style_patch)
-            .expect("valid definition patch");
+        let style_patch = ExecutionPatch::SetStyle {
+            object,
+            style: source.base_style,
+        };
+        live.apply_execution_patch(&track_patch)
+            .expect("valid patch");
+        live.apply_execution_patch(&style_patch)
+            .expect("valid patch");
         let expected_compiled =
-            CompiledScene::compile(&definition).expect("scene must compile after patches");
+            CompiledScene::compile_objects(vec![source], &[replacement]).unwrap();
         let mut expected = SceneInstance::new(expected_compiled);
         expected.seek(2.0).expect("valid time");
         assert_eq!(live.frame(), expected.frame());
@@ -3209,10 +3211,15 @@ mod tests {
 
     #[test]
     fn adding_presence_event_live_reconciles_at_current_time() {
-        let mut definition = SceneDefinition::new();
-        let object = definition.add(GeometryRef::circle(1.0));
+        let object = ObjectId::new(0);
+        let source = CompiledObject::new(
+            object,
+            GeometryRef::circle(1.0),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
         let mut live =
-            SceneInstance::new(CompiledScene::compile(&definition).expect("scene must compile"));
+            SceneInstance::new(CompiledScene::compile_objects(vec![source.clone()], &[]).unwrap());
         live.seek(2.0).expect("valid time");
         assert!(live.frame().is_present(0));
         let presence = TrackDefinition {
@@ -3226,14 +3233,11 @@ mod tests {
             timing: TrackTiming::instant(1.0),
             time_map: CompositionTimeMap::identity(),
         };
-        let patch = ScenePatch::AddTrack(presence);
-        live.apply_patch(&patch).expect("presence patch must apply");
-        definition
-            .apply_patch(patch)
-            .expect("definition patch must apply");
-        let mut expected = SceneInstance::new(
-            CompiledScene::compile(&definition).expect("scene must compile after patch"),
-        );
+        let patch = ExecutionPatch::AddTrack(presence.clone());
+        live.apply_execution_patch(&patch)
+            .expect("presence patch must apply");
+        let mut expected =
+            SceneInstance::new(CompiledScene::compile_objects(vec![source], &[presence]).unwrap());
         expected.seek(2.0).expect("valid time");
         assert_eq!(live.frame(), expected.frame());
         assert!(!live.frame().is_present(0));
@@ -3257,7 +3261,7 @@ mod tests {
         instance.seek(1.0).expect("valid time");
         assert_eq!(instance.frame().objects[0].style.opacity, 0.5);
         instance
-            .apply_patch(&ScenePatch::RemoveTrack(track_id))
+            .apply_execution_patch(&ExecutionPatch::RemoveTrack(track_id))
             .expect("valid patch");
         assert_eq!(instance.frame().objects[0].style.opacity, 1.0);
     }
@@ -3438,7 +3442,7 @@ mod tests {
             SceneInstance::new(CompiledScene::compile(&definition).expect("scene must compile"));
         instance.seek(1.0).expect("valid time");
         instance
-            .apply_patch(&ScenePatch::SetStyle {
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
                 object,
                 style: Style {
                     fill: Some(Color::rgb(0.2, 0.4, 0.8)),
@@ -3486,7 +3490,7 @@ mod tests {
         instance.take_frame_changes();
         instance.advance_to(0.5).expect("valid time");
         instance
-            .apply_patch(&ScenePatch::SetStyle {
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
                 object: patched,
                 style: Style {
                     opacity: 0.5,
