@@ -563,6 +563,24 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = arrangeInGrid)]
+        pub fn arrange_in_grid(
+            &self,
+            rows: Option<u32>,
+            columns: Option<u32>,
+            gap_x: f64,
+            gap_y: f64,
+        ) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .arrange_in_grid(
+                    rows.map(|v| v as usize),
+                    columns.map(|v| v as usize),
+                    gap_x,
+                    gap_y,
+                )
+                .map_err(js_error)
+        }
+
         pub fn scale(&self, x: f64, y: f64) -> Result<(), JsValue> {
             self.semantic_family()?.scale(x, y).map_err(js_error)
         }

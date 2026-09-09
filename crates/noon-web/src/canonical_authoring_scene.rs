@@ -5787,6 +5787,29 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = liveArrangeFamilyInGrid)]
+        pub fn live_arrange_family_in_grid(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            rows: Option<u32>,
+            columns: Option<u32>,
+            gap_x: f64,
+            gap_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_arrange_family_in_grid(
+                    &family,
+                    rows.map(|v| v as usize),
+                    columns.map(|v| v as usize),
+                    gap_x,
+                    gap_y,
+                )
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = liveScaleFamily)]
         pub fn live_scale_family(
             &mut self,

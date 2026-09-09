@@ -1541,6 +1541,34 @@ def _group_set_opacity(self, opacity):
     return _group_paint(self, "Opacity", (alpha,), "set_opacity", (opacity,))
 
 
+def _group_arrange_in_grid(self, rows=None, cols=None, buff=_base.MED_SMALL_BUFF):
+    import operator
+
+    def dimension(value):
+        if value is None:
+            return None
+        value = operator.index(value)
+        if not 0 < value <= 0xFFFFFFFF:
+            raise ValueError("grid dimensions must be positive 32-bit integers")
+        return value
+
+    rows, cols = dimension(rows), dimension(cols)
+    gap = (_base._as_vec2(buff) if isinstance(buff, (tuple, list, _base.Vec2))
+           else _base.Vec2(float(buff), float(buff)))
+    handle = getattr(self, "_semantic_family_handle", None)
+    if handle is None:
+        raise RuntimeError("Group grid requires the shared Rust authoring host")
+    context = _group_live_layout_context(self)
+    try:
+        if context is None:
+            handle.arrangeInGrid(rows, cols, gap.x, gap.y)
+        else:
+            context.liveArrangeFamilyInGrid(handle, rows, cols, gap.x, gap.y)
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return self
+
+
 def _group_scale(self: _compat.Group, factor: object) -> _compat.Group:
     scale = (_base._as_vec2(factor) if isinstance(factor, (tuple, list, _base.Vec2))
              else _base.Vec2(float(factor), float(factor)))
