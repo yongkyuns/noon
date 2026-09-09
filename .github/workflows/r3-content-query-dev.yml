@@ -21,9 +21,7 @@ jobs:
         with:
           ref: 2ebf43857584e6fafdde8bd9955191400d642e1b
           fetch-depth: 0
-      - name: Record exact product source and retain approved predecessor results
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Record exact product source
         run: |
           mkdir -p /tmp/r3-full
           test "$(git rev-parse HEAD^{tree})" = cfb1475e6317804f4ccb3a52a4e853035cc516bf
@@ -31,8 +29,6 @@ jobs:
           echo 5b56124312657c0959e1ca3936930cad0fe7e240 > /tmp/r3-full/base.txt
           git archive --format=tar.gz HEAD > /tmp/r3-full/source.tar.gz
           git diff 5b56124312657c0959e1ca3936930cad0fe7e240 HEAD > /tmp/r3-full/product.patch
-          gh api repos/yongkyuns/noon/actions/jobs/102591146255/logs > /tmp/r3-full/approved-predecessor-browser.log
-          gh api 'repos/yongkyuns/noon/actions/runs?event=pull_request&head_sha=e4c2b7ee44416eb328bb42a70e462e1da85eceaf&per_page=100' > /tmp/r3-full/approved-predecessor-runs.json
       - uses: actions/cache/restore@v6
         with:
           path: |
@@ -56,11 +52,26 @@ jobs:
         run: |
           if test -f Cargo.lock; then cp Cargo.lock /tmp/r3-full/Cargo.lock; fi
           if test -f web/pkg/noon_web_bg.wasm; then
-            tar -czf /tmp/r3-full/release-package.tar.gz web/pkg web/python-worker.js web/compat-bundle.*.json
+            tar -czf /tmp/r3-full/release-package.tar.gz web/pkg web/python-worker.js web/python/compat-bundle.*.json
             sha256sum web/pkg/noon_web_bg.wasm > /tmp/r3-full/wasm-sha256.txt
           fi
           git status --short > /tmp/r3-full/status.txt
           git diff --exit-code
+      - name: Archive already-completed predecessor evidence without terminal control bytes
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re, urllib.request
+          base='https://api.github.com/repos/yongkyuns/noon'
+          for path,name in [('/actions/jobs/102591146255/logs','approved-predecessor-browser.log'),('/actions/runs?event=pull_request&head_sha=e4c2b7ee44416eb328bb42a70e462e1da85eceaf&per_page=100','approved-predecessor-runs.json')]:
+              request=urllib.request.Request(base+path,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+              with urllib.request.urlopen(request,timeout=30) as response: text=response.read().decode('utf-8-sig')
+              text=re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]','',text)
+              text=''.join(c for c in text if c in '\n\r\t' or ord(c)>=32)
+              pathlib.Path('/tmp/r3-full',name).write_text(text)
+          PY
       - uses: actions/upload-artifact@v7
         if: always()
         with:
