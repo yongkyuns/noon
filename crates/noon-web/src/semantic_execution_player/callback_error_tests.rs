@@ -305,8 +305,7 @@ fn callback_and_advancement_share_settled_nested_error_projection() {
         let error = player
             .session
             .advance_to_callback_barrier(time)
-            .err()
-            .expect("the shared callback operation rejects non-finite time");
+            .expect_err("the shared callback operation rejects non-finite time");
         // Exercise the existing shared wrapper conversion as well as the
         // actual callback producer. Segment admission rejects NaN earlier.
         let failure = AuthoringFailure::from(noon::ExecutionSegmentAdvanceError::from(error));
@@ -331,8 +330,7 @@ fn callback_and_advancement_share_settled_nested_error_projection() {
     let error = player
         .session
         .advance_segment_to_callback_barrier(segment, 0.125)
-        .err()
-        .expect("the shared segment operation rejects a pending callback");
+        .expect_err("the shared segment operation rejects a pending callback");
     let failure = AuthoringFailure::from(error);
     // Pending advancement remains outside the settled transaction categories;
     // preserve that explicit inventory instead of guessing from its message.
