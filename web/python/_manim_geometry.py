@@ -7,6 +7,8 @@ for unsupported glyph rendering.
 
 from __future__ import annotations
 
+from _noon_errors import engine_call
+
 import copy
 import math
 from typing import Any
@@ -205,8 +207,5 @@ def match_points(self: _base.Mobject, mobject: object) -> _base.Mobject:
         raise NotImplementedError(
             "Line.match_points requires opaque shared semantic Line handles"
         )
-    try:
-        source_handle.matchLine(target_handle)
-    except Exception as error:
-        raise ValueError(str(error)) from None
+    engine_call(source_handle.matchLine, target_handle, operation="Line.match_points")
     return self

@@ -6,6 +6,8 @@ Scalar values, signal identity, graph declarations and playback belong to Rust.
 
 from __future__ import annotations
 
+from _noon_errors import engine_call, raise_engine_error
+
 import math
 from contextvars import ContextVar
 from typing import Any
@@ -107,7 +109,7 @@ class ValueTracker:
         if _create_tracker_handle is not None:
             self._scene = None
             self._canonical_context = None
-            self._canonical_handle = _create_tracker_handle(value)
+            self._canonical_handle = engine_call(_create_tracker_handle, value)
             return
         raise RuntimeError("ValueTracker requires the shared Rust authoring context")
 
@@ -152,9 +154,9 @@ class ValueTracker:
         if handle is None:
             raise ValueError("ValueTracker has no detached shared semantic handle")
         try:
-            context.associateValueTracker(handle)
+            engine_call(context.associateValueTracker, handle)
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error)
         self._commit_canonical_association(scene, context)
 
     def _commit_canonical_association(self, scene: _base.Scene, context: object) -> None:
@@ -173,13 +175,13 @@ class ValueTracker:
             return _manim_updaters.canonical_callback_scalar_value(self._scene, canonical[1])
         if canonical is not None:
             context, handle = canonical
-            return float(context.valueTrackerValue(handle))
+            return float(engine_call(context.valueTrackerValue, handle))
         detached = self._detached_canonical_handle()
         if detached is not None:
             try:
-                return float(detached.detachedValue())
+                return float(engine_call(detached.detachedValue))
             except Exception as error:
-                raise ValueError(str(error)) from None
+                raise_engine_error(error)
         raise RuntimeError("ValueTracker has no shared semantic handle")
 
     def set_value(self, value: float) -> ValueTracker:
@@ -194,16 +196,16 @@ class ValueTracker:
                 )
             context, handle = canonical
             try:
-                context.setValueTracker(handle, value)
+                engine_call(context.setValueTracker, handle, value)
             except Exception as error:
-                raise ValueError(str(error)) from None
+                raise_engine_error(error)
             return self
         detached = self._detached_canonical_handle()
         if detached is not None:
             try:
-                detached.setDetachedValue(value)
+                engine_call(detached.setDetachedValue, value)
             except Exception as error:
-                raise ValueError(str(error)) from None
+                raise_engine_error(error)
             return self
         raise RuntimeError("ValueTracker has no shared semantic handle")
 

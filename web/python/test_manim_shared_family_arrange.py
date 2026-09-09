@@ -128,7 +128,7 @@ class ManimSharedFamilyArrangeTests(unittest.TestCase):
             try:
                 family.arrange()
                 raise AssertionError("shared rejection was swallowed")
-            except ValueError as error:
+            except RuntimeError as error:
                 assert str(error) == "invalid shared arrangement"
             store.reject_arrange = False
 

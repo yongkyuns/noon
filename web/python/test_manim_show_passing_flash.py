@@ -19,6 +19,7 @@ class ManimShowPassingFlashTests(unittest.TestCase):
         source = textwrap.dedent(
             r"""
             import json
+            from test_noon_errors import diagnostic, js_exception
             from types import SimpleNamespace
             import sys
             import types
@@ -35,7 +36,9 @@ class ManimShowPassingFlashTests(unittest.TestCase):
 
                 def manimLineEndpoints(self):
                     if "line" not in self.snapshot["geometry"]:
-                        raise ValueError("mobject content is not an analytic Line")
+                        raise js_exception(diagnostic("unsupported_operation", "authoring.unsupported",
+                            "Line endpoint queries require an analytic Line",
+                            cause=diagnostic("unsupported_operation", "authoring.unsupported_operation")))
                     line = self.snapshot["geometry"]["line"]
                     return SimpleNamespace(
                         startX=line["start"]["x"], startY=line["start"]["y"],

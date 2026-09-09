@@ -8,6 +8,7 @@ from typing import Any
 from js import noonResolveAnimationOptions as _resolve_shared_animation_options
 
 import _manim_rate_functions as _rate_functions
+from _noon_errors import engine_call
 
 
 _SUPPORTED_BUILDER_ARGS = {
@@ -75,7 +76,8 @@ def resolve(
     elif play_rate_func is not None:
         play_rate_id = _rate_functions.easing_from_rate_func(play_rate_func)
 
-    result = _resolve_shared_animation_options(
+    result = engine_call(
+        _resolve_shared_animation_options,
         float(default_lag_ratio),
         _optional_number(builder_args, "run_time"),
         _optional_rate_func(builder_args),
@@ -85,13 +87,8 @@ def resolve(
         float("nan") if play_run_time is None else float(play_run_time),
         play_rate_id,
         float("nan") if play_lag_ratio is None else float(play_lag_ratio),
+        operation="animation.options",
     )
-
-    if not bool(result.ok):
-        message = str(result.message)
-        if str(result.errorKind) == "unsupported":
-            raise NotImplementedError(message)
-        raise ValueError(message)
 
     return ResolvedAnimationOptions(
         run_time=float(result.runTime),

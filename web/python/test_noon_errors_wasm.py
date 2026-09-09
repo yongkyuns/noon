@@ -14,7 +14,7 @@ except ImportError:
 
 from _noon_errors import (
     NoonError, NoonForeignHandleError, NoonOwnershipError, NoonPendingError, NoonCallbackError,
-    NoonStaleHandleError, NoonStalePublicationError, NoonValueError,
+    NoonStaleHandleError, NoonStalePublicationError, NoonValueError, NoonUnsupportedError,
     engine_await, engine_call,
 )
 
@@ -553,6 +553,86 @@ class WasmErrorProjectionTests(unittest.TestCase):
         context.returnExecutionPlayer(player)
         self.assertEqual(context.liveExecutionOwnership(),"returned")
         self.assertEqual(json.loads(context.liveDebugFrameJson())["time"],0.25)
+
+
+    def test_accepted_direct_handle_errors_preserve_paint_and_recover(self):
+        store = wasm.WasmAuthoringStore.new()
+        with self.assertRaises(NoonValueError) as caught:
+            engine_call(store.createManimGeometry,
+                        wasm.WasmManimGeometryOptions.circle(float("nan")))
+        self.assert_diagnostic(caught.exception, "invalid_input")
+        self.assertIn("authoring.invalid_render_number", codes(caught.exception))
+        target = circle(store)
+        before = target.snapshotJson()
+        with self.assertRaises(NoonValueError) as caught:
+            engine_call(target.setOpacity, 1.5)
+        self.assertEqual(caught.exception.code, "authoring.invalid_opacity")
+        self.assertEqual(target.snapshotJson(), before)
+        engine_call(target.setOpacity, 0.5)
+        self.assertAlmostEqual(target.fillOpacity, 0.5)
+        self.assertAlmostEqual(target.strokeOpacity, 0.5)
+        self.assertEqual(json.loads(target.snapshotJson())["style"]["opacity"], 1.0)
+
+    def test_public_line_match_retains_unsupported_cause_and_recovers(self):
+        host.resetStore()
+        from noon import Line
+        source = Line((-1, 0), (1, 0))
+        target = Line((-1, 0), (1, 0)).scale((2, 1))
+        before = source._semantic_handle.snapshotJson()
+        with self.assertRaises(NoonUnsupportedError) as caught:
+            source.match_points(target)
+        self.assert_diagnostic(caught.exception, "unsupported_operation")
+        self.assertEqual(caught.exception.operation, "Line.match_points")
+        self.assertEqual(codes(caught.exception),
+                         ["authoring.unsupported", "authoring.unsupported_operation"])
+        self.assertEqual(source._semantic_handle.snapshotJson(), before)
+        source.match_points(Line((0, 0), (0, 2)))
+        self.assertAlmostEqual(source.get_end()[1], 2.0)
+
+    def test_public_family_and_property_rejections_preserve_shared_state(self):
+        host.resetStore()
+        from noon import Circle, Square, VGroup
+        first, second = Circle(), Square()
+        group = VGroup(first, second)
+        def state():
+            return (first._semantic_handle.snapshotJson(), second._semantic_handle.snapshotJson())
+        before = state()
+        with self.assertRaises(NoonValueError) as caught:
+            group.arrange_in_grid(rows=1, cols=1)
+        self.assertEqual(caught.exception.code, "authoring.insufficient_grid_capacity")
+        self.assertEqual(state(), before)
+        with self.assertRaises(NoonValueError) as caught:
+            first.shift((1e40, 0))
+        self.assertEqual(caught.exception.code, "authoring.invalid_render_number")
+        self.assertEqual(state(), before)
+        group.arrange_in_grid(rows=1, cols=2)
+        first.shift((0.5, 0))
+        self.assertNotEqual(state(), before)
+
+    def test_public_options_and_value_errors_use_the_existing_mapper(self):
+        host.resetStore()
+        from noon import Scene
+        from _manim_animation_options import resolve
+        from _manim_scene import _context
+        def options(run_time):
+            return resolve(builder_args={"run_time": run_time}, default_lag_ratio=0,
+                           play_run_time=None, play_easing=None, play_rate_func=None,
+                           play_lag_ratio=None)
+        with self.assertRaises(NoonValueError) as caught:
+            options(-1)
+        self.assert_diagnostic(caught.exception, "invalid_input")
+        self.assertEqual(caught.exception.operation, "animation.options")
+        self.assertEqual(options(0.5).run_time, 0.5)
+        scene = Scene()
+        context = _context(scene)
+        before = (list(context.rootMembershipKeys()), context.authoredDuration())
+        with self.assertRaises(NoonValueError) as caught:
+            scene.value_tracker(float("nan"))
+        self.assertIn("signal.non_finite_value", codes(caught.exception))
+        self.assertEqual((list(context.rootMembershipKeys()), context.authoredDuration()), before)
+        tracker = scene.value_tracker(2.0)
+        tracker.set_value(3.0)
+        self.assertEqual(tracker.get_value(), 3.0)
 
 
 async def check_real_promise_rejection():
