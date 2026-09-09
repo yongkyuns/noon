@@ -83,37 +83,6 @@ def _as_vec2(value: object) -> _base.Vec2:
     raise TypeError("expected a two- or three-component vector")
 
 
-class _CompatAnimationBuilder:
-    """Generic Manim-style ``mobject.animate`` target-state proxy.
-
-    The proxy runs authoring-time mutator methods on a detached copy, then Noon lowers
-    the final source/target pair to one deterministic Transform track.
-    """
-
-    def __init__(self, source: _BaseMobject) -> None:
-        if source._scene is None or source._object is None:
-            raise ValueError("animate requires a Mobject that belongs to a Scene")
-        self.source = source
-        self.target = source.copy()
-
-    def __getattr__(self, name: str) -> Callable[..., _CompatAnimationBuilder]:
-        if name.startswith("_"):
-            raise AttributeError(name)
-        target_attribute = getattr(self.target, name)
-        if not callable(target_attribute):
-            raise AttributeError(f"{name} is not an animatable method")
-
-        def invoke(*args: Any, **kwargs: Any) -> _CompatAnimationBuilder:
-            result = target_attribute(*args, **kwargs)
-            if result is not None and result is not self.target:
-                raise TypeError(
-                    f"animate.{name} must be a mutating Mobject method returning self or None"
-                )
-            return self
-
-        return invoke
-
-
 class VMobject(_BaseMobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
 
@@ -268,32 +237,6 @@ def _rotation_angle_2d(angle: float, axis: object = OUT) -> float:
     if not math.isfinite(value):
         raise ValueError("rotation angle must be finite")
     return -value if z < 0.0 else value
-
-
-class _GroupAnimationBuilder:
-    def __init__(self, source: Group) -> None:
-        leaves = _leaf_mobjects(source)
-        if any(member._scene is None or member._object is None for member in leaves):
-            raise ValueError("animate requires a Group that belongs to a Scene")
-        self.source = source
-        self.target = source.copy()
-
-    def __getattr__(self, name: str) -> Callable[..., _GroupAnimationBuilder]:
-        if name.startswith("_"):
-            raise AttributeError(name)
-        target_attribute = getattr(self.target, name)
-        if not callable(target_attribute):
-            raise AttributeError(f"{name} is not an animatable method")
-
-        def invoke(*args: Any, **kwargs: Any) -> _GroupAnimationBuilder:
-            result = target_attribute(*args, **kwargs)
-            if result is not None and result is not self.target:
-                raise TypeError(
-                    f"animate.{name} must be a mutating Group method returning self or None"
-                )
-            return self
-
-        return invoke
 
 
 class Group(_base.Group, _BaseMobject):
@@ -476,8 +419,9 @@ class Group(_base.Group, _BaseMobject):
         return _group_arrange_in_grid(self, rows, cols, buff)
 
     @property
-    def animate(self) -> _GroupAnimationBuilder:
-        return _GroupAnimationBuilder(self)
+    def animate(self):
+        from _manim_animate import _AlignedGroupAnimationBuilder
+        return _AlignedGroupAnimationBuilder(self)
 
     def _copy_for_animate_target(self) -> Group:
         return _base._semantic_operations()._group_copy(self)
@@ -805,7 +749,6 @@ def install() -> None:
     # Existing Mobject methods resolve _as_vec2 dynamically from noon.py globals,
     # so replacing that helper makes inherited transforms/layout accept z=0 vectors.
     _base._as_vec2 = _as_vec2
-    _BaseMobject.animate = property(lambda self: _CompatAnimationBuilder(self))
     _BaseMobject.get_edge_center = _mobject_get_edge_center
     _BaseMobject.get_corner = _mobject_get_corner
     _BaseMobject.get_left = _mobject_get_left

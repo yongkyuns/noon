@@ -119,7 +119,6 @@ class ManimSharedElbowTests(unittest.TestCase):
             )
 
             import _manim_shared_geometry
-            _manim_shared_geometry.install()
             from noon import BLUE, Elbow, VMobject
 
             shape = Elbow(width=-0.5, angle=math.pi / 3.0, color=BLUE, stroke_width=2.0)

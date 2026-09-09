@@ -22,14 +22,22 @@ PY_ROOT = ROOT / "web" / "python"
 TUTORIAL_MANIFEST = PY_ROOT / "examples" / "manim_tutorial_manifest.json"
 
 
-def _literal_strings(node: ast.AST) -> set[str]:
-    try:
-        value = ast.literal_eval(node)
-    except (ValueError, TypeError):
+def _literal_strings(node: ast.AST, bindings: dict[str, set[str]] | None = None) -> set[str]:
+    """Read static export sequences, including unpacked module-level constants."""
+    bindings = {} if bindings is None else bindings
+    if isinstance(node, ast.Name):
+        return bindings.get(node.id, set())
+    if isinstance(node, ast.Dict):
+        return _dict_string_keys(node)
+    if not isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         return set()
-    if isinstance(value, (list, tuple, set)):
-        return {item for item in value if isinstance(item, str)}
-    return set()
+    result: set[str] = set()
+    for item in node.elts:
+        if isinstance(item, ast.Constant) and isinstance(item.value, str):
+            result.add(item.value)
+        elif isinstance(item, ast.Starred):
+            result.update(_literal_strings(item.value, bindings))
+    return result
 
 
 def _dict_string_keys(node: ast.AST) -> set[str]:
@@ -78,20 +86,26 @@ def _loop_registers_public_name(node: ast.For) -> bool:
 def noon_public_exports() -> set[str]:
     """Statically recover the runtime ``noon.__all__`` construction.
 
-    Noon installs compatibility adapters by extending ``noon.__all__`` from small
-    ``public = {...}`` dictionaries. Static extraction avoids importing Pyodide-only
-    ``js`` bridge modules in this CPython compatibility job.
+    Read explicit export lists and their unpacked module constants, plus remaining
+    adapter ``public`` mappings. Static extraction never imports Pyodide-only bridge
+    modules or executes frontend code.
     """
 
     exports: set[str] = set()
     sources = [PY_ROOT / "noon.py", *sorted(PY_ROOT.glob("_manim*.py"))]
     for path in sources:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        bindings: dict[str, set[str]] = {}
+        for declaration in tree.body:
+            if isinstance(declaration, ast.Assign):
+                for target in declaration.targets:
+                    if isinstance(target, ast.Name):
+                        bindings[target.id] = _literal_strings(declaration.value, bindings)
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 for target in node.targets:
                     if isinstance(target, ast.Name) and target.id == "__all__":
-                        exports.update(_literal_strings(node.value))
+                        exports.update(_literal_strings(node.value, bindings))
                     if isinstance(target, ast.Name) and target.id == "public":
                         exports.update(_public_mapping_keys(node.value))
             if isinstance(node, ast.For):

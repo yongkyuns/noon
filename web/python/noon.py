@@ -367,8 +367,9 @@ class Mobject:
         return _semantic_operations()._align_on_frame(self, direction, buff)
 
     @property
-    def animate(self) -> _AnimationBuilder:
-        return _AnimationBuilder(self)
+    def animate(self):
+        from _manim_animate import _AlignedAnimationBuilder
+        return _AlignedAnimationBuilder(self)
 
 
     def add_updater(
@@ -560,56 +561,6 @@ class FadeOut:
     key: str | None = None
 
 
-class _AnimationBuilder:
-    """Transient target-state builder used by ``mobject.animate``."""
-
-    def __init__(self, source: Mobject) -> None:
-        if source._scene is None or source._object is None:
-            raise ValueError("animate requires a Mobject that belongs to a Scene")
-        self.source = source
-        self.target = source.copy()
-
-    def shift(self, direction: Vec2 | tuple[float, float]) -> _AnimationBuilder:
-        self.target.shift(direction)
-        return self
-
-    def move_to(self, point: Vec2 | tuple[float, float]) -> _AnimationBuilder:
-        self.target.move_to(point)
-        return self
-
-    def scale(self, factor: float | tuple[float, float]) -> _AnimationBuilder:
-        self.target.scale(factor)
-        return self
-
-    def rotate(self, angle: float) -> _AnimationBuilder:
-        self.target.rotate(angle)
-        return self
-
-    def set_color(self, color: Color) -> _AnimationBuilder:
-        self.target.set_color(color)
-        return self
-
-    def set_fill(
-        self, color: Color | None = None, opacity: float | None = None
-    ) -> _AnimationBuilder:
-        self.target.set_fill(color, opacity)
-        return self
-
-    def set_stroke(
-        self, color: Color | None = None, width: float | None = None
-    ) -> _AnimationBuilder:
-        self.target.set_stroke(color, width)
-        return self
-
-    def set_opacity(self, opacity: float) -> _AnimationBuilder:
-        self.target.set_opacity(opacity)
-        return self
-
-    def set_object_opacity(self, opacity: float) -> _AnimationBuilder:
-        self.target.set_object_opacity(opacity)
-        return self
-
-
 def _scene_operations():
     """Load the shared host adapter lazily, after public wrapper classes exist."""
     try:
@@ -736,6 +687,41 @@ class Scene:
 
 Object = Mobject
 
+# Public wrappers resolve from their defining modules without startup mutation.
+_PUBLIC_EXPORTS = {
+    "Elbow": "_manim_shared_geometry",
+    "RoundedRectangle": "_manim_shared_geometry",
+    "SurroundingRectangle": "_manim_shared_geometry",
+    "BackgroundRectangle": "_manim_shared_geometry",
+    "Underline": "_manim_shared_geometry",
+    "AnnularSector": "_manim_shared_geometry",
+    "Sector": "_manim_shared_geometry",
+    "Annulus": "_manim_shared_geometry",
+    "Dot": "_manim_geometry",
+    "Ellipse": "_manim_geometry",
+    "Triangle": "_manim_geometry",
+    "Arrow": "_manim_geometry",
+    "ApplyMethod": "_manim_geometry",
+    "DEFAULT_DOT_RADIUS": "_manim_geometry",
+    "PURE_YELLOW": "_manim_geometry",
+    "Text": "_manim_typst",
+    "Typst": "_manim_typst",
+    "MathTypst": "_manim_typst",
+}
+
+
+def __getattr__(name: str):
+    module = _PUBLIC_EXPORTS.get(name)
+    if module is not None:
+        from importlib import import_module
+        return getattr(import_module(module), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
+
+
 __all__ = [
     "BLACK",
     "BLUE",
@@ -830,4 +816,9 @@ __all__ = [
     "YELLOW_D",
     "YELLOW_E",
     "color_from_hex",
+    "SMALL_BUFF",
+    "MED_SMALL_BUFF",
+    "MED_LARGE_BUFF",
+    "LARGE_BUFF",
+    *_PUBLIC_EXPORTS,
 ]

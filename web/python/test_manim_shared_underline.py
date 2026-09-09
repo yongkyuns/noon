@@ -147,7 +147,6 @@ class ManimSharedUnderlineTests(unittest.TestCase):
             )
 
             import _manim_shared_geometry
-            _manim_shared_geometry.install()
             from noon import BLUE, Line, Rectangle, Underline
 
             target = Rectangle(width=4.0, height=2.0)

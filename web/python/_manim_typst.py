@@ -26,7 +26,6 @@ except ImportError:  # Import remains possible for source-only CPython tests.
 
 
 _DEFAULT_NATIVE_FONT = "DejaVu Sans Mono"
-_INSTALLED = False
 
 
 def _validated_font_size(value: float) -> float:
@@ -382,22 +381,3 @@ class Text(_RetainedTextMobject):
             float(handle.criticalX(float(axis.x), float(axis.y))),
             float(handle.criticalY(float(axis.x), float(axis.y))),
         )
-
-def install() -> None:
-    """Install shared semantic Text and Typst wrappers."""
-
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-
-    _base.Scene = _compat.Scene
-
-    public = {"Text": Text, "Typst": Typst, "MathTypst": MathTypst}
-    for name, value in public.items():
-        setattr(_base, name, value)
-    exports = list(_base.__all__)
-    for name in public:
-        if name not in exports:
-            exports.append(name)
-    _base.__all__ = exports
