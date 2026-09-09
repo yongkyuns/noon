@@ -1,13 +1,13 @@
-use noon_compile::CompiledScene;
+use noon_compile::{CompiledObject, CompiledScene, ExecutionPatch};
 use noon_core::{
-    Easing, GeometryRef, ObjectSnapshot, SceneDefinition, ScenePatch, Style, TrackTiming,
-    Transform2D, Vec2,
+    Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId, TrackTiming,
+    TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
 };
 use noon_render_wgpu::FramePreparer;
 use noon_runtime::SceneInstance;
 
-fn snapshot(geometry: GeometryRef, style: Style) -> ObjectSnapshot {
-    ObjectSnapshot {
+fn endpoint(geometry: GeometryRef, style: Style) -> TransformTrackEndpoint {
+    TransformTrackEndpoint {
         geometry,
         transform: Transform2D::IDENTITY,
         style,
@@ -16,19 +16,29 @@ fn snapshot(geometry: GeometryRef, style: Style) -> ObjectSnapshot {
 
 #[test]
 fn analytic_geometry_transform_dirties_only_one_instance_without_path_work() {
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(GeometryRef::circle(1.0));
+    let object = ObjectId::new(0);
     let style = Style::default();
-    scene
-        .animate_transform(
+    let compiled = CompiledScene::compile_objects(
+        vec![CompiledObject::new(
             object,
-            snapshot(GeometryRef::circle(1.0), style),
-            snapshot(GeometryRef::circle(3.0), style),
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
-        .unwrap();
-
-    let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+            GeometryRef::circle(1.0),
+            Transform2D::IDENTITY,
+            style,
+        )],
+        &[TrackDefinition {
+            id: TrackId::new(0),
+            object,
+            property: Property::Transform,
+            values: TrackValues::Object {
+                from: endpoint(GeometryRef::circle(1.0), style),
+                to: endpoint(GeometryRef::circle(3.0), style),
+            },
+            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            time_map: Default::default(),
+        }],
+    )
+    .unwrap();
+    let mut instance = SceneInstance::new(compiled);
     let mut preparer = FramePreparer::new();
     let initial_changes = instance.take_frame_changes();
     let initial = preparer.prepare_incremental(instance.frame(), &initial_changes);
@@ -49,36 +59,49 @@ fn analytic_geometry_transform_dirties_only_one_instance_without_path_work() {
 
 #[test]
 fn rectangle_and_line_geometry_transforms_stay_on_analytic_instance_paths() {
-    let mut scene = SceneDefinition::new();
     let style = Style::default();
-
-    let rectangle = scene.add(GeometryRef::rectangle(2.0, 4.0));
-    scene
-        .animate_transform(
+    let rectangle = ObjectId::new(0);
+    let line = ObjectId::new(1);
+    let rectangle_from = GeometryRef::rectangle(2.0, 4.0);
+    let line_from = GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0));
+    let objects = vec![
+        CompiledObject::new(
             rectangle,
-            snapshot(GeometryRef::rectangle(2.0, 4.0), style),
-            snapshot(GeometryRef::rectangle(6.0, 8.0), style),
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
-        .unwrap();
-
-    let line = scene.add(GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)));
-    scene
-        .animate_transform(
-            line,
-            snapshot(
-                GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)),
-                style,
-            ),
-            snapshot(
-                GeometryRef::line(Vec2::new(0.0, -2.0), Vec2::new(0.0, 2.0)),
-                style,
-            ),
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
-        .unwrap();
-
-    let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+            rectangle_from.clone(),
+            Transform2D::IDENTITY,
+            style,
+        ),
+        CompiledObject::new(line, line_from.clone(), Transform2D::IDENTITY, style),
+    ];
+    let tracks = [
+        TrackDefinition {
+            id: TrackId::new(0),
+            object: rectangle,
+            property: Property::Transform,
+            values: TrackValues::Object {
+                from: endpoint(rectangle_from, style),
+                to: endpoint(GeometryRef::rectangle(6.0, 8.0), style),
+            },
+            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            time_map: Default::default(),
+        },
+        TrackDefinition {
+            id: TrackId::new(1),
+            object: line,
+            property: Property::Transform,
+            values: TrackValues::Object {
+                from: endpoint(line_from, style),
+                to: endpoint(
+                    GeometryRef::line(Vec2::new(0.0, -2.0), Vec2::new(0.0, 2.0)),
+                    style,
+                ),
+            },
+            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            time_map: Default::default(),
+        },
+    ];
+    let mut instance =
+        SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap());
     let mut preparer = FramePreparer::new();
     let initial_changes = instance.take_frame_changes();
     preparer.prepare_incremental(instance.frame(), &initial_changes);
@@ -103,11 +126,18 @@ fn repeated_line_transform_patches_keep_preparation_bounded_and_local() {
     const STATIC_INDEX: usize = 0;
     const MOVING_INDEX: usize = 1;
 
-    let mut scene = SceneDefinition::new();
-    let _static_line = scene.add(GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)));
-    let moving_line = scene.add(GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)));
-
-    let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+    let moving_line = ObjectId::new(MOVING_INDEX as u64);
+    let objects = (0..2)
+        .map(|index| {
+            CompiledObject::new(
+                ObjectId::new(index),
+                GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )
+        })
+        .collect();
+    let mut instance = SceneInstance::new(CompiledScene::compile_objects(objects, &[]).unwrap());
     let static_before = instance.frame().objects[STATIC_INDEX].clone();
     let mut preparer = FramePreparer::new();
     let initial_changes = instance.take_frame_changes();
@@ -123,7 +153,7 @@ fn repeated_line_transform_patches_keep_preparation_bounded_and_local() {
             ..Transform2D::IDENTITY
         };
         instance
-            .apply_patch(&ScenePatch::SetTransform {
+            .apply_execution_patch(&ExecutionPatch::SetTransform {
                 object: moving_line,
                 transform,
             })
