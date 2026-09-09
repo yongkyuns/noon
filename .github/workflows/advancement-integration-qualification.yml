@@ -1,4 +1,4 @@
-name: Advancement integration qualification
+name: Endpoint admission final integration
 on:
   push:
     branches: [codex/1349-full-landing]
@@ -6,7 +6,7 @@ permissions:
   contents: write
   actions: read
 concurrency:
-  group: advancement-integration-qualification
+  group: endpoint-admission-final-integration
   cancel-in-progress: false
 env:
   CARGO_BUILD_JOBS: '2'
@@ -16,97 +16,160 @@ env:
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: 'true'
   SCCACHE_GHA_RW_MODE: READ_ONLY
+  ENDPOINT_BASE: d2382819df22019a89bbadfc4e2d15b57e2478f6
 jobs:
   qualify:
     runs-on: ubuntu-latest
     timeout-minutes: 50
     steps:
-      - name: Checkout the existing production PR
+      - name: Checkout the independently authored endpoint fix
         uses: actions/checkout@v7
         with:
-          ref: e4ce9125d45ddf9a35ccfb6180040643b56c3f0c
+          ref: 2680ffb0b76a2630fb5a203df619d3c7e38ece1b
           fetch-depth: 0
-      - name: Reconcile only the additive test assertion with landed master
+      - name: Integrate the reviewed advancement combination and preserve independent tests
         run: |
-          git config user.name 'Noon development tooling'
-          git config user.email 'development@noon.invalid'
-          python3 - <<'PY'
+          export ENDPOINT_EVIDENCE="$RUNNER_TEMP/endpoint-evidence"
+          echo "ENDPOINT_EVIDENCE=$ENDPOINT_EVIDENCE" >> "$GITHUB_ENV"
+          python3 - <<'PYTHON'
+          """Final integration for the existing #1353 delta; not product source."""
           from pathlib import Path
-          import ast, re, subprocess
-          old = 'e4ce9125d45ddf9a35ccfb6180040643b56c3f0c'
-          base = '406944f8a58218629c14ff247894b3fd2e8c471a'
+          import ast
+          import os
+          import re
+          import subprocess
+          BASE = os.environ['ENDPOINT_BASE']
+          HEAD = '2680ffb0b76a2630fb5a203df619d3c7e38ece1b'
+          ADVANCEMENT = 'b3e1a7c7a2a003e0152517fb1ec24bb82fe39377'
+          CLEANUP = 'b9d6c4cbd82a6333551663358946294538cc3842'
+          RUNNER = 'scripts/typed-authoring-errors-smoke.mjs'
+          TESTS = 'web/python/test_noon_errors_wasm.py'
+          EVIDENCE = Path(os.environ['ENDPOINT_EVIDENCE'])
+          EVIDENCE.mkdir(parents=True, exist_ok=True)
           def git(*args):
               return subprocess.check_output(['git', *args], text=True).strip()
-          assert git('rev-parse', 'HEAD') == old
+          def source(ref, path):
+              return subprocess.check_output(['git', 'show', f'{ref}:{path}'], text=True)
+          def methods(text):
+              result = {}
+              for node in ast.walk(ast.parse(text)):
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test_'):
+                      assert node.name not in result, f'duplicate test: {node.name}'
+                      result[node.name] = ast.dump(node, include_attributes=False)
+              return result
+          assert git('rev-parse', 'HEAD') == HEAD
           assert not git('status', '--porcelain')
-          result = subprocess.run(['git', '-c', 'merge.conflictStyle=merge', 'merge', '--no-ff', '--no-commit', base])
-          assert result.returncode in (0, 1)
-          unresolved = set(git('diff', '--name-only', '--diff-filter=U').splitlines())
-          path = Path('scripts/typed-authoring-errors-smoke.mjs')
-          assert unresolved in (set(), {str(path)}), unresolved
-          text = path.read_text()
-          if unresolved:
-              pattern = r'^<<<<<<< [^\n]*\n(.*?)^=======\n(.*?)^>>>>>>> [^\n]*\n'
-              matches = list(re.finditer(pattern, text, flags=re.M | re.S))
-              assert len(matches) == 1
-              ours, theirs = matches[0].groups()
-              expected = 'assert.equal(report.python.advancement.length, 9);'
-              assert {ours.strip(), theirs.strip()} == {'', expected}, (ours, theirs)
-              text = re.sub(pattern, '  ' + expected + '\n', text, flags=re.M | re.S)
-          assert text.count('assert.equal(report.python.additionalTests, 10);') == 1
-          text = text.replace('assert.equal(report.python.additionalTests, 10);',
-                              'assert.equal(report.python.additionalTests, 11);')
-          path.write_text(text)
-          module = ast.parse(Path('web/python/test_noon_errors_wasm.py').read_text())
-          tests = [n.name for n in ast.walk(module) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name.startswith('test_')]
-          assert len(tests) == len(set(tests)) == 11, tests
-          assert 'test_invalid_first_wait_does_not_publish_a_player_and_retries' in tests
-          assert 'test_public_live_advance_projection_preserves_coercion_and_time_rules' in tests
-          subprocess.run(['cargo', 'fmt', '--all'], check=True)
-          subprocess.run(['git', 'add', 'crates', 'scripts/typed-authoring-errors-smoke.mjs', 'web/python'], check=True)
-          expected_files = {
-              'crates/noon-web/src/authoring_error.rs',
-              'crates/noon-web/src/canonical_authoring_scene.rs',
-              'crates/noon-web/src/semantic_execution_player.rs',
-              'scripts/typed-authoring-errors-smoke.mjs',
-              'web/python/_manim_scene.py',
-              'web/python/test_noon_errors_wasm.py',
-          }
-          actual = set(git('diff', '--cached', '--name-only', base).splitlines())
-          assert actual == expected_files, actual
+          for ancestor in (ADVANCEMENT, CLEANUP):
+              subprocess.run(['git', 'merge-base', '--is-ancestor', ancestor, BASE], check=True)
+          subprocess.run(['git', 'config', 'user.name', 'Noon development tooling'], check=True)
+          subprocess.run(['git', 'config', 'user.email', 'development@noon.invalid'], check=True)
+          base_runner = source(BASE, RUNNER)
+          base_methods = methods(source(BASE, TESTS))
+          assert len(base_methods) == 11, len(base_methods)
+          endpoint_methods = methods(source(HEAD, TESTS))
+          new_method = 'test_endpoint_wait_rejects_callbacks_before_publication_and_async_retry_works'
+          assert new_method not in base_methods and new_method in endpoint_methods
+          merge = subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', 'merge', '--no-ff', '--no-commit', BASE])
+          assert merge.returncode in (0, 1)
+          conflicts = set(git('diff', '--name-only', '--diff-filter=U').splitlines())
+          assert conflicts <= {RUNNER}, conflicts
+          # The only endpoint runner delta is its additional discovered test.
+          # Keep all landed advancement/callback fixtures and exact assertions.
+          old_count = 'assert.equal(report.python.additionalTests, 11);'
+          assert base_runner.count(old_count) == 1
+          Path(RUNNER).write_text(base_runner.replace(old_count, 'assert.equal(report.python.additionalTests, 12);'))
+          combined = methods(Path(TESTS).read_text())
+          assert len(combined) == 12
+          assert set(combined) == set(base_methods) | {new_method}
+          for name, body in base_methods.items():
+              assert combined[name] == body, f'changed independent test: {name}'
+          assert combined[new_method] == endpoint_methods[new_method]
+          for required in (
+              'test_invalid_first_wait_does_not_publish_a_player_and_retries',
+              'test_public_live_advance_projection_preserves_coercion_and_time_rules',
+              'test_public_live_transform_errors_preserve_python_coercion_and_recover',
+          ):
+              assert required in combined
+          for expected in (
+              'assert.equal(report.python.matrix.length, 10);',
+              'assert.equal(report.python.liveProperties.length, 29);',
+              'assert.equal(report.python.advancement.length, 9);',
+              'assert.equal(report.python.skipped, 0);',
+          ):
+              assert expected in Path(RUNNER).read_text(), expected
+          callback_path = 'web/python/test_noon_callback_errors_wasm.py'
+          callback_exists = subprocess.run(['git', 'cat-file', '-e', f'{BASE}:{callback_path}'], capture_output=True).returncode == 0
+          if callback_exists:
+              assert Path(callback_path).read_text() == source(BASE, callback_path)
+              assert 'test_noon_callback_errors_wasm' in Path(RUNNER).read_text()
+          # Keep the reviewed wait correction and its native regression verbatim.
+          def rust_function(text, name):
+              match = re.search(r'\bfn '+re.escape(name)+r'\s*\(', text)
+              assert match, name
+              start = text.index('{', match.start())
+              depth = 1
+              end = start + 1
+              while depth:
+                  depth += (text[end] == '{') - (text[end] == '}')
+                  end += 1
+              return text[match.start():end]
+          canonical = 'crates/noon-web/src/canonical_authoring_scene.rs'
+          for name in ('ordinary_wait', 'begin_ordinary_wait', 'admit_ordinary_wait'):
+              assert rust_function(Path(canonical).read_text(), name) == rust_function(source(HEAD, canonical), name), name
+          native = 'crates/noon-web/src/canonical_authoring_scene/wait_bootstrap_tests.rs'
+          name = 'endpoint_wait_rejects_callbacks_before_publication_and_async_retry_keeps_them'
+          assert rust_function(Path(native).read_text(), name) == rust_function(source(HEAD, native), name)
+          subprocess.run(['cargo', 'fmt', '--all', '--', '--check'], check=True)
+          subprocess.run(['git', 'add', '--', canonical, native, RUNNER, TESTS], check=True)
+          assert not git('diff', '--name-only', '--diff-filter=U')
+          allowed = {canonical, native, RUNNER, TESTS}
+          assert set(git('diff', '--cached', '--name-only', BASE).splitlines()) == allowed
           subprocess.run(['git', 'diff', '--cached', '--check'], check=True)
-          subprocess.run(['git', '-c', 'commit.gpgSign=false', 'commit', '-m',
-                          'fix: integrate typed advancement with first-wait and family callback regressions'], check=True)
-          assert git('show', '-s', '--format=%P', 'HEAD').split() == [old, base]
-          print('CANDIDATE', git('rev-parse', 'HEAD'), 'TREE', git('rev-parse', 'HEAD^{tree}'))
-          PY
-          mkdir -p "$RUNNER_TEMP/advance-evidence"
-          git rev-parse HEAD > "$RUNNER_TEMP/advance-evidence/head.txt"
-          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/advance-evidence/tree.txt"
-          printf '%s\n' 406944f8a58218629c14ff247894b3fd2e8c471a > "$RUNNER_TEMP/advance-evidence/base.txt"
-          git diff --binary 406944f8a58218629c14ff247894b3fd2e8c471a HEAD > "$RUNNER_TEMP/advance-evidence/patch.txt"
-          git archive --format=tar HEAD | gzip > "$RUNNER_TEMP/advance-evidence/source.tar.gz"
-          git push origin HEAD:refs/heads/codex/1349-integrated-candidate
-      - name: Retain the exact candidate before qualification
+          subprocess.run(['git', '-c', 'commit.gpgSign=false', '-c', 'core.hooksPath=/dev/null', 'commit', '-m',
+                          'fix: integrate reviewed endpoint wait admission with final advancement'], check=True)
+          assert not git('status', '--porcelain')
+          (EVIDENCE/'head.txt').write_text(git('rev-parse','HEAD')+'\n')
+          (EVIDENCE/'tree.txt').write_text(git('rev-parse','HEAD^{tree}')+'\n')
+          (EVIDENCE/'base.txt').write_text(BASE+'\n')
+          (EVIDENCE/'source-head.txt').write_text(HEAD+'\n')
+          (EVIDENCE/'test-inventory.txt').write_text('\n'.join(sorted(combined))+'\ncallback_module='+str(callback_exists)+'\n')
+          (EVIDENCE/'patch.txt').write_text(subprocess.check_output(['git','diff',BASE,'HEAD'], text=True))
+          subprocess.run(['git','archive','--format=tar.gz','--output='+str(EVIDENCE/'source.tar.gz'),'HEAD'],check=True)
+          print('Final endpoint integration',git('rev-parse','HEAD'),git('rev-parse','HEAD^{tree}'))
+          print('Main test count: 12. Retained callback module:',callback_exists)
+          PYTHON
+          test "$(git ls-remote origin refs/heads/codex/endpoint-wait-admission | cut -f1)" = 2680ffb0b76a2630fb5a203df619d3c7e38ece1b
+          git push origin HEAD:refs/heads/codex/1353-integrated-candidate
+      - name: Retain the exact source before the full qualification
         uses: actions/upload-artifact@v7
         with:
-          name: advancement-integrated-source
-          path: ${{ runner.temp }}/advance-evidence/
+          name: endpoint-integrated-source
+          path: ${{ runner.temp }}/endpoint-evidence
           retention-days: 3
           if-no-files-found: error
-      - name: Reuse the original qualified dependency lock
+      - name: Reuse the exact dependency lock from the completed advancement gate
         uses: actions/download-artifact@v8
         with:
-          name: r3-advancement-qualification
-          run-id: 34366396023
+          name: advancement-integrated-full-qualification
+          run-id: 34376659940
           github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/advance-input
-      - name: Record immutable input and prerequisites
+          path: ${{ runner.temp }}/advancement-input
+      - name: Record source and toolchain evidence
         run: |
-          test "$(head -1 "$RUNNER_TEMP/advance-input/product/revisions.txt")" = e4ce9125d45ddf9a35ccfb6180040643b56c3f0c
-          cp "$RUNNER_TEMP/advance-input/product/Cargo.lock" Cargo.lock
-          sha256sum Cargo.lock > "$RUNNER_TEMP/advance-evidence/lock-before.txt"
-          { git rev-parse HEAD HEAD^{tree}; rustup show; node --version; python3 --version; } > "$RUNNER_TEMP/advance-evidence/environment.txt"
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import os, hashlib
+          root=Path(os.environ['RUNNER_TEMP'])/'advancement-input'
+          heads=list(root.rglob('head.txt'))
+          assert len(heads)==1 and heads[0].read_text().strip()=='b3e1a7c7a2a003e0152517fb1ec24bb82fe39377'
+          locks=list(root.rglob('Cargo.lock'))
+          assert locks
+          hashes={hashlib.sha256(p.read_bytes()).hexdigest() for p in locks}
+          assert hashes=={'9fc77831ae25df351229c9902c073657062501a8e5faf8ea313dd9c8284062dd'}
+          Path('Cargo.lock').write_bytes(locks[0].read_bytes())
+          PYTHON
+          sha256sum Cargo.lock > "$ENDPOINT_EVIDENCE/lock-before.txt"
+          { git rev-parse HEAD HEAD^{tree}; rustup show; node --version; python3 --version; } > "$ENDPOINT_EVIDENCE/environment.txt"
       - uses: actions/cache/restore@v6
         with:
           path: |
@@ -123,32 +186,32 @@ jobs:
         with:
           tool: wasm-pack@0.15.0
           fallback: none
-      - name: Run the integrated full gate and optimized release build
+      - name: Run the one full gate and optimized release-WASM build
         run: |
-          bash scripts/check.sh full 406944f8a58218629c14ff247894b3fd2e8c471a > "$RUNNER_TEMP/advance-evidence/full.log" 2>&1 || { tail -160 "$RUNNER_TEMP/advance-evidence/full.log"; exit 1; }
+          bash scripts/check.sh full "$ENDPOINT_BASE" > "$ENDPOINT_EVIDENCE/full.log" 2>&1 || { tail -160 "$ENDPOINT_EVIDENCE/full.log"; exit 1; }
           git diff --exit-code
-          sha256sum Cargo.lock > "$RUNNER_TEMP/advance-evidence/lock-after.txt"
-          diff "$RUNNER_TEMP/advance-evidence/lock-before.txt" "$RUNNER_TEMP/advance-evidence/lock-after.txt"
-          sha256sum web/pkg/noon_web_bg.wasm > "$RUNNER_TEMP/advance-evidence/release-package.txt"
-          tail -20 "$RUNNER_TEMP/advance-evidence/full.log"
-      - name: Build the diagnostic-enabled package for the existing fixture matrix
+          sha256sum Cargo.lock > "$ENDPOINT_EVIDENCE/lock-after.txt"
+          diff "$ENDPOINT_EVIDENCE/lock-before.txt" "$ENDPOINT_EVIDENCE/lock-after.txt"
+          sha256sum web/pkg/noon_web_bg.wasm > "$ENDPOINT_EVIDENCE/release-package.txt"
+          tail -25 "$ENDPOINT_EVIDENCE/full.log"
+      - name: Build the existing diagnostic-enabled package for its real fixtures
         run: |
-          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh > "$RUNNER_TEMP/advance-evidence/dev-build.log" 2>&1 || { tail -160 "$RUNNER_TEMP/advance-evidence/dev-build.log"; exit 1; }
-          sha256sum web/pkg/noon_web_bg.wasm > "$RUNNER_TEMP/advance-evidence/dev-package.txt"
-      - name: Execute both additions and retained cases through real WASM and Pyodide
-        run: |
+          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh > "$ENDPOINT_EVIDENCE/dev-build.log" 2>&1 || { tail -120 "$ENDPOINT_EVIDENCE/dev-build.log"; exit 1; }
+          sha256sum web/pkg/noon_web_bg.wasm > "$ENDPOINT_EVIDENCE/dev-package.txt"
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install --with-deps chromium
-          node scripts/typed-authoring-errors-smoke.mjs > "$RUNNER_TEMP/advance-evidence/browser.log" 2>&1 || { tail -160 "$RUNNER_TEMP/advance-evidence/browser.log"; exit 1; }
-          node scripts/manim-compat-smoke.mjs > "$RUNNER_TEMP/advance-evidence/manim.log" 2>&1 || { tail -120 "$RUNNER_TEMP/advance-evidence/manim.log"; exit 1; }
+      - name: Qualify all independent additions through the existing real runner
+        run: |
+          node scripts/typed-authoring-errors-smoke.mjs > "$ENDPOINT_EVIDENCE/browser.log" 2>&1 || { tail -160 "$ENDPOINT_EVIDENCE/browser.log"; exit 1; }
+          node scripts/manim-compat-smoke.mjs > "$ENDPOINT_EVIDENCE/manim.log" 2>&1 || { tail -120 "$ENDPOINT_EVIDENCE/manim.log"; exit 1; }
           git diff --exit-code
-      - name: Retain complete qualification evidence
+      - name: Retain the complete final qualification
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: advancement-integrated-full-qualification
+          name: endpoint-integrated-full-qualification
           path: |
-            ${{ runner.temp }}/advance-evidence/
+            ${{ runner.temp }}/endpoint-evidence
             browser-smoke-artifacts/typed-authoring-errors/
             Cargo.lock
           retention-days: 3
