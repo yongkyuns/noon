@@ -764,6 +764,9 @@ try {
       expectedDuration: 4,
       endpointTime: null,
     },
+    { filename: "ordinary_filled_path_transform.py", objectCount: 1, expectedDuration: 3.2, endpointTime: null },
+    { filename: "ordinary_create_shapes.py", objectCount: 4, expectedDuration: 3.2, endpointTime: null },
+    { filename: "ordinary_morph_stress.py", objectCount: 96, expectedDuration: 3.4, endpointTime: null },
     {
       filename: "ordinary_composition_play.py",
       objectCount: 2,

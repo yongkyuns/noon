@@ -455,6 +455,10 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectOrdinarySuccessionSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryPaintPlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryStylePlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectFilledPathTransformRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectCreateShapesRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectMorphStressRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+
   );
 }
 
