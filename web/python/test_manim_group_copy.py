@@ -24,30 +24,27 @@ class ManimGroupCopyTests(unittest.TestCase):
             import _manim_phase_b  # noqa: F401 - installs pinned style/geometry semantics
             import _manim_geometry  # noqa: F401
 
-            from noon import Arrow, ORIGIN, RIGHT, VGroup
+            from noon import Circle, VGroup
+            from _typed_geometry_test_support import identity_only_wrapper as identity
 
-            arrow = Arrow(ORIGIN, 2 * RIGHT)
-            clone = arrow.copy()
-            assert isinstance(clone, Arrow)
-            assert clone is not arrow
-            assert len(clone) == len(arrow)
-            assert clone._shaft is clone[0]
-            assert clone._tip is clone[1]
-            assert clone._shaft is not arrow._shaft
-            assert clone._tip is not arrow._tip
+            class CustomFamily(VGroup):
+                def __init__(self):
+                    raise AssertionError("copy replayed user constructor")
 
-            original_center = arrow.get_center()
-            clone.shift(RIGHT)
-            assert arrow.get_center() == original_center
-            assert clone.get_center() != original_center
-
-            family = VGroup(arrow)
-            family_clone = family.copy()
-            nested_arrow = family_clone[0]
-            assert isinstance(nested_arrow, Arrow)
-            assert nested_arrow._shaft is nested_arrow[0]
-            assert nested_arrow._tip is nested_arrow[1]
-            assert nested_arrow is not arrow
+            # This pass copies Python metadata only. Rust family-copy tests own
+            # semantic duplication and independent geometry/mutation behavior.
+            leaf = identity(Circle)
+            family = identity(CustomFamily, submobjects=[leaf], selected=leaf)
+            nested = identity(VGroup, submobjects=[family], selected=family)
+            _manim_compat.Group.__deepcopy__ = _manim_compat.deepcopy_semantic_wrapper
+            _manim_compat._BaseMobject.__deepcopy__ = _manim_compat.deepcopy_semantic_wrapper
+            clone, pairs = _manim_compat.prepare_family_wrapper_copy(nested, lambda value: set())
+            assert isinstance(clone[0], CustomFamily)
+            assert clone is not nested and clone[0] is not family
+            assert clone.selected is clone[0]
+            assert clone[0].selected is clone[0][0]
+            assert clone[0][0] is not leaf
+            assert len(pairs) == 3
             """
         )
         completed = subprocess.run(

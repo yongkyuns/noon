@@ -20,7 +20,7 @@ class SemanticOwnershipInventoryTests(unittest.TestCase):
     def test_checked_in_inventory_has_valid_locations_and_explanations(self) -> None:
         document = CHECKER.load_inventory(INVENTORY_PATH)
         self.assertGreaterEqual(len(document["operations"]), 12)
-        self.assertTrue(
+        self.assertFalse(
             any(
                 item["classification"] == "python-semantic-duplicate"
                 for item in document["operations"]
@@ -30,12 +30,9 @@ class SemanticOwnershipInventoryTests(unittest.TestCase):
     def test_unexplained_python_duplicate_is_rejected(self) -> None:
         with INVENTORY_PATH.open(encoding="utf-8") as handle:
             document = json.load(handle)
-        duplicate = next(
-            item
-            for item in document["operations"]
-            if item["classification"] == "python-semantic-duplicate"
-        )
-        duplicate.pop("reason")
+        duplicate = document["operations"][0]
+        duplicate["classification"] = "python-semantic-duplicate"
+        duplicate.pop("reason", None)
         errors = CHECKER.validate_inventory(document)
         self.assertTrue(any("unexplained python-semantic-duplicate" in error for error in errors))
 
@@ -61,7 +58,7 @@ class SemanticOwnershipInventoryTests(unittest.TestCase):
         budget = next(
             item
             for item in document["duplicate_debt_budgets"]
-            if item["path"] == "web/python/noon.py"
+            if item["path"] == "web/python/_manim_semantic_handles.py"
             and item["token"] == "copy.deepcopy"
         )
         budget["maximum"] -= 1
@@ -74,7 +71,7 @@ class SemanticOwnershipInventoryTests(unittest.TestCase):
         budget = next(
             item
             for item in document["duplicate_debt_budgets"]
-            if item["path"] == "web/python/noon.py"
+            if item["path"] == "web/python/_manim_semantic_handles.py"
             and item["token"] == "copy.deepcopy"
         )
         budget["maximum"] += 1

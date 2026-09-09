@@ -17,7 +17,6 @@ import _noon_ir as _ir
 
 INFLECTION = 10.0
 _INSTALLED = False
-_ORIGINAL_MOBJECT_SET_COLOR = _base.Mobject.set_color
 
 
 def linear(t: float) -> float:
@@ -130,16 +129,7 @@ def _set_color_preserving_opacity(
                 "typed set_color requires the shared semantic mutation path"
             )
 
-    before = self._current_raw().style
-    result = _ORIGINAL_MOBJECT_SET_COLOR(self, color)
-    raw = _base._raw_mobject(self._current_raw())
-    for channel in ("fill", "stroke"):
-        previous = before[channel]
-        current = raw.style[channel]
-        if previous is not None and current is not None:
-            current["alpha"] = previous["alpha"]
-    result._apply(raw)
-    return result
+    raise RuntimeError("Mobject paint requires the shared Rust authoring host")
 
 
 def install() -> None:

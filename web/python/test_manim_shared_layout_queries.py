@@ -1,196 +1,70 @@
-import os
-import subprocess
-import sys
-import textwrap
+"""Facade delegation; geometry correctness is tested against shared Rust bounds."""
 import unittest
-from pathlib import Path
+from types import SimpleNamespace
+
+import noon
+import _manim_compat
+_manim_compat.install()
+import _manim_semantic_handles as shared
+
+
+class Observation:
+    centerX, centerY, width, height = 7.0, -3.0, 10.0, 6.0
+
+    def criticalX(self, x, y):
+        return 2.0 if x < 0 else 12.0 if x > 0 else self.centerX
+
+    def criticalY(self, x, y):
+        return -6.0 if y < 0 else 0.0 if y > 0 else self.centerY
+
+    def snapshotJson(self):
+        raise AssertionError("layout must not request a geometry snapshot")
 
 
 class ManimSharedLayoutQueryTests(unittest.TestCase):
-    def test_detached_layout_queries_do_not_materialize_snapshots(self) -> None:
-        python_dir = Path(__file__).resolve().parent
-        env = os.environ.copy()
-        existing_pythonpath = env.get("PYTHONPATH")
-        env["PYTHONPATH"] = (
-            str(python_dir)
-            if not existing_pythonpath
-            else os.pathsep.join((str(python_dir), existing_pythonpath))
-        )
-        source = textwrap.dedent(
-            """
-            import json
-            import math
-            import sys
-            import types
+    def wrapper(self, handle):
+        value = object.__new__(noon.Mobject)
+        shared._attach_shared_handle(value, handle)
+        return value
 
-            fake_js = types.ModuleType("js")
-            fake_js.noonResolveAnimationOptions = object()
-            sys.modules["js"] = fake_js
+    def test_detached_layout_delegates_without_materializing_geometry(self):
+        value = self.wrapper(Observation())
+        self.assertEqual(shared._get_center(value), (7, -3))
+        self.assertEqual(shared._width(value), 10)
+        self.assertEqual(shared._height(value), 6)
+        self.assertEqual(shared._layout_bounds(value), ((2, -6), (12, 0)))
+        self.assertEqual(shared._get_critical_point(value, noon.RIGHT), (12, -3))
 
-            import _manim_compat
-            _manim_compat.install()
-            import _manim_phase_b  # noqa: F401 - installs exact Manim world bounds
-            import noon as _base
-            import _manim_semantic_handles as handles
+    def test_bound_layout_uses_the_owning_live_context(self):
+        value = self.wrapper(object())
+        observed = Observation()
+        calls = []
+        def query(handle):
+            calls.append(handle)
+            return observed
+        value._scene = SimpleNamespace(_canonical_authoring_context=SimpleNamespace(queryMobjectLayout=query))
+        value._object = object()
+        self.assertEqual(shared._get_center(value), (7, -3))
+        self.assertEqual(shared._width(value), 10)
+        self.assertEqual(shared._get_critical_point(value, noon.UP), (7, 0))
+        self.assertEqual(calls, [value._semantic_handle] * 3)
 
-            class FakeHandle:
-                def __init__(self, snapshot_json):
-                    self.snapshot = json.loads(snapshot_json)
-                    self.snapshot_requests = 0
+    def test_missing_shared_layout_never_falls_back_to_snapshot_math(self):
+        for handle in (None, SimpleNamespace(snapshotJson=lambda: self.fail("raw fallback"))):
+            value = self.wrapper(handle)
+            for query in (shared._get_center, shared._width, shared._height, shared._layout_bounds):
+                with self.subTest(handle=handle, query=query.__name__):
+                    with self.assertRaises((RuntimeError, AttributeError)):
+                        query(value)
 
-                def _raw(self):
-                    return _base._ir.Mobject(
-                        geometry=self.snapshot["geometry"],
-                        transform=self.snapshot["transform"],
-                        style=self.snapshot["style"],
-                    )
-
-                def _bounds(self):
-                    bounds = _base._bounds(self._raw())
-                    assert bounds is not None
-                    return bounds
-
-                def snapshotJson(self):
-                    self.snapshot_requests += 1
-                    return json.dumps(self.snapshot, separators=(",", ":"))
-
-                def cloneHandle(self):
-                    return FakeHandle(json.dumps(self.snapshot, separators=(",", ":")))
-
-                @property
-                def centerX(self):
-                    minimum, maximum = self._bounds()
-                    return (minimum.x + maximum.x) * 0.5
-
-                @property
-                def centerY(self):
-                    minimum, maximum = self._bounds()
-                    return (minimum.y + maximum.y) * 0.5
-
-                @property
-                def width(self):
-                    minimum, maximum = self._bounds()
-                    return maximum.x - minimum.x
-
-                @property
-                def height(self):
-                    minimum, maximum = self._bounds()
-                    return maximum.y - minimum.y
-
-                def criticalX(self, direction_x, direction_y):
-                    minimum, maximum = self._bounds()
-                    center = (minimum.x + maximum.x) * 0.5
-                    return minimum.x if direction_x < 0 else maximum.x if direction_x > 0 else center
-
-                def criticalY(self, direction_x, direction_y):
-                    minimum, maximum = self._bounds()
-                    center = (minimum.y + maximum.y) * 0.5
-                    return minimum.y if direction_y < 0 else maximum.y if direction_y > 0 else center
-
-                def setFillOpacity(self, opacity):
-                    fill = self.snapshot["style"]["fill"]
-                    if fill is not None:
-                        fill["alpha"] = float(opacity)
-
-                def setStrokeOpacity(self, opacity):
-                    stroke = self.snapshot["style"]["stroke"]
-                    if stroke is not None:
-                        stroke["alpha"] = float(opacity)
-
-                def shift(self, x, y):
-                    translation = self.snapshot["transform"]["translation"]
-                    translation["x"] += float(x)
-                    translation["y"] += float(y)
-
-                def scale(self, x, y):
-                    scale = self.snapshot["transform"]["scale"]
-                    scale["x"] *= float(x)
-                    scale["y"] *= float(y)
-
-                def rotateAboutPoint(self, angle, point_x, point_y):
-                    translation = self.snapshot["transform"]["translation"]
-                    dx = translation["x"] - float(point_x)
-                    dy = translation["y"] - float(point_y)
-                    cosine = math.cos(float(angle))
-                    sine = math.sin(float(angle))
-                    translation["x"] = float(point_x) + dx * cosine - dy * sine
-                    translation["y"] = float(point_y) + dx * sine + dy * cosine
-                    self.snapshot["transform"]["rotation"] += float(angle)
-
-                def alignOnFrame(self, direction_x, direction_y, buff):
-                    point_x = self.criticalX(direction_x, direction_y)
-                    point_y = self.criticalY(direction_x, direction_y)
-                    shift_x = 0.0
-                    shift_y = 0.0
-                    if direction_x != 0.0:
-                        target_x = math.copysign(_base.DEFAULT_FRAME_WIDTH * 0.5, direction_x)
-                        shift_x = target_x - point_x - direction_x * float(buff)
-                    if direction_y != 0.0:
-                        target_y = math.copysign(_base.DEFAULT_FRAME_HEIGHT * 0.5, direction_y)
-                        shift_y = target_y - point_y - direction_y * float(buff)
-                    self.shift(shift_x, shift_y)
-
-            import _typed_geometry_test_support as _geometry_test
-
-            _geometry_test.install_js_bridge(fake_js, FakeHandle)
-            import _typed_geometry_test_support as _geometry_test
-            _geometry_test.install_module_bridge(handles, FakeHandle)
-            handles.install()
-
-            from noon import Circle, DEFAULT_FRAME_WIDTH, PI, Path, RIGHT, VectorPath
-
-            ellipse = Circle(1.0).scale((2.0, 1.0)).rotate(PI / 4.0)
-            handle = ellipse._semantic_handle
-            handle.snapshot_requests = 0
-            expected = math.sqrt(10.0)
-            assert abs(ellipse.width - expected) < 1e-12
-            assert abs(ellipse.height - expected) < 1e-12
-            assert abs(ellipse.get_center().x) < 1e-12
-            assert abs(ellipse.get_center().y) < 1e-12
-            # A typed leaf must ask its semantic handle for the critical point;
-            # raw geometry is neither an input nor a fallback for this query.
-            ellipse._current_raw = lambda: (_ for _ in ()).throw(
-                AssertionError("critical point read raw Python geometry")
-            )
-            assert abs(ellipse.get_critical_point(RIGHT).x - expected * 0.5) < 1e-12
-            assert handle.snapshot_requests == 0
-
-            curve = Path(
-                VectorPath()
-                .move_to((-1.0, 0.0))
-                .quadratic_to((0.0, 2.0), (1.0, 0.0))
-            ).rotate(PI / 4.0)
-            curve_handle = curve._semantic_handle
-            curve_handle.snapshot_requests = 0
-            expected_curve_extent = 9.0 * math.sqrt(2.0) / 8.0
-            assert abs(curve.width - expected_curve_extent) < 1e-12
-            assert abs(curve.height - expected_curve_extent) < 1e-12
-            assert curve_handle.snapshot_requests == 0
-
-            edge = ellipse.copy().to_edge(RIGHT, buff=0.5)
-            edge_handle = edge._semantic_handle
-            edge_handle.snapshot_requests = 0
-            assert abs(
-                edge.get_critical_point(RIGHT).x
-                - (DEFAULT_FRAME_WIDTH * 0.5 - 0.5)
-            ) < 1e-12
-            assert edge_handle.snapshot_requests == 0
-            """
-        )
-        completed = subprocess.run(
-            [sys.executable, "-c", source],
-            cwd=python_dir,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(
-            completed.returncode,
-            0,
-            "shared layout query subprocess failed:\n"
-            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
-        )
+    def test_copy_and_target_capture_require_a_shared_handle(self):
+        value = self.wrapper(None)
+        value._current_raw = lambda: self.fail("copy must not materialize raw state")
+        for target_state in (False, True):
+            with self.assertRaisesRegex(RuntimeError, "shared Rust"):
+                shared._clone_mobject(value, target_state=target_state)
+        with self.assertRaisesRegex(NotImplementedError, "raw replacement"):
+            shared._apply(value, object())
 
 
 if __name__ == "__main__":

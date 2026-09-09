@@ -6,7 +6,6 @@ the shared Rust semantic scene facade used for execution.
 
 from __future__ import annotations
 
-import copy
 import json
 import math
 from dataclasses import dataclass
@@ -196,109 +195,11 @@ GRAY_E = GREY_E = _hex_color(0x222222)
 GRAY = GREY = GRAY_C
 
 
-def _raw_mobject(raw: _ir.Mobject) -> _ir.Mobject:
-    return _ir.Mobject(
-        geometry=copy.deepcopy(raw.geometry),
-        transform=copy.deepcopy(raw.transform),
-        style=copy.deepcopy(raw.style),
-    )
-
-
-def _bounds(raw: _ir.Mobject) -> tuple[Vec2, Vec2] | None:
-    geometry = raw.geometry
-    points: list[Vec2] = []
-    if "circle" in geometry:
-        radius = float(geometry["circle"]["radius"])
-        points = [Vec2(-radius, -radius), Vec2(radius, radius)]
-    elif "rectangle" in geometry:
-        size = geometry["rectangle"]["size"]
-        half = Vec2(float(size["x"]) / 2.0, float(size["y"]) / 2.0)
-        points = [-half, half]
-    elif "line" in geometry:
-        line = geometry["line"]
-        points = [
-            Vec2(line["start"]["x"], line["start"]["y"]),
-            Vec2(line["end"]["x"], line["end"]["y"]),
-        ]
-    elif "vector_path" in geometry:
-        for command in geometry["vector_path"]["commands"]:
-            if command == "close":
-                continue
-            payload = next(iter(command.values()))
-            for key in ("to", "control", "control1", "control2"):
-                if key in payload:
-                    point = payload[key]
-                    points.append(Vec2(point["x"], point["y"]))
-    if not points:
-        return None
-
-    min_x = min(point.x for point in points)
-    max_x = max(point.x for point in points)
-    min_y = min(point.y for point in points)
-    max_y = max(point.y for point in points)
-    local_corners = (
-        Vec2(min_x, min_y),
-        Vec2(min_x, max_y),
-        Vec2(max_x, min_y),
-        Vec2(max_x, max_y),
-    )
-    transform = raw.transform
-    scale = Vec2(transform["scale"]["x"], transform["scale"]["y"])
-    translation = Vec2(
-        transform["translation"]["x"], transform["translation"]["y"]
-    )
-    rotation = float(transform["rotation"])
-    sine = math.sin(rotation)
-    cosine = math.cos(rotation)
-
-    def world(point: Vec2) -> Vec2:
-        x = point.x * scale.x
-        y = point.y * scale.y
-        return Vec2(
-            x * cosine - y * sine + translation.x,
-            x * sine + y * cosine + translation.y,
-        )
-
-    world_points = [world(point) for point in local_corners]
-    return (
-        Vec2(
-            min(point.x for point in world_points),
-            min(point.y for point in world_points),
-        ),
-        Vec2(
-            max(point.x for point in world_points),
-            max(point.y for point in world_points),
-        ),
-    )
-
-
-def _center(raw: _ir.Mobject) -> Vec2:
-    bounds = _bounds(raw)
-    if bounds is None:
-        translation = raw.transform["translation"]
-        return Vec2(translation["x"], translation["y"])
-    return (bounds[0] + bounds[1]) * 0.5
-
-
-def _critical(raw: _ir.Mobject, direction: Vec2) -> Vec2:
-    bounds = _bounds(raw)
-    if bounds is None:
-        return _center(raw)
-    minimum, maximum = bounds
-    center = (minimum + maximum) * 0.5
-    return Vec2(
-        minimum.x if direction.x < 0 else maximum.x if direction.x > 0 else center.x,
-        minimum.y if direction.y < 0 else maximum.y if direction.y > 0 else center.y,
-    )
-
-
 class Mobject:
-    """Thin Python handle around one canonical Noon object snapshot."""
+    """Python identity wrapper; shared Rust handles own all semantic state."""
 
     def __init__(self, raw: _ir.Mobject) -> None:
-        self._raw = _raw_mobject(raw)
-        self._scene: Scene | None = None
-        self._object: _ir.Object | None = None
+        raise RuntimeError("Mobject construction requires the shared Rust authoring host")
 
     @property
     def geometry(self) -> dict[str, Any]:
@@ -322,7 +223,7 @@ class Mobject:
         return self._current_raw().to_ir()
 
     def copy(self) -> Mobject:
-        return Mobject(self._current_raw())
+        raise RuntimeError("Mobject copy requires the shared Rust authoring host")
 
     def _bind(self, scene: Scene, obj: _ir.Object) -> None:
         if self._scene is not None and self._scene is not scene:
@@ -334,36 +235,24 @@ class Mobject:
         raise RuntimeError("Scene membership requires the shared Rust authoring host")
 
     def _current_raw(self) -> _ir.Mobject:
-        if self._scene is None or self._object is None:
-            return self._raw
-        raise RuntimeError("bound Mobject queries require the shared Rust authoring host")
+        raise RuntimeError("Mobject queries require the shared Rust authoring host")
 
     def _apply(self, raw: _ir.Mobject) -> Mobject:
-        if self._scene is None or self._object is None:
-            self._raw = _raw_mobject(raw)
-        else:
-            raise RuntimeError("bound Mobject edits require the shared Rust authoring host")
-        return self
+        raise NotImplementedError("raw replacement is unsupported; use a shared semantic operation")
 
     def get_center(self) -> Vec2:
-        return _center(self._current_raw())
+        raise RuntimeError("Mobject layout requires the shared Rust authoring host")
 
     @property
     def width(self) -> float:
-        bounds = _bounds(self._current_raw())
-        return 0.0 if bounds is None else bounds[1].x - bounds[0].x
+        raise RuntimeError("Mobject layout requires the shared Rust authoring host")
 
     @property
     def height(self) -> float:
-        bounds = _bounds(self._current_raw())
-        return 0.0 if bounds is None else bounds[1].y - bounds[0].y
+        raise RuntimeError("Mobject layout requires the shared Rust authoring host")
 
     def shift(self, direction: Vec2 | tuple[float, float]) -> Mobject:
-        raw = _raw_mobject(self._current_raw())
-        offset = _as_vec2(direction)
-        raw.transform["translation"]["x"] += offset.x
-        raw.transform["translation"]["y"] += offset.y
-        return self._apply(raw)
+        raise RuntimeError("Mobject edits require the shared Rust authoring host")
 
     def move_to(self, point: Vec2 | tuple[float, float]) -> Mobject:
         return self.shift(_as_vec2(point) - self.get_center())
@@ -380,50 +269,24 @@ class Mobject:
         return self.shift(Vec2(0.0, float(y) - center.y))
 
     def scale(self, factor: float | tuple[float, float]) -> Mobject:
-        raw = _raw_mobject(self._current_raw())
-        if isinstance(factor, (tuple, list, Vec2)):
-            value = _as_vec2(factor)
-        else:
-            value = Vec2(float(factor), float(factor))
-        raw.transform["scale"]["x"] *= value.x
-        raw.transform["scale"]["y"] *= value.y
-        return self._apply(raw)
+        raise RuntimeError("Mobject edits require the shared Rust authoring host")
 
     def rotate(self, angle: float) -> Mobject:
-        raw = _raw_mobject(self._current_raw())
-        raw.transform["rotation"] += float(angle)
-        return self._apply(raw)
+        raise RuntimeError("Mobject edits require the shared Rust authoring host")
 
     def set_color(self, color: Color) -> Mobject:
-        raw = _raw_mobject(self._current_raw())
-        if raw.style["fill"] is not None:
-            raw.style["fill"] = color.to_ir()
-        if raw.style["stroke"] is not None:
-            raw.style["stroke"] = color.to_ir()
-        if raw.style["fill"] is None and raw.style["stroke"] is None:
-            raw.style["fill"] = color.to_ir()
-        return self._apply(raw)
+        raise RuntimeError("Mobject edits require the shared Rust authoring host")
 
     def set_fill(self, color: Color | None = None, opacity: float | None = None) -> Mobject:
-        raw = _raw_mobject(self._current_raw())
-        raw.style["fill"] = None if color is None else color.to_ir()
-        if opacity is not None:
-            raw.style["opacity"] = float(opacity)
-        return self._apply(raw)
+        raise RuntimeError("Mobject edits require the shared Rust authoring host")
 
     def set_stroke(
         self, color: Color | None = None, width: float | None = None
     ) -> Mobject:
-        raw = _raw_mobject(self._current_raw())
-        raw.style["stroke"] = None if color is None else color.to_ir()
-        if width is not None:
-            raw.style["stroke_width"] = float(width)
-        return self._apply(raw)
+        raise RuntimeError("Mobject edits require the shared Rust authoring host")
 
     def set_opacity(self, opacity: float) -> Mobject:
-        raw = _raw_mobject(self._current_raw())
-        raw.style["opacity"] = float(opacity)
-        return self._apply(raw)
+        raise RuntimeError("Mobject edits require the shared Rust authoring host")
 
     def set_object_opacity(self, opacity: float) -> Mobject:
         """Set Noon's object-composite opacity independently of paint opacity.
@@ -443,26 +306,14 @@ class Mobject:
         direction: Vec2 | tuple[float, float] = RIGHT,
         buff: float = DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
     ) -> Mobject:
-        axis = _as_vec2(direction).normalized()
-        self_point = _critical(self._current_raw(), -axis)
-        if isinstance(other, Mobject):
-            target_point = _critical(other._current_raw(), axis)
-        else:
-            target_point = _as_vec2(other)
-        return self.shift(target_point - self_point + axis * float(buff))
+        raise RuntimeError("Mobject layout requires the shared Rust authoring host")
 
     def align_to(
         self,
         other: Mobject,
         direction: Vec2 | tuple[float, float] = ORIGIN,
     ) -> Mobject:
-        axis = _as_vec2(direction)
-        delta = _critical(other._current_raw(), axis) - _critical(
-            self._current_raw(), axis
-        )
-        return self.shift(
-            Vec2(delta.x if axis.x else 0.0, delta.y if axis.y else 0.0)
-        )
+        raise RuntimeError("Mobject layout requires the shared Rust authoring host")
 
     def to_edge(
         self,
@@ -479,20 +330,7 @@ class Mobject:
         return self._align_on_frame(_as_vec2(corner), float(buff))
 
     def _align_on_frame(self, direction: Vec2, buff: float) -> Mobject:
-        point = _critical(self._current_raw(), direction)
-        target = Vec2(
-            math.copysign(DEFAULT_FRAME_WIDTH / 2.0, direction.x)
-            if direction.x
-            else point.x,
-            math.copysign(DEFAULT_FRAME_HEIGHT / 2.0, direction.y)
-            if direction.y
-            else point.y,
-        )
-        shift = Vec2(
-            target.x - point.x - (direction.x * buff if direction.x else 0.0),
-            target.y - point.y - (direction.y * buff if direction.y else 0.0),
-        )
-        return self.shift(shift)
+        raise RuntimeError("Mobject layout requires the shared Rust authoring host")
 
     @property
     def animate(self) -> _AnimationBuilder:
@@ -503,9 +341,7 @@ class Group:
     """Lightweight authoring collection; it does not add runtime hierarchy."""
 
     def __init__(self, *mobjects: Mobject) -> None:
-        if not all(isinstance(mobject, Mobject) for mobject in mobjects):
-            raise TypeError("Group members must be Mobjects")
-        self.submobjects = list(mobjects)
+        raise RuntimeError("Mobject construction requires the shared Rust authoring host")
 
     def __iter__(self) -> Iterator[Mobject]:
         return iter(self.submobjects)
@@ -521,26 +357,10 @@ class Group:
         return self
 
     def get_center(self) -> Vec2:
-        if not self.submobjects:
-            return ORIGIN
-        mins: list[Vec2] = []
-        maxes: list[Vec2] = []
-        for mobject in self.submobjects:
-            bounds = _bounds(mobject._current_raw())
-            if bounds is not None:
-                mins.append(bounds[0])
-                maxes.append(bounds[1])
-        if not mins:
-            return ORIGIN
-        return Vec2(
-            (min(point.x for point in mins) + max(point.x for point in maxes)) / 2.0,
-            (min(point.y for point in mins) + max(point.y for point in maxes)) / 2.0,
-        )
+        raise RuntimeError("Mobject layout requires the shared Rust authoring host")
 
     def shift(self, direction: Vec2 | tuple[float, float]) -> Group:
-        for mobject in self.submobjects:
-            mobject.shift(direction)
-        return self
+        raise RuntimeError("Mobject edits require the shared Rust authoring host")
 
     def arrange(
         self,
@@ -548,14 +368,7 @@ class Group:
         buff: float = DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
         center: bool = True,
     ) -> Group:
-        if not self.submobjects:
-            return self
-        axis = _as_vec2(direction)
-        for previous, current in zip(self.submobjects, self.submobjects[1:]):
-            current.next_to(previous, axis, buff)
-        if center:
-            self.shift(-self.get_center())
-        return self
+        raise RuntimeError("family layout requires the shared Rust authoring host")
 
     def arrange_in_grid(
         self,
@@ -563,32 +376,7 @@ class Group:
         cols: int | None = None,
         buff: float | tuple[float, float] = MED_SMALL_BUFF,
     ) -> Group:
-        count = len(self.submobjects)
-        if count == 0:
-            return self
-        if rows is None and cols is None:
-            cols = math.ceil(math.sqrt(count))
-            rows = math.ceil(count / cols)
-        elif rows is None:
-            assert cols is not None
-            rows = math.ceil(count / cols)
-        elif cols is None:
-            cols = math.ceil(count / rows)
-        if rows <= 0 or cols <= 0:
-            raise ValueError("rows and cols must be positive")
-        if isinstance(buff, (tuple, list, Vec2)):
-            gap = _as_vec2(buff)
-        else:
-            gap = Vec2(float(buff), float(buff))
-        cell_width = max((mobject.width for mobject in self.submobjects), default=0.0) + gap.x
-        cell_height = max((mobject.height for mobject in self.submobjects), default=0.0) + gap.y
-        for index, mobject in enumerate(self.submobjects):
-            row = index // cols
-            col = index % cols
-            x = (col - (cols - 1) / 2.0) * cell_width
-            y = ((rows - 1) / 2.0 - row) * cell_height
-            mobject.move_to(Vec2(x, y))
-        return self
+        raise RuntimeError("family layout requires the shared Rust authoring host")
 
 
 class VGroup(Group):

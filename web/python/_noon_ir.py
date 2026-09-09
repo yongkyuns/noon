@@ -1,7 +1,7 @@
-"""Inert Python values, argument coercions, and detached geometry fallback.
+"""Inert Python values and legacy constructor/export argument shapes.
 
-No Scene, timeline, or execution lives here. The remaining detached geometry
-snapshot adapter is deletion-owned by #61.
+No Scene, timeline, detached semantic state, or execution lives here. The remaining
+constructor/export shape adapter is deletion-owned by #61.
 """
 
 from __future__ import annotations
