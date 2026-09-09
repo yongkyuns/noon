@@ -67,15 +67,8 @@ printf 'pub fn runtime() {}\n' > crates/noon-runtime/src/runtime.rs
 printf 'pub fn deterministic_replay() {}\n' > crates/noon-web/src/determinism.rs
 printf 'pub fn semantic_snapshot() {}\n' > crates/noon-web/src/semantic_snapshot.rs
 
-# Model the deliberately shrinking ScenePlayer allowlist that remains during A4.
-cat > crates/noon-web/src/legacy.rs <<'EOF'
-pub struct ScenePlayer;
-EOF
-for consumer in execution_transport; do
-  cat > "crates/noon-web/src/${consumer}.rs" <<'EOF'
-use crate::ScenePlayer;
-EOF
-done
+# The legacy player is retired; transport code has no scene-player authority.
+printf 'pub fn execution_transport() {}\n' > crates/noon-web/src/execution_transport.rs
 
 # Model the canonical playback clock left after #1005 removed its legacy duplicate.
 printf 'pub struct PlaybackClock;\n' > crates/noon-web/src/clock.rs
@@ -256,7 +249,7 @@ printf 'pub fn unrelated_after_scene_player_spread() {}\n' > src/scene_player_sp
 git add src/scene_player_spread_probe.rs
 git commit -qm "unrelated change after ScenePlayer spread"
 if bash scripts/architecture-ratchet.sh "$SCENE_PLAYER_SPREAD_BASE" >/dev/null 2>&1; then
-  echo "architecture ratchet test failed: accepted ScenePlayer consumer outside migration allowlist" >&2
+  echo "architecture ratchet test failed: accepted restored ScenePlayer consumer" >&2
   exit 1
 fi
 

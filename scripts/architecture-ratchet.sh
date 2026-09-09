@@ -180,11 +180,8 @@ while IFS= read -r reference; do
   [[ -z "$reference" ]] && continue
   reference_file="${reference%%:*}"
   case "$reference_file" in
-    crates/noon-web/src/legacy.rs|\
-    crates/noon-web/src/execution_transport.rs)
-      ;;
     *.rs)
-      printf 'architecture ratchet: ScenePlayer consumer outside migration allowlist: %s\n' "$reference" >&2
+      printf 'architecture ratchet: retired ScenePlayer consumer: %s\n' "$reference" >&2
       scene_player_consumer_spread_found=1
       ;;
   esac
@@ -193,10 +190,8 @@ done <<< "$scene_player_references"
 if (( scene_player_consumer_spread_found != 0 )); then
   cat >&2 <<'EOF'
 
-ScenePlayer is a shrinking migration authority. New noon-web Rust modules must not
-consume it. The temporary allowlist is limited to its definition plus the live
-execution transport seam; remove entries as that caller migrates rather than
-adding consumers. See #959/A4 and #961/A6.8.
+ScenePlayer and its last consumers have been deleted. No noon-web Rust module may
+restore this retired scene authority. See #959/A4 and #961/A6.8.
 EOF
 fi
 
@@ -247,9 +242,8 @@ fi
 deleted_legacy_validation_paths=(
   'scripts/explicit-transport-scene-fixture.js'
   'web/fixtures/execution-transport.json'
-  'crates/noon-ir/src/mixed.rs'
-  'crates/noon-ir/src/semantic'
-  'crates/noon-ir/tests/reactive_runtime.rs'
+  'crates/noon-ir'
+  'crates/noon-web/src/legacy.rs'
   'crates/noon/src/legacy.rs'
   'crates/noon/src/legacy/semantic_snapshot.rs'
   'crates/noon/src/analytic_geometry_authoring.rs'

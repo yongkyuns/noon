@@ -174,12 +174,10 @@ const expectedJavascriptSurface = [
   "manimMoveToPoint(",
   "appendCreate(",
   "appendRotate(",
-  "sceneJson(",
   "export function resolveAnimationOptions(",
 ];
 const expectedTypeSurface = [
   "constructor()",
-  "sceneJson(): string",
   "export class WasmAuthoringStore",
   "createManimCircle(radius: number): WasmAuthoringMobjectHandle",
   "createManimText(source: string, font_family: string, font_size: number, line_spacing: number): WasmAuthoringMobjectHandle",
@@ -489,13 +487,14 @@ for (const fragment of expectedTypeSurface) {
     throw new Error(`Generated declarations are missing: ${fragment}`);
   }
 }
-for (const retired of ["ReactiveScenePlayer", "ReactiveCanvasPlayer",
+for (const retired of ["EngineScenePlayer", "ReactiveScenePlayer", "ReactiveCanvasPlayer",
   "AuthoringSceneCore", "DetachedMobjectCore", "AnimateCore", "PlayBatchCore"]) {
   if (javascript.includes(`export class ${retired}`) || declarations.includes(`export class ${retired}`)) {
     throw new Error(`Deleted browser API returned to the package: ${retired}`);
   }
 }
 for (const retired of [
+  "sceneJson(",
   "export function verifySceneReplay(",
   "export function resolveUniformCompositionSchedule(",
   "export function resolveLifecyclePlan(",

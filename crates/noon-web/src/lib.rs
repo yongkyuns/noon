@@ -19,7 +19,6 @@ mod geometry_export;
 mod gpu_diagnostics;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 mod gpu_timestamps;
-mod legacy;
 mod manim_scale_bridge;
 #[cfg(target_arch = "wasm32")]
 mod manim_shape_matcher_handle_bridge;
@@ -58,7 +57,6 @@ pub use direct_execution_smoke::*;
 pub use execution_canvas::*;
 pub use execution_transport::*;
 pub use execution_wake::*;
-pub use legacy::{PlayerError, ReconcileOutcome};
 pub use renderer_observation::*;
 #[cfg(all(
     feature = "renderer",
