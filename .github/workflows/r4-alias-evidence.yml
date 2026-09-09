@@ -1,0 +1,94 @@
+name: R4 raw-alias evidence
+on:
+  push:
+    branches: [codex/1292-r4-alias-evidence]
+permissions:
+  contents: read
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Retain exact raw-alias reproduction
+        run: |
+          mkdir -p evidence
+          git rev-parse HEAD > evidence/checkout.txt
+          cat > crates/noon/tests/root_order_alias_probe.rs <<'RUST'
+          use std::{cell::RefCell, rc::Rc};
+          use noon::integration::{SemanticMutationTransaction, SemanticStore};
+          use noon::{ExecutionSession, LiveSession};
+          use noon_compile::semantic_execution_object_id;
+          use noon_core::{SemanticNodeId, SemanticObjectState, StoredGeometry};
+          fn object(store: &mut SemanticStore) -> SemanticNodeId {
+              store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 }))
+          }
+          fn family(store: &mut SemanticStore, members: &[SemanticNodeId]) -> SemanticNodeId {
+              let family = store.insert_family();
+              for &member in members { store.add_member(family, member).unwrap(); }
+              family
+          }
+          fn check(store: &SemanticStore, root: SemanticNodeId, session: &ExecutionSession) {
+              let actual = session.painter_order().iter().map(|&row| session.frame().objects[row as usize].id).collect::<Vec<_>>();
+              let expected = store.ordered_leaf_nodes(root).unwrap().into_iter().map(semantic_execution_object_id).collect::<Vec<_>>();
+              assert_eq!(actual, expected);
+          }
+          #[test]
+          fn raw_cross_root_alias_reorder_matches_first_occurrence() {
+              let mut store = SemanticStore::new();
+              let [shared, a, b] = std::array::from_fn(|_| object(&mut store));
+              let left = family(&mut store, &[shared, a]);
+              let right = family(&mut store, &[shared, b]);
+              let root = family(&mut store, &[left, right]);
+              let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+              let owner = Rc::new(RefCell::new(store));
+              let mut transaction = SemanticMutationTransaction::new();
+              transaction.reorder_member(root, left, None);
+              LiveSession::new(&owner, root, &mut session).apply(transaction).unwrap();
+              check(&owner.borrow(), root, &session);
+          }
+          #[test]
+          fn raw_append_with_nested_alias_matches_first_occurrence() {
+              let mut store = SemanticStore::new();
+              let [anchor, shared, other] = std::array::from_fn(|_| object(&mut store));
+              let alias = family(&mut store, &[shared]);
+              let group = family(&mut store, &[shared, other, alias]);
+              let root = family(&mut store, &[anchor]);
+              let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+              let owner = Rc::new(RefCell::new(store));
+              let mut transaction = SemanticMutationTransaction::new();
+              transaction.add_member(root, group);
+              LiveSession::new(&owner, root, &mut session).apply(transaction).unwrap();
+              check(&owner.borrow(), root, &session);
+          }
+          RUST
+          cp crates/noon/tests/root_order_alias_probe.rs evidence/
+      - name: Execute candidate and unchanged-master reproductions
+        run: |
+          rustup default stable
+          rustc --version > evidence/toolchain.txt
+          python3 .github/ci/r4-qualification-source.py patch
+          set +e
+          cargo test -p noon --no-default-features --test root_order_alias_probe -- --nocapture > evidence/candidate.log 2>&1
+          candidate=$?
+          set -e
+          git fetch --no-tags --depth=1 origin d6734d2a0626f5c9926e4043ad2017a94f5c8c5a
+          for path in crates/noon-core/src/semantic_store.rs crates/noon-compile/src/semantic_lowering/root_order.rs; do
+            git show d6734d2a0626f5c9926e4043ad2017a94f5c8c5a:$path > "$path"
+          done
+          set +e
+          cargo test -p noon --no-default-features --test root_order_alias_probe -- --nocapture > evidence/master.log 2>&1
+          master=$?
+          set -e
+          printf 'candidate=%s\nmaster=%s\n' "$candidate" "$master" | tee evidence/status.txt
+          cat evidence/candidate.log evidence/master.log
+          test "$candidate" = 0 -a "$master" = 0
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: raw-alias-evidence
+          path: evidence
+          retention-days: 3
