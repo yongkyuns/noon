@@ -33,7 +33,6 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                 message = ""
 
             fake_js.noonResolveAnimationOptions = lambda *args: Result()
-            fake_js.noonResolveUniformCompositionSchedule = lambda *args: None
 
             class FakeHandle:
                 def __init__(self, snapshot_json):
@@ -412,13 +411,16 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             assert handle.calls[-1] == "targetEditor"
             assert handle.snapshot_requests == 0
             first.shift(RIGHT)
-            scene.play(first, run_time=1.0)
-            assert handle.calls[-1] == "becomeHandle", handle.calls
+            assert first_target.get_center().x == 2.0
+            assert square.get_center().x == 1.0
+            # This double proves target isolation and shared mutation/copy dispatch.
+            # Actual animation completion belongs to the shared continuation proofs;
+            # Python must not commit a target snapshot after playback.
+            square.shift(RIGHT)
             assert handle.snapshot_requests == 0
             assert square.get_center().x == 2.0
 
-            # The second builder starts directly from the committed shared final state;
-            # no evaluated Python snapshot or source JSON seed is needed.
+            # The next builder reads the updated shared source without JSON seeding.
             before = handle.snapshot_requests
             second = animate._AlignedAnimationBuilder(square)
             second_target = second.target

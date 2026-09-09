@@ -24,7 +24,6 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
             import types
 
             fake_js = types.ModuleType("js")
-            fake_js.noonResolveUniformCompositionSchedule = object()
             fake_js.noonResolveAnimationOptions = object()
             sys.modules["js"] = fake_js
 

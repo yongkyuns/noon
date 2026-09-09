@@ -23,7 +23,6 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
             import types
 
             fake_js = types.ModuleType("js")
-            fake_js.noonResolveUniformCompositionSchedule = object()
             fake_js.noonResolveAnimationOptions = object()
 
             next_id = 1

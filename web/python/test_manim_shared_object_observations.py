@@ -25,9 +25,6 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
 
             fake_js = types.ModuleType("js")
             fake_js.noonResolveAnimationOptions = lambda *args: None
-            fake_js.noonResolveUniformCompositionSchedule = lambda *args: None
-            fake_js.noonResolveLifecyclePlan = lambda *args: None
-            fake_js.noonValidatePresenceTransition = lambda *args: None
 
             class Handle:
                 def __init__(self, snapshot_json):

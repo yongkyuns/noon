@@ -17,12 +17,18 @@
     {"path": "web/python/_manim_canonical_scene.py", "token": "_ORIGINAL_WAIT", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_canonical_scene.py", "token": "_ORIGINAL_TIME", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_canonical_scene.py", "token": "_ORIGINAL_BIND_", "maximum": 0, "migration_issue": "#61"},
-    {"path": "web/python/_manim_animate.py", "token": "copy.deepcopy", "maximum": 6, "migration_issue": "#61"},
-    {"path": "web/python/_manim_animate.py", "token": "_snapshot_for_object_at", "maximum": 2, "migration_issue": "#61"},
-    {"path": "web/python/_manim_animate.py", "token": "_ir.Mobject(", "maximum": 1, "migration_issue": "#61"},
+    {"path": "web/python/_manim_animate.py", "token": "_tracks", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_animate.py", "token": "_cursor", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_animate.py", "token": "_aligned_scene_play", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_lifecycle.py", "token": "_tracks", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_lifecycle.py", "token": "_cursor", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_lifecycle.py", "token": "_aligned_scene_play", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_animate.py", "token": "copy.deepcopy", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_animate.py", "token": "_snapshot_for_object_at", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_animate.py", "token": "_ir.Mobject(", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_compat.py", "token": "copy.deepcopy", "maximum": 1, "migration_issue": "#61"},
     {"path": "web/python/_manim_composition.py", "token": "copy.deepcopy", "maximum": 0, "migration_issue": "#61"},
-    {"path": "web/python/_manim_lifecycle.py", "token": "_snapshot_for_object_at", "maximum": 1, "migration_issue": "#61"},
+    {"path": "web/python/_manim_lifecycle.py", "token": "_snapshot_for_object_at", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_rotate.py", "token": "_snapshot_for_object_at", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_semantic_handles.py", "token": "copy.deepcopy", "maximum": 1, "migration_issue": "#61"},
     {"path": "web/python/_manim_semantic_handles.py", "token": "_ir.Mobject(", "maximum": 1, "migration_issue": "#61"},
@@ -211,13 +217,21 @@
     },
     {
       "id": "animation.transform",
-      "surface": "Transform/ReplacementTransform/TransformFromCopy",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_animate.py", "symbol": "_aligned_scene_play"},
-      "shared_owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::declare_and_activate_transform_to"},
-      "reason": "Ordinary Transform reaches shared Rust execution; remaining migration/export transform variants still expand Python-authored tracks and must be retired.",
-      "replacement": "Pass transform intent and handles to the shared Rust authoring scene.",
-      "migration_issue": "#61"
+      "surface": "Supported Transform and animate target requests",
+      "classification": "shared-rust",
+      "owner": {
+        "language": "rust",
+        "path": "crates/noon/src/live_session.rs",
+        "symbol": "LiveSession/declare_and_activate_composition"
+      },
+      "adapters": [
+        {
+          "language": "python",
+          "path": "web/python/_manim_animate.py",
+          "symbol": "Transform/_AlignedAnimationBuilder"
+        }
+      ],
+      "reason": "Supported Transform and animate target intent reaches shared Rust execution. Constructor-only unsupported variants no longer have a Python playback fallback."
     },
     {
       "id": "animation.affine-fade",
@@ -269,13 +283,21 @@
     },
     {
       "id": "animation.lifecycle",
-      "surface": "Remaining Typst and other unconverted group lifecycle operations",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_lifecycle.py", "symbol": "_schedule_fade/_schedule_create"},
-      "shared_owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::declare_and_activate_create/declare_and_activate_fade_with_endpoint"},
-      "reason": "The remaining #959 retained/group migration path still constructs endpoint snapshots, presence tracks, and final handoff state in Python; canonical typed leaf fades and plain Text family creation use shared Rust operations.",
-      "replacement": "Move deterministic endpoint and lifecycle track lowering to the shared Rust facade.",
-      "migration_issue": "#61"
+      "surface": "Supported FadeIn/FadeOut/Create/Uncreate lifecycle requests",
+      "classification": "shared-rust",
+      "owner": {
+        "language": "rust",
+        "path": "crates/noon/src/live_session.rs",
+        "symbol": "LiveSession/declare_and_activate_create/declare_and_activate_fade_with_endpoint"
+      },
+      "adapters": [
+        {
+          "language": "python",
+          "path": "web/python/_manim_animate.py",
+          "symbol": "FadeIn/FadeOut/Create/Uncreate"
+        }
+      ],
+      "reason": "Supported lifecycle requests use shared Rust execution and atomic publication; the Python lifecycle planner, snapshot scheduling and presence-track mutation hooks are deleted."
     },
     {
       "id": "animation.composition",
@@ -319,8 +341,8 @@
       "surface": "Deterministic scene-bound Mobject transform/style/layout state and animate source seed",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_mutation_handle_for/_set_color/commit_transform_target"}, {"language": "python", "path": "web/python/_manim_animate.py", "symbol": "_aligned_scene_play"}],
-      "reason": "The same store-owned semantic node survives initial scene binding and owns deterministic transform/style/layout state. Target editors allocate independent nodes in that store. The canonical path lowers directly to ExecutionSession; legacy animation synchronization remains a separate migration concern."
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_mutation_handle_for/_set_color"}, {"language": "python", "path": "web/python/_manim_animate.py", "symbol": "_store_animation_args"}],
+      "reason": "The same store-owned semantic node survives initial scene binding and owns deterministic transform/style/layout state. Target editors allocate independent nodes in that store. The canonical path lowers directly to ExecutionSession; the obsolete Python animation completion synchronizer is deleted."
     },
     {
       "id": "scene-bound-dynamic-state",

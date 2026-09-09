@@ -957,25 +957,6 @@ def _mutation_handle_for(value: _base.Mobject):
     return handle
 
 
-def invalidate_semantic_handle(value: object) -> None:
-    if isinstance(value, _base.Mobject) and hasattr(value, "_semantic_handle"):
-        value._semantic_handle_fresh = False
-
-
-def commit_transform_target(source: object, target: object) -> None:
-    if not isinstance(source, _base.Mobject):
-        return
-    source_handle = _handle_for(source)
-    target_handle = _handle_for(target)
-    if source_handle is None:
-        return
-    if target_handle is None:
-        invalidate_semantic_handle(source)
-        return
-    source_handle.becomeHandle(target_handle, False, False, False, False)
-    source._semantic_handle_fresh = True
-
-
 def _shift(self: _base.Mobject, direction: object) -> _base.Mobject:
     handle = _mutation_handle_for(self)
     if handle is None:

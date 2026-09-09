@@ -26,7 +26,6 @@ class ManimRotateAnimationTests(unittest.TestCase):
             fake_js = types.ModuleType("js")
 
             fake_js.noonResolveAnimationOptions = lambda *args: None
-            fake_js.noonResolveUniformCompositionSchedule = lambda *args: None
             sys.modules["js"] = fake_js
 
             import _manim_compat
