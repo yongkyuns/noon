@@ -4,94 +4,88 @@ on:
     branches: [codex/1347-landed-review-evidence]
 permissions:
   contents: read
+  actions: read
 jobs:
-  integration:
+  browser-only:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
-    env:
-      BASE_SHA: dd23347d4675d13395468d4ccd1bc06c22c9e1bb
-      PRODUCT_SHA: 6fd6391b138fb654410b90b97509ff7f285cf494
-      CARGO_INCREMENTAL: "0"
-      CARGO_PROFILE_DEV_DEBUG: "0"
-      CARGO_PROFILE_TEST_DEBUG: "0"
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_RW_MODE: READ_ONLY
-      BINARYEN_VERSION: "132"
-      BINARYEN_LINUX_SHA256: 195ddc94f9bc89f45abdabb0b9eea86023d727ba90eac8b35b80f2544fc30572
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: dd23347d4675d13395468d4ccd1bc06c22c9e1bb
+          ref: 65fa129a0370b4231623dcf4a74b3011a8d0d86f
           fetch-depth: 0
           persist-credentials: false
-      - name: Integrate the exact review head without changing any remote branch
+      - uses: actions/download-artifact@v8
+        with:
+          name: renderer-recovery-web-runtime
+          run-id: 34399817109
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: web
+      - name: Verify exact retained package and source
         run: |
           set -o pipefail
-          mkdir -p /tmp/a6-evidence
-          git fetch origin "$PRODUCT_SHA"
-          git config user.name 'Noon qualification'
-          git config user.email 'qualification@users.noreply.github.com'
-          git merge --no-edit --no-ff "$PRODUCT_SHA"
-          test "$(git rev-parse HEAD^1)" = "$BASE_SHA"
-          test "$(git rev-parse HEAD^2)" = "$PRODUCT_SHA"
-          git show -s --format='%H%n%P%n%T%n%s' HEAD | tee /tmp/a6-evidence/revisions.txt
-          git diff --stat "$BASE_SHA" HEAD | tee /tmp/a6-evidence/scope.txt
-          git diff --exit-code
-      - name: Use repository Rust toolchain
+          mkdir -p /tmp/a6-browser-evidence
+          test "$(git rev-parse HEAD)" = 65fa129a0370b4231623dcf4a74b3011a8d0d86f
+          test "$(git rev-parse HEAD^{tree})" = b9a32853e78b74ac20eee09a46c3ef47adfcaccd
+          echo '1edca88dcd8a420e47174a79b4a9f92128c3e4ac481a6bca22632d2961a6ea9d  web/pkg/noon_web_bg.wasm' | sha256sum --check --strict
+          echo 'e2b1df6bdcca43c06d6bdb709c6b3aa70366e2249fee0b9e08eafb516f443586  web/pkg/noon_web.js' | sha256sum --check --strict
+          echo 'ef3d343471e41fbb89cedceca681de6e60a575593476e6da7ba1700216984cb9  web/python-worker.js' | sha256sum --check --strict
+          echo '5f4b9d46a15518f2bfc3598e649d87ae3973f45eda9fa3e813efc236799cfc6d  web/python/compat-bundle.c05f66857ef750cf34965ecdd24c189192bf610d3584f77d1dbdbf25f39dc4bd.json' | sha256sum --check --strict
+          cp web/python-worker.js /tmp/a6-browser-evidence/retained-worker.js
+          node scripts/build-python-worker.mjs
+          cmp web/python-worker.js /tmp/a6-browser-evidence/retained-worker.js
+          echo '5f4b9d46a15518f2bfc3598e649d87ae3973f45eda9fa3e813efc236799cfc6d  web/python/compat-bundle.c05f66857ef750cf34965ecdd24c189192bf610d3584f77d1dbdbf25f39dc4bd.json' | sha256sum --check --strict
+          git show -s --format='%H%n%P%n%T' HEAD > /tmp/a6-browser-evidence/source.txt
+          sha256sum web/pkg/* > /tmp/a6-browser-evidence/package-sha256.txt
+          node scripts/check-web-package.mjs
+      - name: Install browser dependencies only
         run: |
-          rustup component add rustfmt clippy
-          rustup target add wasm32-unknown-unknown
-      - uses: actions/cache/restore@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-sources-
-      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
-        with:
-          version: v0.16.0
-      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
-        with:
-          tool: wasm-pack@0.15.0
-          fallback: none
-      - name: Install pinned optimized-build tool
-        shell: bash
-        run: |
-          archive="binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz"
-          curl --fail --location --retry 3 --retry-all-errors --output "$RUNNER_TEMP/$archive" "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/${archive}"
-          echo "${BINARYEN_LINUX_SHA256}  $RUNNER_TEMP/$archive" | sha256sum --check --strict
-          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/binaryen-version_${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
-      - name: Required full gate on pinned integration
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Reproduce the old resize assertion on the retained package
         run: |
           set -o pipefail
-          bash scripts/check.sh full "$BASE_SHA" 2>&1 | tee /tmp/a6-evidence/full.log
-          git diff --exit-code
-      - name: Existing artifact contracts on the same source
-        run: |
-          set -o pipefail
-          node --test web/optimized-replay-contract.test.mjs .github/ci/wasm-build.test.mjs 2>&1 | tee /tmp/a6-evidence/contracts.log
-      - name: Retain source, package and exact diagnostics
+          cp scripts/playground-zero-size-smoke.mjs /tmp/corrected-resize.mjs
+          trap 'cp /tmp/corrected-resize.mjs scripts/playground-zero-size-smoke.mjs' EXIT
+          git show 10e9597611dad4dc4d1917f39dc685143fd37f3c:scripts/playground-zero-size-smoke.mjs > scripts/playground-zero-size-smoke.mjs
+          set +e
+          NOON_PLAYGROUND_ZERO_SIZE_ARTIFACTS=/tmp/a6-browser-evidence/resize-red node scripts/playground-zero-size-smoke.mjs 2>&1 | tee /tmp/a6-browser-evidence/resize-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -ne 0
+          python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/a6-browser-evidence/resize-red/diagnostics.json'))
+          assert 'zero' in d['snapshots'] and 'nearZero' not in d['snapshots'], d
+          assert not d['pageErrors'] and not d['consoleErrors'], d
+          assert 'Timeout' in d['failure'] and 'waitForFrameAfter' in d['failure'], d
+          print('Confirmed old no-op resize assertion fails after successful zero-size presentation.')
+          PY
+      - name: Corrected settled resize and restore
         if: always()
         run: |
-          mkdir -p /tmp/a6-evidence
-          git show -s --format='%H%n%P%n%T%n%s' HEAD > /tmp/a6-evidence/final-revisions.txt
-          git diff --full-index --binary "$BASE_SHA" HEAD > /tmp/a6-evidence/product.patch
-          git ls-tree -r HEAD > /tmp/a6-evidence/source-blobs.txt
-          git archive HEAD | gzip > /tmp/a6-evidence/source.tar.gz
-          git status --porcelain > /tmp/a6-evidence/worktree-status.txt
-          rustc --version > /tmp/a6-evidence/toolchain.txt
-          cargo --version >> /tmp/a6-evidence/toolchain.txt
-          test ! -f Cargo.lock || cp Cargo.lock /tmp/a6-evidence/
-          if test -d web/pkg; then tar -czf /tmp/a6-evidence/web-runtime.tar.gz web/pkg web/python-worker.js web/python/compat-bundle.*.json; fi
-          sha256sum /tmp/a6-evidence/*.tar.gz > /tmp/a6-evidence/archives-sha256.txt
+          set -o pipefail
+          NOON_PLAYGROUND_ZERO_SIZE_ARTIFACTS=/tmp/a6-browser-evidence/resize-green node scripts/playground-zero-size-smoke.mjs 2>&1 | tee /tmp/a6-browser-evidence/resize-green.log
+      - name: Existing direct WebGPU validation propagation
+        if: always()
+        run: |
+          set -o pipefail
+          NOON_RENDERER_VALIDATION_ERROR_ARTIFACTS=/tmp/a6-browser-evidence/validation node scripts/renderer-webgpu-validation-error-smoke.mjs 2>&1 | tee /tmp/a6-browser-evidence/validation.log
+      - name: Existing worker WebGPU validation propagation
+        if: always()
+        run: |
+          set -o pipefail
+          NOON_RENDERER_VALIDATION_ARTIFACTS=/tmp/a6-browser-evidence/worker-validation node scripts/renderer-worker-webgpu-validation-error-smoke.mjs 2>&1 | tee /tmp/a6-browser-evidence/worker-validation.log
+      - name: Final source and package identity
+        if: always()
+        run: |
+          git diff --exit-code
+          sha256sum web/pkg/* > /tmp/a6-browser-evidence/final-package-sha256.txt
+          cmp /tmp/a6-browser-evidence/package-sha256.txt /tmp/a6-browser-evidence/final-package-sha256.txt
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: a6-1361-full-integration
-          path: /tmp/a6-evidence
-          retention-days: 7
+          name: a6-1364-browser-only
+          path: /tmp/a6-browser-evidence
           if-no-files-found: error
+          retention-days: 7
