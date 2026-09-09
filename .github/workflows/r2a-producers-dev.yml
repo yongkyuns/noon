@@ -32,6 +32,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Apply hash-guarded source edits
+        id: apply
         working-directory: source
         run: |
           python3 - <<'PY'
@@ -65,8 +66,6 @@ jobs:
           for test in ../tooling/.github/r2a-tests/*.rs; do
             test ! -f "$test" || cp "$test" fixtures/provider-consumer/tests/
           done
-          # #1336 now owns this already-landed source implementation. Consume it
-          # through the master merge, not a second version of the same work.
           git restore --source=HEAD -- crates/noon-core/src/semantic_store/semantic_transaction.rs
           cargo fmt --all
           cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
@@ -93,26 +92,49 @@ jobs:
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
-      - name: Compile minimal producer and all native callers
-        working-directory: source
-        run: |
-          cargo check -p noon --no-default-features --all-targets > ../compile.log 2>&1 || { tail -250 ../compile.log; exit 1; }
-          cargo check --workspace --all-targets --all-features >> ../compile.log 2>&1 || { tail -250 ../compile.log; exit 1; }
-          tail -30 ../compile.log
       - name: Test minimal producer and independent typed consumer
+        id: tests
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
         working-directory: source
         run: |
-          cargo test -p noon --no-default-features --lib > ../tests.log 2>&1 || { tail -200 ../tests.log; exit 1; }
-          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests >> ../tests.log 2>&1 || { tail -200 ../tests.log; exit 1; }
-          tail -50 ../tests.log
-      - name: Qualify native and direct-WASM boundary
+          set +e
+          cargo test -p noon --no-default-features --lib > ../tests.log 2>&1
+          library=$?
+          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests >> ../tests.log 2>&1
+          consumer=$?
+          tail -160 ../tests.log
+          test "$library" = 0 && test "$consumer" = 0
+      - name: Compile minimal producer and all native callers
+        id: native
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
+        working-directory: source
+        run: |
+          set +e
+          cargo check -p noon --no-default-features --all-targets > ../compile.log 2>&1
+          minimal=$?
+          cargo check --workspace --all-targets --all-features >> ../compile.log 2>&1
+          workspace=$?
+          tail -200 ../compile.log
+          test "$minimal" = 0 && test "$workspace" = 0
+      - name: Compile direct-WASM callers and independent tests
+        id: wasm
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
+        working-directory: source
+        run: |
+          set +e
+          cargo check -p noon-web --all-features --target wasm32-unknown-unknown > ../wasm.log 2>&1
+          web=$?
+          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests --target wasm32-unknown-unknown --no-run >> ../wasm.log 2>&1
+          consumer=$?
+          tail -200 ../wasm.log
+          test "$web" = 0 && test "$consumer" = 0
+      - name: Qualify repository gate and public facade
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' && steps.native.outcome == 'success' && steps.wasm.outcome == 'success' }}
         working-directory: source
         run: |
           bash scripts/check.sh fast "$CURRENT_BASE" > ../fast.log 2>&1 || { tail -200 ../fast.log; exit 1; }
           cargo test -p noon --no-default-features --doc > ../docs.log 2>&1 || { tail -120 ../docs.log; exit 1; }
           cargo run -p noon --no-default-features --example shared_authoring >> ../docs.log 2>&1 || { tail -120 ../docs.log; exit 1; }
-          cargo check -p noon-web --all-features --target wasm32-unknown-unknown > ../wasm.log 2>&1 || { tail -200 ../wasm.log; exit 1; }
-          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests --target wasm32-unknown-unknown --no-run >> ../wasm.log 2>&1 || { tail -200 ../wasm.log; exit 1; }
       - name: Preserve staged candidate for inspection
         if: always()
         working-directory: source
