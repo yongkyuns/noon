@@ -33,9 +33,9 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
         self.assertIs(family.set_x(5), family)
         self.assertIs(family.set_y(-3), family)
         self.assertEqual(family.move_to.call_args_list[0].args, (compat._base.Vec2(5, 0),))
-        self.assertEqual(family.move_to.call_args_list[0].kwargs, {"aligned_edge": noon.ORIGIN, "coor_mask": (1.0, 0.0, 0.0)})
+        self.assertEqual(family.move_to.call_args_list[0].kwargs, {"aligned_edge": compat._base.ORIGIN, "coor_mask": (1.0, 0.0, 0.0)})
         self.assertEqual(family.move_to.call_args_list[1].args, (compat._base.Vec2(0, -3),))
-        self.assertEqual(family.move_to.call_args_list[1].kwargs, {"aligned_edge": noon.ORIGIN, "coor_mask": (0.0, 1.0, 0.0)})
+        self.assertEqual(family.move_to.call_args_list[1].kwargs, {"aligned_edge": compat._base.ORIGIN, "coor_mask": (0.0, 1.0, 0.0)})
 
     def test_group_wrapper_mirrors_shared_family_membership(self) -> None:
         python_dir = Path(__file__).resolve().parent
