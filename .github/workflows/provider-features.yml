@@ -8,6 +8,10 @@ on:
       - 'rust-toolchain'
       - 'rust-toolchain.toml'
       - '.cargo/**'
+      - '**/rustfmt.toml'
+      - '**/.rustfmt.toml'
+      - '**/clippy.toml'
+      - '**/.clippy.toml'
       # Include examples, tests, build inputs and transitive path dependencies.
       # Do not make provider selection depend on historical internal crate names.
       - 'crates/**'
