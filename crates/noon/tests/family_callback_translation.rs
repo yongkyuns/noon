@@ -78,6 +78,22 @@ fn selection_is_unique_local_and_all_inputs_are_prepared_before_returning_change
         }),
         Err(FamilyCallbackTranslationError::Translation(_))
     ));
+    // Finite transforms do not guarantee finite translated bounds. An offset
+    // path can have large content bounds without a large object translation.
+    let mut bounds_reads = Vec::new();
+    assert!(matches!(
+        family.prepare_callback_translation(before, 1.0e38, 0.0, |node| {
+            bounds_reads.push(node);
+            let selected_bounds = if node == b.node_id() {
+                Some(Rect::new(Vec2::new(2.9e38, -1.0), Vec2::new(3.1e38, 1.0)))
+            } else {
+                bounds
+            };
+            Ok((Transform2D::default(), selected_bounds))
+        }),
+        Err(FamilyCallbackTranslationError::Translation(_))
+    ));
+    assert_eq!(bounds_reads, [a.node_id(), b.node_id()]);
     assert!(family
         .prepare_callback_translation(before, 0.0, 0.0, |_| Ok((Transform2D::default(), bounds)))
         .unwrap()

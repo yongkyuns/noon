@@ -93,7 +93,19 @@ impl MobjectFamily {
                 let offset = translation - previous.translation;
                 // Translation-only bounds propagation matches the existing
                 // EffectiveObjectProperties::set_transform fallback exactly.
-                let bounds = bounds.map(|b| Rect::new(b.min + offset, b.max + offset));
+                let bounds = bounds
+                    .map(|b| -> Result<_, SemanticLoweringError> {
+                        let translate = |point: noon_core::Vec2| {
+                            SemanticVec3::new(
+                                f64::from(point.x) + f64::from(offset.x),
+                                f64::from(point.y) + f64::from(offset.y),
+                                0.0,
+                            )
+                            .lower_xy_f32()
+                        };
+                        Ok(Rect::new(translate(b.min)?, translate(b.max)?))
+                    })
+                    .transpose()?;
                 changes.push(CallbackFamilyTranslation {
                     node,
                     transform,
