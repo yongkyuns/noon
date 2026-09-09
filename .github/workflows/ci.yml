@@ -175,7 +175,9 @@ jobs:
       - name: Test required slow callbacks preserve shared execution order
         run: node scripts/execution-worker-host-smoke.mjs
       - name: Test Python editor highlighting and linting
-        run: node scripts/python-editor-smoke.mjs
+        run: |
+          node scripts/python-editor-input-smoke.mjs
+          node scripts/python-editor-smoke.mjs
 
   browser-rendering:
     name: Browser rendering (${{ matrix.backend }})

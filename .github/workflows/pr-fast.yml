@@ -147,6 +147,9 @@ jobs:
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
 
+      - name: Check editor input and Reset without engine startup
+        run: node scripts/python-editor-input-smoke.mjs
+
       - name: Check preloaded cold-start footprint
         if: steps.browser-risk.outputs.cold_start == 'true'
         id: cold-start
