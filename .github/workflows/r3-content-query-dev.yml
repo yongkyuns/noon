@@ -3,66 +3,78 @@ on:
   push:
     branches: [codex/1292-r3-content-query-prep]
 permissions:
-  contents: write
+  contents: read
+  actions: write
+  pull-requests: read
 jobs:
-  reconcile:
+  approve-and-inspect:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Reconcile scoped native-qualified patch with newly landed master
+      - name: Approve only the explicitly authorized current-head held runs
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p /tmp/r3-content-integration
+          mkdir -p /tmp/r3-resume
           python3 - <<'PY'
-          import base64, gzip, hashlib, pathlib
-          patch = gzip.decompress(base64.b64decode(pathlib.Path('.github/r3-content.patch.b64').read_text(), validate=True))
-          assert hashlib.sha256(patch).hexdigest() == 'df20d16e51f9bb181b76b32822456e43d4610b55967f5b7903f48f072f0793c3'
-          old = b'-  assert.equal(report.python.additionalTests, 9);'
-          new = b'+  assert.equal(report.python.additionalTests, 10);'
-          assert patch.count(old) == patch.count(new) == 1
-          patch = patch.replace(old, b'-  assert.equal(report.python.additionalTests, 10);').replace(new, b'+  assert.equal(report.python.additionalTests, 11);')
-          pathlib.Path('/tmp/r3-content-integration/input.patch').write_bytes(patch)
+          import json, os, pathlib, urllib.request, urllib.error
+          root = 'https://api.github.com/repos/yongkyuns/noon'
+          expected = 'e4c2b7ee44416eb328bb42a70e462e1da85eceaf'
+          ids = [34378530142,34378530219,34378530226,34378530283,34378530144,34378530159,34378530177,34378530157,34378530269,34378530244]
+          def api(path, method='GET'):
+              request = urllib.request.Request(root + path, method=method, headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                  'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2026-03-10'})
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  data = response.read()
+                  return response.status, json.loads(data) if data else None
+          _, pr = api('/pulls/1355')
+          assert pr['state'] == 'open' and pr['head']['sha'] == expected, 'PR moved; refuse stale approval'
+          results = []
+          try:
+              for run_id in ids:
+                  _, run = api('/actions/runs/' + str(run_id))
+                  assert run['head_sha'] == expected and run['event'] == 'pull_request'
+                  assert any(p['number'] == 1355 for p in run['pull_requests'])
+                  row = {'id': run_id, 'name': run['name'], 'head': run['head_sha'], 'before': run['conclusion']}
+                  results.append(row)
+                  if run['conclusion'] == 'action_required':
+                      try:
+                          status, body = api('/actions/runs/' + str(run_id) + '/approve', 'POST')
+                          row.update(approval_status=status, response=body)
+                          assert status == 201
+                      except urllib.error.HTTPError as error:
+                          row.update(approval_status=error.code, response=error.read().decode())
+                          raise
+                  else:
+                      row['action'] = 'already resolved; not rerun'
+                  print(json.dumps(row), flush=True)
+          finally:
+              pathlib.Path('/tmp/r3-resume/approvals.json').write_text(json.dumps(results, indent=2))
           PY
-          base=b9d6c4cbd82a6333551663358946294538cc3842
-          parent=74afb348d23c378f9ee827f5015b9095d6c573dd
-          test "$(git rev-parse refs/remotes/origin/codex/1292-r3-content-query)" = "$parent"
-          git checkout --detach "$base"
-          git archive --format=tar.gz HEAD > /tmp/r3-content-integration/base-source.tar.gz
-          git apply --index /tmp/r3-content-integration/input.patch
-          git diff --cached --check
-          test "$(git diff --cached --name-only | wc -l)" -eq 5
-          node --check scripts/typed-authoring-errors-smoke.mjs
-          git config user.name 'Yongkyun Shin'
-          git config user.email '4311628+yongkyuns@users.noreply.github.com'
-          tree=$(git write-tree)
-          candidate=$(git commit-tree "$tree" -p "$parent" -p "$base" -m 'fix: reconcile content/query boundary tests with current master')
-          git reset --hard "$candidate"
-          git rev-parse HEAD HEAD^{tree} > /tmp/r3-content-integration/revisions.txt
-          echo "$base" > /tmp/r3-content-integration/base.txt
-          git diff "$base" HEAD > /tmp/r3-content-integration/product.patch
-          git archive --format=tar.gz HEAD > /tmp/r3-content-integration/source.tar.gz
-      - name: Complete Python suite on the actual combined source
-        run: |
-          set -o pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s web/python -p 'test_*.py' 2>&1 | tee /tmp/r3-content-integration/python.log
-      - name: Publish integrated draft for normal exact-event native and WASM checks
-        run: |
-          set -o pipefail
-          if git push origin HEAD:refs/heads/codex/1292-r3-content-query 2>&1 | tee /tmp/r3-content-integration/publication.log; then
-            echo pushed > /tmp/r3-content-integration/publication-status.txt
-          else
-            echo 'Not published; connector publication of the recorded commit is required.' > /tmp/r3-content-integration/publication-status.txt
-          fi
-      - name: Retain final source state
+      - uses: actions/checkout@v7
         if: always()
+        with:
+          ref: 5b56124312657c0959e1ca3936930cad0fe7e240
+          fetch-depth: 0
+      - name: Retain exact master and ownership handoffs without building
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git status --short > /tmp/r3-content-integration/status.txt
-          git rev-parse HEAD > /tmp/r3-content-integration/final-head.txt
+          git rev-parse HEAD HEAD^{tree} > /tmp/r3-resume/master-revisions.txt
+          git archive --format=tar.gz HEAD > /tmp/r3-resume/master-source.tar.gz
+          git diff --stat e4c2b7ee44416eb328bb42a70e462e1da85eceaf...HEAD > /tmp/r3-resume/master-delta-stat.txt
+          git diff e4c2b7ee44416eb328bb42a70e462e1da85eceaf...HEAD -- crates/noon-web web/python scripts/typed-authoring-errors-smoke.mjs > /tmp/r3-resume/master-relevant.patch
+          for pr in 1350 1354 1355; do
+            gh api repos/yongkyuns/noon/pulls/$pr > /tmp/r3-resume/pr-$pr.json
+            gh api --paginate repos/yongkyuns/noon/issues/$pr/comments > /tmp/r3-resume/comments-$pr.json
+          done
+          gh api --paginate repos/yongkyuns/noon/issues/1292/comments > /tmp/r3-resume/comments-1292.json
+          git status --short > /tmp/r3-resume/status.txt
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r3-content-current-master
-          path: /tmp/r3-content-integration
+          name: r3-1355-approval-and-source
+          path: /tmp/r3-resume
           retention-days: 7
