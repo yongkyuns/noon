@@ -284,6 +284,8 @@ pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable)
     assert_eq!(source.stroke_opacity()?, 0.75);
     scene.add(&source).map_err(|error| error.to_string())?;
 
+    let nested = scene.family(&[(&source).into()])?;
+    let family = scene.family(&[(&nested).into(), (&source).into()])?;
     let mut target = source.target_editor()?;
     target.set_translation(2.0, 0.0)?;
     let animation = scene.declare_transform_to(
@@ -303,7 +305,7 @@ pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable)
             .set_target_style(style)
             .map_err(|error| std::io::Error::other(error.to_string()))
     })?;
-    callbacks.insert(FILL_AND_COMPOSITE_OPACITY, |context| {
+    callbacks.insert(FILL_AND_COMPOSITE_OPACITY, move |context| {
         let before = context.target_state().style;
         let expected_fill_alpha = if context.time() == 0.0 { 0.25 } else { 0.4 };
         if before.fill.map(|color| color.alpha) != Some(expected_fill_alpha)
@@ -313,9 +315,16 @@ pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable)
                 "ordered paint callback did not observe preserved layer alpha",
             ));
         }
-        let mut style = context
-            .target_style_with_fill_opacity(0.4)
+        context
+            .paint_family(
+                &family,
+                crate::FamilyPaint::Fill {
+                    color: None,
+                    opacity: Some(0.4),
+                },
+            )
             .map_err(std::io::Error::other)?;
+        let mut style = context.target_state().style;
         style.opacity = 0.5;
         context
             .set_target_style(style)
@@ -1373,6 +1382,16 @@ pub fn ordinary_callback_sparse_reads_program() -> Result<
         .value_tracker(0.0)
         .map_err(|error| error.to_string())?;
 
+    let nested = scene
+        .family(&[(&circle).into(), (&anchor).into()])
+        .map_err(|error| error.to_string())?;
+    let family = scene
+        .family(&[(&nested).into(), (&circle).into()])
+        .map_err(|error| error.to_string())?;
+    let missing = scene.circle(0.1).map_err(|error| error.to_string())?;
+    let invalid_family = scene
+        .family(&[(&circle).into(), (&missing).into()])
+        .map_err(|error| error.to_string())?;
     let tracker_id = tracker.node_id();
     let anchor_id = anchor.node_id();
     let mut observed_phase_times = Vec::new();
@@ -1386,6 +1405,32 @@ pub fn ordinary_callback_sparse_reads_program() -> Result<
                 )));
             }
             observed_phase_times.push(context.time());
+            context
+                .paint_family(
+                    &family,
+                    crate::FamilyPaint::Fill {
+                        color: None,
+                        opacity: Some(0.6),
+                    },
+                )
+                .map_err(|error| SparseReadExampleError(error.to_string()))?;
+            context
+                .paint_family(
+                    &family,
+                    crate::FamilyPaint::Color(Color::rgba(0.0, 0.4, 1.0, 0.9)),
+                )
+                .map_err(|error| SparseReadExampleError(error.to_string()))?;
+            assert!((context.target_state().style.fill.unwrap().alpha - 0.6).abs() < 1e-6);
+            assert!(context
+                .paint_family(
+                    &invalid_family,
+                    crate::FamilyPaint::Fill {
+                        color: None,
+                        opacity: Some(0.1)
+                    }
+                )
+                .is_err());
+            assert!((context.target_state().style.fill.unwrap().alpha - 0.6).abs() < 1e-6);
             let scalar = context
                 .scalar_signal(tracker_id)
                 .map_err(|error| SparseReadExampleError(error.to_string()))?;

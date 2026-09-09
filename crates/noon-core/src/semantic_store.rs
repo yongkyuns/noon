@@ -26,6 +26,9 @@ impl std::hash::Hash for SemanticStoreIdentity {
     }
 }
 
+mod family_member_order;
+use family_member_order::MemberOrderLink;
+
 mod semantic_scene_operations;
 pub use semantic_scene_operations::*;
 
@@ -135,22 +138,40 @@ enum SemanticSceneMembership {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug)]
 struct FamilyMemberLink {
     previous: Option<SemanticNodeId>,
     next: Option<SemanticNodeId>,
+    order: MemberOrderLink,
 }
 
-/// Ordered family membership with local lookup/add/remove/reorder.
+/// Ordered family membership with O(1) identity/neighbor lookup and O(log n) edits.
+/// Balanced rank metadata supports local order comparison without sibling scans.
 ///
 /// The hash map is identity lookup only; deterministic semantic order follows
 /// the private previous/next links from `head` to `tail`.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default)]
 struct OrderedFamilyMembers {
     head: Option<SemanticNodeId>,
     tail: Option<SemanticNodeId>,
     links: HashMap<SemanticNodeId, FamilyMemberLink>,
+    order_root: Option<SemanticNodeId>,
 }
+
+impl PartialEq for OrderedFamilyMembers {
+    fn eq(&self, other: &Self) -> bool {
+        self.head == other.head
+            && self.tail == other.tail
+            && self.links.len() == other.links.len()
+            && self.links.iter().all(|(id, link)| {
+                other
+                    .links
+                    .get(id)
+                    .is_some_and(|other| link.previous == other.previous && link.next == other.next)
+            })
+    }
+}
+impl Eq for OrderedFamilyMembers {}
 
 impl OrderedFamilyMembers {
     fn contains(&self, member: SemanticNodeId) -> bool {
@@ -176,16 +197,20 @@ impl OrderedFamilyMembers {
             FamilyMemberLink {
                 previous,
                 next: None,
+                order: MemberOrderLink::default(),
             },
         );
+        self.order_insert(member, None);
         self.tail = Some(member);
         true
     }
 
     fn remove(&mut self, member: SemanticNodeId) -> bool {
-        let Some(link) = self.links.remove(&member) else {
+        let Some(link) = self.links.get(&member).copied() else {
             return false;
         };
+        self.order_remove(member);
+        self.links.remove(&member);
         if let Some(previous_id) = link.previous {
             self.links
                 .get_mut(&previous_id)
@@ -212,7 +237,7 @@ impl OrderedFamilyMembers {
     }
 
     /// Move an existing member immediately before `before`, or to the tail when
-    /// `before` is `None`. All link lookup and rewiring is O(1).
+    /// `before` is `None`. Neighbor rewiring is O(1); rank maintenance is O(log n).
     fn move_before(&mut self, member: SemanticNodeId, before: Option<SemanticNodeId>) -> bool {
         let link = *self
             .links
@@ -225,6 +250,7 @@ impl OrderedFamilyMembers {
             return false;
         }
 
+        self.order_remove(member);
         // Detach the member without changing membership identity.
         if let Some(previous_id) = link.previous {
             self.links
@@ -274,8 +300,12 @@ impl OrderedFamilyMembers {
         *self
             .links
             .get_mut(&member)
-            .expect("family reorder member link must remain present") =
-            FamilyMemberLink { previous, next };
+            .expect("family reorder member link must remain present") = FamilyMemberLink {
+            previous,
+            next,
+            order: MemberOrderLink::default(),
+        };
+        self.order_insert(member, before);
         true
     }
 
@@ -416,6 +446,11 @@ impl SemanticNode {
         self.members.head
     }
 
+    /// Return the last member without traversing or allocating sibling order.
+    pub fn last_member(&self) -> Option<SemanticNodeId> {
+        self.members.tail
+    }
+
     /// Direct successor of `member`, resolved without scanning siblings.
     pub fn next_member(&self, member: SemanticNodeId) -> Option<SemanticNodeId> {
         self.members.links.get(&member).and_then(|link| link.next)
@@ -427,6 +462,22 @@ impl SemanticNode {
             .links
             .get(&member)
             .and_then(|link| link.previous)
+    }
+
+    /// Compare two direct members in authored order in O(log member_count).
+    /// Returns `None` when either identity is not a current direct member.
+    /// Neighbor links remain the order authority; balanced rank metadata avoids
+    /// traversing unrelated siblings during compiler alias preparation.
+    pub fn compare_members(
+        &self,
+        left: SemanticNodeId,
+        right: SemanticNodeId,
+    ) -> Option<std::cmp::Ordering> {
+        Some(
+            self.members
+                .order_rank(left)?
+                .cmp(&self.members.order_rank(right)?),
+        )
     }
 
     /// Whether `member` is a direct member of this family.

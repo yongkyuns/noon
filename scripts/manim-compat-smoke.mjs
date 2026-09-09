@@ -475,7 +475,9 @@ try {
       try {
         contexts[0].returnExecutionPlayer(players[index]);
       } catch (error) {
-        if (!(error instanceof wasm.WasmExecutionPlayerReturnError)) throw error;
+        if (!(error instanceof Error) || error.noonErrorVersion !== 1 ||
+            error.category !== "ownership" || error.code !== "ownership.foreign_scene" ||
+            typeof error.takePlayer !== "function") throw error;
         messages.push(error.message);
         players[index] = error.takePlayer();
         rejected = true;
@@ -496,7 +498,7 @@ try {
   assert.deepEqual(playerOwnership.afterReturns, ["returned", "returned", "returned"]);
   assert.deepEqual(playerOwnership.sessions, [41, 41, 41]);
   assert.equal(playerOwnership.messages.length, 2);
-  assert.ok(playerOwnership.messages.every(message => message.includes("another authoring scene")));
+  assert.ok(playerOwnership.messages.every(message => typeof message === "string" && message.length > 0));
 
   const foundation = await page.evaluate(
     (pythonSource) => window.noonManimCompat.runLive(pythonSource),

@@ -2036,8 +2036,12 @@ async function directOrdinaryCallbackSparseReadsProof(expectedBackend) {
     throw new Error(`direct sparse-read lifecycle is invalid ${JSON.stringify(metrics)}`);
   }
   for (const [label, color] of Object.entries({ initialRead, midpoint, persistentHold, anchor })) {
-    if (color.blue < 180 || color.green < 60) {
-      throw new Error(`direct sparse-read ${label} is not visibly blue: ${JSON.stringify(metrics)}`);
+    // Both leaves have shared fill alpha 0.6. At the initial anchor they
+    // overlap: 1 - (1 - 0.6)^2 = 0.84. Later samples contain one leaf.
+    const expectedBlue = 255 * (label === "initialRead" ? 0.84 : 0.6);
+    if (Math.abs(color.blue - expectedBlue) > 16 ||
+        Math.abs(color.green - expectedBlue * 0.4) > 16 || color.red > 16) {
+      throw new Error(`direct sparse-read ${label} lost shared paint alpha: ${JSON.stringify(metrics)}`);
     }
   }
   return metrics;

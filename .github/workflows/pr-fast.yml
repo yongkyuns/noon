@@ -191,6 +191,9 @@ jobs:
           echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
           exit "$status"
 
+      - name: Check typed WASM/Python error boundary
+        run: node scripts/typed-authoring-errors-smoke.mjs
+
       - name: Check Manim-style authoring
         id: manim-authoring
         run: |

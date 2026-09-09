@@ -4,7 +4,8 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { measure, prepare, sourceSha, stamp, trustedWriter,
+import { productConfig } from "./product-artifact.mjs";
+import { measure, prepare, prepareArtifact, sourceSha, stamp, trustedWriter,
   validateEnvironment, verify } from "./wasm-build.mjs";
 
 const env = { RUNNER_OS: "Linux", RUNNER_ARCH: "X64" };
@@ -191,4 +192,24 @@ test("dirty tracked source cannot be labeled as the HEAD artifact", async (t) =>
   await assert.rejects(prepare(root, env, compiler), /tracked checkout was modified/);
   await assert.rejects(stamp(root, identity, env), /tracked checkout was modified/);
   await assert.rejects(verify(root, env), /tracked checkout was modified/);
+});
+
+for (const role of ["baseline", "candidate"]) {
+  test(`${role} product package verifies the release role and exact event source`, async (t) => {
+    const { root, git } = await fixture(t);
+    const expected = { ...env, GITHUB_SHA: git("rev-parse", "HEAD") };
+    const build = productConfig(role);
+    const identity = await prepareArtifact(root, expected, compiler, build);
+    const manifest = await stamp(root, identity, expected, build);
+    assert.deepEqual(await verify(root, expected, build), manifest);
+    assert.equal(manifest.build.profile, "release");
+    // Default dev artifacts and the other release feature set cannot substitute.
+    await assert.rejects(verify(root, expected), /configuration mismatch/);
+    await assert.rejects(verify(root, expected, productConfig(role === "baseline" ? "candidate" : "baseline")), /configuration mismatch/);
+    await assert.rejects(verify(root, { ...expected, GITHUB_SHA: "f".repeat(40) }, build), /checkout differs/);
+  });
+}
+
+test("unknown product roles cannot select a default build", () => {
+  assert.throws(() => productConfig("other"), /invalid product artifact role/);
 });

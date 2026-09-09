@@ -7,7 +7,7 @@ restarted to fill either row.
 """
 
 import _manim_updaters
-from noon import Circle, Color, Scene, ValueTracker, linear
+from noon import Circle, Color, Scene, ValueTracker, VGroup, linear
 
 
 class OrdinaryCallbackSparseReads(Scene):
@@ -18,6 +18,8 @@ class OrdinaryCallbackSparseReads(Scene):
             .shift((-1.0, 1.0, 0.0))
         )
         circle = Circle(radius=0.4).set_fill(Color(0.0, 0.4, 1.0), opacity=1.0)
+        family = VGroup(VGroup(circle, anchor), circle)
+        invalid_family = VGroup(circle, Circle(radius=0.1))
         tracker = ValueTracker(0.0)
         phase_counts: dict[float, int] = {}
 
@@ -25,6 +27,19 @@ class OrdinaryCallbackSparseReads(Scene):
             phase_time = _manim_updaters._canonical_callback_time(mobject)
             phase_counts[phase_time] = phase_counts.get(phase_time, 0) + 1
             assert phase_counts[phase_time] == 1
+            # One Rust-selected family read fetches the missing anchor row.
+            # Recolor must observe the preceding family alpha edit, not authored alpha.
+            family.set_fill(opacity=0.6)
+            family.set_color(Color(0.0, 0.4, 1.0, 0.9))
+            assert abs(anchor.get_fill_opacity() - 0.6) < 1e-6
+            assert abs(mobject.get_fill_opacity() - 0.6) < 1e-6
+            try:
+                invalid_family.set_fill(opacity=0.1)
+            except RuntimeError:
+                pass  # The detached final member cannot be read from this phase.
+            else:
+                raise AssertionError("family paint accepted a non-live member")
+            assert abs(mobject.get_fill_opacity() - 0.6) < 1e-6
             anchor_center = anchor.get_center()
             mobject.move_to((anchor_center.x + tracker.get_value(), anchor_center.y, 0.0))
 

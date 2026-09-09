@@ -198,3 +198,20 @@ The output never automatically approves a PR or claims a percentage speedup.
 Representative cold/warm Rust/frontend/mixed trials, end-to-end comparison across
 all required workflows, seed eviction/freshness, build-once producer consolidation,
 and a measured tool-image decision remain separate #1265 acceptance work.
+
+### Product measurement retries
+
+`playground-product-gate.yml` builds the baseline and candidate release packages
+in one producer, preserving the job-local compiler cache between fresh source
+builds. Its measurement job downloads the producer's immutable artifact IDs and
+verifies each checkout SHA, release feature set, compiler pin, resolved lockfile,
+and runtime-file hashes using the shared WASM artifact contract. The candidate is
+GitHub's tested PR merge commit; the baseline is the event's base SHA.
+
+After a measurement failure, rerun the failed measurement job to reuse those
+packages without rebuilding Rust. Re-running all jobs builds new packages. Keep
+both package artifacts for the 14-day evidence window; after they expire, rerun
+the full workflow. Measurement artifacts include the attempt number, so a retry
+does not overwrite the original failure. All existing smokes, comparison
+thresholds, and the required comparison check name remain in place. A failed
+producer also fails that required check.

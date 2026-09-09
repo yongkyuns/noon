@@ -42,6 +42,10 @@ pub(crate) trait PaintStyleEdit {
     fn set_fill_color(&mut self, color: Color, opacity_when_enabled: f64);
     fn set_stroke_color(&mut self, color: Color, opacity_when_enabled: f64);
     fn set_fill_opacity(&mut self, opacity: f64);
+    fn disable_fill(&mut self);
+    fn disable_stroke(&mut self);
+    fn set_stroke_opacity(&mut self, opacity: f64);
+    fn set_stroke_width(&mut self, width: f64);
 }
 
 // A captured effective solid paint can carry alpha in its color as well as
@@ -98,6 +102,18 @@ impl PaintStyleEdit for SemanticStyle {
     fn set_fill_opacity(&mut self, opacity: f64) {
         set_paint_opacity(&mut self.fill, &mut self.fill_opacity, opacity);
     }
+    fn disable_fill(&mut self) {
+        self.fill = None;
+    }
+    fn disable_stroke(&mut self) {
+        self.stroke = None;
+    }
+    fn set_stroke_opacity(&mut self, opacity: f64) {
+        set_paint_opacity(&mut self.stroke, &mut self.stroke_opacity, opacity);
+    }
+    fn set_stroke_width(&mut self, width: f64) {
+        self.stroke_width = width;
+    }
 }
 
 impl PaintStyleEdit for Style {
@@ -128,6 +144,21 @@ impl PaintStyleEdit for Style {
             alpha: opacity as f32,
             ..self.fill.unwrap_or(Color::WHITE)
         });
+    }
+    fn disable_fill(&mut self) {
+        self.fill = None;
+    }
+    fn disable_stroke(&mut self) {
+        self.stroke = None;
+    }
+    fn set_stroke_opacity(&mut self, opacity: f64) {
+        self.stroke = Some(Color {
+            alpha: opacity as f32,
+            ..self.stroke.unwrap_or(Color::WHITE)
+        });
+    }
+    fn set_stroke_width(&mut self, width: f64) {
+        self.stroke_width = width as f32;
     }
 }
 
@@ -162,8 +193,8 @@ pub(crate) fn edit_color<S: PaintStyleEdit>(
     Ok(())
 }
 
-pub(crate) fn edit_disable_fill(style: &mut SemanticStyle) {
-    style.fill = None;
+pub(crate) fn edit_disable_fill<S: PaintStyleEdit>(style: &mut S) {
+    style.disable_fill();
 }
 
 pub(crate) fn edit_fill_color<S: PaintStyleEdit>(
@@ -202,22 +233,22 @@ pub(crate) fn edit_fill<S: PaintStyleEdit>(
     Ok(())
 }
 
-pub(crate) fn edit_manim_opacity(
-    style: &mut SemanticStyle,
+pub(crate) fn edit_manim_opacity<S: PaintStyleEdit>(
+    style: &mut S,
     opacity: f64,
 ) -> Result<(), AuthoringError> {
     let opacity = unit_opacity("opacity", opacity)?;
-    if style.fill.is_some() {
-        set_paint_opacity(&mut style.fill, &mut style.fill_opacity, opacity);
+    if style.has_fill() {
+        style.set_fill_opacity(opacity);
     }
-    if style.stroke.is_some() {
-        set_paint_opacity(&mut style.stroke, &mut style.stroke_opacity, opacity);
+    if style.has_stroke() {
+        style.set_stroke_opacity(opacity);
     }
     Ok(())
 }
 
-pub(crate) fn edit_disable_stroke(style: &mut SemanticStyle) {
-    style.stroke = None;
+pub(crate) fn edit_disable_stroke<S: PaintStyleEdit>(style: &mut S) {
+    style.disable_stroke();
 }
 
 pub(crate) fn edit_stroke_color<S: PaintStyleEdit>(
@@ -233,12 +264,12 @@ pub(crate) fn edit_stroke_color<S: PaintStyleEdit>(
     Ok(())
 }
 
-pub(crate) fn edit_stroke_opacity(
-    style: &mut SemanticStyle,
+pub(crate) fn edit_stroke_opacity<S: PaintStyleEdit>(
+    style: &mut S,
     opacity: f64,
 ) -> Result<(), AuthoringError> {
     let opacity = unit_opacity("stroke opacity", opacity)?;
-    set_paint_opacity(&mut style.stroke, &mut style.stroke_opacity, opacity);
+    style.set_stroke_opacity(opacity);
     Ok(())
 }
 
@@ -256,18 +287,17 @@ pub(crate) fn edit_stroke(
     Ok(())
 }
 
-pub(crate) fn edit_stroke_width(
-    style: &mut SemanticStyle,
+pub(crate) fn edit_stroke_width<S: PaintStyleEdit>(
+    style: &mut S,
     width: f64,
 ) -> Result<(), AuthoringError> {
     let width = authoring_render_f64("stroke width", width)?;
     if width < 0.0 {
         return Err(AuthoringError::NegativeStrokeWidth(width));
     }
-    style.stroke_width = width;
-    if style.stroke.is_none() {
-        style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
-        style.stroke_opacity = 1.0;
+    style.set_stroke_width(width);
+    if !style.has_stroke() {
+        style.set_stroke_color(Color::WHITE, 1.0);
     }
     Ok(())
 }

@@ -10,6 +10,19 @@ import math
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
+from _noon_errors import (
+    NoonError,
+    NoonErrorCause,
+    NoonValueError,
+    NoonForeignHandleError,
+    NoonStaleHandleError,
+    NoonMissingResourceError,
+    NoonUnsupportedError,
+    NoonPendingError,
+    NoonStalePublicationError,
+    NoonCallbackError,
+    NoonOwnershipError,
+)
 import _noon_ir as _ir
 
 VectorPath = _ir.VectorPath
@@ -810,6 +823,18 @@ def __dir__():
 
 
 __all__ = [
+    "NoonError",
+    "NoonErrorCause",
+    "NoonValueError",
+    "NoonForeignHandleError",
+    "NoonStaleHandleError",
+    "NoonMissingResourceError",
+    "NoonUnsupportedError",
+    "NoonPendingError",
+    "NoonStalePublicationError",
+    "NoonCallbackError",
+    "NoonOwnershipError",
+
     "BLACK",
     "BLUE",
     "BLUE_A",

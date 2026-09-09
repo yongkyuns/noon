@@ -470,3 +470,70 @@ fn rejection_retains_previously_queued_changes_and_local_recovery() -> TestResul
     assert_eq!(session.take_frame_changes().object_indices(), &[1]);
     Ok(())
 }
+
+#[test]
+fn callback_family_invalid_paint_retains_shared_cause_before_reads_and_recovers() -> TestResult {
+    use noon::{FamilyCallbackPaintError, FamilyPaint, Style};
+
+    let scene = Scene::new();
+    let first = scene.circle(0.5)?;
+    let second = scene.square(0.5)?;
+    let nested = scene.family(&[(&first).into(), (&second).into()])?;
+    let family = scene.family(&[(&nested).into(), (&first).into()])?;
+    let before = snapshot(&scene, &[&first, &second]);
+    let revision = scene.revision();
+    let mut reads = Vec::new();
+    let error = family
+        .prepare_callback_paint(
+            revision,
+            FamilyPaint::Fill {
+                color: None,
+                opacity: Some(1.5),
+            },
+            |node| {
+                reads.push(node);
+                Ok(Style::default())
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(
+        &error,
+        FamilyCallbackPaintError::InvalidPaint(AuthoringError::InvalidOpacity { value: 1.5, .. })
+    ));
+    let cause = error
+        .source()
+        .unwrap()
+        .downcast_ref::<AuthoringError>()
+        .unwrap();
+    assert!(matches!(
+        cause,
+        AuthoringError::InvalidOpacity { value: 1.5, .. }
+    ));
+    assert!(cause.source().is_none());
+    assert!(
+        reads.is_empty(),
+        "invalid paint must be rejected before effective reads"
+    );
+    assert_eq!(snapshot(&scene, &[&first, &second]), before);
+
+    let changes = family.prepare_callback_paint(
+        revision,
+        FamilyPaint::Fill {
+            color: None,
+            opacity: Some(0.5),
+        },
+        |node| {
+            reads.push(node);
+            Ok(Style::default())
+        },
+    )?;
+    assert_eq!(reads, [first.node_id(), second.node_id()]);
+    assert_eq!(changes.len(), 2);
+    for (_, style) in changes {
+        assert_eq!(style.fill.unwrap().alpha, 0.5);
+    }
+    // Preparation returns an effective write batch; even recovery is not an
+    // authored edit and must not change membership, resources or scene revision.
+    assert_eq!(snapshot(&scene, &[&first, &second]), before);
+    Ok(())
+}

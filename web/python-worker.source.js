@@ -353,7 +353,7 @@ function parseContinuationCallbackReadRequest(requestJson) {
   }
   if (!isRecord(request) ||
       !Number.isSafeInteger(request.request_id) || request.request_id < 0 ||
-      !["scalar_signal", "object"].includes(request.kind) || !isRecord(request.node) ||
+      !["scalar_signal", "object", "family"].includes(request.kind) || !isRecord(request.node) ||
       !Number.isSafeInteger(request.node.slot) || request.node.slot < 0 || request.node.slot > 0xffffffff ||
       !Number.isSafeInteger(request.node.generation) || request.node.generation < 0 || request.node.generation > 0xffffffff) {
     throw new TypeError("canonical callback read request must contain a request ID, typed kind, and semantic node");

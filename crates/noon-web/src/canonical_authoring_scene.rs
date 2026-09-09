@@ -1,11 +1,16 @@
+use crate::authoring_error::AuthoringFailure;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod player_ownership;
 #[cfg(any(target_arch = "wasm32", test))]
-use player_ownership::{PlayerOwnership, PlayerReturnError, RejectedPlayerReturn};
+pub(crate) use player_ownership::PlayerReturnError;
+#[cfg(any(target_arch = "wasm32", test))]
+use player_ownership::{PlayerOwnership, RejectedPlayerReturn};
 #[cfg(test)]
 mod ownership_tests;
+#[cfg(test)]
+mod wait_bootstrap_tests;
 
 use noon_core::ObjectId;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -249,7 +254,11 @@ impl CanonicalAuthoringScene {
         }
     }
 
-    pub fn bind_mobject(&mut self, id: ObjectId, handle: &noon::Mobject) -> Result<(), String> {
+    pub fn bind_mobject(
+        &mut self,
+        id: ObjectId,
+        handle: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
         self.edit_membership(SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
             members: vec![OwnedSceneMembershipMember::Mobject {
@@ -802,7 +811,7 @@ impl CanonicalAuthoringScene {
     /// the first operation in an empty scene. Pre-execution scalar declaration
     /// keeps using the explicit `authored_wait` entry point.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn ordinary_wait(&mut self, duration: f64) -> Result<f64, String> {
+    fn ordinary_wait(&mut self, duration: f64) -> Result<f64, AuthoringFailure> {
         if self.player_ownership.local().is_some()
             && self.active_live_player()?.has_required_callbacks()
         {
@@ -817,7 +826,7 @@ impl CanonicalAuthoringScene {
         player.live_complete_segment()?;
         player
             .live_handoff_duration()
-            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
+            .ok_or_else(|| AuthoringFailure::from("live execution player has no handoff duration"))
     }
 
     /// Begin one ordinary wait without advancing it.
@@ -825,7 +834,7 @@ impl CanonicalAuthoringScene {
     /// This exists for the async worker continuation path. The returned endpoint is derived
     /// from the player-owned segment; no Python or JavaScript cursor is created.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn begin_ordinary_wait(&mut self, duration: f64) -> Result<f64, String> {
+    fn begin_ordinary_wait(&mut self, duration: f64) -> Result<f64, AuthoringFailure> {
         if self.player_ownership.is_unstarted() {
             if self.scene.time() != 0.0 {
                 return Err(
@@ -835,7 +844,12 @@ impl CanonicalAuthoringScene {
             }
             // A wait has no animation extent, but the presentation clock still needs a
             // positive valid range before its session-derived deadline replaces it.
-            self.live_player(duration.max(1.0))?;
+            let mut player = self.build_live_player(duration.max(1.0), 0)?;
+            let end_time = player.live_wait(duration)?;
+            // Shared admission is fallible. Publish the first runtime only once
+            // it owns a valid segment; rejection leaves this context unstarted.
+            self.player_ownership = PlayerOwnership::Active(player);
+            return Ok(end_time);
         }
         let player = self.active_live_player()?;
         player.live_wait(duration)
@@ -870,11 +884,11 @@ impl CanonicalAuthoringScene {
     /// This lets Python update only its derived wrapper attachment after a completed
     /// FadeOut without storing lifecycle state or adding metadata to the player receipt.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_contains_mobject(&mut self, target: &noon::Mobject) -> Result<bool, String> {
+    fn live_contains_mobject(&mut self, target: &noon::Mobject) -> Result<bool, AuthoringFailure> {
         if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
-            return Err("mobject belongs to another authoring store".into());
+            return Err(noon::AuthoringError::ForeignStore.into());
         }
-        target.validate().map_err(|error| error.to_string())?;
+        target.validate().map_err(AuthoringFailure::from)?;
         if !self.identities.contains_key(&target.node_id()) {
             return Err("live Mobject is not bound to this canonical Scene".into());
         }
@@ -910,7 +924,9 @@ impl CanonicalAuthoringScene {
         let end = self.begin_ordinary_affine_lifecycle(id, target, direction, endpoint, options)?;
         let player = self.active_live_player()?;
         player.live_advance_segment_to(end)?;
-        player.live_complete_segment()?;
+        player
+            .live_complete_segment()
+            .map_err(|error| error.to_string())?;
         player
             .live_handoff_duration()
             .ok_or_else(|| "live execution player has no handoff duration".to_owned())
@@ -971,7 +987,9 @@ impl CanonicalAuthoringScene {
         )?;
         let player = self.active_live_player()?;
         player.live_advance_segment_to(end)?;
-        player.live_complete_segment()?;
+        player
+            .live_complete_segment()
+            .map_err(|error| error.to_string())?;
         player
             .live_handoff_duration()
             .ok_or_else(|| "live execution player has no handoff duration".into())
@@ -1832,7 +1850,9 @@ impl CanonicalAuthoringScene {
             match entering_id {
                 Some(id) => {
                     let node = target.node_id();
-                    let detached = !self.contains_mobject(target)?;
+                    let detached = !self
+                        .contains_mobject(target)
+                        .map_err(|error| error.to_string())?;
                     let binding_available =
                         match (self.bindings.get(&id), self.identities.get(&node)) {
                             (None, None) => detached,
@@ -2033,7 +2053,11 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_add_mobject(&mut self, id: ObjectId, handle: &noon::Mobject) -> Result<(), String> {
+    fn live_add_mobject(
+        &mut self,
+        id: ObjectId,
+        handle: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
         self.edit_membership(SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
             members: vec![OwnedSceneMembershipMember::Mobject {
@@ -2044,18 +2068,23 @@ impl CanonicalAuthoringScene {
         })
     }
 
-    fn edit_membership(&mut self, batch: SceneMembershipBatch) -> Result<(), String> {
+    fn edit_membership(&mut self, batch: SceneMembershipBatch) -> Result<(), AuthoringFailure> {
         let mut new_bindings = Vec::new();
         let mut seen_ids = BTreeSet::new();
         let mut seen_nodes = BTreeSet::new();
         for (wrapper_id, handle) in &batch.bindings {
             if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
-                return Err("membership mobject belongs to another authoring store".into());
+                return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                    .with_message("membership mobject belongs to another authoring store"));
             }
-            handle.validate().map_err(|error| error.to_string())?;
+            handle.validate().map_err(AuthoringFailure::from)?;
             let node = handle.node_id();
             if !seen_ids.insert(*wrapper_id) || !seen_nodes.insert(node) {
-                return Err("membership batch contains a duplicate mobject binding".into());
+                return Err(AuthoringFailure::new(
+                    "invalid_input",
+                    "boundary.duplicate_binding",
+                    "membership batch contains a duplicate mobject binding",
+                ));
             }
             match (self.bindings.get(wrapper_id), self.identities.get(&node)) {
                 (Some(bound_node), Some(bound_id))
@@ -2072,7 +2101,8 @@ impl CanonicalAuthoringScene {
                     return Err(format!(
                         "canonical object {} has inconsistent membership binding",
                         wrapper_id.get()
-                    ));
+                    )
+                    .into());
                 }
             }
         }
@@ -2084,9 +2114,12 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         handle.integration_store(),
                     ) {
-                        return Err("membership mobject belongs to another authoring store".into());
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "membership mobject belongs to another authoring store",
+                            ));
                     }
-                    handle.validate().map_err(|error| error.to_string())?;
+                    handle.validate().map_err(AuthoringFailure::from)?;
                     let node = handle.node_id();
                     if let Some(wrapper_id) = wrapper_id {
                         if !batch
@@ -2097,13 +2130,18 @@ impl CanonicalAuthoringScene {
                             return Err(format!(
                                 "canonical object {} has no validated membership binding",
                                 wrapper_id.get()
-                            ));
+                            )
+                            .into());
                         }
                     } else if matches!(
                         batch.kind,
                         SceneMembershipBatchKind::Add | SceneMembershipBatchKind::Replace
                     ) {
-                        return Err("added membership mobject has no wrapper binding".into());
+                        return Err(AuthoringFailure::new(
+                            "invalid_input",
+                            "boundary.missing_binding",
+                            "added membership mobject has no wrapper binding",
+                        ));
                     }
                     borrowed.push(noon::MobjectFamilyMember::Mobject(handle));
                 }
@@ -2112,11 +2150,16 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         family.integration_store(),
                     ) {
-                        return Err("membership family belongs to another authoring store".into());
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message("membership family belongs to another authoring store"));
                     }
-                    family.validate().map_err(|error| error.to_string())?;
+                    family.validate().map_err(AuthoringFailure::from)?;
                     if !seen_nodes.insert(family.node_id()) {
-                        return Err("membership batch contains a duplicate family".into());
+                        return Err(AuthoringFailure::new(
+                            "invalid_input",
+                            "boundary.duplicate_family",
+                            "membership batch contains a duplicate family",
+                        ));
                     }
                     borrowed.push(noon::MobjectFamilyMember::Family(family));
                 }
@@ -2127,13 +2170,21 @@ impl CanonicalAuthoringScene {
             SceneMembershipBatchKind::Remove => noon::SceneMembershipRequest::Remove(&borrowed),
             SceneMembershipBatchKind::Clear => {
                 if !borrowed.is_empty() {
-                    return Err("Clear membership batch must not contain members".into());
+                    return Err(AuthoringFailure::new(
+                        "invalid_input",
+                        "boundary.clear_members",
+                        "Clear membership batch must not contain members",
+                    ));
                 }
                 noon::SceneMembershipRequest::Clear
             }
             SceneMembershipBatchKind::Replace => {
                 let [old, new] = borrowed.as_slice() else {
-                    return Err("Replace membership batch requires exactly old and new".into());
+                    return Err(AuthoringFailure::new(
+                        "invalid_input",
+                        "boundary.replace_arity",
+                        "Replace membership batch requires exactly old and new",
+                    ));
                 };
                 noon::SceneMembershipRequest::Replace {
                     old: *old,
@@ -2144,13 +2195,13 @@ impl CanonicalAuthoringScene {
         #[cfg(not(any(target_arch = "wasm32", test)))]
         self.scene
             .edit_membership(request)
-            .map_err(|error| error.to_string())?;
+            .map_err(AuthoringFailure::from)?;
         #[cfg(any(target_arch = "wasm32", test))]
         match &mut self.player_ownership {
             PlayerOwnership::Unstarted if self.scene.time() == 0.0 => {
                 self.scene
                     .edit_membership(request)
-                    .map_err(|error| error.to_string())?;
+                    .map_err(AuthoringFailure::from)?;
             }
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
                 self.active_live_player()?.live_edit_membership(request)?;
@@ -2170,7 +2221,7 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn root_membership_keys(&self) -> Result<Vec<String>, String> {
+    fn root_membership_keys(&self) -> Result<Vec<String>, AuthoringFailure> {
         self.scene
             .integration_store()
             .borrow()
@@ -2181,27 +2232,27 @@ impl CanonicalAuthoringScene {
                     .map(|node| format!("{}:{}", node.slot(), node.generation()))
                     .collect()
             })
-            .map_err(|error| error.to_string())
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn contains_mobject(&self, target: &noon::Mobject) -> Result<bool, String> {
+    fn contains_mobject(&self, target: &noon::Mobject) -> Result<bool, AuthoringFailure> {
         if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
-            return Err("mobject belongs to another authoring store".into());
+            return Err(noon::AuthoringError::ForeignStore.into());
         }
-        target.validate().map_err(|error| error.to_string())?;
+        target.validate().map_err(AuthoringFailure::from)?;
         noon_core::semantic_scene_root_contains(
             &self.scene.integration_store().borrow(),
             self.scene.root(),
             target.node_id(),
         )
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_remove_mobject(&mut self, handle: &noon::Mobject) -> Result<(), String> {
+    fn live_remove_mobject(&mut self, handle: &noon::Mobject) -> Result<(), AuthoringFailure> {
         if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
-            return Err("mobject belongs to another authoring store".into());
+            return Err(noon::AuthoringError::ForeignStore.into());
         }
         let node = handle.node_id();
         let id = *self
@@ -2293,7 +2344,9 @@ impl CanonicalAuthoringScene {
         if !player.has_pending_live_segment() {
             return Err("semantic continuation has no pending segment to resume".into());
         }
-        player.require_callback_progression_available()?;
+        player
+            .require_callback_progression_available()
+            .map_err(|error| error.to_string())?;
         self.player_ownership.transfer()
     }
 
@@ -2304,7 +2357,9 @@ impl CanonicalAuthoringScene {
         let PlayerOwnership::Returned(player) = &mut self.player_ownership else {
             return Err("final publication requires a returned execution player".into());
         };
-        player.require_callback_progression_available()?;
+        player
+            .require_callback_progression_available()
+            .map_err(|error| error.to_string())?;
         if player.has_pending_live_segment() {
             return Err("final publication requires a completed continuation segment".into());
         }
@@ -2342,9 +2397,10 @@ mod wasm {
     use wasm_bindgen::prelude::*;
 
     use super::*;
+    use crate::authoring_error::js_error as typed_js_error;
 
     /// A rejected ownership return retains the consumed WASM player wrapper.
-    /// Catch this value and call `takePlayer()` to recover that exact player;
+    /// Its projected JS Error retains `takePlayer()` to recover that exact player;
     /// returning it to its rightful context requires no lowering or cloning.
     #[wasm_bindgen]
     pub struct WasmExecutionPlayerReturnError {
@@ -2367,6 +2423,27 @@ mod wasm {
         #[wasm_bindgen(js_name = takePlayer)]
         pub fn take_player(self) -> crate::SemanticExecutionPlayer {
             *self.rejected.player
+        }
+    }
+
+    impl WasmExecutionPlayerReturnError {
+        fn into_js_error(self) -> JsValue {
+            // Pyodide requires a real Error, not an Error-like WASM class.
+            // Binding the existing consuming method retains the rejected player
+            // in exactly one Rust owner; no player clone or host lease is added.
+            let error = typed_js_error(AuthoringFailure::from(self.rejected.reason));
+            let rejection = JsValue::from(self);
+            let take_player: js_sys::Function =
+                js_sys::Reflect::get(&rejection, &JsValue::from_str("takePlayer"))
+                    .expect("WASM rejection exposes takePlayer")
+                    .unchecked_into();
+            js_sys::Reflect::set(
+                &error,
+                &JsValue::from_str("takePlayer"),
+                &take_player.bind0(&rejection),
+            )
+            .expect("new Error accepts its recovery capability");
+            error
         }
     }
 
@@ -4011,13 +4088,15 @@ mod wasm {
         /// Consume one complete typed membership request and publish it once.
         #[wasm_bindgen(js_name = editMembership)]
         pub fn edit_membership(&mut self, batch: WasmSceneMembershipBatch) -> Result<(), JsValue> {
-            self.inner.edit_membership(batch.inner).map_err(js_error)
+            self.inner
+                .edit_membership(batch.inner)
+                .map_err(typed_js_error)
         }
 
         /// Return the authoritative direct-root semantic identities in painter order.
         #[wasm_bindgen(js_name = rootMembershipKeys)]
         pub fn root_membership_keys(&self) -> Result<Vec<String>, JsValue> {
-            self.inner.root_membership_keys().map_err(js_error)
+            self.inner.root_membership_keys().map_err(typed_js_error)
         }
 
         /// Query authoritative recursive membership without enumerating the scene.
@@ -4032,7 +4111,7 @@ mod wasm {
             )?;
             self.inner
                 .contains_mobject(target.semantic_mobject())
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         /// Evaluate one callback-local rotation without mutating authored scene state.
@@ -4060,6 +4139,97 @@ mod wasm {
             )
             .map_err(js_error)?;
             Ok(WasmCallbackTransform { transform })
+        }
+
+        /// Resolve a typed family only in this authoring store before a pinned read.
+        #[wasm_bindgen(js_name = callbackFamilyKeys)]
+        pub fn callback_family_keys(
+            &self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            revision: &str,
+        ) -> Result<Vec<String>, JsValue> {
+            let family = handle.semantic_family()?;
+            if !std::rc::Rc::ptr_eq(
+                self.inner.scene.integration_store(),
+                family.integration_store(),
+            ) {
+                return Err(typed_js_error(noon::AuthoringError::ForeignStore));
+            }
+            let revision =
+                noon_core::SceneRevision::new(revision.parse::<u64>().map_err(js_error)?);
+            family
+                .callback_leaf_nodes(revision)
+                .map(|nodes| {
+                    nodes
+                        .into_iter()
+                        .map(|node| format!("{}:{}", node.slot(), node.generation()))
+                        .collect()
+                })
+                .map_err(typed_js_error)
+        }
+
+        /// One callback-boundary projection of an already prepared effective operation.
+        /// Input rows are the pinned read cache plus preceding ordered overlay writes.
+        #[wasm_bindgen(js_name = callbackFamilyPaint)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn callback_family_paint(
+            &self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            revision: &str,
+            operation: &str,
+            styles_json: &str,
+            has_color: bool,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            width: Option<f64>,
+            opacity: Option<f64>,
+        ) -> Result<String, JsValue> {
+            self.callback_family_keys(handle, revision)?;
+            let family = handle.semantic_family()?;
+            let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
+                .map_err(js_error)?;
+            let operation = match operation {
+                "Color" => noon::FamilyPaint::Color(
+                    color.ok_or_else(|| js_error("family color is required"))?,
+                ),
+                "Fill" => noon::FamilyPaint::Fill { color, opacity },
+                "Stroke" => noon::FamilyPaint::Stroke {
+                    color,
+                    width,
+                    opacity,
+                },
+                "Opacity" => noon::FamilyPaint::Opacity(
+                    opacity.ok_or_else(|| js_error("family opacity is required"))?,
+                ),
+                _ => return Err(js_error("unknown family paint operation")),
+            };
+            let revision =
+                noon_core::SceneRevision::new(revision.parse::<u64>().map_err(js_error)?);
+            // This is the existing Python callback view/overlay codec boundary,
+            // never an authored scene or a native/direct-WASM engine boundary.
+            let rows: Vec<(u32, u32, Style)> =
+                serde_json::from_str(styles_json).map_err(js_error)?;
+            let styles: BTreeMap<_, _> = rows
+                .into_iter()
+                .map(|(slot, generation, style)| {
+                    (noon_core::SemanticNodeId::new(slot, generation), style)
+                })
+                .collect();
+            let changes = family
+                .prepare_callback_paint(revision, operation, |node| {
+                    styles
+                        .get(&node)
+                        .copied()
+                        .ok_or(noon::ExecutionSessionCallbackError::UnknownObject(node))
+                })
+                .map_err(typed_js_error)?;
+            let rows: Vec<_> = changes
+                .into_iter()
+                .map(|(node, style)| (node.slot(), node.generation(), style))
+                .collect();
+            serde_json::to_string(&rows).map_err(js_error)
         }
 
         /// Apply shared Manim `set_color` semantics to callback-local paint.
@@ -4254,7 +4424,7 @@ mod wasm {
             let id = parse_object_id("object ID", object_id)?;
             self.inner
                 .bind_mobject(id, handle.semantic_mobject())
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         /// Create the scene-owned invisible 2D camera frame and return its opaque semantic handle.
@@ -4513,13 +4683,15 @@ mod wasm {
 
         #[wasm_bindgen(js_name = ordinaryWait)]
         pub fn ordinary_wait(&mut self, duration: f64) -> Result<f64, JsValue> {
-            self.inner.ordinary_wait(duration).map_err(js_error)
+            self.inner.ordinary_wait(duration).map_err(typed_js_error)
         }
 
         /// Begin one ordinary wait for an async continuation without fast-forwarding it.
         #[wasm_bindgen(js_name = beginOrdinaryWait)]
         pub fn begin_ordinary_wait(&mut self, duration: f64) -> Result<f64, JsValue> {
-            self.inner.begin_ordinary_wait(duration).map_err(js_error)
+            self.inner
+                .begin_ordinary_wait(duration)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = beginOrdinaryCompositionBuilder)]
@@ -5186,7 +5358,7 @@ mod wasm {
             )?;
             self.inner
                 .live_contains_mobject(target.semantic_mobject())
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveTargetEditor)]
@@ -5348,7 +5520,7 @@ mod wasm {
                 .active_live_player()
                 .map_err(js_error)?
                 .live_wait(duration)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveAdvanceSegmentTo)]
@@ -5366,7 +5538,7 @@ mod wasm {
                 .active_live_player()
                 .map_err(js_error)?
                 .live_complete_segment()
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveEvaluate)]
@@ -5406,9 +5578,9 @@ mod wasm {
             )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_set_translation(handle.semantic_mobject(), x, y)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveMoveToLayout)]
@@ -5708,7 +5880,7 @@ mod wasm {
             )?;
             self.inner
                 .live_add_mobject(id, handle.semantic_mobject())
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveRemove)]
@@ -5722,7 +5894,7 @@ mod wasm {
             )?;
             self.inner
                 .live_remove_mobject(handle.semantic_mobject())
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveReplaceContent)]
@@ -5757,9 +5929,9 @@ mod wasm {
             )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_shift(handle.semantic_mobject(), x, y)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         /// Create a complete detached family through the current live publication.
@@ -5986,9 +6158,9 @@ mod wasm {
             )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_set_scale(handle.semantic_mobject(), x, y)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveScale)]
@@ -6021,9 +6193,9 @@ mod wasm {
             )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_set_rotation(handle.semantic_mobject(), angle)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveRotate)]
@@ -6069,7 +6241,7 @@ mod wasm {
         ) -> Result<(), JsValue> {
             self.inner
                 .return_execution_player(player)
-                .map_err(|rejected| WasmExecutionPlayerReturnError { rejected }.into())
+                .map_err(|rejected| WasmExecutionPlayerReturnError { rejected }.into_js_error())
         }
 
         #[wasm_bindgen(js_name = resumeExecutionPlayer)]

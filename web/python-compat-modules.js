@@ -1,4 +1,5 @@
 export const PYTHON_COMPAT_MODULES = Object.freeze([
+  { sourcePath: "python/_noon_errors.py", runtimePath: "/tmp/_noon_errors.py", label: "Noon shared error projection" },
   { sourcePath: "python/noon.py", runtimePath: "/tmp/noon.py", label: "Noon Python API" },
   { sourcePath: "python/_noon_ir.py", runtimePath: "/tmp/_noon_ir.py", label: "Noon Python values and constructor arguments" },
   { sourcePath: "python/_manim_compat.py", runtimePath: "/tmp/_manim_compat.py", label: "Noon Manim compatibility layer" },
