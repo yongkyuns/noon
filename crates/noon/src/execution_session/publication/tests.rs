@@ -1,4 +1,5 @@
 use super::*;
+use noon_compile::semantic_execution_object_id;
 use noon_core::{
     AnimationOptions, RateFunction, SemanticAnimationIntent, SemanticAnimationState,
     SemanticMutationImpact, SemanticNodeCreation, SemanticObjectProperty, SemanticObjectState,
