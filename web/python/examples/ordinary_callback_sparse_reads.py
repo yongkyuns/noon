@@ -7,6 +7,7 @@ restarted to fill either row.
 """
 
 import _manim_updaters
+from _noon_errors import NoonStaleHandleError
 from noon import Circle, Color, Scene, ValueTracker, VGroup, linear
 
 
@@ -35,8 +36,13 @@ class OrdinaryCallbackSparseReads(Scene):
             assert abs(mobject.get_fill_opacity() - 0.6) < 1e-6
             try:
                 invalid_family.set_fill(opacity=0.1)
-            except RuntimeError:
-                pass  # The detached final member cannot be read from this phase.
+            except NoonStaleHandleError as error:
+                assert error.category == "stale_handle"
+                assert error.code == "callback.family.read"
+                assert error.operation == "callback.read"
+                assert error.rust_cause.code == "callback.read"
+                assert error.rust_cause.cause.code == "callback_read.unknown_object"
+                assert error.__cause__ is not None
             else:
                 raise AssertionError("family paint accepted a non-live member")
             assert abs(mobject.get_fill_opacity() - 0.6) < 1e-6

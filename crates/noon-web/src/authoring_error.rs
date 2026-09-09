@@ -9,6 +9,7 @@ use std::error::Error;
 
 use noon::{
     AuthoringError, ExecutionSegmentCompletionError, ExecutionSegmentError,
+    ExecutionSessionCallbackError, ExecutionSessionCallbackReadError,
     ExecutionSessionPublicationError, LiveSessionError,
 };
 use noon_core::{
@@ -80,7 +81,7 @@ impl From<noon::FamilyCallbackPaintError> for AuthoringFailure {
         match error {
             Authoring(e) => Self::from(e),
             Store(e) => Self::from(e),
-            Callback(e) => Self::unclassified("callback.family.read", &e),
+            Callback(e) => Self::caused_by("callback.family.read", e.to_string(), e.into()),
             StaleRevision { .. } => {
                 Self::new("stale_handle", "callback.family.stale_revision", error)
             }
@@ -204,6 +205,68 @@ impl From<SemanticMutationTransactionError> for AuthoringFailure {
                 Self::new("stale_handle", "transaction.removed_node", message)
             }
             other => Self::unclassified("transaction.unclassified", &other),
+        }
+    }
+}
+
+// Callback transactions already have typed shared errors. Preserve their domain
+// causes here; decoder/player-local String failures remain explicitly unclassified.
+impl From<ExecutionSessionCallbackReadError> for AuthoringFailure {
+    fn from(error: ExecutionSessionCallbackReadError) -> Self {
+        use ExecutionSessionCallbackReadError as E;
+        let message = error.to_string();
+        match error {
+            E::NoPendingPhase => Self::new(
+                "stale_publication",
+                "callback_read.no_pending_phase",
+                message,
+            ),
+            E::StaleToken { expected, actual } => Self::new(
+                "stale_publication",
+                "callback_read.stale_token",
+                format!("{message}; expected {expected:?}, actual {actual:?}"),
+            ),
+            E::UnknownSignal(_) => {
+                Self::new("stale_handle", "callback_read.unknown_signal", message)
+            }
+            E::NonScalarSignal(_) => {
+                Self::new("invalid_input", "callback_read.non_scalar_signal", message)
+            }
+            E::UnknownObject(_) => {
+                Self::new("stale_handle", "callback_read.unknown_object", message)
+            }
+        }
+    }
+}
+
+impl From<ExecutionSessionCallbackError> for AuthoringFailure {
+    fn from(error: ExecutionSessionCallbackError) -> Self {
+        use ExecutionSessionCallbackError as E;
+        let message = error.to_string();
+        match error {
+            E::NoPendingPhase => {
+                Self::new("stale_publication", "callback.no_pending_phase", message)
+            }
+            E::StaleToken { expected, actual } => Self::new(
+                "stale_publication",
+                "callback.stale_token",
+                format!("{message}; expected {expected:?}, actual {actual:?}"),
+            ),
+            E::UnknownObject(_) => Self::new("stale_handle", "callback.unknown_object", message),
+            E::Read(cause) => Self::caused_by("callback.read", message, cause.into()),
+            E::Evaluation(cause) => Self::caused_by("callback.evaluation", message, cause.into()),
+            E::InvalidEffectiveWrite(cause) => Self::caused_by(
+                "callback.invalid_effective_write",
+                message,
+                Self::unclassified("runtime.effective_write", &cause),
+            ),
+            E::Commit(cause) => Self::caused_by(
+                "callback.commit",
+                message,
+                Self::unclassified("runtime.frame_commit", &cause),
+            ),
+            // Advance/driver policy is outside this transaction-boundary slice.
+            other => Self::unclassified("callback.unclassified", &other),
         }
     }
 }
@@ -360,11 +423,7 @@ impl From<noon::ExecutionSegmentAdvanceError> for AuthoringFailure {
                 Self::new("stale_publication", "advance.stale_segment", message)
             }
             E::Evaluation(cause) => Self::caused_by("advance.evaluation", message, cause.into()),
-            E::Callback(cause) => Self::caused_by(
-                "advance.callback",
-                message,
-                Self::unclassified("callback.unclassified", &cause),
-            ),
+            E::Callback(cause) => Self::caused_by("advance.callback", message, cause.into()),
         }
     }
 }
