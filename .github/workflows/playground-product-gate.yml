@@ -88,6 +88,8 @@ jobs:
         env:
           # Separate checkout mtimes must not reuse baseline workspace artifacts.
           CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target/candidate
+          # Exercise release code with only the typed recovery fixture exported.
+          NOON_RENDERER_SMOKE: "1"
         run: bash scripts/build-web-demo.sh
 
       - name: Cache Playwright Chromium

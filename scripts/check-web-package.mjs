@@ -468,6 +468,17 @@ if (process.env.NOON_WASM_PROFILE === "dev"
   );
 }
 
+// Recovery qualification also runs with release optimizations. Its explicit
+// fixture feature does not enable the rest of the debug example surface.
+if (process.env.NOON_RENDERER_SMOKE === "1"
+    || javascript.includes("export function createDirectRecoverySmokeRenderer(")) {
+  expectedJavascriptSurface.push("export function createDirectRecoverySmokeRenderer(");
+  expectedTypeSurface.push(
+    "export function createDirectRecoverySmokeRenderer(canvas: OffscreenCanvas, fixture: string): Promise<ExecutionCanvasRenderer>",
+    "directSceneRevision(): bigint",
+  );
+}
+
 for (const fragment of expectedJavascriptSurface) {
   if (!javascript.includes(fragment)) {
     throw new Error(`Generated JavaScript is missing: ${fragment}`);
