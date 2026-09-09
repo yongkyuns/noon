@@ -394,6 +394,19 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             else:
                 raise AssertionError("half-typed become fell back through raw geometry")
 
+            # Unsupported operands must fail before copying/scaling a target.
+            for operand in (half_typed, detached_source):
+                operand._semantic_handle_fresh = False
+                operand.copy = lambda: (_ for _ in ()).throw(AssertionError("untyped target was copied"))
+                operand.scale = lambda *args: (_ for _ in ()).throw(AssertionError("untyped target was scaled"))
+            for operation in ("become", "replace"):
+                try:
+                    getattr(detached_source, operation)(half_typed, stretch=True)
+                except NotImplementedError as error:
+                    assert "both Mobjects" in str(error)
+                else:
+                    raise AssertionError(operation + " admitted untyped operands")
+
             bindings_before = dict(scene._binding_handles)
             square.set_fill(GREEN, opacity=0.25)
             assert handle.snapshot_requests == 0

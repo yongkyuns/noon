@@ -403,55 +403,15 @@ class VGroup(Group):
     pass
 
 
-def _state_target(
-    self: Mobject,
-    mobject: Mobject,
-    *,
-    match_height: bool,
-    match_width: bool,
-    match_depth: bool,
-    match_center: bool,
-    stretch: bool,
-) -> Mobject:
-    if not isinstance(mobject, Mobject):
-        raise TypeError("state target must be a Mobject")
-    if match_depth:
-        raise NotImplementedError("depth matching requires the shared 2.5D family model")
-    if not (match_height or match_width or match_center or stretch):
-        return mobject
-    target = mobject.copy()
-    if stretch:
-        if target.width == 0.0 or target.height == 0.0:
-            raise ValueError("cannot stretch a zero-width or zero-height target")
-        target.scale((self.width / target.width, self.height / target.height))
-    else:
-        if match_height:
-            if target.height == 0.0:
-                raise ValueError("cannot match height from a zero-height target")
-            target.scale(self.height / target.height)
-        if match_width:
-            if target.width == 0.0:
-                raise ValueError("cannot match width from a zero-width target")
-            target.scale(self.width / target.width)
-    if match_center:
-        target.move_to(self.get_center())
-    return target
-
-
 def _mobject_generate_target(self: Mobject, use_deepcopy: bool = False) -> Mobject:
-    """Create the detached target through the installed shared target editor."""
-    # Canonical Mobjects install `_copy_for_animate_target`, which delegates target
-    # capture to Rust.  This preserves effective-state capture for a live source and
-    # avoids using `copy()` as a second target-state model.  Plain compatibility
-    # objects retain their existing copy behavior until they have a typed handle.
+    """Capture a detached target through the shared Rust target editor."""
     del use_deepcopy
-    factory = getattr(self, "_copy_for_animate_target", None)
     previous = getattr(self, "target", None)
     # A target must not recursively clone the previously generated target chain.
     # Preserve the wrapper's previous target if shared capture is rejected.
     self.target = None
     try:
-        target = factory() if callable(factory) else self.copy()
+        target = self._copy_for_animate_target()
     except BaseException:
         self.target = previous
         raise
@@ -470,48 +430,6 @@ def _mobject_restore(self: Mobject) -> Mobject:
     if not hasattr(self, "saved_state") or self.saved_state is None:
         raise Exception("Trying to restore without having saved")
     return self.become(self.saved_state)
-
-
-def _mobject_become(
-    self: Mobject,
-    mobject: Mobject,
-    match_height: bool = False,
-    match_width: bool = False,
-    match_depth: bool = False,
-    match_center: bool = False,
-    stretch: bool = False,
-) -> Mobject:
-    target = _state_target(
-        self,
-        mobject,
-        match_height=match_height,
-        match_width=match_width,
-        match_depth=match_depth,
-        match_center=match_center,
-        stretch=stretch,
-    )
-    raise RuntimeError("Mobject become requires the shared Rust authoring host")
-
-
-def _mobject_replace(
-    self: Mobject, mobject: Mobject, dim_to_match: int = 0, stretch: bool = False
-) -> Mobject:
-    if not isinstance(mobject, Mobject):
-        raise TypeError("replacement target must be a Mobject")
-    if dim_to_match not in (0, 1):
-        raise NotImplementedError("replace currently supports width (0) or height (1)")
-    if stretch:
-        if self.width == 0.0 or self.height == 0.0:
-            raise ValueError("cannot stretch-replace an object with zero width or height")
-        self.scale((mobject.width / self.width, mobject.height / self.height))
-    else:
-        source_length = self.width if dim_to_match == 0 else self.height
-        target_length = mobject.width if dim_to_match == 0 else mobject.height
-        if source_length == 0.0:
-            raise ValueError("cannot replace along a zero-length dimension")
-        self.scale(target_length / source_length)
-    self.move_to(mobject.get_center())
-    return self
 
 
 class MoveToTarget:

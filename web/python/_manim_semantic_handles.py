@@ -1117,22 +1117,8 @@ def _become(
             handle.becomeHandle(other_handle, *flags)
         return self
 
-    has_typed_operand = any(
-        getattr(value, "_semantic_handle", None) is not None
-        for value in (self, mobject)
-    )
-    if has_typed_operand:
-        raise NotImplementedError(
-            "become requires valid shared semantic handles for both Mobjects"
-        )
-    return _compat._mobject_become(
-        self,
-        mobject,
-        match_height=match_height,
-        match_width=match_width,
-        match_depth=match_depth,
-        match_center=match_center,
-        stretch=stretch,
+    raise NotImplementedError(
+        "become requires valid shared semantic handles for both Mobjects"
     )
 
 
@@ -1142,16 +1128,19 @@ def _replace(
     dim_to_match: int = 0,
     stretch: bool = False,
 ) -> _base.Mobject:
-    if _live_mutation_context(self) is not None:
+    if not isinstance(mobject, _base.Mobject):
+        raise TypeError("replacement target must be a Mobject")
+    if dim_to_match not in (0, 1):
+        raise NotImplementedError("replace currently supports width (0) or height (1)")
+    if (_live_mutation_context(self) is not None
+            or _live_mutation_context(mobject) is not None):
         raise NotImplementedError("canonical live affine targets do not support replace")
-    handle = _detached_handle_for(self)
-    other_handle = _detached_handle_for(mobject)
-    if handle is not None and other_handle is not None:
-        if dim_to_match not in (0, 1):
-            raise NotImplementedError("replace currently supports width (0) or height (1)")
-        handle.replaceHandle(other_handle, int(dim_to_match), bool(stretch))
-        return self
-    return _compat._mobject_replace(self, mobject, dim_to_match=dim_to_match, stretch=stretch)
+    handle = _handle_for(self)
+    other_handle = _handle_for(mobject)
+    if handle is None or other_handle is None:
+        raise NotImplementedError("replace requires valid shared semantic handles for both Mobjects")
+    handle.replaceHandle(other_handle, int(dim_to_match), bool(stretch))
+    return self
 
 
 def _critical(value: _base.Mobject, direction: _base.Vec2) -> _base.Vec2:
