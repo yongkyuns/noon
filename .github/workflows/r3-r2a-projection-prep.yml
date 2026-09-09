@@ -10,6 +10,7 @@ jobs:
     timeout-minutes: 40
     env:
       BASE: 8cadad70a9fdbdaf51de49369fb5c98c2d4750e0
+      ORIGINAL_MAPPER_BASE: 10e9597611dad4dc4d1917f39dc685143fd37f3c
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -24,20 +25,66 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/r3-r2a"
-          cat scripts/r3-r2a-projection-prep.part1.b64 scripts/r3-r2a-projection-prep.part2.b64 | base64 -d | gzip -d > "$RUNNER_TEMP/r3-r2a/projection.patch"
-          test "$(sha256sum "$RUNNER_TEMP/r3-r2a/projection.patch" | cut -d' ' -f1)" = "5068b00b0bba1040df242a54067f01ef3644fb89c860cac0bc80bfbc1c4ca446"
+          E="$RUNNER_TEMP/r3-r2a"
+          mkdir -p "$E/oldtree/crates/noon-web/src"
+          cat scripts/r3-r2a-projection-prep.part1.b64 scripts/r3-r2a-projection-prep.part2.b64 | base64 -d | gzip -d > "$E/projection.patch"
+          test "$(sha256sum "$E/projection.patch" | cut -d' ' -f1)" = "5068b00b0bba1040df242a54067f01ef3644fb89c860cac0bc80bfbc1c4ca446"
+          python3 - "$E" <<'PY'
+          from pathlib import Path
+          import re, sys
+          root = Path(sys.argv[1])
+          text = (root / "projection.patch").read_text()
+          chunks = [c for c in re.split(r"(?=^--- a/)", text, flags=re.M) if c]
+          author = [c for c in chunks if c.startswith("--- a/crates/noon-web/src/authoring_error.rs\n")]
+          assert len(author) == 1
+          rest = [c for c in chunks if c not in author]
+          assert len(rest) == 5
+          (root / "authoring.patch").write_text(author[0])
+          (root / "rest.patch").write_text("".join(rest))
+          PY
           git config user.name 'Noon qualification bot'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git checkout --detach "$BASE"
-          git apply --3way "$RUNNER_TEMP/r3-r2a/projection.patch"
+          git show "$ORIGINAL_MAPPER_BASE:crates/noon-web/src/authoring_error.rs" > "$E/oldtree/crates/noon-web/src/authoring_error.rs"
+          patch -s -d "$E/oldtree" -p1 < "$E/authoring.patch"
+          git apply "$E/rest.patch"
+          python3 - "$E" <<'PY'
+          from pathlib import Path
+          import sys
+          root = Path(sys.argv[1])
+          path = Path("crates/noon-web/src/authoring_error.rs")
+          current = path.read_text()
+          desired = (root / "oldtree/crates/noon-web/src/authoring_error.rs").read_text()
+          family_start = current.index("impl From<noon::FamilyCallbackPaintError>")
+          family_end = current.index("impl From<String>", family_start)
+          family_before = current[family_start:family_end]
+          old_import = "    ExecutionSessionPublicationError, LiveSessionError,\n"
+          new_import = "    ExecutionSessionPublicationError, LiveSessionError, UnsupportedAuthoringOperation,\n"
+          assert current.count(old_import) == 1
+          current = current.replace(old_import, new_import, 1)
+          d0 = desired.index("impl From<UnsupportedAuthoringOperation>")
+          d1 = desired.index("\nimpl From<SemanticSceneOperationError>", d0)
+          block = desired[d0:d1]
+          c0 = current.index("impl From<AuthoringError>")
+          c1 = current.index("\nimpl From<SemanticSceneOperationError>", c0)
+          current = current[:c0] + block + current[c1:]
+          f0 = current.index("impl From<noon::FamilyCallbackPaintError>")
+          f1 = current.index("impl From<String>", f0)
+          assert current[f0:f1] == family_before
+          assert "InvalidPaint(cause) => Self::caused_by(" in family_before
+          assert 'other => Self::unclassified("authoring.unclassified", &other)' in current
+          assert '_ => return Self::unclassified("unsupported.unclassified", &error)' in current
+          path.write_text(current)
+          PY
           cargo fmt --all
           git add crates/noon-web/src/authoring_error.rs crates/noon-web/src/authoring_mobject.rs crates/noon-web/src/canonical_authoring_scene.rs web/python/_manim_geometry.py web/python/_manim_semantic_handles.py web/python/test_noon_errors_wasm.py
+          test "$(git diff --cached --name-only | wc -l)" -eq 6
+          test -z "$(find . -name '*.rej' -print -quit)"
           git diff --cached --check
           git commit -m 'fix: project typed R2a authoring failures through WASM and Python'
-          git rev-parse HEAD HEAD^{tree} HEAD^ > "$RUNNER_TEMP/r3-r2a/revisions.txt"
-          git diff "$BASE" HEAD > "$RUNNER_TEMP/r3-r2a/product.patch"
-          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/r3-r2a/source.tar.gz"
+          git rev-parse HEAD HEAD^{tree} HEAD^ > "$E/revisions.txt"
+          git diff "$BASE" HEAD > "$E/product.patch"
+          git archive --format=tar.gz HEAD > "$E/source.tar.gz"
       - uses: actions/cache/restore@v6
         with:
           path: |
