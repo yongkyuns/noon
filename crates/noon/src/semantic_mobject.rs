@@ -925,7 +925,10 @@ fn state_dimension(
     )
 }
 
-fn state_center(store: &SemanticStore, state: &SemanticObjectState) -> Result<(f64, f64), String> {
+pub(crate) fn state_center(
+    store: &SemanticStore,
+    state: &SemanticObjectState,
+) -> Result<(f64, f64), String> {
     Ok(layout_for_content(store, state.content, state.transform)?
         .map(|bounds| {
             (
@@ -936,7 +939,7 @@ fn state_center(store: &SemanticStore, state: &SemanticObjectState) -> Result<(f
         .unwrap_or((state.transform.translation.x, state.transform.translation.y)))
 }
 
-fn scale_state_about_center(
+pub(crate) fn scale_state_about_center(
     store: &SemanticStore,
     state: &mut SemanticObjectState,
     x: f64,

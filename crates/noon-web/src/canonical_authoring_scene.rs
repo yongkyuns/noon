@@ -5707,6 +5707,43 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = liveScaleFamily)]
+        pub fn live_scale_family(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            x: f64,
+            y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_scale_family(&family, x, y)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveRotateFamily)]
+        pub fn live_rotate_family(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            angle: f64,
+            x: f64,
+            y: f64,
+            about_point: bool,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_rotate_family(&family, angle, pivot)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = liveArrangeFamily)]
         pub fn live_arrange_family(
             &mut self,

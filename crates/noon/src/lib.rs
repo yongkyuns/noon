@@ -61,6 +61,7 @@ mod elbow_authoring;
 pub mod example_scenes;
 mod execution_segment;
 mod execution_session;
+mod family_affine;
 mod family_arrangement;
 mod family_authoring;
 mod family_copy;

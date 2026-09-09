@@ -479,6 +479,21 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        pub fn scale(&self, x: f64, y: f64) -> Result<(), JsValue> {
+            self.semantic_family()?.scale(x, y).map_err(js_error)
+        }
+
+        pub fn rotate(&self, angle: f64, x: f64, y: f64, about_point: bool) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
+            self.semantic_family()?
+                .rotate(angle, pivot)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = layoutAnchor)]
         pub fn layout_anchor(&self, index: Option<i32>) -> Result<WasmLayoutAnchor, JsValue> {
             let anchor = noon::LayoutAnchor::from(&self.semantic_family()?);
