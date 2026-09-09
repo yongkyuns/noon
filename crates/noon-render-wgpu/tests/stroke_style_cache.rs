@@ -1,6 +1,6 @@
-use noon_compile::CompiledScene;
+use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    Color, GeometryRef, SceneDefinition, StrokeCap, StrokeJoin, Style, Vec2, VectorPath,
+    Color, GeometryRef, ObjectId, StrokeCap, StrokeJoin, Style, Transform2D, Vec2, VectorPath,
 };
 use noon_render_wgpu::FramePreparer;
 use noon_runtime::SceneInstance;
@@ -29,12 +29,19 @@ fn path_cache_key_includes_join_and_cap_policy() {
         style(StrokeJoin::Round, StrokeCap::Butt),
         style(StrokeJoin::Round, StrokeCap::Round),
     ];
-    let mut scene = SceneDefinition::new();
-    for path_style in styles {
-        let object = scene.add(GeometryRef::path(path.clone()));
-        scene.object_mut(object).unwrap().style = path_style;
-    }
-    let instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+    let objects = styles
+        .into_iter()
+        .enumerate()
+        .map(|(index, path_style)| {
+            CompiledObject::new(
+                ObjectId::new(index as u64),
+                GeometryRef::path(path.clone()),
+                Transform2D::IDENTITY,
+                path_style,
+            )
+        })
+        .collect();
+    let instance = SceneInstance::new(CompiledScene::compile_objects(objects, &[]).unwrap());
     let mut preparer = FramePreparer::new();
     let prepared = preparer.prepare(instance.frame());
     assert_eq!(prepared.stats.geometry_cache_misses, 3);
