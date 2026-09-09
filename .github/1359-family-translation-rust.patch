@@ -1,0 +1,345 @@
+diff --git a/crates/noon-web/src/canonical_authoring_scene.rs b/crates/noon-web/src/canonical_authoring_scene.rs
+index 73053e0..a765349 100644
+--- a/crates/noon-web/src/canonical_authoring_scene.rs
++++ b/crates/noon-web/src/canonical_authoring_scene.rs
+@@ -4187,6 +4187,39 @@ mod wasm {
+             serde_json::to_string(&rows).map_err(js_error)
+         }
+ 
++        /// Prepare a family translation over the existing callback read/overlay
++        /// codec boundary. Native/direct-WASM callbacks use the same typed Rust
++        /// operation; this function introduces no worker message or runtime.
++        #[wasm_bindgen(js_name = callbackFamilyShift)]
++        pub fn callback_family_shift(
++            &self,
++            handle: &crate::WasmAuthoringFamilyHandle,
++            revision: &str,
++            rows_json: &str,
++            x: f64,
++            y: f64,
++        ) -> Result<String, JsValue> {
++            self.callback_family_keys(handle, revision)?;
++            let family = handle.semantic_family()?;
++            let revision = noon_core::SceneRevision::new(revision.parse::<u64>().map_err(js_error)?);
++            let rows: Vec<(u32, u32, Transform2D, Option<noon_core::Rect>)> =
++                serde_json::from_str(rows_json).map_err(js_error)?;
++            let rows: BTreeMap<_, _> = rows.into_iter().map(|(slot, generation, transform, bounds)|
++                (noon_core::SemanticNodeId::new(slot, generation), (transform, bounds))).collect();
++            let changes = family.prepare_callback_translation(revision, x, y, |node|
++                rows.get(&node).copied().ok_or(noon::ExecutionSessionCallbackError::UnknownObject(node))
++            ).map_err(|error| match error {
++                // Consume the existing selection/read mapper; do not replace
++                // #1350's callback mapping or #1354's producer signatures.
++                noon::FamilyCallbackTranslationError::Family(error) => typed_js_error(error),
++                noon::FamilyCallbackTranslationError::Translation(error) => typed_js_error(
++                    AuthoringFailure::new("invalid_input", "callback.family.translation", error)),
++            })?;
++            let rows: Vec<_> = changes.into_iter().map(|change|
++                (change.node.slot(), change.node.generation(), change.transform, change.bounds)).collect();
++            serde_json::to_string(&rows).map_err(js_error)
++        }
++
+         /// Apply shared Manim `set_color` semantics to callback-local paint.
+         #[wasm_bindgen(js_name = callbackPaintSetColor)]
+         #[allow(clippy::too_many_arguments)]
+diff --git a/crates/noon/src/example_scenes.rs b/crates/noon/src/example_scenes.rs
+index aaefaa7..89e5287 100644
+--- a/crates/noon/src/example_scenes.rs
++++ b/crates/noon/src/example_scenes.rs
+@@ -1369,6 +1369,21 @@ pub fn ordinary_callback_sparse_reads_program() -> Result<
+                 )));
+             }
+             observed_phase_times.push(context.time());
++            // Same operation as the paired Python callback: a preceding leaf
++            // edit, nested alias translation, caught late failure, then retry.
++            let mut prior = context.target_state().transform;
++            prior.translation.x += 0.25;
++            context.set_target_transform(prior)
++                .map_err(|error| SparseReadExampleError(error.to_string()))?;
++            context.shift_family(&family, 1.0, 0.0)
++                .map_err(|error| SparseReadExampleError(error.to_string()))?;
++            assert!((context.target_state().transform.translation.x - (prior.translation.x + 1.0)).abs() < 1e-5);
++            let shifted = *context.target_state();
++            assert!(context.shift_family(&invalid_family, 1.0, 0.0).is_err());
++            assert_eq!(*context.target_state(), shifted);
++            context.shift_family(&family, -1.0, 0.0)
++                .map_err(|error| SparseReadExampleError(error.to_string()))?;
++            assert!((context.target_state().transform.translation.x - prior.translation.x).abs() < 1e-5);
+             context
+                 .paint_family(
+                     &family,
+diff --git a/crates/noon/src/family_callback_translation.rs b/crates/noon/src/family_callback_translation.rs
+new file mode 100644
+index 0000000..42d0e92
+--- /dev/null
++++ b/crates/noon/src/family_callback_translation.rs
+@@ -0,0 +1,84 @@
++//! All-before-write translation of a revision-pinned, unique semantic family.
++
++use crate::{FamilyCallbackPaintError, MobjectFamily, SemanticNodeId, Transform2D};
++use noon_core::{Rect, SceneRevision, SemanticLoweringError, SemanticVec3};
++
++/// Existing family-read or shared numeric-lowering rejection. No write is exposed
++/// when selection, a late read, or a translated coordinate fails.
++#[derive(Debug)]
++pub enum FamilyCallbackTranslationError {
++    Family(FamilyCallbackPaintError),
++    Translation(SemanticLoweringError),
++}
++
++impl std::fmt::Display for FamilyCallbackTranslationError {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        match self {
++            Self::Family(error) => error.fmt(f),
++            Self::Translation(error) => error.fmt(f),
++        }
++    }
++}
++impl std::error::Error for FamilyCallbackTranslationError {
++    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
++        match self {
++            Self::Family(error) => Some(error),
++            Self::Translation(error) => Some(error),
++        }
++    }
++}
++impl From<FamilyCallbackPaintError> for FamilyCallbackTranslationError {
++    fn from(error: FamilyCallbackPaintError) -> Self { Self::Family(error) }
++}
++impl From<SemanticLoweringError> for FamilyCallbackTranslationError {
++    fn from(error: SemanticLoweringError) -> Self { Self::Translation(error) }
++}
++
++/// Prepared effective transform and its optional translated observation. This is
++/// one operation's result, not retained family state or another mutation protocol.
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct CallbackFamilyTranslation {
++    pub node: SemanticNodeId,
++    pub transform: Transform2D,
++    pub bounds: Option<Rect>,
++}
++
++impl MobjectFamily {
++    /// Translate unique semantic leaves using the exact phase's effective rows,
++    /// including preceding overlay writes. No authored state or read row changes
++    /// until the caller has the entire successful result. Work is family-local;
++    /// geometry and unrelated objects are never read.
++    pub fn prepare_callback_translation(
++        &self,
++        revision: SceneRevision,
++        x: f64,
++        y: f64,
++        mut read: impl FnMut(SemanticNodeId) -> Result<(Transform2D, Option<Rect>), crate::ExecutionSessionCallbackError>,
++    ) -> Result<Vec<CallbackFamilyTranslation>, FamilyCallbackTranslationError> {
++        let leaves = self.callback_leaf_nodes(revision)?;
++        // Same high-precision input and explicit f32 lowering as authored shift.
++        let delta = SemanticVec3::new(x, y, 0.0);
++        delta.lower_xy_f32()?;
++        let mut changes = Vec::with_capacity(leaves.len());
++        for node in leaves {
++            let (previous, bounds) = read(node).map_err(FamilyCallbackPaintError::Callback)?;
++            // Retain shared numeric causes even when an earlier overlay operation
++            // supplied invalid values. Never partially append this operation.
++            SemanticVec3::new(previous.scale.x.into(), previous.scale.y.into(), previous.rotation.into()).lower_xy_f32()?;
++            let translation = SemanticVec3::new(
++                f64::from(previous.translation.x) + delta.x,
++                f64::from(previous.translation.y) + delta.y,
++                0.0,
++            ).lower_xy_f32()?;
++            let transform = Transform2D { translation, ..previous };
++            if transform != previous {
++                let offset = translation - previous.translation;
++                // Translation-only bounds propagation matches the existing
++                // EffectiveObjectProperties::set_transform fallback exactly.
++                let bounds = bounds.map(|b| Rect::new(b.min + offset, b.max + offset));
++                changes.push(CallbackFamilyTranslation { node, transform, bounds });
++            }
++        }
++        Ok(changes)
++    }
++}
+diff --git a/crates/noon/src/host_callbacks.rs b/crates/noon/src/host_callbacks.rs
+index 1378634..000e0fa 100644
+--- a/crates/noon/src/host_callbacks.rs
++++ b/crates/noon/src/host_callbacks.rs
+@@ -252,6 +252,35 @@ impl RustHostCallbackContext<'_> {
+         Ok(())
+     }
+ 
++    /// Translate one semantic family once per leaf in the current ordered phase.
++    /// Read and validate the entire operation before caching rows or appending
++    /// any writes; a caught late rejection preserves preceding overlay edits.
++    pub fn shift_family(
++        &mut self,
++        family: &crate::MobjectFamily,
++        x: f64,
++        y: f64,
++    ) -> Result<(), crate::FamilyCallbackTranslationError> {
++        let token = self.overlay.token();
++        let rows: BTreeMap<_, _> = self.session.required_callback_family_read(
++            &family.integration_store().borrow(), token, family.node_id(),
++        )?.into_iter().collect();
++        let changes = family.prepare_callback_translation(
++            token.publication().scene_revision(), x, y,
++            |node| self.overlay.object(node).or_else(|| rows.get(&node))
++                .map(|row| (row.transform, row.bounds))
++                .ok_or(ExecutionSessionCallbackError::UnknownObject(node)),
++        )?;
++        for (node, row) in rows {
++            self.overlay.cache_read_object(node, row);
++        }
++        for change in changes {
++            self.overlay.set_transform(change.node, change.transform)
++                .expect("all selected family rows were read and validated before writes");
++        }
++        Ok(())
++    }
++
+     pub fn set_target_style(&mut self, style: Style) -> Result<(), ExecutionSessionCallbackError> {
+         self.overlay.set_style(self.target, style)
+     }
+diff --git a/crates/noon/src/lib.rs b/crates/noon/src/lib.rs
+index ec19eb9..653e7a7 100644
+--- a/crates/noon/src/lib.rs
++++ b/crates/noon/src/lib.rs
+@@ -67,6 +67,7 @@ mod family_affine;
+ mod family_arrangement;
+ mod family_authoring;
+ mod family_callback_paint;
++mod family_callback_translation;
+ mod family_copy;
+ mod family_layout;
+ mod family_style;
+@@ -102,6 +103,7 @@ pub use execution_session::{
+ pub use family_arrangement::FamilyArrangeOptions;
+ pub use family_authoring::{MobjectFamily, MobjectFamilyMember};
+ pub use family_callback_paint::{FamilyCallbackPaintError, FamilyPaint};
++pub use family_callback_translation::{CallbackFamilyTranslation, FamilyCallbackTranslationError};
+ pub use family_copy::FamilyCopy;
+ pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor};
+ pub use focus_on_authoring::FocusOnOptions;
+diff --git a/crates/noon/tests/family_callback_translation.rs b/crates/noon/tests/family_callback_translation.rs
+new file mode 100644
+index 0000000..f759b7b
+--- /dev/null
++++ b/crates/noon/tests/family_callback_translation.rs
+@@ -0,0 +1,119 @@
++use noon::integration::HostCallbackId;
++use noon::{ExecutionSessionCallbackError, FamilyCallbackPaintError, FamilyCallbackTranslationError,
++    Rect, RustHostCallbackTable, Scene, Transform2D, Vec2};
++use std::{cell::RefCell, error::Error, rc::Rc};
++
++#[test]
++fn selection_is_unique_local_and_all_inputs_are_prepared_before_returning_changes() {
++    let scene = Scene::new();
++    let a = scene.circle(0.5).unwrap();
++    let b = scene.circle(0.5).unwrap();
++    let nested = scene.family(&[(&a).into(), (&b).into()]).unwrap();
++    let family = scene.family(&[(&a).into(), (&nested).into()]).unwrap();
++    let empty = scene.family(&[]).unwrap();
++    for _ in 0..2000 { scene.circle(0.1).unwrap(); }
++    let before = scene.revision();
++    let authored = [a.state().unwrap(), b.state().unwrap()];
++    let bounds = Some(Rect::new(Vec2::new(-1.0, -1.0), Vec2::new(1.0, 1.0)));
++    let mut reads = vec![];
++    let changes = family.prepare_callback_translation(before, 1.0, -2.0, |node| {
++        reads.push(node);
++        Ok((Transform2D::default(), bounds))
++    }).unwrap();
++    assert_eq!(reads, [a.node_id(), b.node_id()]);
++    assert_eq!(changes.iter().map(|c| c.node).collect::<Vec<_>>(), reads);
++    for change in &changes {
++        assert_eq!(change.transform.translation, Vec2::new(1.0, -2.0));
++        assert_eq!(change.bounds.unwrap().min, Vec2::new(0.0, -3.0));
++    }
++    for (x,y) in [(f64::NAN,0.0), (0.0,f64::INFINITY), (f64::NEG_INFINITY,0.0),
++                  (f64::MAX,0.0)] {
++        for selection in [&family, &empty] {
++            let error=selection.prepare_callback_translation(before,x,y, |_| unreachable!("invalid delta must not read")).unwrap_err();
++            assert!(matches!(error, FamilyCallbackTranslationError::Translation(_)));
++            assert!(error.source().unwrap().is::<noon_core::SemanticLoweringError>());
++        }
++    }
++    let late=family.prepare_callback_translation(before,1.0,0.0, |node| {
++        if node==b.node_id() { Err(ExecutionSessionCallbackError::UnknownObject(node)) }
++        else { Ok((Transform2D::default(),bounds)) }
++    }).unwrap_err();
++    assert!(matches!(late, FamilyCallbackTranslationError::Family(FamilyCallbackPaintError::Callback(
++        ExecutionSessionCallbackError::UnknownObject(node))) if node==b.node_id()));
++    // A finite requested delta can overflow only at the last effective row.
++    assert!(matches!(family.prepare_callback_translation(before, f64::from(f32::MAX),0.0, |node| {
++        let mut transform=Transform2D::default();
++        if node==b.node_id() { transform.translation.x=f32::MAX; }
++        Ok((transform,None))
++    }), Err(FamilyCallbackTranslationError::Translation(_))));
++    assert!(family.prepare_callback_translation(before,0.0,0.0, |_| Ok((Transform2D::default(),bounds))).unwrap().is_empty());
++    assert_eq!(scene.revision(),before);
++    assert_eq!([a.state().unwrap(), b.state().unwrap()],authored);
++    scene.circle(0.1).unwrap();
++    assert!(matches!(family.prepare_callback_translation(before,1.0,0.0, |_| unreachable!()),
++        Err(FamilyCallbackTranslationError::Family(FamilyCallbackPaintError::StaleRevision{..}))));
++}
++
++#[test]
++fn native_callback_preserves_prior_overlay_and_late_failures_then_retries_once_per_leaf() {
++    let mut scene=Scene::new();
++    let a=scene.circle(0.5).unwrap();
++    let b=scene.circle(0.5).unwrap();
++    let missing=scene.circle(0.5).unwrap();
++    let untouched=scene.circle(0.5).unwrap();
++    let nested=scene.family(&[(&a).into(), (&b).into()]).unwrap();
++    let family=scene.family(&[(&a).into(), (&nested).into()]).unwrap();
++    let invalid=scene.family(&[(&a).into(), (&missing).into()]).unwrap();
++    let foreign_scene=Scene::new();
++    let foreign=foreign_scene.family(&[]).unwrap();
++    scene.add_many(&[(&a).into(),(&b).into(),(&untouched).into()]).unwrap();
++    let observed=Rc::new(RefCell::new(Vec::new()));
++    let calls=observed.clone();
++    let mut callbacks=RustHostCallbackTable::new();
++    let id=HostCallbackId::new(73);
++    callbacks.insert(id,move |context| -> Result<(), FamilyCallbackTranslationError> {
++        let mut prior=context.target_state().transform;
++        prior.translation=Vec2::new(3.0,2.0);
++        context.set_target_transform(prior).map_err(FamilyCallbackPaintError::Callback)?;
++        let prior=*context.target_state();
++        assert!(matches!(context.shift_family(&invalid,1.0,0.0),
++            Err(FamilyCallbackTranslationError::Family(FamilyCallbackPaintError::Callback(_)))));
++        assert_eq!(*context.target_state(),prior);
++        assert!(matches!(context.shift_family(&foreign,1.0,0.0),
++            Err(FamilyCallbackTranslationError::Family(FamilyCallbackPaintError::Authoring(noon::AuthoringError::ForeignStore)))));
++        assert!(context.shift_family(&family,f64::NAN,0.0).is_err());
++        assert_eq!(*context.target_state(),prior);
++        context.shift_family(&family,1.0,0.0)?;
++        assert_eq!(context.target_state().transform.translation,Vec2::new(4.0,2.0));
++        let second=context.read_object(b.node_id()).map_err(FamilyCallbackPaintError::Callback)?;
++        assert_eq!(second.transform.translation,Vec2::new(1.0,0.0));
++        // A late numeric error also leaves the preceding successful operation intact.
++        let mut too_large=second.transform;
++        too_large.translation.x=f32::MAX;
++        context.set_transform(b.node_id(),too_large).map_err(FamilyCallbackPaintError::Callback)?;
++        let first=*context.target_state();
++        assert!(context.shift_family(&family,f64::from(f32::MAX),0.0).is_err());
++        assert_eq!(*context.target_state(),first);
++        assert_eq!(context.read_object(b.node_id()).unwrap().transform,too_large);
++        context.set_transform(b.node_id(),second.transform).map_err(FamilyCallbackPaintError::Callback)?;
++        context.shift_family(&family,-1.0,0.0)?;
++        assert_eq!(context.target_state().transform,prior.transform);
++        assert_eq!(context.read_object(b.node_id()).unwrap().transform.translation,Vec2::ZERO);
++        calls.borrow_mut().push(context.time());
++        Ok(())
++    }).unwrap();
++    callbacks.add_updater(&mut scene.integration_store().borrow_mut(),a.node_id(),id,0.0,None).unwrap();
++    let revision=scene.revision();
++    let authored=a.state().unwrap();
++    let mut session=scene.execution_session().unwrap();
++    let untouched_before=session.frame().objects[2].clone();
++    let geometry=session.frame().objects.iter().map(|o|o.geometry().cloned()).collect::<Vec<_>>();
++    callbacks.advance_to(&mut session,0.0).unwrap();
++    assert_eq!(*observed.borrow(),[0.0]);
++    assert_eq!(session.frame().objects[0].transform.translation,Vec2::new(3.0,2.0));
++    assert_eq!(session.frame().objects[1].transform.translation,Vec2::ZERO);
++    assert_eq!(session.frame().objects[2],untouched_before);
++    assert_eq!(session.frame().objects.iter().map(|o|o.geometry().cloned()).collect::<Vec<_>>(),geometry);
++    assert_eq!(scene.revision(),revision);
++    assert_eq!(a.state().unwrap(),authored);
++}
