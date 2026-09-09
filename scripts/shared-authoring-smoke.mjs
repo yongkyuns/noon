@@ -112,6 +112,11 @@ import builtins
 scene = Scene()
 circle = Circle(radius=1.0)
 scene.add(circle)
+# Empty/cleared updater metadata must not disable ordinary typed mutations.
+circle.clear_updaters()
+circle.shift(RIGHT)
+assert circle.get_center() == (1.0, 0.0)
+circle.shift(LEFT)
 # A handle-less wrapper must fail before binding can project existing geometry
 # into Python state. The same scene must remain usable afterward.
 # Unsupported native bindings cannot append legacy declarations on an empty Scene.

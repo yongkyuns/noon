@@ -270,6 +270,9 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                 def liveExecutionOwnership(self):
                     return "transferred" if self.transferred else "returned"
 
+                def liveShift(self, source, x, y):
+                    self.live_calls.append(("shift", source, x, y))
+
                 def liveBecomeMobject(self, source, target, *flags):
                     if self.transferred:
                         raise RuntimeError("live execution session is running in the semantic engine")
@@ -293,13 +296,16 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             # the canonical runtime through the fresh raw semantic handle.
             square._noon_updaters = [lambda mobject: mobject]
             context.queries.clear()
-            assert handles._handle_for(square) is None
+            assert handles._handle_for(square) is handle
+            square.shift(RIGHT)
+            assert context.live_calls[-1] == ("shift", handle, 1.0, 0.0)
             assert square.get_center() == (2.5, -1.5)
             assert square.width == 6.0
             assert square.height == 4.0
             assert context.queries == [handle, handle, handle]
 
             del square._noon_updaters
+            context.live_calls.clear()
 
             context.transferred = True
             try:
@@ -441,11 +447,12 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             updater_scene.add(detached_updater)
             assert detached_updater._scene is updater_scene
 
-            # Once bound, host-dynamic state deliberately opts out until runtime evaluated
-            # handles are shared. This is a correctness fallback, not a second deterministic path.
-            assert handles._handle_for(detached_updater) is None
+            # Binding and updater registration preserve the ordinary typed path.
+            assert handles._handle_for(detached_updater) is detached_handle
+            detached_updater.shift(RIGHT)
+            assert detached_updater.get_center().x == 1.0
             square._noon_updaters = []
-            assert handles._handle_for(square) is None
+            assert handles._handle_for(square) is handle
             '''
         )
         completed = subprocess.run(
