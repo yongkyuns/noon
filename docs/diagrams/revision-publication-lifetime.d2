@@ -2,28 +2,22 @@
 ...@_style
 
 direction: down
-main: "COHERENT STATE / LIFETIME PATH" {
+main: "STATE / LIFETIME PATH" {
   grid-columns: 4
-  horizontal-gap: 72
-  scene: "SceneRevision\ncommitted authored state" {class: authority}
-  execution: "ExecutionRevision\nderived projection" {class: authority}
+  horizontal-gap: 62
+  scene: "SceneRevision\nauthored state" {class: authority}
+  execution: "ExecutionRevision\nderived plan" {class: authority}
   frame: "FrameEpoch\neffective publication" {class: authority}
-  submit: "SubmissionSerial\nGPU lifetime / retirement" {class: node}
-  scene -> execution: "derive / prepare"
-  execution -> frame: "evaluate / publish"
-  frame -> submit: "submit referenced resources"
+  submit: "SubmissionSerial\nGPU lifetime" {class: node}
+  scene -> execution: "derive"
+  execution -> frame: "publish"
+  frame -> submit: "submit"
 }
-contexts: "OTHER DISTINCT DOMAINS" {
-  grid-columns: 4
-  horizontal-gap: 38
+context: "DISTINCT CONTEXTS" {
+  grid-columns: 2
+  horizontal-gap: 100
   identity: "NodeId generation\nidentity validity" {class: node}
-  resource: "ResourceVersion\nimmutable content" {class: node}
-  input: "InputSequence\nordered ingress" {class: node}
-  callback: "CallbackEpoch\nordered host context" {class: node}
+  inputs: "Publication context\nResourceVersion · InputSequence · CallbackEpoch" {class: node}
 }
-contexts.identity -> main.scene: "valid handles" {style.stroke-dash: 4}
-contexts.resource -> main.frame: "referenced version" {style.stroke-dash: 4}
-contexts.input -> main.frame: "staged event context" {style.stroke-dash: 4}
-contexts.callback -> main.frame: "apply only if current" {style.stroke-dash: 4}
-note: "Different domains are never compared merely because they are integers.\nLate async/callback/resource results carry the exact context needed to prove applicability." {class: note}
-main -> note: {style.opacity: 0}
+context.identity -> main.scene: "valid handle" {style.stroke-dash: 4}
+context.inputs -> main.frame: "versioned / ordered inputs" {style.stroke-dash: 4}

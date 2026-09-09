@@ -9,19 +9,16 @@ engine: "SHARED TYPED RUST ENGINE" {
   scene: "Semantic Scene\nSemanticStore" {class: authority}
   plan: "Execution Plan\nnoon-compile" {class: authority}
   runtime: "Runtime\nnoon-runtime" {class: authority}
-  renderer: "Retained renderer\nnoon-render-wgpu" {class: authority}
+  renderer: "Renderer\nnoon-render-wgpu" {class: authority}
   scene -> plan: "typed lowering"
-  plan -> runtime: "typed execution data"
-  runtime -> renderer: "FrameEpoch / publication"
+  plan -> runtime: "typed execution"
+  runtime -> renderer: "FrameEpoch"
 }
-hosts: "PLATFORM EDGE · deployment alternatives" {
+hosts: "PLATFORM EDGE" {
   grid-columns: 2
-  horizontal-gap: 150
-  native: "noon-native\nwinit · input · surface\nacquire / submit / present" {class: host}
-  web: "noon-web + browser glue\nWASM bootstrap · input · canvas\nWebGPU / WebGL2 presentation" {class: host}
+  horizontal-gap: 120
+  native: "Native host\nnoon-native" {class: host}
+  web: "Browser host\nnoon-web" {class: host}
 }
 app -> engine.scene: "author / mutate"
-engine.renderer -> hosts.native: "native surface"
-engine.renderer -> hosts.web: "browser canvas"
-note: "No JSON, scene document or language bridge sits between the four engine responsibilities.\nHosts drive input/frame lifecycle but own no semantic or runtime truth." {class: note}
-hosts -> note: {style.opacity: 0}
+engine.renderer -> hosts: "surface / presentation"
