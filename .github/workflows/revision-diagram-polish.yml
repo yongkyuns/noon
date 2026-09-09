@@ -1,0 +1,44 @@
+name: Revision diagram polish
+on:
+  push:
+    branches: [work/revision-diagram-polish-20260909]
+permissions:
+  contents: write
+jobs:
+  polish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install D2
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://github.com/d2lang/d2/releases/download/v0.9.0/d2-v0.9.0-linux-amd64.tar.gz -o "$RUNNER_TEMP/d2.tar.gz"
+          echo '5669ddc46b99e942cc96078f4a4e36d5e62103348f4c05179ede27802fdd87a9  '"$RUNNER_TEMP/d2.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/d2.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/d2-v0.9.0/bin" >> "$GITHUB_PATH"
+      - name: Render and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/revision-diagram-polish.yml
+          d2 fmt docs/diagrams/revision-publication-lifetime.d2
+          D2=d2 python3 scripts/architecture_diagrams.py
+          D2=d2 python3 scripts/test_architecture_diagrams.py
+          D2=d2 python3 scripts/architecture_diagrams.py --check
+          bash scripts/check.sh architecture 8cadad70a9fdbdaf51de49369fb5c98c2d4750e0
+          git diff --check
+      - name: Publish clean final commit
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A -- README.md docs/architecture.md docs/diagrams .github/workflows/revision-diagram-polish.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          tree="$(git write-tree)"
+          commit="$(git commit-tree "$tree" -p cb48fc7febd5aa9ff383f4d9fe322b58f5631730 -m 'docs: remove crossing revision context arrows')"
+          git push origin "$commit:refs/heads/docs/architecture-clarity-final3-20260909"
