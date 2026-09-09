@@ -202,6 +202,14 @@ class Line(VMobject):
         from _manim_semantic_handles import _line_init
         _line_init(self, start, end, color=color, **kwargs)
 
+    def get_start(self) -> _base.Vec2:
+        from _manim_geometry import _line_get_start
+        return _line_get_start(self)
+
+    def get_end(self) -> _base.Vec2:
+        from _manim_geometry import _line_get_end
+        return _line_get_end(self)
+
 
 class Path(VMobject):
     def __init__(
@@ -479,6 +487,10 @@ class Group(_base.Group, _BaseMobject):
 
     def __deepcopy__(self, memo):
         return deepcopy_semantic_wrapper(self, memo)
+
+    def get_color(self) -> _base.Color:
+        from _manim_geometry import _group_get_color
+        return _group_get_color(self)
 
 
 class VGroup(Group):

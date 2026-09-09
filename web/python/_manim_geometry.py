@@ -30,45 +30,24 @@ class Dot(_compat.Circle):
         color: _base.Color = _base.WHITE,
         **kwargs: Any,
     ) -> None:
-        super().__init__(
-            radius=radius,
-            stroke_width=stroke_width,
-            fill_opacity=fill_opacity,
-            color=color,
-            **kwargs,
-        )
-        self.move_to(_compat._as_vec2(point))
+        from _manim_shared_geometry import _dot_init
+        _dot_init(self, point, radius, stroke_width, fill_opacity, color, **kwargs)
 
 
 class Ellipse(_compat.Circle):
-    """Manim-compatible ellipse.
-
-    The browser bridge replaces this initializer with shared Rust geometry and
-    layout semantics. This constructor remains only for the retained-only fallback
-    owned for deletion by #959.
-    """
+    """Manim-compatible ellipse backed by the shared Rust constructor."""
 
     def __init__(self, width: float = 2.0, height: float = 1.0, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self.stretch_to_fit_width(float(width))
-        self.stretch_to_fit_height(float(height))
+        from _manim_shared_geometry import _ellipse_init
+        _ellipse_init(self, width, height, **kwargs)
 
 
 class Triangle(_compat.Path):
     """Manim-compatible equilateral ``Triangle`` with RegularPolygon defaults."""
 
     def __init__(self, **kwargs: Any) -> None:
-        points = [
-            _base.Vec2(
-                math.cos(math.pi / 2.0 + index * _base.TAU / 3.0),
-                math.sin(math.pi / 2.0 + index * _base.TAU / 3.0),
-            )
-            for index in range(3)
-        ]
-        path = _base.VectorPath().move_to(points[0])
-        for point in points[1:]:
-            path.line_to(point)
-        super().__init__(path.close(), **kwargs)
+        from _manim_shared_geometry import _triangle_init
+        _triangle_init(self, **kwargs)
 
 
 def _line_get_start(self: _compat.Line) -> _base.Vec2:
@@ -307,12 +286,7 @@ def install() -> None:
         if name not in {"DEFAULT_DOT_RADIUS", "PURE_YELLOW"}:
             setattr(_compat, name, value)
 
-    _compat.Line.get_start = _line_get_start
-    _compat.Line.get_end = _line_get_end
-    _base.Mobject.get_color = _mobject_get_color
-    _compat.Group.get_color = _group_get_color
 
-    _base.Mobject.match_points = match_points
 
     exports = list(_base.__all__)
     for name in public:
