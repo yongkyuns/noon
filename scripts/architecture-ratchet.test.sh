@@ -480,6 +480,19 @@ for canonical in crates/noon/src/semantic_mobject.rs crates/noon/src/scene.rs cr
   git rm -q "$canonical"
   git commit -qm "remove canonical poison"
 done
+# The unconsumed slotted runtime wrapper must stay deleted even if a regression
+# already exists at the comparison base.
+for symbol in SlottedSceneInstance FrameSlotId RetiredSlotCompactionPolicy ExecutionCompactionStats ExecutionCompactionError; do
+  printf 'pub struct %s;\n' "$symbol" > src/runtime_wrapper_probe.rs
+  git add src/runtime_wrapper_probe.rs
+  git commit -qm 'restore retired runtime wrapper'
+  if bash scripts/architecture-ratchet.sh HEAD >/dev/null 2>&1; then
+    echo "architecture ratchet test failed: accepted retired runtime type $symbol" >&2
+    exit 1
+  fi
+done
+git rm -q src/runtime_wrapper_probe.rs
+git commit -qm 'remove retired runtime wrapper probe'
 # Renderer fixtures must not preserve a second scene API, even when committed
 # before the comparison base.
 for canonical in crates/noon-render-wgpu/src/probe.rs crates/noon-render-wgpu/tests/probe.rs; do
@@ -498,7 +511,7 @@ for canonical in crates/noon-render-wgpu/src/probe.rs crates/noon-render-wgpu/te
 done
 # Lowering and live publication must stay typed even when an old patch-codec
 # dependency already exists at the comparison base.
-for canonical in crates/noon-compile/src/semantic_lowering.rs crates/noon-compile/src/semantic_lowering/publication.rs crates/noon/src/execution_session.rs crates/noon/src/execution_session/publication.rs crates/noon/src/live_session.rs; do
+for canonical in crates/noon-compile/src/semantic_lowering.rs crates/noon-compile/src/semantic_lowering/publication.rs crates/noon/src/execution_session.rs crates/noon/src/execution_session/publication.rs crates/noon/src/live_session.rs crates/noon-runtime/src/execution_slots/probe.rs crates/noon-runtime/src/probe/tests.rs; do
   mkdir -p "$(dirname "$canonical")"
   printf 'use noon_core::{ScenePatch, MutationTransaction};\n' > "$canonical"
   git add "$canonical"

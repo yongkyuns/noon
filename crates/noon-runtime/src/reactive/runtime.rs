@@ -865,7 +865,7 @@ mod tests {
         let mut instance =
             SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
         instance
-            .apply_patch(&noon_core::ScenePatch::RemoveObject(object))
+            .apply_execution_patch(&noon_compile::ExecutionPatch::RemoveObject(object))
             .expect("remove must compile");
         assert!(!instance.frame().presences[0]);
 
@@ -879,8 +879,13 @@ mod tests {
         assert_eq!(instance.last_reactive_stats().dense_targets_applied, 0);
 
         instance
-            .apply_patch(&noon_core::ScenePatch::CreateObject(
-                noon_core::ObjectDefinition::new(object, GeometryRef::rectangle(2.0, 1.0)),
+            .apply_execution_patch(&noon_compile::ExecutionPatch::CreateObject(
+                noon_compile::CompiledObject::new(
+                    object,
+                    GeometryRef::rectangle(2.0, 1.0),
+                    noon_core::Transform2D::IDENTITY,
+                    noon_core::Style::default(),
+                ),
             ))
             .expect("same identity may be recreated after removal");
         assert_eq!(instance.frame().objects.len(), 1);

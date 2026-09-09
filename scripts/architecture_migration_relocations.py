@@ -136,6 +136,8 @@ def main() -> int:
             errors.append(f'{path}: deleted reactive runtime symbol returned; use the canonical execution session')
         if not path.endswith('.rs'):
             continue
+        if re.search(r'\b(?:SlottedSceneInstance|FrameSlotId|RetiredSlotCompactionPolicy|ExecutionCompactionStats|ExecutionCompactionError)\b', source):
+            errors.append(f'{path}: retired runtime wrapper returned; use ExecutionSession and shared runtime slots')
         if re.search(r'\bFrontendMobjectHandle\b', source):
             errors.append(f'{path}: deleted FrontendMobjectHandle authority returned')
         if path.startswith('crates/noon-render-wgpu/'):
@@ -152,6 +154,7 @@ def main() -> int:
         } or path.startswith((
             'crates/noon-compile/src/semantic_lowering/',
             'crates/noon/src/execution_session/',
+            'crates/noon-runtime/src/',
         ))
         if canonical_execution:
             code = re.sub(r'/\*.*?\*/|//[^\n]*', '', source, flags=re.S)
