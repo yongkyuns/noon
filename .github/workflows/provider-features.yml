@@ -4,14 +4,21 @@ on:
   pull_request:
     paths:
       - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain'
       - 'rust-toolchain.toml'
-      - 'crates/**/Cargo.toml'
-      - 'crates/noon/src/**'
-      - 'crates/noon-typst/**'
-      - 'crates/noon-text/**'
+      - '.cargo/**'
+      - '**/rustfmt.toml'
+      - '**/.rustfmt.toml'
+      - '**/clippy.toml'
+      - '**/.clippy.toml'
+      # Include examples, tests, build inputs and transitive path dependencies.
+      # Do not make provider selection depend on historical internal crate names.
+      - 'crates/**'
       - 'fixtures/provider-consumer/**'
       - 'scripts/provider-features.py'
       - 'scripts/provider_features_test.py'
+      - 'web/ci-workflow-topology.test.mjs'
       - '.github/workflows/provider-features.yml'
   workflow_dispatch:
     inputs:
@@ -89,6 +96,11 @@ jobs:
         run: |
           cargo test -p noon --no-default-features --doc
           cargo run -p noon --no-default-features --example shared_authoring
+      - name: Prove provider-dependent examples require feature guards
+        if: matrix.config == 'minimal' && matrix.target == 'x86_64-unknown-linux-gnu'
+        env:
+          NOON_PROVIDER_COMPILE_TESTS: '1'
+        run: python3 scripts/provider_features_test.py ProviderExampleTests
       - name: Publish evidence
         if: always()
         uses: actions/upload-artifact@v7

@@ -103,6 +103,18 @@ def run(command: list[str], *, env: dict[str, str], output: Path | None = None) 
     return time.perf_counter() - start
 
 
+def facade_check_command(config: str, target: str) -> list[str]:
+    """Share the real all-target check with the provider-example regression."""
+    if config not in CONFIGS:
+        raise ValueError(f"unknown provider configuration: {config}")
+    command = ["cargo", "check", "--manifest-path", str(ROOT / "Cargo.toml"),
+               "-p", "noon", "--target", target, "--no-default-features"]
+    features = "default" if config == "product" else CONFIGS[config]
+    if features:
+        command += ["--features", features]
+    return [*command, "--all-targets"]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", choices=CONFIGS, required=True)
@@ -181,11 +193,7 @@ def main() -> None:
         run(test_command, env=env)
         run(["cargo", "clippy", *common, "--all-targets", "--", "-D", "warnings"], env=env)
         # Ordinary facade targets/examples must also compile independently.
-        facade = ["--manifest-path", str(ROOT / "Cargo.toml"), "-p", "noon", "--target", args.target, "--no-default-features"]
-        features = "default" if args.config == "product" else CONFIGS[args.config]
-        if features:
-            facade += ["--features", features]
-        run(["cargo", "check", *facade, "--all-targets"], env=env)
+        run(facade_check_command(args.config, args.target), env=env)
     (output / "qualification-passed.txt").write_text("All requested checks completed successfully.\n")
 
 
