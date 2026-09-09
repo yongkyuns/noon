@@ -525,7 +525,10 @@ impl CanonicalAuthoringScene {
         self.mobject_observation(handle, noon::Mobject::fill_opacity, |player, handle| {
             // Reject resource paints before reading their lowered scalar projection.
             handle.fill_opacity()?;
-            Ok(player.live_effective(handle)?.fill_opacity())
+            Ok(player
+                .live_effective(handle)
+                .map_err(|error| error.to_string())?
+                .fill_opacity())
         })
     }
 
@@ -534,7 +537,10 @@ impl CanonicalAuthoringScene {
         self.mobject_observation(handle, noon::Mobject::stroke_opacity, |player, handle| {
             // Reject resource paints before reading their lowered scalar projection.
             handle.stroke_opacity()?;
-            Ok(player.live_effective(handle)?.stroke_opacity())
+            Ok(player
+                .live_effective(handle)
+                .map_err(|error| error.to_string())?
+                .stroke_opacity())
         })
     }
 
@@ -2231,11 +2237,11 @@ impl CanonicalAuthoringScene {
         &mut self,
         target: &noon::Mobject,
         source: &noon::Mobject,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store())
             || !std::rc::Rc::ptr_eq(self.scene.integration_store(), source.integration_store())
         {
-            return Err("mobject belongs to another authoring store".into());
+            return Err(noon::AuthoringError::ForeignStore.into());
         }
         self.active_live_player()?
             .live_replace_content(target, source)
@@ -5974,7 +5980,7 @@ mod wasm {
             )?;
             self.inner
                 .live_replace_content(target.semantic_mobject(), source.semantic_mobject())
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveShift)]
@@ -6289,9 +6295,9 @@ mod wasm {
                 state: self
                     .inner
                     .active_live_player()
-                    .map_err(js_error)?
+                    .map_err(typed_js_error)?
                     .live_effective(handle.semantic_mobject())
-                    .map_err(js_error)?,
+                    .map_err(typed_js_error)?,
             })
         }
 

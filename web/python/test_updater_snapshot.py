@@ -623,14 +623,16 @@ class PortableCapturedScalarTests(unittest.IsolatedAsyncioTestCase):
             if False:
                 mobject = tracker
             calls.append("once")
+        failure = ValueError("stale phase scalar")
         async def read(key):
-            raise ValueError("stale phase scalar")
+            raise failure
         context._read_scalar_async = read
         await context.prefetch_captured_scalars([callback], self.Tracker)
         callback(None)
         self.assertEqual(calls, ["once"])
-        with self.assertRaisesRegex(RuntimeError, "stale phase scalar"):
+        with self.assertRaises(ValueError) as caught:
             context.scalar((8, 3))
+        self.assertIs(caught.exception, failure)
 
     async def test_foreign_values_and_authored_descriptors_are_not_evaluated(self):
         owner = object()

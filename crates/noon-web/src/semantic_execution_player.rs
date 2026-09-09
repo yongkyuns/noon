@@ -1,5 +1,4 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
-#[cfg(any(target_arch = "wasm32", test))]
 use crate::authoring_error::AuthoringFailure;
 use noon::integration::{
     CallbackAdvance, CallbackPhaseToken, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
@@ -704,7 +703,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         target: &noon::Mobject,
         source: &noon::Mobject,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -717,7 +716,7 @@ impl SemanticExecutionPlayer {
         )
         .replace_content(target, source)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -975,7 +974,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_effective(
         &mut self,
         mobject: &noon::Mobject,
-    ) -> Result<noon::EffectiveMobjectState, String> {
+    ) -> Result<noon::EffectiveMobjectState, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -987,7 +986,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .effective(mobject)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2067,6 +2066,118 @@ fn decode_callback_batch(json: &str) -> Result<EffectivePropertyBatch, String> {
     Ok(EffectivePropertyBatch::new(token, writes))
 }
 
+// Keep the shared callback failures typed until the actual JS boundary. The
+// decoding and preflight/commit order below are the existing worker protocol.
+impl SemanticExecutionPlayer {
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub fn required_callback_read_json(
+        &mut self,
+        token_json: &str,
+        request_json: &str,
+    ) -> Result<String, AuthoringFailure> {
+        let token = Self::callback_token_from_json(token_json)?;
+        self.pending_callback_phase
+            .filter(|(pending, _)| *pending == token)
+            .ok_or("callback read does not match the player pending phase")?;
+        let request_wire: CallbackReadRequestWire = serde_json::from_str(request_json)
+            .map_err(|error| format!("invalid callback read request JSON: {error}"))?;
+        let requested_object = match &request_wire {
+            CallbackReadRequestWire::Object { node } => Some(node.clone()),
+            CallbackReadRequestWire::ScalarSignal { .. }
+            | CallbackReadRequestWire::Family { .. } => None,
+        };
+        let request = match request_wire {
+            CallbackReadRequestWire::Family { node } => {
+                let store = self
+                    .semantics
+                    .as_ref()
+                    .ok_or("family callback reads require a live semantic store")?;
+                let rows = self
+                    .session
+                    .required_callback_family_read(&store.borrow(), token, node.into())
+                    .map_err(AuthoringFailure::from)?;
+                let objects = rows
+                    .into_iter()
+                    .map(|(node, properties)| CallbackPhaseObjectWire {
+                        node: node.into(),
+                        transform: properties.transform,
+                        style: properties.style,
+                        appearance: properties.appearance,
+                        presence: properties.presence,
+                        reveal: properties.reveal,
+                        morph: properties.morph,
+                        bounds: properties.bounds,
+                    })
+                    .collect();
+                return serde_json::to_string(&CallbackReadValueWire::Family { objects })
+                    .map_err(|error| AuthoringFailure::from(error.to_string()));
+            }
+            CallbackReadRequestWire::Object { node } => CallbackReadRequest::Object(node.into()),
+            CallbackReadRequestWire::ScalarSignal { node } => {
+                CallbackReadRequest::ScalarSignal(node.into())
+            }
+        };
+        let value = self
+            .session
+            .required_callback_read(token, request)
+            .map_err(AuthoringFailure::from)?;
+        let wire = match value {
+            CallbackReadValue::Scalar(value) => CallbackReadValueWire::Scalar { value },
+            CallbackReadValue::Object(properties) => CallbackReadValueWire::Object {
+                object: CallbackPhaseObjectWire {
+                    node: requested_object.ok_or("scalar callback read returned an object")?,
+                    transform: properties.transform,
+                    style: properties.style,
+                    appearance: properties.appearance,
+                    presence: properties.presence,
+                    reveal: properties.reveal,
+                    morph: properties.morph,
+                    bounds: properties.bounds,
+                },
+            },
+        };
+        serde_json::to_string(&wire).map_err(|error| AuthoringFailure::from(error.to_string()))
+    }
+
+    pub fn commit_callback_phase_json(&mut self, batch_json: &str) -> Result<(), AuthoringFailure> {
+        let batch = decode_callback_batch(batch_json)?;
+        let token = batch.token();
+        let (_, time) = self
+            .pending_callback_phase
+            .filter(|(pending, _)| *pending == token)
+            .ok_or("callback batch does not match the player pending phase")?;
+        self.session
+            .commit_required_callback_phase(batch)
+            .map_err(AuthoringFailure::from)?;
+        // The callback phase time is session-owned. Re-anchoring presentation
+        // only after its commit avoids a host-side progression cursor.
+        self.clock.seek(time).map_err(|error| error.to_string())?;
+        self.pending_callback_phase = None;
+        Ok(())
+    }
+
+    pub fn fail_callback_phase_json(&mut self, phase_json: &str) -> Result<(), AuthoringFailure> {
+        let token = Self::phase_token_from_json(phase_json)?;
+        self.session
+            .fail_required_callback_phase(token)
+            .map_err(AuthoringFailure::from)?;
+        self.pending_callback_phase = None;
+        Ok(())
+    }
+
+    pub fn interrupt_callback_phase_json(
+        &mut self,
+        phase_json: &str,
+    ) -> Result<(), AuthoringFailure> {
+        let token = Self::phase_token_from_json(phase_json)?;
+        self.session
+            .interrupt_required_callback_phase(token)
+            .map_err(AuthoringFailure::from)?;
+        self.pending_callback_phase = None;
+        Ok(())
+    }
+}
+
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 impl SemanticExecutionPlayer {
     fn callback_phase_json(
@@ -2252,113 +2363,45 @@ impl SemanticExecutionPlayer {
     /// Read one typed value from the exact pending callback phase without
     /// committing it. This is the real Python-worker boundary; direct Rust
     /// callbacks call the session API without JSON.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = requiredCallbackReadJson))]
-    pub fn required_callback_read_json(
+    pub fn required_callback_read_json_wasm(
         &mut self,
         token_json: &str,
         request_json: &str,
-    ) -> Result<String, String> {
-        let token = Self::callback_token_from_json(token_json)?;
-        self.pending_callback_phase
-            .filter(|(pending, _)| *pending == token)
-            .ok_or("callback read does not match the player pending phase")?;
-        let request_wire: CallbackReadRequestWire = serde_json::from_str(request_json)
-            .map_err(|error| format!("invalid callback read request JSON: {error}"))?;
-        let requested_object = match &request_wire {
-            CallbackReadRequestWire::Object { node } => Some(node.clone()),
-            CallbackReadRequestWire::ScalarSignal { .. }
-            | CallbackReadRequestWire::Family { .. } => None,
-        };
-        let request = match request_wire {
-            CallbackReadRequestWire::Family { node } => {
-                let store = self
-                    .semantics
-                    .as_ref()
-                    .ok_or("family callback reads require a live semantic store")?;
-                let rows = self
-                    .session
-                    .required_callback_family_read(&store.borrow(), token, node.into())
-                    .map_err(|error| error.to_string())?;
-                let objects = rows
-                    .into_iter()
-                    .map(|(node, properties)| CallbackPhaseObjectWire {
-                        node: node.into(),
-                        transform: properties.transform,
-                        style: properties.style,
-                        appearance: properties.appearance,
-                        presence: properties.presence,
-                        reveal: properties.reveal,
-                        morph: properties.morph,
-                        bounds: properties.bounds,
-                    })
-                    .collect();
-                return serde_json::to_string(&CallbackReadValueWire::Family { objects })
-                    .map_err(|error| error.to_string());
-            }
-            CallbackReadRequestWire::Object { node } => CallbackReadRequest::Object(node.into()),
-            CallbackReadRequestWire::ScalarSignal { node } => {
-                CallbackReadRequest::ScalarSignal(node.into())
-            }
-        };
-        let value = self
-            .session
-            .required_callback_read(token, request)
-            .map_err(|error| error.to_string())?;
-        let wire = match value {
-            CallbackReadValue::Scalar(value) => CallbackReadValueWire::Scalar { value },
-            CallbackReadValue::Object(properties) => CallbackReadValueWire::Object {
-                object: CallbackPhaseObjectWire {
-                    node: requested_object.ok_or("scalar callback read returned an object")?,
-                    transform: properties.transform,
-                    style: properties.style,
-                    appearance: properties.appearance,
-                    presence: properties.presence,
-                    reveal: properties.reveal,
-                    morph: properties.morph,
-                    bounds: properties.bounds,
-                },
-            },
-        };
-        serde_json::to_string(&wire).map_err(|error| error.to_string())
+    ) -> Result<String, wasm_bindgen::JsValue> {
+        self.required_callback_read_json(token_json, request_json)
+            .map_err(crate::authoring_error::js_error)
     }
 
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = commitCallbackPhaseJson))]
-    pub fn commit_callback_phase_json(&mut self, batch_json: &str) -> Result<(), String> {
-        let batch = decode_callback_batch(batch_json)?;
-        let token = batch.token();
-        let (_, time) = self
-            .pending_callback_phase
-            .filter(|(pending, _)| *pending == token)
-            .ok_or("callback batch does not match the player pending phase")?;
-        self.session
-            .commit_required_callback_phase(batch)
-            .map_err(|error| error.to_string())?;
-        // The callback phase time is session-owned. Re-anchoring presentation
-        // only after its commit avoids a host-side progression cursor.
-        self.clock.seek(time).map_err(|error| error.to_string())?;
-        self.pending_callback_phase = None;
-        Ok(())
+    pub fn commit_callback_phase_json_wasm(
+        &mut self,
+        batch_json: &str,
+    ) -> Result<(), wasm_bindgen::JsValue> {
+        self.commit_callback_phase_json(batch_json)
+            .map_err(crate::authoring_error::js_error)
     }
 
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = failCallbackPhaseJson))]
-    pub fn fail_callback_phase_json(&mut self, phase_json: &str) -> Result<(), String> {
-        let token = Self::phase_token_from_json(phase_json)?;
-        self.session
-            .fail_required_callback_phase(token)
-            .map_err(|error| error.to_string())?;
-        self.pending_callback_phase = None;
-        Ok(())
+    pub fn fail_callback_phase_json_wasm(
+        &mut self,
+        phase_json: &str,
+    ) -> Result<(), wasm_bindgen::JsValue> {
+        self.fail_callback_phase_json(phase_json)
+            .map_err(crate::authoring_error::js_error)
     }
 
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = interruptCallbackPhaseJson))]
-    pub fn interrupt_callback_phase_json(&mut self, phase_json: &str) -> Result<(), String> {
-        let token = Self::phase_token_from_json(phase_json)?;
-        self.session
-            .interrupt_required_callback_phase(token)
-            .map_err(|error| error.to_string())?;
-        self.pending_callback_phase = None;
-        Ok(())
+    pub fn interrupt_callback_phase_json_wasm(
+        &mut self,
+        phase_json: &str,
+    ) -> Result<(), wasm_bindgen::JsValue> {
+        self.interrupt_callback_phase_json(phase_json)
+            .map_err(crate::authoring_error::js_error)
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = callbackTerminationJson))]
@@ -2756,6 +2799,70 @@ mod tests {
             assert_ne!(object.state().unwrap(), authored);
             assert_ne!(player.session.publication_context(), publication);
         }
+    }
+
+    #[test]
+    fn live_content_and_observation_errors_keep_atomicity_and_local_retry() {
+        let mut scene = noon::Scene::new();
+        let target = scene.circle(0.5).unwrap();
+        let source = scene.circle(0.75).unwrap();
+        let other = noon::Scene::new();
+        let foreign = other.circle(0.5).unwrap();
+        scene.add(&target).unwrap();
+        let session = scene.execution_session().unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            session,
+            std::rc::Rc::clone(scene.integration_store()),
+            scene.root(),
+            1.0,
+            41,
+        )
+        .unwrap();
+        player.delta(true).unwrap().unwrap();
+        let authored = target.state().unwrap();
+        let original_source = source.state().unwrap();
+        let publication = player.session.publication_context();
+        let frame = player.debug_frame_json();
+        let resources = player.resource_bundle_bytes();
+        for (invalid_target, invalid_source) in [(&foreign, &source), (&target, &foreign)] {
+            let error = player
+                .live_replace_content(invalid_target, invalid_source)
+                .unwrap_err();
+            assert_eq!(error.category, "foreign_handle");
+            assert_eq!(error.code, "live.foreign_store");
+            assert_eq!(target.state().unwrap(), authored);
+            assert_eq!(source.state().unwrap(), original_source);
+            assert_eq!(player.session.publication_context(), publication);
+            assert_eq!(player.debug_frame_json(), frame);
+            assert_eq!(player.resource_bundle_bytes(), resources);
+            assert!(player.delta(false).unwrap().is_none());
+        }
+        // A valid detached semantic object is not an effective execution row.
+        let error = player.live_effective(&source).unwrap_err();
+        assert_eq!(error.category, "stale_handle");
+        assert_eq!(error.code, "live.publication");
+        let cause = error.cause.as_ref().unwrap();
+        assert_eq!(cause.code, "publication.unknown_object");
+        assert!(cause.cause.is_none());
+        assert_eq!(player.session.publication_context(), publication);
+        assert_eq!(player.debug_frame_json(), frame);
+        assert_eq!(player.resource_bundle_bytes(), resources);
+        assert!(player.delta(false).unwrap().is_none());
+
+        player.live_replace_content(&target, &source).unwrap();
+        let after = target.state().unwrap();
+        assert_eq!(after.content, original_source.content);
+        assert_ne!(after.content, authored.content);
+        assert_eq!(after.transform, authored.transform);
+        assert_eq!(after.style, authored.style);
+        assert_eq!(source.state().unwrap(), original_source);
+        player.live_effective(&target).unwrap();
+        let delta = player.delta(false).unwrap().unwrap();
+        assert!(!delta.retained.snapshot);
+        assert_eq!(delta.retained.objects.len(), 1);
+        assert!(delta.retained.removed_slots.is_empty());
+        assert!(player.delta(false).unwrap().is_none());
+        assert_eq!(player.resource_bundle_bytes(), resources);
     }
 
     #[test]
@@ -3682,3 +3789,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod callback_error_tests;

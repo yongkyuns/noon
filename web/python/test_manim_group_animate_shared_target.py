@@ -99,6 +99,14 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
                     self.members = []
                     self.calls = []
 
+                def layout(self):
+                    self.calls.append("layout")
+                    return self
+
+                def shiftBy(self, x, y):
+                    # This double observes forwarding, not shared Rust semantics.
+                    self.calls.append(("shiftBy", float(x), float(y)))
+
                 def setFill(self, *arguments):
                     self.calls.append(("setFill", arguments))
 
@@ -165,9 +173,12 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
             builder.shift(RIGHT).set_fill(ORANGE, opacity=0.5)
             assert first._current_raw().to_ir() == source_first
             assert second._current_raw().to_ir() == source_second
-            assert target_first._current_raw().transform["translation"]["x"] == 1.0
-            assert target_second._current_raw().transform["translation"]["x"] == 1.0
-            # Rust owns family paint semantics; this frontend test checks one dispatch.
+            # Shared Rust owns family translation and paint. The test double
+            # records a single family dispatch; no leaf fallback may run here.
+            assert target._semantic_family_handle.calls[:2] == ["layout", ("shiftBy", 1.0, 0.0)]
+            assert not any(isinstance(call, tuple) and call[0] == "shift"
+                           for handle in (target_first._semantic_handle, target_second._semantic_handle)
+                           for call in handle.calls)
             assert target._semantic_family_handle.calls[-1] == (
                 "setFill", (True, ORANGE.red, ORANGE.green, ORANGE.blue, ORANGE.alpha, 0.5)
             )
