@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      BASE: ee1de6a0418c6da8559f891f98820aa8dc57809d
+      BASE: e5a0557bc4d3b0f1df8bbc1474694fa37503af93
       ORIGINAL_MAPPER_BASE: 10e9597611dad4dc4d1917f39dc685143fd37f3c
       PAYLOAD_COMMIT: 044c054fa6c157c11e0e9eb163ff1f645fba7996
       CARGO_INCREMENTAL: "0"
@@ -77,6 +77,10 @@ jobs:
           assert "InvalidPaint(cause) => Self::caused_by(" in family_before
           assert 'other => Self::unclassified("authoring.unclassified", &other)' in current
           assert '_ => return Self::unclassified("unsupported.unclassified", &error)' in current
+          old_test = '''        // Unaccepted domains remain explicit, even with category-like input text.\n        let failure = AuthoringFailure::from(AuthoringError::InvalidStrokeCap(\n            "invalid opacity; negative stroke width".into(),\n        ));\n        assert_eq!(failure.category, "unclassified");\n        assert_eq!(failure.code, "authoring.unclassified");\n'''
+          new_test = '''        // The settled typed variant, not category-like diagnostic text, owns classification.\n        let failure = AuthoringFailure::from(AuthoringError::InvalidStrokeCap(\n            "invalid opacity; negative stroke width".into(),\n        ));\n        assert_eq!(failure.category, "invalid_input");\n        assert_eq!(failure.code, "authoring.invalid_stroke_cap");\n'''
+          assert current.count(old_test) == 1
+          current = current.replace(old_test, new_test, 1)
           path.write_text(current)
 
           tests = Path("web/python/test_noon_errors_wasm.py")
@@ -116,15 +120,15 @@ jobs:
           set -euo pipefail
           cargo test -p noon-web --all-features --lib authoring_error::tests -- --nocapture 2>&1 | tee "$RUNNER_TEMP/r3-r2a/native-mapper.log"
           cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests 2>&1 | tee "$RUNNER_TEMP/r3-r2a/consumers.log"
-      - name: Fast architecture and compile gate
+      - name: Required full gate
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/check.sh fast "$BASE" 2>&1 | tee "$RUNNER_TEMP/r3-r2a/fast.log"
+          bash scripts/check.sh full "$BASE" 2>&1 | tee "$RUNNER_TEMP/r3-r2a/full.log"
       - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
         with:
           tool: wasm-pack@0.15.0
-      - name: Build actual WASM and preflight Python
+      - name: Build diagnostic WASM and preflight Python
         shell: bash
         run: |
           set -euo pipefail
@@ -157,7 +161,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r3-r2a-current-master-qualification
+          name: r3-r2a-full-current-master-qualification
           path: ${{ runner.temp }}/r3-r2a
           if-no-files-found: error
           retention-days: 3
