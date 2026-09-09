@@ -10,7 +10,7 @@ jobs:
     timeout-minutes: 50
     env:
       BASE: 5b56124312657c0959e1ca3936930cad0fe7e240
-      CANDIDATE: 8a19ea03af9e4e87f48ccb761b196dbb8061ceb5
+      CANDIDATE: ae2d56e236749cffc9db11d8ee7ed5bcaf55b341
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Integrate the landed advancement mapping once, preserving all independent tests
+      - name: Correct two native-test lint findings without altering the integrated mapper
         shell: bash
         run: |
           set -euo pipefail
@@ -33,10 +33,10 @@ jobs:
           git checkout --detach "$CANDIDATE"
           RUSTC_WRAPPER= python3 "$RUNNER_TEMP/r3-input/combine.py"
           git diff --cached --check
-          git commit -m 'fix: join landed advancement and callback cause mappings without losing regressions'
+          git commit -m 'test: use direct error assertions in nested callback projection regression'
           test "$(git rev-parse HEAD^)" = "$CANDIDATE"
-          test "$(git rev-parse HEAD^2)" = "$BASE"
-          git rev-parse HEAD HEAD^{tree} HEAD^ HEAD^2 > "$RUNNER_TEMP/r3-evidence/revisions.txt"
+          git merge-base --is-ancestor "$BASE" HEAD
+          git rev-parse HEAD HEAD^{tree} HEAD^ "$BASE" > "$RUNNER_TEMP/r3-evidence/revisions.txt"
           git diff "$BASE" HEAD > "$RUNNER_TEMP/r3-evidence/product.patch"
           git archive --format=tar.gz HEAD > "$RUNNER_TEMP/r3-evidence/source.tar.gz"
           git push origin HEAD:refs/heads/codex/1350-final-candidate
@@ -60,7 +60,7 @@ jobs:
       - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
         with:
           tool: wasm-pack@0.15.0
-      - name: Full gate for the meaningful Rust mapping overlap, not the recovered infrastructure leg
+      - name: Full gate for the corrected meaningful mapping overlap
         shell: bash
         run: |
           set -euo pipefail
