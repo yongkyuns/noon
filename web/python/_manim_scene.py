@@ -1466,7 +1466,7 @@ def _build_canonical_composition_candidate(
             nested = build(nested_kind, tuple(animation.animations), animation, {})
             builder.appendComposition(nested)
             return
-        if type(animation) is _options.ScaleInPlace:
+        if type(animation) is _animate.ScaleInPlace:
             # Resolve options before creating a target. Copy/scale and effective
             # play-begin state belong to the shared semantic operations.
             _canonical_composition_child_options(animation, child_kwargs)

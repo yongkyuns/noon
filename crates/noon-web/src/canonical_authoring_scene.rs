@@ -9,6 +9,8 @@ pub(crate) use player_ownership::PlayerReturnError;
 use player_ownership::{PlayerOwnership, RejectedPlayerReturn};
 #[cfg(test)]
 mod ownership_tests;
+#[cfg(test)]
+mod wait_bootstrap_tests;
 
 use noon_core::ObjectId;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -801,7 +803,12 @@ impl CanonicalAuthoringScene {
             }
             // A wait has no animation extent, but the presentation clock still needs a
             // positive valid range before its session-derived deadline replaces it.
-            self.live_player(duration.max(1.0))?;
+            let mut player = self.build_live_player(duration.max(1.0), 0)?;
+            let end_time = player.live_wait(duration)?;
+            // Shared admission is fallible. Publish the first runtime only once
+            // it owns a valid segment; rejection leaves this context unstarted.
+            self.player_ownership = PlayerOwnership::Active(player);
+            return Ok(end_time);
         }
         let player = self.active_live_player()?;
         player.live_wait(duration)

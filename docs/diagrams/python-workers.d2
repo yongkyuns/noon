@@ -1,0 +1,37 @@
+# Current semantic Python path: semantic-engine-endpoint.js leases an existing
+# context player in the authoring worker. The other owner renders derived output.
+...@_style
+
+grid-columns: 1
+vertical-gap: 64
+ui: "BROWSER MAIN THREAD\neditor · controls · canvas lifecycle · recovery\nNo semantic state or timeline authority" {class: host}
+
+contexts: "" {
+  grid-columns: 2
+  horizontal-gap: 220
+  style.stroke-width: 0
+  authoring: "PYTHON AUTHORING WORKER" {
+    grid-columns: 1
+    vertical-gap: 66
+    python: "Pyodide + thin Python facade\nsource continuation · coercion\nPython callback invocation" {class: node}
+    semantics: "Shared Rust/WASM semantics\nScene + SemanticStore\ncanonical authoring context" {class: authority}
+    execution: "Rust execution session\ncompiler + runtime\nsame-context player lease" {class: authority}
+    endpoint: "Semantic engine endpoint\ncontrols · callback barriers\ntransport pacing, not a runtime" {class: node}
+    python -> semantics: "synchronous handle operations"
+    semantics -> execution: "typed lowering / live publication"
+    execution -> endpoint: "derived render output"
+  }
+
+  render: "RENDER OWNER" {
+    grid-columns: 1
+    vertical-gap: 66
+    receiver: "Transport receiver\nresource installation + deltas\nRetainedExecutionCanvasRenderer" {class: node}
+    gpu: "noon-render-wgpu\nretained GPU resources\nWebGPU / WebGL2 surface" {class: authority}
+    note: "Worker or main-thread fallback\nNo scene / runtime authority" {class: note}
+    receiver -> gpu: "prepare / draw / present"
+  }
+}
+
+ui -> contexts.authoring: "source + controls"
+ui -> contexts.render: "canvas + lifecycle"
+contexts.authoring <-> contexts.render: "resources / deltas →\n← ticks / acknowledgements\nREAL CONTEXT BOUNDARY" {style.stroke-width: 3}
