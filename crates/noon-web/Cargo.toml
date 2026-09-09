@@ -12,6 +12,8 @@ crate-type = ["cdylib", "rlib"]
 default = ["renderer"]
 # Explicit release-profile qualification only; production builds omit the fixtures.
 renderer-smoke = ["renderer"]
+# Opt-in typed replay fixtures for optimized qualification, not production exports.
+replay-smoke = []
 renderer = [
     "dep:noon-render-wgpu",
     "dep:wgpu",

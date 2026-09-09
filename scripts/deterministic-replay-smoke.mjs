@@ -60,6 +60,9 @@ try {
     const wasm = await import("./pkg/noon_web.js");
     await wasm.default();
     if ("verifySceneReplay" in wasm) throw new Error("legacy scene-document replay API returned");
+    if (typeof wasm.verifyDirectExecutionReplay !== "function") {
+      throw new Error("Replay qualification requires a dev package or the explicit replay-smoke release feature; production packages omit fixtures");
+    }
     window.noonDeterminism = { verify: wasm.verifyDirectExecutionReplay };
   });
 
