@@ -8,23 +8,11 @@ The project treats Manim's common 2D authoring semantics as a cross-language con
 
 Noon exposes one expressive, mutable semantic scene and specializes it as aggressively as the program permits:
 
-```text
-Manim-compatible Python     idiomatic Rust     future frontends
-          \                     |                    /
-           \                    |                   /
-            +-------- shared semantic scene -------+
-                              |
-                       analysis / lowering
-                              |
-                         execution plan
-                              |
-                       mutable runtime
-                              |
-                     incremental dirty work
-                              |
-                              v
-                         renderer
-```
+![Shared Rust semantic operations feed one Semantic Scene, derived Execution Plan, effective Runtime and retained Renderer; native and browser hosts own lifecycle.](docs/diagrams/overview.svg)
+
+[D2 source](docs/diagrams/overview.d2) · [Current crate ownership](docs/architecture.md#current-implementation-ownership) · [Python worker topology](docs/architecture.md#host-language-or-multi-worker-topology).
+
+The direct native and single-context Rust/WASM paths use typed in-process boundaries. The optional Python worker transport is a separate integration topology, not an extra engine layer.
 
 Key invariants:
 
@@ -171,10 +159,10 @@ The browser demo combines:
 - Rust/WASM scene compilation and evaluation;
 - WebGPU rendering with automatic WebGL2 fallback;
 - a Pyodide worker for interactive Python authoring;
-- semantic live scene reconciliation;
+- shared Rust live mutations and source-session replacement on rerun;
 - runtime and GPU profiling counters.
 
-The target architecture keeps the shared semantic implementation beside Pyodide in the authoring context. Python wrappers call it synchronously through handles, while the execution/render context receives typed scene or mutation data. Static playback requires no Pyodide participation.
+The current semantic Python path keeps the shared Rust/WASM semantic context **and its execution session in the authoring worker** beside Pyodide. Python calls shared operations synchronously through handles; the semantic engine endpoint leases the existing player in that same context. A separate render owner receives derived resource bundles and execution deltas over the actual worker boundary, using transferable buffers or a shared mailbox. Rendering can fall back to the main thread without moving semantic/runtime authority. Deterministic playback without host callbacks does not require per-frame Python interpreter execution. See the [current worker diagram](docs/architecture.md#host-language-or-multi-worker-topology).
 
 Build the current demo from the repository root:
 
@@ -193,15 +181,16 @@ The active implementation lives under `crates/`. Current responsibilities are:
 
 - `noon` — public Rust API, shared authoring operations, and execution-session orchestration;
 - `noon-core` — shared semantic identity/store, declarations, resources, and renderer-independent data contracts;
-- `noon-compile` — semantic analysis, specialization, lowering, and geometry preparation;
+- `noon-compile` — semantic analysis, specialization, lowering, `CompiledScene`, root-order publication preparation, and geometry preparation;
 - `noon-runtime` — deterministic mutable execution, reactive evaluation, scheduling, and incremental updates;
 - `noon-render-wgpu` — retained WebGPU renderer;
+- `noon-native` — native window/event-loop/surface integration, isolated by its platform dependencies;
 - `noon-web` — WASM/browser integration;
 - supporting geometry/text crates only where a real dependency or compilation boundary justifies them.
 
-`noon-ir` and the obsolete browser scene/execution mirrors have been deleted. Remaining core legacy scene/codec and frontend migration surfaces are tracked by #959 and #61. Serialization is reserved for explicit codecs and genuine cross-context transport; it is not an in-process engine boundary.
+`noon-ir` and the obsolete browser scene/execution mirrors have been deleted. Explicit codec/export and frontend cleanup remain tracked by #959 and #61. Serialization is reserved for explicit codecs and genuine cross-context transport; it is not an in-process engine boundary.
 
-The target boundary remains defined by `docs/architecture.md`; #960 tracks the remaining separation of semantic and execution definitions currently housed in `noon-core`.
+The [current ownership diagram](docs/architecture.md#current-implementation-ownership) distinguishes this implementation from the target crate responsibilities. `SemanticStore` remains in `noon-core`, `CompiledScene` in `noon-compile`, and execution-session orchestration in `noon`. The target boundary remains defined by `docs/architecture.md`; #960 tracks the remaining separation. Diagram sources and checked-in SVGs are refreshed with `python3 scripts/architecture_diagrams.py`; CI checks that they agree.
 
 Crates should correspond to real dependency or compilation boundaries. Prefer modules over crates until an independent build/dependency/reuse boundary exists.
 

@@ -1,0 +1,33 @@
+# Current shared pipeline; the separate Python worker boundary is expanded in python-workers.d2.
+...@_style
+
+direction: down
+rust: "Rust authoring\nScene · Mobject · LiveSession" {class: node}
+python: "Python facade\nManim syntax · shared handles" {class: node}
+future: "Future JS/TS\noptional language adapter" {class: future}
+operations: "Shared Rust semantic operations\nidentity · family · layout · animation · mutation" {class: node}
+
+engine: "FOUR AUTHORITIES · one shared engine" {
+  grid-columns: 4
+  horizontal-gap: 100
+  scene: "01  Semantic Scene\nAuthored / base state" {class: authority}
+  plan: "02  Execution Plan\nDerived specialization" {class: authority}
+  runtime: "03  Runtime\nEffective state · time" {class: authority}
+  renderer: "04  Renderer\nRetained GPU state" {class: authority}
+  scene -> plan: "lower"
+  plan -> runtime: "instantiate"
+  runtime -> renderer: "dirty work"
+}
+
+hosts: "PLATFORM SHELLS · lifecycle, not scene or runtime truth" {
+  grid-columns: 2
+  horizontal-gap: 48
+  native: "noon-native\nwindow · event loop · surface" {class: host}
+  web: "noon-web + browser glue\ncanvas · resize · presentation" {class: host}
+}
+
+rust -> operations
+python -> operations
+future -> operations: {style.stroke-dash: 4}
+operations -> engine: "author / mutate"
+engine -> hosts: "render output · host-owned presentation"

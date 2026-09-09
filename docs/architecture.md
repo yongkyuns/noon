@@ -34,21 +34,9 @@ Noon unifies **scene semantics and engine execution**, not source-language execu
 
 Rust, Python and future frontends are allowed to have fundamentally different host execution models:
 
-```text
-Rust source
-    |
-  rustc
-    |
-    v
-compiled Rust program -----------+
-                                 |
-Python source                    | typed/shared semantic operations
-    |                            |
-Python interpreter --------------+----> Semantic Scene
-                                 |
-editor/live declarations --------+
-    parser/diff/commands
-```
+![Rust compiled control flow, Python interpreter continuation and future editor commands converge on shared Rust operations, coherent segments and logical completion.](diagrams/host-continuation.svg)
+
+[D2 source](diagrams/host-continuation.d2).
 
 A Rust application is ahead-of-time compiled. It may create, query and mutate a live Noon scene at runtime through code paths that were compiled ahead of time, but the live-scene model does not imply that arbitrary new Rust source can be interpreted inside the running process. Arbitrary Rust source changes require an explicit mechanism such as recompilation/hot reload, a plugin boundary, or a separate runtime-editable declarative language.
 
@@ -82,27 +70,9 @@ The Semantic Scene remains alive and authoritative across execution-plan revisio
 
 The complete native Rust path is a direct, typed, in-process Rust pipeline:
 
-```text
-Rust application
-    |
-    v
-idiomatic `noon` Rust API
-    |
-    v
-Semantic Scene
-    |
-    v
-Execution Plan
-    |
-    v
-Runtime
-    |
-    v
-Renderer
-    |
-    v
-native host / surface / GPU
-```
+![Native Rust authoring, semantic lowering, runtime and retained renderer share one process with typed boundaries; noon-native owns window and surface lifecycle.](diagrams/native-execution.svg)
+
+[D2 source](diagrams/native-execution.d2).
 
 This path must not require Python, JavaScript, WASM, a browser runtime, JSON, serialization/deserialization, transport documents, or a host-language bridge between these layers.
 
@@ -110,27 +80,9 @@ This path must not require Python, JavaScript, WASM, a browser runtime, JSON, se
 
 Rust authoring must also be able to target the browser directly by compiling the same shared engine path to WASM:
 
-```text
-Rust/WASM application
-    |
-    v
-idiomatic `noon` Rust API
-    |
-    v
-Semantic Scene
-    |
-    v
-Execution Plan
-    |
-    v
-Runtime
-    |
-    v
-Renderer
-    |
-    v
-web host / canvas / WebGPU or WebGL
-```
+![Direct Rust/WASM uses the same four layers in one WASM context; JavaScript only supplies browser lifecycle glue, never intermediate scene transport.](diagrams/wasm-execution.svg)
+
+[D2 source](diagrams/wasm-execution.d2).
 
 When those layers live in one WASM execution context, every arrow above is a typed in-process Rust boundary. The scene must not be serialized to JSON, a scene document, an execution mirror, or another wire representation merely because the final surface is a browser canvas.
 
@@ -146,55 +98,9 @@ Manim Community v0.21.x is the compatibility oracle for supported common 2D Pyth
 
 ## 2. Architecture in one picture
 
-```text
-                  Manim-compatible Python      future JS/TS
-                            |                       |
-                            +---- thin wrappers ----+
-                                      |
-                                      v
-                         shared Rust semantic operations
-                                      ^
-                                      |
-                            idiomatic Rust API
-                                      |
-                                      v
-                              +-----------------------+
-                              |    Semantic Scene     |
-                              |  one source of truth  |
-                              +-----------+-----------+
-                                          |
-                                  analyze / lower
-                                          |
-                                          v
-                              +-----------------------+
-                              |    Execution Plan     |
-                              | compact + specialized |
-                              +-----------+-----------+
-                                          |
-                                     instantiate
-                                          |
-                                          v
-                              +-----------------------+
-                              |        Runtime        |
-                              | time + mutable state  |
-                              | dirty/local updates   |
-                              +-----------+-----------+
-                                          |
-                                          v
-                              +-----------------------+
-                              |       Renderer        |
-                              | retained GPU state    |
-                              +-----------+-----------+
-                                          |
-                         +----------------+----------------+
-                         |                                 |
-                         v                                 v
-              native platform host                browser/WASM host
-          window/event loop/surface            canvas/frame/input glue
-                         |                                 |
-                         v                                 v
-                  native surface                     web surface
-```
+![One shared Rust engine with Semantic Scene, Execution Plan, Runtime and Renderer authorities, reused by native and browser platform shells.](diagrams/overview.svg)
+
+[D2 source](diagrams/overview.d2).
 
 There are four engine layers and exactly one authority at each layer:
 
@@ -217,30 +123,9 @@ A continuously live authoring experience requires coordination between ways of c
 
 Conceptually:
 
-```text
-script continuation / segment completion
-native input + events
-host callbacks
-editor/session manipulation
-hot-reload reconciliation
-          |
-          v
-+----------------------------------+
-| live execution/session control   |
-| ordering + barriers + revisions  |
-| no independent scene authority   |
-+----------------+-----------------+
-                 |
-        +--------+--------+
-        |                 |
-        v                 v
-Semantic operations    Runtime tick/wake
-        |                 |
-        +--------+--------+
-                 |
-                 v
-              Renderer
-```
+![LiveProgram and ExecutionSession coordinate script continuation, input and callback barriers, semantic publication and runtime advance without becoming a fifth authority.](diagrams/session-control.svg)
+
+[D2 source](diagrams/session-control.d2).
 
 The control-plane responsibility belongs with runtime/execution integration. It may coordinate script continuations, published frame epochs, wake/sleep, input delivery, ordered updater/callback evaluation and publication barriers, but it must not own a second scene, timeline, scheduler truth or renderer model.
 
@@ -370,20 +255,7 @@ Thin does not mean one cross-language call per scalar property access. Frontends
 
 Sequential authoring is allowed to depend on completed runtime state. `play()`/`wait()`-class operations therefore establish a logical segment-completion barrier:
 
-```text
-host authoring continuation
-        |
-        | author mutations / animation intent
-        v
-stage + coherently publish executable segment
-        |
-        | execute deterministic/realtime segment
-        v
-logical segment completion
-        |
-        v
-resume host authoring continuation
-```
+See the [host-continuation diagram](#host-language-execution-invariant) ([D2 source](diagrams/host-continuation.d2)): author intent, stage/publish a segment, advance the same runtime, then resume only after logical completion.
 
 The host mechanism used to wait is target-specific: a Python worker may block/suspend an interpreter continuation, native Rust may drive/await through compiled control flow, and browser/WASM must yield/await without blocking browser frame/input servicing. These mechanisms need semantic equivalence at the barrier; they do not need identical host-language execution machinery.
 
@@ -710,22 +582,11 @@ Host callbacks, editor actions, graph topology updates and hot reload should reu
 
 Ordered runtime evaluation may produce two different classes of staged output and the architecture must not conflate them:
 
-```text
-StagedUpdateBatch
-    effective driver writes
-        -> Runtime effective slots/domains
-        -> spatial/renderer-facing effects as needed
-        -> FrameEpoch may advance
-        -> no SceneRevision necessarily
-        -> no ExecutionRevision necessarily
+![Persistent semantic edits go through semantic and compiler preparation; effective driver writes bypass authored relowering. Both publish coherent effective state and local renderer changes.](diagrams/live-publication.svg)
 
-    authored semantic mutations
-        -> Semantic Scene staged state
-        -> validation + impact analysis
-        -> incremental lowering/preparation when required
-        -> SceneRevision advances on commit
-        -> ExecutionRevision advances only if the execution projection changes
-```
+[D2 source](diagrams/live-publication.d2).
+
+This is the publication contract for supported operations, not a claim that every mutation kind in the roadmap is implemented. Today `noon::ExecutionSession` coordinates preparation and commit; `noon-compile` owns local lowering and root-relative membership/painter-order preparation, and `noon-runtime` owns effective execution. A failed preparation leaves the previous coherent publication live.
 
 Both classes participate in the same semantic updater order, transactional overlay and coherent `FrameEpoch` publication barrier, but they have different ownership and invalidation costs.
 
@@ -920,25 +781,7 @@ The browser must support two distinct integration shapes without confusing them.
 
 For a Rust-authored application compiled to WASM, the preferred topology is one typed in-process Rust path:
 
-```text
-Rust/WASM application
-  idiomatic `noon` Rust API
-          |
-          v
-  Semantic Scene
-          |
-          v
-  Execution Plan
-          |
-          v
-  Runtime
-          |
-          v
-  retained renderer
-          |
-          v
-  browser canvas / WebGPU or WebGL
-```
+See the [direct Rust/WASM diagram](#rust-on-web-product-invariant) ([D2 source](diagrams/wasm-execution.d2)). The same four engine authorities execute in a single WASM context; only platform lifecycle crosses into JavaScript.
 
 No transport representation exists between these layers merely because the target is the browser. JavaScript may load the WASM module, provide the canvas, and participate in browser-specific lifecycle glue, but it does not receive and re-send scene or runtime state between the Rust layers.
 
@@ -946,24 +789,19 @@ A `play()`/`wait()` barrier in this topology must not require synchronously bloc
 
 ### Host-language or multi-worker topology
 
-Arbitrary Python should stay away from the render frame loop. A browser integration with a separate Python/Pyodide authoring context may look like:
+Arbitrary Python should stay away from the render frame loop. The **current semantic Python path** uses the following placement:
 
-```text
-Python worker / authoring context
-  Pyodide
-  thin Python facade
-  shared semantic Rust/WASM
-  arbitrary Python callbacks
-          |
-          | typed batched scene/update/callback/resource payloads
-          v
-execution/render context
-  execution runtime WASM
-  native input processing
-  retained renderer
-```
+![The Pyodide authoring worker contains the shared semantic context and its Rust execution session; derived resources and deltas cross to a render-only owner, with control acknowledgements returning.](diagrams/python-workers.svg)
 
-Exact worker placement is an integration decision, not a semantic boundary.
+[D2 source](diagrams/python-workers.d2).
+
+The current implementation keeps the semantic context and its existing compiler/runtime session together in the authoring worker. [`semantic-engine-endpoint.js`](../web/semantic-engine-endpoint.js) leases the context's existing player through `createExecutionPlayer` / `returnExecutionPlayer`; it does not transfer a Rust player between WASM instances or create a second runtime. [`python-worker.source.js`](../web/python-worker.source.js) supplies Python continuation and required callback invocation.
+
+[`authoring-render-controller.js`](../web/authoring-render-controller.js) owns render attachment, resource installation, delta consumption and presentation using `RetainedExecutionCanvasRenderer`. It runs in [`authoring-render-worker.js`](../web/authoring-render-worker.js), with [`MainThreadRenderWorker`](../web/main-thread-render-worker.js) as the platform fallback. The legacy `execution-render-worker.js` URL forwards to that render-owner implementation; its name does not establish another authoritative runtime. Resources and execution deltas cross a MessagePort/transferable-buffer or shared-mailbox boundary; ticks and readiness/presentation acknowledgements are host coordination, not timeline truth.
+
+Required Python callbacks can hold authored progress at the shared barrier while the last coherent frame remains presentable. Playback with no host callbacks does not require per-frame interpreter execution. Source reruns currently replace a session; this diagram does not claim incremental hot-reload identity preservation.
+
+Exact worker placement remains an integration decision, not a semantic boundary. A future placement that separates semantic authoring from execution must still satisfy the same ownership, callback, revision and atomic-publication contracts.
 
 A browser worker/process boundary may require a typed transport representation because it is a real cross-context boundary. That transport is derived from authoritative semantic/execution state and must not become another scene model.
 
@@ -1026,25 +864,7 @@ Any execution channel whose value is evaluated on the GPU but is also required f
 
 Platform integration shells provide lifecycle mechanics and reuse the same renderer:
 
-```text
-native host integration
-  window/event loop
-  wgpu instance/surface/device/queue/config
-  resize + input ingress
-  frame acquire/submit/present
-          |
-          v
-   noon runtime + noon-render-wgpu
-
-browser/WASM host (`noon-web`)
-  canvas/browser lifecycle
-  browser surface/device/queue/config
-  resize + input ingress
-  frame acquire/submit/present
-          |
-          v
-   noon runtime + noon-render-wgpu
-```
+The [native path](#rust-native-product-invariant) and [direct Rust/WASM path](#rust-on-web-product-invariant) diagrams show the platform shells. Both hosts own surface/device/queue configuration, resize and input ingress, and acquire/submit/present/recovery policy. They reuse `noon-runtime` and `noon-render-wgpu`; neither owns another scene or scheduler.
 
 Whether native host integration deserves a separate crate such as `noon-native` or remains a module is a dependency/compilation decision, not an architectural naming requirement.
 
@@ -1058,7 +878,19 @@ Renderer-specific mirrors and caches are derived and disposable.
 
 Crates exist only for real dependency, compilation-target or reuse boundaries.
 
-Target responsibilities:
+### Current implementation ownership
+
+![Current ownership: noon provides authoring and session coordination; noon-core holds semantic storage and shared contracts; noon-compile lowers and owns CompiledScene; noon-runtime executes; renderer and platform hosts remain separate.](diagrams/crate-ownership.svg)
+
+[D2 source](diagrams/crate-ownership.d2). This ownership/data-flow snapshot was checked against master `d6734d2a0626f5c9926e4043ad2017a94f5c8c5a` (2026-09-09). It is **not** a complete Cargo dependency graph or a declaration that the target crate split is complete.
+
+`SemanticStore` currently lives under [`noon-core/src/semantic_store`](../crates/noon-core/src/semantic_store.rs), beside ordinary top-level `resources`, `animation`, `reactive`, `publication`, `object_state` and `graph_topology` modules. Semantic storage is no longer hidden under `reactive` or redirected with `#[path]`. [`noon-compile`](../crates/noon-compile/src/lib.rs) owns `CompiledScene`, typed execution patches and [`root_order`](../crates/noon-compile/src/semantic_lowering/root_order.rs) preparation. [`noon::ExecutionSession`](../crates/noon/src/execution_session.rs) still coordinates compiler preparation, runtime preflight and coherent publication; [`noon-runtime`](../crates/noon-runtime/src/lib.rs) owns effective execution state. The ordinary facade remains distinct from `noon::integration` and feature-gated `noon::diagnostics`.
+
+Do not mechanically move the store into the higher-level facade to make code match a target crate name: compiler/runtime consumers must not gain an upward dependency. Remaining responsibility normalization stays with #960; this diagram changes no ownership or dependency boundary.
+
+### Target responsibilities
+
+The following remains the target responsibility split, not the current filesystem map:
 
 ```text
 noon
@@ -1384,6 +1216,26 @@ long-running edit/add/remove/resource/input churn
 ```
 
 Performance regressions should be measured in terms of authoring/host bridge calls and bytes, effective driver writes versus authored semantic mutations, validation/preflight work, active channels, ordered updater regions/barriers, dirty dependencies, affected slots/domains/materialized leaves, visible candidates, resource versions and GPU ranges—not only total FPS.
+
+### Diagram maintenance
+
+Editable D2 sources live in [`docs/diagrams`](diagrams), beside their checked-in SVGs. Markdown embeds SVGs so GitHub readers do not need a D2 renderer. `_style.d2` contains presentation only; it does not define another architecture.
+
+Install **D2 v0.9.0** and use the same local/CI entrypoint:
+
+```sh
+# After editing a source, format it (including shared style changes).
+d2 fmt docs/diagrams/*.d2
+python3 scripts/architecture_diagrams.py
+# Non-mutating freshness, formatting, SVG and document-link check.
+python3 scripts/architecture_diagrams.py --check
+# Real-renderer regression tests for stale/missing/orphan output and failures.
+python3 scripts/test_architecture_diagrams.py
+```
+
+`D2=/path/to/d2` selects an installed binary; these commands do not download tools. The renderer version, ELK layout/spacing, light/dark themes and padding are pinned. [`Architecture diagrams`](../.github/workflows/architecture-diagrams.yml) installs the checksum-verified release and checks generated output on relevant pull requests and master pushes. It fails on stale SVGs rather than silently editing a contributor's branch. A source/style edit therefore requires regenerating and committing the SVGs, but not manually redrawing them.
+
+When architecture changes, review `AGENTS.md`, this document, the relevant crate `lib.rs` / manifests, session publication code and actual browser endpoints before updating a diagram. Keep current placement separate from target/future responsibilities. Source/render agreement checks cannot prove architectural truth; that still requires code review and the engine qualification described above.
 
 ---
 
