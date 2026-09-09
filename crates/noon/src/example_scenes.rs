@@ -19,6 +19,7 @@ pub mod ordinary_membership;
 pub mod ordinary_subset_display;
 pub mod ordinary_uncreate_options;
 pub mod painter_order_overlap;
+pub mod renderer_fixtures;
 pub mod specialized_geometry;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_family_fade;

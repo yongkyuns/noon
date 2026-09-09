@@ -133,9 +133,9 @@ pub(crate) fn compile_transform_geometry_plan(
         (GeometryRef::Circle { .. }, GeometryRef::Rectangle { .. })
         | (GeometryRef::Rectangle { .. }, GeometryRef::Circle { .. }) => {
             let source = noon_geometry::canonical_outline_path(&from.geometry)
-                .expect("closed analytic source geometry must convert to a path");
+                .expect("supported source geometry must convert to a path");
             let target = noon_geometry::canonical_outline_path(&to.geometry)
-                .expect("closed analytic target geometry must convert to a path");
+                .expect("supported target geometry must convert to a path");
             compile_path_pair(
                 from.style,
                 to.style,
@@ -150,10 +150,10 @@ pub(crate) fn compile_transform_geometry_plan(
     Ok(Some(plan))
 }
 
-/// Compile a typed analytic point-correspondence transform without constructing
+/// Compile a typed analytic or resource-path point-correspondence transform without constructing
 /// an authored object endpoint. The returned resource is execution-owned and may
 /// use a fixed render frame while semantic affine channels remain independently visible.
-pub(crate) fn compile_analytic_content_morph(
+pub(crate) fn compile_content_morph(
     from_geometry: &GeometryRef,
     to_geometry: &GeometryRef,
     from_style: Style,
@@ -167,14 +167,15 @@ pub(crate) fn compile_analytic_content_morph(
             | (GeometryRef::Rectangle { .. }, GeometryRef::Circle { .. })
             | (GeometryRef::Circle { .. }, GeometryRef::Circle { .. })
             | (GeometryRef::Rectangle { .. }, GeometryRef::Rectangle { .. })
+            | (GeometryRef::VectorPath(_), GeometryRef::VectorPath(_))
     );
     if !supported {
         return Err(TransformCompileFailure::UnsupportedGeometry);
     }
     let source = noon_geometry::canonical_outline_path(from_geometry)
-        .expect("closed analytic source geometry must convert to a path");
+        .expect("supported source geometry must convert to a path");
     let target = noon_geometry::canonical_outline_path(to_geometry)
-        .expect("closed analytic target geometry must convert to a path");
+        .expect("supported target geometry must convert to a path");
     let TransformGeometryPlan::PathPair {
         geometry,
         render_transform,
@@ -187,7 +188,7 @@ pub(crate) fn compile_analytic_content_morph(
         target,
     )?
     else {
-        unreachable!("analytic point transform compiles to a path pair")
+        unreachable!("point transform compiles to a path pair")
     };
     if from_style.stroke_width_mode == StrokeWidthMode::ScreenSpace && render_transform.is_none() {
         return Err(TransformCompileFailure::RequiresRetessellation);
@@ -365,7 +366,7 @@ mod tests {
             rotation: std::f32::consts::FRAC_PI_4,
             ..Transform2D::IDENTITY
         };
-        let (geometry, render_transform) = compile_analytic_content_morph(
+        let (geometry, render_transform) = compile_content_morph(
             &GeometryRef::rectangle(2.0, 2.0),
             &GeometryRef::circle(1.0),
             style,
@@ -398,7 +399,7 @@ mod tests {
         };
 
         assert_eq!(
-            compile_analytic_content_morph(
+            compile_content_morph(
                 &GeometryRef::rectangle(2.0, 2.0),
                 &GeometryRef::circle(1.0),
                 style,

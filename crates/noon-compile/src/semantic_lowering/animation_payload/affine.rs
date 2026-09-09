@@ -19,8 +19,8 @@ use super::super::{
     SemanticScheduledAnimationPayload,
 };
 use super::transform_payload::{
-    is_supported_analytic_content_morph, validate_transform_payload_shape,
-    SemanticAffineAnimationField, TransformPayloadValidationIssue,
+    is_supported_content_morph, validate_transform_payload_shape, SemanticAffineAnimationField,
+    TransformPayloadValidationIssue,
 };
 
 /// The activation-time effective domains consumed by the shared animation lowerer.
@@ -728,7 +728,7 @@ where
             captures.insert(leaf.execution_object_id, captured);
             captured
         };
-        let channels = lower_transform_channels(source, target, from, interpolation)
+        let channels = lower_transform_channels(store, source, target, from, interpolation)
             .map_err(|issue| existing_payload_error(leaf, target_state, issue))?;
         for channel in channels {
             push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
@@ -1856,12 +1856,13 @@ pub(super) fn lower_indicate_channels(
 }
 
 pub(super) fn lower_transform_channels(
+    store: &SemanticStore,
     source: &noon_core::SemanticObjectState,
     target: &noon_core::SemanticObjectState,
     from: EffectiveAnimationProperties,
     interpolation: noon_core::SemanticTransformInterpolation,
 ) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
-    let analytic_point_transform = matches!(
+    let point_transform = matches!(
         (source.content.geometry(), target.content.geometry()),
         (
             Some(StoredGeometry::Circle { .. }),
@@ -1869,17 +1870,20 @@ pub(super) fn lower_transform_channels(
         ) | (
             Some(StoredGeometry::Rectangle { .. }),
             Some(StoredGeometry::Rectangle { .. })
+        ) | (
+            Some(StoredGeometry::Resource(_)),
+            Some(StoredGeometry::Resource(_))
         )
     );
     if source.content == target.content {
         if interpolation == noon_core::SemanticTransformInterpolation::Affine {
             return lower_affine_channels(source, target, from);
         }
-        if !analytic_point_transform {
+        if !point_transform {
             return Err(AffinePayloadIssue::UnsupportedPointCorrespondence);
         }
     }
-    if !analytic_point_transform && !is_supported_analytic_content_morph(source, target) {
+    if !point_transform && !is_supported_content_morph(source, target) {
         return Err(AffinePayloadIssue::UnsupportedContentChange);
     }
     if let Some(binding) = source.signal_bindings().first() {
@@ -1894,16 +1898,18 @@ pub(super) fn lower_transform_channels(
         return Err(AffinePayloadIssue::InvalidEffectiveStyle);
     }
 
-    let geometry = |content: SemanticObjectContent| match content.geometry() {
-        Some(StoredGeometry::Circle { radius }) => Ok(noon_core::GeometryRef::circle(radius)),
-        Some(StoredGeometry::Rectangle { size }) => Ok(noon_core::GeometryRef::Rectangle { size }),
-        _ => Err(AffinePayloadIssue::UnsupportedContentChange),
+    let geometry = |content: SemanticObjectContent| {
+        let geometry = content
+            .geometry()
+            .ok_or(AffinePayloadIssue::UnsupportedContentChange)?;
+        super::super::compiled_scene::lower_semantic_geometry_value(geometry, Some(store))
+            .map_err(|_| AffinePayloadIssue::UnsupportedContentChange)
     };
     let target_transform = lower_semantic_transform_value(target)
         .map_err(|_| AffinePayloadIssue::InvalidEffectiveTransform)?;
     let target_style =
         lower_semantic_style_value(target).map_err(AffinePayloadIssue::InvalidTargetStyle)?;
-    let (prepared, render_transform) = crate::transform::compile_analytic_content_morph(
+    let (prepared, render_transform) = crate::transform::compile_content_morph(
         &geometry(source.content)?,
         &geometry(target.content)?,
         from.style,
