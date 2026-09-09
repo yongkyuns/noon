@@ -20,8 +20,8 @@ if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
 fi
 
 # Local gates inspect staged and unstaged code as well as committed changes.
-# Exact #959 relocation permissions are validated before the growth scan.
-relocation_permissions="$(python3 scripts/architecture_migration_relocations.py "$base")"
+# Retired authorities and namespaces stay absent throughout the working tree.
+python3 scripts/architecture_retired_models.py
 range="$base"
 fixture_path='crates/noon-compile/src/transaction_preflight/tests.rs'
 if [[ -f "$fixture_path" ]] && [[ "$(sed -n '1p' "$fixture_path")" != '#![cfg(test)]' ]]; then
@@ -39,12 +39,6 @@ while IFS= read -r line; do
   case "$line" in
     "+++ b/"*)
       current_file="${line#+++ b/}"
-      current_relocation_tokens=""
-      while IFS=$'\t' read -r allowed_path allowed_token; do
-        if [[ "$allowed_path" == "$current_file" ]]; then
-          current_relocation_tokens+=" $allowed_token"
-        fi
-      done <<< "$relocation_permissions"
       ;;
     +*)
       [[ "$line" == "+++ "* ]] && continue
@@ -54,14 +48,9 @@ while IFS= read -r line; do
       # The checker is tooling, not an engine consumer: its own enforcement
       # vocabulary necessarily names the forbidden types it checks. No product
       # path receives this exemption.
-      if [[ "$current_file" == 'scripts/architecture_migration_relocations.py' ]]; then
+      if [[ "$current_file" == 'scripts/architecture_retired_models.py' ]]; then
         migration_checked=""
       fi
-      # Each permission is bounded by a full-working-tree count and an exact
-      # reviewed file/symbol inventory; it cannot authorize new consumer paths.
-      for token in $current_relocation_tokens; do
-        migration_checked="${migration_checked//"$token"/}"
-      done
       if [[ "$migration_checked" =~ $forbidden ]]; then
         printf 'architecture ratchet: %s: +%s\n' "${current_file:-unknown}" "$added" >&2
         migration_found=1
