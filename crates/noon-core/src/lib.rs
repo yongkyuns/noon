@@ -9,11 +9,13 @@
 mod graph_topology;
 mod patch;
 mod reactive;
+mod semantic_store;
 mod timeline;
 
 pub use graph_topology::*;
 pub use patch::*;
 pub use reactive::*;
+pub use semantic_store::*;
 pub use timeline::*;
 
 use serde::{Deserialize, Serialize};

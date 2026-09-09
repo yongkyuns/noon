@@ -1,4 +1,4 @@
-use super::{
+use crate::{
     AnimationOptions, AnimationOptionsError, SemanticNodeId, SemanticNodeKind,
     SemanticSceneOperationError, SemanticSignalError, SemanticStore, SemanticVec3,
 };

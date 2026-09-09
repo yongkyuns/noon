@@ -1,4 +1,4 @@
-use super::{
+use crate::{
     HostCallbackId, SemanticNodeId, SemanticNodeKind, SemanticSceneOperationError, SemanticStore,
     SemanticUpdaterRegistration, SemanticUpdaterRegistrationError,
 };
