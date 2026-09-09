@@ -2,8 +2,7 @@
 
 Playback remains authoritative in Rust (`noon_core::RateFunction`). This module only
 provides Manim-compatible public callables, maps known callables to the shared semantic
-IDs written into scene IR, and mirrors those deterministic functions for authoring-time
-snapshot evaluation inside the Python frontend.
+IDs passed to Rust. Python callables remain available for explicit user evaluation.
 """
 
 from __future__ import annotations
@@ -18,7 +17,6 @@ import _noon_ir as _ir
 
 INFLECTION = 10.0
 _INSTALLED = False
-_ORIGINAL_ADD_TRACK = _ir.Scene._add_track
 _ORIGINAL_MOBJECT_SET_COLOR = _base.Mobject.set_color
 
 
@@ -114,57 +112,6 @@ def evaluate_rate_function(semantic_id: str, progress: float) -> float:
     return function(value)
 
 
-def _track_progress(timing: dict[str, Any], time: float) -> float:
-    raw = max(
-        0.0,
-        min(1.0, (time - timing["start_time"]) / timing["duration"]),
-    )
-    return evaluate_rate_function(timing["easing"], raw)
-
-
-def _add_track(
-    self: _ir.Scene,
-    obj: _ir.Object,
-    property_name: str,
-    values: dict[str, Any],
-    start_time: float,
-    duration: float,
-    easing: str,
-    key: str | None,
-) -> None:
-    """Bridge the legacy Python IR whitelist to the shared core vocabulary.
-
-    The old IR builder validates only ``linear`` and ``ease_in_out_cubic``. For a
-    known shared semantic ID, reuse all of its existing structural validation with
-    ``linear`` as the temporary accepted token, then restore the semantic ID in the
-    emitted track. Unknown values still flow through the original validator and fail.
-    """
-
-    if easing in _KNOWN_RATE_FUNCTIONS and easing != "linear":
-        _ORIGINAL_ADD_TRACK(
-            self,
-            obj,
-            property_name,
-            values,
-            start_time,
-            duration,
-            "linear",
-            key,
-        )
-        self._tracks[-1]["timing"]["easing"] = easing
-        return
-    _ORIGINAL_ADD_TRACK(
-        self,
-        obj,
-        property_name,
-        values,
-        start_time,
-        duration,
-        easing,
-        key,
-    )
-
-
 def _set_color_preserving_opacity(
     self: _base.Mobject, color: _base.Color
 ) -> _base.Mobject:
@@ -220,11 +167,6 @@ def install() -> None:
     # independent opacity. This matters for Transform-style effects such as Indicate:
     # a transparent stroke must not become visible while the color interpolates.
     _base.Mobject.set_color = _set_color_preserving_opacity
-
-    # `_noon_ir` needs progress only while materializing authoring-time snapshots.
-    # Runtime playback never calls this mirror; Rust RateFunction remains authoritative.
-    _ir._track_progress = _track_progress
-    _ir.Scene._add_track = _add_track
 
     exports = list(_base.__all__)
     for name in public:
