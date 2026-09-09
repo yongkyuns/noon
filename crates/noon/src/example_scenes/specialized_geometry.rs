@@ -8,19 +8,31 @@ use crate::{ExecutionSession, Mobject, MobjectFamilyMember, Scene};
 pub fn session() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
     let store = || Rc::clone(scene.integration_store());
-    let dot = Mobject::manim_dot(store(), -4.0, 2.0, 0.3)?;
-    let mut triangle = Mobject::manim_triangle(store())?;
-    triangle.shift(0.0, 2.0)?;
-    let mut elbow = Mobject::manim_elbow(store(), 0.8, 0.3)?;
-    elbow.shift(4.0, 2.0)?;
-    let mut rectangle = Mobject::manim_rounded_rectangle(store(), 2.0, 1.0, 0.2)?;
-    rectangle.shift(-4.0, 0.0)?;
-    let annular_sector = Mobject::manim_annular_sector(store(), 0.3, 0.9, PI, 0.0, 8, 0.0, 0.0)?;
-    let sector = Mobject::manim_sector(store(), 0.9, PI / 2.0, PI / 4.0, 8, 4.0, 0.0)?;
-    let annulus = Mobject::manim_annulus(store(), 0.5, 0.9, 8, -4.0, -2.0)?;
-    let dashed = Mobject::manim_dashed_line(store(), -1.0, -2.0, 1.0, -2.0, 0.2, 0.5)?;
-    let mut underline = Mobject::manim_underline(&rectangle, 0.2)?;
-    underline.shift(8.0, -1.3)?;
+    let dot = Mobject::manim_dot(store(), -4.0, 2.0, 0.3).map_err(|error| error.to_string())?;
+    let mut triangle = Mobject::manim_triangle(store()).map_err(|error| error.to_string())?;
+    triangle
+        .shift(0.0, 2.0)
+        .map_err(|error| error.to_string())?;
+    let mut elbow = Mobject::manim_elbow(store(), 0.8, 0.3).map_err(|error| error.to_string())?;
+    elbow.shift(4.0, 2.0).map_err(|error| error.to_string())?;
+    let mut rectangle = Mobject::manim_rounded_rectangle(store(), 2.0, 1.0, 0.2)
+        .map_err(|error| error.to_string())?;
+    rectangle
+        .shift(-4.0, 0.0)
+        .map_err(|error| error.to_string())?;
+    let annular_sector = Mobject::manim_annular_sector(store(), 0.3, 0.9, PI, 0.0, 8, 0.0, 0.0)
+        .map_err(|error| error.to_string())?;
+    let sector = Mobject::manim_sector(store(), 0.9, PI / 2.0, PI / 4.0, 8, 4.0, 0.0)
+        .map_err(|error| error.to_string())?;
+    let annulus = Mobject::manim_annulus(store(), 0.5, 0.9, 8, -4.0, -2.0)
+        .map_err(|error| error.to_string())?;
+    let dashed = Mobject::manim_dashed_line(store(), -1.0, -2.0, 1.0, -2.0, 0.2, 0.5)
+        .map_err(|error| error.to_string())?;
+    let mut underline =
+        Mobject::manim_underline(&rectangle, 0.2).map_err(|error| error.to_string())?;
+    underline
+        .shift(8.0, -1.3)
+        .map_err(|error| error.to_string())?;
 
     let mut objects = [
         dot,
@@ -34,11 +46,19 @@ pub fn session() -> Result<ExecutionSession, String> {
         underline,
     ];
     for object in &mut objects {
-        object.set_fill(0.0, 0.0, 1.0, 0.35)?;
-        object.set_stroke_color(1.0, 1.0, 1.0, 1.0)?;
-        object.set_stroke_opacity(1.0)?;
+        object
+            .set_fill(0.0, 0.0, 1.0, 0.35)
+            .map_err(|error| error.to_string())?;
+        object
+            .set_stroke_color(1.0, 1.0, 1.0, 1.0)
+            .map_err(|error| error.to_string())?;
+        object
+            .set_stroke_opacity(1.0)
+            .map_err(|error| error.to_string())?;
         // Manim width 2 uses a 0.02 scene-unit stroke in the paired Python example.
-        object.set_stroke_width(0.02)?;
+        object
+            .set_stroke_width(0.02)
+            .map_err(|error| error.to_string())?;
     }
     scene
         .add_many(

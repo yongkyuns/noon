@@ -61,10 +61,18 @@ impl LiveContinuation for FamilyTransformIndicate {
                 let copied = live
                     .copy_family_with_references(&self.source, &[(&self.saved_left).into()])
                     .map_err(|e| e.to_string())?;
-                if copied.mobject(&self.saved_left)?.center()? != (-2.0, 0.0) {
+                if copied
+                    .mobject(&self.saved_left)
+                    .map_err(|error| error.to_string())?
+                    .center()
+                    .map_err(|error| error.to_string())?
+                    != (-2.0, 0.0)
+                {
                     return Err("family copy changed detached saved state".into());
                 }
-                let left_target = copied.mobject(&self.left)?;
+                let left_target = copied
+                    .mobject(&self.left)
+                    .map_err(|error| error.to_string())?;
                 live.shift(&left_target, 1.0, 0.0)
                     .map_err(|e| e.to_string())?;
                 live.become_mobject(
@@ -112,26 +120,39 @@ impl FamilyTransformIndicate {
 
 pub fn program() -> Result<LiveProgram<FamilyTransformIndicate>, String> {
     let mut scene = Scene::new();
-    let mut left = Mobject::manim_square(Rc::clone(scene.integration_store()), 0.6)?;
-    let mut right = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.3)?;
-    left.set_translation(-2.0, 0.0)?;
-    right.set_translation(0.0, 0.0)?;
+    let mut left = Mobject::manim_square(Rc::clone(scene.integration_store()), 0.6)
+        .map_err(|error| error.to_string())?;
+    let mut right = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.3)
+        .map_err(|error| error.to_string())?;
+    left.set_translation(-2.0, 0.0)
+        .map_err(|error| error.to_string())?;
+    right
+        .set_translation(0.0, 0.0)
+        .map_err(|error| error.to_string())?;
     for (object, color) in [(&mut left, Color::PINK), (&mut right, Color::BLUE)] {
-        object.set_fill(
-            f64::from(color.red),
-            f64::from(color.green),
-            f64::from(color.blue),
-            0.9,
-        )?;
-        object.set_stroke_opacity(0.0)?;
+        object
+            .set_fill(
+                f64::from(color.red),
+                f64::from(color.green),
+                f64::from(color.blue),
+                0.9,
+            )
+            .map_err(|error| error.to_string())?;
+        object
+            .set_stroke_opacity(0.0)
+            .map_err(|error| error.to_string())?;
     }
     scene.add(&left).map_err(|error| error.to_string())?;
     scene.add(&right).map_err(|error| error.to_string())?;
-    let source = scene.family(&[(&left).into(), (&right).into()])?;
-    let saved_left = left.target_editor()?;
-    let copied = source.copy_with_references(&[(&saved_left).into()])?;
+    let source = scene
+        .family(&[(&left).into(), (&right).into()])
+        .map_err(|error| error.to_string())?;
+    let saved_left = left.target_editor().map_err(|error| error.to_string())?;
+    let copied = source
+        .copy_with_references(&[(&saved_left).into()])
+        .map_err(|error| error.to_string())?;
     let target = copied.root().clone();
-    target.shift(1.0, 0.0)?;
+    target.shift(1.0, 0.0).map_err(|error| error.to_string())?;
     scene
         .into_live_program(FamilyTransformIndicate {
             left,

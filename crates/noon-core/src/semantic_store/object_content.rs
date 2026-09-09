@@ -14,6 +14,24 @@ pub enum SemanticGeometryLayout {
     ManimEllipseControlHull,
 }
 
+/// A geometry/layout combination rejected before it becomes authored content.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SemanticGeometryLayoutError {
+    EllipseRequiresCircle(StoredGeometry),
+}
+
+impl std::fmt::Display for SemanticGeometryLayoutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EllipseRequiresCircle(_) => {
+                f.write_str("Manim Ellipse layout requires analytic Circle geometry")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SemanticGeometryLayoutError {}
+
 /// One semantic geometry payload. Layout meaning travels with content while
 /// compiler and renderer geometry continue to consume the same `StoredGeometry`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -33,11 +51,11 @@ impl SemanticGeometryContent {
     pub fn with_layout(
         geometry: StoredGeometry,
         layout: SemanticGeometryLayout,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, SemanticGeometryLayoutError> {
         if layout == SemanticGeometryLayout::ManimEllipseControlHull
             && !matches!(geometry, StoredGeometry::Circle { .. })
         {
-            return Err("Manim Ellipse layout requires analytic Circle geometry");
+            return Err(SemanticGeometryLayoutError::EllipseRequiresCircle(geometry));
         }
         Ok(Self { geometry, layout })
     }

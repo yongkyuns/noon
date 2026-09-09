@@ -33,7 +33,7 @@ pub(crate) fn family_color(
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn text_authoring_f32(field: &str, value: f64) -> Result<f32, String> {
-    let value = render_f64(field, value)? as f32;
+    let value = render_f64(field, value).map_err(|error| error.to_string())? as f32;
     if !value.is_finite() {
         return Err(format!("{field} is outside the supported range"));
     }
@@ -68,8 +68,8 @@ mod wasm {
 
     use super::{Mobject, SemanticNodeId, SemanticStore};
 
-    fn js_error(error: String) -> JsValue {
-        JsValue::from_str(&error)
+    fn js_error(error: impl std::fmt::Display) -> JsValue {
+        JsValue::from_str(&error.to_string())
     }
 
     type SharedSemanticStore = Rc<RefCell<SemanticStore>>;

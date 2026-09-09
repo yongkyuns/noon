@@ -30,10 +30,10 @@ impl FamilyTranslation {
         source: SemanticNodeId,
         delta_x: f64,
         delta_y: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         let source_members = store
             .ordered_leaf_nodes(source)
-            .map_err(|e| e.to_string())?;
+            .map_err(AuthoringError::from)?;
         Self::from_members(source_members, delta_x, delta_y)
     }
 
@@ -41,7 +41,7 @@ impl FamilyTranslation {
         source_members: Vec<SemanticNodeId>,
         delta_x: f64,
         delta_y: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         let delta = semantic_xy_f64(delta_x, delta_y)?;
         Ok(Self {
             source_members,
@@ -50,22 +50,22 @@ impl FamilyTranslation {
     }
 
     /// Apply each selected semantic leaf in one transaction.
-    pub fn apply(self, store: &mut SemanticStore) -> Result<(), String> {
+    pub fn apply(self, store: &mut SemanticStore) -> Result<(), AuthoringError> {
         self.transaction(store)?
             .apply(store)
             .map(|_| ())
-            .map_err(|error| error.to_string())
+            .map_err(AuthoringError::from)
     }
 
     pub(crate) fn transaction(
         self,
         store: &SemanticStore,
-    ) -> Result<SemanticMutationTransaction, String> {
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
         translation_transaction(self.into_shifts(), |leaf| {
             store
                 .semantic_object_state_checked(leaf)
                 .map(|state| state.transform.translation)
-                .map_err(|error| error.to_string())
+                .map_err(AuthoringError::from)
         })
     }
 
@@ -77,12 +77,12 @@ impl FamilyTranslation {
     }
 }
 
-pub(crate) fn translation_transaction<F>(
+pub(crate) fn translation_transaction<F, E>(
     shifts: impl IntoIterator<Item = (SemanticNodeId, f64, f64)>,
     mut authored_translation: F,
-) -> Result<SemanticMutationTransaction, String>
+) -> Result<SemanticMutationTransaction, E>
 where
-    F: FnMut(SemanticNodeId) -> Result<SemanticVec3, String>,
+    F: FnMut(SemanticNodeId) -> Result<SemanticVec3, E>,
 {
     // Accumulate staged operations before publishing one final property per
     // identity. A single family translation supplies each semantic leaf once.
@@ -132,11 +132,11 @@ impl<'a> From<&'a MobjectFamily> for MobjectFamilyMember<'a> {
 }
 
 impl MobjectFamilyMember<'_> {
-    fn require_store(&self, store: &Rc<RefCell<SemanticStore>>) -> Result<(), String> {
+    fn require_store(&self, store: &Rc<RefCell<SemanticStore>>) -> Result<(), AuthoringError> {
         if !Rc::ptr_eq(self.integration_store(), store) {
-            return Err("family members belong to different authoring stores".into());
+            return Err(AuthoringError::ForeignStore);
         }
-        self.validate().map_err(|error| error.to_string())
+        self.validate()
     }
 
     pub(crate) fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
@@ -170,7 +170,7 @@ pub(crate) fn family_creation_transaction(
         SemanticMutationTransaction,
         noon_core::SemanticLocalNodeToken,
     ),
-    String,
+    AuthoringError,
 > {
     for member in members {
         member.require_store(store)?;
@@ -191,15 +191,15 @@ pub(crate) fn family_membership_transaction(
     family: &MobjectFamily,
     members: &[MobjectFamilyMember<'_>],
     adding: bool,
-) -> Result<(SemanticMutationTransaction, Vec<bool>), String> {
-    family.validate().map_err(|error| error.to_string())?;
+) -> Result<(SemanticMutationTransaction, Vec<bool>), AuthoringError> {
+    family.validate()?;
     for member in members {
         member.require_store(family.integration_store())?;
     }
     let store = family.integration_store().borrow();
     let node = store
         .semantic_family_checked(family.node_id())
-        .map_err(|e| e.to_string())?;
+        .map_err(AuthoringError::from)?;
     let mut seen = BTreeSet::new();
     let mut transaction = SemanticMutationTransaction::new();
     let changed = members
@@ -225,11 +225,11 @@ impl MobjectFamily {
     pub fn create(
         store: Rc<RefCell<SemanticStore>>,
         members: &[MobjectFamilyMember<'_>],
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         let (transaction, family) = family_creation_transaction(&store, members)?;
         let result = transaction
             .apply(&mut store.borrow_mut())
-            .map_err(|e| e.to_string())?;
+            .map_err(AuthoringError::from)?;
         let node = result
             .resolve(family)
             .expect("committed family token resolves");
@@ -237,21 +237,27 @@ impl MobjectFamily {
     }
 
     /// Add one direct member; repeated additions preserve its existing order.
-    pub fn add(&self, member: MobjectFamilyMember<'_>) -> Result<bool, String> {
+    pub fn add(&self, member: MobjectFamilyMember<'_>) -> Result<bool, AuthoringError> {
         Ok(self.add_many(&[member])?[0])
     }
 
     /// Remove one direct member without changing that member's semantic identity.
-    pub fn remove(&self, member: MobjectFamilyMember<'_>) -> Result<bool, String> {
+    pub fn remove(&self, member: MobjectFamilyMember<'_>) -> Result<bool, AuthoringError> {
         Ok(self.remove_many(&[member])?[0])
     }
 
     /// Commit a whole direct-member addition before returning per-input decisions.
-    pub fn add_many(&self, members: &[MobjectFamilyMember<'_>]) -> Result<Vec<bool>, String> {
+    pub fn add_many(
+        &self,
+        members: &[MobjectFamilyMember<'_>],
+    ) -> Result<Vec<bool>, AuthoringError> {
         self.edit_members(members, true)
     }
 
-    pub fn remove_many(&self, members: &[MobjectFamilyMember<'_>]) -> Result<Vec<bool>, String> {
+    pub fn remove_many(
+        &self,
+        members: &[MobjectFamilyMember<'_>],
+    ) -> Result<Vec<bool>, AuthoringError> {
         self.edit_members(members, false)
     }
 
@@ -259,22 +265,22 @@ impl MobjectFamily {
         &self,
         members: &[MobjectFamilyMember<'_>],
         adding: bool,
-    ) -> Result<Vec<bool>, String> {
+    ) -> Result<Vec<bool>, AuthoringError> {
         let (transaction, changed) = family_membership_transaction(self, members, adding)?;
         transaction
             .apply(&mut self.store.borrow_mut())
-            .map_err(|e| e.to_string())?;
+            .map_err(AuthoringError::from)?;
         Ok(changed)
     }
 
     pub fn from_node(
         store: Rc<RefCell<SemanticStore>>,
         node: SemanticNodeId,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         store
             .borrow()
             .semantic_family_checked(node)
-            .map_err(|error| error.to_string())?;
+            .map_err(AuthoringError::from)?;
         Ok(Self { store, node })
     }
 
@@ -302,7 +308,7 @@ impl MobjectFamily {
     }
 
     /// Aggregate the current layout bounds of this family's authoritative leaves.
-    pub fn layout_bounds(&self) -> Result<Option<Bounds2D64>, String> {
+    pub fn layout_bounds(&self) -> Result<Option<Bounds2D64>, AuthoringError> {
         Ok(self.layout()?.bounds())
     }
 
@@ -336,7 +342,8 @@ pub(crate) fn prepare_subset_display_transaction(
             .map_err(|_| "subset display supports direct object members, not nested families")?
             .style
             .clone();
-        crate::semantic_mobject::edit_manim_opacity(&mut style, 0.0)?;
+        crate::semantic_mobject::edit_manim_opacity(&mut style, 0.0)
+            .map_err(|error| error.to_string())?;
         transaction.replace_style(member, style);
     }
     Ok(transaction)

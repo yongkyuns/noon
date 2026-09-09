@@ -339,6 +339,8 @@ fn vector_path_retained_bytes(path: &VectorPath) -> usize {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GeometryResourceError {
+    /// A path rejected before resource allocation contains non-finite points.
+    NonFinitePath,
     UnknownResource(GeometryId),
     VersionExhausted(GeometryId),
 }
@@ -346,6 +348,7 @@ pub enum GeometryResourceError {
 impl std::fmt::Display for GeometryResourceError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::NonFinitePath => formatter.write_str("geometry path contains non-finite points"),
             Self::UnknownResource(id) => {
                 write!(formatter, "unknown geometry resource {}", id.get())
             }

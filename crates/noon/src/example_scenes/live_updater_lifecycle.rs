@@ -42,10 +42,18 @@ impl LiveContinuation for RotationUpdater {
 
 pub fn program() -> Result<(LiveProgram<RotationUpdater>, RustHostCallbackTable), String> {
     let mut scene = Scene::new();
-    let mut reference = scene.line((0.0, 0.0), (-1.0, 0.0))?;
-    reference.set_color(1.0, 1.0, 1.0, 1.0)?;
-    let mut moving = scene.line((0.0, 0.0), (-1.0, 0.0))?;
-    moving.set_color(1.0, 1.0, 0.0, 1.0)?;
+    let mut reference = scene
+        .line((0.0, 0.0), (-1.0, 0.0))
+        .map_err(|error| error.to_string())?;
+    reference
+        .set_color(1.0, 1.0, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    let mut moving = scene
+        .line((0.0, 0.0), (-1.0, 0.0))
+        .map_err(|error| error.to_string())?;
+    moving
+        .set_color(1.0, 1.0, 0.0, 1.0)
+        .map_err(|error| error.to_string())?;
     scene.add(&reference).map_err(|error| error.to_string())?;
     scene.add(&moving).map_err(|error| error.to_string())?;
     let mut callbacks = RustHostCallbackTable::new();

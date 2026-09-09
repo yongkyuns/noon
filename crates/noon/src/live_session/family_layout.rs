@@ -28,23 +28,23 @@ impl LiveSession<'_> {
         let (leaves, bounds) = self.anchor_layout_members(source)?;
         let scale = dimension
             .scale(bounds, length, stretch)
-            .map_err(LiveSessionError::Mobject)?;
+            .map_err(LiveSessionError::from)?;
         for &leaf in &leaves {
-            let object = Mobject::from_node(Rc::clone(self.store), leaf)
-                .map_err(LiveSessionError::Mobject)?;
+            let object =
+                Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
             self.placement_authored_transform(&object)?;
             crate::dimension_fit::validate_fit_stretch(
                 self.authored(&object)?.transform.rotation_z,
                 stretch,
             )
-            .map_err(LiveSessionError::Mobject)?;
+            .map_err(LiveSessionError::from)?;
         }
         let Some((x, y)) = scale else {
             return Ok(());
         };
         let transaction = crate::family_affine::FamilyAffine::Scale(x, y)
             .transaction(&self.store.borrow(), &leaves, bounds)
-            .map_err(LiveSessionError::Mobject)?;
+            .map_err(LiveSessionError::from)?;
         self.apply(transaction).map(|_| ())
     }
 
@@ -92,13 +92,13 @@ impl LiveSession<'_> {
         // As with placement, resolve an active affine driver at its logical
         // completion barrier before a persistent edit; never overwrite it midway.
         for &leaf in &leaves {
-            let object = Mobject::from_node(Rc::clone(self.store), leaf)
-                .map_err(LiveSessionError::Mobject)?;
+            let object =
+                Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
             self.placement_authored_transform(&object)?;
         }
         let transaction = operation
             .transaction(&self.store.borrow(), &leaves, bounds)
-            .map_err(LiveSessionError::Mobject)?;
+            .map_err(LiveSessionError::from)?;
         self.apply(transaction)
     }
 
@@ -128,11 +128,11 @@ impl LiveSession<'_> {
             .store
             .borrow()
             .ordered_leaf_nodes(family.node_id())
-            .map_err(|e| LiveSessionError::Mobject(e.to_string()))?;
+            .map_err(crate::AuthoringError::from)?;
         let mut bounds: Option<Bounds2D64> = None;
         for &leaf in &leaves {
-            let mobject = Mobject::from_node(Rc::clone(self.store), leaf)
-                .map_err(LiveSessionError::Mobject)?;
+            let mobject =
+                Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
             let next = self.family_member_bounds(&mobject)?;
             if let Some(next) = next {
                 if let Some(total) = &mut bounds {
@@ -152,22 +152,23 @@ impl LiveSession<'_> {
     ) -> Result<Option<Bounds2D64>, LiveSessionError> {
         self.require_mobject(mobject)?;
         if !self.session.semantic_object_is_reachable(mobject.node_id()) {
-            return mobject.layout_bounds().map_err(LiveSessionError::Mobject);
+            return mobject.layout_bounds().map_err(LiveSessionError::from);
         }
         let store = self.store.borrow();
         let observed = self
             .session
             .effective_semantic_object(&store, mobject.node_id())?;
         if !observed.authored_content_layout_applicable() {
-            return Err(LiveSessionError::Mobject(
-                "effective family layout cannot use render-content overrides".into(),
-            ));
+            return Err(crate::AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::EffectiveFamilyLayoutRenderOverride,
+            )
+            .into());
         }
         let transform = observed.object.transform;
         drop(store);
         mobject
             .layout_bounds_at(transform)
-            .map_err(LiveSessionError::Mobject)
+            .map_err(LiveSessionError::from)
     }
 
     /// Move one live object or detached target using shared edge/mask semantics.
@@ -182,7 +183,7 @@ impl LiveSession<'_> {
         let transform = self.placement_authored_transform(mobject)?;
         let bounds = mobject
             .layout_bounds_at(transform)
-            .map_err(LiveSessionError::Mobject)?
+            .map_err(LiveSessionError::from)?
             .unwrap_or_else(|| {
                 Bounds2D64::point(
                     f64::from(transform.translation.x),
@@ -230,22 +231,20 @@ impl LiveSession<'_> {
         anchor: &crate::LayoutAnchor,
     ) -> Result<(Vec<SemanticNodeId>, Option<Bounds2D64>), LiveSessionError> {
         if !Rc::ptr_eq(self.store, anchor.integration_store()) {
-            return Err(LiveSessionError::Mobject(
-                "layout anchors belong to different authoring stores".into(),
-            ));
+            return Err(crate::AuthoringError::ForeignStore.into());
         }
         self.session.require_published_store(&self.store.borrow())?;
-        let node = anchor.resolve().map_err(LiveSessionError::Mobject)?;
+        let node = anchor.resolve().map_err(LiveSessionError::from)?;
         if matches!(
             self.store.borrow().node(node).map(|n| n.kind()),
             Some(noon_core::SemanticNodeKind::Family)
         ) {
             let family = MobjectFamily::from_node(Rc::clone(self.store), node)
-                .map_err(LiveSessionError::Mobject)?;
+                .map_err(LiveSessionError::from)?;
             self.family_layout_members(&family)
         } else {
-            let object = Mobject::from_node(Rc::clone(self.store), node)
-                .map_err(LiveSessionError::Mobject)?;
+            let object =
+                Mobject::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::from)?;
             let bounds = self.family_member_bounds(&object)?;
             let bounds = match bounds {
                 Some(bounds) => Some(bounds),
@@ -253,7 +252,7 @@ impl LiveSession<'_> {
                     let (x, y) = if self.session.semantic_object_is_reachable(node) {
                         self.effective_layout(&object)?.center
                     } else {
-                        object.center().map_err(LiveSessionError::Mobject)?
+                        object.center().map_err(LiveSessionError::from)?
                     };
                     Some(Bounds2D64::point(x, y))
                 }
@@ -293,45 +292,35 @@ impl LiveSession<'_> {
         target: LiveLayoutTarget<'_>,
         placement: RelativePlacement,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let delta = placement
-            .delta(bounds, |x, y| match target {
-                LiveLayoutTarget::Point(px, py) => {
-                    let point = authoring_xy_f64(px, py)?;
-                    Ok((point.x, point.y))
+        let delta = placement.delta(bounds, |x, y| match target {
+            LiveLayoutTarget::Point(px, py) => {
+                let point = authoring_xy_f64(px, py)?;
+                Ok((point.x, point.y))
+            }
+            LiveLayoutTarget::Mobject(object) => match self.family_member_bounds(object)? {
+                Some(bounds) => Ok(bounds_critical_point(Some(bounds), x, y)),
+                None if self.session.semantic_object_is_reachable(object.node_id()) => {
+                    self.effective_layout(object).map(|layout| layout.center)
                 }
-                LiveLayoutTarget::Mobject(object) => {
-                    match self
-                        .family_member_bounds(object)
-                        .map_err(|e| e.to_string())?
-                    {
-                        Some(bounds) => Ok(bounds_critical_point(Some(bounds), x, y)),
-                        None if self.session.semantic_object_is_reachable(object.node_id()) => self
-                            .effective_layout(object)
-                            .map(|layout| layout.center)
-                            .map_err(|e| e.to_string()),
-                        None => object.center(),
-                    }
-                }
-                LiveLayoutTarget::Anchor(anchor) => self
-                    .anchor_layout_members(anchor)
-                    .map(|(_, bounds)| bounds_critical_point(bounds, x, y))
-                    .map_err(|e| e.to_string()),
-                LiveLayoutTarget::Family(family) => self
-                    .family_layout_members(family)
-                    .map(|(_, bounds)| bounds_critical_point(bounds, x, y))
-                    .map_err(|e| e.to_string()),
-            })
-            .map_err(LiveSessionError::Mobject)?;
+                None => object.center().map_err(LiveSessionError::from),
+            },
+            LiveLayoutTarget::Anchor(anchor) => self
+                .anchor_layout_members(anchor)
+                .map(|(_, bounds)| bounds_critical_point(bounds, x, y)),
+            LiveLayoutTarget::Family(family) => self
+                .family_layout_members(family)
+                .map(|(_, bounds)| bounds_critical_point(bounds, x, y)),
+        })?;
         // Relative placement cannot override a still-active affine/content driver.
         // Complete its logical segment first, as for live Mobject.move_to_point.
         for &leaf in &leaves {
-            let mobject = Mobject::from_node(Rc::clone(self.store), leaf)
-                .map_err(LiveSessionError::Mobject)?;
+            let mobject =
+                Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
             self.placement_authored_transform(&mobject)?;
         }
         let transaction = FamilyTranslation::from_members(leaves, delta.0, delta.1)
             .and_then(|translation| translation.transaction(&self.store.borrow()))
-            .map_err(LiveSessionError::Mobject)?;
+            .map_err(LiveSessionError::from)?;
         self.apply(transaction)
     }
 }

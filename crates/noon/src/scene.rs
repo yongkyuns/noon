@@ -63,7 +63,10 @@ impl Scene {
 
     /// Construct detached geometry through the shared authoring implementation.
     /// Use `LiveSession::create_manim_geometry` after initial lowering instead.
-    pub fn geometry(&self, options: crate::ManimGeometryOptions) -> Result<Mobject, String> {
+    pub fn geometry(
+        &self,
+        options: crate::ManimGeometryOptions,
+    ) -> Result<Mobject, crate::AuthoringError> {
         Mobject::from_manim_geometry(Rc::clone(&self.store), options)
     }
 
@@ -80,19 +83,27 @@ impl Scene {
         self.cursor += duration;
         Ok(())
     }
-    pub fn circle(&self, radius: f64) -> Result<Mobject, String> {
+    pub fn circle(&self, radius: f64) -> Result<Mobject, crate::AuthoringError> {
         Mobject::manim_circle(Rc::clone(&self.store), radius)
     }
-    pub fn square(&self, side: f64) -> Result<Mobject, String> {
+    pub fn square(&self, side: f64) -> Result<Mobject, crate::AuthoringError> {
         Mobject::manim_square(Rc::clone(&self.store), side)
     }
-    pub fn rectangle(&self, width: f64, height: f64) -> Result<Mobject, String> {
+    pub fn rectangle(&self, width: f64, height: f64) -> Result<Mobject, crate::AuthoringError> {
         Mobject::manim_rectangle(Rc::clone(&self.store), width, height)
     }
-    pub fn line(&self, start: (f64, f64), end: (f64, f64)) -> Result<Mobject, String> {
+    pub fn line(
+        &self,
+        start: (f64, f64),
+        end: (f64, f64),
+    ) -> Result<Mobject, crate::AuthoringError> {
         Mobject::manim_line(Rc::clone(&self.store), start.0, start.1, end.0, end.1)
     }
-    pub fn path(&self, path: VectorPath, style: SemanticStyle) -> Result<Mobject, String> {
+    pub fn path(
+        &self,
+        path: VectorPath,
+        style: SemanticStyle,
+    ) -> Result<Mobject, crate::AuthoringError> {
         Mobject::from_geometry(Rc::clone(&self.store), GeometryRef::path(path), style)
     }
     pub fn add(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
@@ -145,7 +156,10 @@ impl Scene {
     }
 
     /// Create one detached semantic family with authoritative ordered members.
-    pub fn family(&self, members: &[MobjectFamilyMember<'_>]) -> Result<MobjectFamily, String> {
+    pub fn family(
+        &self,
+        members: &[MobjectFamilyMember<'_>],
+    ) -> Result<MobjectFamily, crate::AuthoringError> {
         MobjectFamily::create(Rc::clone(&self.store), members)
     }
     pub fn remove(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
@@ -154,11 +168,11 @@ impl Scene {
         ]))
         .map(|_| ())
     }
-    pub(crate) fn require_object(&self, object: &Mobject) -> Result<(), String> {
+    pub(crate) fn require_object(&self, object: &Mobject) -> Result<(), crate::AuthoringError> {
         if !Rc::ptr_eq(&self.store, object.integration_store()) {
-            return Err("mobject belongs to another scene store".into());
+            return Err(crate::AuthoringError::ForeignStore);
         }
-        object.validate().map_err(|error| error.to_string())
+        object.validate()
     }
     /// Validate the bounded ordinary leaf-affine operation without creating a
     /// declaration, session, track, or runtime identity.
@@ -168,8 +182,10 @@ impl Scene {
         target: &Mobject,
         options: AnimationOptions,
     ) -> Result<bool, String> {
-        self.require_object(source)?;
-        self.require_object(target)?;
+        self.require_object(source)
+            .map_err(|error| error.to_string())?;
+        self.require_object(target)
+            .map_err(|error| error.to_string())?;
         match noon_compile::validate_semantic_transform_to_payload(
             &self.store.borrow(),
             source.node_id(),

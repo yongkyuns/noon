@@ -1,4 +1,5 @@
 //! Cubic circular-arc construction shared by annular semantic geometry.
+use crate::AuthoringError;
 use noon_core::{Vec2, VectorPath};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -40,11 +41,12 @@ fn point_is_finite(point: Vec2) -> bool {
     point.x.is_finite() && point.y.is_finite()
 }
 
-pub(crate) fn authored_f32(value: f64, label: &str) -> Result<f32, String> {
+pub(crate) fn authored_f32(value: f64, label: &str) -> Result<f32, AuthoringError> {
     if !value.is_finite() || value.abs() > f64::from(f32::MAX) {
-        return Err(format!(
-            "{label} must be finite and representable as f32, got {value}"
-        ));
+        return Err(AuthoringError::InvalidRenderNumber {
+            name: label.to_owned(),
+            value,
+        });
     }
     Ok(value as f32)
 }

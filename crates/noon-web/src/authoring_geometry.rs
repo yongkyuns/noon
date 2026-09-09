@@ -4,8 +4,8 @@
 use noon_core::{Vec2, VectorPath};
 use wasm_bindgen::prelude::*;
 
-fn js_error(error: String) -> JsValue {
-    JsValue::from_str(&error)
+fn js_error(error: impl std::fmt::Display) -> JsValue {
+    JsValue::from_str(&error.to_string())
 }
 
 /// Constructor values own no semantic store, identity, or execution state.

@@ -163,7 +163,7 @@ impl RustHostCallbackContext<'_> {
         &self,
         angle: f64,
         pivot: Vec2,
-    ) -> Result<Transform2D, String> {
+    ) -> Result<Transform2D, crate::AuthoringError> {
         rotate_effective_transform_about_point(self.target_state().transform, angle, pivot)
     }
 
@@ -177,7 +177,7 @@ impl RustHostCallbackContext<'_> {
         green: f64,
         blue: f64,
         alpha: f64,
-    ) -> Result<Style, String> {
+    ) -> Result<Style, crate::AuthoringError> {
         effective_style_with_color(self.target_state().style, red, green, blue, alpha)
     }
 
@@ -188,12 +188,15 @@ impl RustHostCallbackContext<'_> {
         green: f64,
         blue: f64,
         alpha: f64,
-    ) -> Result<Style, String> {
+    ) -> Result<Style, crate::AuthoringError> {
         effective_style_with_fill_color(self.target_state().style, red, green, blue, alpha)
     }
 
     /// Derive an opacity-only fill edit, enabling white fill when absent.
-    pub fn target_style_with_fill_opacity(&self, opacity: f64) -> Result<Style, String> {
+    pub fn target_style_with_fill_opacity(
+        &self,
+        opacity: f64,
+    ) -> Result<Style, crate::AuthoringError> {
         effective_style_with_fill_opacity(self.target_state().style, opacity)
     }
 
@@ -204,7 +207,7 @@ impl RustHostCallbackContext<'_> {
         green: f64,
         blue: f64,
         opacity: f64,
-    ) -> Result<Style, String> {
+    ) -> Result<Style, crate::AuthoringError> {
         effective_style_with_fill(self.target_state().style, red, green, blue, opacity)
     }
 
@@ -215,7 +218,7 @@ impl RustHostCallbackContext<'_> {
         green: f64,
         blue: f64,
         alpha: f64,
-    ) -> Result<Style, String> {
+    ) -> Result<Style, crate::AuthoringError> {
         effective_style_with_stroke_color(self.target_state().style, red, green, blue, alpha)
     }
 
@@ -240,9 +243,9 @@ pub fn rotate_effective_transform_about_point(
     transform: Transform2D,
     angle: f64,
     pivot: Vec2,
-) -> Result<Transform2D, String> {
+) -> Result<Transform2D, crate::AuthoringError> {
     if !transform.scale.x.is_finite() || !transform.scale.y.is_finite() {
-        return Err("callback transform scale must be finite".into());
+        return Err(crate::AuthoringError::NonFiniteTransform);
     }
     let ((translation_x, translation_y), rotation) =
         crate::semantic_mobject::rotate_affine_about_point(
@@ -271,7 +274,7 @@ pub fn effective_style_with_color(
     green: f64,
     blue: f64,
     alpha: f64,
-) -> Result<Style, String> {
+) -> Result<Style, crate::AuthoringError> {
     crate::semantic_mobject::edit_color(&mut style, red, green, blue, alpha)?;
     Ok(style)
 }
@@ -283,13 +286,16 @@ pub fn effective_style_with_fill_color(
     green: f64,
     blue: f64,
     alpha: f64,
-) -> Result<Style, String> {
+) -> Result<Style, crate::AuthoringError> {
     crate::semantic_mobject::edit_fill_color(&mut style, red, green, blue, alpha)?;
     Ok(style)
 }
 
 /// Apply shared Manim opacity-only fill semantics to an effective runtime style.
-pub fn effective_style_with_fill_opacity(mut style: Style, opacity: f64) -> Result<Style, String> {
+pub fn effective_style_with_fill_opacity(
+    mut style: Style,
+    opacity: f64,
+) -> Result<Style, crate::AuthoringError> {
     crate::semantic_mobject::edit_fill_opacity(&mut style, opacity)?;
     Ok(style)
 }
@@ -301,7 +307,7 @@ pub fn effective_style_with_fill(
     green: f64,
     blue: f64,
     opacity: f64,
-) -> Result<Style, String> {
+) -> Result<Style, crate::AuthoringError> {
     crate::semantic_mobject::edit_fill(&mut style, red, green, blue, opacity)?;
     Ok(style)
 }
@@ -313,7 +319,7 @@ pub fn effective_style_with_stroke_color(
     green: f64,
     blue: f64,
     alpha: f64,
-) -> Result<Style, String> {
+) -> Result<Style, crate::AuthoringError> {
     crate::semantic_mobject::edit_stroke_color(&mut style, red, green, blue, alpha)?;
     Ok(style)
 }

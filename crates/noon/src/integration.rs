@@ -46,11 +46,14 @@ pub use crate::text_authoring::SCALE_FACTOR_PER_FONT_POINT;
 #[cfg(any(feature = "native-text", feature = "typst"))]
 pub use crate::text_authoring::{RetainedMobject, RetainedScene};
 pub use noon_core::{
-    GeometryResource, GeometryResourceArena, GeometryResourceHandle, GeometryResourceLookup,
-    HostCallbackId, SemanticMutationImpact, SemanticMutationTransaction,
-    SemanticMutationTransactionError, SemanticMutationTransactionResult, SemanticNodeCreation,
-    SemanticNodeKind, SemanticSceneOperationError, SemanticStore, SemanticStoreError,
-    SemanticStoreIdentity, SemanticTransactionNodeRef, TextResource, TextResourceArena,
+    GeometryResource, GeometryResourceArena, GeometryResourceError, GeometryResourceHandle,
+    GeometryResourceLookup, HostCallbackId, SemanticFamilyPairingError,
+    SemanticGeometryLayoutError, SemanticLoweringError, SemanticMutationImpact,
+    SemanticMutationTransaction, SemanticMutationTransactionError,
+    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeKind,
+    SemanticScalarSignalQueryError, SemanticSceneOperationError, SemanticSignalBindingError,
+    SemanticSignalError, SemanticStore, SemanticStoreError, SemanticStoreIdentity,
+    SemanticTextImportError, SemanticTransactionNodeRef, TextResource, TextResourceArena,
     TextResourceHandle,
 };
 pub use noon_runtime::{

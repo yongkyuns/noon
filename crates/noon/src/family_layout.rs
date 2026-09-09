@@ -1,4 +1,5 @@
 //! Immutable authored family observations and atomic relative placement.
+use crate::AuthoringError;
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{
@@ -78,30 +79,39 @@ impl LayoutAnchor {
         &self.store
     }
 
-    pub(crate) fn resolve(&self) -> Result<SemanticNodeId, String> {
+    pub(crate) fn resolve(&self) -> Result<SemanticNodeId, AuthoringError> {
         let store = self.store.borrow();
-        let node = store
-            .node(self.node)
-            .ok_or_else(|| format!("stale layout anchor {:?}", self.node))?;
+        let node =
+            store
+                .node(self.node)
+                .ok_or(noon_core::SemanticSceneOperationError::UnknownNode(
+                    self.node,
+                ))?;
         let Some(index) = self.index else {
             return Ok(self.node);
         };
         if !matches!(node.kind(), noon_core::SemanticNodeKind::Family) {
-            return Err("alignment submobject index requires a semantic family".into());
+            return Err(
+                noon_core::SemanticSceneOperationError::NotSemanticFamily(self.node).into(),
+            );
         }
         let members = node.members();
+        let requested_index = index;
         let index = if index < 0 {
             members.len().checked_add_signed(index)
         } else {
             Some(index as usize)
         };
-        index
-            .and_then(|index| members.get(index).copied())
-            .ok_or_else(|| "alignment submobject index is unavailable".into())
+        index.and_then(|index| members.get(index).copied()).ok_or(
+            AuthoringError::InvalidSubmobjectIndex {
+                family: self.node,
+                index: requested_index,
+            },
+        )
     }
 
     /// Observe the selected object/family through the shared authored layout path.
-    pub fn layout(&self) -> Result<FamilyLayout, String> {
+    pub fn layout(&self) -> Result<FamilyLayout, AuthoringError> {
         let node = self.resolve()?;
         if matches!(
             self.store.borrow().node(node).map(|n| n.kind()),
@@ -131,9 +141,9 @@ impl LayoutAnchor {
         target: FamilyLayoutTarget<'_>,
         aligner: &LayoutAnchor,
         args: ManimNextToArgs,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         if !Rc::ptr_eq(&self.store, &aligner.store) {
-            return Err("layout anchors belong to different authoring stores".into());
+            return Err(AuthoringError::ForeignStore);
         }
         let source = self.layout()?;
         let alignment = aligner.layout()?;
@@ -145,13 +155,13 @@ impl LayoutAnchor {
 
 impl MobjectFamily {
     /// Observe only this family's layout and ordered semantic leaves.
-    pub fn layout(&self) -> Result<FamilyLayout, String> {
-        self.validate().map_err(|error| error.to_string())?;
+    pub fn layout(&self) -> Result<FamilyLayout, AuthoringError> {
+        self.validate()?;
         let leaves = self
             .integration_store()
             .borrow()
             .ordered_leaf_nodes(self.node_id())
-            .map_err(|e| e.to_string())?;
+            .map_err(AuthoringError::from)?;
         let mut bounds: Option<Bounds2D64> = None;
         for &leaf in &leaves {
             let Some(next) =
@@ -174,7 +184,7 @@ impl MobjectFamily {
     }
 
     /// Shift each semantic leaf once without querying its geometry.
-    pub fn shift(&self, x: f64, y: f64) -> Result<(), String> {
+    pub fn shift(&self, x: f64, y: f64) -> Result<(), AuthoringError> {
         let translation =
             FamilyTranslation::begin(&self.integration_store().borrow(), self.node_id(), x, y)?;
         translation.apply(&mut self.integration_store().borrow_mut())
@@ -209,7 +219,7 @@ impl FamilyLayout {
         bounds_critical_point(self.bounds, x, y)
     }
 
-    pub fn shift(&self, x: f64, y: f64) -> Result<(), String> {
+    pub fn shift(&self, x: f64, y: f64) -> Result<(), AuthoringError> {
         FamilyTranslation::from_members(self.leaves.clone(), x, y)?
             .apply(&mut self.store.borrow_mut())
     }
@@ -219,7 +229,7 @@ impl FamilyLayout {
         target: FamilyLayoutTarget<'_>,
         edge: (f64, f64),
         mask: (f64, f64),
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         self.place(target, RelativePlacement::Move { edge, mask })
     }
 
@@ -228,11 +238,15 @@ impl FamilyLayout {
         &self,
         target: FamilyLayoutTarget<'_>,
         args: ManimNextToArgs,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         self.place(target, RelativePlacement::Next(args))
     }
 
-    pub fn align_to(&self, target: FamilyLayoutTarget<'_>, axis: (f64, f64)) -> Result<(), String> {
+    pub fn align_to(
+        &self,
+        target: FamilyLayoutTarget<'_>,
+        axis: (f64, f64),
+    ) -> Result<(), AuthoringError> {
         self.place(target, RelativePlacement::Align(axis))
     }
 
@@ -240,7 +254,7 @@ impl FamilyLayout {
         &self,
         target: FamilyLayoutTarget<'_>,
         placement: RelativePlacement,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         let delta = placement.delta(self.bounds, |x, y| self.target_point(target, x, y))?;
         self.shift(delta.0, delta.1)
     }
@@ -250,7 +264,7 @@ impl FamilyLayout {
         target: FamilyLayoutTarget<'_>,
         x: f64,
         y: f64,
-    ) -> Result<(f64, f64), String> {
+    ) -> Result<(f64, f64), AuthoringError> {
         let target_store = match target {
             FamilyLayoutTarget::Point(px, py) => {
                 let point = authoring_xy_f64(px, py)?;
@@ -261,9 +275,7 @@ impl FamilyLayout {
             FamilyLayoutTarget::Anchor(anchor) => anchor.integration_store(),
         };
         if !Rc::ptr_eq(&self.store, target_store) {
-            return Err(
-                "family placement source and target belong to different authoring stores".into(),
-            );
+            return Err(AuthoringError::ForeignStore);
         }
         match target {
             FamilyLayoutTarget::Mobject(object) => object.critical_point(x, y),
@@ -282,11 +294,11 @@ pub(crate) enum RelativePlacement {
 }
 
 impl RelativePlacement {
-    pub(crate) fn delta(
+    pub(crate) fn delta<E: From<AuthoringError>>(
         self,
         bounds: Option<Bounds2D64>,
-        target: impl FnOnce(f64, f64) -> Result<(f64, f64), String>,
-    ) -> Result<(f64, f64), String> {
+        target: impl FnOnce(f64, f64) -> Result<(f64, f64), E>,
+    ) -> Result<(f64, f64), E> {
         let (source_axis, target_axis, offset, mask) = match self {
             Self::Move { edge, mask } => {
                 let edge = authoring_xy_f64(edge.0, edge.1)?;
