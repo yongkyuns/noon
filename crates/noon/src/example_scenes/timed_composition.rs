@@ -115,18 +115,25 @@ impl LiveContinuation for TimedComposition {
 pub fn program() -> Result<LiveProgram<TimedComposition>, String> {
     let scene = Scene::new();
     let mut squares = [
-        Mobject::manim_square(Rc::clone(scene.integration_store()), 1.0)?,
-        Mobject::manim_square(Rc::clone(scene.integration_store()), 1.0)?,
-        Mobject::manim_square(Rc::clone(scene.integration_store()), 1.0)?,
+        Mobject::manim_square(Rc::clone(scene.integration_store()), 1.0)
+            .map_err(|error| error.to_string())?,
+        Mobject::manim_square(Rc::clone(scene.integration_store()), 1.0)
+            .map_err(|error| error.to_string())?,
+        Mobject::manim_square(Rc::clone(scene.integration_store()), 1.0)
+            .map_err(|error| error.to_string())?,
     ];
     for (square, x) in squares.iter_mut().zip([-2.0, 0.0, 2.0]) {
-        square.set_translation(x, 0.0)?;
-        square.set_fill(
-            f64::from(Color::BLUE.red),
-            f64::from(Color::BLUE.green),
-            f64::from(Color::BLUE.blue),
-            0.7,
-        )?;
+        square
+            .set_translation(x, 0.0)
+            .map_err(|error| error.to_string())?;
+        square
+            .set_fill(
+                f64::from(Color::BLUE.red),
+                f64::from(Color::BLUE.green),
+                f64::from(Color::BLUE.blue),
+                0.7,
+            )
+            .map_err(|error| error.to_string())?;
     }
     scene
         .into_live_program(TimedComposition { squares, stage: 0 })

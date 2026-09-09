@@ -1,4 +1,5 @@
 //! Dimension fitting uses shared bounds and the existing atomic affine edits.
+use crate::AuthoringError;
 use std::rc::Rc;
 
 use crate::{semantic_mobject::authoring_render_f64, Bounds2D64, LayoutAnchor};
@@ -11,13 +12,13 @@ pub enum LayoutDimension {
 }
 
 impl TryFrom<u32> for LayoutDimension {
-    type Error = String;
+    type Error = AuthoringError;
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::Width),
             1 => Ok(Self::Height),
-            _ => Err("dimension fitting supports width and height only".into()),
+            _ => Err(AuthoringError::InvalidDimension(value)),
         }
     }
 }
@@ -35,7 +36,7 @@ impl LayoutDimension {
         bounds: Option<Bounds2D64>,
         length: f64,
         stretch: bool,
-    ) -> Result<Option<(f64, f64)>, String> {
+    ) -> Result<Option<(f64, f64)>, AuthoringError> {
         let length = authoring_render_f64("fit length", length)?;
         let previous = self.length(bounds);
         if previous == 0.0 {
@@ -50,11 +51,13 @@ impl LayoutDimension {
     }
 }
 
-pub(crate) fn validate_fit_stretch(rotation: f64, stretch: bool) -> Result<(), String> {
+pub(crate) fn validate_fit_stretch(rotation: f64, stretch: bool) -> Result<(), AuthoringError> {
     // The planar affine representation has local scale plus rotation, not shear.
     // A world-axis stretch of a rotated shape cannot generally use local scale.
     if stretch && rotation.sin().abs() > 1.0e-12 {
-        return Err("dimension stretching of rotated objects is unsupported".into());
+        return Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::RotatedDimensionStretch,
+        ));
     }
     Ok(())
 }
@@ -67,7 +70,7 @@ impl LayoutAnchor {
         length: f64,
         dimension: LayoutDimension,
         stretch: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         let layout = self.layout()?;
         let Some((x, y)) = dimension.scale(layout.bounds(), length, stretch)? else {
             return Ok(());
@@ -77,7 +80,7 @@ impl LayoutAnchor {
             for &leaf in layout.leaves() {
                 let state = store
                     .semantic_object_state_checked(leaf)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(AuthoringError::from)?;
                 validate_fit_stretch(state.transform.rotation_z, stretch)?;
             }
             crate::family_affine::FamilyAffine::Scale(x, y).transaction(
@@ -89,7 +92,7 @@ impl LayoutAnchor {
         transaction
             .apply(&mut self.integration_store().borrow_mut())
             .map(|_| ())
-            .map_err(|e| e.to_string())
+            .map_err(AuthoringError::from)
     }
 
     /// Match an object's or family's dimension using a fresh shared observation.
@@ -98,9 +101,9 @@ impl LayoutAnchor {
         target: &LayoutAnchor,
         dimension: LayoutDimension,
         stretch: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         if !Rc::ptr_eq(self.integration_store(), target.integration_store()) {
-            return Err("dimension match targets belong to different authoring stores".into());
+            return Err(AuthoringError::ForeignStore);
         }
         let length = dimension.length(target.layout()?.bounds());
         self.rescale_to_fit(length, dimension, stretch)

@@ -186,12 +186,16 @@ fn create_morph_fade_session() -> Result<ExecutionSession, String> {
         Scene, SemanticAnimationCompositionKind, SemanticFadeDirection, TransformToRequest,
     };
     let mut scene = Scene::new();
-    let mut entering = scene.circle(0.75)?;
-    entering.set_translation(-2.0, 0.0)?;
-    let source = scene.square(1.5)?;
-    let target = scene.circle(0.75)?;
-    let mut leaving = scene.circle(0.75)?;
-    leaving.set_translation(2.0, 0.0)?;
+    let mut entering = scene.circle(0.75).map_err(|error| error.to_string())?;
+    entering
+        .set_translation(-2.0, 0.0)
+        .map_err(|error| error.to_string())?;
+    let source = scene.square(1.5).map_err(|error| error.to_string())?;
+    let target = scene.circle(0.75).map_err(|error| error.to_string())?;
+    let mut leaving = scene.circle(0.75).map_err(|error| error.to_string())?;
+    leaving
+        .set_translation(2.0, 0.0)
+        .map_err(|error| error.to_string())?;
     scene.add(&source).map_err(|error| error.to_string())?;
     scene.add(&leaving).map_err(|error| error.to_string())?;
     let mut session = scene

@@ -3,6 +3,7 @@
 //! These handles retain only their owning store and one `SemanticNodeId`.
 //! Routing and effective values are lowered into the canonical `ExecutionSession`.
 
+use crate::AuthoringError;
 use std::{cell::RefCell, rc::Rc};
 
 use noon_core::{
@@ -27,15 +28,15 @@ impl NativeSignalHandle {
         Rc::ptr_eq(&self.store, store)
     }
 
-    fn require_store(&self, store: &Rc<RefCell<SemanticStore>>) -> Result<(), String> {
+    fn require_store(&self, store: &Rc<RefCell<SemanticStore>>) -> Result<(), AuthoringError> {
         if !self.is_in_store(store) {
-            return Err("native signal belongs to another scene store".into());
+            return Err(AuthoringError::ForeignStore);
         }
         self.store
             .borrow()
             .semantic_signal_state(self.node)
             .map(|_| ())
-            .map_err(|error| error.to_string())
+            .map_err(AuthoringError::from)
     }
 }
 
@@ -68,15 +69,15 @@ impl NativeBoolSignal {
 }
 
 impl Scene {
-    pub fn pointer_position_signal(&self) -> Result<NativeVectorSignal, String> {
+    pub fn pointer_position_signal(&self) -> Result<NativeVectorSignal, AuthoringError> {
         self.native_vector_signal(NativeStateSource::PointerPosition)
     }
 
-    pub fn viewport_size_signal(&self) -> Result<NativeVectorSignal, String> {
+    pub fn viewport_size_signal(&self) -> Result<NativeVectorSignal, AuthoringError> {
         self.native_vector_signal(NativeStateSource::ViewportSize)
     }
 
-    pub fn wheel_delta_signal(&self) -> Result<NativeVectorSignal, String> {
+    pub fn wheel_delta_signal(&self) -> Result<NativeVectorSignal, AuthoringError> {
         self.native_vector_signal(NativeStateSource::WheelDelta)
     }
 
@@ -84,7 +85,7 @@ impl Scene {
         &self,
         code: impl Into<String>,
         initial: bool,
-    ) -> Result<NativeBoolSignal, String> {
+    ) -> Result<NativeBoolSignal, AuthoringError> {
         let code = nonempty_name("key code", code.into())?;
         self.native_bool_signal(NativeStateSource::Key { code }, initial)
     }
@@ -93,7 +94,7 @@ impl Scene {
         &self,
         name: impl Into<String>,
         initial: f64,
-    ) -> Result<ValueTracker, String> {
+    ) -> Result<ValueTracker, AuthoringError> {
         let name = nonempty_name("control name", name.into())?;
         let (store, node) = self.native_signal(
             SemanticSignalValue::Scalar(initial),
@@ -102,7 +103,7 @@ impl Scene {
         Ok(ValueTracker::from_semantic_node(store, node))
     }
 
-    pub fn pointer_down_events(&self, button: u8) -> Result<ValueTracker, String> {
+    pub fn pointer_down_events(&self, button: u8) -> Result<ValueTracker, AuthoringError> {
         let (store, node) = self.native_signal(
             SemanticSignalValue::Scalar(0.0),
             SemanticNativeInputSource::Event(NativeEventSource::PointerDown { button }),
@@ -110,7 +111,7 @@ impl Scene {
         Ok(ValueTracker::from_semantic_node(store, node))
     }
 
-    pub fn wheel_events(&self) -> Result<ValueTracker, String> {
+    pub fn wheel_events(&self) -> Result<ValueTracker, AuthoringError> {
         let (store, node) = self.native_signal(
             SemanticSignalValue::Scalar(0.0),
             SemanticNativeInputSource::Event(NativeEventSource::Wheel),
@@ -118,7 +119,10 @@ impl Scene {
         Ok(ValueTracker::from_semantic_node(store, node))
     }
 
-    pub fn control_commit_events(&self, name: impl Into<String>) -> Result<ValueTracker, String> {
+    pub fn control_commit_events(
+        &self,
+        name: impl Into<String>,
+    ) -> Result<ValueTracker, AuthoringError> {
         let name = nonempty_name("control name", name.into())?;
         let (store, node) = self.native_signal(
             SemanticSignalValue::Scalar(0.0),
@@ -132,7 +136,7 @@ impl Scene {
         &self,
         object: &Mobject,
         signal: &NativeVectorSignal,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         self.require_object(object)?;
         signal.0.require_store(self.integration_store())?;
         self.bind_signal(
@@ -143,14 +147,22 @@ impl Scene {
     }
 
     /// Bind a scalar input/event counter to rotation around the semantic z axis.
-    pub fn bind_rotation(&self, object: &Mobject, signal: &ValueTracker) -> Result<(), String> {
+    pub fn bind_rotation(
+        &self,
+        object: &Mobject,
+        signal: &ValueTracker,
+    ) -> Result<(), AuthoringError> {
         signal.require_store(self.integration_store())?;
         self.require_object(object)?;
         self.bind_signal(object, signal.node_id(), SemanticObjectProperty::RotationZ)
     }
 
     /// Bind a scalar input to the object's composed opacity.
-    pub fn bind_opacity(&self, object: &Mobject, signal: &ValueTracker) -> Result<(), String> {
+    pub fn bind_opacity(
+        &self,
+        object: &Mobject,
+        signal: &ValueTracker,
+    ) -> Result<(), AuthoringError> {
         signal.require_store(self.integration_store())?;
         self.require_object(object)?;
         self.bind_signal(
@@ -161,7 +173,11 @@ impl Scene {
     }
 
     /// Bind a native bool state to whether the object participates in rendering.
-    pub fn bind_presence(&self, object: &Mobject, signal: &NativeBoolSignal) -> Result<(), String> {
+    pub fn bind_presence(
+        &self,
+        object: &Mobject,
+        signal: &NativeBoolSignal,
+    ) -> Result<(), AuthoringError> {
         signal.0.require_store(self.integration_store())?;
         self.require_object(object)?;
         self.bind_signal(object, signal.node_id(), SemanticObjectProperty::Presence)
@@ -170,7 +186,7 @@ impl Scene {
     fn native_vector_signal(
         &self,
         source: NativeStateSource,
-    ) -> Result<NativeVectorSignal, String> {
+    ) -> Result<NativeVectorSignal, AuthoringError> {
         let (store, node) = self.native_signal(
             SemanticSignalValue::Vec3(SemanticVec3::ZERO),
             SemanticNativeInputSource::State(source),
@@ -182,7 +198,7 @@ impl Scene {
         &self,
         source: NativeStateSource,
         initial: bool,
-    ) -> Result<NativeBoolSignal, String> {
+    ) -> Result<NativeBoolSignal, AuthoringError> {
         let (store, node) = self.native_signal(
             SemanticSignalValue::Bool(initial),
             SemanticNativeInputSource::State(source),
@@ -194,16 +210,16 @@ impl Scene {
         &self,
         initial: SemanticSignalValue,
         source: SemanticNativeInputSource,
-    ) -> Result<(Rc<RefCell<SemanticStore>>, SemanticNodeId), String> {
+    ) -> Result<(Rc<RefCell<SemanticStore>>, SemanticNodeId), AuthoringError> {
         let store = Rc::clone(self.integration_store());
         let creation = noon_core::SemanticNodeCreation::native_input_signal(initial, source)
-            .map_err(|error| error.to_string())?;
+            .map_err(AuthoringError::from)?;
         let mut transaction = SemanticMutationTransaction::new();
         let pending = transaction.create_node(creation);
         transaction.scope_signal(self.root(), pending);
         let result = transaction
             .apply(&mut store.borrow_mut())
-            .map_err(|error| error.to_string())?;
+            .map_err(AuthoringError::from)?;
         let node = result
             .resolve(pending)
             .expect("committed native input resolves its transaction-local identity");
@@ -215,18 +231,20 @@ impl Scene {
         object: &Mobject,
         signal: SemanticNodeId,
         property: SemanticObjectProperty,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         self.integration_store()
             .borrow_mut()
             .bind_semantic_signal(signal, object.node_id(), property)
             .map(|_| ())
-            .map_err(|error| error.to_string())
+            .map_err(AuthoringError::from)
     }
 }
 
-fn nonempty_name(kind: &str, value: String) -> Result<String, String> {
+fn nonempty_name(kind: &str, value: String) -> Result<String, AuthoringError> {
     if value.trim().is_empty() {
-        Err(format!("native input {kind} must not be empty"))
+        Err(AuthoringError::EmptyInputName {
+            kind: kind.to_owned(),
+        })
     } else {
         Ok(value)
     }

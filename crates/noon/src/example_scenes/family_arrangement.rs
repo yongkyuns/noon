@@ -109,25 +109,40 @@ impl LiveContinuation for FamilyArrangement {
 
 pub fn program() -> Result<LiveProgram<FamilyArrangement>, String> {
     let mut scene = Scene::new();
-    let mut first = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.2)?;
-    let mut second = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.2)?;
+    let mut first = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.2)
+        .map_err(|error| error.to_string())?;
+    let mut second = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.2)
+        .map_err(|error| error.to_string())?;
     for (object, color) in [(&mut first, Color::BLUE), (&mut second, Color::YELLOW)] {
-        object.set_fill(
-            f64::from(color.red),
-            f64::from(color.green),
-            f64::from(color.blue),
-            1.0,
-        )?;
-        object.set_stroke_width(0.0)?;
+        object
+            .set_fill(
+                f64::from(color.red),
+                f64::from(color.green),
+                f64::from(color.blue),
+                1.0,
+            )
+            .map_err(|error| error.to_string())?;
+        object
+            .set_stroke_width(0.0)
+            .map_err(|error| error.to_string())?;
     }
-    second.shift(2.0, 0.0)?;
-    let nested = scene.family(&[(&first).into(), (&second).into()])?;
-    let family = scene.family(&[(&first).into(), (&nested).into()])?;
-    let bounds = family.layout_bounds()?.ok_or("family bounds are empty")?;
+    second.shift(2.0, 0.0).map_err(|error| error.to_string())?;
+    let nested = scene
+        .family(&[(&first).into(), (&second).into()])
+        .map_err(|error| error.to_string())?;
+    let family = scene
+        .family(&[(&first).into(), (&nested).into()])
+        .map_err(|error| error.to_string())?;
+    let bounds = family
+        .layout_bounds()
+        .map_err(|error| error.to_string())?
+        .ok_or("family bounds are empty")?;
     if (bounds.width() - 2.4).abs() > 1e-6 || (bounds.height() - 0.4).abs() > 1e-6 {
         return Err("shared family bounds differ from its authored members".into());
     }
-    family.arrange(1.0, 0.0, 0.2, true)?;
+    family
+        .arrange(1.0, 0.0, 0.2, true)
+        .map_err(|error| error.to_string())?;
     scene.add(&first).map_err(|error| error.to_string())?;
     scene.add(&second).map_err(|error| error.to_string())?;
     scene

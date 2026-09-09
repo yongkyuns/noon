@@ -87,8 +87,10 @@ impl crate::Scene {
         target: &Mobject,
         options: AnimationOptions,
     ) -> Result<DeclaredAnimation, String> {
-        self.require_object(source)?;
-        self.require_object(target)?;
+        self.require_object(source)
+            .map_err(|error| error.to_string())?;
+        self.require_object(target)
+            .map_err(|error| error.to_string())?;
         self.declare_animation(
             SemanticAnimationIntent::TransformTo {
                 target: source.node_id(),
@@ -106,7 +108,8 @@ impl crate::Scene {
         time_width: f64,
         options: AnimationOptions,
     ) -> Result<DeclaredAnimation, String> {
-        self.require_object(target)?;
+        self.require_object(target)
+            .map_err(|error| error.to_string())?;
         let options = normalized_passing_flash_options(options)?;
         self.declare_animation(
             SemanticAnimationIntent::PassingFlash {

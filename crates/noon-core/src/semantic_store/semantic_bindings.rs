@@ -59,7 +59,15 @@ impl std::fmt::Display for SemanticSignalBindingError {
     }
 }
 
-impl std::error::Error for SemanticSignalBindingError {}
+impl std::error::Error for SemanticSignalBindingError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Signal(error) => Some(error),
+            Self::Target(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl From<SemanticSignalError> for SemanticSignalBindingError {
     fn from(value: SemanticSignalError) -> Self {

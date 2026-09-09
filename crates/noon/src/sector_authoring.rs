@@ -1,5 +1,6 @@
 //! Closed retained contours used by shared annular-sector, sector and annulus handles.
 use crate::arc_authoring::{authored_f32, circular_arc_path, ArcAuthoringError};
+use crate::AuthoringError;
 use noon_core::{GeometryRef, PathCommand, Vec2, VectorPath, TAU};
 
 fn append_command(path: VectorPath, command: PathCommand) -> VectorPath {
@@ -90,7 +91,7 @@ pub(crate) fn annular_sector_geometry(
     num_components: u32,
     center_x: f64,
     center_y: f64,
-) -> Result<GeometryRef, String> {
+) -> Result<GeometryRef, AuthoringError> {
     let path = annular_sector_path(
         authored_f32(inner_radius, "annular sector inner radius")?,
         authored_f32(outer_radius, "annular sector outer radius")?,
@@ -102,7 +103,7 @@ pub(crate) fn annular_sector_geometry(
             authored_f32(center_y, "annular sector center y")?,
         ),
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(AuthoringError::from)?;
     Ok(GeometryRef::VectorPath(path))
 }
 
@@ -114,7 +115,7 @@ pub(crate) fn sector_geometry(
     num_components: u32,
     center_x: f64,
     center_y: f64,
-) -> Result<GeometryRef, String> {
+) -> Result<GeometryRef, AuthoringError> {
     annular_sector_geometry(
         0.0,
         radius,
@@ -132,7 +133,7 @@ pub(crate) fn annulus_geometry(
     num_components: u32,
     center_x: f64,
     center_y: f64,
-) -> Result<GeometryRef, String> {
+) -> Result<GeometryRef, AuthoringError> {
     let path = annulus_path(
         authored_f32(inner_radius, "annulus inner radius")?,
         authored_f32(outer_radius, "annulus outer radius")?,
@@ -142,6 +143,6 @@ pub(crate) fn annulus_geometry(
             authored_f32(center_y, "annulus center y")?,
         ),
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(AuthoringError::from)?;
     Ok(GeometryRef::VectorPath(path))
 }

@@ -15,7 +15,7 @@ except ImportError:
     wasm = None
 
 from _noon_errors import (
-    NoonError, NoonCallbackError, NoonStaleHandleError, NoonStalePublicationError,
+    NoonError, NoonCallbackError, NoonStaleHandleError, NoonStalePublicationError, NoonValueError,
     engine_call,
 )
 
@@ -200,6 +200,59 @@ class CallbackErrorBoundaryTests(unittest.TestCase):
         self.assertEqual(fixture.state(), before)
         self.assertIsNone(fixture.player.drainDeltaJson())
         fixture.finish()
+
+    def test_family_paint_retains_typed_causes_and_same_player_recovery(self):
+        cases = (
+            ("Opacity", None, 1.5, "authoring.invalid_opacity"),
+            ("Opacity", None, float("nan"), "authoring.invalid_render_number"),
+            ("Stroke", -1.0, None, "authoring.negative_stroke_width"),
+            ("Stroke", float("inf"), None, "authoring.invalid_render_number"),
+        )
+        for operation, width, opacity, cause_code in cases:
+            with self.subTest(operation=operation, cause=cause_code):
+                fixture = CallbackFixture(with_families=True)
+                self.addCleanup(fixture.close)
+                family = fixture.families[1]
+                revision = fixture.phase["token"]["publication"]["scene_revision"]
+                authored = (fixture.target.snapshotJson(), fixture.detached.snapshotJson())
+                # An empty read cache proves input rejection precedes effective reads.
+                error = self.rejection(
+                    fixture, fixture.context.callbackFamilyPaint,
+                    [family, revision, operation, "[]", False, 0.0, 0.0, 0.0, 1.0,
+                     width, opacity],
+                    NoonValueError, "invalid_input", "callback.family.invalid_paint",
+                )
+                self.assertIsNotNone(error.rust_cause)
+                self.assertEqual(error.rust_cause.category, "invalid_input")
+                self.assertEqual(error.rust_cause.code, cause_code)
+                self.assertIsNone(error.rust_cause.cause)
+                self.assertTrue(host.isError(error.js_error.cause))
+                self.assertEqual(str(error.js_error.cause.code), cause_code)
+                self.assertTrue(error.rust_cause.message)
+                self.assertEqual((fixture.target.snapshotJson(), fixture.detached.snapshotJson()),
+                                 authored)
+
+                rows = [[row["node"]["slot"], row["node"]["generation"], row["style"]]
+                        for row in fixture.phase["objects"]]
+                before = fixture.state()
+                changes = json.loads(engine_call(
+                    fixture.context.callbackFamilyPaint, family, revision, operation,
+                    json.dumps(rows), False, 0.0, 0.0, 0.0, 1.0,
+                    0.1 if operation == "Stroke" else None, 0.5,
+                    operation="callback.family.paint",
+                ))
+                self.assertEqual(len(changes), 1)
+                self.assertEqual(fixture.state(), before)
+                self.assertEqual((fixture.target.snapshotJson(), fixture.detached.snapshotJson()),
+                                 authored)
+                fixture.commit([{
+                    "kind": "style", "object": {"slot": slot, "generation": generation},
+                    "style": style,
+                } for slot, generation, style in changes])
+                self.assertNotEqual(fixture.state(), before)
+                self.assertEqual((fixture.target.snapshotJson(), fixture.detached.snapshotJson()),
+                                 authored)
+                fixture.finish()
 
     def test_valid_abort_remains_terminal_and_repeat_keeps_no_pending_precedence(self):
         for method, kind in (("failCallbackPhaseJson", "failed"),
