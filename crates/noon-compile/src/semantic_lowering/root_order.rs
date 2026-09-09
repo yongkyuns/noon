@@ -1,5 +1,7 @@
 //! Lower authored family ordering into derived execution painter-order patches.
 
+use std::collections::HashMap;
+
 use noon_core::{
     PreparedSemanticMutationTransaction, SemanticMutation, SemanticNodeId, SemanticNodeKind,
     SemanticStore, SemanticTransactionNodeRef,
@@ -9,6 +11,81 @@ use super::{
     semantic_execution_object_id, SemanticLoweringError, SemanticPublicationLoweringError,
 };
 use crate::ExecutionPatch;
+
+// Only changed root links are retained. Untouched links are read directly from
+// the authored root; this is not a second scene or a semantic validator. The
+// prepared transaction has already validated all membership operations.
+#[derive(Clone, Copy)]
+struct RootLinks {
+    previous: Option<SemanticTransactionNodeRef>,
+    next: Option<SemanticTransactionNodeRef>,
+}
+
+struct RootOrder<'a> {
+    root: &'a noon_core::SemanticNode,
+    links: HashMap<SemanticTransactionNodeRef, Option<RootLinks>>,
+    tail: Option<SemanticTransactionNodeRef>,
+}
+
+impl<'a> RootOrder<'a> {
+    fn new(root: &'a noon_core::SemanticNode) -> Self {
+        Self { root, links: HashMap::new(), tail: root.last_member().map(Into::into) }
+    }
+
+    fn links(&self, member: SemanticTransactionNodeRef) -> Option<RootLinks> {
+        self.links.get(&member).copied().unwrap_or_else(|| {
+            let member = member.existing()?;
+            self.root.contains_member(member).then(|| RootLinks {
+                previous: self.root.previous_member(member).map(Into::into),
+                next: self.root.next_member(member).map(Into::into),
+            })
+        })
+    }
+
+    fn next(&self, member: SemanticTransactionNodeRef) -> Option<SemanticTransactionNodeRef> {
+        self.links(member).and_then(|links| links.next)
+    }
+
+    fn set_next(&mut self, member: Option<SemanticTransactionNodeRef>, next: Option<SemanticTransactionNodeRef>) {
+        if let Some(member) = member {
+            let mut links = self.links(member).expect("validated root predecessor remains present");
+            links.next = next;
+            self.links.insert(member, Some(links));
+        }
+    }
+
+    fn set_previous(&mut self, member: Option<SemanticTransactionNodeRef>, previous: Option<SemanticTransactionNodeRef>) {
+        if let Some(member) = member {
+            let mut links = self.links(member).expect("validated root successor remains present");
+            links.previous = previous;
+            self.links.insert(member, Some(links));
+        } else {
+            self.tail = previous;
+        }
+    }
+
+    fn remove(&mut self, member: SemanticTransactionNodeRef) {
+        if let Some(links) = self.links(member) {
+            self.set_next(links.previous, links.next);
+            self.set_previous(links.next, links.previous);
+            self.links.insert(member, None);
+        }
+    }
+
+    fn insert_before(&mut self, member: SemanticTransactionNodeRef, before: Option<SemanticTransactionNodeRef>) {
+        if before == Some(member) || self.links(member).is_some_and(|links| links.next == before) {
+            return;
+        }
+        self.remove(member);
+        let previous = match before {
+            Some(anchor) => self.links(anchor).expect("validated root anchor remains present").previous,
+            None => self.tail,
+        };
+        self.set_next(previous, Some(member));
+        self.set_previous(before, Some(member));
+        self.links.insert(member, Some(RootLinks { previous, next: before }));
+    }
+}
 
 fn node_for_root_order(
     store: &SemanticStore,
@@ -80,8 +157,21 @@ pub fn prepare_semantic_root_order(
         .into());
     }
 
+    let mut order = RootOrder::new(root_node);
     let mut patches = Vec::new();
     for mutation in prepared.candidate_mutations() {
+        match mutation {
+            SemanticMutation::AddMember { family, member } if family.existing() == Some(root) => {
+                order.insert_before(*member, None);
+            }
+            SemanticMutation::RemoveMember { family, member } if family.existing() == Some(root) => {
+                order.remove(*member);
+            }
+            SemanticMutation::ReorderMember { family, member, before } if family.existing() == Some(root) => {
+                order.insert_before(*member, *before);
+            }
+            _ => {}
+        }
         match mutation {
             SemanticMutation::AddMember { family, member } if family.existing() == Some(root) => {
                 let Some(member) = member.existing() else {
@@ -114,8 +204,9 @@ pub fn prepare_semantic_root_order(
                         break;
                     }
                     // An empty root member still marks a semantic position. Its
-                    // next sibling, not the execution tail, supplies the anchor.
-                    before = root_node.next_member(candidate);
+                    // next staged sibling, not the execution tail or a removed
+                    // published sibling, supplies the anchor.
+                    before = order.next(candidate.into()).and_then(SemanticTransactionNodeRef::existing);
                 }
                 for leaf in member_leaves.into_iter().rev() {
                     let object = semantic_execution_object_id(leaf);
@@ -162,8 +253,8 @@ mod tests {
         let mut transaction = SemanticMutationTransaction::new();
         transaction.reorder_member(root, family, Some(nodes[0]));
         let prepared = transaction.prepare(&mut store).unwrap();
-
         let patches = prepare_semantic_root_order(&prepared, root).unwrap();
+
         assert_eq!(
             patches,
             vec![
