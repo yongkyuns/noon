@@ -2423,11 +2423,11 @@ class LiveExecution:
 
     def advance_to(self, time: float) -> bool:
         """Drive the current segment; affine endpoints require ``complete()``."""
-        return bool(self._context.liveAdvanceSegmentTo(float(time)))
+        return bool(engine_call(self._context.liveAdvanceSegmentTo, float(time), operation="LiveExecution.advance_to"))
 
     def evaluate(self, time: float) -> None:
         """Evaluate canonical deterministic tracks at one session-owned time."""
-        self._context.liveEvaluate(float(time))
+        engine_call(self._context.liveEvaluate, float(time), operation="LiveExecution.evaluate")
 
     def complete(self) -> None:
         """Publish the active endpoint before sequential authoring continues."""

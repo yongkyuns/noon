@@ -212,6 +212,84 @@ try {
         dispose: () => { context.free(); object.free(); foreign.free(); stale?.free(); store.free(); otherStore.free(); },
       };
     };
+    // Keep the admitted time/callback semantics in Rust. These fixtures compare
+    // failed calls and valid continuations without replaying diagnostic snapshots.
+    const advanceCases = [
+      ...["nan", "positive_infinity", "negative_infinity"].flatMap(kind => [
+        {method: "liveAdvanceSegmentTo", kind, category: "invalid_input", code: "advance.evaluation", cause: "evaluation.invalid_time"},
+        {method: "liveEvaluate", kind, category: "invalid_input", code: "clock.invalid_scene_time"},
+      ]),
+      {method: "liveEvaluate", kind: "negative", category: "invalid_input", code: "clock.invalid_scene_time"},
+      {method: "liveEvaluate", kind: "outside_loop", category: "invalid_input", code: "clock.time_outside_loop"},
+      {method: "liveEvaluate", kind: "callback_barrier", category: "unsupported_operation", code: "evaluation.callback_barrier"},
+    ];
+    const advanceFixture = spec => {
+      const store = new wasm.WasmAuthoringStore();
+      const context = store.createSceneContext(), object = store.createManimCircle(0.5);
+      context.bindMobject("0", object);
+      const callbacks = spec.kind === "callback_barrier";
+      if (callbacks) context.addUpdater(object, "1", 0);
+      context.beginLiveExecution(1);
+      context.liveWait(0.25);
+      let player = context.createExecutionPlayer(1, 41);
+      const resources = Array.from(player.resourceBundleBytes());
+      context.returnExecutionPlayer(player); player = null;
+      const state = () => ({...snapshot(context, true), authored: object.snapshotJson()});
+      const before = state();
+      const invalid = {nan: NaN, positive_infinity: Infinity, negative_infinity: -Infinity,
+        negative: -0.25, outside_loop: 2, callback_barrier: 0.125};
+      return {
+        reject: () => context[spec.method](invalid[spec.kind]),
+        assertDiagnostic: error => {
+          check(error.code === spec.code, `wrong advance code ${error.code}`);
+          check(error.cause?.code === spec.cause, "advance cause lost or invented");
+          check(!error.cause?.cause, "advance leaf gained a fake cause");
+          if (spec.cause) equal(error.message, error.cause.message, "advance changed the original diagnostic");
+        },
+        assertAtomic: () => equal(state(), before, "failed advance changed frame, authored state, revisions, membership or ownership"),
+        recover: () => {
+          if (callbacks) {
+            player = context.createExecutionPlayer(1, 41);
+            const phase = player.initialCallbackPhaseJson();
+            const acknowledge = encoded => {
+              const parsed = JSON.parse(encoded);
+              equal(parsed.invocations.map(row => row.callback_id), ["1"], "callback order/identity changed");
+              player.commitCallbackPhaseJson(JSON.stringify({token: parsed.token, writes: []}));
+              return parsed.time;
+            };
+            equal(acknowledge(phase), 0, "initial phase time changed");
+            let drive = player.driveLiveSegmentToAuthoredTime(0.25);
+            check(drive.callbackPhaseJson !== null, "endpoint callback was skipped");
+            equal(acknowledge(drive.callbackPhaseJson), 0.25, "endpoint phase time changed");
+            drive.free();
+            drive = player.driveLiveSegmentToAuthoredTime(0.25);
+            check(drive.reachedEndpoint, "callback recovery failed to reach the original endpoint");
+            drive.free(); player.completeLiveSegment();
+          } else {
+            // Backward segment requests clamp; deterministic evaluate can seek.
+            // Rejecting either of these would be a host semantic change.
+            context.liveAdvanceSegmentTo(-1);
+            equal(JSON.parse(context.liveDebugFrameJson()).time, 0, "negative segment request should clamp");
+            context.liveAdvanceSegmentTo(0.125);
+            context.liveAdvanceSegmentTo(0.0625);
+            equal(JSON.parse(context.liveDebugFrameJson()).time, 0.125, "segment drive rewound");
+            context.liveEvaluate(0.0625);
+            equal(JSON.parse(context.liveDebugFrameJson()).time, 0.0625, "deterministic reverse evaluation was rejected");
+            context.liveAdvanceSegmentTo(9);
+            equal(JSON.parse(context.liveDebugFrameJson()).time, 0.25, "drive failed to clamp at endpoint");
+            context.liveCompleteSegment();
+            player = context.createExecutionPlayer(1, 41);
+          }
+          equal(JSON.parse(player.debugFrameJson()).time, 0.25, "recovery replaced the timeline");
+          equal(Array.from(player.resourceBundleBytes()), resources, "recovery changed resources");
+          equal(JSON.parse(player.initialDeltaJson()).session, 41, "recovery changed transport session");
+          context.returnExecutionPlayer(player); player = null;
+          equal(object.snapshotJson(), before.authored, "evaluation rewrote authored state");
+          return {atomic: true, originalTimelineCompleted: true, callbacks};
+        },
+        dispose: () => { player?.free(); context.free(); object.free(); store.free(); },
+      };
+    };
     const contentObservationCases = [
       ...["foreign_target", "foreign_source", "stale_target", "stale_source", "stale_publication", "leased"].map(kind => ({method: "liveReplaceContent", kind})),
       ...["foreign_target", "stale_target", "not_lowered", "stale_publication", "leased"].map(kind => ({method: "liveEffectiveMobject", kind})),
@@ -313,7 +391,7 @@ try {
         },
       };
     };
-    window.noonTypedErrorFixtures = {membershipFixture, ownershipFixture, livePropertyFixture, livePropertyCases, contentObservationFixture, contentObservationCases, describe, requireFailure};
+    window.noonTypedErrorFixtures = {membershipFixture, ownershipFixture, livePropertyFixture, livePropertyCases, advanceFixture, advanceCases, contentObservationFixture, contentObservationCases, describe, requireFailure};
   });
   report.javascript = await page.evaluate(() => {
     const {membershipFixture, ownershipFixture, describe, requireFailure} = window.noonTypedErrorFixtures;
@@ -359,6 +437,18 @@ try {
     });
   });
   assert.equal(report.liveProperties.length, 29);
+  report.advancement = await page.evaluate(() => {
+    const {advanceFixture, advanceCases, describe, requireFailure} = window.noonTypedErrorFixtures;
+    return advanceCases.map(spec => {
+      const fixture = advanceFixture(spec);
+      try {
+        const error = requireFailure(fixture.reject, spec.category);
+        fixture.assertDiagnostic(error); fixture.assertAtomic();
+        return {method: spec.method, kind: spec.kind, error: describe(error), recovered: fixture.recover()};
+      } finally { fixture.dispose(); }
+    });
+  });
+  assert.equal(report.advancement.length, 9);
   report.contentObservations = await page.evaluate(() => {
     const {contentObservationFixture, contentObservationCases, describe, requireFailure} = window.noonTypedErrorFixtures;
     return contentObservationCases.map(spec => {
@@ -484,6 +574,28 @@ for spec in fixtures.livePropertyCases:
             raise AssertionError("invalid live property request succeeded")
     finally:
         fixture.dispose()
+advancement_results = []
+for spec in fixtures.advanceCases:
+    fixture = fixtures.advanceFixture(spec)
+    try:
+        try:
+            engine_call(fixture.reject, operation=spec.method)
+        except (ValueError, NotImplementedError) as error:
+            assert error.category == spec.category and error.operation == spec.method
+            assert error.code == spec.code and error.__cause__ is not None
+            assert str(error) == error.js_error.message
+            fixture.assertDiagnostic(error.js_error)
+            if spec.method == "liveAdvanceSegmentTo":
+                assert error.rust_cause.code == "evaluation.invalid_time"
+                assert error.rust_cause.cause is None
+            fixture.assertAtomic()
+            fixture.recover()
+            advancement_results.append({"method": spec.method, "kind": spec.kind,
+                                        "category": error.category, "code": error.code, "recovered": True})
+        else:
+            raise AssertionError("invalid advancement succeeded")
+    finally:
+        fixture.dispose()
 content_results = []
 from _noon_errors import NoonError
 for spec in fixtures.contentObservationCases:
@@ -509,13 +621,14 @@ result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loa
 assert not result.skipped, result.skipped
 assert result.wasSuccessful(), "real WASM/Python tests failed"
 await tests.check_real_promise_rejection()
-json.dumps({"matrix": results, "liveProperties": property_results, "contentObservations": content_results, "additionalTests": result.testsRun, "promiseRejectionAndRecovery": True, "skipped": len(result.skipped)})
+json.dumps({"matrix": results, "liveProperties": property_results, "advancement": advancement_results, "contentObservations": content_results, "additionalTests": result.testsRun, "promiseRejectionAndRecovery": True, "skipped": len(result.skipped)})
 `));
   }, {modules, tests, pyodideUrl});
   assert.equal(report.python.matrix.length, 10);
   assert.equal(report.python.liveProperties.length, 29);
+  assert.equal(report.python.advancement.length, 9);
   assert.equal(report.python.contentObservations.length, 11);
-  assert.equal(report.python.additionalTests, 11);
+  assert.equal(report.python.additionalTests, 12);
   assert.equal(report.python.skipped, 0);
   assert.equal(report.python.promiseRejectionAndRecovery, true);
   // Exercise actual deployed Python callsites and a rerun in the same worker.

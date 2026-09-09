@@ -225,6 +225,47 @@ class WasmErrorProjectionTests(unittest.TestCase):
         self.assertEqual(caught.exception.category, "callback_failure")
         self.assertEqual(snapshot(context), returned)
 
+    def test_public_live_advance_projection_preserves_coercion_and_time_rules(self):
+        host.resetStore()
+        from noon import Circle, Scene
+        from _manim_scene import _context
+        scene = Scene()
+        target = Circle(radius=0.5)
+        scene.add(target)
+        live = scene.live_execution(1)
+        context = _context(scene)
+        live.wait(0.25)
+        for name in ("advance_to", "evaluate"):
+            method = getattr(live, name)
+            before = snapshot(context)
+            for value in (float("nan"), float("inf"), -float("inf")):
+                with self.assertRaises(NoonValueError) as caught:
+                    method(value)
+                self.assert_diagnostic(caught.exception, "invalid_input")
+                self.assertEqual(caught.exception.operation, "LiveExecution." + name)
+                self.assertEqual(codes(caught.exception),
+                    ["advance.evaluation", "evaluation.invalid_time"] if name == "advance_to"
+                    else ["clock.invalid_scene_time"])
+                self.assertEqual(snapshot(context), before)
+            original = ValueError("pending stale invalid scene time")
+            class NotATime:
+                def __float__(self):
+                    raise original
+            with self.assertRaises(ValueError) as caught:
+                method(NotATime())
+            self.assertIs(caught.exception, original)
+            self.assertEqual(snapshot(context), before)
+        live.advance_to(-1)
+        self.assertEqual(snapshot(context)[1]["time"], 0)
+        live.advance_to(0.125)
+        live.advance_to(0.0625)
+        self.assertEqual(snapshot(context)[1]["time"], 0.125)
+        live.evaluate(0.0625)
+        self.assertEqual(snapshot(context)[1]["time"], 0.0625)
+        live.advance_to(9)
+        live.complete()
+        self.assertEqual(snapshot(context)[1]["time"], 0.25)
+
     def test_public_live_transform_errors_preserve_python_coercion_and_recover(self):
         host.resetStore()
         from noon import Circle, Scene

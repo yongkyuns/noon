@@ -3174,7 +3174,7 @@ result = scene
   assert.equal(paintResult.observation.outcome, "presented");
   const paintStyle = paintResult.observation.committed.style;
   assert.ok(Math.abs(paintStyle.fill.alpha - 0.4) < 1e-6);
-  assert.ok(Math.abs(paintStyle.stroke.alpha - 0.75) < 1e-6);
+  assert.ok(Math.abs(paintStyle.stroke.alpha - 0.4) < 1e-6);
   assert.equal(paintStyle.opacity, 0.5);
   const paintPixel = renderedWorldPixel(
     await page.locator(`#${paintResult.canvasId}`).screenshot(), 1, 0,

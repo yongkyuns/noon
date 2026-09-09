@@ -1510,7 +1510,6 @@ impl SemanticExecutionPlayer {
             .scene_time_at(wall_time_ms)
             .ok_or("observe the live segment wake before driving it from wall time")?;
         self.live_drive_segment_to(segment, requested_time)
-            .map_err(AuthoringFailure::from)
     }
 
     /// Drive the active continuation segment toward one externally supplied
@@ -1534,7 +1533,6 @@ impl SemanticExecutionPlayer {
         }
         let segment = self.live_segment()?;
         self.live_drive_segment_to(segment, requested_time)
-            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1542,13 +1540,13 @@ impl SemanticExecutionPlayer {
         &mut self,
         segment: noon::ExecutionSegment,
         requested_time: f64,
-    ) -> Result<WasmLiveSegmentDrive, String> {
+    ) -> Result<WasmLiveSegmentDrive, AuthoringFailure> {
         let current_time = self.session.frame().time;
         let mut clock = self.live_clock_at(current_time, segment.end_time(), false)?;
         match self
             .session
             .advance_segment_to_callback_barrier(segment, requested_time)
-            .map_err(|error| error.to_string())?
+            .map_err(AuthoringFailure::from)?
         {
             CallbackAdvance::Ready(_) => {
                 clock.seek(self.session.frame().time).expect(
@@ -1574,7 +1572,10 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_advance_segment_to(&mut self, requested_time: f64) -> Result<bool, String> {
+    pub(crate) fn live_advance_segment_to(
+        &mut self,
+        requested_time: f64,
+    ) -> Result<bool, AuthoringFailure> {
         self.reject_required_callback_segment()?;
         let segment = self.live_segment()?;
         let drive = self.live_drive_segment_to(segment, requested_time)?;
@@ -1611,13 +1612,13 @@ impl SemanticExecutionPlayer {
     /// Evaluate scalar tracks through the one execution session, then align the
     /// hold presentation at that same absolute time for a later handoff.
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_evaluate(&mut self, time: f64) -> Result<(), String> {
+    pub(crate) fn live_evaluate(&mut self, time: f64) -> Result<(), AuthoringFailure> {
         let mut clock = self.clock.clone();
-        clock.seek(time).map_err(|error| error.to_string())?;
+        clock.seek(time).map_err(AuthoringFailure::from)?;
         clock.pause();
         self.session
             .advance_to(time)
-            .map_err(|error| error.to_string())?;
+            .map_err(AuthoringFailure::from)?;
         self.clock = clock;
         Ok(())
     }
@@ -2536,6 +2537,140 @@ mod tests {
             ],
         })
         .to_string()
+    }
+
+    #[test]
+    fn live_advance_projection_preserves_clock_frame_and_retry() {
+        let mut scene = noon::Scene::new();
+        let object = scene.circle(0.5).unwrap();
+        scene.add(&object).unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            scene.execution_session().unwrap(),
+            std::rc::Rc::clone(scene.integration_store()),
+            scene.root(),
+            1.0,
+            41,
+        )
+        .unwrap();
+        player.live_wait(0.25).unwrap();
+        player.delta(true).unwrap().unwrap();
+        let frame = player.debug_frame_json();
+        let publication = player.session.publication_context();
+        let resources = player.resource_bundle_bytes();
+        let authored = object.state().unwrap();
+        let clock = player.clock.clone();
+        for time in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let error = player.live_advance_segment_to(time).unwrap_err();
+            assert_eq!(error.category, "invalid_input");
+            assert_eq!(error.code, "advance.evaluation");
+            let cause = error.cause.as_ref().unwrap();
+            assert_eq!(cause.code, "evaluation.invalid_time");
+            assert_eq!(
+                cause.message,
+                noon_runtime::EvaluationError::InvalidTime(time).to_string()
+            );
+            assert!(cause.cause.is_none());
+            let error = player.live_evaluate(time).unwrap_err();
+            assert_eq!(error.category, "invalid_input");
+            assert_eq!(error.code, "clock.invalid_scene_time");
+            assert_eq!(player.clock, clock);
+            assert_eq!(player.debug_frame_json(), frame);
+            assert_eq!(player.session.publication_context(), publication);
+            assert_eq!(player.resource_bundle_bytes(), resources);
+            assert_eq!(object.state().unwrap(), authored);
+            assert!(player.delta(false).unwrap().is_none());
+        }
+        for (time, code) in [
+            (-0.25, "clock.invalid_scene_time"),
+            (2.0, "clock.time_outside_loop"),
+        ] {
+            let error = player.live_evaluate(time).unwrap_err();
+            assert_eq!(error.category, "invalid_input");
+            assert_eq!(error.code, code);
+            assert_eq!(player.clock, clock);
+            assert_eq!(player.debug_frame_json(), frame);
+            assert_eq!(player.session.publication_context(), publication);
+            assert!(player.delta(false).unwrap().is_none());
+        }
+        // Segment advancement clamps, deterministic evaluation can seek backward.
+        player.live_advance_segment_to(-1.0).unwrap();
+        assert_eq!(player.time(), 0.0);
+        player.live_advance_segment_to(0.125).unwrap();
+        player.live_advance_segment_to(0.0625).unwrap();
+        assert_eq!(player.time(), 0.125);
+        player.live_evaluate(0.0625).unwrap();
+        assert_eq!(player.time(), 0.0625);
+        player.live_advance_segment_to(9.0).unwrap();
+        assert_eq!(player.time(), 0.25);
+        player.live_complete_segment().unwrap();
+        assert_eq!(object.state().unwrap(), authored);
+        assert_eq!(player.resource_bundle_bytes(), resources);
+    }
+
+    #[test]
+    fn live_advance_projection_preserves_callback_guard_and_recovery() {
+        let mut scene = noon::Scene::new();
+        let object = scene.circle(0.5).unwrap();
+        scene.add(&object).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_updater(object.node_id(), HostCallbackId::new(1), 0.0, None);
+        transaction
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            scene.execution_session().unwrap(),
+            std::rc::Rc::clone(scene.integration_store()),
+            scene.root(),
+            1.0,
+            41,
+        )
+        .unwrap();
+        player.live_wait(0.25).unwrap();
+        player.delta(true).unwrap().unwrap();
+        let resources = player.resource_bundle_bytes();
+        let error = player.live_evaluate(0.125).unwrap_err();
+        assert_eq!(error.category, "unsupported_operation");
+        assert_eq!(error.code, "evaluation.callback_barrier");
+        let phase = player.initial_callback_phase_json().unwrap().unwrap();
+        let frame = player.debug_frame_json();
+        let clock = player.clock.clone();
+        let pending = player.pending_callback_phase;
+        let publication = player.session.publication_context();
+        let error = player.live_evaluate(0.125).unwrap_err();
+        assert_eq!(error.category, "pending_work");
+        assert_eq!(error.code, "evaluation.callback_pending");
+        // Clock admission still precedes the runtime callback guard.
+        assert_eq!(
+            player.live_evaluate(f64::NAN).unwrap_err().code,
+            "clock.invalid_scene_time"
+        );
+        assert_eq!(player.pending_callback_phase, pending);
+        assert_eq!(player.clock, clock);
+        assert_eq!(player.debug_frame_json(), frame);
+        assert_eq!(player.session.publication_context(), publication);
+        assert_eq!(player.resource_bundle_bytes(), resources);
+        assert!(player.delta(false).unwrap().is_none());
+        let acknowledge = |player: &mut SemanticExecutionPlayer, phase: &str| {
+            let phase: serde_json::Value = serde_json::from_str(phase).unwrap();
+            player
+                .commit_callback_phase_json(
+                    &serde_json::json!({
+                        "token": phase["token"], "writes": [],
+                    })
+                    .to_string(),
+                )
+                .unwrap();
+        };
+        acknowledge(&mut player, &phase);
+        let drive = player.live_drive_segment_to_authored_time(0.25).unwrap();
+        acknowledge(&mut player, drive.callback_phase_json.as_ref().unwrap());
+        assert!(player
+            .live_drive_segment_to_authored_time(0.25)
+            .unwrap()
+            .reached_endpoint());
+        player.live_complete_segment().unwrap();
+        assert_eq!(player.time(), 0.25);
+        assert_eq!(player.resource_bundle_bytes(), resources);
     }
 
     #[test]
