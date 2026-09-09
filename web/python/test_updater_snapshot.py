@@ -437,7 +437,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         line._noon_updaters = []
         updaters._ACTIVE_CONTEXTS[id(scene)] = context
         try:
-            _manim_shared_geometry._rotate_about_origin(line, math.pi / 2.0)
+            line.rotate_about_origin(math.pi / 2.0)
             writes = context.effective_batch()["writes"]
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)

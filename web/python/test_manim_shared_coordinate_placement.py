@@ -80,6 +80,11 @@ class ManimSharedCoordinatePlacementTests(unittest.TestCase):
             _geometry_test.install_js_bridge(fake_js, generic_snapshot)
             sys.modules["js"] = fake_js
 
+            import noon
+            geometry_methods = {
+                name: getattr(noon.Mobject, name)
+                for name in ("set_coord", "match_coord", "match_x", "match_y", "rotate_about_origin")
+            }
             import _manim_compat
             _manim_compat.install()
             import _manim_geometry
@@ -87,6 +92,7 @@ class ManimSharedCoordinatePlacementTests(unittest.TestCase):
 
             import _manim_shared_geometry
             _manim_shared_geometry.install()
+            assert all(getattr(noon.Mobject, name) is method for name, method in geometry_methods.items())
 
             from noon import Circle, RIGHT, UP
 

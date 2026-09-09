@@ -1,8 +1,7 @@
 """Thin Manim geometry adapters backed by shared Rust semantics.
 
-This module patches only operations whose full observable geometry/layout contract is
-already owned by Rust. Class identity and inheritance remain unchanged where an
-established compatibility class already exists.
+Geometry and layout operations delegate to Rust. Python owns constructor signatures
+and argument conversion.
 """
 
 from __future__ import annotations
@@ -86,43 +85,6 @@ def _match_coord(
         mobject,
         aligned_edge=direction,
         coor_mask=_coordinate_mask(dim),
-    )
-
-
-def _match_x(
-    self: _base.Mobject,
-    mobject: _base.Mobject,
-    direction: object = _base.ORIGIN,
-) -> _base.Mobject:
-    """Match a directional x coordinate through shared ``match_coord`` semantics."""
-
-    return _match_coord(self, mobject, 0, direction)
-
-
-def _match_y(
-    self: _base.Mobject,
-    mobject: _base.Mobject,
-    direction: object = _base.ORIGIN,
-) -> _base.Mobject:
-    """Match a directional y coordinate through shared ``match_coord`` semantics."""
-
-    return _match_coord(self, mobject, 1, direction)
-
-
-def _rotate_about_origin(
-    self: _base.Mobject,
-    angle: float,
-    axis: object = _compat.OUT,
-    **kwargs: Any,
-) -> _base.Mobject:
-    """Rotate through the shared Rust transform path around Manim's origin."""
-
-    return _shared._rotate(
-        self,
-        angle,
-        axis,
-        about_point=_base.ORIGIN,
-        **kwargs,
     )
 
 
@@ -541,11 +503,6 @@ def install() -> None:
     if _INSTALLED:
         return
     _INSTALLED = True
-    _base.Mobject.set_coord = _set_coord
-    _base.Mobject.match_coord = _match_coord
-    _base.Mobject.match_x = _match_x
-    _base.Mobject.match_y = _match_y
-    _base.Mobject.rotate_about_origin = _rotate_about_origin
 
     public = {
         "Elbow": Elbow,
