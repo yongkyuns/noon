@@ -24,7 +24,7 @@ jobs:
           mkdir -p /tmp/b1-slicing
           base=7edd6b41feee02355943868d48754bf0e23a706b
           git checkout --detach "$base"
-          git apply --index <(git show codex/74-family-slicing-prep:.github/74-family-slicing.patch)
+          git apply --recount --index <(git show codex/74-family-slicing-prep:.github/74-family-slicing.patch)
           python3 -m py_compile web/python/_manim_compat.py scripts/manim-differential.py
           git diff --cached --check
           git config user.name 'Yongkyun Shin'
