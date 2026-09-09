@@ -288,6 +288,18 @@ fi
 identity_authority_found=0
 canonical_identity_file='crates/noon-core/src/semantic_store.rs'
 
+# The semantic store no longer admits a second object payload or execution-ID map.
+if retired_store_payloads="$(grep -nE 'ObjectDefinition|from_scene_definition|object_nodes' "$canonical_identity_file")"; then
+  printf 'architecture ratchet: retired semantic-store payload or ID lookup:\n%s\n' "$retired_store_payloads" >&2
+  exit 1
+else
+  scan_status=$?
+  if (( scan_status != 1 )); then
+    echo 'architecture ratchet: semantic-store source scan failed' >&2
+    exit "$scan_status"
+  fi
+fi
+
 semantic_node_defs="$(git grep -nE '^[[:space:]]*(pub([[:space:]]*\([^)]*\))?[[:space:]]+)?struct[[:space:]]+SemanticNodeId([[:space:]{(;]|$)' -- '*.rs' || true)"
 semantic_store_defs="$(git grep -nE '^[[:space:]]*(pub([[:space:]]*\([^)]*\))?[[:space:]]+)?struct[[:space:]]+SemanticStore([[:space:]{(;]|$)' -- '*.rs' || true)"
 semantic_node_impls="$(git grep -nE '^[[:space:]]*impl[[:space:]]+SemanticNodeId([[:space:]{]|$)' -- '*.rs' || true)"
