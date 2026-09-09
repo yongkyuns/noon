@@ -712,7 +712,12 @@ impl Clone for ExecutionSession {
 }
 
 impl ExecutionSession {
-    pub(crate) fn runtime_identity(&self) -> noon_runtime::RuntimeIdentity {
+    /// Opaque identity of this session's existing mutable runtime incarnation.
+    ///
+    /// Integration hosts may use it to validate ownership handoffs. Moving a session
+    /// or publishing a revision preserves this identity; cloning a session creates a
+    /// different runtime. It grants no authority to mutate or drive that runtime.
+    pub fn runtime_identity(&self) -> noon_runtime::RuntimeIdentity {
         self.runtime.runtime_identity()
     }
 

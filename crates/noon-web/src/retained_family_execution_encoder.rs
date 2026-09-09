@@ -35,6 +35,11 @@ struct StagedPlanMappings {
 }
 
 impl RetainedFamilyExecutionDeltaEncoder {
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) const fn session(&self) -> u32 {
+        self.retained.session()
+    }
+
     pub fn new(session: u32) -> Self {
         Self {
             retained: RetainedExecutionDeltaEncoder::new(session),
