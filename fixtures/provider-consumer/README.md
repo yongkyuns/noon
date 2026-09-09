@@ -103,3 +103,8 @@ The doc tests reject accidental root exports, the private implementation module,
 and unqualified raw-store access. These boundary checks complement typed membership
 and provider qualification; they do not claim all geometry/animation errors or
 Python exception producers have been converted to structured errors.
+
+The geometry program copied by `--baseline` uses the ordinary geometry API common
+to both revisions. Shared text-contract visibility and arena assertions live in
+`public_facade` rather than adding a dependency on new integration accessor names
+to the historical-build workload. No historical baseline code is rewritten.

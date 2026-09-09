@@ -3028,7 +3028,7 @@ impl ExecutionSession {
                 continue;
             }
             let initial = match prepared
-                .integration_store()
+                .store()
                 .semantic_signal_state(leaf.signal)
                 .map_err(|error| {
                     ExecutionSessionAnimationError::AuthoredPublication(

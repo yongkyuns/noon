@@ -50,8 +50,10 @@ fn public_authoring_live_queries_and_completion() -> Result<(), Box<dyn std::err
 #[test]
 fn integration_access_keeps_one_arena_and_stale_publication_protection(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use noon::integration::{SemanticMutationTransaction, SemanticStore};
+    use noon::integration::{SemanticMutationTransaction, SemanticStore, TextResource};
     use std::{cell::RefCell, rc::Rc};
+    // Shared semantic text/resource contracts remain available without providers.
+    let _: Option<TextResource> = None;
     let arena = Rc::new(RefCell::new(SemanticStore::new()));
     let mut scene = Scene::with_integration_store(Rc::clone(&arena));
     let circle = scene.circle(1.0)?;
@@ -60,6 +62,7 @@ fn integration_access_keeps_one_arena_and_stale_publication_protection(
     assert!(Rc::ptr_eq(circle.integration_store(), &arena));
     assert!(Rc::ptr_eq(family.integration_store(), &arena));
     scene.add(&circle)?;
+    assert!(arena.borrow().text_resources().is_empty());
     let mut session = scene.execution_session()?;
     session.take_frame_changes();
     let published = session.publication_context();
@@ -86,6 +89,7 @@ fn integration_access_keeps_one_arena_and_stale_publication_protection(
             ))
         ));
     }
+    assert_eq!(circle.state()?.transform.translation.x, 9.0);
     assert_eq!(scene.revision(), raw_revision);
     assert_eq!(session.publication_context(), published);
     assert_eq!(session.frame().objects[0].transform, original_transform);
