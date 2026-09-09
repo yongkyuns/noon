@@ -705,7 +705,7 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_scale_family(
         &mut self,
         family: &noon::MobjectFamily,
@@ -716,7 +716,7 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_rotate_family(
         &mut self,
         family: &noon::MobjectFamily,
