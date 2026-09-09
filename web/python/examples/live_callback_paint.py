@@ -31,7 +31,7 @@ class LiveCallbackPaint(Scene):
             before_stroke = mobject.get_stroke_opacity()
             mobject.set_color(Color(0.8, 0.4, 0.2, 0.9))
             assert abs(mobject.get_fill_opacity() - before_fill) < 1e-6
-            assert mobject.get_stroke_opacity() == before_stroke
+            assert abs(mobject.get_stroke_opacity() - before_stroke) < 1e-6
 
         def fill_and_composite_opacity(mobject, _dt):
             family.set_fill(opacity=0.4)
