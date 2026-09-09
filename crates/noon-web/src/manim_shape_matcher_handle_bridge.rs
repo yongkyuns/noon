@@ -7,9 +7,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::{WasmAuthoringFamilyLayout, WasmAuthoringMobjectHandle, WasmManimGeometryOptions};
 
-fn js_error(error: impl std::fmt::Display) -> JsValue {
-    JsValue::from_str(&error.to_string())
-}
+use crate::authoring_error::js_error;
 
 fn mobject_bounds(handle: &WasmAuthoringMobjectHandle) -> Result<Bounds2D64, JsValue> {
     let object = handle.semantic_mobject();
