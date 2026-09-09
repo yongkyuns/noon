@@ -33,10 +33,6 @@ class NoonValueError(NoonError, ValueError):
     pass
 
 
-class NoonIndexError(NoonValueError, IndexError):
-    """A structured invalid-input failure that also satisfies Python index semantics."""
-
-
 class NoonForeignHandleError(NoonError, ValueError):
     pass
 
@@ -87,10 +83,6 @@ _EXCEPTION_TYPES = {
     "ownership": NoonOwnershipError,
 }
 
-_CODE_EXCEPTION_TYPES = {
-    "authoring.invalid_submobject_index": NoonIndexError,
-}
-
 
 def _diagnostic(value: object) -> NoonErrorCause | None:
     if getattr(value, "noonErrorVersion", None) != 1:
@@ -112,10 +104,7 @@ def map_engine_error(error: Exception, *, operation: str | None = None) -> Excep
     diagnostic = _diagnostic(original)
     if diagnostic is None:
         return error
-    exception_type = _CODE_EXCEPTION_TYPES.get(
-        diagnostic.code,
-        _EXCEPTION_TYPES.get(diagnostic.category, NoonError),
-    )
+    exception_type = _EXCEPTION_TYPES.get(diagnostic.category, NoonError)
     return exception_type(diagnostic, original, operation)
 
 
