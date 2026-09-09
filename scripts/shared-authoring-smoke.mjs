@@ -113,6 +113,17 @@ circle = Circle(radius=1.0)
 scene.add(circle)
 # A handle-less wrapper must fail before binding can project existing geometry
 # into Python state. The same scene must remain usable afterward.
+# Unsupported native bindings cannot append legacy declarations on an empty Scene.
+unsupported = Scene()
+for operation in ("bind_rotation", "bind_opacity", "bind_presence", "bind_position",
+                  "bind_appearance", "bind_reveal", "bind_morph"):
+    try:
+        getattr(unsupported, operation)(None, object())
+    except NotImplementedError:
+        pass
+    else:
+        raise AssertionError(operation + " admitted a legacy binding")
+assert not unsupported._tracks
 color_probe = Circle().set_fill(BLUE, opacity=0.35).set_stroke(BLUE, opacity=0.2)
 color_probe.set_color(GREEN)
 assert abs(color_probe.get_fill_opacity() - 0.35) < 1e-6
@@ -1042,6 +1053,9 @@ class SelectedScene(Scene):
     def construct(self):
         raise AssertionError("prebuilt result construct ran twice")
 result = SelectedScene()
+# An obsolete Python cursor must never participate in shared time or admission.
+result._cursor = object()
+assert result.time == 0.0
 def author(scene):
     scene.wait(0.25)
     assert scene.time == 0.25

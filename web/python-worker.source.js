@@ -4,7 +4,6 @@ import initNoonWeb, {
   WasmManimGeometryOptions,
   WasmSceneMembershipBatch,
   resolveAnimationOptions,
-  resolveCompositionSchedule,
   resolveLifecyclePlan,
   resolveUniformCompositionSchedule,
   validatePresenceTransition,
@@ -134,7 +133,6 @@ async function initializePyodide() {
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
   self.noonCreateAuthoringFamilyHandle = (batch) => authoringStore.createFamily(batch);
   self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
-  self.noonResolveCompositionSchedule = resolveCompositionSchedulePlain;
   self.noonResolveUniformCompositionSchedule = resolveUniformCompositionSchedulePlain;
   self.noonResolveLifecyclePlan = resolveLifecyclePlanPlain;
   self.noonValidatePresenceTransition = validatePresenceTransitionPlain;
@@ -291,16 +289,6 @@ function compositionResultPlain(result) {
   } finally {
     result.free();
   }
-}
-
-function resolveCompositionSchedulePlain(childRunTimesJson, lagRatio, runTime) {
-  const childRunTimes = JSON.parse(childRunTimesJson);
-  if (!Array.isArray(childRunTimes)) {
-    throw new TypeError("child runtimes must decode to an array");
-  }
-  return compositionResultPlain(
-    resolveCompositionSchedule(new Float64Array(childRunTimes), lagRatio, runTime),
-  );
 }
 
 function resolveUniformCompositionSchedulePlain(...args) {

@@ -25,7 +25,6 @@ class ManimShowPassingFlashTests(unittest.TestCase):
 
             fake_js = types.ModuleType("js")
             fake_js.noonResolveAnimationOptions = lambda *args: None
-            fake_js.noonResolveCompositionSchedule = lambda *args: None
             fake_js.noonResolveUniformCompositionSchedule = lambda *args: None
             fake_js.noonResolveLifecyclePlan = lambda *args: None
             fake_js.noonValidatePresenceTransition = lambda *args: None
@@ -57,7 +56,9 @@ class ManimShowPassingFlashTests(unittest.TestCase):
             import _manim_phase_b  # noqa: F401
             import _manim_animate  # noqa: F401
             import _manim_composition
+            play_before_composition = _manim_compat.Scene.play
             _manim_composition.install()
+            assert _manim_compat.Scene.play is play_before_composition
             import _manim_semantic_handles as handles
             handles.install()
             import _manim_indication
