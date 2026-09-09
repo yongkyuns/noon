@@ -134,6 +134,10 @@ if [[ "${NOON_RENDERER_SMOKE:-0}" == "1" ]]; then
   wasm_pack_args+=(--features renderer-smoke)
 fi
 
+if [[ "${NOON_REPLAY_SMOKE:-0}" == "1" ]]; then
+  wasm_pack_args+=(--features replay-smoke)
+fi
+
 worker_pid=""
 if (( parallel_worker == 1 )); then
   node scripts/build-python-worker.mjs &
