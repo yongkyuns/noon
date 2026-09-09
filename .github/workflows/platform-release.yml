@@ -116,7 +116,6 @@ jobs:
           echo "$binaryen_dir/bin" >> "$GITHUB_PATH"
           "$binaryen_dir/bin/wasm-opt" --version
       - name: Build and validate optimized browser package
-        env:
         run: bash scripts/build-web-demo.sh
       - name: Record optimized WASM size
         shell: bash
