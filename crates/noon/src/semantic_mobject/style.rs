@@ -247,7 +247,7 @@ pub(crate) fn edit_stroke(
     Ok(())
 }
 
-pub(super) fn edit_stroke_width(style: &mut SemanticStyle, width: f64) -> Result<(), String> {
+pub(crate) fn edit_stroke_width(style: &mut SemanticStyle, width: f64) -> Result<(), String> {
     let width = authoring_render_f64("stroke width", width)?;
     if width < 0.0 {
         return Err("stroke width must be non-negative".to_owned());

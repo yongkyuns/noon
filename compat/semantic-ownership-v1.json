@@ -455,6 +455,14 @@
       "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_value_tracker/_canonical_bind_position"}]
     },
     {
+      "id": "group-authored-paint-mutation",
+      "surface": "Authored and live Group/VGroup color, fill, stroke and opacity",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/family_style.rs", "symbol": "MobjectFamily::style_transaction"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_paint"}],
+      "reason": "Rust selects unique leaves and stages one validated transaction using existing leaf paint operations. Existing active callback per-leaf dispatch remains under #955 until shared family callback overlay operations replace it; this row covers persistent authoring only."
+    },
+    {
       "id": "group-affine-mutation",
       "surface": "Authored and live Group/VGroup scale and rotate with aliased semantic members",
       "classification": "shared-rust",

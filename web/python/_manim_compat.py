@@ -413,29 +413,22 @@ class Group(_base.Group, _BaseMobject):
         from _manim_semantic_handles import _group_rotate
         return _group_rotate(self, angle, axis, about_point=about_point, about_edge=about_edge, **kwargs)
 
-    def set_color(self, color: _base.Color) -> Group:
-        for member in self.submobjects:
-            member.set_color(color)
-        return self
+    def set_color(self, color: object) -> Group:
+        from _manim_semantic_handles import _group_set_color
+        return _group_set_color(self, color)
 
-    def set_fill(
-        self, color: _base.Color | None = None, opacity: float | None = None
-    ) -> Group:
-        for member in self.submobjects:
-            member.set_fill(color, opacity)
-        return self
+    def set_fill(self, color: object = None, opacity: float | None = None) -> Group:
+        from _manim_semantic_handles import _group_set_fill
+        return _group_set_fill(self, color, opacity)
 
-    def set_stroke(
-        self, color: _base.Color | None = None, width: float | None = None
-    ) -> Group:
-        for member in self.submobjects:
-            member.set_stroke(color, width)
-        return self
+    def set_stroke(self, color: object = None, width: float | None = None,
+                   opacity: float | None = None) -> Group:
+        from _manim_semantic_handles import _group_set_stroke
+        return _group_set_stroke(self, color, width, opacity)
 
     def set_opacity(self, opacity: float) -> Group:
-        for member in self.submobjects:
-            member.set_opacity(opacity)
-        return self
+        from _manim_semantic_handles import _group_set_opacity
+        return _group_set_opacity(self, opacity)
 
     def next_to(
         self,
