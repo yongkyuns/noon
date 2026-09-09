@@ -1,0 +1,28 @@
+# Contract for supported operations; not a claim that all roadmap mutation kinds exist.
+...@_style
+
+direction: down
+authored: "Persistent authored edit\nLiveSession / completion reconciliation" {class: node}
+effective: "Effective driver write\ntimeline · native reactive · supported callback" {class: node}
+
+staging: "PREPARE BEFORE PUBLISH · ExecutionSession coordinates today" {
+  direction: down
+  semantic: "Semantic transaction preflight\nidentity · values · membership · staged changes\nnoon-core / SemanticStore" {class: node}
+  compiler: "Compiler-owned preparation\nlocal lowering · root membership / painter order\nnoon-compile" {class: node}
+  runtime: "Runtime preflight + staged effective changes\nslots · drivers · spatial / renderer effects\nnoon-runtime" {class: node}
+  semantic -> compiler: "validated staged state"
+  compiler -> runtime: "typed prepared execution effects"
+}
+
+publish: "ATOMIC COHERENT PUBLICATION\nFrameEpoch references compatible\nSceneRevision + ExecutionRevision" {class: authority}
+observe: "Published effective state\nlive queries · segment completion barrier" {class: node}
+render: "Dirty renderer publication\nchanged resident state / resource ranges\nnoon-render-wgpu" {class: node}
+
+authored -> staging.semantic
+effective -> staging.runtime: "no authored rewrite / relowering"
+staging.runtime -> publish: "commit only after all fallible preparation"
+publish -> observe
+publish -> render
+note: "Rejection keeps the previous coherent state.\nEffective-only updates need not change scene / execution revisions.\nLogical completion is not a GPU-retirement fence." {class: note}
+observe -> note: {style.opacity: 0}
+render -> note: {style.opacity: 0}

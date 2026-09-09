@@ -1,0 +1,33 @@
+# Current ownership map, NOT a complete Cargo dependency graph or target crate split.
+# Inspect Cargo.toml + each crate's lib.rs when refreshing this diagram.
+...@_style
+
+direction: down
+api: "noon\nordinary API: Scene / Mobject / LiveSession\nshared authoring + ExecutionSession coordination\nexplicit integration · opt-in diagnostics" {class: node}
+
+shared: "RENDERER-INDEPENDENT OWNERSHIP TODAY" {
+  grid-columns: 3
+  horizontal-gap: 100
+  core: "noon-core\nSemanticStore + semantic identity\nsemantic_store · resources\nanimation · reactive · publication" {class: authority}
+  compile: "noon-compile\nCompiledScene + execution mapping\nsemantic_lowering · root_order\nexecution patches + preparation" {class: authority}
+  runtime: "noon-runtime\nSceneInstance + effective state\nframe · reactive · spatial_index\nexecution_slots · publication" {class: authority}
+  core -> compile: "lower"
+  compile -> runtime: "execute"
+}
+
+renderer: "noon-render-wgpu\nretained GPU resources · text / geometry drawing\nNo window or browser event-loop ownership" {class: authority}
+hosts: "PLATFORM DEPENDENCY BOUNDARIES" {
+  grid-columns: 2
+  horizontal-gap: 48
+  native: "noon-native\nwinit / native wgpu integration" {class: host}
+  web: "noon-web\nWASM bindings / browser integration" {class: host}
+}
+providers: "SUPPORTING PROVIDERS\nnoon-geometry: tessellation / geometry preparation\nnoon-text: text shaping / fonts\nnoon-typst: optional Typst realization" {class: node}
+
+api -> shared: "author / lower / coordinate"
+shared -> renderer: "typed runtime observations"
+renderer -> hosts: "same reusable renderer"
+
+note: "Ownership / data-flow view, not all Cargo edges.\nSemanticStore remains in noon-core; CompiledScene remains in noon-compile.\nThe target crate split below is not a completed module move." {class: note}
+hosts -> providers: {style.opacity: 0}
+providers -> note: {style.opacity: 0}

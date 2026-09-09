@@ -7,8 +7,7 @@ owns authoring syntax, argument conversion, and wrapper identity.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 
 from _noon_errors import (
     NoonError,
@@ -527,62 +526,6 @@ class Mobject:
         return deepcopy_semantic_wrapper(self, memo)
 
 
-@dataclass(frozen=True, slots=True)
-class Transform:
-    source: Mobject | _ir.Object
-    target: Mobject | _ir.Mobject | VectorPath
-    key: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class ReplacementTransform:
-    source: Mobject | _ir.Object
-    target: Mobject | _ir.Object
-    key: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class TransformFromCopy:
-    source: Mobject | _ir.Object
-    target: Mobject | _ir.Object
-    key: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class TransformMatchingShapes:
-    sources: Iterable[Mobject | _ir.Object]
-    targets: Iterable[Mobject | _ir.Object]
-    key: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class Create:
-    """Progressively draw a shape without changing its steady-state geometry."""
-
-    target: Mobject | _ir.Object
-    key: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class Uncreate(Create):
-    """Manim-style Create in reverse, optionally removing the target at completion."""
-
-    reverse_rate_function: bool = True
-    remover: bool = True
-
-
-@dataclass(frozen=True, slots=True)
-class FadeIn:
-    target: Mobject | _ir.Object
-    key: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class FadeOut:
-    target: Mobject | _ir.Object
-    key: str | None = None
-
-
 def _scene_operations():
     """Load the shared host adapter lazily, after public wrapper classes exist."""
     try:
@@ -749,6 +692,18 @@ Object = Mobject
 
 # Public wrappers resolve from their defining modules without startup mutation.
 _PUBLIC_EXPORTS = {
+    "Transform": "_manim_animate",
+    "ReplacementTransform": "_manim_animate",
+    "TransformFromCopy": "_manim_animate",
+    "TransformMatchingShapes": "_manim_animate",
+    "Create": "_manim_animate",
+    "Uncreate": "_manim_animate",
+    "FadeIn": "_manim_animate",
+    "FadeOut": "_manim_animate",
+    "Indicate": "_manim_animate",
+    "ScaleInPlace": "_manim_animate",
+    "ShrinkToCenter": "_manim_animate",
+
     "linear": "_manim_rate_functions",
     "smooth": "_manim_rate_functions",
     "rush_into": "_manim_rate_functions",
@@ -843,8 +798,6 @@ __all__ = [
     "BLUE_D",
     "BLUE_E",
     "Color",
-    "Create",
-    "Uncreate",
     "DEGREES",
     "DEFAULT_FRAME_HEIGHT",
     "DEFAULT_FRAME_WIDTH",
@@ -853,8 +806,6 @@ __all__ = [
     "DL",
     "DOWN",
     "DR",
-    "FadeIn",
-    "FadeOut",
     "GOLD",
     "GRAY",
     "GRAY_A",
@@ -896,7 +847,6 @@ __all__ = [
     "RED_D",
     "RED_E",
     "RIGHT",
-    "ReplacementTransform",
     "Scene",
     "TAU",
     "TEAL",
@@ -905,9 +855,6 @@ __all__ = [
     "TEAL_C",
     "TEAL_D",
     "TEAL_E",
-    "Transform",
-    "TransformFromCopy",
-    "TransformMatchingShapes",
     "UL",
     "UP",
     "UR",
