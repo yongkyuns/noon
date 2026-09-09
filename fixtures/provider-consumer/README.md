@@ -84,3 +84,22 @@ table, graph/cache-mode expectations, provider-input tests and ten isolated comp
 cells. Existing all-feature Rust and normal browser/native checks remain in place.
 Artifacts distinguish `qualification.json` from opt-in `measurements.json`; no
 fixed speed/size promise is encoded here.
+
+## Public authoring error contract
+
+The provider-free `authoring_errors` integration tests exercise typed handle
+validation and authored/live Scene membership operations. `Scene::add`,
+`remove`, `add_many`, `remove_many`, `clear`, `replace` and `edit_membership`
+return `AuthoringError`. `Mobject::validate` and `MobjectFamily::validate` retain
+semantic node or resource identities. Existing `LiveSessionError` categories
+continue to distinguish foreign stores, publication/segment barriers and stale
+publications; its `Authoring` variant retains the membership or handle cause.
+`std::error::Error::source` preserves nested typed diagnostics.
+
+This is a bounded R2 slice, not a claim that every authoring API is typed yet.
+Other geometry/animation APIs and the current language bridge may still expose
+strings, and public export/raw-store narrowing remains under #958. Ordinary
+post-bootstrap edits should use `scene.live(&mut session)`. Direct authored/raw
+store edits invalidate an existing execution revision; rejection is intentional,
+not a signal to bypass revision checks. Tests use raw access only to construct
+stale-generation and callback-precondition fixtures.

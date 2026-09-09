@@ -18,8 +18,8 @@ pub fn session() -> Result<ExecutionSession, String> {
     square.set_translation(0.0, -1.0)?;
     square.set_color(0.0, 0.0, 1.0, 1.0)?;
     square.set_fill(0.0, 0.0, 1.0, 1.0)?;
-    scene.add(&circle)?;
-    scene.add(&square)?;
+    scene.add(&circle).map_err(|error| error.to_string())?;
+    scene.add(&square).map_err(|error| error.to_string())?;
 
     let mut transaction = SemanticMutationTransaction::new();
     let timing = TrackTiming::new(0.0, 2.0, RateFunction::Linear);

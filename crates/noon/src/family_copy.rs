@@ -21,7 +21,7 @@ impl FamilyCopy {
 
     pub fn mobject(&self, source: &Mobject) -> Result<Mobject, String> {
         self.require_store(source.store())?;
-        source.validate()?;
+        source.validate().map_err(|error| error.to_string())?;
         Mobject::from_node(
             Rc::clone(self.root.store()),
             self.copied_id(source.node_id())?,
@@ -30,7 +30,7 @@ impl FamilyCopy {
 
     pub fn family(&self, source: &MobjectFamily) -> Result<MobjectFamily, String> {
         self.require_store(source.store())?;
-        source.validate()?;
+        source.validate().map_err(|error| error.to_string())?;
         MobjectFamily::from_node(
             Rc::clone(self.root.store()),
             self.copied_id(source.node_id())?,
@@ -88,7 +88,7 @@ pub(crate) fn prepare_family_copy(
     references: &[MobjectFamilyMember<'_>],
     mut capture: impl FnMut(&Mobject) -> Result<SemanticObjectState, String>,
 ) -> Result<(SemanticMutationTransaction, PendingFamilyCopy), String> {
-    source.validate()?;
+    source.validate().map_err(|error| error.to_string())?;
     let store = source.store();
     let mut transaction = SemanticMutationTransaction::new();
     let mut copied = BTreeMap::new();
@@ -98,7 +98,7 @@ pub(crate) fn prepare_family_copy(
         if !Rc::ptr_eq(store, member.store()) {
             return Err("family copy reference belongs to another semantic store".into());
         }
-        member.validate()?;
+        member.validate().map_err(|error| error.to_string())?;
         queue.push(member.node_id());
     }
     queue.push(source.node_id());

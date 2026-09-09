@@ -414,6 +414,8 @@ impl<'a> TransformToRequest<'a> {
 /// Errors while a semantic handle is used through a live execution session.
 #[derive(Debug)]
 pub enum LiveSessionError {
+    /// Handle or membership preflight failed before publication.
+    Authoring(crate::AuthoringError),
     ForeignMobjectStore,
     Mobject(String),
     Animation(String),
@@ -430,6 +432,7 @@ impl std::fmt::Display for LiveSessionError {
             Self::ForeignMobjectStore => {
                 formatter.write_str("mobject belongs to another semantic store")
             }
+            Self::Authoring(error) => error.fmt(formatter),
             Self::Mobject(error) => error.fmt(formatter),
             Self::Animation(error) => error.fmt(formatter),
             Self::Activation(error) => error.fmt(formatter),
@@ -441,7 +444,29 @@ impl std::fmt::Display for LiveSessionError {
     }
 }
 
-impl std::error::Error for LiveSessionError {}
+impl std::error::Error for LiveSessionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Authoring(error) => Some(error),
+            Self::Activation(error) => Some(error),
+            Self::Segment(error) => Some(error),
+            Self::Advance(error) => Some(error),
+            Self::Completion(error) => Some(error),
+            Self::Publication(error) => Some(error),
+            Self::ForeignMobjectStore | Self::Mobject(_) | Self::Animation(_) => None,
+        }
+    }
+}
+
+impl From<crate::AuthoringError> for LiveSessionError {
+    fn from(error: crate::AuthoringError) -> Self {
+        match error {
+            // Retain the existing live error category for all foreign-handle paths.
+            crate::AuthoringError::ForeignStore => Self::ForeignMobjectStore,
+            other => Self::Authoring(other),
+        }
+    }
+}
 
 impl From<ExecutionSessionPublicationError> for LiveSessionError {
     fn from(value: ExecutionSessionPublicationError) -> Self {
@@ -564,8 +589,7 @@ impl<'a> LiveSession<'a> {
         request: SceneMembershipRequest<'_>,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         let transaction =
-            crate::scene_membership::prepare_scene_membership(self.store, self.root, request)
-                .map_err(LiveSessionError::Mobject)?;
+            crate::scene_membership::prepare_scene_membership(self.store, self.root, request)?;
         self.apply(transaction)
     }
 
@@ -601,7 +625,10 @@ impl<'a> LiveSession<'a> {
         self.store
             .borrow()
             .is_direct_member(self.root, mobject.node_id())
-            .map_err(|error| LiveSessionError::Mobject(error.to_string()))
+            .map_err(|error| {
+                crate::AuthoringError::from(noon_core::SemanticSceneOperationError::from(error))
+                    .into()
+            })
     }
 
     /// Replace one live object's content with content already authored in this store.
@@ -2283,14 +2310,14 @@ impl<'a> LiveSession<'a> {
         if !Rc::ptr_eq(self.store, mobject.store()) {
             return Err(LiveSessionError::ForeignMobjectStore);
         }
-        mobject.validate().map_err(LiveSessionError::Mobject)
+        mobject.validate().map_err(Into::into)
     }
 
     fn require_family(&self, family: &MobjectFamily) -> Result<(), LiveSessionError> {
         if !Rc::ptr_eq(self.store, family.store()) {
             return Err(LiveSessionError::ForeignMobjectStore);
         }
-        family.validate().map_err(LiveSessionError::Mobject)
+        family.validate().map_err(Into::into)
     }
 }
 

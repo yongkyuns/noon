@@ -5,7 +5,7 @@ use noon_core::{
     SemanticNodeId, SemanticSceneMembershipRequest, SemanticStore,
 };
 
-use crate::MobjectFamilyMember;
+use crate::{AuthoringError, MobjectFamilyMember};
 
 /// One ordered, atomic membership edit over a Scene's authoritative root family.
 #[derive(Clone, Copy)]
@@ -23,10 +23,10 @@ pub(crate) fn prepare_scene_membership(
     owner: &Rc<RefCell<SemanticStore>>,
     root: SemanticNodeId,
     request: SceneMembershipRequest<'_>,
-) -> Result<SemanticMutationTransaction, String> {
-    let validate = |member: MobjectFamilyMember<'_>| -> Result<SemanticNodeId, String> {
+) -> Result<SemanticMutationTransaction, AuthoringError> {
+    let validate = |member: MobjectFamilyMember<'_>| -> Result<SemanticNodeId, AuthoringError> {
         if !Rc::ptr_eq(owner, member.store()) {
-            return Err("membership target belongs to another scene store".into());
+            return Err(AuthoringError::ForeignStore);
         }
         member.validate()?;
         Ok(member.node_id())
@@ -66,14 +66,53 @@ pub(crate) fn prepare_scene_membership(
             )
         }
     }
-    .map_err(|error| error.to_string())
+    .map_err(Into::into)
 }
 
 pub(crate) fn apply_scene_membership(
     store: &Rc<RefCell<SemanticStore>>,
     transaction: SemanticMutationTransaction,
-) -> Result<SemanticMutationTransactionResult, String> {
+) -> Result<SemanticMutationTransactionResult, AuthoringError> {
     transaction
         .apply(&mut store.borrow_mut())
-        .map_err(|error| error.to_string())
+        .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error;
+
+    #[test]
+    fn transaction_application_keeps_preflight_error_and_commits_nothing() {
+        let scene = crate::Scene::new();
+        let object = scene.circle(1.0).unwrap();
+        let revision = scene.store().borrow().scene_revision();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_member(scene.root(), object.node_id());
+        transaction.add_member(object.node_id(), scene.root());
+        let error = apply_scene_membership(scene.store(), transaction).unwrap_err();
+        let AuthoringError::Transaction(cause) = &error else {
+            panic!("transaction errors must retain their category")
+        };
+        assert!(matches!(
+            cause,
+            noon_core::SemanticMutationTransactionError::Family { index: 1, .. }
+        ));
+        assert_eq!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<noon_core::SemanticMutationTransactionError>(),
+            Some(cause)
+        );
+        assert_eq!(scene.store().borrow().scene_revision(), revision);
+        assert!(scene
+            .store()
+            .borrow()
+            .node(scene.root())
+            .unwrap()
+            .members()
+            .is_empty());
+    }
 }

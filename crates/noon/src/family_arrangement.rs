@@ -84,7 +84,7 @@ impl FamilyArrangePlan {
         family: &MobjectFamily,
         options: &FamilyArrangeOptions,
     ) -> Result<Self, String> {
-        family.validate()?;
+        family.validate().map_err(|error| error.to_string())?;
         // Normalize/check even an empty request without publishing anything.
         RelativePlacement::Next(options.placement).delta(None, |_, _| Ok((0.0, 0.0)))?;
         let ids = family

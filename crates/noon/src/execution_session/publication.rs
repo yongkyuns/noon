@@ -159,7 +159,21 @@ impl std::fmt::Display for ExecutionSessionPublicationError {
         }
     }
 }
-impl std::error::Error for ExecutionSessionPublicationError {}
+impl std::error::Error for ExecutionSessionPublicationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Semantic(error) => Some(error),
+            Self::Lowering(error) => Some(error),
+            Self::Runtime(error) => Some(error),
+            Self::ExecutionSlot(error) => Some(error),
+            Self::RequiredCallbackPending
+            | Self::SegmentCompletionPending
+            | Self::ForeignSemanticStore
+            | Self::StaleSceneRevision { .. }
+            | Self::UnknownObject(_) => None,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StructuralPublicationStats {

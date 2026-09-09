@@ -277,7 +277,7 @@ impl Mobject {
     }
 
     pub fn manim_underline(target: &Self, buff: f64) -> Result<Self, String> {
-        target.validate()?;
+        target.validate().map_err(|error| error.to_string())?;
         let bounds = target
             .layout_bounds()?
             .ok_or("underline target has no finite bounds")?;

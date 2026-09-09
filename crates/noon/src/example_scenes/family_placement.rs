@@ -50,7 +50,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         .move_to(Target::Family(&target.layout()?), (0.0, 0.0), (1.0, 0.0))?;
     family.shift(0.0, 0.2)?;
     for object in [&first, &second, &anchor] {
-        scene.add(object)?;
+        scene.add(object).map_err(|error| error.to_string())?;
     }
     scene.execution_session().map_err(|e| e.to_string())
 }

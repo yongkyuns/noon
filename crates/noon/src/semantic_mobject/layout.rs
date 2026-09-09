@@ -10,7 +10,7 @@ impl Mobject {
         mask_y: f64,
     ) -> Result<(), String> {
         self.require_same_store(other)?;
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let edge = authoring_xy_f64(aligned_edge_x, aligned_edge_y)?;
         let mask = authoring_xy_f64(mask_x, mask_y)?;
         let source = self.critical_point(edge.x, edge.y)?;
@@ -29,7 +29,7 @@ impl Mobject {
         mask_x: f64,
         mask_y: f64,
     ) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let point = authoring_xy_f64(point_x, point_y)?;
         let edge = authoring_xy_f64(aligned_edge_x, aligned_edge_y)?;
         let mask = authoring_xy_f64(mask_x, mask_y)?;
@@ -42,7 +42,7 @@ impl Mobject {
         args: ManimNextToArgs,
     ) -> Result<(), String> {
         self.require_same_store(other)?;
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let direction = authoring_xy_f64(args.direction.0, args.direction.1)?;
         let edge = authoring_xy_f64(args.aligned_edge.0, args.aligned_edge.1)?;
         let mask = authoring_xy_f64(args.mask.0, args.mask.1)?;
@@ -60,7 +60,7 @@ impl Mobject {
         point_y: f64,
         args: ManimNextToArgs,
     ) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let point = authoring_xy_f64(point_x, point_y)?;
         let direction = authoring_xy_f64(args.direction.0, args.direction.1)?;
         let edge = authoring_xy_f64(args.aligned_edge.0, args.aligned_edge.1)?;
@@ -80,7 +80,7 @@ impl Mobject {
         buff: f64,
     ) -> Result<(), String> {
         self.require_same_store(other)?;
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let (axis_x, axis_y) = normalized_direction(direction_x, direction_y)?;
         let source = self.critical_point(-axis_x, -axis_y)?;
         let target = other.critical_point(axis_x, axis_y)?;
@@ -97,7 +97,7 @@ impl Mobject {
         direction_y: f64,
         buff: f64,
     ) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         semantic_xy(point_x, point_y)?;
         let (axis_x, axis_y) = normalized_direction(direction_x, direction_y)?;
         let source = self.critical_point(-axis_x, -axis_y)?;
@@ -113,7 +113,7 @@ impl Mobject {
         direction_y: f64,
     ) -> Result<(), String> {
         self.require_same_store(other)?;
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         finite_f32("direction.x", direction_x)?;
         finite_f32("direction.y", direction_y)?;
         let source = self.critical_point(direction_x, direction_y)?;
@@ -138,7 +138,7 @@ impl Mobject {
         direction_x: f64,
         direction_y: f64,
     ) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         semantic_xy(point_x, point_y)?;
         let source = self.critical_point(direction_x, direction_y)?;
         self.shift(
@@ -160,7 +160,7 @@ impl Mobject {
         direction_y: f64,
         buff: f64,
     ) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         finite_f32("direction.x", direction_x)?;
         finite_f32("direction.y", direction_y)?;
         let point = self.critical_point(direction_x, direction_y)?;

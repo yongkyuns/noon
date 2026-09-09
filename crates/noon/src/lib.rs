@@ -6,6 +6,8 @@
 #![forbid(unsafe_code)]
 
 mod animation_authoring;
+mod authoring_error;
+pub use authoring_error::AuthoringError;
 mod arc_authoring;
 mod camera_authoring;
 mod compact_value_authoring;
@@ -70,10 +72,10 @@ pub use text_authoring::*;
 /// Common imports for direct typed semantic authoring.
 pub mod prelude {
     pub use crate::{
-        ContinuationStep, DeclaredAnimation, DrawBorderThenFillOptions, EffectiveMobjectState,
-        ExecutionSession, FadeEndpoint, FadeTranslation, LiveContinuation, LiveProgram,
-        LiveSession, Mobject, MobjectFamily, MobjectFamilyMember, NativeBoolSignal,
-        NativeVectorSignal, Scene, TrackerPosition, ValueTracker,
+        AuthoringError, ContinuationStep, DeclaredAnimation, DrawBorderThenFillOptions,
+        EffectiveMobjectState, ExecutionSession, FadeEndpoint, FadeTranslation, LiveContinuation,
+        LiveProgram, LiveSession, LiveSessionError, Mobject, MobjectFamily, MobjectFamilyMember,
+        NativeBoolSignal, NativeVectorSignal, Scene, TrackerPosition, ValueTracker,
     };
     pub use noon_core::{
         Color, SemanticObjectState, SemanticStyle, StoredGeometry, Vec2, VectorPath,

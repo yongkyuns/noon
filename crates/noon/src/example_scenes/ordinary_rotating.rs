@@ -53,7 +53,7 @@ pub fn program() -> Result<LiveProgram<OrdinaryRotating>, String> {
     rectangle.set_fill_color(0.0, 1.0, 1.0, 1.0)?;
     rectangle.set_fill_opacity(1.0)?;
     rectangle.disable_stroke()?;
-    scene.add(&rectangle)?;
+    scene.add(&rectangle).map_err(|error| error.to_string())?;
     scene
         .into_live_program(OrdinaryRotating {
             rectangle,

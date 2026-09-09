@@ -1,6 +1,6 @@
 //! Direct authoring scope over one family in the shared semantic store.
 use crate::{
-    ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectFamilyMember,
+    AuthoringError, ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectFamilyMember,
     SceneMembershipRequest,
 };
 use noon_core::{
@@ -76,17 +76,22 @@ impl Scene {
     pub fn path(&self, path: VectorPath, style: SemanticStyle) -> Result<Mobject, String> {
         Mobject::from_geometry(Rc::clone(&self.store), GeometryRef::path(path), style)
     }
-    pub fn add(&mut self, object: &Mobject) -> Result<(), String> {
+    pub fn add(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Add(&[
             MobjectFamilyMember::Mobject(object),
         ]))
         .map(|_| ())
     }
 
+    /// Prepare and apply one atomic authored membership edit.
+    ///
+    /// Errors preserve semantic identities and causes in [`AuthoringError`].
+    /// After execution bootstrap, use [`LiveSession::edit_membership`] instead:
+    /// direct authored edits invalidate that session's publication revision.
     pub fn edit_membership(
         &mut self,
         request: SceneMembershipRequest<'_>,
-    ) -> Result<noon_core::SemanticMutationTransactionResult, String> {
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
         let transaction =
             crate::scene_membership::prepare_scene_membership(&self.store, self.root, request)?;
         crate::scene_membership::apply_scene_membership(&self.store, transaction)
@@ -95,18 +100,20 @@ impl Scene {
     pub fn add_many(
         &mut self,
         members: &[MobjectFamilyMember<'_>],
-    ) -> Result<noon_core::SemanticMutationTransactionResult, String> {
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Add(members))
     }
 
     pub fn remove_many(
         &mut self,
         members: &[MobjectFamilyMember<'_>],
-    ) -> Result<noon_core::SemanticMutationTransactionResult, String> {
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Remove(members))
     }
 
-    pub fn clear(&mut self) -> Result<noon_core::SemanticMutationTransactionResult, String> {
+    pub fn clear(
+        &mut self,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Clear)
     }
 
@@ -114,7 +121,7 @@ impl Scene {
         &mut self,
         old: MobjectFamilyMember<'_>,
         new: MobjectFamilyMember<'_>,
-    ) -> Result<noon_core::SemanticMutationTransactionResult, String> {
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Replace { old, new })
     }
 
@@ -122,7 +129,7 @@ impl Scene {
     pub fn family(&self, members: &[MobjectFamilyMember<'_>]) -> Result<MobjectFamily, String> {
         MobjectFamily::create(Rc::clone(&self.store), members)
     }
-    pub fn remove(&mut self, object: &Mobject) -> Result<(), String> {
+    pub fn remove(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Remove(&[
             MobjectFamilyMember::Mobject(object),
         ]))
@@ -132,7 +139,7 @@ impl Scene {
         if !Rc::ptr_eq(&self.store, object.store()) {
             return Err("mobject belongs to another scene store".into());
         }
-        object.validate()
+        object.validate().map_err(|error| error.to_string())
     }
     /// Validate the bounded ordinary leaf-affine operation without creating a
     /// declaration, session, track, or runtime identity.

@@ -625,3 +625,30 @@ fn invalid_specialized_geometry_does_not_allocate_or_publish() {
     assert_eq!(store.len(), before_nodes);
     assert_eq!(store.geometry_resources().len(), before_resources);
 }
+
+#[test]
+fn content_validation_retains_missing_resource_identity_without_mutation() {
+    let store = SemanticStore::new();
+    let geometry = noon_core::GeometryResourceHandle {
+        arena: 0,
+        id: noon_core::GeometryId::new(42),
+        version: 7,
+    };
+    let text = noon_core::TextResourceHandle {
+        arena: 0,
+        id: noon_core::TextResourceId::new(43),
+        version: 8,
+    };
+    let before = store.scene_revision();
+    assert_eq!(
+        validate_content(&store, StoredGeometry::Resource(geometry).into()),
+        Err(AuthoringError::MissingGeometryResource(geometry))
+    );
+    assert_eq!(
+        validate_content(&store, SemanticObjectContent::Text(text)),
+        Err(AuthoringError::MissingTextResource(text))
+    );
+    assert_eq!(store.scene_revision(), before);
+    assert!(store.geometry_resources().is_empty());
+    assert!(store.text_resources().is_empty());
+}
