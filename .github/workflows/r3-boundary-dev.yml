@@ -3,9 +3,9 @@ on:
   push:
     branches: [codex/1292-r3-boundary-prep]
 permissions:
-  contents: read
+  contents: write
 jobs:
-  compatibility:
+  qualify:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -18,18 +18,34 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 166b166f25e27a13d2d940f8ac802d0e59fc2f8f
           fetch-depth: 0
-      - name: Check the combination with new master without changing either product branch
+      - name: Assemble the bounded advancement projection
         run: |
-          mkdir -p /tmp/r3-compatibility
+          mkdir -p /tmp/r3-advance/product /tmp/r3-advance/combined
+          python3 - <<'PY'
+          import base64, gzip, hashlib, pathlib
+          text = pathlib.Path('.github/r3-advance.b64').read_text().strip()
+          # Correct a two-character transcription insertion; both exact source
+          # checksums remain mandatory before any patch can be applied.
+          text = text.replace('jb2/OX5u785f', 'jb2/OX785f')
+          assert hashlib.sha256(text.encode()).hexdigest() == '43febbfff1f6b07c604a7964ea1ab63f59b7daa75689193b4d6a75fc8aa90ac2'
+          patch = gzip.decompress(base64.b64decode(text, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'a4d3226d739f2184aa2929d4a88b77bc2783ef70c0f6bf71123d893fe8818851'
+          pathlib.Path('/tmp/r3-advance/input.patch').write_bytes(patch)
+          PY
+          git checkout --detach 166b166f25e27a13d2d940f8ac802d0e59fc2f8f
+          git apply --index /tmp/r3-advance/input.patch
+          cargo fmt --all
+          git add -u
+          git diff --cached --check
+          test "$(git diff --cached --name-only | wc -l)" -eq 6
           git config user.name 'Yongkyun Shin'
           git config user.email '4311628+yongkyuns@users.noreply.github.com'
-          git merge --no-ff --no-edit 71d8bfac1094e8232ae7f4b89872af2a1baff9db
-          git diff --check
-          git rev-parse HEAD HEAD^{tree} HEAD^1 HEAD^2 > /tmp/r3-compatibility/revisions.txt
-          git diff 166b166f25e27a13d2d940f8ac802d0e59fc2f8f HEAD > /tmp/r3-compatibility/master-delta.patch
-          git archive --format=tar.gz HEAD > /tmp/r3-compatibility/source.tar.gz
+          git commit -m 'fix: preserve typed live advancement errors through WASM and Python'
+          git rev-parse HEAD HEAD^{tree} > /tmp/r3-advance/product/revisions.txt
+          git rev-parse HEAD > /tmp/r3-advance/product-head.txt
+          git diff HEAD^ HEAD > /tmp/r3-advance/product.patch
+          git archive --format=tar.gz HEAD > /tmp/r3-advance/product/source.tar.gz
       - uses: actions/cache/restore@v6
         with:
           path: |
@@ -44,23 +60,18 @@ jobs:
         with:
           tool: wasm-pack@0.15.0
           fallback: none
-      - name: Existing root-order acceptance and transaction regressions
+      - name: Exact product native fast gate and advancement regressions
         run: |
           set -o pipefail
-          cargo test -p noon --test root_order_acceptance --test root_order_transaction_regressions 2>&1 | tee /tmp/r3-compatibility/root-order.log
-      - name: Native fast gate on the combined tree
-        run: |
-          set -o pipefail
-          bash scripts/check.sh fast 71d8bfac1094e8232ae7f4b89872af2a1baff9db 2>&1 | tee /tmp/r3-compatibility/native.log
-      - name: Web static and Python tests
-        run: |
-          set -o pipefail
-          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/r3-compatibility/preflight.log
-      - name: Build actual dev WASM from the combined tree
+          cargo test -p noon-web --lib live_advance_projection -- --nocapture 2>&1 | tee /tmp/r3-advance/product/focused.log
+          bash scripts/check.sh fast 166b166f25e27a13d2d940f8ac802d0e59fc2f8f 2>&1 | tee /tmp/r3-advance/product/native.log
+          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/r3-advance/product/preflight.log
+      - name: Build actual product WASM
         run: |
           set -o pipefail
           rustup target add wasm32-unknown-unknown
-          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/r3-compatibility/wasm.log
+          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/r3-advance/product/wasm.log
+          cp -a web/pkg /tmp/r3-advance/product/web-pkg
       - uses: actions/cache/restore@v6
         with:
           path: ~/.cache/ms-playwright
@@ -69,22 +80,38 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-      - name: Real WASM and Python categories, atomicity and recovery
+      - name: Exact product real WASM and Python regressions
         run: |
           set -o pipefail
-          node scripts/typed-authoring-errors-smoke.mjs 2>&1 | tee /tmp/r3-compatibility/errors-browser.log
-          node scripts/manim-compat-smoke.mjs 2>&1 | tee /tmp/r3-compatibility/manim-browser.log
-      - name: Retain exact dependencies and final state
-        if: always()
+          NOON_TYPED_ERRORS_ARTIFACTS=/tmp/r3-advance/product/browser node scripts/typed-authoring-errors-smoke.mjs 2>&1 | tee /tmp/r3-advance/product/errors-browser.log
+          node scripts/manim-compat-smoke.mjs 2>&1 | tee /tmp/r3-advance/product/manim-browser.log
+          git diff --exit-code
+          git status --short > /tmp/r3-advance/product/status.txt
+          cp Cargo.lock /tmp/r3-advance/product/Cargo.lock
+      - name: Integrate freshly checked master only for compatibility qualification
         run: |
-          test ! -f Cargo.lock || cp Cargo.lock /tmp/r3-compatibility/Cargo.lock
-          test ! -d browser-smoke-artifacts/typed-authoring-errors || cp -a browser-smoke-artifacts/typed-authoring-errors /tmp/r3-compatibility/browser
-          test ! -f web/pkg/noon_web_bg.wasm || sha256sum web/pkg/* > /tmp/r3-compatibility/wasm-sha256.txt
-          git status --short > /tmp/r3-compatibility/status.txt
-          git rev-parse HEAD > /tmp/r3-compatibility/final-head.txt
+          git merge --no-edit 0eca24ef7c74478d0810332179a9197f19a1c39c
+          git rev-parse HEAD HEAD^{tree} HEAD^1 HEAD^2 > /tmp/r3-advance/combined/revisions.txt
+          git archive --format=tar.gz HEAD > /tmp/r3-advance/combined/source.tar.gz
+      - name: Combined native and web qualification
+        run: |
+          set -o pipefail
+          cargo test -p noon --test root_order_acceptance --test root_order_transaction_regressions 2>&1 | tee /tmp/r3-advance/combined/root-order.log
+          bash scripts/check.sh fast 0eca24ef7c74478d0810332179a9197f19a1c39c 2>&1 | tee /tmp/r3-advance/combined/native.log
+          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/r3-advance/combined/preflight.log
+          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/r3-advance/combined/wasm.log
+          NOON_TYPED_ERRORS_ARTIFACTS=/tmp/r3-advance/combined/browser node scripts/typed-authoring-errors-smoke.mjs 2>&1 | tee /tmp/r3-advance/combined/errors-browser.log
+          node scripts/manim-compat-smoke.mjs 2>&1 | tee /tmp/r3-advance/combined/manim-browser.log
+          git diff --exit-code
+          git status --short > /tmp/r3-advance/combined/status.txt
+          cp Cargo.lock /tmp/r3-advance/combined/Cargo.lock
+      - name: Publish only the verified incremental product commit
+        run: |
+          git checkout --detach "$(cat /tmp/r3-advance/product-head.txt)"
+          git push origin HEAD:refs/heads/codex/1292-r3-advancement
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r3-live-properties-current-master
-          path: /tmp/r3-compatibility
+          name: r3-advancement-qualification
+          path: /tmp/r3-advance
           retention-days: 7
