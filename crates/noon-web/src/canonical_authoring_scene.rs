@@ -2286,7 +2286,6 @@ fn checked_f32(name: &str, value: f64) -> Result<f32, String> {
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use noon_core::{Color, Style, Transform2D, Vec2};
-    use serde::de::DeserializeOwned;
     use wasm_bindgen::prelude::*;
 
     use super::*;
@@ -2320,10 +2319,6 @@ mod wasm {
 
     fn js_error(error: impl ToString) -> JsValue {
         JsValue::from_str(&error.to_string())
-    }
-
-    fn parse_json<T: DeserializeOwned>(label: &str, json: &str) -> Result<T, JsValue> {
-        serde_json::from_str(json).map_err(|error| js_error(format!("invalid {label}: {error}")))
     }
 
     fn parse_object_id(label: &str, value: &str) -> Result<ObjectId, JsValue> {

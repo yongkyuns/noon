@@ -174,12 +174,10 @@ const expectedJavascriptSurface = [
   "manimMoveToPoint(",
   "appendCreate(",
   "appendRotate(",
-  "sceneJson(",
   "export function resolveAnimationOptions(",
 ];
 const expectedTypeSurface = [
   "constructor()",
-  "sceneJson(): string",
   "export class WasmAuthoringStore",
   "createManimCircle(radius: number): WasmAuthoringMobjectHandle",
   "createManimText(source: string, font_family: string, font_size: number, line_spacing: number): WasmAuthoringMobjectHandle",
@@ -487,6 +485,7 @@ for (const retired of ["EngineScenePlayer", "ReactiveScenePlayer", "ReactiveCanv
   }
 }
 for (const retired of [
+  "sceneJson(",
   "export function verifySceneReplay(",
   "export function resolveUniformCompositionSchedule(",
   "export function resolveLifecyclePlan(",
