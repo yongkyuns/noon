@@ -9,7 +9,7 @@ concurrency:
   group: r2a-producers-development
   cancel-in-progress: true
 env:
-  PRODUCT_HEAD: 4af209f29cf8df43f8249ec1830f410b8b9871b1
+  PRODUCT_HEAD: 7d373852040c253d90f927efb774c100f56c1291
   CURRENT_BASE: 5b56124312657c0959e1ca3936930cad0fe7e240
   CARGO_BUILD_JOBS: '2'
   CARGO_INCREMENTAL: '0'
@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 4af209f29cf8df43f8249ec1830f410b8b9871b1
+          ref: 7d373852040c253d90f927efb774c100f56c1291
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v6
@@ -43,8 +43,10 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/r2a-full
           test "$(git rev-parse HEAD)" = "$PRODUCT_HEAD"
-          test "$(git rev-parse HEAD^{tree})" = 25fb3d40be9535a58bd689cca68d3394cb35e070
-          test "$(git rev-parse HEAD^2)" = "$CURRENT_BASE"
+          test "$(git rev-parse HEAD^{tree})" = f7b787b82aed329961c175d21d14fd3ab41537cc
+          test "$(git rev-parse HEAD^)" = 4af209f29cf8df43f8249ec1830f410b8b9871b1
+          git merge-base --is-ancestor "$CURRENT_BASE" HEAD
+          git diff --exit-code HEAD^ HEAD -- crates fixtures scripts/typed-authoring-errors-smoke.mjs web/python
           git diff --exit-code
           printf '%s\n' "$GITHUB_SHA" > /tmp/r2a-full/helper-event-sha.txt
           git show -s --format='%H %T %P' HEAD > /tmp/r2a-full/source-identity.txt
@@ -64,6 +66,10 @@ jobs:
           cargo --version >> /tmp/r2a-full/toolchain.txt
           node --version >> /tmp/r2a-full/toolchain.txt
           python3 --version >> /tmp/r2a-full/toolchain.txt
+      - name: Validate the complete web preflight before spending on the full build
+        run: |
+          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh > /tmp/r2a-full/preflight.log 2>&1 || { tail -200 /tmp/r2a-full/preflight.log; exit 1; }
+          tail -30 /tmp/r2a-full/preflight.log
       - uses: actions/cache@v6
         with:
           path: |
