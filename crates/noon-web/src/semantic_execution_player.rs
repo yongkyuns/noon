@@ -420,7 +420,7 @@ impl SemanticExecutionPlayer {
         target: noon::LiveLayoutTarget<'_>,
         edge: (f64, f64),
         mask: (f64, f64),
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.move_to(mobject, target, edge, mask))
             .map(|_| ())
     }
@@ -431,7 +431,7 @@ impl SemanticExecutionPlayer {
         target: &noon::Mobject,
         other: &noon::Mobject,
         options: noon::ManimBecomeOptions,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -444,14 +444,14 @@ impl SemanticExecutionPlayer {
         )
         .become_mobject(target, other, options)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_create_manim_geometry(
         &mut self,
         options: noon::ManimGeometryOptions,
-    ) -> Result<noon::Mobject, String> {
+    ) -> Result<noon::Mobject, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -463,11 +463,14 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .create_manim_geometry(options)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_create_text(&mut self, text: noon::Text) -> Result<noon::Mobject, String> {
+    pub(crate) fn live_create_text(
+        &mut self,
+        text: noon::Text,
+    ) -> Result<noon::Mobject, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -479,11 +482,14 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .create_text(text)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_create_typst(&mut self, text: noon::Typst) -> Result<noon::Mobject, String> {
+    pub(crate) fn live_create_typst(
+        &mut self,
+        text: noon::Typst,
+    ) -> Result<noon::Mobject, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -495,14 +501,14 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .create_typst(text)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_create_math_typst(
         &mut self,
         text: noon::MathTypst,
-    ) -> Result<noon::Mobject, String> {
+    ) -> Result<noon::Mobject, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -514,7 +520,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .create_math_typst(text)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -525,7 +531,7 @@ impl SemanticExecutionPlayer {
         green: f64,
         blue: f64,
         alpha: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_family_color(family, red, green, blue, alpha))
             .map(|_| ())
     }
@@ -536,7 +542,7 @@ impl SemanticExecutionPlayer {
         family: &noon::MobjectFamily,
         color: Option<noon::Color>,
         opacity: Option<f64>,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_family_fill(family, color, opacity))
             .map(|_| ())
     }
@@ -548,7 +554,7 @@ impl SemanticExecutionPlayer {
         color: Option<noon::Color>,
         width: Option<f64>,
         opacity: Option<f64>,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_family_stroke(family, color, width, opacity))
             .map(|_| ())
     }
@@ -558,7 +564,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         family: &noon::MobjectFamily,
         opacity: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_family_opacity(family, opacity))
             .map(|_| ())
     }
@@ -571,7 +577,7 @@ impl SemanticExecutionPlayer {
         green: f64,
         blue: f64,
         opacity: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_fill(mobject, red, green, blue, opacity))
             .map(|_| ())
     }
@@ -584,13 +590,16 @@ impl SemanticExecutionPlayer {
         green: f64,
         blue: f64,
         alpha: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_fill_color(mobject, red, green, blue, alpha))
             .map(|_| ())
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_disable_fill(&mut self, mobject: &noon::Mobject) -> Result<(), String> {
+    pub(crate) fn live_disable_fill(
+        &mut self,
+        mobject: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.disable_fill(mobject))
             .map(|_| ())
     }
@@ -600,7 +609,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         mobject: &noon::Mobject,
         opacity: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_fill_opacity(mobject, opacity))
             .map(|_| ())
     }
@@ -613,7 +622,7 @@ impl SemanticExecutionPlayer {
         green: f64,
         blue: f64,
         alpha: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_color(mobject, red, green, blue, alpha))
             .map(|_| ())
     }
@@ -626,7 +635,7 @@ impl SemanticExecutionPlayer {
         green: f64,
         blue: f64,
         opacity: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_stroke(mobject, red, green, blue, opacity))
             .map(|_| ())
     }
@@ -639,13 +648,16 @@ impl SemanticExecutionPlayer {
         green: f64,
         blue: f64,
         alpha: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_stroke_color(mobject, red, green, blue, alpha))
             .map(|_| ())
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_disable_stroke(&mut self, mobject: &noon::Mobject) -> Result<(), String> {
+    pub(crate) fn live_disable_stroke(
+        &mut self,
+        mobject: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.disable_stroke(mobject))
             .map(|_| ())
     }
@@ -655,7 +667,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         mobject: &noon::Mobject,
         opacity: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_stroke_opacity(mobject, opacity))
             .map(|_| ())
     }
@@ -665,7 +677,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         mobject: &noon::Mobject,
         opacity: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_opacity(mobject, opacity))
             .map(|_| ())
     }
@@ -675,7 +687,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         mobject: &noon::Mobject,
         opacity: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_object_opacity(mobject, opacity))
             .map(|_| ())
     }
@@ -684,7 +696,7 @@ impl SemanticExecutionPlayer {
     fn with_live_session<T>(
         &mut self,
         operation: impl FnOnce(&mut noon::LiveSession<'_>) -> Result<T, noon::LiveSessionError>,
-    ) -> Result<T, String> {
+    ) -> Result<T, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -695,7 +707,7 @@ impl SemanticExecutionPlayer {
                 .expect("live semantic store has one scene root"),
             &mut self.session,
         ))
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -747,7 +759,7 @@ impl SemanticExecutionPlayer {
         family: &noon::MobjectFamily,
         x: f64,
         y: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|session| session.shift_family(family, x, y))
             .map(|_| ())
     }
@@ -760,7 +772,7 @@ impl SemanticExecutionPlayer {
         columns: Option<usize>,
         gap_x: f64,
         gap_y: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| {
             live.arrange_family_in_grid(family, rows, columns, gap_x, gap_y)
         })
@@ -774,7 +786,7 @@ impl SemanticExecutionPlayer {
         length: f64,
         dimension: noon::LayoutDimension,
         stretch: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.rescale_to_fit(source, length, dimension, stretch))
     }
 
@@ -785,7 +797,7 @@ impl SemanticExecutionPlayer {
         target: &noon::LayoutAnchor,
         dimension: noon::LayoutDimension,
         stretch: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.match_dim_size(source, target, dimension, stretch))
     }
 
@@ -795,7 +807,7 @@ impl SemanticExecutionPlayer {
         family: &noon::MobjectFamily,
         x: f64,
         y: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|session| session.scale_family(family, x, y))
             .map(|_| ())
     }
@@ -806,7 +818,7 @@ impl SemanticExecutionPlayer {
         family: &noon::MobjectFamily,
         angle: f64,
         pivot: noon::ManimRotationPivot,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|session| session.rotate_family(family, angle, pivot))
             .map(|_| ())
     }
@@ -816,7 +828,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         family: &noon::MobjectFamily,
         options: &noon::FamilyArrangeOptions,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|session| session.arrange_family_with_options(family, options))
             .map(|_| ())
     }
@@ -826,7 +838,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         source: &noon::MobjectFamily,
         references: &[noon::MobjectFamilyMember<'_>],
-    ) -> Result<noon::FamilyCopy, String> {
+    ) -> Result<noon::FamilyCopy, AuthoringFailure> {
         self.with_live_session(|live| live.copy_family_with_references(source, references))
     }
 
@@ -834,7 +846,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_family_layout(
         &mut self,
         family: &noon::MobjectFamily,
-    ) -> Result<noon::EffectiveMobjectLayout, String> {
+    ) -> Result<noon::EffectiveMobjectLayout, AuthoringFailure> {
         self.with_live_session(|live| live.effective_family_layout(family))
     }
 
@@ -845,7 +857,7 @@ impl SemanticExecutionPlayer {
         target: noon::LiveLayoutTarget<'_>,
         edge: (f64, f64),
         mask: (f64, f64),
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.move_family_to(family, target, edge, mask))
             .map(|_| ())
     }
@@ -857,7 +869,7 @@ impl SemanticExecutionPlayer {
         target: noon::LiveLayoutTarget<'_>,
         aligner: &noon::LayoutAnchor,
         args: noon::ManimNextToArgs,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.next_layout_to_aligned(source, target, aligner, args))
             .map(|_| ())
     }
@@ -868,7 +880,7 @@ impl SemanticExecutionPlayer {
         family: &noon::MobjectFamily,
         direction: (f64, f64),
         buff: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.align_family_on_frame(family, direction, buff))
             .map(|_| ())
     }
@@ -879,7 +891,7 @@ impl SemanticExecutionPlayer {
         family: &noon::MobjectFamily,
         target: noon::LiveLayoutTarget<'_>,
         axis: (f64, f64),
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.align_family_to(family, target, axis))
             .map(|_| ())
     }
@@ -912,7 +924,7 @@ impl SemanticExecutionPlayer {
         mobject: &noon::Mobject,
         x: f64,
         y: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -925,7 +937,7 @@ impl SemanticExecutionPlayer {
         )
         .scale(mobject, x, y)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -954,7 +966,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         mobject: &noon::Mobject,
         angle: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -967,7 +979,7 @@ impl SemanticExecutionPlayer {
         )
         .rotate(mobject, angle)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -993,7 +1005,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_effective_layout(
         &mut self,
         mobject: &noon::Mobject,
-    ) -> Result<noon::EffectiveMobjectLayout, String> {
+    ) -> Result<noon::EffectiveMobjectLayout, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -1005,14 +1017,14 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .effective_layout(mobject)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective_line_endpoints(
         &mut self,
         mobject: &noon::Mobject,
-    ) -> Result<noon::ManimLineEndpoints, String> {
+    ) -> Result<noon::ManimLineEndpoints, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -1024,14 +1036,14 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .effective_line_endpoints(mobject)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective_manim_color(
         &mut self,
         mobject: &noon::Mobject,
-    ) -> Result<noon_core::Color, String> {
+    ) -> Result<noon_core::Color, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -1043,7 +1055,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .effective_manim_color(mobject)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     /// Publish one already validated scene-membership batch through the active
@@ -1243,9 +1255,8 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_value_tracker(
         &mut self,
         initial: f64,
-    ) -> Result<noon::ValueTracker, String> {
-        self.require_completed_live_segment()
-            .map_err(|error| error.to_string())?;
+    ) -> Result<noon::ValueTracker, AuthoringFailure> {
+        self.require_completed_live_segment()?;
         let semantics = self
             .semantics
             .clone()
@@ -1257,7 +1268,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .value_tracker(initial)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     /// Associate and sparsely enroll one pre-existing tracker in this live root.
@@ -1265,9 +1276,8 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_associate_value_tracker(
         &mut self,
         tracker: &noon::ValueTracker,
-    ) -> Result<(), String> {
-        self.require_completed_live_segment()
-            .map_err(|error| error.to_string())?;
+    ) -> Result<(), AuthoringFailure> {
+        self.require_completed_live_segment()?;
         let semantics = self
             .semantics
             .clone()
@@ -1279,7 +1289,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .associate_value_tracker(tracker)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     /// Create a detached target through the retained session so its semantic
@@ -1289,7 +1299,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_target_editor(
         &mut self,
         source: &noon::Mobject,
-    ) -> Result<noon::Mobject, String> {
+    ) -> Result<noon::Mobject, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -1301,7 +1311,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .target_editor(source)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1310,7 +1320,7 @@ impl SemanticExecutionPlayer {
         family: &noon::MobjectFamily,
         members: &[noon::MobjectFamilyMember<'_>],
         adding: bool,
-    ) -> Result<Vec<bool>, String> {
+    ) -> Result<Vec<bool>, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -1325,7 +1335,7 @@ impl SemanticExecutionPlayer {
         } else {
             live.remove_family_members(family, members)
         }
-        .map_err(|e| e.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     /// Create one detached family through the retained session so its node and
@@ -1334,7 +1344,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_family(
         &mut self,
         members: &[noon::MobjectFamilyMember<'_>],
-    ) -> Result<noon::MobjectFamily, String> {
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -1346,7 +1356,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .family(members)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     /// Apply subset-display constructor preparation through the active retained
@@ -1637,7 +1647,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_effective_signal(
         &self,
         tracker: &noon::ValueTracker,
-    ) -> Result<f64, String> {
+    ) -> Result<f64, AuthoringFailure> {
         match self
             .session
             .effective_signal_value(tracker.node_id())
@@ -1653,7 +1663,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         tracker: &noon::ValueTracker,
         value: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         if !value.is_finite() {
             return Err("ValueTracker value must be finite".into());
         }
@@ -1668,7 +1678,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .set_value(tracker, value)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
