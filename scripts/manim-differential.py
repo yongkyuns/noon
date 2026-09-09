@@ -512,8 +512,8 @@ def _manim_rotate_about_origin() -> Any:
 def _group_coordinate_dimensions(api, group_class):
     first = api.Rectangle(width=2.0, height=1.0).shift(2 * api.LEFT)
     second = api.Square(side_length=1.0).shift(2 * api.RIGHT)
-    nested = group_class(second)
-    family = group_class(first, nested, first)
+    nested = group_class(first, second)
+    family = group_class(first, nested)
     target = group_class(api.Rectangle(width=0.5, height=2).shift(api.RIGHT + api.UP))
     observations = []
     for operation in (
@@ -530,7 +530,8 @@ def _group_coordinate_dimensions(api, group_class):
             "target": _object_observation(target),
             "members_preserved": family.submobjects[0] is first
                 and family.submobjects[1] is nested
-                and nested.submobjects[0] is second,
+                and nested.submobjects[0] is first
+                and nested.submobjects[1] is second,
         })
     return observations
 

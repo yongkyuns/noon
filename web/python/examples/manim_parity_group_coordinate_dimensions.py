@@ -9,7 +9,7 @@ class GroupCoordinateDimensions(Scene):
         first.shift(2 * LEFT)
         second.shift(2 * RIGHT)
         target.shift(RIGHT + UP)
-        family = VGroup(first, VGroup(second), first)
+        family = VGroup(first, VGroup(first, second))
         family.width = 4
         family.height = 2
         family.set_x(3, RIGHT).set_y(-2, DOWN)
