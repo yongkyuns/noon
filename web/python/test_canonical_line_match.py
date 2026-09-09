@@ -45,7 +45,7 @@ class CanonicalLineMatchTests(unittest.TestCase):
             import _manim_compat as manim
             manim.install()
             import _manim_semantic_handles as handles
-            handles.install()
+
             assert handles._create_geometry_handle is not None
             assert manim.Line.__init__.__module__ == "_manim_compat"
             import _manim_geometry  # installs match_points

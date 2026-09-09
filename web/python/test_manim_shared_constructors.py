@@ -99,8 +99,15 @@ class ManimSharedConstructorTests(unittest.TestCase):
 
             import _manim_compat
             _manim_compat.install()
+            public_methods = tuple(getattr(_manim_compat._base.Mobject, name)
+                                   for name in ("__init__", "copy", "next_to", "width"))
+            group_shift = _manim_compat.Group.shift
             import _manim_semantic_handles as handles
-            handles.install()
+            assert not hasattr(handles, "install")
+            assert public_methods == tuple(getattr(_manim_compat._base.Mobject, name)
+                                           for name in ("__init__", "copy", "next_to", "width"))
+            assert group_shift is _manim_compat.Group.shift
+
 
             for name in ("Circle", "Rectangle", "Line", "Path"):
                 setattr(_manim_compat._ir, name, lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Python IR constructor was called")))

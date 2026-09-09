@@ -116,7 +116,7 @@ class ManimSharedRoundedRectangleTests(unittest.TestCase):
             _manim_compat.install()
             import _manim_geometry
             import _manim_semantic_handles as handles
-            handles.install()
+
 
             # Any Python-side path construction would violate the shared-geometry boundary.
             _manim_compat._ir.Path = lambda *args, **kwargs: (_ for _ in ()).throw(

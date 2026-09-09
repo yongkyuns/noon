@@ -66,7 +66,7 @@ class ManimSharedMatchXYTests(unittest.TestCase):
             _manim_compat.install()
             import _manim_geometry
             import _manim_semantic_handles as handles
-            handles.install()
+
             import _manim_shared_geometry
             _manim_shared_geometry.install()
 

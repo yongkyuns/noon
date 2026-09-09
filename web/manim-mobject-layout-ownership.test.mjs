@@ -38,19 +38,15 @@ test("detached Mobject layout queries stay owned by the shared semantic handle",
   assert.match(height, /handle\.height/);
 
   assert.match(facadeSource, /return _callback_operations\(\)\._canonical_get_center\(self\)/);
-  assert.match(callbackSource, /return _semantic_operations\(\)\._get_center\(self\)/);
+  assert.match(callbackSource, /return _base\._semantic_operations\(\)\._get_center\(self\)/);
   assert.doesNotMatch(callbackSource, /def install\(|_ORIGINAL_/);
 
-  assert.match(
-    semanticHandlesSource,
-    /_base\.Mobject\.width = property\(_width, _set_width_property\)/,
-    "install() must keep width on the semantic-handle adapter",
-  );
-  assert.match(
-    semanticHandlesSource,
-    /_base\.Mobject\.height = property\(_height, _set_height_property\)/,
-    "install() must keep height on the semantic-handle adapter",
-  );
+  for (const property of ["width", "height"]) {
+    assert.ok(facadeSource.includes(`return _semantic_operations()._${property}(self)`));
+    assert.ok(facadeSource.includes(`_semantic_operations()._set_${property}_property(self, value)`));
+  }
+  assert.doesNotMatch(semanticHandlesSource, /def install\(|_ORIGINAL_|^_base\.Mobject\.[a-z_]+ =/m);
+
 });
 
 test("Rust semantic handle remains the layout-query source of truth", () => {

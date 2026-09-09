@@ -1,8 +1,7 @@
-"""Shared semantic-handle migration for the Manim-compatible Python facade.
+"""Shared semantic operations for the Manim-compatible Python facade.
 
-Detached objects and `.animate` target-state copies live in Rust/WASM rather than in
-Python-owned deep-copied snapshots. Scene-owned objects continue through the existing
-scene adapter until the stable execution-slot integration is complete.
+Detached, scene-owned and live targets use typed Rust handles. Callback execution
+uses its explicit staged property view; this module installs no public methods.
 """
 
 from __future__ import annotations
@@ -142,16 +141,6 @@ def _manim_arrange(
     return self
 
 
-# Install compatibility placement before capturing fallbacks below. The generic
-# formulas use dynamic ``shift``/query dispatch, so after semantic-handle install
-# the same code mutates Rust/WASM-owned detached objects and ordinary scene objects.
-_base.Mobject.next_to = _manim_next_to
-_base.Mobject.align_to = _manim_align_to
-_compat.Group.move_to = _manim_move_to
-_compat.Group.next_to = _manim_next_to
-_compat.Group.align_to = _manim_align_to
-_compat.Group.arrange = _manim_arrange
-
 _ir = _base._ir
 
 try:
@@ -170,20 +159,7 @@ except ImportError:  # Native CPython tests install explicit bridge fixtures.
     _create_family_handle = None
     _new_membership_batch = None
 
-_INSTALLED = False
-_ORIGINAL_MOVE_TO = _manim_move_to
-_ORIGINAL_SET_OBJECT_OPACITY = _base.Mobject.set_object_opacity
-_ORIGINAL_NEXT_TO = _base.Mobject.next_to
-_ORIGINAL_ALIGN_TO = _base.Mobject.align_to
-_ORIGINAL_ALIGN_ON_FRAME = _base.Mobject._align_on_frame
-_ORIGINAL_BECOME = _compat._mobject_become
-_ORIGINAL_REPLACE = _compat._mobject_replace
 
-_ORIGINAL_GROUP_SHIFT = _compat.Group.shift
-_ORIGINAL_GROUP_MOVE_TO = _compat.Group.move_to
-_ORIGINAL_GROUP_NEXT_TO = _compat.Group.next_to
-_ORIGINAL_GROUP_ALIGN_TO = _compat.Group.align_to
-_ORIGINAL_GROUP_ARRANGE = _compat.Group.arrange
 
 
 def _raw_from_json(value: str) -> _ir.Mobject:
@@ -900,7 +876,7 @@ def _move_to(
 ) -> _base.Mobject:
     handle = _handle_for(self)
     if handle is None:
-        return _ORIGINAL_MOVE_TO(
+        return _manim_move_to(
             self,
             point_or_mobject,
             aligned_edge=aligned_edge,
@@ -928,7 +904,7 @@ def _move_to(
     if _alignment_is_mobject(point_or_mobject):
         target_handle = _handle_for(point_or_mobject)
         if target_handle is None or not hasattr(handle, "manimMoveToHandle"):
-            return _ORIGINAL_MOVE_TO(
+            return _manim_move_to(
                 self,
                 point_or_mobject,
                 aligned_edge=aligned_edge,
@@ -938,7 +914,7 @@ def _move_to(
         handle.manimMoveToHandle(target_handle, edge.x, edge.y, mask.x, mask.y)
     else:
         if not hasattr(handle, "manimMoveToPoint"):
-            return _ORIGINAL_MOVE_TO(
+            return _manim_move_to(
                 self,
                 point_or_mobject,
                 aligned_edge=aligned_edge,
@@ -1105,7 +1081,7 @@ def _become(
         raise NotImplementedError(
             "become requires valid shared semantic handles for both Mobjects"
         )
-    return _ORIGINAL_BECOME(
+    return _compat._mobject_become(
         self,
         mobject,
         match_height=match_height,
@@ -1131,7 +1107,7 @@ def _replace(
             raise NotImplementedError("replace currently supports width (0) or height (1)")
         handle.replaceHandle(other_handle, int(dim_to_match), bool(stretch))
         return self
-    return _ORIGINAL_REPLACE(self, mobject, dim_to_match=dim_to_match, stretch=stretch)
+    return _compat._mobject_replace(self, mobject, dim_to_match=dim_to_match, stretch=stretch)
 
 
 def _critical(value: _base.Mobject, direction: _base.Vec2) -> _base.Vec2:
@@ -1232,8 +1208,7 @@ def _next_to(
     if _shared_next_to(self, mobject_or_point, direction, buff, aligned_edge,
                        submobject_to_align, index_of_submobject_to_align, coor_mask):
         return self
-    fallback = _ORIGINAL_GROUP_NEXT_TO if isinstance(self, _compat.Group) else _ORIGINAL_NEXT_TO
-    return fallback(
+    return _manim_next_to(
         self, mobject_or_point, direction, buff,
         aligned_edge=aligned_edge, submobject_to_align=submobject_to_align,
         index_of_submobject_to_align=index_of_submobject_to_align, coor_mask=coor_mask,
@@ -1247,7 +1222,7 @@ def _align_to(
 ) -> _base.Mobject:
     handle = _handle_for(self)
     if handle is None:
-        return _ORIGINAL_ALIGN_TO(self, mobject_or_point, direction)
+        return _manim_align_to(self, mobject_or_point, direction)
     if _live_mutation_context(self) is not None:
         raise NotImplementedError(
             "canonical live affine targets do not support layout alignment"
@@ -1256,11 +1231,11 @@ def _align_to(
     if _alignment_is_mobject(mobject_or_point):
         target_handle = _handle_for(mobject_or_point)
         if target_handle is None or not hasattr(handle, "alignToHandle"):
-            return _ORIGINAL_ALIGN_TO(self, mobject_or_point, direction)
+            return _manim_align_to(self, mobject_or_point, direction)
         handle.alignToHandle(target_handle, axis.x, axis.y)
     else:
         if not hasattr(handle, "alignToPoint"):
-            return _ORIGINAL_ALIGN_TO(self, mobject_or_point, direction)
+            return _manim_align_to(self, mobject_or_point, direction)
         point = _base._as_vec2(mobject_or_point)
         handle.alignToPoint(point.x, point.y, axis.x, axis.y)
     return self
@@ -1273,7 +1248,7 @@ def _align_on_frame(
 ) -> _base.Mobject:
     handle = _handle_for(self)
     if handle is None or not hasattr(handle, "alignOnFrame"):
-        return _ORIGINAL_ALIGN_ON_FRAME(self, direction, buff)
+        raise RuntimeError("Mobject frame alignment requires a current shared Rust semantic handle")
     if _live_mutation_context(self) is not None:
         raise NotImplementedError(
             "canonical live affine targets do not support frame alignment"
@@ -1415,7 +1390,7 @@ def _set_object_opacity(
 
     handle = _handle_for(self)
     if handle is None:
-        return _ORIGINAL_SET_OBJECT_OPACITY(self, opacity)
+        raise NotImplementedError("set_object_opacity requires the shared semantic authoring handle")
     alpha = _compat._opacity("object opacity", opacity)
     live_context = _live_mutation_context(self)
     try:
@@ -1604,10 +1579,10 @@ def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
         return self
     shared = _shared_family_layout(self, mutation=True)
     if shared is None:
-        return _ORIGINAL_GROUP_SHIFT(self, direction)
+        return _compat._shift_group_members(self, direction)
     session = shared
     if not hasattr(session, "shiftBy"):
-        return _ORIGINAL_GROUP_SHIFT(self, direction)
+        return _compat._shift_group_members(self, direction)
     offset = _base._as_vec2(direction)
     session.shiftBy(offset.x, offset.y)
     return self
@@ -1660,7 +1635,7 @@ def _group_move_to(
         return self
     shared = _shared_family_layout(self, mutation=True)
     if shared is None:
-        return _ORIGINAL_GROUP_MOVE_TO(self, point_or_mobject, aligned_edge, coor_mask)
+        return _manim_move_to(self, point_or_mobject, aligned_edge, coor_mask)
     session = shared
     edge = _base._as_vec2(aligned_edge)
     mask = _alignment_mask2(coor_mask)
@@ -1689,7 +1664,7 @@ def _group_move_to(
         applied = True
 
     if not applied:
-        return _ORIGINAL_GROUP_MOVE_TO(self, point_or_mobject, aligned_edge, coor_mask)
+        return _manim_move_to(self, point_or_mobject, aligned_edge, coor_mask)
     return self
 
 
@@ -1707,7 +1682,7 @@ def _group_align_to(
         return self
     shared = _shared_family_layout(self, mutation=True)
     if shared is None:
-        return _ORIGINAL_GROUP_ALIGN_TO(self, mobject_or_point, direction)
+        return _manim_align_to(self, mobject_or_point, direction)
     session = shared
     axis = _base._as_vec2(direction)
 
@@ -1728,7 +1703,7 @@ def _group_align_to(
         applied = True
 
     if not applied:
-        return _ORIGINAL_GROUP_ALIGN_TO(self, mobject_or_point, direction)
+        return _manim_align_to(self, mobject_or_point, direction)
     return self
 
 
@@ -1742,7 +1717,7 @@ def _group_arrange(
 ) -> _compat.Group:
     family_handle = getattr(self, "_semantic_family_handle", None)
     if family_handle is None or not hasattr(family_handle, "arrangeOptions"):
-        return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center, **kwargs)
+        return _manim_arrange(self, direction=direction, buff=buff, center=center, **kwargs)
     if not self.submobjects:
         return self
     unknown = set(kwargs) - {"aligned_edge", "coor_mask", "submobject_to_align", "index_of_submobject_to_align"}
@@ -1758,7 +1733,7 @@ def _group_arrange(
     if aligner is not None:
         anchor = _layout_anchor(aligner)
         if anchor is None:
-            return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center, **kwargs)
+            return _manim_arrange(self, direction=direction, buff=buff, center=center, **kwargs)
         options.setAligner(anchor)
     context = _group_target_context(self)
     try:
@@ -1768,7 +1743,7 @@ def _group_arrange(
         leaves = _compat._leaf_mobjects(self)
         leaf_handles = [_family_layout_leaf_adapter(member, mutation=True) for member in leaves]
         if any(handle is None for handle in leaf_handles):
-            return _ORIGINAL_GROUP_ARRANGE(self, direction=direction, buff=buff, center=center, **kwargs)
+            return _manim_arrange(self, direction=direction, buff=buff, center=center, **kwargs)
         family_handle.arrange(options)
     except Exception as error:
         if "alignment submobject index" in str(error):
@@ -1976,37 +1951,3 @@ def _group_copy(self: _compat.Group) -> _compat.Group:
             if context is not None:
                 target._canonical_live_target_context = context
     return clone
-
-
-def install() -> None:
-    global _INSTALLED
-    if _INSTALLED or _create_geometry_handle is None:
-        return
-    _INSTALLED = True
-
-    _base.Mobject.__init__ = _init
-    _base.Mobject.copy = _copy_mobject
-    _base.Mobject.__deepcopy__ = _compat.deepcopy_semantic_wrapper
-    _compat.Group.__deepcopy__ = _compat.deepcopy_semantic_wrapper
-    _base.Mobject._copy_for_animate_target = _target_mobject
-    _base.Mobject.get_critical_point = _get_critical_point
-    _base.Mobject.width = property(_width, _set_width_property)
-    _base.Mobject.height = property(_height, _set_height_property)
-    _base.Mobject.set_object_opacity = _set_object_opacity
-    _base.Mobject.become = _become
-    _base.Mobject.replace = _replace
-    _base.Mobject.next_to = _next_to
-    _base.Mobject.align_to = _align_to
-    _base.Mobject._align_on_frame = _align_on_frame
-
-    _compat.VMobject._copy_for_animate_target = _target_mobject
-    _compat._bounds_for = _compat_bounds_for
-
-
-    if _create_family_handle is not None:
-        _compat.Group.shift = _group_shift
-        _compat.Group.move_to = _group_move_to
-        _compat.Group.next_to = _next_to
-        _compat.Group.align_to = _group_align_to
-        _compat.Group.arrange = _group_arrange
-        _compat.Group._copy_for_animate_target = _group_copy

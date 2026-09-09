@@ -56,7 +56,7 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
             rate_functions.install()
             import _manim_geometry
             import _manim_semantic_handles as handles
-            handles.install()
+
 
             from noon import BLUE, Line, Square
 

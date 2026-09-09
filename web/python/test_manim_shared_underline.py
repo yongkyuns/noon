@@ -135,7 +135,7 @@ class ManimSharedUnderlineTests(unittest.TestCase):
             _manim_compat.install()
             import _manim_geometry
             import _manim_semantic_handles as handles
-            handles.install()
+
 
             # Underline geometry and placement must stay below the Python facade.
             _manim_compat._ir.Line = lambda *args, **kwargs: (_ for _ in ()).throw(

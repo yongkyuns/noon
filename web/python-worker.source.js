@@ -148,7 +148,7 @@ import _manim_rate_functions
 _manim_rate_functions.install()
 import _manim_geometry
 import _manim_semantic_handles
-_manim_semantic_handles.install()
+
 import _manim_shared_geometry
 _manim_shared_geometry.install()
 import _manim_dashed_line
