@@ -128,6 +128,30 @@ def _manim_scaled_square() -> Any:
     return _object_observation(obj)
 
 
+def _noon_scale_pivots() -> Any:
+    make = lambda: noon.Line(start=noon.RIGHT + noon.DOWN, end=3 * noon.RIGHT + noon.UP)
+    centered = make().scale(2.0)
+    point = make().scale(2.0, about_point=noon.ORIGIN)
+    edge = make().scale(2.0, about_edge=noon.RIGHT)
+    return {
+        "centered": _object_observation(centered),
+        "point": _object_observation(point),
+        "edge": _object_observation(edge),
+    }
+
+
+def _manim_scale_pivots() -> Any:
+    make = lambda: manim.Line(start=manim.RIGHT + manim.DOWN, end=3 * manim.RIGHT + manim.UP)
+    centered = make().scale(2.0)
+    point = make().scale(2.0, about_point=manim.ORIGIN)
+    edge = make().scale(2.0, about_edge=manim.RIGHT)
+    return {
+        "centered": _object_observation(centered),
+        "point": _object_observation(point),
+        "edge": _object_observation(edge),
+    }
+
+
 def _noon_rotated_rectangle() -> Any:
     obj = noon.Rectangle(width=3.0, height=1.0).rotate(math.pi / 2.0)
     return _object_observation(obj)
@@ -515,6 +539,7 @@ FIXTURES = [
     Fixture("shifted_circle", _noon_shifted_circle, _manim_shifted_circle),
     Fixture("moved_rectangle", _noon_moved_rectangle, _manim_moved_rectangle),
     Fixture("scaled_square", _noon_scaled_square, _manim_scaled_square),
+    Fixture("scale_pivots", _noon_scale_pivots, _manim_scale_pivots),
     Fixture("rotated_rectangle", _noon_rotated_rectangle, _manim_rotated_rectangle),
     Fixture("next_to", _noon_next_to, _manim_next_to),
     Fixture("align_to_top", _noon_align_to_top, _manim_align_to_top),

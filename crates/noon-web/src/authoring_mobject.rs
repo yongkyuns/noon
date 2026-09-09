@@ -1108,7 +1108,31 @@ mod wasm {
         }
 
         pub fn scale(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
-            self.handle.scale(x, y).map_err(js_error)
+            self.handle.manim_scale(x, y).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = scaleAboutPoint)]
+        pub fn scale_about_point(
+            &mut self,
+            factor: f64,
+            point_x: f64,
+            point_y: f64,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .manim_scale_about_point(factor, point_x, point_y)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = scaleAboutEdge)]
+        pub fn scale_about_edge(
+            &mut self,
+            factor: f64,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .manim_scale_about_edge(factor, direction_x, direction_y)
+                .map_err(js_error)
         }
 
         pub fn rotate(&mut self, angle: f64) -> Result<(), JsValue> {

@@ -661,6 +661,34 @@ impl Mobject {
         let center = self.center()?;
         self.scale_about_center(x, y, center)
     }
+
+    /// Uniform Manim scaling around one explicit world-space point.
+    pub fn manim_scale_about_point(
+        &mut self,
+        factor: f64,
+        point_x: f64,
+        point_y: f64,
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
+        let mut state = self.state()?;
+        scale_state_about_point(&mut state, factor, (point_x, point_y))?;
+        self.commit_state(state)
+    }
+
+    /// Uniform Manim scaling around the current critical point selected by an edge direction.
+    pub fn manim_scale_about_edge(
+        &mut self,
+        factor: f64,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
+        let direction_x = authoring_render_f64("scale edge.x", direction_x)?;
+        let direction_y = authoring_render_f64("scale edge.y", direction_y)?;
+        let pivot = self.critical_point(direction_x, direction_y)?;
+        self.manim_scale_about_point(factor, pivot.0, pivot.1)
+    }
+
     fn scale_about_center(
         &mut self,
         x: f64,
@@ -985,6 +1013,39 @@ pub(crate) fn scale_state_about_center(
     let scaled_center = state_center(store, state)?;
     state.transform.translation.x += center.0 - scaled_center.0;
     state.transform.translation.y += center.1 - scaled_center.1;
+    state
+        .transform
+        .translation
+        .lower_xy_f32()
+        .map_err(AuthoringError::from)?;
+    Ok(())
+}
+
+fn scale_state_about_point(
+    state: &mut SemanticObjectState,
+    factor: f64,
+    point: (f64, f64),
+) -> Result<(), AuthoringError> {
+    let factor = authoring_render_f64("scale factor", factor)?;
+    let point_x = authoring_render_f64("scale pivot.x", point.0)?;
+    let point_y = authoring_render_f64("scale pivot.y", point.1)?;
+    let next_scale = SemanticVec3::new(
+        state.transform.scale.x * factor,
+        state.transform.scale.y * factor,
+        state.transform.scale.z,
+    );
+    next_scale.lower_xy_f32().map_err(AuthoringError::from)?;
+    let translation_x = authoring_render_f64(
+        "scale result translation.x",
+        point_x + factor * (state.transform.translation.x - point_x),
+    )?;
+    let translation_y = authoring_render_f64(
+        "scale result translation.y",
+        point_y + factor * (state.transform.translation.y - point_y),
+    )?;
+    state.transform.scale = next_scale;
+    state.transform.translation.x = translation_x;
+    state.transform.translation.y = translation_y;
     state
         .transform
         .translation

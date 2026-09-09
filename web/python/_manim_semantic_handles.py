@@ -746,23 +746,46 @@ def _match_dim_size(self, mobject, dim, stretch=False, **kwargs):
     return self
 
 
-def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
+def _scale(
+    self: _base.Mobject,
+    factor: object,
+    *,
+    about_point: object | None = None,
+    about_edge: object | None = None,
+) -> _base.Mobject:
     handle = _handle_for(self)
     if handle is None:
         raise RuntimeError("Mobject edits require a current shared Rust semantic handle")
-    if isinstance(factor, (tuple, list, _base.Vec2)):
+    vector_factor = isinstance(factor, (tuple, list, _base.Vec2))
+    if vector_factor:
         value = _base._as_vec2(factor)
+        scalar = None
     else:
         scalar = float(factor)
         value = _base.Vec2(scalar, scalar)
     context = _live_mutation_context(self)
     if context is not None:
+        if about_point is not None or about_edge is not None:
+            raise NotImplementedError(
+                "canonical live affine scaling supports only scaling about the current center"
+            )
         try:
             engine_call(context.liveScale, handle, value.x, value.y)
         except Exception as error:
             raise_engine_error(error)
         return self
-    engine_call(handle.scale, value.x, value.y)
+    if about_point is not None:
+        if scalar is None:
+            raise TypeError("about_point requires a scalar scale_factor")
+        pivot = _base._as_vec2(about_point)
+        engine_call(handle.scaleAboutPoint, scalar, pivot.x, pivot.y)
+    elif about_edge is not None:
+        if scalar is None:
+            raise TypeError("about_edge requires a scalar scale_factor")
+        edge = _base._as_vec2(about_edge)
+        engine_call(handle.scaleAboutEdge, scalar, edge.x, edge.y)
+    else:
+        engine_call(handle.scale, value.x, value.y)
     return self
 
 

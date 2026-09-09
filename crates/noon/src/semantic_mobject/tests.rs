@@ -35,6 +35,42 @@ fn aliases_and_copies_share_the_arena_but_only_aliases_share_state() {
 }
 
 #[test]
+fn manim_scale_preserves_center_and_resolves_explicit_point_and_edge_pivots() {
+    let scene = Scene::new();
+    let path = || {
+        VectorPath::new()
+            .move_to(Vec2::new(1.0, -1.0))
+            .line_to(Vec2::new(3.0, 1.0))
+    };
+
+    let mut centered = scene.path(path(), SemanticStyle::default()).unwrap();
+    assert_eq!(centered.center().unwrap(), (2.0, 0.0));
+    centered.manim_scale(2.0, 2.0).unwrap();
+    assert_eq!(centered.center().unwrap(), (2.0, 0.0));
+    assert!((centered.width().unwrap() - 4.0).abs() < 1.0e-9);
+    assert!((centered.height().unwrap() - 4.0).abs() < 1.0e-9);
+
+    let mut point = scene.path(path(), SemanticStyle::default()).unwrap();
+    point.manim_scale_about_point(2.0, 0.0, 0.0).unwrap();
+    assert_eq!(point.center().unwrap(), (4.0, 0.0));
+
+    let mut edge = scene.path(path(), SemanticStyle::default()).unwrap();
+    let right = edge.critical_point(1.0, 0.0).unwrap();
+    edge.manim_scale_about_edge(2.0, 1.0, 0.0).unwrap();
+    assert_eq!(edge.critical_point(1.0, 0.0).unwrap(), right);
+    assert_eq!(edge.center().unwrap(), (1.0, 0.0));
+
+    let before = edge.state().unwrap();
+    let revision = scene.integration_store().borrow().scene_revision();
+    assert!(edge.manim_scale_about_point(2.0, f64::NAN, 0.0).is_err());
+    assert_eq!(edge.state().unwrap(), before);
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        revision
+    );
+}
+
+#[test]
 fn no_op_edits_do_not_publish_and_invalid_compound_edits_roll_back() {
     let scene = Scene::new();
     let mut circle = scene.circle(1.0).unwrap();
