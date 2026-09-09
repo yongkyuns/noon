@@ -708,8 +708,6 @@ else:
 if isinstance(__noon_result, Scene):
     from js import noonRegisterSemanticExecution, noonSemanticContinuationGeneration
     __noon_context = execution_context(__noon_result)
-    if __noon_context is None:
-        raise RuntimeError("shared Scene cannot fall back to scene-document execution; remove incompatible legacy declarations")
     __noon_live_duration = __noon_context.liveHandoffDuration()
     __noon_semantic = {
         "context_id": str(noonRegisterSemanticExecution(__noon_context)),

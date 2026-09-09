@@ -766,8 +766,7 @@ def _canonical_wait(
             or getattr(scene, "_canonical_authoring_context", None) is not None
         )
     ):
-        if execution_context(scene) is None:
-            raise NotImplementedError("Scene.wait request is unsupported by the shared Rust engine")
+        execution_context(scene)
         _start_default_synchronous_continuation(scene)
     if _semantic_continuation_active(scene):
         try:
@@ -2312,9 +2311,8 @@ def _canonical_bind_position(
     return self
 
 
-def execution_context(scene, callbacks=None):
-    """Select typed geometry/native-Text execution; unsupported contracts stay explicit."""
-    del callbacks  # Callback declarations now lower through the canonical context.
+def execution_context(scene):
+    """Prepare callbacks on this Scene's one shared Rust execution context."""
     context = _context(scene)
     # Python keeps callable identity only. This bootstrap writes the authored
     # occurrence intervals into the one shared Rust semantic store before the
@@ -2336,11 +2334,6 @@ class LiveExecution:
 
     def __init__(self, scene: _base.Scene, duration: float | None = None) -> None:
         context = execution_context(scene)
-        if context is None:
-            raise RuntimeError(
-                "live execution currently supports typed static geometry/native Text, "
-                "canonical scalar ValueTracker tracks, and predeclared property callbacks"
-            )
         self._scene = scene
         if duration is None:
             handoff = context.liveHandoffDuration()
@@ -2456,11 +2449,6 @@ def _declare_live_transform_to(
     ``LiveExecution.play``.
     """
     context = execution_context(self)
-    if context is None:
-        raise RuntimeError(
-            "live animation currently supports typed static geometry/native Text, "
-            "canonical scalar ValueTracker tracks, and predeclared property callbacks"
-        )
     if not isinstance(source, _base.Mobject) or source._scene is not self:
         raise ValueError("live animation source must belong to this Scene")
     if not isinstance(target, _base.Mobject) or target._scene is not None:
