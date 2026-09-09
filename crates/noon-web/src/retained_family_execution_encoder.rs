@@ -409,8 +409,8 @@ impl From<RetainedFamilyExecutionTransportError> for RetainedFamilyExecutionEnco
 mod tests {
     use noon_core::{
         FamilyAnimationMode, FamilyAnimationState, GeometryRef, ObjectContentRef, ObjectId,
-        RateFunction, RetainedFamilyAnimationPlanBuilder, RetainedObjectDefinition, SemanticStore,
-        Style, TextResourceArena, Transform2D,
+        RateFunction, RetainedFamilyAnimationPlanBuilder, SemanticStore, Style, TextResourceArena,
+        Transform2D,
     };
     use noon_runtime::{FrameObjectState, FrameState};
 
@@ -432,9 +432,22 @@ mod tests {
         FrameState,
         Vec<Option<FamilyAnimationState>>,
     ) {
-        let first = RetainedObjectDefinition::geometry(ObjectId::new(10), GeometryRef::circle(1.0));
-        let second =
-            RetainedObjectDefinition::geometry(ObjectId::new(11), GeometryRef::circle(2.0));
+        let first = noon_runtime::FrameObjectState {
+            id: ObjectId::new(10),
+            content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+            transform: noon_core::Transform2D::IDENTITY,
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
+        let second = noon_runtime::FrameObjectState {
+            id: ObjectId::new(11),
+            content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
+            transform: noon_core::Transform2D::IDENTITY,
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
         let mut semantics = SemanticStore::new();
         let first_leaf = semantics.insert_authoring_object();
         let second_leaf = semantics.insert_authoring_object();
@@ -443,8 +456,12 @@ mod tests {
         semantics.add_member(family, second_leaf).unwrap();
         let texts = TextResourceArena::new();
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&semantics, family).unwrap();
-        builder.accept_leaf(first_leaf, &first, &texts).unwrap();
-        builder.accept_leaf(second_leaf, &second, &texts).unwrap();
+        builder
+            .accept_leaf(first_leaf, first.id, &first.content, &texts)
+            .unwrap();
+        builder
+            .accept_leaf(second_leaf, second.id, &second.content, &texts)
+            .unwrap();
         let plan = builder.finish().unwrap();
 
         let frame = FrameState {

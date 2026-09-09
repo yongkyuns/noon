@@ -89,9 +89,9 @@ mod tests {
     use noon_core::{
         FamilyAnimationMode, FamilyAnimationState, FontFaceIdentity, GeometryRef, GlyphRun,
         ObjectContentRef, ObjectId, PositionedGlyph, RateFunction, Rect,
-        RetainedFamilyAnimationPlanBuilder, RetainedObjectDefinition, SemanticStore, Style,
-        TextAffineTransform, TextClusterIdentity, TextDirection, TextRenderItem, TextResource,
-        TextResourceArena, TextSourceKind, TextSourceSpan, Transform2D, Vec2,
+        RetainedFamilyAnimationPlanBuilder, SemanticStore, Style, TextAffineTransform,
+        TextClusterIdentity, TextDirection, TextRenderItem, TextResource, TextResourceArena,
+        TextSourceKind, TextSourceSpan, Transform2D, Vec2,
     };
 
     use crate::{FrameObjectState, FrameState};
@@ -168,12 +168,29 @@ mod tests {
 
         let mut texts = TextResourceArena::new();
         let text_handle = texts.insert(text_resource()).unwrap();
-        let text = RetainedObjectDefinition::text(ObjectId::new(10), text_handle);
-        let circle =
-            RetainedObjectDefinition::geometry(ObjectId::new(11), GeometryRef::circle(1.0));
+        let text = crate::FrameObjectState {
+            id: ObjectId::new(10),
+            content: noon_core::ObjectContentRef::Text(text_handle),
+            transform: noon_core::Transform2D::IDENTITY,
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
+        let circle = crate::FrameObjectState {
+            id: ObjectId::new(11),
+            content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+            transform: noon_core::Transform2D::IDENTITY,
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&store, family).unwrap();
-        builder.accept_leaf(text_leaf, &text, &texts).unwrap();
-        builder.accept_leaf(circle_leaf, &circle, &texts).unwrap();
+        builder
+            .accept_leaf(text_leaf, text.id, &text.content, &texts)
+            .unwrap();
+        builder
+            .accept_leaf(circle_leaf, circle.id, &circle.content, &texts)
+            .unwrap();
         let plan = builder.finish().unwrap();
 
         let frame = FrameState {

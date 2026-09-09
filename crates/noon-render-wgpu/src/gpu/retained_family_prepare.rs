@@ -426,9 +426,9 @@ mod tests {
 
     use noon_core::{
         FamilyAnimationMode, FamilyAnimationState, FontFaceIdentity, GlyphRun, ObjectContentRef,
-        PositionedGlyph, RateFunction, Rect, RetainedFamilyAnimationPlanBuilder,
-        RetainedObjectDefinition, SemanticStore, TextAffineTransform, TextClusterIdentity,
-        TextDirection, TextRenderItem, TextResource, TextSourceKind, TextSourceSpan,
+        PositionedGlyph, RateFunction, Rect, RetainedFamilyAnimationPlanBuilder, SemanticStore,
+        TextAffineTransform, TextClusterIdentity, TextDirection, TextRenderItem, TextResource,
+        TextSourceKind, TextSourceSpan,
     };
     use noon_runtime::{FrameObjectState, FrameState};
 
@@ -456,14 +456,30 @@ mod tests {
         let family = store.insert_family();
         store.add_member(family, first).unwrap();
         store.add_member(family, second).unwrap();
-        let first_object =
-            RetainedObjectDefinition::geometry(ObjectId::new(10), GeometryRef::circle(1.0));
-        let second_object =
-            RetainedObjectDefinition::geometry(ObjectId::new(11), GeometryRef::circle(2.0));
+        let first_object = noon_runtime::FrameObjectState {
+            id: ObjectId::new(10),
+            content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+            transform: noon_core::Transform2D::IDENTITY,
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
+        let second_object = noon_runtime::FrameObjectState {
+            id: ObjectId::new(11),
+            content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
+            transform: noon_core::Transform2D::IDENTITY,
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
         let texts = TextResourceArena::new();
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&store, family).unwrap();
-        builder.accept_leaf(first, &first_object, &texts).unwrap();
-        builder.accept_leaf(second, &second_object, &texts).unwrap();
+        builder
+            .accept_leaf(first, first_object.id, &first_object.content, &texts)
+            .unwrap();
+        builder
+            .accept_leaf(second, second_object.id, &second_object.content, &texts)
+            .unwrap();
         let plan = builder.finish().unwrap();
         let frame = FrameState {
             family_animations: Vec::new(),
@@ -550,9 +566,18 @@ mod tests {
         let text = texts.insert(resource).unwrap();
         let mut store = SemanticStore::new();
         let leaf = store.insert_authoring_object();
-        let object = RetainedObjectDefinition::text(ObjectId::new(20), text);
+        let object = noon_runtime::FrameObjectState {
+            id: ObjectId::new(20),
+            content: noon_core::ObjectContentRef::Text(text),
+            transform: noon_core::Transform2D::IDENTITY,
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&store, leaf).unwrap();
-        builder.accept_leaf(leaf, &object, &texts).unwrap();
+        builder
+            .accept_leaf(leaf, object.id, &object.content, &texts)
+            .unwrap();
         let plan = builder.finish().unwrap();
         let frame = FrameState {
             family_animations: Vec::new(),

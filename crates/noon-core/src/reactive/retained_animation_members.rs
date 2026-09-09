@@ -1,7 +1,7 @@
 use crate::{
     plain_text_animation_members, FamilyAnimationMemberPlanBuilder, FamilyAnimationMemberPlanError,
-    ObjectContentRef, RetainedObjectDefinition, SemanticNodeId, TextAnimationMember,
-    TextAnimationMemberError, TextResourceHandle, TextResourceLookup,
+    ObjectContentRef, ObjectId, SemanticNodeId, TextAnimationMember, TextAnimationMemberError,
+    TextResourceHandle, TextResourceLookup,
 };
 
 /// Lightweight content-local identity for one Manim-visible animation member.
@@ -147,11 +147,12 @@ impl FamilyAnimationMemberPlanBuilder {
     pub fn accept_retained_leaf(
         &mut self,
         semantic_leaf: SemanticNodeId,
-        object: &RetainedObjectDefinition,
+        object: ObjectId,
+        content: &ObjectContentRef,
         texts: &(impl TextResourceLookup + ?Sized),
     ) -> Result<RetainedAnimationMembers, RetainedFamilyAnimationMemberPlanError> {
-        let members = RetainedAnimationMembers::resolve(&object.content, texts)?;
-        self.accept_leaf(semantic_leaf, object.id, members.member_count())?;
+        let members = RetainedAnimationMembers::resolve(content, texts)?;
+        self.accept_leaf(semantic_leaf, object, members.member_count())?;
         Ok(members)
     }
 }
@@ -325,16 +326,17 @@ mod tests {
                 ],
             ))
             .unwrap();
-        let text = RetainedObjectDefinition::text(ObjectId::new(10), text_handle);
-        let circle =
-            RetainedObjectDefinition::geometry(ObjectId::new(11), GeometryRef::circle(1.0));
+        let text_id = ObjectId::new(10);
+        let text = ObjectContentRef::Text(text_handle);
+        let circle_id = ObjectId::new(11);
+        let circle = ObjectContentRef::Geometry(GeometryRef::circle(1.0));
 
         let mut builder = FamilyAnimationMemberPlanBuilder::begin(&store, family).unwrap();
         let text_members = builder
-            .accept_retained_leaf(text_leaf, &text, &texts)
+            .accept_retained_leaf(text_leaf, text_id, &text, &texts)
             .unwrap();
         let circle_members = builder
-            .accept_retained_leaf(circle_leaf, &circle, &texts)
+            .accept_retained_leaf(circle_leaf, circle_id, &circle, &texts)
             .unwrap();
         let plan = builder.finish().unwrap();
 
@@ -368,22 +370,21 @@ mod tests {
             id: TextResourceId::new(99),
             version: 7,
         };
-        let missing_text = RetainedObjectDefinition::text(ObjectId::new(1), missing);
+        let missing_text_id = ObjectId::new(1);
+        let missing_text = ObjectContentRef::Text(missing);
 
         let mut builder = FamilyAnimationMemberPlanBuilder::begin(&store, leaf).unwrap();
         assert_eq!(
-            builder.accept_retained_leaf(leaf, &missing_text, &texts),
+            builder.accept_retained_leaf(leaf, missing_text_id, &missing_text, &texts),
             Err(RetainedFamilyAnimationMemberPlanError::Members(
                 RetainedAnimationMemberError::MissingTextResource(missing)
             ))
         );
 
-        let geometry = RetainedObjectDefinition::geometry(
-            ObjectId::new(2),
-            GeometryRef::line(Vec2::ZERO, Vec2::ONE),
-        );
+        let geometry_id = ObjectId::new(2);
+        let geometry = ObjectContentRef::Geometry(GeometryRef::line(Vec2::ZERO, Vec2::ONE));
         let members = builder
-            .accept_retained_leaf(leaf, &geometry, &texts)
+            .accept_retained_leaf(leaf, geometry_id, &geometry, &texts)
             .unwrap();
         assert_eq!(members.member_count(), 1);
         assert_eq!(builder.finish().unwrap().total_member_count(), 1);

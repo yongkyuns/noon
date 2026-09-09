@@ -1,9 +1,29 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::{
     FamilyAnimationError, FamilyAnimationState, ObjectId, SemanticNodeId, SemanticStore,
     SemanticStoreError,
 };
+
+/// One authoritative semantic-leaf to runtime-object binding carried across authoring.
+///
+/// The binding contains only stable semantic/runtime identity. Content-local members
+/// such as shaped glyphs are resolved from immutable execution resources.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FamilyAnimationLeafBinding {
+    pub semantic_leaf: SemanticNodeId,
+    pub object: ObjectId,
+}
+
+impl FamilyAnimationLeafBinding {
+    pub const fn new(semantic_leaf: SemanticNodeId, object: ObjectId) -> Self {
+        Self {
+            semantic_leaf,
+            object,
+        }
+    }
+}
 
 /// Global animation-member range owned by one semantic leaf/runtime object.
 ///

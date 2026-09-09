@@ -75,8 +75,7 @@ impl std::error::Error for RetainedTextFamilyTransportError {}
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        GeometryRef, ObjectId, RateFunction, RetainedObjectDefinition, TextFamilyAnimationMode,
-        TextResourceHandle, TextResourceId,
+        GeometryRef, RateFunction, TextFamilyAnimationMode, TextResourceHandle, TextResourceId,
     };
 
     use super::*;
@@ -90,11 +89,11 @@ mod tests {
     }
 
     fn geometry_content() -> ObjectContentRef {
-        RetainedObjectDefinition::geometry(ObjectId::new(1), GeometryRef::circle(1.0)).content
+        ObjectContentRef::Geometry(GeometryRef::circle(1.0))
     }
 
     fn text_content() -> ObjectContentRef {
-        RetainedObjectDefinition::text(ObjectId::new(2), text_handle()).content
+        ObjectContentRef::Text(text_handle())
     }
 
     fn state() -> TextFamilyAnimationState {

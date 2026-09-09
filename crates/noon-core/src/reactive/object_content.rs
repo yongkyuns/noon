@@ -1,4 +1,4 @@
-use crate::{GeometryRef, ObjectId, Style, TextResourceHandle, Transform2D};
+use crate::{GeometryRef, TextResourceHandle};
 use crate::{
     SemanticNodeId, SemanticPresentation, SemanticSignalValueKind, SemanticStyle,
     SemanticTransform2_5D, StoredGeometry,
@@ -288,36 +288,6 @@ impl From<TextResourceHandle> for ObjectContentRef {
     }
 }
 
-/// Migration-only compiler input retained while pre-A1 callers still require
-/// legacy `ObjectId`, `Transform2D`, and `Style` values. #959/A4 owns deletion of
-/// this type; it is not a second target semantic object model.
-#[derive(Clone, Debug, PartialEq)]
-pub struct RetainedObjectDefinition {
-    pub id: ObjectId,
-    pub content: ObjectContentRef,
-    pub transform: Transform2D,
-    pub style: Style,
-}
-
-impl RetainedObjectDefinition {
-    pub fn new(id: ObjectId, content: impl Into<ObjectContentRef>) -> Self {
-        Self {
-            id,
-            content: content.into(),
-            transform: Transform2D::default(),
-            style: Style::default(),
-        }
-    }
-
-    pub fn geometry(id: ObjectId, geometry: GeometryRef) -> Self {
-        Self::new(id, geometry)
-    }
-
-    pub fn text(id: ObjectId, text: TextResourceHandle) -> Self {
-        Self::new(id, text)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,14 +427,14 @@ mod tests {
     }
 
     #[test]
-    fn legacy_text_object_keeps_only_the_versioned_resource_handle() {
+    fn text_content_keeps_only_the_versioned_resource_handle() {
         let handle = TextResourceHandle {
             arena: 0,
             id: TextResourceId::new(11),
             version: 4,
         };
-        let retained = RetainedObjectDefinition::text(ObjectId::new(3), handle);
-        assert_eq!(retained.content.text(), Some(handle));
-        assert_eq!(retained.content.geometry(), None);
+        let retained = ObjectContentRef::Text(handle);
+        assert_eq!(retained.text(), Some(handle));
+        assert_eq!(retained.geometry(), None);
     }
 }
