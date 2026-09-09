@@ -9,6 +9,7 @@ concurrency:
   cancel-in-progress: true
 env:
   PRODUCT_HEAD: a6155ac6f96788d257102b956cbbd4d7fd469e66
+  CURRENT_BASE: 5b56124312657c0959e1ca3936930cad0fe7e240
   CARGO_BUILD_JOBS: '2'
   CARGO_INCREMENTAL: '0'
   CARGO_PROFILE_DEV_DEBUG: '0'
@@ -17,20 +18,25 @@ env:
   SCCACHE_GHA_ENABLED: 'true'
   SCCACHE_GHA_RW_MODE: READ_ONLY
 jobs:
-  typed-example-assertion:
+  integrate-focus:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
           ref: a6155ac6f96788d257102b956cbbd4d7fd469e66
           fetch-depth: 0
-      - name: Use the published typed failure in the existing paired example
+      - name: Integrate pinned master and correct the typed assertion
         run: |
           set -euo pipefail
-          mkdir -p /tmp/r2a-assertion
+          mkdir -p /tmp/r2a-landing
           test "$(git rev-parse HEAD)" = "$PRODUCT_HEAD"
           git diff --exit-code
+          git config user.name 'Noon development tooling'
+          git config user.email 'development@noon.invalid'
+          printf '%s\n%s\n' "$PRODUCT_HEAD" "$CURRENT_BASE" > /tmp/r2a-landing/inputs.txt
+          git archive "$CURRENT_BASE" | gzip > /tmp/r2a-landing/base.tar.gz
+          git merge --no-commit --no-ff "$CURRENT_BASE" > /tmp/r2a-landing/merge.log 2>&1 || { cat /tmp/r2a-landing/merge.log; exit 1; }
           python3 - <<'PY'
           from pathlib import Path
           path = Path('crates/noon/src/example_scenes.rs')
@@ -46,11 +52,14 @@ jobs:
           path.write_text(text.replace(old, new))
           PY
           cargo fmt --all
-          git diff --check
-          test "$(git diff --name-only)" = crates/noon/src/example_scenes.rs
-          git diff > /tmp/r2a-assertion/candidate.patch
-          git config user.name 'Noon development tooling'
-          git config user.email 'development@noon.invalid'
+          git add -u
+          git diff --cached --check
+          # Independent mapped domains, Python, runner and root-domain fix are retained.
+          git diff --exit-code "$CURRENT_BASE" -- crates/noon-web/src/authoring_error.rs crates/noon-web/src/semantic_execution_player.rs crates/noon-compile/src/semantic_lowering/root_order.rs crates/noon/src/execution_session/callback.rs scripts/typed-authoring-errors-smoke.mjs web/python
+          git -c commit.gpgSign=false commit -m 'fix: integrate current master and exercise typed callback assertion (#1354)'
+          git show -s --format='%H %T %P' HEAD > /tmp/r2a-landing/candidate.txt
+          git diff "$CURRENT_BASE" HEAD --stat > /tmp/r2a-landing/stat.txt
+          git diff "$PRODUCT_HEAD" HEAD --stat > /tmp/r2a-landing/integration-stat.txt
       - uses: actions/cache@v6
         with:
           path: |
@@ -63,45 +72,43 @@ jobs:
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
-      - name: Execute the actual example continuation and its typed recovery regression
-        run: |
-          set -o pipefail
-          cargo test -p noon --no-default-features --lib ordinary_callback_continuation_uses_ordered_shared_barriers -- --exact 2>&1 | tee /tmp/r2a-assertion/example.log
-          # Use the module-qualified exact test and assert it executed, not a zero-match filter.
-          cargo test -p noon --no-default-features --lib example_scenes::tests::ordinary_callback_continuation_uses_ordered_shared_barriers -- --exact 2>&1 | tee /tmp/r2a-assertion/exact-example.log
-          grep -q '1 passed; 0 failed; 0 ignored' /tmp/r2a-assertion/exact-example.log
-          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --test object_authoring_errors 2>&1 | tee /tmp/r2a-assertion/object-errors.log
-          cargo fmt --all -- --check
-          bash scripts/check.sh architecture "$PRODUCT_HEAD" > /tmp/r2a-assertion/architecture.log 2>&1
-      - name: Compile existing native and direct-WASM callers
-        run: |
-          cargo clippy -p noon --no-default-features --all-targets -- -D warnings > /tmp/r2a-assertion/native.log 2>&1 || { tail -180 /tmp/r2a-assertion/native.log; exit 1; }
-          cargo check -p noon-web --all-features --target wasm32-unknown-unknown > /tmp/r2a-assertion/wasm.log 2>&1 || { tail -180 /tmp/r2a-assertion/wasm.log; exit 1; }
-      - name: Publish the single assertion change after focused qualification
+      - name: Execute the exact continuation test and independent typed consumers
         run: |
           set -euo pipefail
-          git add crates/noon/src/example_scenes.rs
-          git diff --cached --check
-          test "$(git diff --cached --name-only)" = crates/noon/src/example_scenes.rs
-          git -c commit.gpgSign=false commit -m 'test: match typed placement rejection in the paired callback example (#1354)'
-          test "$(git rev-parse HEAD^)" = "$PRODUCT_HEAD"
+          cargo test -p noon --no-default-features --lib example_scenes::continuation_tests::ordinary_callback_continuation_uses_ordered_shared_barriers -- --exact 2>&1 | tee /tmp/r2a-landing/continuation.log
+          grep -q '1 passed; 0 failed; 0 ignored' /tmp/r2a-landing/continuation.log
+          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests > /tmp/r2a-landing/consumers.log 2>&1 || { tail -180 /tmp/r2a-landing/consumers.log; exit 1; }
+          cargo test -p noon --no-default-features --test family_callback_paint --test root_order_alias_regressions --test root_order_acceptance --test root_order_transaction_regressions > /tmp/r2a-landing/integration-tests.log 2>&1 || { tail -180 /tmp/r2a-landing/integration-tests.log; exit 1; }
+      - name: Check all existing Rust and WASM callers before full qualification
+        run: |
+          cargo check --workspace --all-targets --all-features > /tmp/r2a-landing/native.log 2>&1 || { tail -200 /tmp/r2a-landing/native.log; exit 1; }
+          cargo check -p noon-web --all-features --target wasm32-unknown-unknown > /tmp/r2a-landing/wasm.log 2>&1 || { tail -200 /tmp/r2a-landing/wasm.log; exit 1; }
+          cargo fmt --all -- --check
+          bash scripts/check.sh architecture "$CURRENT_BASE" > /tmp/r2a-landing/architecture.log 2>&1 || { tail -150 /tmp/r2a-landing/architecture.log; exit 1; }
+      - name: Retain focused candidate for review without moving the product branch
+        run: |
+          set -euo pipefail
           git diff --exit-code
-          git push origin HEAD:refs/heads/codex/1292-r2a-typed-producers
-          git show -s --format='%H %T %P' HEAD > /tmp/r2a-assertion/published.txt
-          cat /tmp/r2a-assertion/published.txt
-      - name: Preserve source and qualification evidence
+          git push origin HEAD:refs/heads/codex/1354-qualified-integration
+          git show -s --format='%H %T %P' HEAD > /tmp/r2a-landing/published.txt
+      - name: Preserve exact source and logs even on failure
         if: always()
         run: |
-          mkdir -p /tmp/r2a-assertion
-          git add crates/noon/src/example_scenes.rs
-          git write-tree > /tmp/r2a-assertion/tree.txt
-          git archive "$(git write-tree)" | gzip > /tmp/r2a-assertion/source.tar.gz
-          git diff --cached "$PRODUCT_HEAD" > /tmp/r2a-assertion/final.patch
-          rustc --version > /tmp/r2a-assertion/toolchain.txt
+          mkdir -p /tmp/r2a-landing
+          git status --short > /tmp/r2a-landing/status.txt
+          git ls-files -u > /tmp/r2a-landing/conflicts.txt
+          git diff "$CURRENT_BASE" > /tmp/r2a-landing/candidate.patch
+          tar --exclude=.git --exclude=target --exclude=node_modules --exclude=ci-artifacts --exclude=browser-smoke-artifacts -czf /tmp/r2a-landing/working-tree.tar.gz .
+          if test -z "$(git ls-files -u)"; then
+            git add -u
+            git write-tree > /tmp/r2a-landing/tree.txt
+            git archive "$(git write-tree)" | gzip > /tmp/r2a-landing/source.tar.gz
+          fi
+          rustc --version > /tmp/r2a-landing/toolchain.txt
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r2a-typed-example-qualification
-          path: /tmp/r2a-assertion
+          name: r2a-landing-focused
+          path: /tmp/r2a-landing
           retention-days: 3
           if-no-files-found: error
