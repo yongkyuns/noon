@@ -1,0 +1,29 @@
+# Distinct identity/revision/lifetime domains; not one global generation counter.
+...@_style
+
+direction: down
+main: "COHERENT STATE / LIFETIME PATH" {
+  grid-columns: 4
+  horizontal-gap: 72
+  scene: "SceneRevision\ncommitted authored state" {class: authority}
+  execution: "ExecutionRevision\nderived projection" {class: authority}
+  frame: "FrameEpoch\neffective publication" {class: authority}
+  submit: "SubmissionSerial\nGPU lifetime / retirement" {class: node}
+  scene -> execution: "derive / prepare"
+  execution -> frame: "evaluate / publish"
+  frame -> submit: "submit referenced resources"
+}
+contexts: "OTHER DISTINCT DOMAINS" {
+  grid-columns: 4
+  horizontal-gap: 38
+  identity: "NodeId generation\nidentity validity" {class: node}
+  resource: "ResourceVersion\nimmutable content" {class: node}
+  input: "InputSequence\nordered ingress" {class: node}
+  callback: "CallbackEpoch\nordered host context" {class: node}
+}
+contexts.identity -> main.scene: "valid handles" {style.stroke-dash: 4}
+contexts.resource -> main.frame: "referenced version" {style.stroke-dash: 4}
+contexts.input -> main.frame: "staged event context" {style.stroke-dash: 4}
+contexts.callback -> main.frame: "apply only if current" {style.stroke-dash: 4}
+note: "Different domains are never compared merely because they are integers.\nLate async/callback/resource results carry the exact context needed to prove applicability." {class: note}
+main -> note: {style.opacity: 0}
