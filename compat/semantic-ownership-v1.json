@@ -9,6 +9,12 @@
     "shared-rust"
   ],
   "duplicate_debt_budgets": [
+    {"path": "web/python/noon.py", "token": "def _bounds(", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/noon.py", "token": "def _raw_mobject(", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_phase_b.py", "token": "_vector_path_world_bounds", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_phase_b.py", "token": "_manim_layout_bounds", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_semantic_handles.py", "token": "_ORIGINAL_CURRENT_RAW", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_geometry.py", "token": "_legacy_world_point", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_noon_ir.py", "token": "class Scene", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_noon_ir.py", "token": "_tracks", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/noon.py", "token": "_tracks", "maximum": 0, "migration_issue": "#61"},
@@ -51,9 +57,9 @@
     {"path": "web/python/_manim_updaters.py", "token": "_ir.Mobject(", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_noon_ir.py", "token": "copy.deepcopy", "maximum": 4, "migration_issue": "#61"},
     {"path": "web/python/_noon_ir.py", "token": "_snapshot_for_object_at", "maximum": 0, "migration_issue": "#61"},
-    {"path": "web/python/noon.py", "token": "copy.deepcopy", "maximum": 3, "migration_issue": "#61"},
+    {"path": "web/python/noon.py", "token": "copy.deepcopy", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/noon.py", "token": "_snapshot_for_object_at", "maximum": 0, "migration_issue": "#61"},
-    {"path": "web/python/noon.py", "token": "_ir.Mobject(", "maximum": 1, "migration_issue": "#61"}
+    {"path": "web/python/noon.py", "token": "_ir.Mobject(", "maximum": 0, "migration_issue": "#61"}
   ],
   "operations": [
     {
@@ -134,22 +140,18 @@
     {
       "id": "mobject.scene-layout-query",
       "surface": "Scene-bound Mobject.center/width/height/critical_point",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_layout_bounds/_layout_center/_width/_height/_critical fallbacks"},
-      "shared_owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::center/width/height/critical_point"},
-      "reason": "Legacy or dynamically evaluated wrappers without a current shared handle still evaluate layout from a Python snapshot; ordinary canonical scene-bound handles query the Rust node directly.",
-      "replacement": "Remove the remaining legacy/dynamic fallback after those evaluated values are exposed through shared semantic handles.",
-      "migration_issue": "#61"
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::center/width/height/critical_point"},
+      "reason": "Ordinary layout reads typed shared authored/live observations. Missing typed observations fail explicitly; Python curve extrema and raw bounds fallback are deleted.",
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_layout_bounds/_bound_layout_observation"}]
     },
     {
       "id": "geometry.path-layout-query",
       "surface": "Vector-path and Manim-specialized geometry layout bounds",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_phase_b.py", "symbol": "_vector_path_world_bounds/_manim_layout_bounds"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/reactive/semantic_model.rs", "symbol": "semantic_path_bounds"},
-      "reason": "Canonical geometry handles query arena-owned paths in Rust. Legacy specialized-geometry fallback code still evaluates vector-path extrema and Manim-specific control-hull bounds in Python.",
-      "replacement": "Represent compatibility bounds policy in Rust and expose the resulting layout bounds through semantic handles.",
-      "migration_issue": "#61"
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-core/src/reactive/semantic_model.rs", "symbol": "semantic_path_bounds"},
+      "reason": "Ordinary layout reads typed shared authored/live observations. Missing typed observations fail explicitly; Python curve extrema and raw bounds fallback are deleted.",
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_layout_bounds/_bound_layout_observation"}]
     },
     {
       "id": "mobject.next-to",
@@ -361,13 +363,11 @@
     },
     {
       "id": "scene-bound-dynamic-state",
-      "surface": "Detached raw geometry fallback",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/noon.py", "symbol": "Mobject._current_raw/_apply"},
-      "shared_owner": {"language": "rust", "path": "crates/noon-core/src/semantic_store.rs", "symbol": "SemanticStore/SemanticNode"},
-      "reason": "Detached raw geometry fallback remains until all standalone constructors and getters require shared Rust handles. The Python Scene and timeline engine has been deleted.",
-      "replacement": "Require shared Rust handles for all detached geometry construction, queries and edits; retain only inert language arguments in Python.",
-      "migration_issue": "#61"
+      "surface": "Detached semantic state",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon-core/src/semantic_store.rs", "symbol": "SemanticStore/SemanticNode"},
+      "reason": "Detached wrappers require shared Rust construction; Python retains no raw geometry state and rejects raw replacement.",
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_init/_apply"}]
     },
     {
       "id": "authoring-copy-snapshot",
@@ -379,13 +379,11 @@
     },
     {
       "id": "authoring-copy-evaluated-fallback",
-      "surface": "Mobject.copy / animate target seed after dynamic or raw scene-owned state",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_clone_mobject fallback"},
-      "shared_owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::target_editor"},
-      "reason": "When the persistent authoring handle is deliberately stale because runtime/raw state was not mirrored, Python still materializes the evaluated scene snapshot to seed a new detached shared handle.",
-      "replacement": "Expose shared evaluated scene handles so dynamic state can clone directly without snapshot materialization.",
-      "migration_issue": "#61"
+      "surface": "Callback-bound copy and target capture",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::target_editor"},
+      "reason": "Outside an active callback phase, copies use the shared live target editor; missing/stale handles and active-phase copies fail without snapshot materialization.",
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_clone_mobject/_canonical_target_editor_source"}]
     },
     {
       "id": "group-family",

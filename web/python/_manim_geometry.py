@@ -71,34 +71,13 @@ class Triangle(_compat.Path):
         super().__init__(path.close(), **kwargs)
 
 
-def _legacy_world_point(mobject: _base.Mobject, point: _base.Vec2) -> _base.Vec2:
-    """Retained-only world transform fallback owned for deletion by #959."""
-    raw = mobject._current_raw()
-    transform = raw.transform
-    sx = float(transform["scale"]["x"])
-    sy = float(transform["scale"]["y"])
-    rotation = float(transform["rotation"])
-    tx = float(transform["translation"]["x"])
-    ty = float(transform["translation"]["y"])
-    x = point.x * sx
-    y = point.y * sy
-    cosine = math.cos(rotation)
-    sine = math.sin(rotation)
-    return _base.Vec2(
-        x * cosine - y * sine + tx,
-        x * sine + y * cosine + ty,
-    )
-
-
 def _line_get_start(self: _compat.Line) -> _base.Vec2:
     import _manim_semantic_handles as shared
 
     observed = shared._manim_line_endpoints_observation(self)
     if observed is not None:
         return _base.Vec2(float(observed.startX), float(observed.startY))
-    raw = self._current_raw()
-    point = raw.geometry["line"]["start"]
-    return _legacy_world_point(self, _base.Vec2(float(point["x"]), float(point["y"])))
+    raise RuntimeError("Mobject observation requires the shared Rust authoring host")
 
 
 def _line_get_end(self: _compat.Line) -> _base.Vec2:
@@ -107,9 +86,7 @@ def _line_get_end(self: _compat.Line) -> _base.Vec2:
     observed = shared._manim_line_endpoints_observation(self)
     if observed is not None:
         return _base.Vec2(float(observed.endX), float(observed.endY))
-    raw = self._current_raw()
-    point = raw.geometry["line"]["end"]
-    return _legacy_world_point(self, _base.Vec2(float(point["x"]), float(point["y"])))
+    raise RuntimeError("Mobject observation requires the shared Rust authoring host")
 
 
 def _mobject_get_color(self: _base.Mobject) -> _base.Color:
@@ -123,17 +100,7 @@ def _mobject_get_color(self: _base.Mobject) -> _base.Color:
             float(observed.blue),
             float(observed.alpha),
         )
-    style = self._current_raw().style
-    for channel in ("stroke", "fill"):
-        color = style.get(channel)
-        if color is not None:
-            return _base.Color(
-                float(color["red"]),
-                float(color["green"]),
-                float(color["blue"]),
-                float(color.get("alpha", 1.0)),
-            )
-    return _base.WHITE
+    raise RuntimeError("Mobject observation requires the shared Rust authoring host")
 
 
 def _group_get_color(self: _compat.Group) -> _base.Color:
@@ -315,27 +282,7 @@ class ApplyMethod:
 
 
 def _bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
-    """Use wrapper-specific Manim layout bounds while preserving flat runtime data."""
-
-    leaves = _compat._leaf_mobjects(value)
-    bounds: list[tuple[_base.Vec2, _base.Vec2]] = []
-    for member in leaves:
-        custom = getattr(member, "_manim_layout_bounds", None)
-        bound = custom() if callable(custom) else _base._bounds(member._current_raw())
-        if bound is not None:
-            bounds.append(bound)
-    if not bounds:
-        return None
-    return (
-        _base.Vec2(
-            min(bound[0].x for bound in bounds),
-            min(bound[0].y for bound in bounds),
-        ),
-        _base.Vec2(
-            max(bound[1].x for bound in bounds),
-            max(bound[1].y for bound in bounds),
-        ),
-    )
+    raise RuntimeError("family layout requires the shared Rust authoring host")
 
 
 def match_points(self: _base.Mobject, mobject: object) -> _base.Mobject:

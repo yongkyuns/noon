@@ -19,6 +19,7 @@ class ManimApplyMethodResolutionTests(unittest.TestCase):
 
         source = textwrap.dedent(
             """
+            from _typed_geometry_test_support import identity_only_wrapper as identity
             import _manim_compat
             _manim_compat.install()
             import _manim_phase_b  # noqa: F401
@@ -26,7 +27,7 @@ class ManimApplyMethodResolutionTests(unittest.TestCase):
 
             from noon import Dot
 
-            dot = Dot()
+            dot = identity(Dot)
             assert dot.set_color.__name__ == "_vmobject_set_color"
             assert _manim_geometry._public_bound_method_name(dot, dot.set_color) == "set_color"
             assert _manim_geometry._public_bound_method_name(dot, dot.shift) == "shift"

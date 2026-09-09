@@ -173,10 +173,6 @@ except ImportError:  # Native CPython tests install explicit bridge fixtures.
     _new_membership_batch = None
 
 _INSTALLED = False
-_ORIGINAL_INIT = _base.Mobject.__init__
-_ORIGINAL_CURRENT_RAW = _base.Mobject._current_raw
-_ORIGINAL_APPLY = _base.Mobject._apply
-_ORIGINAL_GET_CENTER = _base.Mobject.get_center
 _ORIGINAL_SHIFT = _base.Mobject.shift
 _ORIGINAL_MOVE_TO = _base.Mobject.move_to
 _ORIGINAL_SCALE = _base.Mobject.scale
@@ -230,10 +226,8 @@ def _handle_for(value: object):
         return None
     if not bool(getattr(value, "_semantic_handle_fresh", False)):
         return None
-    # Once a bound object has arbitrary host updater state attached, the authoritative
-    # frame value is the runtime callback snapshot rather than this deterministic
-    # authoring handle. Detached objects still need the handle to materialize their
-    # initial scene snapshot before the runtime callback path exists.
+    # Callback-bound objects read coherent runtime rows through the callback
+    # adapter. Detached objects always query their authored Rust handle.
     if _is_bound(value) and hasattr(value, "_noon_updaters"):
         return None
     return getattr(value, "_semantic_handle", None)
@@ -364,19 +358,12 @@ def _canonical_target_editor_source(value: object):
     return context, handle
 
 
-def _has_shared_layout_queries(handle: object) -> bool:
-    return handle is not None and all(
-        hasattr(handle, name)
-        for name in ("centerX", "centerY", "width", "height", "criticalX", "criticalY")
-    )
-
-
 def _layout_bounds(value: _base.Mobject) -> tuple[_base.Vec2, _base.Vec2] | None:
     """Read exact world-space layout bounds from a detached shared handle."""
 
     handle = _handle_for(value)
-    if not _has_shared_layout_queries(handle):
-        return _base._bounds(value._current_raw())
+    if handle is None:
+        raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
     return (
         _base.Vec2(
             float(handle.criticalX(-1.0, 0.0)),
@@ -391,13 +378,8 @@ def _layout_bounds(value: _base.Mobject) -> tuple[_base.Vec2, _base.Vec2] | None
 
 def _layout_center(value: _base.Mobject) -> _base.Vec2:
     handle = _handle_for(value)
-    if not _has_shared_layout_queries(handle):
-        raw = value._current_raw()
-        bounds = _base._bounds(raw)
-        if bounds is not None:
-            return (bounds[0] + bounds[1]) * 0.5
-        translation = raw.transform["translation"]
-        return _base.Vec2(float(translation["x"]), float(translation["y"]))
+    if handle is None:
+        raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
     return _base.Vec2(float(handle.centerX), float(handle.centerY))
 
 
@@ -771,16 +753,12 @@ def _line_init(
 
 
 def _init(self: _base.Mobject, raw: _ir.Mobject) -> None:
-    _ORIGINAL_INIT(self, raw)
-    if _create_geometry_handle is not None:
-        handle, context = _consume_geometry_options(_geometry_options_from_raw(raw))
-        self._semantic_handle = handle
-        self._semantic_handle_fresh = True
-        if context is not None:
-            self._canonical_live_target_context = context
-        # The handle is now authoritative for detached state. Keeping a second Python
-        # snapshot here would recreate exactly the ownership split #61 is removing.
-        self._raw = None
+    if _create_geometry_handle is None:
+        raise RuntimeError("Mobject construction requires the shared Rust authoring host")
+    handle, context = _consume_geometry_options(_geometry_options_from_raw(raw))
+    _attach_shared_handle(self, handle)
+    if context is not None:
+        self._canonical_live_target_context = context
 
 
 def _current_raw(self: _base.Mobject) -> _ir.Mobject:
@@ -791,23 +769,13 @@ def _current_raw(self: _base.Mobject) -> _ir.Mobject:
     handle = _handle_for(self)
     if handle is not None:
         return _raw_from_json(str(handle.snapshotJson()))
-    return _ORIGINAL_CURRENT_RAW(self)
+    raise RuntimeError("Mobject queries require a current shared Rust semantic handle")
 
 
 def _apply(self: _base.Mobject, raw: _ir.Mobject) -> _base.Mobject:
-    handle = _handle_for(self)
-    if handle is not None:
-        del raw
-        raise NotImplementedError(
-            "typed Mobjects do not support raw replacement; use a shared semantic operation"
-        )
-    result = _ORIGINAL_APPLY(self, raw)
-    if _is_bound(self):
-        # Arbitrary raw/geometry replacement bypasses the typed shared mutation API.
-        # Keep correctness by switching future copy/animate seeding to the evaluated
-        # scene snapshot until a shared geometry operation owns this path too.
-        self._semantic_handle_fresh = False
-    return result
+    raise NotImplementedError(
+        "raw replacement is unsupported; use a shared semantic operation"
+    )
 
 
 def _clone_mobject(
@@ -835,7 +803,7 @@ def _clone_mobject(
         if context is not None:
             clone._canonical_live_target_context = context
     else:
-        _init(clone, self._current_raw())
+        raise RuntimeError("Mobject copy requires a current shared Rust semantic handle")
 
     excluded = {
         "_raw",
@@ -869,8 +837,7 @@ def _copy_mobject(self: _base.Mobject) -> _base.Mobject:
 def _target_mobject(self: _base.Mobject) -> _base.Mobject:
     """Clone a detached target through Rust's explicit target-editor boundary."""
 
-    # Group/VGroup inherit the Mobject protocol but intentionally retain their
-    # Python-owned family copy path until shared family handles land under #61.
+    # Family wrappers use the shared family-copy operation installed on Group.
     if not hasattr(self, "_scene") or not hasattr(self, "_object"):
         return self.copy()
     return _clone_mobject(self, target_state=True)
@@ -883,14 +850,14 @@ def _get_center(self: _base.Mobject) -> _base.Vec2:
     handle = _handle_for(self)
     if handle is not None:
         return _layout_center(self)
-    return _ORIGINAL_GET_CENTER(self)
+    raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
 
 
 def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
     """Read a leaf critical point from the authoritative semantic layout."""
     axis = _compat._as_vec2(direction)
     if isinstance(self, _compat.Group):
-        # Shared family layout is the separate #61 migration; Group has no leaf binding.
+        # Groups query their shared family handle rather than a leaf binding.
         return _compat._critical_for(self, axis)
     observed = _bound_layout_observation(self)
     if observed is not None:
@@ -906,10 +873,9 @@ def _width(self: _base.Mobject) -> float:
     if observed is not None:
         return float(observed.width)
     handle = _handle_for(self)
-    if _has_shared_layout_queries(handle):
+    if handle is not None:
         return float(handle.width)
-    bounds = _base._bounds(self._current_raw())
-    return 0.0 if bounds is None else bounds[1].x - bounds[0].x
+    raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
 
 
 def _height(self: _base.Mobject) -> float:
@@ -917,10 +883,9 @@ def _height(self: _base.Mobject) -> float:
     if observed is not None:
         return float(observed.height)
     handle = _handle_for(self)
-    if _has_shared_layout_queries(handle):
+    if handle is not None:
         return float(handle.height)
-    bounds = _base._bounds(self._current_raw())
-    return 0.0 if bounds is None else bounds[1].y - bounds[0].y
+    raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
 
 
 def _set_width_property(self: _base.Mobject, width: float) -> None:
@@ -1198,12 +1163,12 @@ def _replace(
 
 def _critical(value: _base.Mobject, direction: _base.Vec2) -> _base.Vec2:
     handle = _handle_for(value)
-    if _has_shared_layout_queries(handle):
+    if handle is not None:
         return _base.Vec2(
             float(handle.criticalX(direction.x, direction.y)),
             float(handle.criticalY(direction.x, direction.y)),
         )
-    return _base._critical(value._current_raw(), direction)
+    raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
 
 
 def _semantic_member_index(index):
@@ -1728,8 +1693,6 @@ def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
                 _base.Vec2(float(layout.criticalX(-1.0, 0.0)), float(layout.criticalY(0.0, -1.0))),
                 _base.Vec2(float(layout.criticalX(1.0, 0.0)), float(layout.criticalY(0.0, 1.0))),
             )
-    leaves = _compat._leaf_mobjects(value)
-
     # Rust observes the complete semantic family directly. The wrapper list only
     # selects whether this caller is eligible for the shared query.
     if isinstance(value, _compat.Group):
@@ -1747,30 +1710,16 @@ def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
                 ),
             )
 
-    # Host-dynamic/stale bound leaves intentionally retain the evaluated-snapshot
-    # fallback until runtime family queries exist. Deterministic shared handles do
-    # not execute this aggregation path.
-    present: list[tuple[_base.Vec2, _base.Vec2]] = []
-    for member in leaves:
-        handle = _handle_for(member)
-        if handle is not None:
-            bounds = _layout_bounds(member)
-        else:
-            bounds = _base._bounds(member._current_raw())
-        if bounds is not None:
-            present.append(bounds)
-    if not present:
-        return None
-    return (
-        _base.Vec2(
-            min(bound[0].x for bound in present),
-            min(bound[0].y for bound in present),
-        ),
-        _base.Vec2(
-            max(bound[1].x for bound in present),
-            max(bound[1].y for bound in present),
-        ),
-    )
+    if isinstance(value, _base.Mobject) and not isinstance(value, _compat.Group):
+        observed = _bound_layout_observation(value)
+        if observed is not None:
+            return (
+                _base.Vec2(float(observed.criticalX(-1.0, 0.0)), float(observed.criticalY(0.0, -1.0))),
+                _base.Vec2(float(observed.criticalX(1.0, 0.0)), float(observed.criticalY(0.0, 1.0))),
+            )
+        return _layout_bounds(value)
+    raise RuntimeError("family layout requires a current shared Rust semantic handle")
+
 
 def _family_member_handle(value: object) -> tuple[str | None, object | None]:
     if isinstance(value, _compat.Group):

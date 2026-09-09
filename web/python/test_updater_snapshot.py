@@ -6,6 +6,7 @@ import _manim_compat as compat
 import _manim_typst as typst
 import _manim_updaters as updaters
 from _test_manim_membership import install_test_membership
+from _typed_geometry_test_support import identity_only_wrapper
 
 
 def _object(index: int) -> dict:
@@ -60,7 +61,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             compat.VMobject.set_opacity = semantic_handles._set_opacity
             updaters.install()
         scene = updaters._base.Scene()
-        mobject = compat.Circle(1.0)
+        mobject = identity_only_wrapper(compat.Circle)
         scene.add(mobject)
         mobject._semantic_handle = type(
             "SemanticHandle", (), {"semanticSlot": 11, "semanticGeneration": 3}
@@ -305,7 +306,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         import _manim_semantic_handles as semantic_handles
 
         scene = updaters._base.Scene()
-        circle = compat.Circle(1.0)
+        circle = identity_only_wrapper(compat.Circle)
         scene.add(circle)
         source_handle = object()
         target_handle = object()
@@ -370,11 +371,11 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
                 mobject.rotate(0.5)
             with self.assertRaises(NotImplementedError):
                 mobject.scale(2.0)
-            with self.assertRaises(NotImplementedError):
+            with self.assertRaisesRegex(RuntimeError, "shared Rust"):
                 mobject.width
             with self.assertRaises(NotImplementedError):
                 mobject.geometry
-            with self.assertRaises(NotImplementedError):
+            with self.assertRaisesRegex(NotImplementedError, "callback raw geometry"):
                 mobject.copy()
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
@@ -407,7 +408,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         import _manim_shared_geometry
 
         scene, _, context = self._mobject_and_context()
-        line = compat.Line((0.0, 0.0, 0.0), (1.0, 0.0, 0.0))
+        line = identity_only_wrapper(compat.Line)
         scene.add(line)
         line._semantic_handle = type(
             "SemanticHandle", (), {"semanticSlot": 11, "semanticGeneration": 3}

@@ -187,3 +187,10 @@ def install_option_factory(fake_js, name, factory) -> None:
         name,
         staticmethod(lambda *args: _options_from_result(factory(*args))),
     )
+
+
+def identity_only_wrapper(cls, **metadata):
+    """Inert identity for Python request/coercion tests; provides no semantics."""
+    wrapper = object.__new__(cls)
+    wrapper.__dict__.update(_scene=None, _object=None, **metadata)
+    return wrapper

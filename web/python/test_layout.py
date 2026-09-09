@@ -31,40 +31,6 @@ class PublicAuthoringTests(unittest.TestCase):
         self.assertEqual(BLUE, color_from_hex("#58C4DD"))
         self.assertEqual(RED, color_from_hex(0xFC6255))
 
-    def test_next_to_uses_object_bounds_and_default_buffer(self) -> None:
-        circle = Circle(1.0)
-        square = Square(1.0).next_to(circle, RIGHT)
-
-        circle_right = circle.get_center().x + circle.width / 2.0
-        square_left = square.get_center().x - square.width / 2.0
-        self.assertAlmostEqual(
-            square_left - circle_right,
-            DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
-        )
-
-    def test_vgroup_arrange_uses_bounds_not_fixed_slots(self) -> None:
-        small = Circle(0.25)
-        large = Circle(0.75)
-        square = Square(0.5)
-        group = VGroup(small, large, square).arrange(RIGHT, buff=0.4)
-
-        self.assertEqual(len(group), 3)
-        self.assertAlmostEqual(
-            large.get_center().x - large.width / 2.0 - (small.get_center().x + small.width / 2.0),
-            0.4,
-        )
-        self.assertAlmostEqual(
-            square.get_center().x - square.width / 2.0 - (large.get_center().x + large.width / 2.0),
-            0.4,
-        )
-        self.assertAlmostEqual(group.get_center().x, 0.0)
-
-    def test_to_corner_uses_shared_logical_frame(self) -> None:
-        square = Square(1.0).to_corner(UR)
-        self.assertAlmostEqual(square.get_center().y + 0.5, 4.0 - DEFAULT_MOBJECT_TO_EDGE_BUFFER)
-
-
-
 
 if __name__ == "__main__":
     unittest.main()

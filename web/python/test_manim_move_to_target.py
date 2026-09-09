@@ -17,20 +17,21 @@ class ManimMoveToTargetTests(unittest.TestCase):
         source = textwrap.dedent(
             f"""
             import runpy
+            from _typed_geometry_test_support import identity_only_wrapper as identity
             import _manim_compat; _manim_compat.install()
             from _test_manim_membership import install_test_membership
             install_test_membership(_manim_compat)
             import _manim_rate_functions; _manim_rate_functions.install()
             from noon import Circle, MoveToTarget, RIGHT, Scene, Transform, UP, VGroup
 
-            missing = Circle()
+            missing = identity(Circle)
             try:
                 MoveToTarget(missing)
                 raise AssertionError("missing target must fail")
             except ValueError as error:
                 assert str(error) == "MoveToTarget called on mobject without attribute 'target'"
 
-            group = VGroup(Circle(), Circle())
+            group = identity(VGroup, submobjects=[])
             group.generate_target = lambda: None
             try:
                 MoveToTarget(group)

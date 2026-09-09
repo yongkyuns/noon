@@ -206,21 +206,7 @@ def _leaf_mobjects(value: object) -> list[_BaseMobject]:
 
 
 def _bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
-    leaves = _leaf_mobjects(value)
-    bounds = [_base._bounds(member._current_raw()) for member in leaves]
-    present = [bound for bound in bounds if bound is not None]
-    if not present:
-        return None
-    return (
-        _base.Vec2(
-            min(bound[0].x for bound in present),
-            min(bound[0].y for bound in present),
-        ),
-        _base.Vec2(
-            max(bound[1].x for bound in present),
-            max(bound[1].y for bound in present),
-        ),
-    )
+    raise RuntimeError("family layout requires the shared Rust authoring host")
 
 
 def _critical_for(value: object, direction: _base.Vec2) -> _base.Vec2:
@@ -890,7 +876,7 @@ def _mobject_become(
         match_center=match_center,
         stretch=stretch,
     )
-    return self._apply(_base._raw_mobject(target._current_raw()))
+    raise RuntimeError("Mobject become requires the shared Rust authoring host")
 
 
 def _mobject_replace(
