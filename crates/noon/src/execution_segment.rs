@@ -1,9 +1,8 @@
-use crate::{
-    CallbackAdvance, EvaluationError, ExecutionSession, ExecutionSessionCallbackError, FrameState,
-    RuntimeIdentity, TimelineWakeState,
-};
+use crate::execution_session::CallbackAdvance;
+use crate::{EvaluationError, ExecutionSession, ExecutionSessionCallbackError};
 use noon_compile::SemanticAnimationCompletion;
 use noon_core::{ObjectId, Property, SemanticNodeId, TrackId};
+use noon_runtime::{FrameState, RuntimeIdentity, TimelineWakeState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ExecutionSegmentSequence(u64);

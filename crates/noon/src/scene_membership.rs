@@ -25,7 +25,7 @@ pub(crate) fn prepare_scene_membership(
     request: SceneMembershipRequest<'_>,
 ) -> Result<SemanticMutationTransaction, String> {
     let validate = |member: MobjectFamilyMember<'_>| -> Result<SemanticNodeId, String> {
-        if !Rc::ptr_eq(owner, member.store()) {
+        if !Rc::ptr_eq(owner, member.integration_store()) {
             return Err("membership target belongs to another scene store".into());
         }
         member.validate()?;

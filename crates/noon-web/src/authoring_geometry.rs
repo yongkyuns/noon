@@ -312,7 +312,7 @@ pub struct WasmAuthoringVectorPath {
 }
 
 fn point(x: f64, y: f64) -> Result<Vec2, JsValue> {
-    let value = noon::semantic_mobject::authoring_xy_f64(x, y).map_err(js_error)?;
+    let value = noon::integration::authoring_xy_f64(x, y).map_err(js_error)?;
     Ok(Vec2::new(value.x as f32, value.y as f32))
 }
 

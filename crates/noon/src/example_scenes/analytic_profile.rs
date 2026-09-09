@@ -1,9 +1,12 @@
 //! Analytic workloads for native/direct-WASM profiling, paired with `analytic_profile.py`.
 
 use crate::{
-    AnimationOptions, CompositionTimeMap, ExecutionSession, MobjectFamilyMember, RateFunction,
-    Scene, SemanticAnimationCompositionKind, SemanticAnimationIntent, SemanticMutationTransaction,
-    SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticVec3, TrackTiming,
+    AnimationOptions, ExecutionSession, MobjectFamilyMember, RateFunction, Scene,
+    SemanticAnimationCompositionKind, SemanticVec3,
+};
+use noon_core::{
+    CompositionTimeMap, SemanticAnimationIntent, SemanticMutationTransaction,
+    SemanticObjectTrackProperty, SemanticObjectTrackValues, TrackTiming,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,7 +111,7 @@ pub fn session(
         CompositionTimeMap::identity(),
     );
     let committed = transaction
-        .apply(&mut scene.store().borrow_mut())
+        .apply(&mut scene.integration_store().borrow_mut())
         .map_err(|error| error.to_string())?;
     let root = scene.declare_animation(
         SemanticAnimationIntent::Composition {

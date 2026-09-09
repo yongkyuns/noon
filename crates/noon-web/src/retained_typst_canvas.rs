@@ -1,6 +1,7 @@
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use noon::{MathTypst, RetainedScene, Typst};
+    use noon::integration::RetainedScene;
+    use noon::{MathTypst, Typst};
     use noon_core::Vec2;
     use noon_render_wgpu::{Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState};
     use noon_runtime::SceneInstance;

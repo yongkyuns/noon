@@ -12,11 +12,12 @@ use noon_core::{
     NativeEventOccurrence, NativeInputValue, NativeStateSource, PublicationContext, Rect,
 };
 
+use crate::execution_session::ExecutionViewportQuery;
 use crate::{
     ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentState, ExecutionSession,
-    ExecutionSessionInputError, ExecutionViewportQuery, FrameState, LiveSession,
-    RendererPublication, RustHostCallbackError, RustHostCallbackTable, Scene,
+    ExecutionSessionInputError, LiveSession, RustHostCallbackError, RustHostCallbackTable, Scene,
 };
+use noon_runtime::{FrameState, RendererPublication};
 
 /// One application-authored continuation result.
 ///
@@ -170,7 +171,7 @@ impl<C: LiveContinuation> LiveProgram<C> {
     /// An already-at-end segment still requests one immediate drive so exact-time
     /// callbacks and shared completion cannot be skipped merely because the
     /// underlying tokenless wait already reports a complete interval.
-    pub fn wake_state(&self) -> crate::RuntimeWakeState {
+    pub fn wake_state(&self) -> noon_runtime::RuntimeWakeState {
         let wake = self.session.wake_state();
         let LiveProgramPhase::Awaiting(segment) = self.phase else {
             // Only an awaited segment authorizes authored-time advancement.
@@ -180,7 +181,7 @@ impl<C: LiveContinuation> LiveProgram<C> {
             return wake.without_timeline_wake();
         };
         let timeline = if self.session.frame().time >= segment.end_time() {
-            crate::TimelineWakeState::Deadline(self.session.frame().time)
+            noon_runtime::TimelineWakeState::Deadline(self.session.frame().time)
         } else {
             self.session.segment_state(segment).timeline()
         };
@@ -377,7 +378,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::TimelineWakeState;
+    use noon_runtime::TimelineWakeState;
 
     struct AnimatedContinuation {
         source: crate::Mobject,
@@ -568,12 +569,12 @@ mod tests {
 
         let (scene, session, pending) = scene_with_pending_segment();
         let pending_token = pending.token().unwrap();
-        let stale_sequence = crate::ExecutionSegmentSequence::new(
+        let stale_sequence = crate::execution_segment::ExecutionSegmentSequence::new(
             pending_token.sequence().get().checked_add(1).unwrap(),
         );
         let stale = ExecutionSegment::from_duration(pending.start_time(), pending.duration())
             .unwrap()
-            .with_completion_token(crate::ExecutionSegmentToken::new(
+            .with_completion_token(crate::execution_segment::ExecutionSegmentToken::new(
                 session.runtime_identity(),
                 stale_sequence,
             ));
@@ -623,7 +624,10 @@ mod tests {
         let LiveProgramStatus::Awaiting(waiting) = program.status() else {
             panic!("wait continuation must expose its shared deadline")
         };
-        assert_eq!(waiting.timeline(), crate::TimelineWakeState::Deadline(1.0));
+        assert_eq!(
+            waiting.timeline(),
+            noon_runtime::TimelineWakeState::Deadline(1.0)
+        );
         program
             .drive_to(&mut RustHostCallbackTable::new(), 0.5)
             .unwrap();
@@ -678,7 +682,7 @@ mod tests {
         assert!(state.is_complete());
         assert_eq!(
             program.wake_state().timeline(),
-            crate::TimelineWakeState::Deadline(0.0)
+            noon_runtime::TimelineWakeState::Deadline(0.0)
         );
         assert_eq!(*resumes.borrow(), 1);
         assert_eq!(
@@ -699,7 +703,9 @@ mod tests {
         scene.add(&object).unwrap();
         let mut registration = SemanticMutationTransaction::new();
         registration.add_updater(object.node_id(), CALLBACK, 0.0, None);
-        registration.apply(&mut scene.store().borrow_mut()).unwrap();
+        registration
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let resumes = Rc::new(RefCell::new(0));
         let mut program = scene
             .into_live_program(WaitContinuation {
@@ -734,7 +740,9 @@ mod tests {
         scene.add(&object).unwrap();
         let mut registration = SemanticMutationTransaction::new();
         registration.add_updater(object.node_id(), CALLBACK, 0.0, None);
-        registration.apply(&mut scene.store().borrow_mut()).unwrap();
+        registration
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let callback_count = Rc::new(RefCell::new(0));
         let mut callbacks = RustHostCallbackTable::new();
         let observed_count = Rc::clone(&callback_count);

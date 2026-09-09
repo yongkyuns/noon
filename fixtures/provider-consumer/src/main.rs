@@ -1,5 +1,6 @@
 //! Identical geometry workload for every measured provider configuration.
-use noon::{Scene, TextResource, Vec2};
+use noon::integration::TextResource;
+use noon::{Scene, Vec2};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
@@ -18,7 +19,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     assert_eq!(session.frame().objects.len(), 1);
     assert!(session.frame().objects[0].geometry().is_some());
-    assert!(scene.store().borrow().text_resources().is_empty());
+    assert!(scene
+        .integration_store()
+        .borrow()
+        .text_resources()
+        .is_empty());
     // Shared text contracts remain available even when no provider is selected.
     let _: Option<TextResource> = None;
     std::hint::black_box(session.frame().objects.len());

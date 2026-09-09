@@ -26,10 +26,13 @@ impl Default for Scene {
 }
 impl Scene {
     pub fn new() -> Self {
-        Self::with_store(Rc::new(RefCell::new(SemanticStore::new())))
+        Self::with_integration_store(Rc::new(RefCell::new(SemanticStore::new())))
     }
     /// Integration entry point for language wrappers sharing one semantic arena.
-    pub fn with_store(store: Rc<RefCell<SemanticStore>>) -> Self {
+    ///
+    /// Creates a new root in the existing arena. It does not attach an existing
+    /// session or publish changes into one; see [`crate::integration`].
+    pub fn with_integration_store(store: Rc<RefCell<SemanticStore>>) -> Self {
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_node(SemanticNodeCreation::family());
         let result = transaction
@@ -44,10 +47,26 @@ impl Scene {
             cursor: 0.0,
         }
     }
-    /// Integration access; handles reject stale identities after external edits.
-    pub fn store(&self) -> &Rc<RefCell<SemanticStore>> {
+    /// Raw shared arena access for explicit integration, not live mutation.
+    ///
+    /// External edits can invalidate generational handles and leave an existing
+    /// execution session on a stale scene revision. Use `Scene::live` and its
+    /// coherent publication operations for edits after lowering. No revision
+    /// validation is bypassed by this accessor; see [`crate::integration`].
+    pub fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
         &self.store
     }
+    /// Current authored revision without exposing mutable arena access.
+    pub fn revision(&self) -> noon_core::SceneRevision {
+        self.store.borrow().scene_revision()
+    }
+
+    /// Construct detached geometry through the shared authoring implementation.
+    /// Use `LiveSession::create_manim_geometry` after initial lowering instead.
+    pub fn geometry(&self, options: crate::ManimGeometryOptions) -> Result<Mobject, String> {
+        Mobject::from_manim_geometry(Rc::clone(&self.store), options)
+    }
+
     pub fn root(&self) -> SemanticNodeId {
         self.root
     }
@@ -129,7 +148,7 @@ impl Scene {
         .map(|_| ())
     }
     pub(crate) fn require_object(&self, object: &Mobject) -> Result<(), String> {
-        if !Rc::ptr_eq(&self.store, object.store()) {
+        if !Rc::ptr_eq(&self.store, object.integration_store()) {
             return Err("mobject belongs to another scene store".into());
         }
         object.validate()

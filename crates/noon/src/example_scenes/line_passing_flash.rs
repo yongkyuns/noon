@@ -91,7 +91,7 @@ pub fn program() -> Result<LiveProgram<LinePassingFlash>, String> {
     options.disable_fill();
     options.set_stroke_color(0.0, 1.0, 1.0, 1.0)?;
     options.set_stroke_width(0.08)?;
-    let line = Mobject::from_manim_geometry(Rc::clone(scene.store()), options)?;
+    let line = Mobject::from_manim_geometry(Rc::clone(scene.integration_store()), options)?;
     let identity = line.node_id();
     scene
         .into_live_program(LinePassingFlash {

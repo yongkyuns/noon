@@ -14,7 +14,7 @@ impl Scene {
     /// transformable Mobject; its role only tells lowering which effective transform supplies the
     /// renderer viewport.
     pub fn camera_frame(&mut self) -> Result<Mobject, String> {
-        let store = self.store().borrow();
+        let store = self.integration_store().borrow();
         let root_is_empty = store
             .node(self.root())
             .ok_or("scene root is unavailable")?
@@ -38,7 +38,7 @@ impl Scene {
         let frame = transaction.create_node(SemanticNodeCreation::object(state));
         transaction.add_member(self.root(), frame);
         let result = transaction
-            .apply(&mut self.store().borrow_mut())
+            .apply(&mut self.integration_store().borrow_mut())
             .map_err(|error| error.to_string())?;
         let id = result
             .resolve(frame)
@@ -50,7 +50,7 @@ impl Scene {
                 SemanticMutationImpact::FamilyMemberAdded { .. }
             ]
         ));
-        Mobject::from_node(std::rc::Rc::clone(self.store()), id)
+        Mobject::from_node(std::rc::Rc::clone(self.integration_store()), id)
     }
 }
 
@@ -66,23 +66,31 @@ mod tests {
     #[test]
     fn camera_creation_is_atomic_unique_and_uses_the_scene_identity_space() {
         let mut scene = Scene::new();
-        let revision = scene.store().borrow().scene_revision();
+        let revision = scene.integration_store().borrow().scene_revision();
         let frame = scene.camera_frame().unwrap();
         let state = frame.state().unwrap();
         assert_eq!(state.role(), SemanticObjectRole::Camera2D);
         assert_eq!(state.style.object_opacity, 0.0);
         assert_eq!(
-            scene.store().borrow().node(scene.root()).unwrap().members(),
+            scene
+                .integration_store()
+                .borrow()
+                .node(scene.root())
+                .unwrap()
+                .members(),
             [frame.node_id()]
         );
-        assert_ne!(scene.store().borrow().scene_revision(), revision);
+        assert_ne!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
 
-        let before = scene.store().borrow().scene_revision();
+        let before = scene.integration_store().borrow().scene_revision();
         assert_eq!(
             scene.camera_frame().unwrap_err(),
             "2D camera frame must be created before scene content"
         );
-        assert_eq!(scene.store().borrow().scene_revision(), before);
+        assert_eq!(scene.integration_store().borrow().scene_revision(), before);
     }
 
     #[test]
@@ -90,15 +98,20 @@ mod tests {
         let mut scene = Scene::new();
         let square = scene.square(2.0).unwrap();
         scene.add(&square).unwrap();
-        let before = scene.store().borrow().scene_revision();
+        let before = scene.integration_store().borrow().scene_revision();
 
         assert_eq!(
             scene.camera_frame().unwrap_err(),
             "2D camera frame must be created before scene content"
         );
-        assert_eq!(scene.store().borrow().scene_revision(), before);
+        assert_eq!(scene.integration_store().borrow().scene_revision(), before);
         assert_eq!(
-            scene.store().borrow().node(scene.root()).unwrap().members(),
+            scene
+                .integration_store()
+                .borrow()
+                .node(scene.root())
+                .unwrap()
+                .members(),
             [square.node_id()]
         );
     }

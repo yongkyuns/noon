@@ -1,4 +1,4 @@
-use noon::semantic_mobject::ManimNextToArgs;
+use noon::ManimNextToArgs;
 use noon::{AnimationOptions, LiveLayoutTarget as Target, RateFunction, Scene};
 
 fn close(actual: f64, expected: f64) {
@@ -34,7 +34,7 @@ fn family_queries_mix_effective_and_detached_bounds_without_mutation() {
     let mut live = scene.live(&mut execution);
     let segment = live.play_animation(&animation).unwrap();
     live.advance_segment_to(segment, 1.0).unwrap();
-    let revision = scene.store().borrow().scene_revision();
+    let revision = scene.integration_store().borrow().scene_revision();
     let halfway = live.effective_family_layout(&aliases).unwrap();
     close(halfway.center.0, 6.0);
     close(halfway.width, 9.0);
@@ -43,7 +43,10 @@ fn family_queries_mix_effective_and_detached_bounds_without_mutation() {
         live.effective_family_layout(&empty).unwrap().center,
         (0.0, 0.0)
     );
-    assert_eq!(scene.store().borrow().scene_revision(), revision);
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        revision
+    );
     assert!(live
         .move_family_to(&aliases, Target::Point(0.0, 0.0), (0.0, 0.0), (1.0, 1.0))
         .is_err());
@@ -74,13 +77,13 @@ fn relative_placement_uses_shared_masks_targets_and_one_local_publication() {
     execution.take_frame_changes();
     {
         let mut live = scene.live(&mut execution);
-        let before = scene.store().borrow().scene_revision();
+        let before = scene.integration_store().borrow().scene_revision();
         let result = live
             .move_family_to(&family, Target::Point(4.0, 9.0), (1.0, 0.0), (1.0, 0.0))
             .unwrap();
         assert_eq!(result.impacts().len(), 2);
         assert_eq!(
-            scene.store().borrow().scene_revision(),
+            scene.integration_store().borrow().scene_revision(),
             before.checked_next().unwrap()
         );
         live.next_family_to(
@@ -112,7 +115,7 @@ fn empty_foreign_stale_and_unpublished_families_obey_query_and_mutation_validati
     let foreign = other.family(&[]).unwrap();
     let stale = scene.family(&[]).unwrap();
     scene
-        .store()
+        .integration_store()
         .borrow_mut()
         .remove_node(stale.node_id())
         .unwrap();

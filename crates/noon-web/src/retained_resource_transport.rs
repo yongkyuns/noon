@@ -1523,7 +1523,8 @@ impl TransportTextLayoutBackendKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use noon::{MathTypst, RetainedScene, Typst};
+    use noon::integration::RetainedScene;
+    use noon::{MathTypst, Typst};
     use noon_core::TextSourceKind;
 
     fn text_handles(scene: &RetainedScene) -> Vec<TextResourceHandle> {

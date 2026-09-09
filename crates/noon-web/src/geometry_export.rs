@@ -18,7 +18,7 @@ pub(crate) fn mobject_fields(
         StoredGeometry::Rectangle { size } => GeometryRef::Rectangle { size },
         StoredGeometry::Line { start, end } => GeometryRef::Line { start, end },
         StoredGeometry::Resource(handle) => match object
-            .store()
+            .integration_store()
             .borrow()
             .geometry_resources()
             .get(handle)
@@ -77,7 +77,7 @@ mod tests {
         let scene = noon::Scene::new();
         let object = scene.circle(1.0).unwrap();
         scene
-            .store()
+            .integration_store()
             .borrow_mut()
             .remove_node(object.node_id())
             .unwrap();

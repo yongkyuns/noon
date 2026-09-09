@@ -17,7 +17,7 @@ fn family_surrounding_rectangle_uses_the_authoritative_bounds_union() {
     let bounds = family.layout_bounds().unwrap().unwrap();
 
     let surround = Mobject::from_manim_geometry(
-        Rc::clone(scene.store()),
+        Rc::clone(scene.integration_store()),
         ManimGeometryOptions::surrounding_rectangle(bounds, 0.25, 0.5, 0.0).unwrap(),
     )
     .unwrap();
@@ -36,7 +36,7 @@ fn family_background_rectangle_preserves_union_style() {
     let bounds = family.layout_bounds().unwrap().unwrap();
 
     let background = Mobject::from_manim_geometry(
-        Rc::clone(scene.store()),
+        Rc::clone(scene.integration_store()),
         ManimGeometryOptions::background_rectangle(bounds, 0.0, 0.0, 0.0, 0.75).unwrap(),
     )
     .unwrap();
@@ -68,12 +68,12 @@ fn one_leaf_family_matcher_matches_the_object_bounds_route() {
     assert_eq!(family_bounds, object_bounds);
 
     let object_matcher = Mobject::from_manim_geometry(
-        Rc::clone(scene.store()),
+        Rc::clone(scene.integration_store()),
         ManimGeometryOptions::surrounding_rectangle(object_bounds, 0.25, 0.5, 0.1).unwrap(),
     )
     .unwrap();
     let family_matcher = Mobject::from_manim_geometry(
-        Rc::clone(scene.store()),
+        Rc::clone(scene.integration_store()),
         ManimGeometryOptions::surrounding_rectangle(family_bounds, 0.25, 0.5, 0.1).unwrap(),
     )
     .unwrap();

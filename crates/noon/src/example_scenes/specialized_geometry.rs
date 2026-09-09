@@ -7,7 +7,7 @@ use crate::{ExecutionSession, Mobject, MobjectFamilyMember, Scene};
 /// A grid of nine geometry constructors, paired with `specialized_geometry.py`.
 pub fn session() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
-    let store = || Rc::clone(scene.store());
+    let store = || Rc::clone(scene.integration_store());
     let dot = Mobject::manim_dot(store(), -4.0, 2.0, 0.3)?;
     let mut triangle = Mobject::manim_triangle(store())?;
     triangle.shift(0.0, 2.0)?;

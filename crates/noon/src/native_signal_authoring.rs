@@ -134,7 +134,7 @@ impl Scene {
         signal: &NativeVectorSignal,
     ) -> Result<(), String> {
         self.require_object(object)?;
-        signal.0.require_store(self.store())?;
+        signal.0.require_store(self.integration_store())?;
         self.bind_signal(
             object,
             signal.node_id(),
@@ -144,14 +144,14 @@ impl Scene {
 
     /// Bind a scalar input/event counter to rotation around the semantic z axis.
     pub fn bind_rotation(&self, object: &Mobject, signal: &ValueTracker) -> Result<(), String> {
-        signal.require_store(self.store())?;
+        signal.require_store(self.integration_store())?;
         self.require_object(object)?;
         self.bind_signal(object, signal.node_id(), SemanticObjectProperty::RotationZ)
     }
 
     /// Bind a scalar input to the object's composed opacity.
     pub fn bind_opacity(&self, object: &Mobject, signal: &ValueTracker) -> Result<(), String> {
-        signal.require_store(self.store())?;
+        signal.require_store(self.integration_store())?;
         self.require_object(object)?;
         self.bind_signal(
             object,
@@ -162,7 +162,7 @@ impl Scene {
 
     /// Bind a native bool state to whether the object participates in rendering.
     pub fn bind_presence(&self, object: &Mobject, signal: &NativeBoolSignal) -> Result<(), String> {
-        signal.0.require_store(self.store())?;
+        signal.0.require_store(self.integration_store())?;
         self.require_object(object)?;
         self.bind_signal(object, signal.node_id(), SemanticObjectProperty::Presence)
     }
@@ -195,7 +195,7 @@ impl Scene {
         initial: SemanticSignalValue,
         source: SemanticNativeInputSource,
     ) -> Result<(Rc<RefCell<SemanticStore>>, SemanticNodeId), String> {
-        let store = Rc::clone(self.store());
+        let store = Rc::clone(self.integration_store());
         let creation = noon_core::SemanticNodeCreation::native_input_signal(initial, source)
             .map_err(|error| error.to_string())?;
         let mut transaction = SemanticMutationTransaction::new();
@@ -216,7 +216,7 @@ impl Scene {
         signal: SemanticNodeId,
         property: SemanticObjectProperty,
     ) -> Result<(), String> {
-        self.store()
+        self.integration_store()
             .borrow_mut()
             .bind_semantic_signal(signal, object.node_id(), property)
             .map(|_| ())
@@ -244,16 +244,16 @@ mod tests {
     fn stale_scene_rejects_native_input_creation_without_allocating_a_signal() {
         let scene = Scene::new();
         scene
-            .store()
+            .integration_store()
             .borrow_mut()
             .remove_node(scene.root())
             .unwrap();
         let before = {
-            let store = scene.store().borrow();
+            let store = scene.integration_store().borrow();
             (store.len(), store.scene_revision())
         };
         assert!(scene.control_signal("gain", 1.0).is_err());
-        let store = scene.store().borrow();
+        let store = scene.integration_store().borrow();
         assert_eq!((store.len(), store.scene_revision()), before);
     }
 
@@ -277,7 +277,7 @@ mod tests {
         let wheel = scene.wheel_events().unwrap();
         let commit = scene.control_commit_events("opacity").unwrap();
 
-        let store = scene.store().borrow();
+        let store = scene.integration_store().borrow();
         assert_eq!(
             store
                 .semantic_signal_state(key.node_id())
@@ -348,11 +348,11 @@ mod tests {
     #[test]
     fn invalid_names_and_foreign_handles_fail_before_semantic_mutation() {
         let scene = Scene::new();
-        let before = scene.store().borrow().slot_capacity();
+        let before = scene.integration_store().borrow().slot_capacity();
         assert!(scene.key_state_signal(" ", false).is_err());
         assert!(scene.control_signal("", 1.0).is_err());
         assert!(scene.control_commit_events("\t").is_err());
-        assert_eq!(scene.store().borrow().slot_capacity(), before);
+        assert_eq!(scene.integration_store().borrow().slot_capacity(), before);
 
         let mut foreign = Scene::new();
         let object = foreign.square(1.0).unwrap();
@@ -360,7 +360,7 @@ mod tests {
         let pointer = scene.pointer_position_signal().unwrap();
         assert!(foreign.bind_native_translation(&object, &pointer).is_err());
         assert!(foreign
-            .store()
+            .integration_store()
             .borrow()
             .semantic_object_signal_bindings(object.node_id())
             .unwrap()

@@ -9,6 +9,7 @@
 mod family_layout;
 pub use family_layout::LiveLayoutTarget;
 
+use crate::execution_session::EffectiveSemanticObject;
 use crate::{
     family_arrangement::FamilyArrangePlan,
     semantic_mobject::{authoring_render_f64, prepare_become_state, stage_state_changes},
@@ -17,7 +18,7 @@ use crate::{
         edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
         edit_stroke_opacity,
     },
-    DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentAdvanceError,
+    DeclaredAnimation, ExecutionSegment, ExecutionSegmentAdvanceError,
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError,
     ManimBecomeOptions, ManimLineEndpoints, Mobject, MobjectFamily, MobjectFamilyMember,
@@ -2280,14 +2281,14 @@ impl<'a> LiveSession<'a> {
     }
 
     fn require_mobject(&self, mobject: &Mobject) -> Result<(), LiveSessionError> {
-        if !Rc::ptr_eq(self.store, mobject.store()) {
+        if !Rc::ptr_eq(self.store, mobject.integration_store()) {
             return Err(LiveSessionError::ForeignMobjectStore);
         }
         mobject.validate().map_err(LiveSessionError::Mobject)
     }
 
     fn require_family(&self, family: &MobjectFamily) -> Result<(), LiveSessionError> {
-        if !Rc::ptr_eq(self.store, family.store()) {
+        if !Rc::ptr_eq(self.store, family.integration_store()) {
             return Err(LiveSessionError::ForeignMobjectStore);
         }
         family.validate().map_err(LiveSessionError::Mobject)
@@ -2297,7 +2298,8 @@ impl<'a> LiveSession<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CallbackAdvance, ExecutionSessionCreateError, Scene};
+    use crate::execution_session::CallbackAdvance;
+    use crate::{ExecutionSessionCreateError, Scene};
     use noon_core::{
         AnimationOptions, Color, HostCallbackId, RateFunction, SemanticPaint, SemanticVec3,
     };
@@ -2398,7 +2400,9 @@ mod tests {
         scene.add(&circle).unwrap();
         let mut callbacks = SemanticMutationTransaction::new();
         callbacks.add_updater(circle.node_id(), HostCallbackId::new(9), 0.0, None);
-        callbacks.apply(&mut scene.store().borrow_mut()).unwrap();
+        callbacks
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
 
         let mut session = scene.execution_session().unwrap();
         let mut live = scene.live(&mut session);
@@ -2900,7 +2904,11 @@ mod tests {
         let anchor = scene.circle(0.5).unwrap();
         scene.add(&anchor).unwrap();
         let mut session = scene.execution_session().unwrap();
-        let before_resources = scene.store().borrow().geometry_resources().len();
+        let before_resources = scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len();
         let path = crate::ManimGeometryOptions::path(
             VectorPath::new()
                 .move_to(Vec2::ZERO)
@@ -2908,7 +2916,7 @@ mod tests {
         )
         .unwrap();
 
-        Mobject::manim_circle(Rc::clone(scene.store()), 0.1).unwrap();
+        Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.1).unwrap();
         let mut live = scene.live(&mut session);
         assert!(matches!(
             live.create_manim_geometry(path),
@@ -2917,7 +2925,11 @@ mod tests {
             ))
         ));
         assert_eq!(
-            scene.store().borrow().geometry_resources().len(),
+            scene
+                .integration_store()
+                .borrow()
+                .geometry_resources()
+                .len(),
             before_resources
         );
     }
@@ -3160,7 +3172,7 @@ mod tests {
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
         let before = session.publication_context();
-        let before_nodes = circle.store().borrow().len();
+        let before_nodes = circle.integration_store().borrow().len();
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Smooth);
@@ -3182,7 +3194,7 @@ mod tests {
             before.scene_revision().checked_next().unwrap()
         );
         // Two Create leaves and one Parallel root share one semantic publication.
-        assert_eq!(circle.store().borrow().len(), before_nodes + 3);
+        assert_eq!(circle.integration_store().borrow().len(), before_nodes + 3);
         assert!(live.contains(&circle).unwrap());
         assert!(live.contains(&square).unwrap());
         assert_eq!(live.session.frame().objects.len(), 2);
@@ -3202,7 +3214,7 @@ mod tests {
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
         let before = session.publication_context();
-        let before_nodes = circle.store().borrow().len();
+        let before_nodes = circle.integration_store().borrow().len();
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear);
@@ -3224,7 +3236,7 @@ mod tests {
             ))
         ));
         assert_eq!(session.publication_context(), before);
-        assert_eq!(circle.store().borrow().len(), before_nodes);
+        assert_eq!(circle.integration_store().borrow().len(), before_nodes);
         assert!(session.frame().objects.is_empty());
         assert!(session.take_frame_changes().is_empty());
     }
@@ -3283,7 +3295,7 @@ mod tests {
         let mut square = scene.square(1.0).unwrap();
         square.set_translation(2.0, -1.0).unwrap();
         let detached_family = {
-            let mut store = scene.store().borrow_mut();
+            let mut store = scene.integration_store().borrow_mut();
             let family = store.insert_family();
             store.add_member(family, square.node_id()).unwrap();
             family
@@ -3320,7 +3332,7 @@ mod tests {
         assert!(!live.contains(&square).unwrap());
         assert_eq!(square.node_id(), semantic_id);
         assert_eq!(square.state().unwrap(), authored);
-        let store = square.store().borrow();
+        let store = square.integration_store().borrow();
         let parents = store.node(square.node_id()).unwrap().parents();
         assert_eq!(parents.len(), 1);
         assert!(parents.contains(&detached_family));
@@ -3331,7 +3343,7 @@ mod tests {
         let scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let detached_family = {
-            let mut store = scene.store().borrow_mut();
+            let mut store = scene.integration_store().borrow_mut();
             let family = store.insert_family();
             store.add_member(family, square.node_id()).unwrap();
             family
@@ -3363,7 +3375,7 @@ mod tests {
         live.complete_segment(segment).unwrap();
         assert_eq!(square.node_id(), semantic_id);
         {
-            let store = square.store().borrow();
+            let store = square.integration_store().borrow();
             let parents = store.node(square.node_id()).unwrap().parents();
             assert_eq!(parents.len(), 2);
             assert!(parents.contains(&detached_family));
@@ -3411,7 +3423,7 @@ mod tests {
         live.advance_segment_to(shrink, shrink.end_time()).unwrap();
         live.complete_segment(shrink).unwrap();
         assert!(!live.contains(&square).unwrap());
-        let store = square.store().borrow();
+        let store = square.integration_store().borrow();
         let parents = store.node(square.node_id()).unwrap().parents();
         assert_eq!(parents.len(), 1);
         assert!(parents.contains(&detached_family));
@@ -3422,7 +3434,7 @@ mod tests {
         let scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let live_family = {
-            let mut store = scene.store().borrow_mut();
+            let mut store = scene.integration_store().borrow_mut();
             let family = store.insert_family();
             store.add_member(family, square.node_id()).unwrap();
             family
@@ -3432,7 +3444,9 @@ mod tests {
         let mut membership = SemanticMutationTransaction::new();
         membership.add_member(scene.root(), live_family);
         membership.add_member(scene.root(), square.node_id());
-        membership.apply(&mut scene.store().borrow_mut()).unwrap();
+        membership
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
         let before = session.publication_context();
@@ -3464,7 +3478,7 @@ mod tests {
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
         let before = session.publication_context();
-        let before_nodes = square.store().borrow().len();
+        let before_nodes = square.integration_store().borrow().len();
 
         let result = scene
             .live(&mut session)
@@ -3482,7 +3496,7 @@ mod tests {
 
         assert!(matches!(result, Err(LiveSessionError::Activation(_))));
         assert_eq!(session.publication_context(), before);
-        assert_eq!(square.store().borrow().len(), before_nodes);
+        assert_eq!(square.integration_store().borrow().len(), before_nodes);
         assert!(session.frame().objects.is_empty());
         assert!(session.take_frame_changes().is_empty());
     }
@@ -3612,7 +3626,7 @@ mod tests {
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
         let before = session.publication_context();
-        let before_nodes = left.store().borrow().len();
+        let before_nodes = left.integration_store().borrow().len();
 
         let children = [
             TransformToRequest::new(
@@ -3645,7 +3659,7 @@ mod tests {
             before.scene_revision().checked_next().unwrap()
         );
         // Two immutable target snapshots, two leaves, and one root share that commit.
-        assert_eq!(left.store().borrow().len(), before_nodes + 5);
+        assert_eq!(left.integration_store().borrow().len(), before_nodes + 5);
         let publication = live.session.last_structural_publication_stats();
         assert_eq!(publication.preparation.object_states_lowered, 0);
         assert_eq!(publication.entered_objects, 0);
@@ -3793,7 +3807,7 @@ mod tests {
         session.take_frame_changes();
         let before = session.publication_context();
         let before_frame = session.frame().clone();
-        let before_nodes = circle.store().borrow().len();
+        let before_nodes = circle.integration_store().borrow().len();
         let children = [
             TransformToRequest::new(&circle, &first_target, AnimationOptions::new()),
             TransformToRequest::new(&circle, &second_target, AnimationOptions::new()),
@@ -3818,7 +3832,7 @@ mod tests {
         ));
         assert_eq!(session.publication_context(), before);
         assert_eq!(session.frame(), &before_frame);
-        assert_eq!(circle.store().borrow().len(), before_nodes);
+        assert_eq!(circle.integration_store().borrow().len(), before_nodes);
         assert!(session.take_frame_changes().is_empty());
     }
 
@@ -3833,7 +3847,7 @@ mod tests {
         session.take_frame_changes();
         let before = session.publication_context();
         let before_frame = session.frame().clone();
-        let before_nodes = square.store().borrow().len();
+        let before_nodes = square.integration_store().borrow().len();
         let children = [
             AnimationCompositionRequest::TransformTo(TransformToRequest::new(
                 &square,
@@ -3859,7 +3873,7 @@ mod tests {
         assert!(matches!(result, Err(LiveSessionError::ForeignMobjectStore)));
         assert_eq!(session.publication_context(), before);
         assert_eq!(session.frame(), &before_frame);
-        assert_eq!(square.store().borrow().len(), before_nodes);
+        assert_eq!(square.integration_store().borrow().len(), before_nodes);
         assert!(session.take_frame_changes().is_empty());
     }
 
@@ -3872,7 +3886,7 @@ mod tests {
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
         let before = session.publication_context();
-        let before_nodes = line.store().borrow().len();
+        let before_nodes = line.integration_store().borrow().len();
 
         let result = scene
             .live(&mut session)
@@ -3898,7 +3912,7 @@ mod tests {
             ))
         ), "unexpected rejection: {result:?}");
         assert_eq!(session.publication_context(), before);
-        assert_eq!(line.store().borrow().len(), before_nodes);
+        assert_eq!(line.integration_store().borrow().len(), before_nodes);
         assert!(session.frame().objects.is_empty());
         assert!(session.take_frame_changes().is_empty());
     }
@@ -4209,7 +4223,7 @@ mod tests {
             live.complete_segment(segment).unwrap();
             assert_eq!(live.effective(&shape).unwrap().appearance, 1.0);
             assert!(!scene
-                .store()
+                .integration_store()
                 .borrow()
                 .semantic_family_members_checked(scene.root())
                 .unwrap()
@@ -4387,7 +4401,7 @@ mod recursive_composition_tests {
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
         let before = session.publication_context();
-        let before_nodes = first.store().borrow().len();
+        let before_nodes = first.integration_store().borrow().len();
         let request = AnimationCompositionRequest::Composition {
             kind: SemanticAnimationCompositionKind::Sequence,
             options: AnimationOptions::new().rate_func(RateFunction::Smooth),
@@ -4419,7 +4433,7 @@ mod recursive_composition_tests {
             live.session.publication_context().scene_revision(),
             before.scene_revision().checked_next().unwrap()
         );
-        assert_eq!(first.store().borrow().len(), before_nodes + 5);
+        assert_eq!(first.integration_store().borrow().len(), before_nodes + 5);
         assert!(live.contains(&first).unwrap());
         assert!(live.contains(&second).unwrap());
         live.advance_segment_to(segment, segment.end_time())
@@ -4542,7 +4556,7 @@ mod recursive_composition_tests {
         assert!(!live.contains(&fading).unwrap());
         assert!(!live.contains(&companion).unwrap());
         assert!(fading
-            .store()
+            .integration_store()
             .borrow()
             .node(fading.node_id())
             .unwrap()
@@ -4657,7 +4671,7 @@ mod recursive_composition_tests {
         );
         assert_eq!(
             scene
-                .store()
+                .integration_store()
                 .borrow()
                 .semantic_signal_state(tracker.node_id())
                 .unwrap()
@@ -4695,7 +4709,7 @@ mod recursive_composition_tests {
         );
         assert_eq!(
             scene
-                .store()
+                .integration_store()
                 .borrow()
                 .semantic_signal_state(tracker.node_id())
                 .unwrap()
@@ -4705,7 +4719,7 @@ mod recursive_composition_tests {
         );
         assert_eq!(
             scene
-                .store()
+                .integration_store()
                 .borrow()
                 .semantic_input_scalar_value_at(tracker.node_id(), segment.end_time()),
             Ok(4.0)
@@ -4725,10 +4739,10 @@ mod recursive_composition_tests {
     fn invalid_mixed_sibling_rolls_back_tracker_scope_and_object_admission() {
         let scene = Scene::new();
         let square = scene.square(1.0).unwrap();
-        let tracker = ValueTracker::detached(Rc::clone(scene.store()), 0.0).unwrap();
+        let tracker = ValueTracker::detached(Rc::clone(scene.integration_store()), 0.0).unwrap();
         let mut session = scene.execution_session().unwrap();
         let before = session.publication_context();
-        let before_nodes = scene.store().borrow().len();
+        let before_nodes = scene.integration_store().borrow().len();
         let request = AnimationCompositionRequest::Composition {
             kind: SemanticAnimationCompositionKind::Parallel,
             options: AnimationOptions::new(),
@@ -4750,9 +4764,9 @@ mod recursive_composition_tests {
             .declare_and_activate_composition(&request, AnimationOptions::new())
             .is_err());
         assert_eq!(session.publication_context(), before);
-        assert_eq!(scene.store().borrow().len(), before_nodes);
+        assert_eq!(scene.integration_store().borrow().len(), before_nodes);
         assert!(!scene
-            .store()
+            .integration_store()
             .borrow()
             .has_semantic_signal_scope(tracker.node_id()));
         assert!(session.frame().objects.is_empty());
@@ -4761,8 +4775,8 @@ mod recursive_composition_tests {
     #[test]
     fn two_detached_trackers_enroll_in_one_mixed_publication() {
         let scene = Scene::new();
-        let first = ValueTracker::detached(Rc::clone(scene.store()), 1.0).unwrap();
-        let second = ValueTracker::detached(Rc::clone(scene.store()), -2.0).unwrap();
+        let first = ValueTracker::detached(Rc::clone(scene.integration_store()), 1.0).unwrap();
+        let second = ValueTracker::detached(Rc::clone(scene.integration_store()), -2.0).unwrap();
         let mut session = scene.execution_session().unwrap();
         let before = session.publication_context();
         let request = AnimationCompositionRequest::Composition {
@@ -4793,11 +4807,11 @@ mod recursive_composition_tests {
             before.scene_revision().checked_next().unwrap()
         );
         assert!(scene
-            .store()
+            .integration_store()
             .borrow()
             .has_semantic_signal_scope(first.node_id()));
         assert!(scene
-            .store()
+            .integration_store()
             .borrow()
             .has_semantic_signal_scope(second.node_id()));
         assert_eq!(
@@ -4813,8 +4827,8 @@ mod recursive_composition_tests {
     #[test]
     fn invalid_second_detached_tracker_rolls_back_both_enrollments() {
         let scene = Scene::new();
-        let first = ValueTracker::detached(Rc::clone(scene.store()), 1.0).unwrap();
-        let second = ValueTracker::detached(Rc::clone(scene.store()), -2.0).unwrap();
+        let first = ValueTracker::detached(Rc::clone(scene.integration_store()), 1.0).unwrap();
+        let second = ValueTracker::detached(Rc::clone(scene.integration_store()), -2.0).unwrap();
         let mut session = scene.execution_session().unwrap();
         let before = session.publication_context();
         let request = AnimationCompositionRequest::Composition {
@@ -4840,11 +4854,11 @@ mod recursive_composition_tests {
             .is_err());
         assert_eq!(session.publication_context(), before);
         assert!(!scene
-            .store()
+            .integration_store()
             .borrow()
             .has_semantic_signal_scope(first.node_id()));
         assert!(!scene
-            .store()
+            .integration_store()
             .borrow()
             .has_semantic_signal_scope(second.node_id()));
         assert_eq!(session.effective_signal_value(first.node_id()), None);
@@ -4923,7 +4937,7 @@ mod recursive_composition_tests {
             let nested = scene.family(&[(&first).into(), (&second).into()]).unwrap();
             let outer = scene.family(&[(&first).into()]).unwrap();
             scene
-                .store()
+                .integration_store()
                 .borrow_mut()
                 .add_member(outer.node_id(), nested.node_id())
                 .unwrap();
@@ -4984,7 +4998,7 @@ mod recursive_composition_tests {
             .unwrap();
         assert_eq!(
             scene
-                .store()
+                .integration_store()
                 .borrow()
                 .semantic_family_members_checked(scene.root())
                 .unwrap(),
@@ -5017,7 +5031,7 @@ mod recursive_composition_tests {
             .unwrap();
         live.complete_segment(segment).unwrap();
 
-        let store = scene.store().borrow();
+        let store = scene.integration_store().borrow();
         assert!(store
             .semantic_family_members_checked(scene.root())
             .unwrap()
@@ -5068,7 +5082,7 @@ mod recursive_composition_tests {
             .unwrap();
         live.complete_segment(segment).unwrap();
 
-        let store = scene.store().borrow();
+        let store = scene.integration_store().borrow();
         assert_eq!(
             store.semantic_family_members_checked(scene.root()).unwrap(),
             [written.node_id()]
@@ -5110,7 +5124,7 @@ mod recursive_composition_tests {
         assert_eq!(session.publication_context(), before);
         assert_eq!(
             scene
-                .store()
+                .integration_store()
                 .borrow()
                 .semantic_family_members_checked(scene.root())
                 .unwrap(),
@@ -5133,20 +5147,25 @@ mod recursive_composition_tests {
             transaction.add_member(inner, target.node_id());
             let outer = transaction.create_node(noon_core::SemanticNodeCreation::family());
             transaction.add_member(outer, inner);
-            let result = transaction.apply(&mut scene.store().borrow_mut()).unwrap();
-            MobjectFamily::from_node(Rc::clone(scene.store()), result.resolve(outer).unwrap())
-                .unwrap()
+            let result = transaction
+                .apply(&mut scene.integration_store().borrow_mut())
+                .unwrap();
+            MobjectFamily::from_node(
+                Rc::clone(scene.integration_store()),
+                result.resolve(outer).unwrap(),
+            )
+            .unwrap()
         };
         let mut session = scene.execution_session().unwrap();
         let before = session.publication_context();
-        let before_nodes = scene.store().borrow().len();
+        let before_nodes = scene.integration_store().borrow().len();
 
         assert!(scene
             .live(&mut session)
             .declare_and_activate_family_transform_to(&source, &nested, AnimationOptions::new(),)
             .is_err());
         assert_eq!(session.publication_context(), before);
-        assert_eq!(scene.store().borrow().len(), before_nodes);
+        assert_eq!(scene.integration_store().borrow().len(), before_nodes);
     }
 
     #[test]
@@ -5650,10 +5669,14 @@ mod recursive_composition_tests {
         let outer = transaction.create_node(noon_core::SemanticNodeCreation::family());
         transaction.add_member(outer, first.node_id());
         transaction.add_member(outer, nested.node_id());
-        let result = transaction.apply(&mut scene.store().borrow_mut()).unwrap();
-        let outer =
-            MobjectFamily::from_node(Rc::clone(scene.store()), result.resolve(outer).unwrap())
-                .unwrap();
+        let result = transaction
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
+        let outer = MobjectFamily::from_node(
+            Rc::clone(scene.integration_store()),
+            result.resolve(outer).unwrap(),
+        )
+        .unwrap();
 
         assert!(outer.prepare_subset_display().is_err());
         assert_eq!(first.state().unwrap().style.fill_opacity, 1.0);
@@ -5670,7 +5693,7 @@ mod recursive_composition_tests {
             .is_err());
         assert_eq!(session.publication_context(), before);
         assert!(scene
-            .store()
+            .integration_store()
             .borrow()
             .semantic_family_members_checked(scene.root())
             .unwrap()
@@ -5709,7 +5732,7 @@ mod recursive_composition_tests {
             .is_err());
         assert_eq!(session.publication_context(), before);
         assert!(scene
-            .store()
+            .integration_store()
             .borrow()
             .node(family.node_id())
             .unwrap()
@@ -5724,7 +5747,7 @@ mod recursive_composition_tests {
         live.complete_segment(write).unwrap();
         for member in [&left, &right] {
             assert!(noon_core::semantic_scene_root_contains(
-                &scene.store().borrow(),
+                &scene.integration_store().borrow(),
                 scene.root(),
                 member.node_id(),
             )
@@ -5743,13 +5766,13 @@ mod recursive_composition_tests {
         live.complete_segment(unwrite).unwrap();
         for member in [&left, &right] {
             assert!(!noon_core::semantic_scene_root_contains(
-                &scene.store().borrow(),
+                &scene.integration_store().borrow(),
                 scene.root(),
                 member.node_id(),
             )
             .unwrap());
         }
-        let store = family.store().borrow();
+        let store = family.integration_store().borrow();
         assert!(store.node(family.node_id()).is_some());
         assert_eq!(
             store

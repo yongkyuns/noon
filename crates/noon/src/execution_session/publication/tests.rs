@@ -599,7 +599,8 @@ fn authored_publication_is_rejected_while_required_callback_is_pending() {
 
 #[test]
 fn live_updater_removal_replacement_and_freeze_keep_one_runtime() {
-    use crate::{HostCallbackId, RustHostCallbackTable};
+    use crate::RustHostCallbackTable;
+    use noon_core::HostCallbackId;
     let mut store = SemanticStore::new();
     let node = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
         radius: 1.0,
@@ -684,7 +685,8 @@ fn live_updater_removal_replacement_and_freeze_keep_one_runtime() {
 
 #[test]
 fn live_updater_edits_reject_pending_phases_retroactivity_and_unindexed_targets_atomically() {
-    use crate::{CallbackAdvance, HostCallbackId};
+    use crate::execution_session::CallbackAdvance;
+    use noon_core::HostCallbackId;
     let mut store = SemanticStore::new();
     let node = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
         radius: 1.0,
@@ -745,7 +747,8 @@ fn live_updater_edits_reject_pending_phases_retroactivity_and_unindexed_targets_
 
 #[test]
 fn live_updater_revision_preserves_target_preorder_and_future_barriers() {
-    use crate::{CallbackAdvance, HostCallbackId};
+    use crate::execution_session::CallbackAdvance;
+    use noon_core::HostCallbackId;
     let mut store = SemanticStore::new();
     let nodes = (0..2)
         .map(|_| {

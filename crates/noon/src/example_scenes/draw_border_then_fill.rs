@@ -50,7 +50,7 @@ impl LiveContinuation for DrawBorderThenFill {
 
 pub fn program() -> Result<LiveProgram<DrawBorderThenFill>, String> {
     let scene = Scene::new();
-    let mut square = Mobject::manim_square(Rc::clone(scene.store()), 0.8)?;
+    let mut square = Mobject::manim_square(Rc::clone(scene.integration_store()), 0.8)?;
     square.set_fill(
         f64::from(Color::ORANGE.red),
         f64::from(Color::ORANGE.green),
@@ -64,7 +64,7 @@ pub fn program() -> Result<LiveProgram<DrawBorderThenFill>, String> {
         1.0,
     )?;
     square.set_stroke_width(0.06)?;
-    let mut circle = Mobject::manim_circle(Rc::clone(scene.store()), 0.4)?;
+    let mut circle = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.4)?;
     circle.set_fill(
         f64::from(Color::PINK.red),
         f64::from(Color::PINK.green),

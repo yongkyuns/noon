@@ -1,9 +1,12 @@
 //! Exact authored channels lower once into the shared runtime on native and WASM.
 
 use crate::{
-    AnimationOptions, CompositionTimeMap, ExecutionSession, RateFunction, Scene,
-    SemanticAnimationCompositionKind, SemanticAnimationIntent, SemanticMutationTransaction,
-    SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticVec3, TrackTiming,
+    AnimationOptions, ExecutionSession, RateFunction, Scene, SemanticAnimationCompositionKind,
+    SemanticVec3,
+};
+use noon_core::{
+    CompositionTimeMap, SemanticAnimationIntent, SemanticMutationTransaction,
+    SemanticObjectTrackProperty, SemanticObjectTrackValues, TrackTiming,
 };
 
 /// A moving, fading red circle above an independently rotating blue square.
@@ -54,7 +57,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         CompositionTimeMap::identity(),
     );
     let result = transaction
-        .apply(&mut scene.store().borrow_mut())
+        .apply(&mut scene.integration_store().borrow_mut())
         .map_err(|error| error.to_string())?;
     let root = scene.declare_animation(
         SemanticAnimationIntent::Composition {

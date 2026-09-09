@@ -13,9 +13,9 @@ const MANIM_DEFAULT_CLEAR_COLOR: wgpu::Color = wgpu::Color {
 mod wasm {
     use std::{cell::Cell, mem, rc::Rc};
 
+    use noon::integration::RendererPublication;
     use noon::{
-        ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RendererPublication,
-        RustHostCallbackTable,
+        ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RustHostCallbackTable,
     };
     use noon_core::{
         Camera2DState, NativeEventOccurrence, NativeEventSource, NativeInputValue,
@@ -80,7 +80,7 @@ mod wasm {
     trait DirectLiveProgram {
         fn session(&self) -> &ExecutionSession;
         fn wake_plan(&self) -> BrowserExecutionWakePlan;
-        fn query_viewport(&mut self, bounds: Rect) -> noon::ExecutionViewportQuery;
+        fn query_viewport(&mut self, bounds: Rect) -> noon::integration::ExecutionViewportQuery;
         /// Returns whether this operation resumed a subsequent continuation stage.
         fn drive_to(&mut self, requested_time: f64) -> Result<DirectDriveOutcome, JsValue>;
         fn take_renderer_publication(&mut self) -> RendererPublication<'_>;
@@ -152,7 +152,7 @@ mod wasm {
             BrowserExecutionWakePlan::from_runtime(self.program.wake_state())
         }
 
-        fn query_viewport(&mut self, bounds: Rect) -> noon::ExecutionViewportQuery {
+        fn query_viewport(&mut self, bounds: Rect) -> noon::integration::ExecutionViewportQuery {
             self.program.query_viewport(bounds)
         }
 
@@ -265,7 +265,7 @@ mod wasm {
             }
         }
 
-        fn query_viewport(&mut self, bounds: Rect) -> noon::ExecutionViewportQuery {
+        fn query_viewport(&mut self, bounds: Rect) -> noon::integration::ExecutionViewportQuery {
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, .. } => session.query_viewport(bounds),
                 DirectSourceAuthority::Program(program) => program.query_viewport(bounds),
