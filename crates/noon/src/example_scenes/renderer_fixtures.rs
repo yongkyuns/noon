@@ -170,7 +170,7 @@ pub fn morph_stress(count: usize) -> Result<ExecutionSession, String> {
             )
         })
         .collect();
-    let mut requests = Vec::with_capacity(count);
+    let mut pairs = Vec::with_capacity(count);
     for index in 0..count {
         let paint = style(None, colors[index % colors.len()], width);
         let mut shape = scene.path(source.clone(), paint.clone())?;
@@ -180,9 +180,7 @@ pub fn morph_stress(count: usize) -> Result<ExecutionSession, String> {
         shape.set_translation(x, y)?;
         target.set_translation(x, y)?;
         scene.add(&shape)?;
-        requests.push(AnimationCompositionRequest::TransformTo(
-            TransformToRequest::point_correspondence(&shape, &target, options().run_time(3.4)),
-        ));
+        pairs.push((shape, target));
     }
     let mut session = scene
         .execution_session()
@@ -190,7 +188,22 @@ pub fn morph_stress(count: usize) -> Result<ExecutionSession, String> {
     scene
         .live(&mut session)
         .declare_and_activate_composition(
-            &AnimationCompositionRequest::Parallel(requests),
+            &AnimationCompositionRequest::Composition {
+                kind: crate::SemanticAnimationCompositionKind::Parallel,
+                children: pairs
+                    .iter()
+                    .map(|(shape, target)| {
+                        AnimationCompositionRequest::TransformTo(
+                            TransformToRequest::point_correspondence(
+                                shape,
+                                target,
+                                options().run_time(3.4),
+                            ),
+                        )
+                    })
+                    .collect(),
+                options: AnimationOptions::new(),
+            },
             AnimationOptions::new(),
         )
         .map_err(|error| error.to_string())?;
