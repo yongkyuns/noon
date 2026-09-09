@@ -1,5 +1,7 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
 #[cfg(any(target_arch = "wasm32", test))]
+use crate::authoring_error::AuthoringFailure;
+#[cfg(any(target_arch = "wasm32", test))]
 use noon::integration::TimelineWakeState;
 use noon::integration::{
     CallbackAdvance, CallbackPhaseToken, CallbackReadRequest, CallbackReadValue,
@@ -1040,7 +1042,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_edit_membership(
         &mut self,
         request: noon::SceneMembershipRequest<'_>,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.require_completed_live_segment()?;
         let semantics = self
             .semantics
@@ -1054,7 +1056,7 @@ impl SemanticExecutionPlayer {
         )
         .edit_membership(request)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     /// Route callback declarations through the same shared semantic publication
@@ -1064,7 +1066,8 @@ impl SemanticExecutionPlayer {
         &mut self,
         transaction: noon_core::SemanticMutationTransaction,
     ) -> Result<(), String> {
-        self.require_completed_live_segment()?;
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
         let semantics = self
             .semantics
             .clone()
@@ -1081,24 +1084,33 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn require_completed_live_segment(&self) -> Result<(), String> {
+    fn require_completed_live_segment(&self) -> Result<(), AuthoringFailure> {
         self.require_callback_progression_available()?;
         if self.has_pending_live_segment() {
-            return Err("complete the current live segment before continuing".into());
+            return Err(AuthoringFailure::from(
+                noon::ExecutionSessionPublicationError::SegmentCompletionPending,
+            )
+            .with_message("complete the current live segment before continuing"));
         }
         Ok(())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn require_callback_progression_available(&self) -> Result<(), String> {
+    pub(crate) fn require_callback_progression_available(&self) -> Result<(), AuthoringFailure> {
         if let Some(termination) = self.session.callback_termination() {
-            return Err(format!(
+            return Err(AuthoringFailure::from(
+                noon::ExecutionSegmentCompletionError::CallbackTerminated(termination),
+            )
+            .with_message(format!(
                 "required callback progression terminated: {:?}",
                 termination.kind()
-            ));
+            )));
         }
         if self.pending_callback_phase.is_some() {
-            return Err("a required callback phase is pending host completion".into());
+            return Err(AuthoringFailure::from(
+                noon::ExecutionSessionPublicationError::RequiredCallbackPending,
+            )
+            .with_message("a required callback phase is pending host completion"));
         }
         Ok(())
     }
@@ -1108,7 +1120,8 @@ impl SemanticExecutionPlayer {
         &mut self,
         animation: &noon::DeclaredAnimation,
     ) -> Result<f64, String> {
-        self.require_completed_live_segment()?;
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
         let semantics = self
             .semantics
             .clone()
@@ -1139,7 +1152,8 @@ impl SemanticExecutionPlayer {
         endpoint: noon::AffineLifecycleEndpoint,
         options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
-        self.require_completed_live_segment()?;
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
         let semantics = self
             .semantics
             .clone()
@@ -1164,7 +1178,10 @@ impl SemanticExecutionPlayer {
     /// Query root membership from the exact shared live session. This is a
     /// derived wrapper observation, never a frontend lifecycle authority.
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_contains(&mut self, target: &noon::Mobject) -> Result<bool, String> {
+    pub(crate) fn live_contains(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<bool, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -1176,7 +1193,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .contains(target)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     /// Atomically admit and activate one recursive composition request through the shared
@@ -1188,7 +1205,8 @@ impl SemanticExecutionPlayer {
         request: &noon::AnimationCompositionRequest<'_>,
         play_options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
-        self.require_completed_live_segment()?;
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
         let semantics = self
             .semantics
             .clone()
@@ -1216,7 +1234,8 @@ impl SemanticExecutionPlayer {
         &mut self,
         initial: f64,
     ) -> Result<noon::ValueTracker, String> {
-        self.require_completed_live_segment()?;
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
         let semantics = self
             .semantics
             .clone()
@@ -1237,7 +1256,8 @@ impl SemanticExecutionPlayer {
         &mut self,
         tracker: &noon::ValueTracker,
     ) -> Result<(), String> {
-        self.require_completed_live_segment()?;
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
         let semantics = self
             .semantics
             .clone()
@@ -1326,7 +1346,8 @@ impl SemanticExecutionPlayer {
         &mut self,
         family: &noon::MobjectFamily,
     ) -> Result<(), String> {
-        self.require_completed_live_segment()?;
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
         let semantics = self
             .semantics
             .clone()
@@ -1343,7 +1364,7 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_wait(&mut self, duration: f64) -> Result<f64, String> {
+    pub(crate) fn live_wait(&mut self, duration: f64) -> Result<f64, AuthoringFailure> {
         self.require_completed_live_segment()?;
         let semantics = self
             .semantics
@@ -1356,7 +1377,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .wait_segment(duration)
-        .map_err(|error| error.to_string())?;
+        .map_err(AuthoringFailure::from)?;
         let end_time = segment.end_time();
         self.clock = self
             .live_clock_at(self.session.frame().time, end_time, true)
@@ -1395,7 +1416,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_segment_wake(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmExecutionWake, String> {
+    ) -> Result<WasmExecutionWake, AuthoringFailure> {
         self.require_callback_progression_available()?;
         let segment = self.live_segment()?;
         let plan = BrowserExecutionWakePlan::from_pending_segment(&self.session, segment);
@@ -1463,7 +1484,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn reanchor_live_segment_wake(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmExecutionWake, String> {
+    ) -> Result<WasmExecutionWake, AuthoringFailure> {
         self.require_callback_progression_available()?;
         self.live_segment()?;
         self.live_wake_clock
@@ -1481,7 +1502,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_drive_segment_from_wall_time(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmLiveSegmentDrive, String> {
+    ) -> Result<WasmLiveSegmentDrive, AuthoringFailure> {
         self.require_callback_progression_available()?;
         let segment = self.live_segment()?;
         let requested_time = self
@@ -1489,6 +1510,7 @@ impl SemanticExecutionPlayer {
             .scene_time_at(wall_time_ms)
             .ok_or("observe the live segment wake before driving it from wall time")?;
         self.live_drive_segment_to(segment, requested_time)
+            .map_err(AuthoringFailure::from)
     }
 
     /// Drive the active continuation segment toward one externally supplied
@@ -1502,16 +1524,17 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_drive_segment_to_authored_time(
         &mut self,
         requested_time: f64,
-    ) -> Result<WasmLiveSegmentDrive, String> {
+    ) -> Result<WasmLiveSegmentDrive, AuthoringFailure> {
         self.require_callback_progression_available()?;
         let current = self.session.frame().time;
         if !requested_time.is_finite() || requested_time < current {
             return Err(format!(
                 "external continuation sample requires time at or after {current}, got {requested_time}"
-            ));
+            ).into());
         }
         let segment = self.live_segment()?;
         self.live_drive_segment_to(segment, requested_time)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1564,7 +1587,7 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_complete_segment(&mut self) -> Result<(), String> {
+    pub(crate) fn live_complete_segment(&mut self) -> Result<(), AuthoringFailure> {
         let segment = self.live_segment()?;
         let semantics = self
             .semantics
@@ -1578,7 +1601,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .complete_segment(segment)
-        .map_err(|error| error.to_string())?;
+        .map_err(AuthoringFailure::from)?;
         self.clock = clock;
         self.live_segment = Some(LiveSegmentReceipt::Completed(segment));
         self.live_wake_clock = BrowserExecutionWakeClock::default();
@@ -2150,13 +2173,14 @@ impl SemanticExecutionPlayer {
     /// Derive one browser wake directive for the active ordinary continuation segment.
     ///
     /// This is deliberately a typed WASM value rather than a host-authored duration.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = liveSegmentWake))]
     pub fn live_segment_wake_wasm(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmExecutionWake, String> {
+    ) -> Result<WasmExecutionWake, wasm_bindgen::JsValue> {
         self.live_segment_wake(wall_time_ms)
+            .map_err(crate::authoring_error::js_error)
     }
 
     /// Derive the next generic browser wake from the canonical runtime/session.
@@ -2167,13 +2191,14 @@ impl SemanticExecutionPlayer {
     }
 
     /// Reanchor the next browser interval after a required callback completes.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = reanchorLiveSegmentWake))]
     pub fn reanchor_live_segment_wake_wasm(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmExecutionWake, String> {
+    ) -> Result<WasmExecutionWake, wasm_bindgen::JsValue> {
         self.reanchor_live_segment_wake(wall_time_ms)
+            .map_err(crate::authoring_error::js_error)
     }
 
     /// Advance one active ordinary continuation segment from an anchored browser timestamp.
@@ -2181,30 +2206,33 @@ impl SemanticExecutionPlayer {
     /// A callback phase must be committed before this is retried with the same wall
     /// timestamp. `reachedEndpoint` means shared completion is now permitted but
     /// remains a separate operation so authored reconciliation cannot be skipped.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = driveLiveSegmentFromWallTime))]
     pub fn drive_live_segment_from_wall_time_wasm(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmLiveSegmentDrive, String> {
+    ) -> Result<WasmLiveSegmentDrive, wasm_bindgen::JsValue> {
         self.live_drive_segment_from_wall_time(wall_time_ms)
+            .map_err(crate::authoring_error::js_error)
     }
 
     /// Advance one active continuation segment toward an absolute authored-time
     /// sample without involving a browser clock.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = driveLiveSegmentToAuthoredTime))]
     pub fn drive_live_segment_to_authored_time_wasm(
         &mut self,
         requested_time: f64,
-    ) -> Result<WasmLiveSegmentDrive, String> {
+    ) -> Result<WasmLiveSegmentDrive, wasm_bindgen::JsValue> {
         self.live_drive_segment_to_authored_time(requested_time)
+            .map_err(crate::authoring_error::js_error)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = completeLiveSegment))]
-    pub fn complete_live_segment_wasm(&mut self) -> Result<(), String> {
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = completeLiveSegment)]
+    pub fn complete_live_segment_wasm(&mut self) -> Result<(), wasm_bindgen::JsValue> {
         self.live_complete_segment()
+            .map_err(crate::authoring_error::js_error)
     }
 
     /// Read one typed value from the exact pending callback phase without
@@ -2748,10 +2776,14 @@ mod tests {
         assert_eq!(player.time(), 1.25);
 
         let frame = player.session.frame().clone();
-        assert!(player
-            .live_drive_segment_to_authored_time(1.0)
-            .unwrap_err()
-            .contains("time at or after 1.25"));
+        let error = player.live_drive_segment_to_authored_time(1.0).unwrap_err();
+        // This legacy guard is not a settled R2 producer yet.
+        assert_eq!(error.category, "unclassified");
+        assert_eq!(error.code, "unclassified");
+        assert_eq!(
+            error.message,
+            "external continuation sample requires time at or after 1.25, got 1"
+        );
         assert_eq!(player.session.frame(), &frame);
 
         assert!(player

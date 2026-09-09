@@ -28,6 +28,7 @@ import _manim_rate_functions as _rate_functions
 import _manim_reactive as _reactive
 import _manim_semantic_handles as _semantic_handles
 from _manim_source_execution import current_source_invocation
+from _noon_errors import engine_await, engine_call, raise_engine_error
 import _noon_ir as _ir
 import noon as _base
 
@@ -135,14 +136,14 @@ def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
     reservation = _reserve_typed_binding(self, scene, handle, key)
     context = _context(scene)
     if reservation.reuse_existing_identity:
-        context.liveAdd(str(reservation.object.id), handle)
+        engine_call(context.liveAdd, str(reservation.object.id), handle, operation="Scene.add")
     elif str(context.liveExecutionOwnership()) in {"active", "returned", "transferred"}:
         # A resumed source continuation may introduce an object after a
         # play/wait barrier. Rust atomically publishes both root membership and execution-slot
         # enrollment before Python records its derived wrapper identity.
-        context.liveAdd(str(reservation.object.id), handle)
+        engine_call(context.liveAdd, str(reservation.object.id), handle, operation="Scene.add")
     else:
-        context.bindMobject(str(reservation.object.id), handle)
+        engine_call(context.bindMobject, str(reservation.object.id), handle, operation="Scene.bind")
     return _commit_typed_binding(self, scene, reservation, handle)
 
 
@@ -229,7 +230,7 @@ def _membership_leaf_bindings(
                 reservations.append((member, reservation, handle))
             else:
                 reservations.append((member, reservation, handle))
-        batch.reserveMobjectBinding(str(reservation.object.id), handle)
+        engine_call(batch.reserveMobjectBinding, str(reservation.object.id), handle, operation="Scene.membership")
     return next_object_id, reservations
 
 
@@ -257,7 +258,7 @@ def _append_membership_value(
         family = getattr(value, "_semantic_family_handle", None)
         if family is None:
             raise NotImplementedError("standard Scene membership requires a typed Group")
-        batch.appendFamily(family)
+        engine_call(batch.appendFamily, family, operation="Scene.membership")
     elif isinstance(value, _base.Mobject):
         handle = getattr(value, "_semantic_handle", None)
         if handle is None:
@@ -272,7 +273,7 @@ def _append_membership_value(
                 if value._object is not None
                 else reservations[0][1].object.id
             )
-        batch.appendMobject(object_id, handle)
+        engine_call(batch.appendMobject, object_id, handle, operation="Scene.membership")
     else:
         raise TypeError("Scene membership accepts Mobjects and Groups")
     return next_object_id, reservations
@@ -302,7 +303,7 @@ def _sync_membership_wrapper_attachments(
         if semantic_key in seen:
             continue
         seen.add(semantic_key)
-        if kind == "clear" or not bool(context.containsMobject(wrapper._semantic_handle)):
+        if kind == "clear" or not bool(engine_call(context.containsMobject, wrapper._semantic_handle, operation="Scene.membership")):
             # A removed wrapper keeps its stable semantic identity. Preserve the
             # session that owns that identity so a later copy/animate target and
             # its edits publish through the same semantic/runtime revision.
@@ -314,7 +315,7 @@ def _canonical_scene_mobjects(scene: _base.Scene) -> list[object]:
     registry = _membership_registry(scene)
     return [
         registry[str(key)]
-        for key in _context(scene).rootMembershipKeys()
+        for key in engine_call(_context(scene).rootMembershipKeys, operation="Scene.mobjects")
         if str(key) in registry
     ]
 
@@ -329,7 +330,7 @@ def _canonical_edit_membership(
     if key is not None and (kind != "add" or len(values) != 1 or isinstance(values[0], _compat.Group)):
         raise ValueError("an explicit key requires one ordinary Mobject add")
     context = _context(scene)
-    batch = context.beginMembershipBatch(kind)
+    batch = engine_call(context.beginMembershipBatch, kind, operation="Scene." + kind)
     next_object_id = scene._next_object_id
     reservations = []
     binding_keys = set()
@@ -349,7 +350,7 @@ def _canonical_edit_membership(
             key=key if index == 0 else None,
         )
         reservations.extend(appended)
-    context.editMembership(batch)
+    engine_call(context.editMembership, batch, operation="Scene." + kind)
     for member, reservation, handle in reservations:
         _commit_typed_binding(member, scene, reservation, handle)
     for value in values:
@@ -714,7 +715,7 @@ def _service_semantic_continuation_event(
 async def _await_semantic_continuation(scene: _base.Scene) -> None:
     from js import noonAwaitSemanticContinuation
 
-    event_json = await noonAwaitSemanticContinuation(_context(scene))
+    event_json = await engine_await(noonAwaitSemanticContinuation(_context(scene)), operation="Scene.continuation")
     while True:
         prepared = None
         event = _continuation_event(event_json)
@@ -727,16 +728,16 @@ async def _await_semantic_continuation(scene: _base.Scene) -> None:
                     _manim_updaters.canonical_callback_session_id(scene), event["phase"]
                 )
             except Exception as error:
-                event_json = await noonFailSemanticContinuationCallback(
+                event_json = await engine_await(noonFailSemanticContinuationCallback(
                     _context(scene), _json(event["phase"]["token"]), str(error)
-                )
+                ), operation="Scene.continuation")
                 continue
         next_event = _service_semantic_continuation_event(
             scene, event_json, prepared_callback=prepared
         )
         if next_event is None:
             return
-        event_json = await next_event
+        event_json = await engine_await(next_event, operation="Scene.continuation")
 
 
 def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
@@ -746,12 +747,12 @@ def _synchronous_continuation_wait(scene: _base.Scene) -> _base.Scene:
     from js import noonAwaitSemanticContinuation
     from pyodide.ffi import run_sync
 
-    event_json = run_sync(noonAwaitSemanticContinuation(_context(scene)))
+    event_json = engine_call(run_sync, noonAwaitSemanticContinuation(_context(scene)), operation="Scene.continuation")
     while True:
         next_event = _service_semantic_continuation_event(scene, event_json)
         if next_event is None:
             break
-        event_json = run_sync(next_event)
+        event_json = engine_call(run_sync, next_event, operation="Scene.continuation")
     return scene
 
 
@@ -775,7 +776,7 @@ def _canonical_wait(
             _prepare_semantic_continuation_callbacks(scene, context)
             context.beginOrdinaryWait(float(duration))
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error, operation="Scene.wait")
         if _async_continuation_active(scene):
             return _continuation_awaitable(scene)
         return _synchronous_continuation_wait(scene)
@@ -783,7 +784,7 @@ def _canonical_wait(
     try:
         context.ordinaryWait(float(duration))
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error, operation="Scene.wait")
     return scene
 
 
@@ -1050,7 +1051,7 @@ def _reconcile_fade_membership(
     if direction != "out":
         return
     context = _context(scene)
-    if bool(context.liveContainsMobject(getattr(target, "_semantic_handle"))):
+    if bool(engine_call(context.liveContainsMobject, getattr(target, "_semantic_handle"), operation="Scene.membership")):
         raise RuntimeError("completed FadeOut still belongs to the canonical Scene")
     if target._scene is not scene:
         raise RuntimeError("FadeOut wrapper binding changed before completion")
@@ -2358,14 +2359,14 @@ class LiveExecution:
     def add(self, mobject: _base.Mobject) -> None:
         handle = self._handle(mobject, allow_detached=True)
         if mobject._scene is self._scene:
-            self._context.liveAdd(str(mobject.id), handle)
+            engine_call(self._context.liveAdd, str(mobject.id), handle, operation="LiveExecution.add")
             return
         reservation = _reserve_typed_binding(mobject, self._scene, handle, None)
-        self._context.liveAdd(str(reservation.object.id), handle)
+        engine_call(self._context.liveAdd, str(reservation.object.id), handle, operation="LiveExecution.add")
         _commit_typed_binding(mobject, self._scene, reservation, handle)
 
     def remove(self, mobject: _base.Mobject) -> None:
-        self._context.liveRemove(self._handle(mobject))
+        engine_call(self._context.liveRemove, self._handle(mobject), operation="LiveExecution.remove")
 
     def replace_content(self, target: _base.Mobject, source: _base.Mobject) -> None:
         """Use preauthored source content while preserving target identity and state."""
@@ -2401,7 +2402,7 @@ class LiveExecution:
 
     def wait(self, duration: float) -> float:
         """Start a session-owned continuation wait after the active segment completes."""
-        return float(self._context.liveWait(float(duration)))
+        return float(engine_call(self._context.liveWait, float(duration), operation="LiveExecution.wait"))
 
     def advance_to(self, time: float) -> bool:
         """Drive the current segment; affine endpoints require ``complete()``."""
@@ -2413,7 +2414,7 @@ class LiveExecution:
 
     def complete(self) -> None:
         """Publish the active endpoint before sequential authoring continues."""
-        self._context.liveCompleteSegment()
+        engine_call(self._context.liveCompleteSegment, operation="LiveExecution.complete")
 
 
 class LiveAnimation:
