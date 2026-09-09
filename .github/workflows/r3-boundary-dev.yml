@@ -45,16 +45,8 @@ jobs:
           from pathlib import Path
           p = Path('crates/noon-web/src/semantic_execution_player.rs')
           text = p.read_text()
-          old = '''        assert!(player
-              .live_drive_segment_to_authored_time(1.0)
-              .unwrap_err()
-              .contains("time at or after 1.25"));'''
-          new = '''        let error = player.live_drive_segment_to_authored_time(1.0).unwrap_err();
-                  // This legacy guard is not a settled R2 producer yet.
-                  assert_eq!(error.category, "unclassified");
-                  assert_eq!(error.code, "unclassified");
-                  assert_eq!(error.message,
-                      "external continuation sample requires time at or after 1.25, got 1");'''
+          old = '        assert!(player\n            .live_drive_segment_to_authored_time(1.0)\n            .unwrap_err()\n            .contains("time at or after 1.25"));'
+          new = '        let error = player.live_drive_segment_to_authored_time(1.0).unwrap_err();\n        // This legacy guard is not a settled R2 producer yet.\n        assert_eq!(error.category, "unclassified");\n        assert_eq!(error.code, "unclassified");\n        assert_eq!(error.message, "external continuation sample requires time at or after 1.25, got 1");'
           assert text.count(old) == 1
           p.write_text(text.replace(old, new))
           PY
