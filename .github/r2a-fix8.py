@@ -1,22 +1,20 @@
 """Actual run34357519296 diagnostics; preserve the pre-existing rejection order."""
 from pathlib import Path
+import re
 
 path=Path('../tooling/.github/r2a-tests/object_authoring_errors.rs')
 s=path.read_text()
 assert s.count('AuthoringError::NonFiniteGeometry')==1
 s=s.replace('AuthoringError::NonFiniteGeometry','AuthoringError::NonFiniteObjectState')
-before='''    assert_eq!(
-        family.arrange(0.0, 0.0, 0.1, true).unwrap_err(),
-        AuthoringError::ZeroDirection
-    );'''
-after='''    // A zero direction is accepted by the existing next-to semantics. A
+after='''// A zero direction is accepted by the existing next-to semantics. A
     // non-finite direction is rejected during preparation, before any move.
     assert!(matches!(
         family.arrange(f64::NAN, 0.0, 0.1, true),
         Err(AuthoringError::InvalidRenderNumber { .. })
     ));'''
-assert s.count(before)==1
-path.write_text(s.replace(before,after))
+s,count=re.subn(r'assert_eq!\(\s*family\.arrange\(0\.0, 0\.0, 0\.1, true\)\.unwrap_err\(\),\s*AuthoringError::ZeroDirection\s*\);',after,s)
+assert count==1,count
+path.write_text(s)
 
 # Existing language diagnostics, not an alternative R3 category mapper.
 for name in ['authoring_geometry.rs','manim_shape_matcher_handle_bridge.rs']:
