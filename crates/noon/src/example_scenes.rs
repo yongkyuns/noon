@@ -4,6 +4,7 @@ pub mod affine_fade;
 pub mod analytic_profile;
 #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
 pub mod automatic_wait_text;
+pub mod dimension_fitting;
 pub mod draw_border_then_fill;
 pub mod exact_property_tracks;
 pub mod family_affine;

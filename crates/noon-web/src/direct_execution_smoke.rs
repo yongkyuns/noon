@@ -715,3 +715,12 @@ pub async fn create_direct_live_updater_lifecycle_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program_with_callbacks(canvas, program, callbacks)
         .await
 }
+
+/// Shared dimension fitting uses the same typed native and Rust/WASM session.
+#[wasm_bindgen(js_name = createDirectDimensionFittingSmokeRenderer)]
+pub async fn create_direct_dimension_fitting_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::dimension_fitting::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}

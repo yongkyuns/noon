@@ -403,43 +403,6 @@ class VGroup(Group):
     pass
 
 
-def _mobject_rescale_to_fit(
-    self: Mobject,
-    length: float,
-    dim: int,
-    stretch: bool = False,
-    **kwargs: Any,
-) -> Mobject:
-    if kwargs:
-        unsupported = ", ".join(sorted(kwargs))
-        raise NotImplementedError(
-            f"rescale_to_fit anchor option(s) are not yet supported: {unsupported}"
-        )
-    if dim not in (0, 1):
-        raise NotImplementedError("Noon currently exposes width/height fitting only")
-    old_length = self.width if dim == 0 else self.height
-    if old_length == 0.0:
-        return self
-    factor = float(length) / old_length
-    if stretch:
-        return self.scale((factor, 1.0) if dim == 0 else (1.0, factor))
-    return self.scale(factor)
-
-
-def _mobject_match_dim_size(
-    self: Mobject, mobject: Mobject, dim: int, **kwargs: Any
-) -> Mobject:
-    if not isinstance(mobject, Mobject):
-        raise TypeError("dimension match target must be a Mobject")
-    if dim == 0:
-        length = mobject.width
-    elif dim == 1:
-        length = mobject.height
-    else:
-        raise NotImplementedError("Noon currently exposes width/height matching only")
-    return self.rescale_to_fit(length, dim, **kwargs)
-
-
 def _state_target(
     self: Mobject,
     mobject: Mobject,

@@ -329,12 +329,12 @@ class Mobject:
         return self.match_dim_size(mobject, 1, **kwargs)
 
     def rescale_to_fit(self, length: float, dim: int, stretch: bool = False, **kwargs: Any) -> Mobject:
-        from _manim_compat import _mobject_rescale_to_fit
-        return _mobject_rescale_to_fit(self, length, dim, stretch, **kwargs)
+        from _manim_semantic_handles import _rescale_to_fit
+        return _rescale_to_fit(self, length, dim, stretch, **kwargs)
 
     def match_dim_size(self, mobject: Mobject, dim: int, **kwargs: Any) -> Mobject:
-        from _manim_compat import _mobject_match_dim_size
-        return _mobject_match_dim_size(self, mobject, dim, **kwargs)
+        from _manim_semantic_handles import _match_dim_size
+        return _match_dim_size(self, mobject, dim, **kwargs)
 
     def generate_target(self, use_deepcopy: bool = False) -> Mobject:
         from _manim_compat import _mobject_generate_target

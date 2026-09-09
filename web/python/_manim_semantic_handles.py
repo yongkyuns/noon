@@ -898,6 +898,50 @@ def _move_to(
     return self
 
 
+def _dimension_fit_source(self, dim, kwargs):
+    if kwargs:
+        unsupported = ", ".join(sorted(kwargs))
+        raise NotImplementedError(f"rescale_to_fit anchor option(s) are not yet supported: {unsupported}")
+    if dim not in (0, 1):
+        raise NotImplementedError("Noon currently exposes width/height fitting only")
+    anchor = _layout_anchor(self)
+    if anchor is None:
+        raise RuntimeError("dimension fitting requires a shared Rust layout handle")
+    context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
+               else _live_mutation_context(self))
+    return anchor, context
+
+
+def _rescale_to_fit(self, length, dim, stretch=False, **kwargs):
+    anchor, context = _dimension_fit_source(self, dim, kwargs)
+    length = float(length)
+    try:
+        if context is None:
+            anchor.rescaleToFit(length, dim, bool(stretch))
+        else:
+            context.liveRescaleToFit(anchor, length, dim, bool(stretch))
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return self
+
+
+def _match_dim_size(self, mobject, dim, stretch=False, **kwargs):
+    if not isinstance(mobject, _base.Mobject):
+        raise TypeError("dimension match target must be a Mobject")
+    anchor, context = _dimension_fit_source(self, dim, kwargs)
+    target = _layout_anchor(mobject)
+    if target is None:
+        raise RuntimeError("dimension matching requires a shared Rust target")
+    try:
+        if context is None:
+            anchor.matchDimSize(target, dim, bool(stretch))
+        else:
+            context.liveMatchDimSize(anchor, target, dim, bool(stretch))
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return self
+
+
 def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
     handle = _handle_for(self)
     if handle is None:
