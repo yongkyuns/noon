@@ -4,25 +4,82 @@ on:
     branches: [codex/1272-r2-public-facade-prep]
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: r2-facade-development
   cancel-in-progress: true
+env:
+  CARGO_BUILD_JOBS: '2'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_GHA_RW_MODE: READ_ONLY
 jobs:
-  inspect:
+  candidate:
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
         with:
+          path: tooling
           persist-credentials: false
-          fetch-depth: 0
-      - name: Retain pinned tracked source for facade editing
-        run: |
-          git archive --format=tar 1641398818b6817678ae178faf2887e4ac1e730f | gzip > source.tar.gz
-          sha256sum source.tar.gz
-      - uses: actions/upload-artifact@v7
+      - uses: actions/checkout@v7
         with:
-          name: r2-facade-pinned-source
-          path: source.tar.gz
+          ref: 1641398818b6817678ae178faf2887e4ac1e730f
+          path: source
+          fetch-depth: 0
+      - name: Apply the reviewed facade edits to the pinned source
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = 1641398818b6817678ae178faf2887e4ac1e730f
+          python3 ../tooling/.github/r2-facade-edit.py
+          cargo fmt --all
+          cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
+          git diff --check
+          git diff --stat
+      - name: Publish only the candidate source, without development helpers
+        working-directory: source
+        run: |
+          git switch -c codex/1272-r2-public-facade
+          git config user.name 'Noon development tooling'
+          git config user.email 'development@noon.invalid'
+          git add crates README.md fixtures/provider-consumer
+          git -c commit.gpgSign=false -c core.hooksPath=/dev/null commit -m 'refactor: make public authoring and raw integration explicit (#1272 R2)'
+          git push origin HEAD:refs/heads/codex/1272-r2-public-facade
+          git rev-parse HEAD
+          git archive --format=tar HEAD | gzip > ../candidate.tar.gz
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: r2-facade-sources-${{ runner.os }}-${{ hashFiles('source/Cargo.toml', 'source/crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+            provider-sources-${{ runner.os }}-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Check all workspace callers and features
+        working-directory: source
+        run: cargo check --workspace --all-targets --all-features
+      - name: Exercise the independent public consumer
+        working-directory: source
+        run: cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --test public_facade
+      - name: Exercise public API documentation and paired Rust example
+        working-directory: source
+        run: |
+          cargo test -p noon --no-default-features --doc
+          cargo run -p noon --no-default-features --example shared_authoring
+      - name: Enforce the common architecture gate
+        working-directory: source
+        run: bash scripts/check.sh architecture 1641398818b6817678ae178faf2887e4ac1e730f
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: r2-facade-candidate-source
+          path: candidate.tar.gz
           if-no-files-found: error
           retention-days: 1
