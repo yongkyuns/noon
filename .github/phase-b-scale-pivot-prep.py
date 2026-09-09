@@ -1,0 +1,291 @@
+from pathlib import Path
+
+
+def replace_once(path: str, old: str, new: str) -> None:
+    file = Path(path)
+    text = file.read_text()
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{path}: expected one replacement, found {count}")
+    file.write_text(text.replace(old, new, 1))
+
+
+replace_once(
+    "crates/noon/src/semantic_mobject.rs",
+    '''    pub fn manim_scale(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
+        self.validate()?;
+        let center = self.center()?;
+        self.scale_about_center(x, y, center)
+    }
+    fn scale_about_center(
+''',
+    '''    pub fn manim_scale(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
+        self.validate()?;
+        let center = self.center()?;
+        self.scale_about_center(x, y, center)
+    }
+
+    /// Uniform Manim scaling around one explicit world-space point.
+    pub fn manim_scale_about_point(
+        &mut self,
+        factor: f64,
+        point_x: f64,
+        point_y: f64,
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
+        let mut state = self.state()?;
+        scale_state_about_point(&mut state, factor, (point_x, point_y))?;
+        self.commit_state(state)
+    }
+
+    /// Uniform Manim scaling around the current critical point selected by an edge direction.
+    pub fn manim_scale_about_edge(
+        &mut self,
+        factor: f64,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
+        let direction_x = authoring_render_f64("scale edge.x", direction_x)?;
+        let direction_y = authoring_render_f64("scale edge.y", direction_y)?;
+        let pivot = self.critical_point(direction_x, direction_y)?;
+        self.manim_scale_about_point(factor, pivot.0, pivot.1)
+    }
+
+    fn scale_about_center(
+''',
+)
+
+replace_once(
+    "crates/noon/src/semantic_mobject.rs",
+    '''pub(crate) fn rotate_affine_about_point(
+''',
+    '''fn scale_state_about_point(
+    state: &mut SemanticObjectState,
+    factor: f64,
+    point: (f64, f64),
+) -> Result<(), AuthoringError> {
+    let factor = authoring_render_f64("scale factor", factor)?;
+    let point_x = authoring_render_f64("scale pivot.x", point.0)?;
+    let point_y = authoring_render_f64("scale pivot.y", point.1)?;
+    let next_scale = SemanticVec3::new(
+        state.transform.scale.x * factor,
+        state.transform.scale.y * factor,
+        state.transform.scale.z,
+    );
+    next_scale.lower_xy_f32().map_err(AuthoringError::from)?;
+    let translation_x = authoring_render_f64(
+        "scale result translation.x",
+        point_x + factor * (state.transform.translation.x - point_x),
+    )?;
+    let translation_y = authoring_render_f64(
+        "scale result translation.y",
+        point_y + factor * (state.transform.translation.y - point_y),
+    )?;
+    state.transform.scale = next_scale;
+    state.transform.translation.x = translation_x;
+    state.transform.translation.y = translation_y;
+    state
+        .transform
+        .translation
+        .lower_xy_f32()
+        .map_err(AuthoringError::from)?;
+    Ok(())
+}
+
+pub(crate) fn rotate_affine_about_point(
+''',
+)
+
+replace_once(
+    "crates/noon-web/src/authoring_mobject.rs",
+    '''        pub fn scale(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
+            self.handle.scale(x, y).map_err(js_error)
+        }
+
+        pub fn rotate(&mut self, angle: f64) -> Result<(), JsValue> {
+''',
+    '''        pub fn scale(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
+            self.handle.manim_scale(x, y).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = scaleAboutPoint)]
+        pub fn scale_about_point(
+            &mut self,
+            factor: f64,
+            point_x: f64,
+            point_y: f64,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .manim_scale_about_point(factor, point_x, point_y)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = scaleAboutEdge)]
+        pub fn scale_about_edge(
+            &mut self,
+            factor: f64,
+            direction_x: f64,
+            direction_y: f64,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .manim_scale_about_edge(factor, direction_x, direction_y)
+                .map_err(js_error)
+        }
+
+        pub fn rotate(&mut self, angle: f64) -> Result<(), JsValue> {
+''',
+)
+
+replace_once(
+    "web/python/_manim_semantic_handles.py",
+    '''def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
+    handle = _handle_for(self)
+    if handle is None:
+        raise RuntimeError("Mobject edits require a current shared Rust semantic handle")
+    if isinstance(factor, (tuple, list, _base.Vec2)):
+        value = _base._as_vec2(factor)
+    else:
+        scalar = float(factor)
+        value = _base.Vec2(scalar, scalar)
+    context = _live_mutation_context(self)
+    if context is not None:
+        try:
+            engine_call(context.liveScale, handle, value.x, value.y)
+        except Exception as error:
+            raise_engine_error(error)
+        return self
+    engine_call(handle.scale, value.x, value.y)
+    return self
+''',
+    '''def _scale(
+    self: _base.Mobject,
+    factor: object,
+    *,
+    about_point: object | None = None,
+    about_edge: object | None = None,
+) -> _base.Mobject:
+    handle = _handle_for(self)
+    if handle is None:
+        raise RuntimeError("Mobject edits require a current shared Rust semantic handle")
+    vector_factor = isinstance(factor, (tuple, list, _base.Vec2))
+    if vector_factor:
+        value = _base._as_vec2(factor)
+        scalar = None
+    else:
+        scalar = float(factor)
+        value = _base.Vec2(scalar, scalar)
+    context = _live_mutation_context(self)
+    if context is not None:
+        if about_point is not None or about_edge is not None:
+            raise NotImplementedError(
+                "canonical live affine scaling supports only scaling about the current center"
+            )
+        try:
+            engine_call(context.liveScale, handle, value.x, value.y)
+        except Exception as error:
+            raise_engine_error(error)
+        return self
+    if about_point is not None:
+        if scalar is None:
+            raise TypeError("about_point requires a scalar scale_factor")
+        pivot = _base._as_vec2(about_point)
+        engine_call(handle.scaleAboutPoint, scalar, pivot.x, pivot.y)
+    elif about_edge is not None:
+        if scalar is None:
+            raise TypeError("about_edge requires a scalar scale_factor")
+        edge = _base._as_vec2(about_edge)
+        engine_call(handle.scaleAboutEdge, scalar, edge.x, edge.y)
+    else:
+        engine_call(handle.scale, value.x, value.y)
+    return self
+''',
+)
+
+replace_once(
+    "crates/noon/src/semantic_mobject/tests.rs",
+    '''#[test]
+fn no_op_edits_do_not_publish_and_invalid_compound_edits_roll_back() {
+''',
+    '''#[test]
+fn manim_scale_preserves_center_and_resolves_explicit_point_and_edge_pivots() {
+    let scene = Scene::new();
+    let path = || {
+        VectorPath::new()
+            .move_to(Vec2::new(1.0, -1.0))
+            .line_to(Vec2::new(3.0, 1.0))
+    };
+
+    let mut centered = scene.path(path(), SemanticStyle::default()).unwrap();
+    assert_eq!(centered.center().unwrap(), (2.0, 0.0));
+    centered.manim_scale(2.0, 2.0).unwrap();
+    assert_eq!(centered.center().unwrap(), (2.0, 0.0));
+    assert!((centered.width().unwrap() - 4.0).abs() < 1.0e-9);
+    assert!((centered.height().unwrap() - 4.0).abs() < 1.0e-9);
+
+    let mut point = scene.path(path(), SemanticStyle::default()).unwrap();
+    point.manim_scale_about_point(2.0, 0.0, 0.0).unwrap();
+    assert_eq!(point.center().unwrap(), (4.0, 0.0));
+
+    let mut edge = scene.path(path(), SemanticStyle::default()).unwrap();
+    let right = edge.critical_point(1.0, 0.0).unwrap();
+    edge.manim_scale_about_edge(2.0, 1.0, 0.0).unwrap();
+    assert_eq!(edge.critical_point(1.0, 0.0).unwrap(), right);
+    assert_eq!(edge.center().unwrap(), (1.0, 0.0));
+
+    let before = edge.state().unwrap();
+    let revision = scene.integration_store().borrow().scene_revision();
+    assert!(edge
+        .manim_scale_about_point(2.0, f64::NAN, 0.0)
+        .is_err());
+    assert_eq!(edge.state().unwrap(), before);
+    assert_eq!(scene.integration_store().borrow().scene_revision(), revision);
+}
+
+#[test]
+fn no_op_edits_do_not_publish_and_invalid_compound_edits_roll_back() {
+''',
+)
+
+replace_once(
+    "scripts/manim-differential.py",
+    '''def _noon_rotated_rectangle() -> Any:
+''',
+    '''def _noon_scale_pivots() -> Any:
+    make = lambda: noon.Line(start=noon.RIGHT + noon.DOWN, end=3 * noon.RIGHT + noon.UP)
+    centered = make().scale(2.0)
+    point = make().scale(2.0, about_point=noon.ORIGIN)
+    edge = make().scale(2.0, about_edge=noon.RIGHT)
+    return {
+        "centered": _object_observation(centered),
+        "point": _object_observation(point),
+        "edge": _object_observation(edge),
+    }
+
+
+def _manim_scale_pivots() -> Any:
+    make = lambda: manim.Line(start=manim.RIGHT + manim.DOWN, end=3 * manim.RIGHT + manim.UP)
+    centered = make().scale(2.0)
+    point = make().scale(2.0, about_point=manim.ORIGIN)
+    edge = make().scale(2.0, about_edge=manim.RIGHT)
+    return {
+        "centered": _object_observation(centered),
+        "point": _object_observation(point),
+        "edge": _object_observation(edge),
+    }
+
+
+def _noon_rotated_rectangle() -> Any:
+''',
+)
+
+replace_once(
+    "scripts/manim-differential.py",
+    '''    Fixture("scaled_square", _noon_scaled_square, _manim_scaled_square),
+    Fixture("rotated_rectangle", _noon_rotated_rectangle, _manim_rotated_rectangle),
+''',
+    '''    Fixture("scaled_square", _noon_scaled_square, _manim_scaled_square),
+    Fixture("scale_pivots", _noon_scale_pivots, _manim_scale_pivots),
+    Fixture("rotated_rectangle", _noon_rotated_rectangle, _manim_rotated_rectangle),
+''',
+)
