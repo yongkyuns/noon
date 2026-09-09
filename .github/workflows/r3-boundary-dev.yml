@@ -1,0 +1,27 @@
+name: R3 boundary development
+on:
+  push:
+    branches: [codex/1292-r3-boundary-prep]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: d6734d2a0626f5c9926e4043ad2017a94f5c8c5a
+          fetch-depth: 0
+      - name: Integrate the pinned typed foundation without changing its branch
+        run: |
+          git config user.name 'Yongkyun Shin'
+          git config user.email '4311628+yongkyuns@users.noreply.github.com'
+          git merge --no-edit d1c72e55f03817b4bb2efe815c80e8b9f32b8747
+          mkdir -p /tmp/r3-source
+          git rev-parse HEAD HEAD^{tree} > /tmp/r3-source/revisions.txt
+          git archive --format=tar.gz HEAD > /tmp/r3-source/source.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: r3-source
+          path: /tmp/r3-source
+          retention-days: 3
