@@ -26,7 +26,7 @@ jobs:
         with:
           ref: a6155ac6f96788d257102b956cbbd4d7fd469e66
           fetch-depth: 0
-      - name: Integrate pinned master and correct the typed assertion
+      - name: Integrate pinned master and retain typed paint results
         run: |
           set -euo pipefail
           mkdir -p /tmp/r2a-landing
@@ -50,13 +50,56 @@ jobs:
               ))
           ));'''
           path.write_text(text.replace(old, new))
+          path = Path('crates/noon/src/host_callbacks.rs')
+          text = path.read_text()
+          old = 'pub fn effective_style_with_paint_opacity(mut style: Style, opacity: f64) -> Result<Style, String>'
+          assert text.count(old) == 1
+          path.write_text(text.replace(old, old.replace('Result<Style, String>', 'Result<Style, crate::AuthoringError>')))
+          path = Path('fixtures/provider-consumer/tests/object_authoring_errors.rs')
+          text = path.read_text()
+          assert 'fn scalar_callback_paint_preserves_typed_rejection_and_composite_domain' not in text
+          text += '''
+          #[test]
+          fn scalar_callback_paint_preserves_typed_rejection_and_composite_domain() -> TestResult {
+              use noon::integration::effective_style_with_paint_opacity;
+              use noon::{Color, Style};
+              let before = Style {
+                  fill: Some(Color::rgba(0.1, 0.2, 0.3, 0.25)),
+                  stroke: Some(Color::rgba(0.4, 0.5, 0.6, 0.75)),
+                  opacity: 0.6,
+                  stroke_width: 3.0,
+                  ..Style::default()
+              };
+              for value in [-1.0, 2.0] {
+                  assert!(matches!(
+                      effective_style_with_paint_opacity(before, value),
+                      Err(AuthoringError::InvalidOpacity { value: rejected, .. }) if rejected == value
+                  ));
+              }
+              for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                  assert!(matches!(
+                      effective_style_with_paint_opacity(before, value),
+                      Err(AuthoringError::InvalidRenderNumber { .. })
+                  ));
+              }
+              let next = effective_style_with_paint_opacity(before, 0.4)?;
+              assert_eq!(before.fill.unwrap().alpha, 0.25);
+              assert_eq!(before.stroke.unwrap().alpha, 0.75);
+              assert_eq!(next.fill.unwrap(), Color::rgba(0.1, 0.2, 0.3, 0.4));
+              assert_eq!(next.stroke.unwrap(), Color::rgba(0.4, 0.5, 0.6, 0.4));
+              assert_eq!(next.opacity, before.opacity);
+              assert_eq!(next.stroke_width, before.stroke_width);
+              Ok(())
+          }
+          '''
+          path.write_text(text)
           PY
           cargo fmt --all
+          cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
           git add -u
           git diff --cached --check
-          # Independent mapped domains, Python, runner and root-domain fix are retained.
           git diff --exit-code "$CURRENT_BASE" -- crates/noon-web/src/authoring_error.rs crates/noon-web/src/semantic_execution_player.rs crates/noon-compile/src/semantic_lowering/root_order.rs crates/noon/src/execution_session/callback.rs scripts/typed-authoring-errors-smoke.mjs web/python
-          git -c commit.gpgSign=false commit -m 'fix: integrate current master and exercise typed callback assertion (#1354)'
+          git -c commit.gpgSign=false commit -m 'fix: integrate current master and retain scalar callback paint causes (#1354)'
           git show -s --format='%H %T %P' HEAD > /tmp/r2a-landing/candidate.txt
           git diff "$CURRENT_BASE" HEAD --stat > /tmp/r2a-landing/stat.txt
           git diff "$PRODUCT_HEAD" HEAD --stat > /tmp/r2a-landing/integration-stat.txt
@@ -72,14 +115,14 @@ jobs:
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
-      - name: Execute the exact continuation test and independent typed consumers
+      - name: Execute exact continuation and independent typed consumers
         run: |
           set -euo pipefail
           cargo test -p noon --no-default-features --lib example_scenes::continuation_tests::ordinary_callback_continuation_uses_ordered_shared_barriers -- --exact 2>&1 | tee /tmp/r2a-landing/continuation.log
           grep -q '1 passed; 0 failed; 0 ignored' /tmp/r2a-landing/continuation.log
           cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests > /tmp/r2a-landing/consumers.log 2>&1 || { tail -180 /tmp/r2a-landing/consumers.log; exit 1; }
           cargo test -p noon --no-default-features --test family_callback_paint --test root_order_alias_regressions --test root_order_acceptance --test root_order_transaction_regressions > /tmp/r2a-landing/integration-tests.log 2>&1 || { tail -180 /tmp/r2a-landing/integration-tests.log; exit 1; }
-      - name: Check all existing Rust and WASM callers before full qualification
+      - name: Check existing Rust and WASM callers before full qualification
         run: |
           cargo check --workspace --all-targets --all-features > /tmp/r2a-landing/native.log 2>&1 || { tail -200 /tmp/r2a-landing/native.log; exit 1; }
           cargo check -p noon-web --all-features --target wasm32-unknown-unknown > /tmp/r2a-landing/wasm.log 2>&1 || { tail -200 /tmp/r2a-landing/wasm.log; exit 1; }
@@ -98,6 +141,7 @@ jobs:
           git status --short > /tmp/r2a-landing/status.txt
           git ls-files -u > /tmp/r2a-landing/conflicts.txt
           git diff "$CURRENT_BASE" > /tmp/r2a-landing/candidate.patch
+          test ! -f Cargo.lock || cp Cargo.lock /tmp/r2a-landing/Cargo.lock
           tar --exclude=.git --exclude=target --exclude=node_modules --exclude=ci-artifacts --exclude=browser-smoke-artifacts -czf /tmp/r2a-landing/working-tree.tar.gz .
           if test -z "$(git ls-files -u)"; then
             git add -u
