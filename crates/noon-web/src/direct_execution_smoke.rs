@@ -82,6 +82,15 @@ pub async fn create_direct_painter_order_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Shared family mutation semantics run directly through the Rust/WASM engine.
+#[wasm_bindgen(js_name = createDirectFamilyAffineSmokeRenderer)]
+pub async fn create_direct_family_affine_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::family_affine::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Shared native family placement reaches the direct browser renderer unchanged.
 #[wasm_bindgen(js_name = createDirectFamilyPlacementSmokeRenderer)]
 pub async fn create_direct_family_placement_smoke_renderer(

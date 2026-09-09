@@ -16,6 +16,48 @@ pub enum LiveLayoutTarget<'a> {
 }
 
 impl LiveSession<'_> {
+    /// Publish one alias-aware family scale after validating every local member.
+    pub fn scale_family(
+        &mut self,
+        family: &MobjectFamily,
+        x: f64,
+        y: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.affine_family(family, crate::family_affine::FamilyAffine::Scale(x, y))
+    }
+
+    /// Rotate a family through the same authored transaction and live publication lane.
+    pub fn rotate_family(
+        &mut self,
+        family: &MobjectFamily,
+        angle: f64,
+        pivot: crate::ManimRotationPivot,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.affine_family(
+            family,
+            crate::family_affine::FamilyAffine::Rotate(angle, pivot),
+        )
+    }
+
+    fn affine_family(
+        &mut self,
+        family: &MobjectFamily,
+        operation: crate::family_affine::FamilyAffine,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let (leaves, bounds) = self.family_layout_members(family)?;
+        // As with placement, resolve an active affine driver at its logical
+        // completion barrier before a persistent edit; never overwrite it midway.
+        for &leaf in &leaves {
+            let object = Mobject::from_node(Rc::clone(self.store), leaf)
+                .map_err(LiveSessionError::Mobject)?;
+            self.placement_authored_transform(&object)?;
+        }
+        let transaction = operation
+            .transaction(&self.store.borrow(), &leaves, bounds)
+            .map_err(LiveSessionError::Mobject)?;
+        self.apply(transaction)
+    }
+
     /// Observe this family's effective bounds, including detached authored members.
     /// This query traverses only its semantic leaves and does not publish a revision.
     pub fn effective_family_layout(

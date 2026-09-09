@@ -706,6 +706,28 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_scale_family(
+        &mut self,
+        family: &noon::MobjectFamily,
+        x: f64,
+        y: f64,
+    ) -> Result<(), String> {
+        self.with_live_session(|session| session.scale_family(family, x, y))
+            .map(|_| ())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_rotate_family(
+        &mut self,
+        family: &noon::MobjectFamily,
+        angle: f64,
+        pivot: noon::ManimRotationPivot,
+    ) -> Result<(), String> {
+        self.with_live_session(|session| session.rotate_family(family, angle, pivot))
+            .map(|_| ())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_arrange_family(
         &mut self,
         family: &noon::MobjectFamily,

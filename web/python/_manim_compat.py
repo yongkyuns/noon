@@ -409,19 +409,8 @@ class Group(_base.Group, _BaseMobject):
         return self.shift(_base.Vec2(0.0, float(y) - center.y))
 
     def scale(self, factor: float | tuple[float, float]) -> Group:
-        if isinstance(factor, (tuple, list, _base.Vec2)):
-            scale = _as_vec2(factor)
-        else:
-            scale = _base.Vec2(float(factor), float(factor))
-        center = self.get_center()
-        for member in self.submobjects:
-            member_center = member.get_center()
-            relative = member_center - center
-            member.scale(scale)
-            member.move_to(
-                center + _base.Vec2(relative.x * scale.x, relative.y * scale.y)
-            )
-        return self
+        from _manim_semantic_handles import _group_scale
+        return _group_scale(self, factor)
 
     def rotate(
         self,
@@ -432,15 +421,8 @@ class Group(_base.Group, _BaseMobject):
         about_edge: object | None = None,
         **kwargs: Any,
     ) -> Group:
-        signed_angle = _rotation_angle_2d(angle, axis)
-        if about_point is not None:
-            pivot = _as_vec2(about_point)
-        else:
-            edge = _base.ORIGIN if about_edge is None else _as_vec2(about_edge)
-            pivot = _critical_for(self, edge)
-        for member in self.submobjects:
-            member.rotate(signed_angle, OUT, about_point=pivot, **kwargs)
-        return self
+        from _manim_semantic_handles import _group_rotate
+        return _group_rotate(self, angle, axis, about_point=about_point, about_edge=about_edge, **kwargs)
 
     def set_color(self, color: _base.Color) -> Group:
         for member in self.submobjects:

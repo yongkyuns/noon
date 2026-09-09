@@ -1489,6 +1489,42 @@ def _shared_family_layout(value: object, *, mutation: bool = False):
     return family_handle.layout()
 
 
+def _group_scale(self: _compat.Group, factor: object) -> _compat.Group:
+    scale = (_base._as_vec2(factor) if isinstance(factor, (tuple, list, _base.Vec2))
+             else _base.Vec2(float(factor), float(factor)))
+    handle = getattr(self, "_semantic_family_handle", None)
+    if handle is None:
+        raise RuntimeError("Group scale requires the shared Rust authoring host")
+    context = _group_live_layout_context(self)
+    try:
+        if context is not None:
+            context.liveScaleFamily(handle, scale.x, scale.y)
+        else:
+            handle.scale(scale.x, scale.y)
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return self
+
+
+def _group_rotate(self: _compat.Group, angle: float, axis: object = _compat.OUT,
+                  *, about_point=None, about_edge=None, **kwargs) -> _compat.Group:
+    signed_angle = _compat._rotation_angle_2d(angle, axis)
+    point = (_base._as_vec2(about_point) if about_point is not None
+             else _base._as_vec2(_base.ORIGIN if about_edge is None else about_edge))
+    handle = getattr(self, "_semantic_family_handle", None)
+    if handle is None:
+        raise RuntimeError("Group rotation requires the shared Rust authoring host")
+    context = _group_live_layout_context(self)
+    try:
+        if context is not None:
+            context.liveRotateFamily(handle, signed_angle, point.x, point.y, about_point is not None)
+        else:
+            handle.rotate(signed_angle, point.x, point.y, about_point is not None)
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return self
+
+
 def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
     context = _group_target_context(self)
     if context is not None:
