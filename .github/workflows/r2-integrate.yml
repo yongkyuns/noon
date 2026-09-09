@@ -1,0 +1,92 @@
+name: R2 integrate and qualify
+on:
+  push:
+    branches: [codex/1272-r2-bootstrap]
+    paths: ['.github/workflows/r2-integrate.yml']
+permissions:
+  contents: write
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/1272-r2-typed-membership
+          fetch-depth: 0
+      - name: Correct the three String-returning example boundaries and integrate master
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 280770c0c9076669219414eafd72fba2c4ab7905
+          git config user.name 'Yongkyun Shin'
+          git config user.email 'yongkyuns@gmail.com'
+          python3 - <<'PY'
+          from pathlib import Path
+          for name in ('analytic_profile', 'live_geometry_construction', 'ordinary_become_semantics'):
+              path = Path('crates/noon/src/example_scenes') / (name + '.rs')
+              text = path.read_text()
+              start = text.index('scene.add_many(')
+              end = text.index('?;', start)
+              assert '.map_err(' not in text[start:end]
+              path.write_text(text[:end] + '.map_err(|error| error.to_string())' + text[end:])
+          PY
+          cargo fmt --all
+          git add crates/noon/src/example_scenes
+          git commit -m 'fix: map typed membership failures at remaining example boundaries'
+          if ! git merge --no-ff --no-commit fc5afc251fa2b18cf81929244717fca1facd3738; then
+            python3 - <<'PY'
+          import subprocess, re
+          from pathlib import Path
+          path = 'crates/noon-web/src/canonical_authoring_scene.rs'
+          conflicts = subprocess.check_output(['git', 'diff', '--name-only', '--diff-filter=U'], text=True).splitlines()
+          assert conflicts == [path], conflicts
+          def read(ref):
+              return subprocess.check_output(['git', 'show', ref + ':' + path], text=True)
+          def typed_boundary(text):
+              text = re.sub(r'\b(handle|target|member|source|target_state|family)\.validate\(\)\?',
+                            r'\1.validate().map_err(|error| error.to_string())?', text)
+              return text.replace('self.scene.edit_membership(request)?',
+                                  'self.scene.edit_membership(request).map_err(|error| error.to_string())?')
+          def formatted(text):
+              return subprocess.check_output(['rustfmt', '--edition', '2021', '--emit', 'stdout'], input=text, text=True)
+          # Prove our entire change in the conflicted file is only these error mappings.
+          expected = formatted(typed_boundary(read('ab214ba048670746f77cda2b2ee5ec61d7e7b6ad')))
+          assert expected == read('280770c0c9076669219414eafd72fba2c4ab7905')
+          # Preserve all of the landed cleanup; reapply mappings only to surviving callers.
+          Path(path).write_text(formatted(typed_boundary(read('fc5afc251fa2b18cf81929244717fca1facd3738'))))
+          PY
+            git add crates/noon-web/src/canonical_authoring_scene.rs
+          fi
+          cargo fmt --all
+          cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
+          git diff --check
+          git add -A
+          git commit -m 'Merge current master into R2, preserving reactive and rollback deletion'
+          git push origin HEAD:codex/1272-r2-typed-membership
+      - name: Test external provider-free error contract
+        run: cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --test authoring_errors
+      - name: Compile all facade and browser adapter targets
+        run: cargo check -p noon-web -p noon --all-targets --all-features
+      - name: Test resource identity and transaction failure causes
+        run: |
+          cargo test -p noon --no-default-features transaction_application_keeps_preflight_error
+          cargo test -p noon --no-default-features missing_content_resources
+      - name: Export exact integrated source for review
+        if: always()
+        run: |
+          git archive --format=tar.gz --output="$RUNNER_TEMP/r2-integrated.tar.gz" HEAD
+          git rev-parse HEAD > "$RUNNER_TEMP/revision.txt"
+          git diff fc5afc251fa2b18cf81929244717fca1facd3738 HEAD > "$RUNNER_TEMP/r2-integrated.patch"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: r2-integrated-source
+          path: |
+            ${{ runner.temp }}/r2-integrated.tar.gz
+            ${{ runner.temp }}/revision.txt
+            ${{ runner.temp }}/r2-integrated.patch
+          retention-days: 1
