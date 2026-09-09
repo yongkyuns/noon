@@ -6,13 +6,14 @@ use crate::{
         authoring_render_f64, rotate_affine_about_point, scale_state_about_center,
         stage_state_changes, state_center,
     },
-    ManimRotationPivot, MobjectFamily,
+    ManimRotationPivot, Mobject, MobjectFamily,
 };
 use noon_core::{Bounds2D64, SemanticMutationTransaction, SemanticNodeId, SemanticStore};
 
 #[derive(Clone, Copy)]
 pub(crate) enum FamilyAffine {
     Scale(f64, f64),
+    ScaleAbout(f64, f64, ManimRotationPivot),
     Rotate(f64, ManimRotationPivot),
 }
 
@@ -30,20 +31,14 @@ impl FamilyAffine {
                 authoring_render_f64("family scale.y", y)?;
                 center
             }
+            Self::ScaleAbout(x, y, pivot) => {
+                authoring_render_f64("scale.x", x)?;
+                authoring_render_f64("scale.y", y)?;
+                resolve_pivot(bounds, center, pivot)?
+            }
             Self::Rotate(angle, pivot) => {
                 authoring_render_f64("family rotation", angle)?;
-                match pivot {
-                    ManimRotationPivot::Center => center,
-                    ManimRotationPivot::Point(x, y) => (
-                        authoring_render_f64("family pivot.x", x)?,
-                        authoring_render_f64("family pivot.y", y)?,
-                    ),
-                    ManimRotationPivot::Edge(x, y) => {
-                        authoring_render_f64("family edge.x", x)?;
-                        authoring_render_f64("family edge.y", y)?;
-                        bounds_critical_point(bounds, x, y)
-                    }
-                }
+                resolve_pivot(bounds, center, pivot)?
             }
         };
         let mut transaction = SemanticMutationTransaction::new();
@@ -53,11 +48,11 @@ impl FamilyAffine {
                 .map_err(AuthoringError::from)?;
             let mut next = previous.clone();
             match self {
-                Self::Scale(x, y) => {
+                Self::Scale(x, y) | Self::ScaleAbout(x, y, _) => {
                     let old_center = state_center(store, previous)?;
                     let target_center = (
-                        center.0 + (old_center.0 - center.0) * x,
-                        center.1 + (old_center.1 - center.1) * y,
+                        pivot.0 + (old_center.0 - pivot.0) * x,
+                        pivot.1 + (old_center.1 - pivot.1) * y,
                     );
                     scale_state_about_center(store, &mut next, x, y, target_center)?;
                 }
@@ -79,6 +74,74 @@ impl FamilyAffine {
             stage_state_changes(&mut transaction, leaf, previous, &next);
         }
         Ok(transaction)
+    }
+}
+
+fn resolve_pivot(
+    bounds: Option<Bounds2D64>,
+    center: (f64, f64),
+    pivot: ManimRotationPivot,
+) -> Result<(f64, f64), AuthoringError> {
+    match pivot {
+        ManimRotationPivot::Center => Ok(center),
+        ManimRotationPivot::Point(x, y) => Ok((
+            authoring_render_f64("pivot.x", x)?,
+            authoring_render_f64("pivot.y", y)?,
+        )),
+        ManimRotationPivot::Edge(x, y) => {
+            authoring_render_f64("edge.x", x)?;
+            authoring_render_f64("edge.y", y)?;
+            Ok(bounds_critical_point(bounds, x, y))
+        }
+    }
+}
+
+impl Mobject {
+    /// Scale around one explicit Manim point in a single semantic transaction.
+    pub fn manim_scale_about_point(
+        &mut self,
+        x: f64,
+        y: f64,
+        point_x: f64,
+        point_y: f64,
+    ) -> Result<(), AuthoringError> {
+        self.apply_manim_scale_pivot(x, y, ManimRotationPivot::Point(point_x, point_y))
+    }
+
+    /// Scale around the current Manim critical point selected by an edge vector.
+    pub fn manim_scale_about_edge(
+        &mut self,
+        x: f64,
+        y: f64,
+        edge_x: f64,
+        edge_y: f64,
+    ) -> Result<(), AuthoringError> {
+        self.apply_manim_scale_pivot(x, y, ManimRotationPivot::Edge(edge_x, edge_y))
+    }
+
+    fn apply_manim_scale_pivot(
+        &mut self,
+        x: f64,
+        y: f64,
+        pivot: ManimRotationPivot,
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
+        let state = self.state()?;
+        let bounds = self.layout_bounds()?.or_else(|| {
+            Some(Bounds2D64::point(
+                state.transform.translation.x,
+                state.transform.translation.y,
+            ))
+        });
+        let transaction = FamilyAffine::ScaleAbout(x, y, pivot).transaction(
+            &self.integration_store().borrow(),
+            &[self.node_id()],
+            bounds,
+        )?;
+        transaction
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
     }
 }
 
