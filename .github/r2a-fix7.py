@@ -4,7 +4,7 @@ path=Path('crates/noon/src/live_session.rs')
 s=path.read_text()
 for before,after in [
     ('live.target_editor(&circle),\n            Err(LiveSessionError::Mobject(_))', 'live.target_editor(&circle),\n            Err(LiveSessionError::Callback(crate::ExecutionSessionCallbackError::Pending(_)))'),
-    ('live.move_to_point(&circle, 3.0, 0.0),\n            Err(LiveSessionError::Mobject(_))', 'live.move_to_point(&circle, 3.0, 0.0),\n            Err(LiveSessionError::Authoring(AuthoringError::Unsupported(\n                crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver\n            )))'),
+    ('live.move_to_point(&circle, 3.0, 0.0),\n            Err(LiveSessionError::Mobject(_))', 'live.move_to_point(&circle, 3.0, 0.0),\n            Err(LiveSessionError::Authoring(crate::AuthoringError::Unsupported(\n                crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver\n            )))'),
 ]:
     assert s.count(before)==1,before
     s=s.replace(before,after)
