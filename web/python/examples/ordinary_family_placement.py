@@ -13,6 +13,9 @@ class OrdinaryFamilyPlacement(Scene):
         family.remove(first, nested)
         family.add(first, nested)
         target = VGroup(anchor)
+        first.move_to(target, aligned_edge=UP)
+        first.align_to(target, DOWN)
+        assert abs(first.get_bottom().y - target.get_bottom().y) < 1e-6
         family.next_to(target, direction=2 * RIGHT, buff=0.25,
                        index_of_submobject_to_align=0)
         family.align_to(UP, UP)
@@ -20,3 +23,8 @@ class OrdinaryFamilyPlacement(Scene):
         family.shift(0.2 * UP)
         self.add(first, second, anchor)
         self.wait(1)
+        # After the barrier, the same typed target observes live effective bounds.
+        before = first.get_center()
+        first.move_to(target, coor_mask=(0, 0, 0))
+        assert abs(first.get_center().x - before.x) < 1e-6
+        assert abs(first.get_center().y - before.y) < 1e-6
