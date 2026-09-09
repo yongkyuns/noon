@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use noon_core::{FontResourceHandle, FontResourceId};
 use noon_render_wgpu::text::atlas::{GlyphAtlasEntry, GlyphAtlasPlane, GpuGlyphAtlas};
-use noon_text_raster::{
+use noon_text::raster::{
     GlyphRaster, GlyphRasterFormat, GlyphRasterImage, GlyphRasterKey, GlyphRasterPlacement,
 };
 

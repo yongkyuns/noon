@@ -241,6 +241,43 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmLayoutAnchor {
+        #[wasm_bindgen(js_name = moveTo)]
+        pub fn move_to(
+            &self,
+            target: &WasmLayoutAnchor,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            self.anchor
+                .layout()
+                .map_err(js_error)?
+                .move_to(
+                    noon::FamilyLayoutTarget::Anchor(&target.anchor),
+                    (edge_x, edge_y),
+                    (mask_x, mask_y),
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = alignTo)]
+        pub fn align_to(
+            &self,
+            target: &WasmLayoutAnchor,
+            axis_x: f64,
+            axis_y: f64,
+        ) -> Result<(), JsValue> {
+            self.anchor
+                .layout()
+                .map_err(js_error)?
+                .align_to(
+                    noon::FamilyLayoutTarget::Anchor(&target.anchor),
+                    (axis_x, axis_y),
+                )
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = rescaleToFit)]
         pub fn rescale_to_fit(
             &self,

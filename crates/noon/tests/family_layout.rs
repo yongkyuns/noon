@@ -113,3 +113,44 @@ fn object_next_to_and_frame_corner_use_shared_bounds_and_buffers() {
     assert!((corner.0 - (f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5 - buffer)).abs() < 1e-5);
     assert!((corner.1 - (f64::from(noon_core::DEFAULT_FRAME_HEIGHT) * 0.5 - buffer)).abs() < 1e-5);
 }
+
+#[test]
+fn object_placement_to_family_anchor_is_shared_and_rejects_foreign_targets() {
+    let scene = Scene::new();
+    let object = scene.square(1.0).unwrap();
+    let mut reference = scene.square(2.0).unwrap();
+    reference.shift(5.0, 3.0).unwrap();
+    let family = scene.family(&[(&reference).into()]).unwrap();
+    let source = noon::LayoutAnchor::from(&object);
+    let target = noon::LayoutAnchor::from(&family);
+    source
+        .layout()
+        .unwrap()
+        .move_to(Target::Anchor(&target), (0.0, 1.0), (0.5, 1.0))
+        .unwrap();
+    assert_eq!(object.center().unwrap(), (2.5, 3.5));
+    source
+        .layout()
+        .unwrap()
+        .align_to(Target::Anchor(&target), (0.0, -1.0))
+        .unwrap();
+    assert_eq!(object.center().unwrap(), (2.5, 2.5));
+    let other = Scene::new();
+    let foreign = noon::LayoutAnchor::from(&other.family(&[]).unwrap());
+    let revision = scene.integration_store().borrow().scene_revision();
+    assert!(source
+        .layout()
+        .unwrap()
+        .move_to(Target::Anchor(&foreign), (0.0, 0.0), (1.0, 1.0))
+        .is_err());
+    assert!(source
+        .layout()
+        .unwrap()
+        .align_to(Target::Anchor(&foreign), (1.0, 1.0))
+        .is_err());
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        revision
+    );
+    assert_eq!(object.center().unwrap(), (2.5, 2.5));
+}

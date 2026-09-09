@@ -30,6 +30,20 @@ pub fn session() -> Result<ExecutionSession, String> {
     family.remove_many(&[(&first).into(), (&nested).into()])?;
     family.add_many(&[(&first).into(), (&nested).into()])?;
     let target = scene.family(&[(&anchor).into()])?;
+    let first_anchor = crate::LayoutAnchor::from(&first);
+    let target_anchor = crate::LayoutAnchor::from(&target);
+    first_anchor
+        .layout()?
+        .move_to(Target::Anchor(&target_anchor), (0.0, 1.0), (1.0, 1.0))?;
+    first_anchor
+        .layout()?
+        .align_to(Target::Anchor(&target_anchor), (0.0, -1.0))?;
+    assert!(
+        (first_anchor.layout()?.critical_point(0.0, -1.0).1
+            - target.layout()?.critical_point(0.0, -1.0).1)
+            .abs()
+            < 1e-6
+    );
     let source = crate::LayoutAnchor::from(&family);
     let target_member = crate::LayoutAnchor::from(&target).member(0);
     source.next_to_aligned(

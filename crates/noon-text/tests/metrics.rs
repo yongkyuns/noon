@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use noon_text_native::{NativeFontFace, NativeTextCompiler, NativeTextOptions};
+use noon_text::shaping::{NativeFontFace, NativeTextCompiler, NativeTextOptions};
 
 fn bundled_font() -> NativeFontFace {
     let bytes = typst_assets::fonts()

@@ -21,7 +21,7 @@ use noon_core::{
     TextResourceHandle, TextResourceLookup, Transform2D, Vec2,
 };
 use noon_runtime::{FrameChanges, FrameState};
-use noon_text_raster::{
+use noon_text::raster::{
     GlyphRaster, GlyphRasterCache, GlyphRasterCacheLimits, GlyphRasterError, GlyphRasterKey,
     GlyphRasterStats,
 };
@@ -833,7 +833,7 @@ fn raster_key(
     })
 }
 
-// Must stay byte-for-byte equivalent to `noon-text-raster` cache identity. It is
+// Must stay byte-for-byte equivalent to `noon-text` cache identity. It is
 // intentionally tiny and duplicated here because the raster cache returns the image
 // while the atlas independently requires the same stable key.
 fn variation_fingerprint(settings: &[FontVariationSetting]) -> u64 {

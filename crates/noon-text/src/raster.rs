@@ -1,9 +1,7 @@
-#![forbid(unsafe_code)]
-
 //! Backend-neutral CPU glyph raster preparation for Noon.
 //!
 //! Shaping/layout backends retain authoritative glyph ids, positions, fonts, and
-//! variable-font coordinates in `noon-core`. This crate only turns those retained
+//! variable-font coordinates in `noon-core`. This module only turns those retained
 //! glyph ids into reusable alpha/color images. GPU texture allocation and draw
 //! submission remain renderer concerns.
 

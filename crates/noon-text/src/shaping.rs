@@ -1,8 +1,6 @@
-#![forbid(unsafe_code)]
-
 //! Native OpenType text shaping for Noon.
 //!
-//! This crate is a backend, not a renderer. It accepts exact immutable font bytes,
+//! This module is a backend, not a renderer. It accepts exact immutable font bytes,
 //! shapes source text with Swash, and normalizes the result directly into Noon's
 //! backend-neutral `TextResource` + `FontResourceArena` contract. Public Manim-style
 //! font discovery, markup spans, fallback, and richer script itemization are layered

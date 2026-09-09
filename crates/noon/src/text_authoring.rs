@@ -22,9 +22,9 @@ use noon_core::{
     Vec2, WHITE,
 };
 #[cfg(feature = "native-text")]
-pub use noon_text_native::NativeFontFace;
+pub use noon_text::shaping::NativeFontFace;
 #[cfg(feature = "native-text")]
-use noon_text_native::{
+use noon_text::shaping::{
     NativeTextCompiler, NativeTextError, NativeTextOptions, NativeTextResourceArtifact,
 };
 #[cfg(feature = "typst")]
