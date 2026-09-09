@@ -5,76 +5,46 @@ on:
 permissions:
   contents: read
   actions: read
+  pull-requests: read
 jobs:
-  full:
+  collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    env:
-      CARGO_INCREMENTAL: '0'
-      CARGO_PROFILE_DEV_DEBUG: '0'
-      CARGO_PROFILE_TEST_DEBUG: '0'
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: 'true'
-      SCCACHE_GHA_RW_MODE: READ_ONLY
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: 2ebf43857584e6fafdde8bd9955191400d642e1b
-          fetch-depth: 0
-      - name: Record exact product source
-        run: |
-          mkdir -p /tmp/r3-full
-          test "$(git rev-parse HEAD^{tree})" = cfb1475e6317804f4ccb3a52a4e853035cc516bf
-          git rev-parse HEAD HEAD^{tree} > /tmp/r3-full/revisions.txt
-          echo 5b56124312657c0959e1ca3936930cad0fe7e240 > /tmp/r3-full/base.txt
-          git archive --format=tar.gz HEAD > /tmp/r3-full/source.tar.gz
-          git diff 5b56124312657c0959e1ca3936930cad0fe7e240 HEAD > /tmp/r3-full/product.patch
-      - uses: actions/cache/restore@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-sources-
-      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
-        with:
-          version: v0.16.0
-      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
-        with:
-          tool: wasm-pack@0.15.0
-          fallback: none
-      - name: Required full architecture, Rust, Python and optimized release-WASM gate
-        run: |
-          set -o pipefail
-          bash scripts/check.sh full 5b56124312657c0959e1ca3936930cad0fe7e240 2>&1 | tee /tmp/r3-full/full.log
-      - name: Preserve exact lockfile, compiled release package and source state
-        if: always()
-        run: |
-          if test -f Cargo.lock; then cp Cargo.lock /tmp/r3-full/Cargo.lock; fi
-          if test -f web/pkg/noon_web_bg.wasm; then
-            tar -czf /tmp/r3-full/release-package.tar.gz web/pkg web/python-worker.js web/python/compat-bundle.*.json
-            sha256sum web/pkg/noon_web_bg.wasm > /tmp/r3-full/wasm-sha256.txt
-          fi
-          git status --short > /tmp/r3-full/status.txt
-          git diff --exit-code
-      - name: Archive already-completed predecessor evidence without terminal control bytes
-        if: always()
+      - name: Read completed qualification evidence without building or rerunning
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          mkdir -p /tmp/r3-final-evidence
           python3 - <<'PY'
-          import os, pathlib, re, urllib.request
-          base='https://api.github.com/repos/yongkyuns/noon'
-          for path,name in [('/actions/jobs/102591146255/logs','approved-predecessor-browser.log'),('/actions/runs?event=pull_request&head_sha=e4c2b7ee44416eb328bb42a70e462e1da85eceaf&per_page=100','approved-predecessor-runs.json')]:
-              request=urllib.request.Request(base+path,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
-              with urllib.request.urlopen(request,timeout=30) as response: text=response.read().decode('utf-8-sig')
-              text=re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]','',text)
-              text=''.join(c for c in text if c in '\n\r\t' or ord(c)>=32)
-              pathlib.Path('/tmp/r3-full',name).write_text(text)
+          import hashlib, json, os, pathlib, re, urllib.request
+          root='https://api.github.com/repos/yongkyuns/noon'
+          out=pathlib.Path('/tmp/r3-final-evidence')
+          head='2ebf43857584e6fafdde8bd9955191400d642e1b'
+          def read(path):
+              request=urllib.request.Request(root+path,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+              with urllib.request.urlopen(request,timeout=45) as response: return response.read()
+          def clean(data):
+              text=re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]','',data.decode('utf-8-sig'))
+              return ''.join(c for c in text if c in '\n\r\t' or ord(c)>=32)
+          for path,name in [('/pulls/1355','pr.json'),('/issues/1355/comments?per_page=100','comments.json'),('/pulls/1355/reviews?per_page=100','reviews.json'),('/git/ref/heads/master','master.json'),('/git/commits/003a8fbc4a1503e2e59b7cce831582c14fbeb2f3','tested-merge.json'),('/actions/runs?event=pull_request&head_sha='+head+'&per_page=100','runs.json'),('/actions/runs/34390159552','full-run.json')]:
+              out.joinpath(name).write_bytes(read(path))
+          manifest=[]
+          for job_id,name in [(102594426796,'current-browser.log'),(102594426866,'current-native-unit.log'),(102594426765,'current-web-preflight.log'),(102596995590,'current-product.log')]:
+              job=json.loads(read('/actions/jobs/'+str(job_id)))
+              assert job['status']=='completed' and job['conclusion']=='success', (name,job['status'],job['conclusion'])
+              data=read('/actions/jobs/'+str(job_id)+'/logs')
+              out.joinpath(name).write_text(clean(data))
+              manifest.append({'job_id':job_id,'file':name,'run_id':job['run_id'],'conclusion':job['conclusion'],'raw_sha256':hashlib.sha256(data).hexdigest(),'sanitized_sha256':hashlib.sha256(out.joinpath(name).read_bytes()).hexdigest()})
+          out.joinpath('log-manifest.json').write_text(json.dumps(manifest,indent=2))
+          browser=out.joinpath('current-browser.log').read_text()
+          assert '003a8fbc4a1503e2e59b7cce831582c14fbeb2f3' in browser
+          print('Archived four completed, successful exact-head jobs; no compilation or test rerun.')
+          for row in manifest: print(row['file'],row['job_id'],row['conclusion'])
           PY
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r3-1355-full-qualification
-          path: /tmp/r3-full
+          name: r3-1355-completed-ci-evidence
+          path: /tmp/r3-final-evidence
           retention-days: 7
