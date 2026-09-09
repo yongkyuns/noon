@@ -829,6 +829,11 @@ def canonical_line_match(source: _base.Mobject, target: object) -> bool:
     return True
 
 
+def canonical_callback_phase_active() -> bool:
+    """Whether this invocation is inside the existing ordered callback phase."""
+    return _ACTIVE_CANONICAL_CONTEXT.get() is not None
+
+
 def canonical_callback_scalar_value(scene: _base.Scene, handle: object) -> float:
     """Return one phase-local Rust scalar without consulting published tracker state."""
     context = _ACTIVE_CONTEXTS.get(id(scene))
@@ -1216,12 +1221,6 @@ def run_canonical_callback_phase(
         raise RuntimeError("nested Noon callback phases are not supported")
     _ACTIVE_CONTEXTS[scene_key] = context
     context_token = _ACTIVE_CANONICAL_CONTEXT.set(context)
-    # A canonical phase currently has no typed signal read-set. Enter an empty
-    # signal scope so ValueTracker reads fail explicitly instead of falling back
-    # to the wrapper's authored scalar value.
-    import _manim_reactive as reactive
-
-    reactive._enter_callback_signal_values({"signals": []})
     try:
         for invocation in frame.get("invocations", []):
             if not isinstance(invocation, dict):
@@ -1252,7 +1251,6 @@ def run_canonical_callback_phase(
                 ) from error
             _invoke(callback, mobject, context.delta_time)
     finally:
-        reactive._leave_callback_signal_values()
         _ACTIVE_CANONICAL_CONTEXT.reset(context_token)
         _ACTIVE_CONTEXTS.pop(scene_key, None)
 
