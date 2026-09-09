@@ -27,6 +27,21 @@ class OrdinaryCallbackSparseReads(Scene):
             phase_time = _manim_updaters._canonical_callback_time(mobject)
             phase_counts[phase_time] = phase_counts.get(phase_time, 0) + 1
             assert phase_counts[phase_time] == 1
+            # Nested aliases must move once, retaining the preceding leaf edit.
+            mobject.shift((0.25, 0.0))
+            prior_x = mobject.get_center().x
+            family.shift((1.0, 0.0))
+            assert abs(mobject.get_center().x - (prior_x + 1.0)) < 1e-5
+            shifted = mobject.get_center()
+            try:
+                invalid_family.shift((1.0, 0.0))
+            except (RuntimeError, ReferenceError):
+                pass
+            else:
+                raise AssertionError("family translation accepted a non-live member")
+            assert mobject.get_center() == shifted
+            family.shift((-1.0, 0.0))
+            assert abs(mobject.get_center().x - prior_x) < 1e-5
             # One Rust-selected family read fetches the missing anchor row.
             # Recolor must observe the preceding family alpha edit, not authored alpha.
             family.set_fill(opacity=0.6)

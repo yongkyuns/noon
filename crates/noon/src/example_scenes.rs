@@ -1369,6 +1369,30 @@ pub fn ordinary_callback_sparse_reads_program() -> Result<
                 )));
             }
             observed_phase_times.push(context.time());
+            // Same operation as the paired Python callback: a preceding leaf
+            // edit, nested alias translation, caught late failure, then retry.
+            let mut prior = context.target_state().transform;
+            prior.translation.x += 0.25;
+            context
+                .set_target_transform(prior)
+                .map_err(|error| SparseReadExampleError(error.to_string()))?;
+            context
+                .shift_family(&family, 1.0, 0.0)
+                .map_err(|error| SparseReadExampleError(error.to_string()))?;
+            assert!(
+                (context.target_state().transform.translation.x - (prior.translation.x + 1.0))
+                    .abs()
+                    < 1e-5
+            );
+            let shifted = *context.target_state();
+            assert!(context.shift_family(&invalid_family, 1.0, 0.0).is_err());
+            assert_eq!(*context.target_state(), shifted);
+            context
+                .shift_family(&family, -1.0, 0.0)
+                .map_err(|error| SparseReadExampleError(error.to_string()))?;
+            assert!(
+                (context.target_state().transform.translation.x - prior.translation.x).abs() < 1e-5
+            );
             context
                 .paint_family(
                     &family,

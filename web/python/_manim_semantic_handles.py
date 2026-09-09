@@ -1372,6 +1372,14 @@ def _group_rotate(self: _compat.Group, angle: float, axis: object = _compat.OUT,
 
 
 def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
+    from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
+    phase = _ACTIVE_CANONICAL_CONTEXT.get()
+    if phase is not None:
+        handle = getattr(self, "_semantic_family_handle", None)
+        if handle is None:
+            raise RuntimeError("Group shift requires the shared Rust authoring host")
+        phase.shift_family(handle, _base._as_vec2(direction))
+        return self
     context = _group_target_context(self)
     if context is not None:
         offset = _base._as_vec2(direction)
@@ -1382,10 +1390,8 @@ def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
         return self
     shared = _shared_family_layout(self, mutation=True)
     if shared is None:
-        return _compat._shift_group_members(self, direction)
+        raise RuntimeError("Group shift requires the shared Rust authoring host")
     session = shared
-    if not hasattr(session, "shiftBy"):
-        return _compat._shift_group_members(self, direction)
     offset = _base._as_vec2(direction)
     session.shiftBy(offset.x, offset.y)
     return self

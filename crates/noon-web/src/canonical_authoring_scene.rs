@@ -4187,6 +4187,65 @@ mod wasm {
             serde_json::to_string(&rows).map_err(js_error)
         }
 
+        /// Prepare a family translation over the existing callback read/overlay
+        /// codec boundary. Native/direct-WASM callbacks use the same typed Rust
+        /// operation; this function introduces no worker message or runtime.
+        #[wasm_bindgen(js_name = callbackFamilyShift)]
+        pub fn callback_family_shift(
+            &self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            revision: &str,
+            rows_json: &str,
+            x: f64,
+            y: f64,
+        ) -> Result<String, JsValue> {
+            self.callback_family_keys(handle, revision)?;
+            let family = handle.semantic_family()?;
+            let revision =
+                noon_core::SceneRevision::new(revision.parse::<u64>().map_err(js_error)?);
+            let rows: Vec<(u32, u32, Transform2D, Option<noon_core::Rect>)> =
+                serde_json::from_str(rows_json).map_err(js_error)?;
+            let rows: BTreeMap<_, _> = rows
+                .into_iter()
+                .map(|(slot, generation, transform, bounds)| {
+                    (
+                        noon_core::SemanticNodeId::new(slot, generation),
+                        (transform, bounds),
+                    )
+                })
+                .collect();
+            let changes = family
+                .prepare_callback_translation(revision, x, y, |node| {
+                    rows.get(&node)
+                        .copied()
+                        .ok_or(noon::ExecutionSessionCallbackError::UnknownObject(node))
+                })
+                .map_err(|error| match error {
+                    // Consume the existing selection/read mapper; do not replace
+                    // #1350's callback mapping or #1354's producer signatures.
+                    noon::FamilyCallbackTranslationError::Family(error) => typed_js_error(error),
+                    noon::FamilyCallbackTranslationError::Translation(error) => {
+                        typed_js_error(AuthoringFailure::new(
+                            "invalid_input",
+                            "callback.family.translation",
+                            error,
+                        ))
+                    }
+                })?;
+            let rows: Vec<_> = changes
+                .into_iter()
+                .map(|change| {
+                    (
+                        change.node.slot(),
+                        change.node.generation(),
+                        change.transform,
+                        change.bounds,
+                    )
+                })
+                .collect();
+            serde_json::to_string(&rows).map_err(js_error)
+        }
+
         /// Apply shared Manim `set_color` semantics to callback-local paint.
         #[wasm_bindgen(js_name = callbackPaintSetColor)]
         #[allow(clippy::too_many_arguments)]
