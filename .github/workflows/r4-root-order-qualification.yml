@@ -8,40 +8,79 @@ concurrency:
   group: r4-root-order-qualification
   cancel-in-progress: true
 jobs:
-  prepare:
+  qualify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
+      PRODUCT_SHA: a74343c97039e2322a23bb45582f49c829843aeb
+      BASE_SHA: 100228bd97fee5d7e44aab3a0cf9736808c04858
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 3b9afa39703936edc13227a8b63bde64e8020bcd
-          fetch-depth: 1
+          ref: a74343c97039e2322a23bb45582f49c829843aeb
+          fetch-depth: 3
           persist-credentials: false
-      - name: Reconcile exact product source without changing remote branches
+      - name: Use repository Rust toolchain
         run: |
-          git fetch --no-tags origin 9c429f36330b969968c0fc91f244bfbd6e9c8b9c
-          git checkout FETCH_HEAD -- crates/noon-core/src/semantic_store.rs crates/noon-compile/src/semantic_lowering/root_order.rs crates/noon/tests/root_order_acceptance.rs crates/noon/tests/root_order_transaction_regressions.rs
-          mkdir -p evidence
-          git rev-parse HEAD > evidence/base.txt
-          git diff --cached --binary > evidence/product.patch
-          rustc --version > evidence/toolchain.txt
-          cargo --version >> evidence/toolchain.txt
-          cargo fetch
-          cargo test -p noon --no-default-features --test root_order_acceptance --test root_order_transaction_regressions 2>&1 | tee evidence/baseline.log
-      - name: Retain source and public build inputs for offline focused tests
-        run: |
-          tar --exclude=.git --exclude=target --exclude=evidence -czf evidence/source.tar.gz .
-          toolchain="$(dirname "$(dirname "$(rustup which rustc)")")"
-          tar --exclude=share/doc -C "$toolchain" -czf evidence/toolchain.tar.gz bin lib libexec
-          tar -C "$HOME/.cargo" -czf evidence/registry.tar.gz registry
-          sha256sum evidence/*.tar.gz > evidence/sha256.txt
-      - uses: actions/upload-artifact@v7
+          rustup component add rustfmt clippy
+          rustup target add wasm32-unknown-unknown
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
         with:
-          name: r4-offline-test-inputs
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Use shared compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Verify exact source and regressions
+        run: |
+          set -o pipefail
+          mkdir -p evidence
+          git show -s --format='%H%n%P%n%T%n%s' HEAD | tee evidence/revisions.txt
+          test "$(git rev-parse HEAD)" = "$PRODUCT_SHA"
+          test "$(git rev-parse HEAD^2)" = "$BASE_SHA"
+          rustc --version | tee evidence/toolchain.txt
+          cargo --version | tee -a evidence/toolchain.txt
+          cargo fmt --all -- --check
+          cargo test -p noon-compile --no-default-features --lib root_order -- --nocapture 2>&1 | tee evidence/compiler.log
+          cargo test -p noon --no-default-features --test root_order_acceptance --test root_order_transaction_regressions --no-fail-fast -- --nocapture 2>&1 | tee evidence/acceptance.log
+          git diff --exit-code
+      - name: Qualify repository architecture and Rust gates
+        run: |
+          set -o pipefail
+          bash scripts/check.sh fast "$BASE_SHA" 2>&1 | tee evidence/fast.log
+      - name: Qualify direct WASM compilation
+        run: |
+          set -o pipefail
+          cargo check -p noon-web --all-features --target wasm32-unknown-unknown 2>&1 | tee evidence/wasm.log
+      - name: Retain exact source and diagnostics
+        if: always()
+        run: |
+          mkdir -p evidence
+          git diff --binary --full-index "$BASE_SHA" HEAD -- crates > evidence/product.patch
+          git diff --binary --full-index HEAD^1 HEAD -- crates/noon-compile/src/semantic_lowering/root_order.rs crates/noon/tests/root_order_transaction_regressions.rs > evidence/continuation.patch
+          git status --porcelain > evidence/worktree-status.txt
+          git ls-tree -r HEAD -- crates/noon-core/src/semantic_store.rs crates/noon-compile/src/semantic_lowering/root_order.rs crates/noon/tests/root_order_acceptance.rs crates/noon/tests/root_order_transaction_regressions.rs > evidence/source-blobs.txt
+          cp crates/noon-compile/src/semantic_lowering/root_order.rs evidence/
+          cp crates/noon/tests/root_order_acceptance.rs evidence/
+          cp crates/noon/tests/root_order_transaction_regressions.rs evidence/
+          cp Cargo.lock evidence/
+          sha256sum evidence/*.rs evidence/Cargo.lock > evidence/source-sha256.txt
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: r4-continuation-qualification
           path: evidence
-          retention-days: 1
+          retention-days: 7
           if-no-files-found: error
