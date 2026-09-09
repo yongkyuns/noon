@@ -128,18 +128,318 @@ impl From<AuthoringError> for AuthoringFailure {
                 "authoring.missing_text_resource",
                 message,
             ),
+            AuthoringError::Unsupported(cause) => Self::caused_by(
+                "authoring.unsupported",
+                message,
+                Self::new(
+                    "unsupported_operation",
+                    "authoring.unsupported_operation",
+                    cause,
+                ),
+            ),
             AuthoringError::InvalidRenderNumber { .. } => {
                 Self::new("invalid_input", "authoring.invalid_render_number", message)
+            }
+            AuthoringError::NonPositiveNumber { .. } => {
+                Self::new("invalid_input", "authoring.non_positive_number", message)
             }
             AuthoringError::InvalidOpacity { .. } => {
                 Self::new("invalid_input", "authoring.invalid_opacity", message)
             }
+            AuthoringError::InvalidEllipseDimensions { .. } => Self::new(
+                "invalid_input",
+                "authoring.invalid_ellipse_dimensions",
+                message,
+            ),
+            AuthoringError::NonFiniteGeometry => {
+                Self::new("invalid_input", "authoring.non_finite_geometry", message)
+            }
+            AuthoringError::NonFiniteObjectState => Self::new(
+                "invalid_input",
+                "authoring.non_finite_object_state",
+                message,
+            ),
+            AuthoringError::NonFiniteTransform => {
+                Self::new("invalid_input", "authoring.non_finite_transform", message)
+            }
+            AuthoringError::NonFiniteStyle => {
+                Self::new("invalid_input", "authoring.non_finite_style", message)
+            }
             AuthoringError::NegativeStrokeWidth(_) => {
                 Self::new("invalid_input", "authoring.negative_stroke_width", message)
+            }
+            AuthoringError::InvalidStrokeWidthMode(_) => Self::new(
+                "invalid_input",
+                "authoring.invalid_stroke_width_mode",
+                message,
+            ),
+            AuthoringError::InvalidStrokeJoin(_) => {
+                Self::new("invalid_input", "authoring.invalid_stroke_join", message)
+            }
+            AuthoringError::InvalidStrokeCap(_) => {
+                Self::new("invalid_input", "authoring.invalid_stroke_cap", message)
+            }
+            AuthoringError::NonFiniteDirection => {
+                Self::new("invalid_input", "authoring.non_finite_direction", message)
+            }
+            AuthoringError::ZeroDirection => {
+                Self::new("invalid_input", "authoring.zero_direction", message)
+            }
+            AuthoringError::NonFiniteLineEndpoints => Self::new(
+                "invalid_input",
+                "authoring.non_finite_line_endpoints",
+                message,
+            ),
+            AuthoringError::DegenerateLine => {
+                Self::new("invalid_input", "authoring.degenerate_line", message)
+            }
+            AuthoringError::UnorderedBounds(_) => {
+                Self::new("invalid_input", "authoring.unordered_bounds", message)
+            }
+            AuthoringError::InvalidDimension(_) => {
+                Self::new("invalid_input", "authoring.invalid_dimension", message)
+            }
+            AuthoringError::ZeroReplaceExtent => {
+                Self::new("invalid_input", "authoring.zero_replace_extent", message)
+            }
+            AuthoringError::ZeroStretchTarget => {
+                Self::new("invalid_input", "authoring.zero_stretch_target", message)
+            }
+            AuthoringError::ZeroMatchHeight => {
+                Self::new("invalid_input", "authoring.zero_match_height", message)
+            }
+            AuthoringError::ZeroMatchWidth => {
+                Self::new("invalid_input", "authoring.zero_match_width", message)
+            }
+            AuthoringError::MissingLayoutBounds(_) => {
+                Self::new("invalid_input", "authoring.missing_layout_bounds", message)
+            }
+            AuthoringError::InvalidSubmobjectIndex { .. } => Self::new(
+                "invalid_input",
+                "authoring.invalid_submobject_index",
+                message,
+            ),
+            AuthoringError::InvalidGridDimensions { .. } => Self::new(
+                "invalid_input",
+                "authoring.invalid_grid_dimensions",
+                message,
+            ),
+            AuthoringError::InsufficientGridCapacity { .. } => Self::new(
+                "invalid_input",
+                "authoring.insufficient_grid_capacity",
+                message,
+            ),
+            AuthoringError::AlreadyScopedTracker(_) => {
+                Self::new("invalid_input", "authoring.already_scoped_tracker", message)
+            }
+            AuthoringError::EmptyInputName { .. } => {
+                Self::new("invalid_input", "authoring.empty_input_name", message)
+            }
+            AuthoringError::CameraRequiresEmptyScene(_) => Self::new(
+                "invalid_input",
+                "authoring.camera_requires_empty_scene",
+                message,
+            ),
+            AuthoringError::FamilyPairing(cause) => {
+                Self::caused_by("authoring.family_pairing", message, cause.into())
+            }
+            AuthoringError::VectorLowering(cause) => Self::caused_by(
+                "authoring.vector_lowering",
+                message,
+                Self::new("invalid_input", "vector.invalid_coordinates", cause),
+            ),
+            AuthoringError::GeometryResource(cause) => {
+                Self::caused_by("authoring.geometry_resource", message, cause.into())
+            }
+            AuthoringError::GeometryLayout(cause) => Self::caused_by(
+                "authoring.geometry_layout",
+                message,
+                Self::new("invalid_input", "geometry.invalid_layout", cause),
+            ),
+            AuthoringError::Arc(cause) => Self::caused_by(
+                "authoring.arc",
+                message,
+                Self::new("invalid_input", "arc.invalid_input", cause),
+            ),
+            AuthoringError::Elbow(cause) => Self::caused_by(
+                "authoring.elbow",
+                message,
+                Self::new("invalid_input", "elbow.invalid_input", cause),
+            ),
+            AuthoringError::RoundedRectangle(cause) => Self::caused_by(
+                "authoring.rounded_rectangle",
+                message,
+                Self::new("invalid_input", "rounded_rectangle.invalid_input", cause),
+            ),
+            AuthoringError::DashedLine(cause) => Self::caused_by(
+                "authoring.dashed_line",
+                message,
+                Self::new("invalid_input", "dashed_line.invalid_input", cause),
+            ),
+            AuthoringError::Signal(cause) => {
+                Self::caused_by("authoring.signal", message, cause.into())
+            }
+            AuthoringError::SignalBinding(cause) => {
+                Self::caused_by("authoring.signal_binding", message, cause.into())
+            }
+            AuthoringError::ScalarQuery(cause) => {
+                Self::caused_by("authoring.scalar_query", message, cause.into())
             }
             // The public producer is non-exhaustive; future domains must opt in
             // with a reviewed projection, not silently acquire a guessed class.
             other => Self::unclassified("authoring.unclassified", &other),
+        }
+    }
+}
+
+impl From<noon_core::AnimationOptionsError> for AuthoringFailure {
+    fn from(error: noon_core::AnimationOptionsError) -> Self {
+        use noon_core::AnimationOptionsError as E;
+        let (category, code) = match &error {
+            E::UnsupportedPathArc(_) => ("unsupported_operation", "animation.unsupported_path_arc"),
+            E::UnsupportedReverseRateFunction => {
+                ("unsupported_operation", "animation.unsupported_reverse")
+            }
+            E::InvalidRunTime(_) => ("invalid_input", "animation.invalid_run_time"),
+            E::InvalidLagRatio(_) => ("invalid_input", "animation.invalid_lag_ratio"),
+            E::InvalidPathArc(_) => ("invalid_input", "animation.invalid_path_arc"),
+        };
+        Self::new(category, code, error)
+    }
+}
+
+impl From<noon_core::GeometryResourceError> for AuthoringFailure {
+    fn from(error: noon_core::GeometryResourceError) -> Self {
+        use noon_core::GeometryResourceError as E;
+        match error {
+            E::NonFinitePath => Self::new("invalid_input", "geometry.non_finite_path", error),
+            E::UnknownResource(_) => {
+                Self::new("missing_resource", "geometry.unknown_resource", error)
+            }
+            _ => Self::unclassified("geometry.unclassified", &error),
+        }
+    }
+}
+
+impl From<noon_core::SemanticFamilyPairingError> for AuthoringFailure {
+    fn from(error: noon_core::SemanticFamilyPairingError) -> Self {
+        use noon_core::SemanticFamilyPairingError as E;
+        let (category, code) = match &error {
+            E::UnknownNode(_) => ("stale_handle", "family_pairing.unknown_node"),
+            E::RootIsNotFamily(_) => ("invalid_input", "family_pairing.not_family"),
+            E::Empty => ("invalid_input", "family_pairing.empty"),
+            E::TopologyMismatch { .. } => {
+                ("unsupported_operation", "family_pairing.topology_mismatch")
+            }
+            E::UnsupportedLeaf(_) => ("unsupported_operation", "family_pairing.unsupported_leaf"),
+            E::AliasMismatch { .. } => ("unsupported_operation", "family_pairing.alias_mismatch"),
+        };
+        Self::new(category, code, error)
+    }
+}
+
+impl From<noon_core::SemanticSignalError> for AuthoringFailure {
+    fn from(error: noon_core::SemanticSignalError) -> Self {
+        use noon_core::SemanticSignalError as E;
+        let (category, code) = match &error {
+            E::UnknownSignal(_) => ("stale_handle", "signal.unknown_signal"),
+            E::NotSignal(_) => ("invalid_input", "signal.not_signal"),
+            E::NonFiniteValue => ("invalid_input", "signal.non_finite_value"),
+            E::DependencyCycle(_) => ("invalid_input", "signal.dependency_cycle"),
+            E::InvalidNativeInputInitialValue { .. } => {
+                ("invalid_input", "signal.invalid_initial_value")
+            }
+            E::InvalidUnaryExpression { .. } => {
+                ("invalid_input", "signal.invalid_unary_expression")
+            }
+            E::InvalidBinaryExpression { .. } => {
+                ("invalid_input", "signal.invalid_binary_expression")
+            }
+            E::SourceTypeMismatch { .. } => ("invalid_input", "signal.source_type_mismatch"),
+            E::NativeInputRequiresInputSignal { .. } => {
+                ("invalid_input", "signal.native_input_requires_input")
+            }
+            E::NativeInputTypeMismatch { .. } => {
+                ("invalid_input", "signal.native_input_type_mismatch")
+            }
+            E::TimelineOwnedSignal { .. } => ("unsupported_operation", "signal.timeline_owned"),
+            E::NativeOwnedSignal { .. } => ("unsupported_operation", "signal.native_owned"),
+        };
+        Self::new(category, code, error)
+    }
+}
+
+impl From<noon_core::SemanticSignalBindingError> for AuthoringFailure {
+    fn from(error: noon_core::SemanticSignalBindingError) -> Self {
+        use noon_core::SemanticSignalBindingError as E;
+        let message = error.to_string();
+        match error {
+            E::Signal(cause) => Self::caused_by("binding.signal", message, cause.into()),
+            E::Target(cause) => Self::caused_by("binding.target", message, cause.into()),
+            E::TypeMismatch { .. } => Self::new("invalid_input", "binding.type_mismatch", message),
+            E::PropertyAlreadyBound { .. } => {
+                Self::new("invalid_input", "binding.property_already_bound", message)
+            }
+        }
+    }
+}
+
+impl From<noon_core::SemanticScalarSignalQueryError> for AuthoringFailure {
+    fn from(error: noon_core::SemanticScalarSignalQueryError) -> Self {
+        use noon_core::SemanticScalarSignalQueryError as E;
+        let message = error.to_string();
+        match error {
+            E::Signal(cause) => Self::caused_by("scalar_query.signal", message, cause.into()),
+            E::NotInputSignal(_) => Self::new("invalid_input", "scalar_query.not_input", message),
+            E::NonScalarSignal(_) => Self::new("invalid_input", "scalar_query.non_scalar", message),
+            E::InvalidTime => Self::new("invalid_input", "scalar_query.invalid_time", message),
+        }
+    }
+}
+
+impl From<noon::TextAuthoringError> for AuthoringFailure {
+    fn from(error: noon::TextAuthoringError) -> Self {
+        use noon::TextAuthoringError as E;
+        let message = error.to_string();
+        match error {
+            E::InvalidFontSize(_) => Self::new("invalid_input", "text.invalid_font_size", message),
+            E::InvalidOpacity(_) => Self::new("invalid_input", "text.invalid_opacity", message),
+            E::FontUnavailable(_) => {
+                Self::new("missing_resource", "text.font_unavailable", message)
+            }
+            E::MissingGeometryResource => {
+                Self::new("missing_resource", "text.missing_geometry", message)
+            }
+            E::MissingFontResource => Self::new("missing_resource", "text.missing_font", message),
+            E::Semantic(cause) => Self::caused_by("text.authoring", message, cause.into()),
+            E::Import(cause) => Self::caused_by("text.import", message, cause.into()),
+            // Provider diagnostics remain attached, without inventing provider policy.
+            other => Self::unclassified("text.provider", &other),
+        }
+    }
+}
+
+impl From<noon_core::SemanticTextImportError> for AuthoringFailure {
+    fn from(error: noon_core::SemanticTextImportError) -> Self {
+        use noon_core::SemanticTextImportError as E;
+        match error {
+            E::MissingFont(_) => Self::new("missing_resource", "text_import.missing_font", error),
+            E::MissingGeometry(_) => {
+                Self::new("missing_resource", "text_import.missing_geometry", error)
+            }
+            E::NonFiniteGeometry(_) => {
+                Self::new("invalid_input", "text_import.non_finite_geometry", error)
+            }
+            E::Validation(ref cause) => Self::caused_by(
+                "text_import.validation",
+                error.to_string(),
+                Self::new("invalid_input", "text.invalid_resource", cause),
+            ),
+            E::Font(ref cause) => Self::caused_by(
+                "text_import.font",
+                error.to_string(),
+                Self::new("invalid_input", "text.invalid_font", cause),
+            ),
         }
     }
 }
@@ -185,6 +485,7 @@ impl From<SemanticMutationTransactionError> for AuthoringFailure {
         let message = error.to_string();
         match error {
             E::Object { error, .. } => Self::caused_by("transaction.object", message, error.into()),
+            E::Signal { error, .. } => Self::caused_by("transaction.signal", message, error.into()),
             E::Family { error, .. } => Self::caused_by("transaction.family", message, error.into()),
             E::AnimationTarget { error, .. } => {
                 Self::caused_by("transaction.animation_target", message, error.into())
@@ -461,6 +762,8 @@ impl From<LiveSessionError> for AuthoringFailure {
         let message = error.to_string();
         match error {
             E::Authoring(cause) => Self::caused_by("live.authoring", message, cause.into()),
+            E::Callback(cause) => Self::caused_by("live.callback", message, cause.into()),
+            E::Text(cause) => Self::caused_by("live.text", message, cause.into()),
             E::ForeignMobjectStore => Self::new("foreign_handle", "live.foreign_store", message),
             E::Segment(cause) => Self::caused_by("live.segment", message, cause.into()),
             E::Advance(cause) => Self::caused_by("live.advance", message, cause.into()),
@@ -570,12 +873,13 @@ mod tests {
                     .unwrap()
             ));
         }
-        // Unaccepted domains remain explicit, even with category-like input text.
+        // A newly accepted typed input keeps its own category/code even when
+        // the user-supplied value names unrelated error categories.
         let failure = AuthoringFailure::from(AuthoringError::InvalidStrokeCap(
             "invalid opacity; negative stroke width".into(),
         ));
-        assert_eq!(failure.category, "unclassified");
-        assert_eq!(failure.code, "authoring.unclassified");
+        assert_eq!(failure.category, "invalid_input");
+        assert_eq!(failure.code, "authoring.invalid_stroke_cap");
     }
 
     #[test]
@@ -607,5 +911,132 @@ mod tests {
                 .category,
             "pending_work"
         );
+    }
+    fn assert_authoring_projection(error: AuthoringError, category: &str, codes: &[&str]) {
+        let diagnostic = error.to_string();
+        let failure = AuthoringFailure::from(error);
+        assert_eq!(failure.category, category);
+        assert_eq!(failure.message, diagnostic);
+        assert!(!diagnostic.is_empty());
+        let mut projected = Vec::new();
+        let mut current = Some(&failure);
+        while let Some(cause) = current {
+            projected.push(cause.code);
+            assert_eq!(cause.category, category);
+            assert!(!cause.message.is_empty());
+            current = cause.cause.as_deref();
+        }
+        assert_eq!(projected, codes);
+    }
+
+    #[test]
+    fn accepted_public_operations_project_real_rust_causes_and_retry() {
+        use noon::{LayoutAnchor, MobjectFamilyMember, Scene};
+        let scene = Scene::new();
+        let mut first = scene.circle(1.0).unwrap();
+        let second = scene.square(1.0).unwrap();
+        let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+        let before = (first.state().unwrap(), second.state().unwrap());
+        let revision = scene.integration_store().borrow().scene_revision();
+        let nodes = scene.integration_store().borrow().len();
+        assert_authoring_projection(
+            scene.circle(0.0).unwrap_err(),
+            "invalid_input",
+            &["authoring.non_positive_number"],
+        );
+        assert_authoring_projection(
+            first.shift(f64::NAN, 0.0).unwrap_err(),
+            "invalid_input",
+            &["authoring.invalid_render_number"],
+        );
+        assert_authoring_projection(
+            first.set_fill_opacity(1.5).unwrap_err(),
+            "invalid_input",
+            &["authoring.invalid_opacity"],
+        );
+        assert_authoring_projection(
+            first.manim_line_endpoints().unwrap_err(),
+            "unsupported_operation",
+            &["authoring.unsupported", "authoring.unsupported_operation"],
+        );
+        assert_authoring_projection(
+            LayoutAnchor::from(&family).member(-3).layout().unwrap_err(),
+            "invalid_input",
+            &["authoring.invalid_submobject_index"],
+        );
+        assert_authoring_projection(
+            family
+                .arrange_in_grid(Some(1), Some(1), 0.1, 0.1)
+                .unwrap_err(),
+            "invalid_input",
+            &["authoring.insufficient_grid_capacity"],
+        );
+        let foreign = Scene::new().circle(1.0).unwrap();
+        assert_authoring_projection(
+            family
+                .copy_with_references(&[MobjectFamilyMember::Mobject(&foreign)])
+                .unwrap_err(),
+            "foreign_handle",
+            &["authoring.foreign_store"],
+        );
+        assert_authoring_projection(
+            scene.value_tracker(f64::NAN).unwrap_err(),
+            "invalid_input",
+            &["authoring.signal", "signal.non_finite_value"],
+        );
+        assert_eq!((first.state().unwrap(), second.state().unwrap()), before);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+        assert_eq!(scene.integration_store().borrow().len(), nodes);
+        first.shift(0.5, -0.5).unwrap();
+        first.set_fill_opacity(0.5).unwrap();
+        family.arrange_in_grid(Some(1), Some(2), 0.1, 0.1).unwrap();
+        assert_eq!(first.fill_opacity().unwrap(), 0.5);
+        assert!(family.copy_family().is_ok());
+        assert_eq!(
+            scene
+                .value_tracker_value(&scene.value_tracker(2.0).unwrap())
+                .unwrap(),
+            2.0
+        );
+    }
+
+    #[test]
+    fn accepted_live_projection_preserves_atomic_publication_and_local_retry() {
+        let mut scene = noon::Scene::new();
+        let target = scene.circle(1.0).unwrap();
+        let unrelated = scene.square(1.0).unwrap();
+        scene.add(&target).unwrap();
+        scene.add(&unrelated).unwrap();
+        let mut execution = scene.execution_session().unwrap();
+        execution.take_frame_changes();
+        let before = execution.frame().clone();
+        let publication = execution.publication_context();
+        let authored = target.state().unwrap();
+        let error = scene
+            .live(&mut execution)
+            .set_fill_opacity(&target, 1.5)
+            .unwrap_err();
+        let message = error.to_string();
+        let projected = AuthoringFailure::from(error);
+        assert_eq!(projected.category, "invalid_input");
+        assert_eq!(projected.code, "live.authoring");
+        assert_eq!(
+            projected.cause.as_ref().unwrap().code,
+            "authoring.invalid_opacity"
+        );
+        assert_eq!(projected.message, message);
+        assert_eq!(execution.frame(), &before);
+        assert_eq!(execution.publication_context(), publication);
+        assert_eq!(target.state().unwrap(), authored);
+        assert!(execution.take_frame_changes().is_empty());
+        scene
+            .live(&mut execution)
+            .set_fill_opacity(&target, 0.5)
+            .unwrap();
+        assert_eq!(execution.take_frame_changes().object_indices(), &[0]);
+        assert_eq!(execution.frame().objects[1], before.objects[1]);
     }
 }

@@ -1,79 +1,9 @@
 use noon_core::{
     resolve_animation_options as resolve_core_animation_options, AnimationDefaults,
-    AnimationOptions, AnimationOptionsError, RateFunction, ResolvedAnimationOptions,
+    AnimationOptions, RateFunction, ResolvedAnimationOptions,
 };
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct FrontendAnimationOptionsResolution {
-    ok: bool,
-    run_time: f64,
-    rate_func: String,
-    lag_ratio: f64,
-    path_arc: f64,
-    reverse_rate_function: bool,
-    error_kind: Option<String>,
-    message: Option<String>,
-}
-
-impl FrontendAnimationOptionsResolution {
-    fn success(options: ResolvedAnimationOptions) -> Self {
-        Self {
-            ok: true,
-            run_time: options.run_time,
-            rate_func: options.rate_func.semantic_id().to_owned(),
-            lag_ratio: options.lag_ratio,
-            path_arc: options.path_arc,
-            reverse_rate_function: options.reverse_rate_function,
-            error_kind: None,
-            message: None,
-        }
-    }
-
-    fn failure(kind: &str, message: impl Into<String>) -> Self {
-        Self {
-            ok: false,
-            run_time: 0.0,
-            rate_func: String::new(),
-            lag_ratio: 0.0,
-            path_arc: 0.0,
-            reverse_rate_function: false,
-            error_kind: Some(kind.to_owned()),
-            message: Some(message.into()),
-        }
-    }
-
-    pub const fn ok(&self) -> bool {
-        self.ok
-    }
-
-    pub const fn run_time(&self) -> f64 {
-        self.run_time
-    }
-
-    pub fn rate_func(&self) -> String {
-        self.rate_func.clone()
-    }
-
-    pub const fn lag_ratio(&self) -> f64 {
-        self.lag_ratio
-    }
-
-    pub const fn path_arc(&self) -> f64 {
-        self.path_arc
-    }
-
-    pub const fn reverse_rate_function(&self) -> bool {
-        self.reverse_rate_function
-    }
-
-    pub fn error_kind(&self) -> Option<String> {
-        self.error_kind.clone()
-    }
-
-    pub fn message(&self) -> Option<String> {
-        self.message.clone()
-    }
-}
+use crate::authoring_error::AuthoringFailure;
 
 fn optional_number(value: f64) -> Option<f64> {
     (!value.is_nan()).then_some(value)
@@ -88,13 +18,19 @@ fn optional_bool(value: i32) -> Option<bool> {
     }
 }
 
-fn parse_optional_rate_func(value: &str) -> Result<Option<RateFunction>, String> {
+fn parse_optional_rate_func(value: &str) -> Result<Option<RateFunction>, AuthoringFailure> {
     if value.is_empty() {
         return Ok(None);
     }
     RateFunction::from_semantic_id(value)
         .map(Some)
-        .ok_or_else(|| format!("unsupported rate function semantic id: {value}"))
+        .ok_or_else(|| {
+            AuthoringFailure::new(
+                "invalid_input",
+                "animation.invalid_rate_function",
+                format!("unsupported rate function semantic id: {value}"),
+            )
+        })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -108,19 +44,9 @@ pub fn resolve_frontend_animation_options(
     play_run_time: f64,
     play_rate_func: &str,
     play_lag_ratio: f64,
-) -> FrontendAnimationOptionsResolution {
-    let animation_rate_func = match parse_optional_rate_func(animation_rate_func) {
-        Ok(value) => value,
-        Err(message) => {
-            return FrontendAnimationOptionsResolution::failure("invalid_rate_func", message)
-        }
-    };
-    let play_rate_func = match parse_optional_rate_func(play_rate_func) {
-        Ok(value) => value,
-        Err(message) => {
-            return FrontendAnimationOptionsResolution::failure("invalid_rate_func", message)
-        }
-    };
+) -> Result<ResolvedAnimationOptions, AuthoringFailure> {
+    let animation_rate_func = parse_optional_rate_func(animation_rate_func)?;
+    let play_rate_func = parse_optional_rate_func(play_rate_func)?;
 
     let animation = AnimationOptions {
         run_time: optional_number(animation_run_time),
@@ -137,74 +63,49 @@ pub fn resolve_frontend_animation_options(
         ..AnimationOptions::new()
     };
 
-    match resolve_core_animation_options(
+    resolve_core_animation_options(
         AnimationDefaults::MANIM.lag_ratio(default_lag_ratio),
         animation,
         play,
-    ) {
-        Ok(options) => FrontendAnimationOptionsResolution::success(options),
-        Err(error) => {
-            let kind = match error {
-                AnimationOptionsError::UnsupportedPathArc(_)
-                | AnimationOptionsError::UnsupportedReverseRateFunction => "unsupported",
-                AnimationOptionsError::InvalidRunTime(_)
-                | AnimationOptionsError::InvalidLagRatio(_)
-                | AnimationOptionsError::InvalidPathArc(_) => "value_error",
-            };
-            FrontendAnimationOptionsResolution::failure(kind, error.to_string())
-        }
-    }
+    )
+    .map_err(AuthoringFailure::from)
 }
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use wasm_bindgen::prelude::*;
 
-    use super::{resolve_frontend_animation_options, FrontendAnimationOptionsResolution};
+    use super::{resolve_frontend_animation_options, ResolvedAnimationOptions};
+    use crate::authoring_error::js_error;
 
     #[wasm_bindgen]
-    pub struct WasmAnimationOptionsResolution(FrontendAnimationOptionsResolution);
+    pub struct WasmAnimationOptionsResolution(ResolvedAnimationOptions);
 
     #[wasm_bindgen]
     impl WasmAnimationOptionsResolution {
-        #[wasm_bindgen(getter)]
-        pub fn ok(&self) -> bool {
-            self.0.ok()
-        }
-
         #[wasm_bindgen(getter, js_name = runTime)]
         pub fn run_time(&self) -> f64 {
-            self.0.run_time()
+            self.0.run_time
         }
 
         #[wasm_bindgen(getter, js_name = rateFunc)]
         pub fn rate_func(&self) -> String {
-            self.0.rate_func()
+            self.0.rate_func.semantic_id().to_owned()
         }
 
         #[wasm_bindgen(getter, js_name = lagRatio)]
         pub fn lag_ratio(&self) -> f64 {
-            self.0.lag_ratio()
+            self.0.lag_ratio
         }
 
         #[wasm_bindgen(getter, js_name = pathArc)]
         pub fn path_arc(&self) -> f64 {
-            self.0.path_arc()
+            self.0.path_arc
         }
 
         #[wasm_bindgen(getter, js_name = reverseRateFunction)]
         pub fn reverse_rate_function(&self) -> bool {
-            self.0.reverse_rate_function()
-        }
-
-        #[wasm_bindgen(getter, js_name = errorKind)]
-        pub fn error_kind(&self) -> Option<String> {
-            self.0.error_kind()
-        }
-
-        #[wasm_bindgen(getter)]
-        pub fn message(&self) -> Option<String> {
-            self.0.message()
+            self.0.reverse_rate_function
         }
     }
 
@@ -220,8 +121,8 @@ mod wasm {
         play_run_time: f64,
         play_rate_func: &str,
         play_lag_ratio: f64,
-    ) -> WasmAnimationOptionsResolution {
-        WasmAnimationOptionsResolution(resolve_frontend_animation_options(
+    ) -> Result<WasmAnimationOptionsResolution, JsValue> {
+        resolve_frontend_animation_options(
             default_lag_ratio,
             animation_run_time,
             animation_rate_func,
@@ -231,7 +132,9 @@ mod wasm {
             play_run_time,
             play_rate_func,
             play_lag_ratio,
-        ))
+        )
+        .map(WasmAnimationOptionsResolution)
+        .map_err(js_error)
     }
 }
 
@@ -256,10 +159,10 @@ mod tests {
             f64::NAN,
         );
 
-        assert!(resolved.ok());
-        assert_eq!(resolved.run_time(), 0.4);
-        assert_eq!(resolved.rate_func(), "smooth");
-        assert_eq!(resolved.lag_ratio(), 0.5);
+        let resolved = resolved.unwrap();
+        assert_eq!(resolved.run_time, 0.4);
+        assert_eq!(resolved.rate_func.semantic_id(), "smooth");
+        assert_eq!(resolved.lag_ratio, 0.5);
     }
 
     #[test]
@@ -275,8 +178,11 @@ mod tests {
             "",
             f64::NAN,
         );
-        assert!(!unsupported.ok());
-        assert_eq!(unsupported.error_kind().as_deref(), Some("unsupported"));
+        let error = unsupported.unwrap_err();
+        assert_eq!(
+            (error.category, error.code),
+            ("unsupported_operation", "animation.unsupported_path_arc")
+        );
 
         let invalid = resolve_frontend_animation_options(
             0.0,
@@ -289,7 +195,10 @@ mod tests {
             "",
             f64::NAN,
         );
-        assert!(!invalid.ok());
-        assert_eq!(invalid.error_kind().as_deref(), Some("invalid_rate_func"));
+        let error = invalid.unwrap_err();
+        assert_eq!(
+            (error.category, error.code),
+            ("invalid_input", "animation.invalid_rate_function")
+        );
     }
 }
