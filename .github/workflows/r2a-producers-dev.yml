@@ -6,11 +6,11 @@ permissions:
   contents: write
   actions: read
 concurrency:
-  group: r2a-producers-development
-  cancel-in-progress: true
+  group: r2a-frame-integration
+  cancel-in-progress: false
 env:
-  INPUT_HEAD: 7d373852040c253d90f927efb774c100f56c1291
-  CURRENT_BASE: 5b56124312657c0959e1ca3936930cad0fe7e240
+  INPUT_HEAD: 05f7667d7d6f00330caaca5002374c3bd106ddd0
+  CURRENT_BASE: 35658f4a9468ca44cc5dcfb97e7aae8b62e38e08
   CARGO_BUILD_JOBS: '2'
   CARGO_INCREMENTAL: '0'
   CARGO_PROFILE_DEV_DEBUG: '0'
@@ -19,80 +19,144 @@ env:
   SCCACHE_GHA_ENABLED: 'true'
   SCCACHE_GHA_RW_MODE: READ_ONLY
 jobs:
-  reviewed-full-landing:
+  frame-integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 7d373852040c253d90f927efb774c100f56c1291
+          ref: 05f7667d7d6f00330caaca5002374c3bd106ddd0
           fetch-depth: 0
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '22'
       - uses: actions/download-artifact@v8
         with:
           name: r2a-landing-focused
           run-id: 34388702779
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/r2a-focused-input
-      - name: Pin source, dependency identity, and review regression
+      - name: Preserve the actual master frame implementation with typed results
         run: |
           set -euo pipefail
-          mkdir -p /tmp/r2a-full
+          mkdir -p /tmp/r2a-frame
           test "$(git rev-parse HEAD)" = "$INPUT_HEAD"
-          test "$(git rev-parse HEAD^{tree})" = f7b787b82aed329961c175d21d14fd3ab41537cc
-          git merge-base --is-ancestor "$CURRENT_BASE" HEAD
-          git diff --exit-code
-          printf '%s\n' "$GITHUB_SHA" > /tmp/r2a-full/helper-event-sha.txt
+          git config user.name 'Noon development tooling'
+          git config user.email 'development@noon.invalid'
+          git archive "$CURRENT_BASE" | gzip > /tmp/r2a-frame/base.tar.gz
+          set +e
+          git merge --no-commit --no-ff "$CURRENT_BASE" > /tmp/r2a-frame/merge.log 2>&1
+          merged=$?
+          set -e
+          test "$merged" -le 1
           python3 - <<'PY'
-          import hashlib, os
+          import os, subprocess, hashlib
           from pathlib import Path
-          data=(Path(os.environ['RUNNER_TEMP'])/'r2a-focused-input/Cargo.lock').read_bytes()
-          assert hashlib.sha256(data).hexdigest()=='9fc77831ae25df351229c9902c073657062501a8e5faf8ea313dd9c8284062dd'
-          Path('Cargo.lock').write_bytes(data)
+          head=os.environ['INPUT_HEAD']; base=os.environ['CURRENT_BASE']
+          def source(ref,path):
+              return subprocess.check_output(['git','show',f'{ref}:{path}'],text=True)
+          def between(text,start,end):
+              assert text.count(start)==1 and text.count(end)==1
+              a=text.index(start); b=text.index(end,a)
+              return text[a:b]
+          allowed={
+              'crates/noon/src/family_layout.rs',
+              'crates/noon/src/live_session/family_layout.rs',
+              'crates/noon/src/semantic_mobject/layout.rs',
+              'crates/noon/src/example_scenes/family_placement.rs',
+          }
+          conflicts=subprocess.check_output(['git','diff','--name-only','--diff-filter=U'],text=True).splitlines()
+          assert set(conflicts)<=allowed,conflicts
+          path='crates/noon/src/family_layout.rs'
+          old=source(head,path); master=source(base,path)
+          method=between(master,'    /// Align selected family edges','    pub fn move_to(')
+          assert method.count('Result<(), String>')==1
+          method=method.replace('Result<(), String>','Result<(), AuthoringError>')
+          assert 'pub fn align_on_frame' not in old
+          old=old.replace('    pub fn move_to(',method+'    pub fn move_to(',1)
+          marker='/// Shared frame target; placement owns bounds, alias selection and publication.'
+          assert master.count(marker)==1
+          helper=master[master.index(marker):]
+          assert helper.count('Result<(f64, f64), String>')==1
+          helper=helper.replace('Result<(f64, f64), String>','Result<(f64, f64), AuthoringError>')
+          Path(path).write_text(old.rstrip()+'\n\n'+helper)
+          path='crates/noon/src/live_session/family_layout.rs'
+          old=source(head,path); master=source(base,path)
+          method=between(master,'    /// Align effective family bounds','    pub fn align_family_to(')
+          assert method.count('map_err(LiveSessionError::Mobject)')==1
+          method=method.replace('map_err(LiveSessionError::Mobject)','map_err(LiveSessionError::from)')
+          assert 'pub fn align_family_on_frame' not in old
+          Path(path).write_text(old.replace('    pub fn align_family_to(',method+'    pub fn align_family_to(',1))
+          path='crates/noon/src/semantic_mobject/layout.rs'
+          old=source(head,path); master=source(base,path)
+          marker='    pub fn align_on_frame('
+          assert old.count(marker)==master.count(marker)==1
+          tail=master[master.index(marker):]
+          assert tail.count('Result<(), String>')==1
+          assert tail.count('self.validate().map_err(|error| error.to_string())?;')==1
+          tail=tail.replace('Result<(), String>','Result<(), AuthoringError>').replace('self.validate().map_err(|error| error.to_string())?;','self.validate()?;')
+          Path(path).write_text(old[:old.index(marker)]+tail)
+          path='crates/noon/src/example_scenes/family_placement.rs'
+          old=source(head,path); master=source(base,path)
+          frame=between(master,'    // Exercise shared frame placement','    family.shift(0.0, 0.2)?;')
+          frame=frame.replace('.layout()?', '.layout().map_err(|error| error.to_string())?')
+          frame=frame.replace('.align_on_frame((2.0, 1.0), 0.25)?;', '.align_on_frame((2.0, 1.0), 0.25).map_err(|error| error.to_string())?;')
+          frame=frame.replace('.move_to(Target::Point(center.0, center.1), (0.0, 0.0), (1.0, 1.0))?;', '.move_to(Target::Point(center.0, center.1), (0.0, 0.0), (1.0, 1.0)).map_err(|error| error.to_string())?;')
+          marker='    family.shift(0.0, 0.2).map_err(|error| error.to_string())?;'
+          assert old.count(marker)==1
+          old=old.replace(marker,frame+marker)
+          marker='    scene.execution_session().map_err(|e| e.to_string())\n}'
+          assert old.count(marker)==1
+          tail=master[master.index('    let mut execution ='):].rstrip()
+          Path(path).write_text(old.replace(marker,tail))
+          subprocess.run(['git','add',*sorted(allowed)],check=True)
+          assert not subprocess.check_output(['git','ls-files','-u'],text=True)
+          lock=(Path(os.environ['RUNNER_TEMP'])/'r2a-focused-input/Cargo.lock').read_bytes()
+          assert hashlib.sha256(lock).hexdigest()=='9fc77831ae25df351229c9902c073657062501a8e5faf8ea313dd9c8284062dd'
+          Path('Cargo.lock').write_bytes(lock)
           path=Path('fixtures/provider-consumer/tests/object_authoring_errors.rs')
           text=path.read_text()
-          assert 'fn positive_number_rejection_retains_original_f64_and_recovers' not in text
+          assert 'fn frame_alignment_preserves_typed_rejection_and_live_recovery' not in text
           text += '''
           #[test]
-          fn positive_number_rejection_retains_original_f64_and_recovers() -> TestResult {
-              let scene = Scene::new();
-              let before = snapshot(&scene, &[]);
-              for supplied in [
-                  f64::MIN_POSITIVE,
-                  -f64::MIN_POSITIVE,
-                  f64::from_bits(1),
-                  -f64::from_bits(1),
-                  1.0e-200,
-                  -1.0e-200,
-                  -1.23456789012345,
-                  0.0,
-                  -0.0,
-              ] {
-                  match scene.circle(supplied).unwrap_err() {
-                      AuthoringError::NonPositiveNumber { name, value } => {
-                          assert_eq!(name, "radius");
-                          assert_eq!(value.to_bits(), supplied.to_bits());
-                      }
-                      other => panic!("expected NonPositiveNumber, got {other:?}"),
-                  }
-                  assert_eq!(snapshot(&scene, &[]), before);
-              }
-              scene.circle(f64::from(f32::MIN_POSITIVE))?;
-              scene.circle(1.0)?;
-              assert_eq!(snapshot(&scene, &[]).nodes, before.nodes + 2);
+          fn frame_alignment_preserves_typed_rejection_and_live_recovery() -> TestResult {
+              let mut scene = Scene::new();
+              let object = scene.circle(0.25)?;
+              let family = scene.family(&[(&object).into()])?;
+              scene.add(&object)?;
+              let before = snapshot(&scene, &[&object]);
+              assert!(matches!(
+                  family.layout()?.align_on_frame((1.0, 0.0), f64::NAN),
+                  Err(AuthoringError::InvalidRenderNumber { .. })
+              ));
+              assert_eq!(snapshot(&scene, &[&object]), before);
+              let mut session = scene.execution_session()?;
+              session.take_frame_changes();
+              let frame = session.frame().clone();
+              let publication = session.publication_context();
+              let error = scene.live(&mut session)
+                  .align_family_on_frame(&family, (1.0, 0.0), f64::NAN)
+                  .unwrap_err();
+              assert!(matches!(error, LiveSessionError::Authoring(
+                  AuthoringError::InvalidRenderNumber { .. }
+              )));
+              assert!(error.source().unwrap().is::<AuthoringError>());
+              assert_live_unchanged(&scene, &mut session, &[&object], before, frame, publication);
+              let old = object.state()?.transform;
+              scene.live(&mut session).align_family_on_frame(&family, (2.0, 0.0), 0.25)?;
+              assert_ne!(object.state()?.transform, old);
+              assert!(!session.take_frame_changes().is_empty());
               Ok(())
           }
           '''
           path.write_text(text)
           PY
-          sha256sum Cargo.lock > /tmp/r2a-full/lock-before.sha256
-          cp Cargo.lock /tmp/r2a-full/Cargo.lock
-          rustc --version > /tmp/r2a-full/toolchain.txt
-          cargo --version >> /tmp/r2a-full/toolchain.txt
-          node --version >> /tmp/r2a-full/toolchain.txt
-          python3 --version >> /tmp/r2a-full/toolchain.txt
+          cargo fmt --all
+          cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
+          git add -u
+          git diff --cached --check
+          git diff --exit-code "$CURRENT_BASE" -- crates/noon-web/src/authoring_error.rs crates/noon-web/src/semantic_execution_player.rs crates/noon-compile/src/semantic_lowering/root_order.rs crates/noon/src/execution_session/callback.rs crates/noon/tests/family_layout.rs crates/noon/tests/live_family_layout.rs scripts/typed-authoring-errors-smoke.mjs web/python compat
+          git -c commit.gpgSign=false commit -m 'fix: retain typed failures through landed family frame alignment (#1354)'
+          git show -s --format='%H %T %P' HEAD > /tmp/r2a-frame/candidate.txt
+          git diff "$CURRENT_BASE" HEAD > /tmp/r2a-frame/candidate.patch
+          cp Cargo.lock /tmp/r2a-frame/Cargo.lock
       - uses: actions/cache@v6
         with:
           path: |
@@ -105,117 +169,35 @@ jobs:
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
-      - name: Prove the unchanged reviewed producer fails the bit-exact regression
+      - name: Qualify typed frame recovery and all retained independent tests
         run: |
-          set +e
-          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --test object_authoring_errors positive_number_rejection_retains_original_f64_and_recovers -- --exact > /tmp/r2a-full/value-red.log 2>&1
-          result=$?
-          set -e
-          tail -50 /tmp/r2a-full/value-red.log
-          test "$result" != 0
-          grep -q 'test result: FAILED. 0 passed; 1 failed; 0 ignored' /tmp/r2a-full/value-red.log
-      - name: Preserve original f64 diagnostics without changing lowered admission
+          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests > /tmp/r2a-frame/consumers.log 2>&1 || { tail -160 /tmp/r2a-frame/consumers.log; exit 1; }
+          grep -q 'test frame_alignment_preserves_typed_rejection_and_live_recovery ... ok' /tmp/r2a-frame/consumers.log
+          cargo test -p noon --no-default-features --test family_layout --test live_family_layout --test family_callback_paint --test root_order_acceptance --test root_order_alias_regressions --test root_order_transaction_regressions > /tmp/r2a-frame/integration-tests.log 2>&1 || { tail -160 /tmp/r2a-frame/integration-tests.log; exit 1; }
+          bash scripts/check.sh rust "$CURRENT_BASE" > /tmp/r2a-frame/rust.log 2>&1 || { tail -200 /tmp/r2a-frame/rust.log; exit 1; }
+          cargo check -p noon-web --all-features --target wasm32-unknown-unknown > /tmp/r2a-frame/wasm.log 2>&1 || { tail -160 /tmp/r2a-frame/wasm.log; exit 1; }
+      - name: Publish only the qualified frame integration for review
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path=Path('crates/noon/src/semantic_mobject.rs')
-          text=path.read_text()
-          old='''fn positive_f32(name: &str, value: f64) -> Result<f32, AuthoringError> {
-              let value = finite_f32(name, value)?;
-              if value <= 0.0 {
-                  return Err(AuthoringError::NonPositiveNumber {
-                      name: name.to_owned(),
-                      value: f64::from(value),
-                  });
-              }
-              Ok(value)
-          }'''
-          new='''fn positive_f32(name: &str, value: f64) -> Result<f32, AuthoringError> {
-              let lowered = finite_f32(name, value)?;
-              if lowered <= 0.0 {
-                  return Err(AuthoringError::NonPositiveNumber {
-                      name: name.to_owned(),
-                      value,
-                  });
-              }
-              Ok(lowered)
-          }'''
-          # Normalize the inline fixture indentation to actual Rust source.
-          import textwrap
-          old=textwrap.dedent(old)
-          new=textwrap.dedent(new)
-          assert text.count(old)==1
-          path.write_text(text.replace(old,new))
-          PY
-          cargo fmt --all
-          cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
-          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests > /tmp/r2a-full/consumers-green.log 2>&1 || { tail -120 /tmp/r2a-full/consumers-green.log; exit 1; }
-          grep -q 'test positive_number_rejection_retains_original_f64_and_recovers ... ok' /tmp/r2a-full/consumers-green.log
-          git diff --check
-          git add crates/noon/src/semantic_mobject.rs fixtures/provider-consumer/tests/object_authoring_errors.rs
-          git config user.name 'Noon development tooling'
-          git config user.email 'development@noon.invalid'
-          git -c commit.gpgSign=false commit -m 'fix: retain original f64 in positive-number rejection (#1354)'
           git diff --exit-code
-          git push origin HEAD:refs/heads/codex/1354-review-value-fix
-          git show -s --format='%H %T %P' HEAD > /tmp/r2a-full/source-identity.txt
-          git archive HEAD | gzip > /tmp/r2a-full/source.tar.gz
-          git diff "$CURRENT_BASE" HEAD > /tmp/r2a-full/source.patch
-          git diff "$INPUT_HEAD" HEAD > /tmp/r2a-full/review-fix.patch
-      - uses: actions/upload-artifact@v7
-        with:
-          name: r2a-reviewed-source
-          path: /tmp/r2a-full
-          retention-days: 3
-          if-no-files-found: error
-      - name: Validate web preflight before the full build
-        run: |
-          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh > /tmp/r2a-full/preflight.log 2>&1 || { tail -200 /tmp/r2a-full/preflight.log; exit 1; }
-          tail -30 /tmp/r2a-full/preflight.log
-      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
-        with:
-          tool: wasm-pack@0.15.0
-          fallback: none
-      - name: Run the exact full gate with default optimized release WASM
-        run: |
-          set -euo pipefail
-          bash scripts/check.sh full "$CURRENT_BASE" > /tmp/r2a-full/full.log 2>&1 || { tail -240 /tmp/r2a-full/full.log; exit 1; }
-          tail -60 /tmp/r2a-full/full.log
-          sha256sum Cargo.lock > /tmp/r2a-full/lock-after.sha256
-          cmp /tmp/r2a-full/lock-before.sha256 /tmp/r2a-full/lock-after.sha256
-          git diff --exit-code
-          sha256sum web/pkg/noon_web_bg.wasm > /tmp/r2a-full/release-wasm.sha256
-      - name: Install existing paired-browser prerequisites
-        run: |
-          npm install --no-save --no-package-lock playwright@1.62.1 pngjs@7
-          npx playwright install --with-deps chromium
-      - name: Run paired behavior using the same release package
-        run: |
-          set -euo pipefail
-          node scripts/shared-authoring-smoke.mjs > /tmp/r2a-full/shared-authoring.log 2>&1 || { tail -200 /tmp/r2a-full/shared-authoring.log; exit 1; }
-          node scripts/manim-compat-smoke.mjs > /tmp/r2a-full/manim-compat.log 2>&1 || { tail -200 /tmp/r2a-full/manim-compat.log; exit 1; }
-          tail -40 /tmp/r2a-full/shared-authoring.log
-          tail -30 /tmp/r2a-full/manim-compat.log
-          git diff --exit-code
-          sha256sum web/pkg/noon_web_bg.wasm > /tmp/r2a-full/release-wasm-after-browser.sha256
-          cmp /tmp/r2a-full/release-wasm.sha256 /tmp/r2a-full/release-wasm-after-browser.sha256
-      - name: Preserve actual source, qualification and package evidence
+          git push origin HEAD:refs/heads/codex/1354-frame-integrated
+          git show -s --format='%H %T %P' HEAD > /tmp/r2a-frame/published.txt
+      - name: Retain exact integration evidence
         if: always()
         run: |
-          mkdir -p /tmp/r2a-full
-          git status --short > /tmp/r2a-full/final-status.txt
-          git diff > /tmp/r2a-full/final-tracked.diff
-          git show -s --format='%H %T %P' HEAD > /tmp/r2a-full/final-identity.txt
-          test -f /tmp/r2a-full/source.tar.gz || git archive HEAD | gzip > /tmp/r2a-full/source.tar.gz
-          if test -d web/pkg; then
-            find web/pkg -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/r2a-full/package.sha256
-            tar -czf /tmp/r2a-full/release-package.tar.gz web/pkg
+          mkdir -p /tmp/r2a-frame
+          git status --short > /tmp/r2a-frame/status.txt
+          git ls-files -u > /tmp/r2a-frame/conflicts.txt
+          git diff > /tmp/r2a-frame/working.diff
+          if test -z "$(git ls-files -u)"; then
+            git add -u
+            git write-tree > /tmp/r2a-frame/tree.txt
+            git archive "$(git write-tree)" | gzip > /tmp/r2a-frame/source.tar.gz
           fi
-          test ! -f Cargo.lock || sha256sum Cargo.lock > /tmp/r2a-full/final-lock.sha256
+          rustc --version > /tmp/r2a-frame/toolchain.txt
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r2a-full-landing
-          path: /tmp/r2a-full
+          name: r2a-frame-integration
+          path: /tmp/r2a-frame
           retention-days: 3
           if-no-files-found: error
