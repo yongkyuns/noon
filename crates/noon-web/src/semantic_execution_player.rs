@@ -1,12 +1,12 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
 #[cfg(any(target_arch = "wasm32", test))]
 use crate::authoring_error::AuthoringFailure;
-#[cfg(any(target_arch = "wasm32", test))]
-use noon::integration::TimelineWakeState;
 use noon::integration::{
-    CallbackAdvance, CallbackPhaseToken, CallbackReadRequest, CallbackReadValue,
-    EffectivePropertyBatch, EffectiveSemanticPropertyWrite, RuntimeIdentity,
+    CallbackAdvance, CallbackPhaseToken, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
+    RuntimeIdentity,
 };
+#[cfg(any(target_arch = "wasm32", test))]
+use noon::integration::{CallbackReadRequest, CallbackReadValue, TimelineWakeState};
 use noon::ExecutionSession;
 use noon_core::{
     ExecutionRevision, FrameEpoch, PublicationContext, Rect, SceneRevision, SemanticNodeId, Style,
@@ -1907,6 +1907,7 @@ struct CallbackPhaseTokenEnvelope {
     token: CallbackTokenWire,
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum CallbackReadRequestWire {
@@ -1915,6 +1916,7 @@ enum CallbackReadRequestWire {
     Family { node: CallbackNodeWire },
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum CallbackReadValueWire {
@@ -2237,6 +2239,7 @@ impl SemanticExecutionPlayer {
     /// Read one typed value from the exact pending callback phase without
     /// committing it. This is the real Python-worker boundary; direct Rust
     /// callbacks call the session API without JSON.
+    #[cfg(any(target_arch = "wasm32", test))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = requiredCallbackReadJson))]
     pub fn required_callback_read_json(
         &mut self,

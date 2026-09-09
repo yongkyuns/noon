@@ -4157,7 +4157,9 @@ mod wasm {
                 serde_json::from_str(styles_json).map_err(js_error)?;
             let styles: BTreeMap<_, _> = rows
                 .into_iter()
-                .map(|(slot, generation, style)| (SemanticNodeId::new(slot, generation), style))
+                .map(|(slot, generation, style)| {
+                    (noon_core::SemanticNodeId::new(slot, generation), style)
+                })
                 .collect();
             let changes = family
                 .prepare_callback_paint(revision, operation, |node| {
