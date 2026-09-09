@@ -279,11 +279,11 @@ class Mobject:
     def center(self) -> Mobject:
         return self.move_to(ORIGIN)
 
-    def set_x(self, x: float) -> Mobject:
-        return _callback_operations()._canonical_set_x(self, x)
+    def set_x(self, x: float, direction: object = ORIGIN) -> Mobject:
+        return _callback_operations()._canonical_set_x(self, x, direction)
 
-    def set_y(self, y: float) -> Mobject:
-        return _callback_operations()._canonical_set_y(self, y)
+    def set_y(self, y: float, direction: object = ORIGIN) -> Mobject:
+        return _callback_operations()._canonical_set_y(self, y, direction)
 
     def scale(self, *args: object, **kwargs: object) -> Mobject:
         return _callback_operations()._canonical_scale(self, *args, **kwargs)
