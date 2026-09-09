@@ -1,114 +1,96 @@
-name: R3 callback final landing qualification (development only)
+name: R3 callback retained browser qualification (development only)
 on:
   push:
     branches: [codex/1292-r3-callback-errors-prep]
 permissions:
-  contents: write
+  contents: read
+  actions: read
 jobs:
-  qualify:
+  browser-only:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
-    env:
-      BASE: 73af2196f06cc1df2a5d239a007d1c45ce5ebafb
-      CANDIDATE: 0c8edb7349a60e176ad183a2a3f780dcefc89fc1
-      CARGO_INCREMENTAL: "0"
-      CARGO_PROFILE_DEV_DEBUG: "0"
-      CARGO_PROFILE_TEST_DEBUG: "0"
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_RW_MODE: READ_ONLY
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0
-      - name: Assemble the existing Family candidate with the pinned landing base
+          ref: 8a19ea03af9e4e87f48ccb761b196dbb8061ceb5
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: 10116818433
+          run-id: 34381814450
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/retained
+          merge-multiple: true
+      - name: Verify exact source and every retained package file before reuse
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/r3-landing-input" "$RUNNER_TEMP/r3-landing-evidence"
-          echo "EVIDENCE=$RUNNER_TEMP/r3-landing-evidence" >> "$GITHUB_ENV"
-          cp scripts/r3-callback-final-combine-prep.py "$RUNNER_TEMP/r3-landing-input/combine.py"
-          git config user.name 'Noon qualification bot'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout --detach "$CANDIDATE"
-          RUSTC_WRAPPER= python3 "$RUNNER_TEMP/r3-landing-input/combine.py"
-          git commit -m 'fix: retain landed scalar opacity in the callback error integration'
-          test "$(git rev-parse HEAD^)" = "$CANDIDATE"
-          test "$(git rev-parse HEAD^2)" = "$BASE"
-          git rev-parse HEAD HEAD^{tree} HEAD^ HEAD^2 > "$RUNNER_TEMP/r3-landing-evidence/revisions.txt"
-          git diff "$BASE" HEAD > "$RUNNER_TEMP/r3-landing-evidence/product.patch"
-          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/r3-landing-evidence/source.tar.gz"
-      - name: Publish source-only candidate for exact-head review and PR CI
-        run: git push origin HEAD:refs/heads/codex/1350-final-candidate
-      - name: Retain the exact candidate source before full qualification
-        uses: actions/upload-artifact@v7
-        with:
-          name: r3-callback-final-source
-          path: ${{ env.EVIDENCE }}
-          retention-days: 3
-          if-no-files-found: error
-      - name: Restore Cargo sources
-        uses: actions/cache/restore@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-sources-
-      - name: Use pinned compiler cache client
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
-        with:
-          version: v0.16.0
-      - name: Install repository-pinned package builder
-        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
-        with:
-          tool: wasm-pack@0.15.0
-      - name: Required full gate on the exact integrated candidate
+          mkdir -p "$RUNNER_TEMP/r3-browser-evidence"
+          echo "EVIDENCE=$RUNNER_TEMP/r3-browser-evidence" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os, subprocess, tarfile
+          saved = Path(os.environ['RUNNER_TEMP']) / 'retained'
+          expected = {
+            'source.tar.gz': '86540797cea123f4bea6148d10cfe9a8f7e82cb15dee3fb0cce80543e486eb3f',
+            'Cargo.lock': '9fc77831ae25df351229c9902c073657062501a8e5faf8ea313dd9c8284062dd',
+            'pkg/noon_web.d.ts': '903df99ebb54e8d6caf04cff3e9f120df70f294cd995a28f20011af01cefba68',
+            'pkg/noon_web.js': 'd590bce4a49033717bf00973c547fdd2edf1b17552b3e6d0f8b23c7cd6c3cb92',
+            'pkg/noon_web_bg.wasm': 'cab275e552ec61373f62eb68a3f0e17ac713cd2afde7b84e7238081d516821d4',
+            'pkg/noon_web_bg.wasm.d.ts': 'ccc2ce03d3288a6135c2f2fdda9e4da5bfffa4e30515ab5f283405c0fee0a40b',
+            'pkg/package.json': 'd6638bab30595f734a886d311ab70778ee9b80008b0270ead761a89b4bd98968',
+          }
+          for name, digest in expected.items():
+              assert hashlib.sha256((saved / name).read_bytes()).hexdigest() == digest, name
+          head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip()
+          assert head == '8a19ea03af9e4e87f48ccb761b196dbb8061ceb5'
+          assert tree == 'e60cb524b768506eed253c3d5e62a45cf000c894'
+          assert (saved / 'revisions.txt').read_text().splitlines()[:2] == [head, tree]
+          names = set()
+          with tarfile.open(saved / 'source.tar.gz') as archive:
+              for member in archive.getmembers():
+                  if member.isfile():
+                      names.add(member.name)
+                      assert archive.extractfile(member).read() == Path(member.name).read_bytes(), member.name
+          tracked = set(subprocess.check_output(['git', 'ls-files', '-z']).decode().rstrip('\0').split('\0'))
+          assert names == tracked, (names ^ tracked)
+          report = {'source': head, 'tree': tree, 'filesVerified': len(names), 'artifact': 10116818433, 'run': 34381814450, 'sha256': expected, 'rustRebuilt': False}
+          destination = Path(os.environ['RUNNER_TEMP']) / 'r3-browser-evidence' / 'input-verification.json'
+          destination.write_text(json.dumps(report, indent=2))
+          print(destination.read_text())
+          PY
+          cp -r "$RUNNER_TEMP/retained/pkg" web/pkg
+          cp "$RUNNER_TEMP/retained/Cargo.lock" Cargo.lock
+          node scripts/build-python-worker.mjs
+      - name: Install the existing pinned browser without repeating apt dependency installation
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/check.sh full "$BASE" 2>&1 | tee "$EVIDENCE/full.log"
-          sha256sum web/pkg/noon_web_bg.wasm > "$EVIDENCE/release-wasm-sha256.txt"
-      - name: Diagnostic-enabled WASM for the existing real error runner
-        shell: bash
-        run: |
-          set -euo pipefail
-          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh 2>&1 | tee "$EVIDENCE/dev-build.log"
-      - name: Install existing browser test dependencies
-        shell: bash
-        run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
-          npx playwright install --with-deps chromium
+          npx playwright install chromium
       - name: Existing real WASM and Pyodide error matrix
         shell: bash
         run: |
           set -euo pipefail
           node scripts/typed-authoring-errors-smoke.mjs 2>&1 | tee "$EVIDENCE/boundary.log"
-      - name: Existing paired authoring and production-worker recovery suites
+      - name: Existing paired authoring and production-worker recovery
         shell: bash
         run: |
           set -euo pipefail
           node scripts/shared-authoring-smoke.mjs 2>&1 | tee "$EVIDENCE/shared-authoring.log"
           node scripts/manim-compat-smoke.mjs 2>&1 | tee "$EVIDENCE/manim.log"
-      - name: Retain actual code, runtime and complete execution evidence
+      - name: Retain verification and actual results
         if: always()
         shell: bash
         run: |
-          set -euo pipefail
-          git status --short > "$EVIDENCE/status.txt"
-          git rev-parse HEAD HEAD^{tree} > "$EVIDENCE/final-revisions.txt"
-          rustc --version > "$EVIDENCE/toolchain.txt"
-          node --version >> "$EVIDENCE/toolchain.txt"
-          test ! -f Cargo.lock || cp Cargo.lock "$EVIDENCE/"
-          test ! -d web/pkg || cp -r web/pkg "$EVIDENCE/pkg"
-          test ! -f web/pkg/noon_web_bg.wasm || sha256sum web/pkg/noon_web_bg.wasm > "$EVIDENCE/dev-wasm-sha256.txt"
-          test ! -d browser-smoke-artifacts/typed-authoring-errors || cp -r browser-smoke-artifacts/typed-authoring-errors "$EVIDENCE/boundary-results"
           git diff --exit-code HEAD
+          git status --short > "$EVIDENCE/status.txt"
+          node --version > "$EVIDENCE/node.txt"
+          test ! -d browser-smoke-artifacts/typed-authoring-errors || cp -r browser-smoke-artifacts/typed-authoring-errors "$EVIDENCE/boundary-results"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r3-callback-final-qualification
+          name: r3-callback-retained-browser
           path: ${{ env.EVIDENCE }}
           retention-days: 3
           if-no-files-found: error
