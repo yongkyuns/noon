@@ -36,7 +36,7 @@ jobs:
           run-id: 34392155628
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/r2a-frame-input
-      - name: Preserve the newly landed content-query forwarding and all independent tests
+      - name: Preserve both typed sources at the existing unmapped opacity boundary
         run: |
           set -euo pipefail
           mkdir -p /tmp/r2a-final
@@ -46,17 +46,85 @@ jobs:
           git config user.name 'Noon development tooling'
           git config user.email 'development@noon.invalid'
           git archive "$CURRENT_BASE" | gzip > /tmp/r2a-final/base.tar.gz
-          git merge --no-commit --no-ff "$CURRENT_BASE" > /tmp/r2a-final/merge.log 2>&1 || { cat /tmp/r2a-final/merge.log; exit 1; }
+          set +e
+          git merge --no-commit --no-ff "$CURRENT_BASE" > /tmp/r2a-final/merge.log 2>&1
+          result=$?
+          set -e
+          test "$result" -le 1
+          python3 - <<'PY'
+          import hashlib,os,re,subprocess
+          from pathlib import Path
+          path=Path('crates/noon-web/src/canonical_authoring_scene.rs')
+          conflicts=subprocess.check_output(['git','diff','--name-only','--diff-filter=U'],text=True).splitlines()
+          assert conflicts==[str(path)],conflicts
+          text=path.read_text()
+          pattern=re.compile(r'<<<<<<< HEAD\n(.*?)=======\n(.*?)>>>>>>> [^\n]+\n',re.S)
+          matches=list(pattern.finditer(text)); assert len(matches)==2
+          for match,kind in reversed(list(zip(matches,['fill','stroke']))):
+              ours,theirs=match.groups()
+              call=f'handle.{kind}_opacity()'
+              assert call+'.map_err(|error| error.to_string())?;' in ours
+              assert call+'?;' in theirs
+              assert '.live_effective(handle)\n                .map_err(|error| error.to_string())?' in theirs
+              combined=theirs.replace(call+'?;',call+'.map_err(|error| error.to_string())?;')
+              text=text[:match.start()]+combined+text[match.end():]
+          assert '<<<<<<<' not in text
+          path.write_text(text)
+          subprocess.run(['git','add',str(path)],check=True)
+          assert not subprocess.check_output(['git','ls-files','-u'],text=True)
+          path=Path('scripts/manim-compat-smoke.mjs')
+          text=path.read_text()
+          a=text.index('    const rejectsForeign = (operation) => {')
+          b=text.index('    const sameNumericId',a)
+          text=text[:a]+'''    // These three forwarding sites are still diagnostic-only R3 inventory.
+              // This fixture proves rejection/atomicity/lifetime; typed categories are
+              // checked by the independent Rust consumer and the typed-boundary runner.
+              // Do not classify human wording or accept an unrelated JS TypeError.
+              const rejectsUnmappedAuthoring = (operation) => {
+                try { operation(); } catch (error) {
+                  if (typeof error !== "string" || error.length === 0) throw error;
+                  return true;
+                }
+                return false;
+              };
+          '''.replace('\n          ','\n')+text[b:]
+          text=text.replace('rejectsForeign(() =>','rejectsUnmappedAuthoring(() =>')
+          needle='    const foreignObjectPlacementRejected = rejectsUnmappedAuthoring'
+          assert text.count(needle)==1
+          insertion='''    const layoutBefore = [circle.centerX, copy.centerX, target.centerX, family.memberCount];
+              const requireUnchangedLayout = () => {
+                const after = [circle.centerX, copy.centerX, target.centerX, family.memberCount];
+                if (!after.every((value, index) => Object.is(value, layoutBefore[index]))) {
+                  throw new Error("rejected foreign placement changed local state");
+                }
+              };
+              const foreignObjectPlacementRejected = rejectsUnmappedAuthoring'''.replace('\n          ','\n')
+          text=text.replace(needle,insertion)
+          text=text.replace('    const foreignFamilyPlacementRejected =','    requireUnchangedLayout();\n    const foreignFamilyPlacementRejected =',1)
+          needle='    store.free();\n    otherStore.free();\n    // Observations retain their semantic store;'
+          assert text.count(needle)==1
+          replacement='''    requireUnchangedLayout();
+              // Retry both exact placement entrypoints with valid local targets. The
+              // copies start at the same center, so these controls preserve the layout.
+              layout.moveToMobject(copy, 0, 0, 1, 1);
+              layout.moveToFamily(layout, 0, 0, 1, 1);
+              requireUnchangedLayout();
+              store.free();
+              otherStore.free();
+              // Observations retain their semantic store;'''.replace('\n          ','\n')
+          text=text.replace(needle,replacement)
+          data=text.encode()
+          assert hashlib.sha1(f'blob {len(data)}\0'.encode()+data).hexdigest()=='93cace7f8074e2994706e272638f0a5201d98ec9'
+          path.write_text(text)
+          lock=(Path(os.environ['RUNNER_TEMP'])/'r2a-frame-input/Cargo.lock').read_bytes()
+          assert hashlib.sha256(lock).hexdigest()=='9fc77831ae25df351229c9902c073657062501a8e5faf8ea313dd9c8284062dd'
+          Path('Cargo.lock').write_bytes(lock)
+          PY
+          cargo fmt --all
+          git add -u
           git diff --cached --check
           git diff --exit-code "$CURRENT_BASE" -- crates/noon-web/src/authoring_error.rs crates/noon-web/src/semantic_execution_player.rs crates/noon-compile/src/semantic_lowering/root_order.rs crates/noon/src/execution_session/callback.rs scripts/typed-authoring-errors-smoke.mjs web/python compat
-          git -c commit.gpgSign=false commit -m 'fix: retain landed content-query forwarding in typed R2a integration (#1354)'
-          python3 - <<'PY'
-          import hashlib,os
-          from pathlib import Path
-          data=(Path(os.environ['RUNNER_TEMP'])/'r2a-frame-input/Cargo.lock').read_bytes()
-          assert hashlib.sha256(data).hexdigest()=='9fc77831ae25df351229c9902c073657062501a8e5faf8ea313dd9c8284062dd'
-          Path('Cargo.lock').write_bytes(data)
-          PY
+          git -c commit.gpgSign=false commit -m 'fix: retain content-query forwarding and remove wording-dependent smoke checks (#1354)'
           cp Cargo.lock /tmp/r2a-final/Cargo.lock
           sha256sum Cargo.lock > /tmp/r2a-final/lock-before.sha256
           git show -s --format='%H %T %P' HEAD > /tmp/r2a-final/source-identity.txt
@@ -82,7 +150,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
-      - name: Run independent typed consumers and check new native/WASM forwarding
+      - name: Run independent typed consumers and check native/WASM forwarding
         run: |
           cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests > /tmp/r2a-final/consumers.log 2>&1 || { tail -160 /tmp/r2a-final/consumers.log; exit 1; }
           cargo check --workspace --all-targets --all-features > /tmp/r2a-final/native.log 2>&1 || { tail -200 /tmp/r2a-final/native.log; exit 1; }
