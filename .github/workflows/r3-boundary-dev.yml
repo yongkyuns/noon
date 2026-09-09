@@ -3,9 +3,9 @@ on:
   push:
     branches: [codex/1292-r3-boundary-prep]
 permissions:
-  contents: write
+  contents: read
 jobs:
-  qualify:
+  compatibility:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -18,31 +18,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: 166b166f25e27a13d2d940f8ac802d0e59fc2f8f
           fetch-depth: 0
-      - name: Assemble only the incremental live-property projection
+      - name: Check the combination with new master without changing either product branch
         run: |
-          mkdir -p /tmp/r3-property-evidence
-          python3 - <<'PY'
-          import base64, gzip, hashlib, pathlib
-          encoded = pathlib.Path('.github/r3-live-properties.b64').read_text().strip()
-          encoded = encoded.replace('LOW3TnPFs/v', 'LOW3TnUs/v')
-          patch = gzip.decompress(base64.b64decode(encoded, validate=True))
-          assert hashlib.sha256(patch).hexdigest() == '2051c276cb977ce6d18ebee75580bfda2239d69a365ec9b9710a06317500a987'
-          pathlib.Path('/tmp/r3-property-evidence/input.patch').write_bytes(patch)
-          PY
-          parent=ef2e4a894a7795471795e62351c8241db59af4ce
-          git checkout --detach "$parent"
-          git apply --index /tmp/r3-property-evidence/input.patch
-          cargo fmt --all
-          git add -u
-          git diff --cached --check
+          mkdir -p /tmp/r3-compatibility
           git config user.name 'Yongkyun Shin'
           git config user.email '4311628+yongkyuns@users.noreply.github.com'
-          git commit -m 'fix: retain typed live transform failures through WASM and Python'
-          git rev-parse HEAD HEAD^{tree} > /tmp/r3-property-evidence/revisions.txt
-          echo "$parent" > /tmp/r3-property-evidence/base.txt
-          git diff "$parent" HEAD > /tmp/r3-property-evidence/product.patch
-          git archive --format=tar.gz HEAD > /tmp/r3-property-evidence/source.tar.gz
+          git merge --no-ff --no-edit 71d8bfac1094e8232ae7f4b89872af2a1baff9db
+          git diff --check
+          git rev-parse HEAD HEAD^{tree} HEAD^1 HEAD^2 > /tmp/r3-compatibility/revisions.txt
+          git diff 166b166f25e27a13d2d940f8ac802d0e59fc2f8f HEAD > /tmp/r3-compatibility/master-delta.patch
+          git archive --format=tar.gz HEAD > /tmp/r3-compatibility/source.tar.gz
       - uses: actions/cache/restore@v6
         with:
           path: |
@@ -57,23 +44,23 @@ jobs:
         with:
           tool: wasm-pack@0.15.0
           fallback: none
-      - name: Focused native atomicity and incremental delta regression
+      - name: Existing root-order acceptance and transaction regressions
         run: |
           set -o pipefail
-          cargo test -p noon-web --lib live_transform_projection_preserves_atomic_rejection_and_local_retry -- --nocapture 2>&1 | tee /tmp/r3-property-evidence/focused-native.log
-      - name: Native architecture, format, check, Clippy and library tests
+          cargo test -p noon --test root_order_acceptance --test root_order_transaction_regressions 2>&1 | tee /tmp/r3-compatibility/root-order.log
+      - name: Native fast gate on the combined tree
         run: |
           set -o pipefail
-          bash scripts/check.sh fast ef2e4a894a7795471795e62351c8241db59af4ce 2>&1 | tee /tmp/r3-property-evidence/native.log
+          bash scripts/check.sh fast 71d8bfac1094e8232ae7f4b89872af2a1baff9db 2>&1 | tee /tmp/r3-compatibility/native.log
       - name: Web static and Python tests
         run: |
           set -o pipefail
-          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/r3-property-evidence/preflight.log
-      - name: Build actual dev WASM from this exact candidate
+          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/r3-compatibility/preflight.log
+      - name: Build actual dev WASM from the combined tree
         run: |
           set -o pipefail
           rustup target add wasm32-unknown-unknown
-          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/r3-property-evidence/wasm.log
+          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/r3-compatibility/wasm.log
       - uses: actions/cache/restore@v6
         with:
           path: ~/.cache/ms-playwright
@@ -82,27 +69,22 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-      - name: Real WASM and Python error categories, atomicity and recovery
+      - name: Real WASM and Python categories, atomicity and recovery
         run: |
           set -o pipefail
-          node scripts/typed-authoring-errors-smoke.mjs 2>&1 | tee /tmp/r3-property-evidence/errors-browser.log
-      - name: Existing authoring and continuation regression
-        run: |
-          set -o pipefail
-          node scripts/manim-compat-smoke.mjs 2>&1 | tee /tmp/r3-property-evidence/manim-browser.log
-      - name: Publish only the verified scoped candidate to its own branch
-        run: git push origin HEAD:refs/heads/codex/1292-r3-live-properties
+          node scripts/typed-authoring-errors-smoke.mjs 2>&1 | tee /tmp/r3-compatibility/errors-browser.log
+          node scripts/manim-compat-smoke.mjs 2>&1 | tee /tmp/r3-compatibility/manim-browser.log
       - name: Retain exact dependencies and final state
         if: always()
         run: |
-          test ! -f Cargo.lock || cp Cargo.lock /tmp/r3-property-evidence/Cargo.lock
-          test ! -d web/pkg || cp -a web/pkg /tmp/r3-property-evidence/web-pkg
-          test ! -d browser-smoke-artifacts/typed-authoring-errors || cp -a browser-smoke-artifacts/typed-authoring-errors /tmp/r3-property-evidence/browser
-          git status --short > /tmp/r3-property-evidence/status.txt
-          git rev-parse HEAD > /tmp/r3-property-evidence/final-head.txt
+          test ! -f Cargo.lock || cp Cargo.lock /tmp/r3-compatibility/Cargo.lock
+          test ! -d browser-smoke-artifacts/typed-authoring-errors || cp -a browser-smoke-artifacts/typed-authoring-errors /tmp/r3-compatibility/browser
+          test ! -f web/pkg/noon_web_bg.wasm || sha256sum web/pkg/* > /tmp/r3-compatibility/wasm-sha256.txt
+          git status --short > /tmp/r3-compatibility/status.txt
+          git rev-parse HEAD > /tmp/r3-compatibility/final-head.txt
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r3-live-property-qualification
-          path: /tmp/r3-property-evidence
+          name: r3-live-properties-current-master
+          path: /tmp/r3-compatibility
           retention-days: 7
