@@ -25,7 +25,14 @@ impl std::fmt::Display for SemanticTransactionReadError {
     }
 }
 
-impl std::error::Error for SemanticTransactionReadError {}
+impl std::error::Error for SemanticTransactionReadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Existing(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 /// A fully validated mutation batch holding the store exclusively until commit.
 ///

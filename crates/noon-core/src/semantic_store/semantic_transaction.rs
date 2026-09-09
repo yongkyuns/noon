@@ -2746,7 +2746,19 @@ impl std::fmt::Display for SemanticMutationTransactionError {
     }
 }
 
-impl std::error::Error for SemanticMutationTransactionError {}
+impl std::error::Error for SemanticMutationTransactionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Signal { error, .. } => Some(error),
+            Self::SignalTrack { error, .. } => Some(error),
+            Self::Object { error, .. }
+            | Self::Family { error, .. }
+            | Self::AnimationTarget { error, .. } => Some(error),
+            Self::Node { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+}
 
 #[cfg(test)]
 mod base_tests;
