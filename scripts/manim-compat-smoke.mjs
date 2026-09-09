@@ -413,19 +413,20 @@ try {
     const copy = circle.cloneHandle();
     const target = circle.targetEditor();
     const identity = (handle) => `${handle.semanticSlot}:${handle.semanticGeneration}`;
-    // These three forwarding sites are still diagnostic-only R3 inventory.
-    // This fixture proves rejection/atomicity/lifetime; typed categories are
-    // checked by the independent Rust consumer and the typed-boundary runner.
-    // Do not classify human wording or accept an unrelated JS TypeError.
-    const rejectsUnmappedAuthoring = (operation) => {
+    // These public operations share the Rust foreign-store cause. Check the
+    // structured boundary while preserving the atomicity and lifetime evidence.
+    const rejectsForeignAuthoring = (operation) => {
       try { operation(); } catch (error) {
-        if (typeof error !== "string" || error.length === 0) throw error;
+        if (!(error instanceof Error) || error.noonErrorVersion !== 1 ||
+            error.category !== "foreign_handle" || error.code !== "authoring.foreign_store") {
+          throw error;
+        }
         return true;
       }
       return false;
     };
     const sameNumericId = identity(circle) === identity(foreign);
-    const foreignAddRejected = rejectsUnmappedAuthoring(() => family.editMembership(batch(circle, foreign)));
+    const foreignAddRejected = rejectsForeignAuthoring(() => family.editMembership(batch(circle, foreign)));
     if (family.memberCount !== 0) throw new Error("failed authored batch partially committed");
     family.editMembership(batch(circle, copy, target));
     const layout = family.layout();
@@ -438,9 +439,9 @@ try {
         throw new Error("rejected foreign placement changed local state");
       }
     };
-    const foreignObjectPlacementRejected = rejectsUnmappedAuthoring(() => layout.moveToMobject(foreign, 0, 0, 1, 1));
+    const foreignObjectPlacementRejected = rejectsForeignAuthoring(() => layout.moveToMobject(foreign, 0, 0, 1, 1));
     requireUnchangedLayout();
-    const foreignFamilyPlacementRejected = rejectsUnmappedAuthoring(() => layout.moveToFamily(foreignLayout, 0, 0, 1, 1));
+    const foreignFamilyPlacementRejected = rejectsForeignAuthoring(() => layout.moveToFamily(foreignLayout, 0, 0, 1, 1));
     requireUnchangedLayout();
     // Retry both exact placement entrypoints with valid local targets. The
     // copies start at the same center, so these controls preserve the layout.
