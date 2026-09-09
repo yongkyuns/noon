@@ -38,8 +38,6 @@ except ImportError:  # pragma: no cover - native import smoke only
     _create_context = None
 
 _INSTALLED = False
-_ORIGINAL_TO_DOCUMENT = _ir.Scene.to_document
-_ORIGINAL_IDENTITY_DOCUMENT = _ir.Scene.identity_document
 _ASYNC_CONTINUATION_MODE = "_noon_async_continuation_mode"
 _ASYNC_CONTINUATION_PENDING = "_noon_async_continuation_pending"
 _SYNCHRONOUS_CONTINUATION_MODE = "_noon_synchronous_continuation_mode"
@@ -55,7 +53,7 @@ def _json(value: object) -> str:
     return json.dumps(value, separators=(",", ":"), allow_nan=False)
 
 
-def _context(scene: _ir.Scene):
+def _context(scene: _base.Scene):
     context = getattr(scene, "_canonical_authoring_context", None)
     if context is not None:
         return context
@@ -130,7 +128,6 @@ def _commit_typed_binding(
     scene._object_keys[obj.id] = reservation.key
     scene._object_key_ids[reservation.key] = obj.id
     scene._next_object_id = obj.id + 1
-    scene._next_painter_order += 1
     _record_mobject_binding(mobject, scene, obj, handle)
     return obj
 
@@ -2334,47 +2331,6 @@ def _canonical_bind_position(
     return self
 
 
-def _to_document(self):
-    # Explicit export may project values; it does not provide execution input on
-    # the shared path. #959 owns the remaining geometry diagnostic codec.
-    document = _ORIGINAL_TO_DOCUMENT(self)
-    objects = document["objects"]
-    for object_id, handle in getattr(self, "_semantic_geometry_handles", {}).items():
-        snapshot = json.loads(str(handle.snapshotJson()))
-        snapshot["id"] = object_id
-        objects[self._object_positions[object_id]] = snapshot
-    # Native/Typst Text has no geometry projection. The legacy document remains
-    # an explicit geometry-only diagnostic, so omit identity-only text rows
-    # and their legacy tracks here.
-    text_ids = set(getattr(self, "_semantic_text_handles", {}))
-    if text_ids:
-        document["objects"] = [
-            object for object in objects if object.get("id") not in text_ids
-        ]
-        document["tracks"] = [
-            track for track in document["tracks"] if track.get("object") not in text_ids
-        ]
-    return document
-
-
-def _identity_document(self: _ir.Scene) -> dict[str, list[dict[str, Any]]]:
-    """Project identities for the geometry-only legacy document."""
-    document = _ORIGINAL_IDENTITY_DOCUMENT(self)
-    text_ids = set(getattr(self, "_semantic_text_handles", {}))
-    if text_ids:
-        document["objects"] = [
-            identity
-            for identity in document["objects"]
-            if identity["id"] not in text_ids
-        ]
-        document["tracks"] = [
-            identity
-            for identity in document["tracks"]
-            if self._tracks[identity["id"]].get("object") not in text_ids
-        ]
-    return document
-
-
 def execution_context(scene, callbacks=None):
     """Select typed geometry/native-Text execution; unsupported contracts stay explicit."""
     del callbacks  # Callback declarations now lower through the canonical context.
@@ -2382,11 +2338,6 @@ def execution_context(scene, callbacks=None):
     text_handles = getattr(scene, "_semantic_text_handles", {})
     if len(handles) + len(text_handles) != len(scene._object_positions):
         return None
-    for track in scene._tracks:
-        if (track.get("property") != "presence" or
-                float(track["timing"]["start_time"]) != 0.0 or
-                track.get("values", {}).get("bool", {}).get("to") is not True):
-            return None
     context = _context(scene)
     # Python keeps callable identity only. This bootstrap writes the authored
     # occurrence intervals into the one shared Rust semantic store before the
@@ -2612,5 +2563,3 @@ def install() -> None:
     _base.Scene.bind_morph = _canonical_bind_morph_dispatch
     _base.Scene.live_execution = _live_execution
     _base.Scene.declare_live_transform_to = _declare_live_transform_to
-    _ir.Scene.to_document = _to_document
-    _ir.Scene.identity_document = _identity_document

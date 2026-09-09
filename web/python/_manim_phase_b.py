@@ -283,29 +283,7 @@ def _manim_layout_bounds(raw: _base._ir.Mobject) -> tuple[_base.Vec2, _base.Vec2
 _base._bounds = _manim_layout_bounds
 
 
-def _bind_raw(scene: _compat.Scene, member: _base.Mobject, *, key: str | None = None) -> None:
-    member._bind_to_scene(scene, key=key)
 
-
-def _bind_introducer_target(self: _compat.Scene, target: object) -> None:
-    if isinstance(target, _compat.Group):
-        for member in _compat._leaf_mobjects(target):
-            if member._scene is None:
-                _bind_raw(self, member)
-            elif member._scene is not self:
-                raise ValueError("Mobject already belongs to another Scene")
-        self._register_top_level(target)
-        return
-
-    if isinstance(target, _base.Mobject):
-        if target._scene is None:
-            _bind_raw(self, target)
-        elif target._scene is not self:
-            raise ValueError("Mobject already belongs to another Scene")
-        self._register_top_level(target)
-
-
-_compat.Scene._bind_introducer_target = _bind_introducer_target
 
 
 # Independent fill/stroke opacity does not require another serialized style field:

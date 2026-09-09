@@ -44,10 +44,6 @@ class MovingCameraScene(_compat.Scene):
         frame = _CameraFrame(self)
         self.camera = _MovingCamera(frame)
 
-    def to_document(self) -> dict[str, Any]:
-        document = super().to_document()
-        document["camera_object"] = self.camera.frame.id
-        return document
 
 
 def install() -> None:

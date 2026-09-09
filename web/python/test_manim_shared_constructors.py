@@ -103,7 +103,7 @@ class ManimSharedConstructorTests(unittest.TestCase):
             import _manim_semantic_handles as handles
             handles.install()
 
-            for name in ("Circle", "Rectangle", "Line"):
+            for name in ("Circle", "Rectangle", "Line", "Path"):
                 setattr(_manim_compat._ir, name, lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Python IR constructor was called")))
 
             from noon import BLUE, Circle, Line, Path, Rectangle, Square, VectorPath

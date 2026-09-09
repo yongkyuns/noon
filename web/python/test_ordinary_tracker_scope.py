@@ -33,13 +33,12 @@ class OrdinaryTrackerScopeTests(unittest.TestCase):
             import noon
             import _noon_ir
             scene_play = noon.Scene.play
-            scene_init = _noon_ir.Scene.__init__
-            scene_export = _noon_ir.Scene.to_document
+            scene_init = noon.Scene.__init__
             with patch.dict("sys.modules", {"js": bridge}):
                 import _manim_reactive as reactive
             assert noon.Scene.play is scene_play
-            assert _noon_ir.Scene.__init__ is scene_init
-            assert _noon_ir.Scene.to_document is scene_export
+            assert noon.Scene.__init__ is scene_init
+            assert not hasattr(_noon_ir, "Scene")
             ValueTracker = reactive.ValueTracker
 
 

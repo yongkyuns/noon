@@ -123,7 +123,7 @@ for operation in ("bind_rotation", "bind_opacity", "bind_presence", "bind_positi
         pass
     else:
         raise AssertionError(operation + " admitted a legacy binding")
-assert not unsupported._tracks
+assert not hasattr(unsupported, "_tracks")
 color_probe = Circle().set_fill(BLUE, opacity=0.35).set_stroke(BLUE, opacity=0.2)
 color_probe.set_color(GREEN)
 assert abs(color_probe.get_fill_opacity() - 0.35) < 1e-6
@@ -1014,7 +1014,6 @@ try {
     const failures = [];
     const corruptions = [
       'scene._semantic_geometry_handles.clear()',
-      'scene._tracks.append({"property": "position"})',
     ];
     for (const corruption of corruptions) {
       const source = `from noon import Circle, Scene

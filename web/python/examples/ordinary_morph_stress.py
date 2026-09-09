@@ -30,9 +30,13 @@ def five_point_star(outer_radius: float, inner_radius: float, phase: float = 0) 
 
 class MorphStress(Scene):
     def construct(self):
-        count = globals().get("context", {}).get("object_count", 96)
+        options = globals().get("context", {})
+        count = options.get("object_count", 96)
         if isinstance(count, bool) or not isinstance(count, int) or not 12 <= count <= 10000:
             raise ValueError("morph object count must be between 12 and 10000")
+        variants = options.get("target_variant_count", 12)
+        if isinstance(variants, bool) or not isinstance(variants, int) or not 1 <= variants <= count:
+            raise ValueError("target variant count must be between 1 and object count")
         columns = math.ceil(math.sqrt(count * 1.5))
         rows = math.ceil(count / columns)
         dx, dy = 5.8 / max(columns - 1, 1), 3.8 / max(rows - 1, 1)
@@ -41,16 +45,16 @@ class MorphStress(Scene):
         colors = (BLUE, TEAL, GREEN, YELLOW, ORANGE, RED, PINK, PURPLE)
         source = rounded_loop(radius)
         targets = []
-        for variant in range(12):
+        for variant in range(variants):
             outer = radius * (1.18 + 0.08 * math.sin(variant * 1.7))
             inner = outer * (0.42 + 0.05 * math.cos(variant * 0.9))
-            targets.append(five_point_star(outer, inner, variant / 12 * math.pi * 0.36))
+            targets.append(five_point_star(outer, inner, variant / variants * math.pi * 0.36))
         animations = []
         for index in range(count):
             paint = dict(fill=None, stroke=colors[index % len(colors)], stroke_width=width * 100)
             position = (-2.9 + index % columns * dx, 1.9 - index // columns * dy)
             shape = Path(source, **paint).shift(position)
-            target = Path(targets[index % 12], **paint).shift(position)
+            target = Path(targets[index % variants], **paint).shift(position)
             self.add(shape)
             animations.append(Transform(shape, target))
         self.play(*animations, run_time=3.4, easing="ease_in_out_cubic")
