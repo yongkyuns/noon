@@ -16,6 +16,61 @@ pub enum LiveLayoutTarget<'a> {
 }
 
 impl LiveSession<'_> {
+    /// Fit from the current coherent layout and publish one local affine edit.
+    /// Active affine/content drivers must finish before persistent fitting.
+    pub fn rescale_to_fit(
+        &mut self,
+        source: &crate::LayoutAnchor,
+        length: f64,
+        dimension: crate::LayoutDimension,
+        stretch: bool,
+    ) -> Result<(), LiveSessionError> {
+        let (leaves, bounds) = self.anchor_layout_members(source)?;
+        let scale = dimension
+            .scale(bounds, length, stretch)
+            .map_err(LiveSessionError::Mobject)?;
+        for &leaf in &leaves {
+            let object = Mobject::from_node(Rc::clone(self.store), leaf)
+                .map_err(LiveSessionError::Mobject)?;
+            self.placement_authored_transform(&object)?;
+            crate::dimension_fit::validate_fit_stretch(
+                self.authored(&object)?.transform.rotation_z,
+                stretch,
+            )
+            .map_err(LiveSessionError::Mobject)?;
+        }
+        let Some((x, y)) = scale else {
+            return Ok(());
+        };
+        let node = source.resolve().map_err(LiveSessionError::Mobject)?;
+        let is_family = matches!(
+            self.store.borrow().node(node).map(|node| node.kind()),
+            Some(noon_core::SemanticNodeKind::Family)
+        );
+        if is_family {
+            let transaction = crate::family_affine::FamilyAffine::Scale(x, y)
+                .transaction(&self.store.borrow(), &leaves, bounds)
+                .map_err(LiveSessionError::Mobject)?;
+            self.apply(transaction).map(|_| ())
+        } else {
+            let object = Mobject::from_node(Rc::clone(self.store), node)
+                .map_err(LiveSessionError::Mobject)?;
+            self.scale(&object, x, y).map(|_| ())
+        }
+    }
+
+    /// Match the effective target dimension; no wrapper computes layout ratios.
+    pub fn match_dim_size(
+        &mut self,
+        source: &crate::LayoutAnchor,
+        target: &crate::LayoutAnchor,
+        dimension: crate::LayoutDimension,
+        stretch: bool,
+    ) -> Result<(), LiveSessionError> {
+        let (_, bounds) = self.anchor_layout_members(target)?;
+        self.rescale_to_fit(source, dimension.length(bounds), dimension, stretch)
+    }
+
     /// Publish one alias-aware family scale after validating every local member.
     pub fn scale_family(
         &mut self,

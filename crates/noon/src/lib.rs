@@ -57,6 +57,7 @@ mod compact_value_authoring;
 mod dashed_line_authoring;
 #[cfg(feature = "diagnostics")]
 pub mod diagnostics;
+mod dimension_fit;
 mod elbow_authoring;
 pub mod example_scenes;
 mod execution_segment;
@@ -85,6 +86,7 @@ mod semantic_mobject;
 mod text_authoring;
 
 pub use animation_authoring::DeclaredAnimation;
+pub use dimension_fit::LayoutDimension;
 pub use execution_segment::{
     ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentError, ExecutionSegmentState,
 };

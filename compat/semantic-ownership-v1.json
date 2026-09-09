@@ -490,6 +490,14 @@
         }
       ],
       "reason": "Rust resolves family pivots and unique leaf identity, reuses shared object affine operations, and stages one atomic transaction. Live edits preserve publication/driver guards; Python only coerces arguments and selects authored or live forwarding. Paint and grid remain separate work under #61."
+    },
+    {
+      "id": "dimension-fitting",
+      "surface": "Object/family width and height fitting and matching",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/dimension_fit.rs", "symbol": "rescale_to_fit/match_dim_size"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_rescale_to_fit/_match_dim_size"}],
+      "reason": "Rust owns current bounds, dimension ratios, unique family leaves and atomic affine publication. Python forwards typed layout references and coerces arguments. Active callback fitting and rotated nonuniform stretching are explicitly unsupported."
     }
   ]
 }

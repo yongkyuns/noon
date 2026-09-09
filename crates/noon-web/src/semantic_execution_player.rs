@@ -767,6 +767,28 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_rescale_to_fit(
+        &mut self,
+        source: &noon::LayoutAnchor,
+        length: f64,
+        dimension: noon::LayoutDimension,
+        stretch: bool,
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.rescale_to_fit(source, length, dimension, stretch))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_match_dim_size(
+        &mut self,
+        source: &noon::LayoutAnchor,
+        target: &noon::LayoutAnchor,
+        dimension: noon::LayoutDimension,
+        stretch: bool,
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.match_dim_size(source, target, dimension, stretch))
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_scale_family(
         &mut self,
         family: &noon::MobjectFamily,

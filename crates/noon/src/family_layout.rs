@@ -182,6 +182,10 @@ impl MobjectFamily {
 }
 
 impl FamilyLayout {
+    pub(crate) fn leaves(&self) -> &[SemanticNodeId] {
+        &self.leaves
+    }
+
     pub fn bounds(&self) -> Option<Bounds2D64> {
         self.bounds
     }

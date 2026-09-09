@@ -241,6 +241,34 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmLayoutAnchor {
+        #[wasm_bindgen(js_name = rescaleToFit)]
+        pub fn rescale_to_fit(
+            &self,
+            length: f64,
+            dimension: u32,
+            stretch: bool,
+        ) -> Result<(), JsValue> {
+            self.anchor
+                .rescale_to_fit(length, dimension.try_into().map_err(js_error)?, stretch)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = matchDimSize)]
+        pub fn match_dim_size(
+            &self,
+            target: &WasmLayoutAnchor,
+            dimension: u32,
+            stretch: bool,
+        ) -> Result<(), JsValue> {
+            self.anchor
+                .match_dim_size(
+                    &target.anchor,
+                    dimension.try_into().map_err(js_error)?,
+                    stretch,
+                )
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = nextTo)]
         #[allow(clippy::too_many_arguments)]
         pub fn next_to(
