@@ -23,37 +23,82 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          path: tooling
-          persist-credentials: false
-      - uses: actions/checkout@v7
-        with:
-          ref: 5b56124312657c0959e1ca3936930cad0fe7e240
-          path: source
+          ref: 0a2c32d81a1aede75f391ae0b39f410b83273fa7
           fetch-depth: 0
-      - name: Apply only the independently authored family translation delta
+          path: source
+      - name: Integrate the existing implementation without changing independent tests
         working-directory: source
         run: |
           mkdir -p "$RUNNER_TEMP/family-evidence"
           echo "EVIDENCE=$RUNNER_TEMP/family-evidence" >> "$GITHUB_ENV"
-          test "$(git rev-parse HEAD)" = 5b56124312657c0959e1ca3936930cad0fe7e240
-          test "$(git hash-object ../tooling/.github/1359-family-translation-rust.patch)" = 2bfa9ae3451d5aa8fcb6916961ec10fd91aa26bb
-          test "$(git hash-object ../tooling/.github/1359-family-translation-python.patch)" = ad461e0c467f0e1c96d79682857f74a992071bb1
-          git apply --index ../tooling/.github/1359-family-translation-rust.patch ../tooling/.github/1359-family-translation-python.patch
-          test "$(git write-tree)" = 1b7c2d19420edd3b8b3fabe955aae09d8949ab2a
-          git config user.name 'Noon development tooling'
-          git config user.email 'development@noon.invalid'
-          cargo fmt --all
-          git add crates
-          git diff --cached --check
-          git -c commit.gpgSign=false -c core.hooksPath=/dev/null commit -m 'fix: prepare callback family translations atomically in shared Rust (#1359)'
-          git -c commit.gpgSign=false -c core.hooksPath=/dev/null merge --no-ff -m 'Merge landed family placement and observation changes' 35658f4a9468ca44cc5dcfb97e7aae8b62e38e08
-          test "$(git diff --name-only 35658f4a9468ca44cc5dcfb97e7aae8b62e38e08 HEAD | wc -l)" = 13
-          git diff --exit-code -- .github
-          test -z "$(git status --porcelain)"
-          test -z "$(git ls-remote origin refs/heads/codex/1359-callback-family-translation)"
-          git push origin HEAD:refs/heads/codex/1359-callback-family-translation
+          python3 - <<'PY'
+          from pathlib import Path
+          import ast, subprocess
+          HEAD='0a2c32d81a1aede75f391ae0b39f410b83273fa7'
+          BASE='dd23347d4675d13395468d4ccd1bc06c22c9e1bb'
+          def git(*args): return subprocess.check_output(['git',*args],text=True).strip()
+          def text(ref,path): return subprocess.check_output(['git','show',f'{ref}:{path}'],text=True)
+          def methods(s):
+              return {n.name:ast.dump(n,include_attributes=False) for n in ast.walk(ast.parse(s)) if isinstance(n,ast.FunctionDef) and n.name.startswith('test_')}
+          assert git('rev-parse','HEAD')==HEAD and not git('status','--porcelain')
+          subprocess.run(['git','config','user.name','Noon development tooling'],check=True)
+          subprocess.run(['git','config','user.email','development@noon.invalid'],check=True)
+          subprocess.run(['git','merge','--no-ff','--no-commit',BASE])
+          runner='scripts/typed-authoring-errors-smoke.mjs'
+          assert set(git('diff','--name-only','--diff-filter=U').splitlines())=={runner}
+          s=text(BASE,runner)
+          assert s.count('assert.equal(report.python.additionalTests, 12);')==1
+          Path(runner).write_text(s.replace('assert.equal(report.python.additionalTests, 12);','assert.equal(report.python.additionalTests, 13);'))
+          p=Path('web/python/test_manim_group_animate_shared_target.py');s=p.read_text()
+          old='                def setFill(self, *arguments):\n'
+          assert s.count(old)==1
+          s=s.replace(old,'''                def layout(self):
+                              self.calls.append("layout")
+                              return self
+
+                          def shiftBy(self, x, y):
+                              # This double observes forwarding, not shared Rust semantics.
+                              self.calls.append(("shiftBy", float(x), float(y)))
+
+                          def setFill(self, *arguments):
+          '''.replace('          ', '', 1)) if False else s
+          replacement=('                def layout(self):\n'
+                       '                    self.calls.append("layout")\n'
+                       '                    return self\n\n'
+                       '                def shiftBy(self, x, y):\n'
+                       '                    # This double observes forwarding, not shared Rust semantics.\n'
+                       '                    self.calls.append(("shiftBy", float(x), float(y)))\n\n'
+                       '                def setFill(self, *arguments):\n')
+          s=s.replace(old,replacement,1)
+          old=('            assert target_first._current_raw().transform["translation"]["x"] == 1.0\n'
+               '            assert target_second._current_raw().transform["translation"]["x"] == 1.0\n'
+               '            # Rust owns family paint semantics; this frontend test checks one dispatch.\n')
+          replacement=('            # Shared Rust owns family translation and paint. The test double\n'
+                       '            # records a single family dispatch; no leaf fallback may run here.\n'
+                       '            assert target._semantic_family_handle.calls[:2] == ["layout", ("shiftBy", 1.0, 0.0)]\n'
+                       '            assert not any(isinstance(call, tuple) and call[0] == "shift"\n'
+                       '                           for handle in (target_first._semantic_handle, target_second._semantic_handle)\n'
+                       '                           for call in handle.calls)\n')
+          assert old in s
+          p.write_text(s.replace(old,replacement))
+          path='web/python/test_noon_errors_wasm.py'
+          before=methods(text(BASE,path));after=methods(Path(path).read_text())
+          assert len(before)==12 and len(after)==13
+          assert all(after[name]==body for name,body in before.items())
+          name='test_callback_family_shift_is_unique_and_atomic_with_same_phase_retry'
+          assert after[name]==methods(text(HEAD,path))[name]
+          for path in ('web/python/test_noon_callback_errors_wasm.py','crates/noon-web/src/authoring_error.rs'):
+              assert Path(path).read_text()==text(BASE,path),path
+          subprocess.run(['git','add','-A'],check=True)
+          assert git('write-tree')=='0815cec4e627ed97e9cb5276a74ba078142464b9'
+          subprocess.run(['git','diff','--cached','--check'],check=True)
+          subprocess.run(['git','-c','commit.gpgSign=false','-c','core.hooksPath=/dev/null','commit','-m','fix: preserve landed callback/content coverage and shared target dispatch'],check=True)
+          assert not git('status','--porcelain')
+          PY
+          test "$(git ls-remote origin refs/heads/codex/1359-callback-family-translation | cut -f1)" = 0a2c32d81a1aede75f391ae0b39f410b83273fa7
+          git push origin HEAD:refs/heads/codex/1359-integrated-candidate
           git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/family-evidence/revisions.txt"
-          git diff 35658f4a9468ca44cc5dcfb97e7aae8b62e38e08 HEAD > "$RUNNER_TEMP/family-evidence/product.patch"
+          git diff dd23347d4675d13395468d4ccd1bc06c22c9e1bb HEAD > "$RUNNER_TEMP/family-evidence/product.patch"
           git archive --format=tar.gz --output="$RUNNER_TEMP/family-evidence/source.tar.gz" HEAD
       - uses: actions/upload-artifact@v7
         with:
@@ -111,7 +156,7 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import ast, hashlib, os, shutil, tarfile, textwrap
+          import ast, hashlib, os, shutil, tarfile
           bundle=Path(os.environ['RUNNER_TEMP'])/'baseline-input'
           assert (bundle/'final-revisions.txt').read_text().splitlines()[0]=='8a19ea03af9e4e87f48ccb761b196dbb8061ceb5'
           binary=bundle/'pkg/noon_web_bg.wasm'
