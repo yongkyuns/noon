@@ -558,8 +558,7 @@ class WasmErrorProjectionTests(unittest.TestCase):
     def test_accepted_direct_handle_errors_preserve_paint_and_recover(self):
         store = wasm.WasmAuthoringStore.new()
         with self.assertRaises(NoonValueError) as caught:
-            engine_call(store.createManimGeometry,
-                        wasm.WasmManimGeometryOptions.circle(float("nan")))
+            engine_call(wasm.WasmManimGeometryOptions.circle, float("nan"))
         self.assert_diagnostic(caught.exception, "invalid_input")
         self.assertIn("authoring.invalid_render_number", codes(caught.exception))
         target = circle(store)
@@ -593,7 +592,7 @@ class WasmErrorProjectionTests(unittest.TestCase):
         host.resetStore()
         from noon import Circle, Square, VGroup
         first, second = Circle(), Square()
-        group = VGroup(first, second)
+        group = VGroup(VGroup(first), VGroup(second))
         def state():
             return (first._semantic_handle.snapshotJson(), second._semantic_handle.snapshotJson())
         before = state()
@@ -612,7 +611,8 @@ class WasmErrorProjectionTests(unittest.TestCase):
         self.assertEqual(state(), before)
         with self.assertRaises(NoonValueError) as caught:
             first.shift((1e40, 0))
-        self.assertEqual(caught.exception.code, "authoring.invalid_render_number")
+        self.assertEqual(codes(caught.exception),
+                         ["authoring.vector_lowering", "vector.invalid_coordinates"])
         self.assertEqual(state(), before)
         group.next_to((1, 0), index_of_submobject_to_align=0)
         group.arrange()

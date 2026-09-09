@@ -947,7 +947,7 @@ mod tests {
         assert_authoring_projection(
             first.shift(f64::NAN, 0.0).unwrap_err(),
             "invalid_input",
-            &["authoring.invalid_render_number"],
+            &["authoring.vector_lowering", "vector.invalid_coordinates"],
         );
         assert_authoring_projection(
             first.set_fill_opacity(1.5).unwrap_err(),
