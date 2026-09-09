@@ -5,6 +5,7 @@ Snapshots below use the existing explicit debug boundary only as test evidence.
 """
 import json
 import unittest
+from _noon_errors import NoonError
 
 try:
     import _noon_wasm_for_error_tests as wasm
@@ -298,6 +299,50 @@ class WasmErrorProjectionTests(unittest.TestCase):
         scene.add(first, second)
         self.assertEqual(scene.mobjects, [first, second])
         self.assertTrue(context.containsMobject(correct))
+
+
+
+    def test_invalid_first_wait_does_not_publish_a_player_and_retries(self):
+        for method in ("ordinaryWait", "beginOrdinaryWait"):
+            for populated in (False, True):
+                for duration in (float("nan"), -1.0, float("-inf"), float("inf")):
+                    with self.subTest(method=method, populated=populated, duration=duration):
+                        store = wasm.WasmAuthoringStore.new()
+                        context = store.createSceneContext()
+                        target = circle(store) if populated else None
+                        if target is not None:
+                            context.bindMobject("0", target)
+                        def state():
+                            return (context.liveExecutionOwnership(), context.authoredDuration(),
+                                    list(context.rootMembershipKeys()), context.liveHandoffDuration())
+                        before = state()
+                        expected = NoonError if duration == float("inf") else NoonValueError
+                        with self.assertRaises(expected) as caught:
+                            engine_call(getattr(context, method), duration, operation="Scene.wait")
+                        category = "unclassified" if duration == float("inf") else "invalid_input"
+                        self.assert_diagnostic(caught.exception, category)
+                        if duration != float("inf"):
+                            self.assertEqual(codes(caught.exception)[-1], "segment.invalid_duration")
+                        self.assertEqual(state(), before)
+                        self.assertEqual(context.liveExecutionOwnership(), "none")
+                        added = circle(store)
+                        engine_call(context.bindMobject, "1", added)
+                        endpoint = engine_call(context.beginOrdinaryWait, 0.5)
+                        self.assertEqual(endpoint, 0.5)
+                        player = context.createExecutionPlayer(0.5, 73)
+                        drive = player.driveLiveSegmentToAuthoredTime(endpoint)
+                        self.assertTrue(drive.reachedEndpoint)
+                        drive.free()
+                        engine_call(player.completeLiveSegment)
+                        context.returnExecutionPlayer(player)
+                        self.assertEqual(engine_call(context.ordinaryWait, 0.25), 0.75)
+                        self.assertEqual(json.loads(context.liveDebugFrameJson())["time"], 0.75)
+                        self.assertTrue(context.containsMobject(added))
+                        context.free()
+                        added.free()
+                        if target is not None:
+                            target.free()
+                        store.free()
 
 
 async def check_real_promise_rejection():
