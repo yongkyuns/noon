@@ -3,200 +3,50 @@ on:
   push:
     branches: [codex/1292-r2a-producers-prep]
 permissions:
-  contents: write
+  contents: read
 concurrency:
   group: r2a-producers-development
   cancel-in-progress: true
 env:
-  CARGO_BUILD_JOBS: '2'
-  CARGO_INCREMENTAL: '0'
-  CARGO_PROFILE_DEV_DEBUG: '0'
-  CARGO_PROFILE_TEST_DEBUG: '0'
-  CARGO_TARGET_DIR: ${{ github.workspace }}/source/target
-  RUSTC_WRAPPER: sccache
-  SCCACHE_GHA_ENABLED: 'true'
-  SCCACHE_GHA_RW_MODE: READ_ONLY
-  CURRENT_BASE: 100228bd97fee5d7e44aab3a0cf9736808c04858
+  CURRENT_BASE: 406944f8a58218629c14ff247894b3fd2e8c471a
+  PRODUCT_HEAD: 461fb1743fe9ee4037089ccd65d5573195d62b61
 jobs:
-  qualify:
+  inspect-integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
-          path: tooling
-          persist-credentials: false
-      - uses: actions/checkout@v7
-        with:
-          ref: fe833fc640cb267bbf213cab7ff266269ae6c5a5
-          path: source
+          ref: 461fb1743fe9ee4037089ccd65d5573195d62b61
           fetch-depth: 0
-      - name: Apply hash-guarded source edits
-        id: apply
-        working-directory: source
+          persist-credentials: false
+      - name: Preserve both exact inputs and inspect merge without publishing
         run: |
-          python3 - <<'PY'
-          import base64,bz2,hashlib,json,pathlib
-          encoded=pathlib.Path('../tooling/.github/r2a-edits.bz2.b64').read_text().strip()
-          encoded=encoded.replace('ns9TQ4743','ns9T4743')
-          raw=bz2.decompress(base64.b64decode(encoded))
-          assert hashlib.sha256(raw).hexdigest()=='1ac62851c307143348b400875c09ef5bd1c34c79a484050297faf03b9a8d6688'
-          updates=[]
-          for name,(before,after,edits) in json.loads(raw).items():
-              path=pathlib.Path(name)
-              assert str(path).startswith('crates/') and '..' not in path.parts
-              original=path.read_bytes()
-              assert hashlib.sha256(original).hexdigest()==before,name
-              lines=original.decode().splitlines(keepends=True)
-              for start,end,replacement in reversed(edits):
-                  lines[start:end]=[replacement]
-              result=''.join(lines).encode()
-              assert hashlib.sha256(result).hexdigest()==after,name
-              updates.append((path,result))
-          for path,result in updates:
-              path.write_bytes(result)
-          print('Applied',len(updates),'verified source changes')
-          PY
-          cargo fmt --all
-          cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
-          python3 ../tooling/.github/r2a-fix1.py
-          for fix in ../tooling/.github/r2a-fix[2-9].py; do
-            test ! -f "$fix" || python3 "$fix"
-          done
-          for test in ../tooling/.github/r2a-tests/*.rs; do
-            test ! -f "$test" || cp "$test" fixtures/provider-consumer/tests/
-          done
-          git restore --source=HEAD -- crates/noon-core/src/semantic_store/semantic_transaction.rs
-          cargo fmt --all
-          cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
-          git add -- crates fixtures/provider-consumer/tests
-          git diff --cached --check
+          set -euo pipefail
+          mkdir -p /tmp/r2a-integration
+          test "$(git rev-parse HEAD)" = "$PRODUCT_HEAD"
+          git diff --exit-code
+          git archive "$CURRENT_BASE" | gzip > /tmp/r2a-integration/master.tar.gz
+          git archive "$PRODUCT_HEAD" | gzip > /tmp/r2a-integration/product.tar.gz
+          git show -s --format='%H %T %P' "$CURRENT_BASE" "$PRODUCT_HEAD" > /tmp/r2a-integration/inputs.txt
           git config user.name 'Noon development tooling'
           git config user.email 'development@noon.invalid'
-          git -c commit.gpgSign=false -c core.hooksPath=/dev/null commit -m 'Stage existing R2a producer candidate for current-master qualification'
-          git merge --no-commit --no-ff "$CURRENT_BASE"
-          git diff --cached --check
-          git diff "$CURRENT_BASE" --stat
-          printf '%s\n' "$CURRENT_BASE" > ../base-sha.txt
-          git archive "$CURRENT_BASE" | gzip > ../base.tar.gz
-      - uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: r2-sources-${{ runner.os }}-${{ hashFiles('source/Cargo.toml', 'source/crates/**/Cargo.toml') }}
-          restore-keys: |
-            Linux-cargo-sources-
-            provider-sources-Linux-
-      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
-        with:
-          version: v0.16.0
-      - name: Test minimal producer and independent typed consumer
-        id: tests
-        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
-        working-directory: source
-        run: |
           set +e
-          cargo test -p noon --no-default-features --lib > ../tests.log 2>&1
-          library=$?
-          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests >> ../tests.log 2>&1
-          consumer=$?
-          tail -160 ../tests.log
-          test "$library" = 0 && test "$consumer" = 0
-      - name: Retain early test diagnostics
-        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: r2a-test-diagnostics
-          path: tests.log
-          retention-days: 3
-      - name: Compile minimal producer and all native callers
-        id: native
-        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
-        working-directory: source
-        run: |
-          set +e
-          cargo check -p noon --no-default-features --all-targets > ../compile.log 2>&1
-          minimal=$?
-          cargo check --workspace --all-targets --all-features >> ../compile.log 2>&1
-          workspace=$?
-          tail -200 ../compile.log
-          test "$minimal" = 0 && test "$workspace" = 0
-      - name: Qualify repository gate and public facade
-        id: gate
-        if: ${{ !cancelled() && steps.native.outcome == 'success' }}
-        working-directory: source
-        run: |
-          bash scripts/check.sh fast "$CURRENT_BASE" > ../fast.log 2>&1 || { tail -200 ../fast.log; exit 1; }
-          cargo test -p noon --no-default-features --doc > ../docs.log 2>&1 || { tail -120 ../docs.log; exit 1; }
-          cargo run -p noon --no-default-features --example shared_authoring >> ../docs.log 2>&1 || { tail -120 ../docs.log; exit 1; }
-      - name: Retain early fast-gate diagnostics
-        if: ${{ !cancelled() && steps.native.outcome == 'success' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: r2a-fast-diagnostics
-          path: |
-            fast.log
-            docs.log
-          retention-days: 3
-      - name: Compile direct-WASM callers and independent tests
-        id: wasm
-        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
-        working-directory: source
-        run: |
-          set +e
-          cargo check -p noon-web --all-features --target wasm32-unknown-unknown > ../wasm.log 2>&1
-          web=$?
-          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests --target wasm32-unknown-unknown --no-run >> ../wasm.log 2>&1
-          consumer=$?
-          tail -200 ../wasm.log
-          test "$web" = 0 && test "$consumer" = 0
-      - name: Publish only qualified Rust source as a new review branch
-        if: ${{ !cancelled() && steps.tests.outcome == 'success' && steps.native.outcome == 'success' && steps.gate.outcome == 'success' && steps.wasm.outcome == 'success' }}
-        working-directory: source
-        run: |
-          git diff --exit-code
-          git diff --cached --check
-          git diff --cached "$CURRENT_BASE" --name-only > ../changed-files.txt
-          python3 - <<'PY'
-          from pathlib import Path
-          names=Path('../changed-files.txt').read_text().splitlines()
-          assert names
-          for name in names:
-              path=Path(name)
-              assert path.suffix=='.rs' and 'target' not in path.parts,name
-              assert name.startswith('crates/') or name.startswith('fixtures/provider-consumer/tests/'),name
-          print('Source-only candidate:',len(names),'Rust files')
-          PY
-          tree=$(git write-tree)
-          candidate=$(printf '%s\n' 'feat: preserve typed object, value, layout and state authoring failures (#1292 R2a)' | git -c commit.gpgSign=false commit-tree "$tree" -p "$CURRENT_BASE")
-          git push origin "$candidate:refs/heads/codex/1292-r2a-typed-producers"
-          printf '%s\n' "$candidate" > ../candidate-sha.txt
-      - name: Preserve staged candidate for inspection
+          git merge --no-commit --no-ff "$CURRENT_BASE" > /tmp/r2a-integration/merge.log 2>&1
+          result=$?
+          set -e
+          git status --short > /tmp/r2a-integration/status.txt
+          git diff --name-only --diff-filter=U > /tmp/r2a-integration/conflicts.txt
+          git diff > /tmp/r2a-integration/unstaged.patch
+          git diff --cached "$CURRENT_BASE" > /tmp/r2a-integration/staged.patch
+          git ls-files -z | sort -zu | tar --null -T - -czf /tmp/r2a-integration/merged-worktree.tar.gz
+          cat /tmp/r2a-integration/inputs.txt /tmp/r2a-integration/merge.log /tmp/r2a-integration/conflicts.txt
+          printf '%s\n' "$result" > /tmp/r2a-integration/merge-exit.txt
+          test "$result" = 0
+      - uses: actions/upload-artifact@v7
         if: always()
-        working-directory: source
-        run: |
-          git add -u
-          git diff --cached "$CURRENT_BASE" --binary > ../candidate.patch
-          git write-tree > ../candidate-tree.txt
-          git archive "$(git write-tree)" | gzip > ../candidate.tar.gz
-      - name: Retain evidence
-        if: always()
-        uses: actions/upload-artifact@v7
         with:
-          name: r2a-producer-compile
-          path: |
-            compile.log
-            tests.log
-            fast.log
-            docs.log
-            wasm.log
-            base-sha.txt
-            base.tar.gz
-            candidate-sha.txt
-            candidate-tree.txt
-            changed-files.txt
-            candidate.patch
-            candidate.tar.gz
+          name: r2a-current-integration
+          path: /tmp/r2a-integration
           retention-days: 3
           if-no-files-found: error
