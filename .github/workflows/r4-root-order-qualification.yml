@@ -1,0 +1,86 @@
+name: R4 root-order qualification
+
+on:
+  push:
+    branches: [codex/1292-r4-root-order-prep]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r4-root-order-qualification
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      BASE_SHA: d6734d2a0626f5c9926e4043ad2017a94f5c8c5a
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 3
+      - name: Use stable Rust
+        run: |
+          rustup default stable
+          rustup component add rustfmt clippy
+          rustup target add wasm32-unknown-unknown
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Use shared compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Record exact source and format candidate
+        run: |
+          mkdir -p evidence
+          git rev-parse HEAD | tee evidence/checkout.txt
+          rustc --version | tee evidence/toolchain.txt
+          cargo --version | tee -a evidence/toolchain.txt
+          if ! git cat-file -e "${BASE_SHA}^{commit}"; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          fi
+          cargo fmt --all
+      - name: Run root-order acceptance against real native runtime
+        run: |
+          set -o pipefail
+          cargo test -p noon --no-default-features --test root_order_acceptance -- --nocapture 2>&1 | tee evidence/acceptance.log
+      - name: Qualify existing architecture and Rust gates
+        run: |
+          set -o pipefail
+          bash scripts/check.sh fast "$BASE_SHA" 2>&1 | tee evidence/fast.log
+      - name: Qualify direct WASM compilation
+        run: |
+          set -o pipefail
+          cargo check -p noon-web --all-features --target wasm32-unknown-unknown 2>&1 | tee evidence/wasm.log
+      - name: Retain exact source and diagnostics
+        if: always()
+        run: |
+          mkdir -p evidence
+          git diff --binary --full-index "$BASE_SHA" -- crates > evidence/candidate.patch
+          cp crates/noon/tests/root_order_acceptance.rs evidence/root_order_acceptance.rs
+          cp crates/noon-compile/src/semantic_lowering/root_order.rs evidence/root_order.rs
+          sha256sum evidence/root_order_acceptance.rs evidence/root_order.rs > evidence/source-sha256.txt
+          tar --exclude=.git --exclude=target --exclude=evidence -czf evidence/source.tar.gz .
+      - name: Upload qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: root-order-qualification
+          path: evidence
+          retention-days: 3
+          if-no-files-found: error
