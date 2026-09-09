@@ -7,7 +7,7 @@ permissions:
 jobs:
   qualify:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
@@ -19,55 +19,30 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Assemble scoped R3 and integrate freshly checked master
+      - name: Assemble only the incremental live-property projection
         run: |
-          mkdir -p /tmp/r3-evidence
+          mkdir -p /tmp/r3-property-evidence
           python3 - <<'PY'
           import base64, gzip, hashlib, pathlib
-          encoded = ''.join(p.read_text().strip() for p in sorted(pathlib.Path('.github/r3-payload').glob('*.b64')))
-          patch = gzip.decompress(base64.b64decode(encoded))
-          assert hashlib.sha256(patch).hexdigest() == 'bbcfab342b0681978749db8bde71913c49a2b87d55069e218e9992b0cea8c919'
-          pathlib.Path('/tmp/r3-evidence/input.patch').write_bytes(patch)
-          encoded = pathlib.Path('.github/r3-fixups.b64').read_text()
-          encoded = encoded.replace('cpixdKZZ0lKO', 'cpixdKZ0lKO').replace('Skr4n7frI2hLA', 'Skr4n7frIhLA').replace('XU9NS4NS4GQi', 'XU9NS4GQi')
-          fixes = gzip.decompress(base64.b64decode(encoded, validate=True))
-          assert hashlib.sha256(fixes).hexdigest() == 'c0adef92ad7413b8ceaf78c60f02126d9ad67e315dda08f63ff50a2ad67fa3d4'
-          pathlib.Path('/tmp/r3-evidence/fixups.patch').write_bytes(fixes)
-          final = pathlib.Path('.github/r3-v3.patch').read_bytes()
-          assert hashlib.sha256(final).hexdigest() == 'fc3f37980ae9c7441986500ca5ba36313b319d487538d349834563b56146a074'
-          pathlib.Path('/tmp/r3-evidence/final.patch').write_bytes(final)
+          encoded = pathlib.Path('.github/r3-live-properties.b64').read_text().strip()
+          encoded = encoded.replace('LOW3TnPFs/v', 'LOW3TnUs/v')
+          patch = gzip.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '2051c276cb977ce6d18ebee75580bfda2239d69a365ec9b9710a06317500a987'
+          pathlib.Path('/tmp/r3-property-evidence/input.patch').write_bytes(patch)
           PY
-          git checkout --detach fe833fc640cb267bbf213cab7ff266269ae6c5a5
-          git apply --index /tmp/r3-evidence/input.patch
-          git apply --index /tmp/r3-evidence/fixups.patch
-          git apply --index /tmp/r3-evidence/final.patch
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('crates/noon-web/src/semantic_execution_player.rs')
-          text = p.read_text()
-          old = '        assert!(player\n            .live_drive_segment_to_authored_time(1.0)\n            .unwrap_err()\n            .contains("time at or after 1.25"));'
-          new = '        let error = player.live_drive_segment_to_authored_time(1.0).unwrap_err();\n        // This legacy guard is not a settled R2 producer yet.\n        assert_eq!(error.category, "unclassified");\n        assert_eq!(error.code, "unclassified");\n        assert_eq!(error.message, "external continuation sample requires time at or after 1.25, got 1");'
-          assert text.count(old) == 1
-          p.write_text(text.replace(old, new))
-          PY
+          parent=ef2e4a894a7795471795e62351c8241db59af4ce
+          git checkout --detach "$parent"
+          git apply --index /tmp/r3-property-evidence/input.patch
           cargo fmt --all
           git add -u
           git diff --cached --check
-          git diff --cached > /tmp/r3-evidence/formatted-r3.patch
-          base=100228bd97fee5d7e44aab3a0cf9736808c04858
-          git reset --hard "$base"
-          git apply --3way --index /tmp/r3-evidence/formatted-r3.patch
-          git diff --cached --check
           git config user.name 'Yongkyun Shin'
           git config user.email '4311628+yongkyuns@users.noreply.github.com'
-          tree=$(git write-tree)
-          parent=$(git rev-parse refs/remotes/origin/codex/1292-r3-typed-boundary)
-          candidate=$(git commit-tree "$tree" -p "$parent" -p "$base" -m 'fix: retain callback-drive categories and qualify integrated R3 boundary')
-          git reset --hard "$candidate"
-          git rev-parse HEAD HEAD^{tree} > /tmp/r3-evidence/revisions.txt
-          echo "$base" > /tmp/r3-evidence/base.txt
-          git diff "$base" HEAD > /tmp/r3-evidence/product.patch
-          git archive --format=tar.gz HEAD > /tmp/r3-evidence/source.tar.gz
+          git commit -m 'fix: retain typed live transform failures through WASM and Python'
+          git rev-parse HEAD HEAD^{tree} > /tmp/r3-property-evidence/revisions.txt
+          echo "$parent" > /tmp/r3-property-evidence/base.txt
+          git diff "$parent" HEAD > /tmp/r3-property-evidence/product.patch
+          git archive --format=tar.gz HEAD > /tmp/r3-property-evidence/source.tar.gz
       - uses: actions/cache/restore@v6
         with:
           path: |
@@ -82,19 +57,23 @@ jobs:
         with:
           tool: wasm-pack@0.15.0
           fallback: none
-      - name: Native architecture, format, workspace check, strict Clippy and library tests
+      - name: Focused native atomicity and incremental delta regression
         run: |
           set -o pipefail
-          bash scripts/check.sh fast 100228bd97fee5d7e44aab3a0cf9736808c04858 2>&1 | tee /tmp/r3-evidence/native.log
+          cargo test -p noon-web --lib live_transform_projection_preserves_atomic_rejection_and_local_retry -- --nocapture 2>&1 | tee /tmp/r3-property-evidence/focused-native.log
+      - name: Native architecture, format, check, Clippy and library tests
+        run: |
+          set -o pipefail
+          bash scripts/check.sh fast ef2e4a894a7795471795e62351c8241db59af4ce 2>&1 | tee /tmp/r3-property-evidence/native.log
       - name: Web static and Python tests
         run: |
           set -o pipefail
-          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/r3-evidence/preflight.log
+          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/r3-property-evidence/preflight.log
       - name: Build actual dev WASM from this exact candidate
         run: |
           set -o pipefail
           rustup target add wasm32-unknown-unknown
-          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/r3-evidence/wasm.log
+          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/r3-property-evidence/wasm.log
       - uses: actions/cache/restore@v6
         with:
           path: ~/.cache/ms-playwright
@@ -106,31 +85,24 @@ jobs:
       - name: Real WASM and Python error categories, atomicity and recovery
         run: |
           set -o pipefail
-          node scripts/typed-authoring-errors-smoke.mjs 2>&1 | tee /tmp/r3-evidence/errors-browser.log
-      - name: Existing real authoring and continuation regression
+          node scripts/typed-authoring-errors-smoke.mjs 2>&1 | tee /tmp/r3-property-evidence/errors-browser.log
+      - name: Existing authoring and continuation regression
         run: |
           set -o pipefail
-          node scripts/manim-compat-smoke.mjs 2>&1 | tee /tmp/r3-evidence/manim-browser.log
-      - name: Publish verified candidate or retain it for authorized connector publication
-        run: |
-          set -o pipefail
-          if git push origin HEAD:refs/heads/codex/1292-r3-typed-boundary 2>&1 | tee /tmp/r3-evidence/publication.log; then
-            echo pushed > /tmp/r3-evidence/publication-status.txt
-          else
-            echo 'Connector publication required; product qualification passed but this job cannot modify workflow refs.' > /tmp/r3-evidence/publication-status.txt
-            cat /tmp/r3-evidence/publication-status.txt
-          fi
-      - name: Retain exact dependency resolution and final working-tree status
+          node scripts/manim-compat-smoke.mjs 2>&1 | tee /tmp/r3-property-evidence/manim-browser.log
+      - name: Publish only the verified scoped candidate to its own branch
+        run: git push origin HEAD:refs/heads/codex/1292-r3-live-properties
+      - name: Retain exact dependencies and final state
         if: always()
         run: |
-          if test -f Cargo.lock; then cp Cargo.lock /tmp/r3-evidence/Cargo.lock; fi
-          if test -d web/pkg; then cp -a web/pkg /tmp/r3-evidence/web-pkg; fi
-          if test -d browser-smoke-artifacts/typed-authoring-errors; then cp -a browser-smoke-artifacts/typed-authoring-errors /tmp/r3-evidence/browser; fi
-          git status --short > /tmp/r3-evidence/status.txt
-          git rev-parse HEAD > /tmp/r3-evidence/final-head.txt
+          test ! -f Cargo.lock || cp Cargo.lock /tmp/r3-property-evidence/Cargo.lock
+          test ! -d web/pkg || cp -a web/pkg /tmp/r3-property-evidence/web-pkg
+          test ! -d browser-smoke-artifacts/typed-authoring-errors || cp -a browser-smoke-artifacts/typed-authoring-errors /tmp/r3-property-evidence/browser
+          git status --short > /tmp/r3-property-evidence/status.txt
+          git rev-parse HEAD > /tmp/r3-property-evidence/final-head.txt
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r3-boundary-qualification
-          path: /tmp/r3-evidence
-          retention-days: 3
+          name: r3-live-property-qualification
+          path: /tmp/r3-property-evidence
+          retention-days: 7
