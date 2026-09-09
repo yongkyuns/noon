@@ -7,23 +7,37 @@ permissions:
 jobs:
   integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     env:
-      INTEGRATION_SHA: 1691d74309cb08321015a8ed3781b5551a0ec7c0
-      BASE_SHA: 73af2196f06cc1df2a5d239a007d1c45ce5ebafb
-      PRODUCT_SHA: 6ba1656ac0bbb0956c90ae3eba6e519b8ecaeca6
+      BASE_SHA: dd23347d4675d13395468d4ccd1bc06c22c9e1bb
+      PRODUCT_SHA: 6fd6391b138fb654410b90b97509ff7f285cf494
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: READ_ONLY
+      BINARYEN_VERSION: "132"
+      BINARYEN_LINUX_SHA256: 195ddc94f9bc89f45abdabb0b9eea86023d727ba90eac8b35b80f2544fc30572
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 1691d74309cb08321015a8ed3781b5551a0ec7c0
-          fetch-depth: 2
+          ref: dd23347d4675d13395468d4ccd1bc06c22c9e1bb
+          fetch-depth: 0
           persist-credentials: false
+      - name: Integrate the exact review head without changing any remote branch
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/a6-evidence
+          git fetch origin "$PRODUCT_SHA"
+          git config user.name 'Noon qualification'
+          git config user.email 'qualification@users.noreply.github.com'
+          git merge --no-edit --no-ff "$PRODUCT_SHA"
+          test "$(git rev-parse HEAD^1)" = "$BASE_SHA"
+          test "$(git rev-parse HEAD^2)" = "$PRODUCT_SHA"
+          git show -s --format='%H%n%P%n%T%n%s' HEAD | tee /tmp/a6-evidence/revisions.txt
+          git diff --stat "$BASE_SHA" HEAD | tee /tmp/a6-evidence/scope.txt
+          git diff --exit-code
       - name: Use repository Rust toolchain
         run: |
           rustup component add rustfmt clippy
@@ -39,44 +53,45 @@ jobs:
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
-      - name: Verify unchanged integration and all root-order tests
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Install pinned optimized-build tool
+        shell: bash
+        run: |
+          archive="binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          curl --fail --location --retry 3 --retry-all-errors --output "$RUNNER_TEMP/$archive" "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/${archive}"
+          echo "${BINARYEN_LINUX_SHA256}  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/binaryen-version_${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
+      - name: Required full gate on pinned integration
         run: |
           set -o pipefail
-          mkdir -p /tmp/r4-integration-evidence
-          git show -s --format='%H%n%P%n%T%n%s' HEAD | tee /tmp/r4-integration-evidence/revisions.txt
-          test "$(git rev-parse HEAD)" = "$INTEGRATION_SHA"
-          test "$(git rev-parse HEAD^1)" = "$BASE_SHA"
-          test "$(git rev-parse HEAD^2)" = "$PRODUCT_SHA"
-          test "$(git rev-parse HEAD^{tree})" = 5f693de5f0a6c4149eee92925f06859f78d64b30
-          cargo test -p noon --no-default-features --test root_order_acceptance --test root_order_transaction_regressions --test root_order_alias_regressions --no-fail-fast -- --nocapture 2>&1 | tee /tmp/r4-integration-evidence/focused.log
+          bash scripts/check.sh full "$BASE_SHA" 2>&1 | tee /tmp/a6-evidence/full.log
           git diff --exit-code
-      - name: Qualify integrated fast Rust and architecture gates
+      - name: Existing artifact contracts on the same source
         run: |
           set -o pipefail
-          bash scripts/check.sh fast "$BASE_SHA" 2>&1 | tee /tmp/r4-integration-evidence/fast.log
-      - name: Qualify integrated direct WASM compilation
-        run: |
-          set -o pipefail
-          cargo check -p noon-web --all-features --target wasm32-unknown-unknown 2>&1 | tee /tmp/r4-integration-evidence/wasm.log
-          git diff --exit-code
-      - name: Retain source and exact integration diagnostics
+          node --test web/optimized-replay-contract.test.mjs .github/ci/wasm-build.test.mjs 2>&1 | tee /tmp/a6-evidence/contracts.log
+      - name: Retain source, package and exact diagnostics
         if: always()
         run: |
-          mkdir -p /tmp/r4-integration-evidence
-          git show -s --format='%H%n%P%n%T%n%s' HEAD > /tmp/r4-integration-evidence/final-revisions.txt
-          git diff --full-index --binary "$BASE_SHA" HEAD > /tmp/r4-integration-evidence/product.patch
-          git ls-tree -r HEAD -- crates/noon/src/execution_session/publication.rs crates/noon/tests/root_order_transaction_regressions.rs > /tmp/r4-integration-evidence/source-blobs.txt
-          git status --porcelain > /tmp/r4-integration-evidence/worktree-status.txt
-          rustc --version > /tmp/r4-integration-evidence/toolchain.txt
-          cargo --version >> /tmp/r4-integration-evidence/toolchain.txt
-          cp crates/noon/src/execution_session/publication.rs /tmp/r4-integration-evidence/
-          cp crates/noon/tests/root_order_transaction_regressions.rs /tmp/r4-integration-evidence/
-          test ! -f Cargo.lock || cp Cargo.lock /tmp/r4-integration-evidence/
-          sha256sum /tmp/r4-integration-evidence/*.rs > /tmp/r4-integration-evidence/source-sha256.txt
+          mkdir -p /tmp/a6-evidence
+          git show -s --format='%H%n%P%n%T%n%s' HEAD > /tmp/a6-evidence/final-revisions.txt
+          git diff --full-index --binary "$BASE_SHA" HEAD > /tmp/a6-evidence/product.patch
+          git ls-tree -r HEAD > /tmp/a6-evidence/source-blobs.txt
+          git archive HEAD | gzip > /tmp/a6-evidence/source.tar.gz
+          git status --porcelain > /tmp/a6-evidence/worktree-status.txt
+          rustc --version > /tmp/a6-evidence/toolchain.txt
+          cargo --version >> /tmp/a6-evidence/toolchain.txt
+          test ! -f Cargo.lock || cp Cargo.lock /tmp/a6-evidence/
+          if test -d web/pkg; then tar -czf /tmp/a6-evidence/web-runtime.tar.gz web/pkg web/python-worker.js web/python/compat-bundle.*.json; fi
+          sha256sum /tmp/a6-evidence/*.tar.gz > /tmp/a6-evidence/archives-sha256.txt
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r4-root-domain-integration-qualification
-          path: /tmp/r4-integration-evidence
+          name: a6-1361-full-integration
+          path: /tmp/a6-evidence
           retention-days: 7
           if-no-files-found: error
