@@ -187,7 +187,8 @@ class ManimSharedFamilyRelativePlacementTests(unittest.TestCase):
             assert store.finishes == 4
 
             # Frame semantics must be delegated without Python bounds or shifts.
-            _manim_compat._critical_for = lambda *_: (_ for _ in ()).throw(AssertionError("Python bounds"))
+            assert not hasattr(_manim_compat, "_critical_for")
+            assert not hasattr(_manim_compat, "_bounds_for")
             family.to_edge(2 * RIGHT, buff=0.25)
             family.to_corner(RIGHT + UP, buff=0.5)
             assert store.frame_calls == [(2.0, 0.0, 0.25), (1.0, 1.0, 0.5)]
