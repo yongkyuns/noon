@@ -4,16 +4,14 @@ on:
     branches: [codex/1347-landed-review-evidence]
 permissions:
   contents: read
-concurrency:
-  group: r4-landed-review-evidence
-  cancel-in-progress: true
 jobs:
-  qualify:
+  integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 20
     env:
+      INTEGRATION_SHA: 1691d74309cb08321015a8ed3781b5551a0ec7c0
+      BASE_SHA: 73af2196f06cc1df2a5d239a007d1c45ce5ebafb
       PRODUCT_SHA: 6ba1656ac0bbb0956c90ae3eba6e519b8ecaeca6
-      BASE_SHA: b9d6c4cbd82a6333551663358946294538cc3842
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -23,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 6ba1656ac0bbb0956c90ae3eba6e519b8ecaeca6
+          ref: 1691d74309cb08321015a8ed3781b5551a0ec7c0
           fetch-depth: 2
           persist-credentials: false
       - name: Use repository Rust toolchain
@@ -41,83 +39,44 @@ jobs:
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
-      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
-        with:
-          tool: wasm-pack@0.15.0
-          fallback: none
-      - name: Verify exact checkout and reproduce unchanged-base rejection gap
+      - name: Verify unchanged integration and all root-order tests
         run: |
           set -o pipefail
-          mkdir -p /tmp/r4-domain-evidence
-          test "$(git rev-parse HEAD)" = "$PRODUCT_SHA"
+          mkdir -p /tmp/r4-integration-evidence
+          git show -s --format='%H%n%P%n%T%n%s' HEAD | tee /tmp/r4-integration-evidence/revisions.txt
+          test "$(git rev-parse HEAD)" = "$INTEGRATION_SHA"
           test "$(git rev-parse HEAD^1)" = "$BASE_SHA"
-          git show -s --format='%H%n%P%n%T%n%s' HEAD | tee /tmp/r4-domain-evidence/revisions.txt
-          rustc --version | tee /tmp/r4-domain-evidence/toolchain.txt
-          cargo --version | tee -a /tmp/r4-domain-evidence/toolchain.txt
-          node --version | tee -a /tmp/r4-domain-evidence/toolchain.txt
-          git show "$BASE_SHA":crates/noon/src/execution_session/publication.rs > crates/noon/src/execution_session/publication.rs
-          set +e
-          CARGO_TARGET_DIR=/tmp/r4-domain-baseline cargo test -p noon --no-default-features --test root_order_transaction_regressions live_root_must_belong_to_the_execution_domain_before_publication -- --nocapture > /tmp/r4-domain-evidence/baseline.log 2>&1
-          status=$?
-          set -e
-          git restore crates/noon/src/execution_session/publication.rs
-          cat /tmp/r4-domain-evidence/baseline.log
-          test "$status" = 101
-          grep -F 'test result: FAILED. 0 passed; 1 failed' /tmp/r4-domain-evidence/baseline.log
-          grep -F 'assertion failed: matches!' /tmp/r4-domain-evidence/baseline.log
+          test "$(git rev-parse HEAD^2)" = "$PRODUCT_SHA"
+          test "$(git rev-parse HEAD^{tree})" = 5f693de5f0a6c4149eee92925f06859f78d64b30
+          cargo test -p noon --no-default-features --test root_order_acceptance --test root_order_transaction_regressions --test root_order_alias_regressions --no-fail-fast -- --nocapture 2>&1 | tee /tmp/r4-integration-evidence/focused.log
           git diff --exit-code
-      - name: Qualify exact native root-order regression suite
+      - name: Qualify integrated fast Rust and architecture gates
         run: |
           set -o pipefail
-          cargo test -p noon --no-default-features --test root_order_acceptance --test root_order_transaction_regressions --test root_order_alias_regressions --no-fail-fast -- --nocapture 2>&1 | tee /tmp/r4-domain-evidence/focused.log
-      - name: Run full repository gate without skipping web preflight or release optimization
+          bash scripts/check.sh fast "$BASE_SHA" 2>&1 | tee /tmp/r4-integration-evidence/fast.log
+      - name: Qualify integrated direct WASM compilation
         run: |
           set -o pipefail
-          bash scripts/check.sh full "$BASE_SHA" 2>&1 | tee /tmp/r4-domain-evidence/full.log
-      - name: Execute the exact root-domain regression as typed Rust in WASM
-        run: |
-          set -o pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import json
-          root = Path.cwd()
-          out = Path('/tmp/r4-domain-wasm')
-          (out/'src').mkdir(parents=True, exist_ok=True)
-          deps = '\n'.join(name + ' = { path = ' + json.dumps(str(root/'crates'/name)) + ', default-features = false }' for name in ['noon', 'noon-core', 'noon-compile'])
-          (out/'Cargo.toml').write_text('[package]\nname="r4-domain-proof"\nversion="0.0.0"\nedition="2021"\n[lib]\ncrate-type=["cdylib"]\n[dependencies]\n' + deps + '\n')
-          source = (root/'crates/noon/tests/root_order_transaction_regressions.rs').read_text().replace('#[test]\n', '')
-          (out/'src/lib.rs').write_text('#![allow(dead_code)]\n' + source + '\n#[unsafe(no_mangle)]\npub extern "C" fn verify_root_domain() -> u32 {\n    live_root_must_belong_to_the_execution_domain_before_publication();\n    8\n}\n')
-          PY
-          CARGO_TARGET_DIR=/tmp/r4-domain-wasm-target cargo build --manifest-path /tmp/r4-domain-wasm/Cargo.toml --release --target wasm32-unknown-unknown 2>&1 | tee /tmp/r4-domain-evidence/direct-wasm-build.log
-          node --input-type=module - <<'JS' | tee /tmp/r4-domain-evidence/direct-wasm-run.log
-          import fs from 'node:fs';
-          import assert from 'node:assert/strict';
-          const bytes = fs.readFileSync('/tmp/r4-domain-wasm-target/wasm32-unknown-unknown/release/r4_domain_proof.wasm');
-          const module = await WebAssembly.compile(bytes);
-          assert.deepEqual(WebAssembly.Module.imports(module), []);
-          const instance = await WebAssembly.instantiate(module, {});
-          assert.equal(instance.exports.verify_root_domain(), 8);
-          console.log(JSON.stringify({wrongRootRecoveryCombinations:8, imports:0, passed:true}));
-          JS
-          sha256sum /tmp/r4-domain-wasm-target/wasm32-unknown-unknown/release/r4_domain_proof.wasm > /tmp/r4-domain-evidence/direct-wasm-sha256.txt
-          cp /tmp/r4-domain-wasm/src/lib.rs /tmp/r4-domain-evidence/direct-wasm-source.rs
+          cargo check -p noon-web --all-features --target wasm32-unknown-unknown 2>&1 | tee /tmp/r4-integration-evidence/wasm.log
           git diff --exit-code
-      - name: Retain exact source, patch and diagnostics
+      - name: Retain source and exact integration diagnostics
         if: always()
         run: |
-          mkdir -p /tmp/r4-domain-evidence
-          git show -s --format='%H%n%P%n%T%n%s' HEAD > /tmp/r4-domain-evidence/final-revisions.txt
-          git diff --full-index --binary "$BASE_SHA" HEAD > /tmp/r4-domain-evidence/product.patch
-          git ls-tree -r HEAD -- crates/noon/src/execution_session/publication.rs crates/noon/tests/root_order_transaction_regressions.rs > /tmp/r4-domain-evidence/source-blobs.txt
-          git status --porcelain > /tmp/r4-domain-evidence/worktree-status.txt
-          cp crates/noon/src/execution_session/publication.rs /tmp/r4-domain-evidence/
-          cp crates/noon/tests/root_order_transaction_regressions.rs /tmp/r4-domain-evidence/
-          test ! -f Cargo.lock || cp Cargo.lock /tmp/r4-domain-evidence/
-          sha256sum /tmp/r4-domain-evidence/*.rs > /tmp/r4-domain-evidence/source-sha256.txt
+          mkdir -p /tmp/r4-integration-evidence
+          git show -s --format='%H%n%P%n%T%n%s' HEAD > /tmp/r4-integration-evidence/final-revisions.txt
+          git diff --full-index --binary "$BASE_SHA" HEAD > /tmp/r4-integration-evidence/product.patch
+          git ls-tree -r HEAD -- crates/noon/src/execution_session/publication.rs crates/noon/tests/root_order_transaction_regressions.rs > /tmp/r4-integration-evidence/source-blobs.txt
+          git status --porcelain > /tmp/r4-integration-evidence/worktree-status.txt
+          rustc --version > /tmp/r4-integration-evidence/toolchain.txt
+          cargo --version >> /tmp/r4-integration-evidence/toolchain.txt
+          cp crates/noon/src/execution_session/publication.rs /tmp/r4-integration-evidence/
+          cp crates/noon/tests/root_order_transaction_regressions.rs /tmp/r4-integration-evidence/
+          test ! -f Cargo.lock || cp Cargo.lock /tmp/r4-integration-evidence/
+          sha256sum /tmp/r4-integration-evidence/*.rs > /tmp/r4-integration-evidence/source-sha256.txt
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r4-root-domain-final-qualification
-          path: /tmp/r4-domain-evidence
+          name: r4-root-domain-integration-qualification
+          path: /tmp/r4-integration-evidence
           retention-days: 7
           if-no-files-found: error
