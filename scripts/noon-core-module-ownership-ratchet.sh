@@ -141,7 +141,7 @@ def private_unconditional(code, index, openings):
         opening = openings[prefix - 1]
         if not opening or code[opening - 1] != '#':
             break
-        if code[opening + 1] in ('cfg', 'cfg_attr', 'path'):
+        if code[opening + 1].removeprefix('r#') in ('cfg', 'cfg_attr', 'path'):
             return False
         prefix = opening - 1
     return True
