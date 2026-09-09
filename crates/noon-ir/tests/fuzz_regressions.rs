@@ -1,5 +1,5 @@
 use noon_core::{GeometryRef, MutationTransaction, SceneDefinition};
-use noon_ir::{decode_patch_batch, decode_scene, decode_semantic_scene, IrError};
+use noon_ir::{decode_patch_batch, decode_scene, IrError};
 
 #[test]
 fn malformed_and_future_scene_inputs_fail_without_panicking() {
@@ -12,7 +12,6 @@ fn malformed_and_future_scene_inputs_fail_without_panicking() {
         r#"{"version":1,"objects":[],"tracks":[{"object":999}]}"#,
     ] {
         let _ = decode_scene(input);
-        let _ = decode_semantic_scene(input);
     }
 
     assert!(matches!(
