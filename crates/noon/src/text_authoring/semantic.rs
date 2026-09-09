@@ -1,8 +1,16 @@
 //! Canonical text authoring in the same semantic store as geometry.
-use super::{MathTypst, Text, TextAuthoringError, Typst, NATIVE_POINT_TO_SCENE_SCALE};
-use noon_core::{GeometryResourceArena, Vec2};
-use noon_typst::{compile_typst_resource, TypstMode};
+use super::TextAuthoringError;
+#[cfg(feature = "typst")]
+use super::{MathTypst, Typst};
+#[cfg(feature = "native-text")]
+use super::{Text, NATIVE_POINT_TO_SCENE_SCALE};
+use noon_core::GeometryResourceArena;
+#[cfg(feature = "native-text")]
+use noon_core::Vec2;
+#[cfg(feature = "typst")]
+use noon_typst::TypstMode;
 
+#[cfg(feature = "native-text")]
 pub(crate) fn native_text_state(
     store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     text: Text,
@@ -24,6 +32,7 @@ pub(crate) fn native_text_state(
     )
 }
 
+#[cfg(feature = "typst")]
 pub(crate) fn typst_state(
     store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     text: Typst,
@@ -31,6 +40,7 @@ pub(crate) fn typst_state(
     typst_spec_state(store, text.0, TypstMode::Markup)
 }
 
+#[cfg(feature = "typst")]
 pub(crate) fn math_typst_state(
     store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     text: MathTypst,
@@ -40,16 +50,19 @@ pub(crate) fn math_typst_state(
 
 impl crate::Scene {
     /// Create an ordinary detached native text Mobject in this scene's shared store.
+    #[cfg(feature = "native-text")]
     pub fn text(&self, text: impl Into<Text>) -> Result<crate::Mobject, TextAuthoringError> {
         crate::Mobject::from_text(std::rc::Rc::clone(self.store()), text)
     }
 
     /// Create an ordinary detached Typst Mobject in this scene's shared store.
+    #[cfg(feature = "typst")]
     pub fn typst(&self, text: Typst) -> Result<crate::Mobject, TextAuthoringError> {
         crate::Mobject::from_typst(std::rc::Rc::clone(self.store()), text)
     }
 
     /// Create an ordinary detached MathTypst Mobject in this scene's shared store.
+    #[cfg(feature = "typst")]
     pub fn math_typst(&self, text: MathTypst) -> Result<crate::Mobject, TextAuthoringError> {
         crate::Mobject::from_math_typst(std::rc::Rc::clone(self.store()), text)
     }
@@ -58,6 +71,7 @@ impl crate::Scene {
 impl crate::Mobject {
     /// Shape native text once and return an ordinary detached semantic Mobject.
     /// Add it to this scene with the same `add` operation used for geometry.
+    #[cfg(feature = "native-text")]
     pub fn from_text(
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
         text: impl Into<Text>,
@@ -67,6 +81,7 @@ impl crate::Mobject {
     }
 
     /// Compile Typst into the shared retained text resource and return its ordinary semantic handle.
+    #[cfg(feature = "typst")]
     pub fn from_typst(
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
         text: Typst,
@@ -76,6 +91,7 @@ impl crate::Mobject {
     }
 
     /// Compile MathTypst into the shared retained text resource and return its ordinary semantic handle.
+    #[cfg(feature = "typst")]
     pub fn from_math_typst(
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
         text: MathTypst,
@@ -85,6 +101,7 @@ impl crate::Mobject {
     }
 }
 
+#[cfg(feature = "typst")]
 fn typst_spec_state(
     store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     text: super::TypstSpec,
@@ -94,7 +111,7 @@ fn typst_spec_state(
         return Err(TextAuthoringError::InvalidFontSize(text.font_size));
     }
     text.presentation.validate()?;
-    let artifact = compile_typst_resource(text.source.as_ref(), mode)?;
+    let artifact = text.compile_artifact(mode)?;
     text_artifact_state(
         store,
         text.authored_transform(),
@@ -159,7 +176,12 @@ fn text_artifact_state(
     Ok(state)
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "native-text",
+    feature = "typst",
+    feature = "bundled-fonts"
+))]
 mod tests {
     use noon_core::{
         AnimationOptions, RateFunction, SemanticFadeDirection, SemanticMutationTransaction,

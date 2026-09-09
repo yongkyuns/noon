@@ -75,9 +75,17 @@ pub struct TypstResourceArtifact {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TypstBackendError {
+    /// No bundled fonts were selected and no explicit fonts were supplied.
+    FontsUnavailable,
+    /// An explicitly supplied font buffer contained no valid font face.
+    InvalidFontData {
+        index: usize,
+    },
     Compile(Arc<str>),
     EmptyDocument,
-    MultiPage { pages: usize },
+    MultiPage {
+        pages: usize,
+    },
     SourceTooLarge,
     UnsupportedGradientOrTiling,
     UnsupportedImage,
@@ -89,6 +97,12 @@ pub enum TypstBackendError {
 impl fmt::Display for TypstBackendError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::FontsUnavailable => {
+                formatter.write_str("Typst requires explicit fonts or the bundled-fonts feature")
+            }
+            Self::InvalidFontData { index } => {
+                write!(formatter, "invalid Typst font buffer at index {index}")
+            }
             Self::Compile(message) => write!(formatter, "Typst compilation failed: {message}"),
             Self::EmptyDocument => write!(formatter, "Typst produced no pages"),
             Self::MultiPage { pages } => write!(
@@ -125,7 +139,20 @@ impl std::error::Error for TypstBackendError {}
 /// This stays available for compatibility, diagnostics, and raster-differential
 /// fixtures. Production retained rendering should use [`compile_typst_resource`].
 pub fn compile_typst(source: &str, mode: TypstMode) -> Result<TypstSvgArtifact, TypstBackendError> {
-    let (document, prepared_source) = compile_document(source, mode)?;
+    compile_typst_with_fonts(source, mode, bundled_fonts())
+}
+
+/// Compile diagnostic SVG using only the supplied font buffers.
+pub fn compile_typst_with_fonts<I, F>(
+    source: &str,
+    mode: TypstMode,
+    fonts: I,
+) -> Result<TypstSvgArtifact, TypstBackendError>
+where
+    I: IntoIterator<Item = F>,
+    F: AsRef<[u8]>,
+{
+    let (document, prepared_source) = compile_document(source, mode, fonts)?;
     let page = one_page(&document)?;
     let size = page.frame.size();
     let svg = svg(page, &SvgOptions::default());
@@ -145,8 +172,22 @@ pub fn compile_typst_resource(
     source: &str,
     mode: TypstMode,
 ) -> Result<TypstResourceArtifact, TypstBackendError> {
+    compile_typst_resource_with_fonts(source, mode, bundled_fonts())
+}
+
+/// Normalize Typst using only application-supplied immutable font buffers.
+/// Empty or invalid inputs are explicit errors, never a bundled-font fallback.
+pub fn compile_typst_resource_with_fonts<I, F>(
+    source: &str,
+    mode: TypstMode,
+    fonts: I,
+) -> Result<TypstResourceArtifact, TypstBackendError>
+where
+    I: IntoIterator<Item = F>,
+    F: AsRef<[u8]>,
+{
     let source_len = u32::try_from(source.len()).map_err(|_| TypstBackendError::SourceTooLarge)?;
-    let (document, prepared_source) = compile_document(source, mode)?;
+    let (document, prepared_source) = compile_document(source, mode, fonts)?;
     let page = one_page(&document)?;
     let size = page.frame.size();
     let width = size.x.to_pt() as f32;
@@ -231,14 +272,44 @@ pub fn compile_typst_resource(
     })
 }
 
-fn compile_document(
+fn bundled_fonts() -> impl Iterator<Item = &'static [u8]> {
+    #[cfg(feature = "bundled-fonts")]
+    {
+        typst_assets::fonts()
+    }
+    #[cfg(not(feature = "bundled-fonts"))]
+    {
+        std::iter::empty()
+    }
+}
+
+fn compile_document<I, F>(
     source: &str,
     mode: TypstMode,
-) -> Result<(PagedDocument, String), TypstBackendError> {
+    fonts: I,
+) -> Result<(PagedDocument, String), TypstBackendError>
+where
+    I: IntoIterator<Item = F>,
+    F: AsRef<[u8]>,
+{
+    // Validate every supplied buffer instead of silently dropping bad fonts.
+    let mut faces = Vec::new();
+    for (index, data) in fonts.into_iter().enumerate() {
+        let start = faces.len();
+        faces.extend(typst_library::text::Font::iter(
+            typst_library::foundations::Bytes::new(data.as_ref().to_vec()),
+        ));
+        if faces.len() == start {
+            return Err(TypstBackendError::InvalidFontData { index });
+        }
+    }
+    if faces.is_empty() {
+        return Err(TypstBackendError::FontsUnavailable);
+    }
     let prepared_source = prepare_source(source, mode);
     let engine = TypstEngine::builder()
         .main_file(prepared_source.as_str())
-        .fonts(typst_assets::fonts())
+        .fonts(faces)
         .build();
 
     let compiled = engine.compile::<PagedDocument>();
@@ -663,7 +734,7 @@ fn fingerprint_hex(bytes: &[u8]) -> String {
     format!("{hash:016x}")
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "bundled-fonts"))]
 mod tests {
     use super::*;
     use noon_core::GeometryResource;
@@ -868,5 +939,45 @@ mod tests {
         let prepared = prepare_source("x", TypstMode::Math);
         assert!(prepared.starts_with(TEMPLATE_PREFIX));
         assert!(prepared.contains("#set text(size: 10pt)"));
+    }
+}
+
+#[cfg(test)]
+mod font_input_tests {
+    use super::*;
+
+    #[test]
+    fn empty_explicit_fonts_never_fall_back_to_bundled_assets() {
+        let error = compile_typst_resource_with_fonts(
+            "Noon",
+            TypstMode::Markup,
+            std::iter::empty::<&[u8]>(),
+        )
+        .unwrap_err();
+        assert_eq!(error, TypstBackendError::FontsUnavailable);
+    }
+
+    #[test]
+    fn invalid_explicit_fonts_are_identified() {
+        let error = compile_typst_resource_with_fonts(
+            "Noon",
+            TypstMode::Markup,
+            [b"not a font".as_slice()],
+        )
+        .unwrap_err();
+        assert_eq!(error, TypstBackendError::InvalidFontData { index: 0 });
+    }
+
+    #[cfg(not(feature = "bundled-fonts"))]
+    #[test]
+    fn missing_bundled_fonts_are_explicit() {
+        assert_eq!(
+            compile_typst_resource("Noon", TypstMode::Markup).unwrap_err(),
+            TypstBackendError::FontsUnavailable
+        );
+        assert_eq!(
+            compile_typst("Noon", TypstMode::Markup).unwrap_err(),
+            TypstBackendError::FontsUnavailable
+        );
     }
 }

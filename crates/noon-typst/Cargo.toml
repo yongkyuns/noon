@@ -5,10 +5,14 @@ edition = "2021"
 license = "MIT"
 description = "Typst text and math layout backend for Noon"
 
+[features]
+default = ["bundled-fonts"]
+bundled-fonts = ["dep:typst-assets"]
+
 [dependencies]
 noon-core = { path = "../noon-core" }
 typst-as-lib = { version = "=0.16.0", default-features = false }
-typst-assets = { version = "=0.15.1", features = ["fonts"] }
+typst-assets = { version = "=0.15.1", features = ["fonts"], optional = true }
 # Keep Typst's shared font/normalization dependency on the last known-good release.
 # tinyvec 1.13.0 fails to compile its alloc-backed TinyVec path under this workspace.
 tinyvec = { version = "=1.12.0", default-features = false }
