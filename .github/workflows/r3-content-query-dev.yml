@@ -1,0 +1,24 @@
+name: R3 content and query qualification
+on:
+  push:
+    branches: [codex/1292-r3-content-query-prep]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: bc9fa345c0feb9a503cfcfa03fff9057fb328cc4
+          fetch-depth: 1
+      - name: Export exact source for reconciliation
+        run: |
+          mkdir -p /tmp/r3-content-evidence
+          git rev-parse HEAD HEAD^{tree} > /tmp/r3-content-evidence/revisions.txt
+          git archive --format=tar.gz HEAD > /tmp/r3-content-evidence/source.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: r3-content-source
+          path: /tmp/r3-content-evidence
+          retention-days: 7
