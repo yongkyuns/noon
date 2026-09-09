@@ -1,0 +1,30 @@
+name: R4 landed-source review evidence
+on:
+  push:
+    branches: [codex/1347-landed-review-evidence]
+permissions:
+  contents: read
+jobs:
+  retain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: bc9fa345c0feb9a503cfcfa03fff9057fb328cc4
+          persist-credentials: false
+      - name: Retain exact published source without modifications
+        run: |
+          mkdir -p /tmp/r4-review-input
+          test "$(git rev-parse HEAD)" = bc9fa345c0feb9a503cfcfa03fff9057fb328cc4
+          git show -s --format='%H%n%P%n%T%n%s' HEAD > /tmp/r4-review-input/revisions.txt
+          git archive --format=tar.gz HEAD > /tmp/r4-review-input/source.tar.gz
+          git ls-tree -r HEAD > /tmp/r4-review-input/source-blobs.txt
+          sha256sum /tmp/r4-review-input/source.tar.gz > /tmp/r4-review-input/source-sha256.txt
+          git diff --exit-code
+      - uses: actions/upload-artifact@v7
+        with:
+          name: r4-landed-review-source
+          path: /tmp/r4-review-input
+          retention-days: 1
+          if-no-files-found: error
