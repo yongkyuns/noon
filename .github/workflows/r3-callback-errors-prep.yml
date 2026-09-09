@@ -1,91 +1,113 @@
-name: R3 final paired browser qualification (development only)
+name: R3 callback content preservation (development only)
 on:
   push:
     branches: [codex/1292-r3-callback-errors-prep]
 permissions:
-  contents: read
-  actions: read
+  contents: write
 jobs:
-  paired-browser-only:
+  source-only:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 8
+    env:
+      BASE: 54a3167f7e977e856e4e519ef8c717a20f715a01
+      CANDIDATE: bba54552cd0c6649d7f7d160eafabb6ec11a8b62
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 332254948a0f85a07fb2c15d7471f9dc5969b5ca
-      - uses: actions/download-artifact@v8
-        with:
-          artifact-ids: 10120446295
-          run-id: 34392333111
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/product
-          merge-multiple: true
-      - name: Verify exact source, configuration and every immutable package file
+          fetch-depth: 0
+      - name: Additively reconcile only the already-landed content and callback runner
         shell: bash
         run: |
           set -euo pipefail
-          export EVIDENCE="$RUNNER_TEMP/r3-paired-evidence"
+          export EVIDENCE="$RUNNER_TEMP/r3-content-preservation"
           mkdir -p "$EVIDENCE"
           echo "EVIDENCE=$EVIDENCE" >> "$GITHUB_ENV"
+          git config user.name 'Noon qualification bot'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --detach "$CANDIDATE"
           python3 - <<'PY'
           from pathlib import Path
-          import hashlib, json, os, shutil, subprocess
-          saved = Path(os.environ['RUNNER_TEMP']) / 'product'
-          manifest = json.loads((saved / 'ci-artifact.json').read_text())
-          head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-          tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip()
-          assert head == manifest['source'] == '332254948a0f85a07fb2c15d7471f9dc5969b5ca'
-          assert tree == '7d28544070a08f8ef92b0890280e968b75bb0f51'
-          assert manifest['schema'] == 1
-          build = manifest['build']
-          assert build['target'] == 'wasm32-unknown-unknown'
-          assert build['profile'] == 'release' and build['features'] == 'default,renderer-smoke'
-          assert build['wasmPack'] == '0.15.0' and build['toolchain'] == '1.98.0'
-          for name, expected in build['inputs'].items():
-              assert hashlib.sha256(Path(name).read_bytes()).hexdigest() == expected, name
-          for name, expected in manifest['files'].items():
-              relative = Path(name)
-              assert relative.parts[0] == 'web' and '..' not in relative.parts, name
-              actual = saved.joinpath(*relative.parts[1:])
-              assert hashlib.sha256(actual.read_bytes()).hexdigest() == expected, name
-          assert manifest['dependencyLock'] == '9fc77831ae25df351229c9902c073657062501a8e5faf8ea313dd9c8284062dd'
-          assert manifest['files']['web/ci-Cargo.lock'] == manifest['dependencyLock']
-          assert manifest['files']['web/pkg/noon_web_bg.wasm'] == 'abf418f1840cb177502a24412fd66cd424ccca4ec317c8ad5ea4dbcfcf05a903'
-          for name in manifest['files']:
-              destination = Path(name)
-              destination.parent.mkdir(parents=True, exist_ok=True)
-              shutil.copy2(saved.joinpath(*destination.parts[1:]), destination)
-          shutil.copy2(saved / 'ci-Cargo.lock', 'Cargo.lock')
-          report = {'source': head, 'tree': tree, 'pr_head': 'bba54552cd0c6649d7f7d160eafabb6ec11a8b62',
-                    'artifact': 10120446295, 'producer_run': 34392333111,
-                    'rust_rebuilt': False, 'full_gate_repeated': False,
-                    'manifest': manifest}
-          Path(os.environ['EVIDENCE'], 'input-verification.json').write_text(json.dumps(report, indent=2))
-          print(json.dumps(report, indent=2))
+          import ast, json, os, re, subprocess
+          base, candidate = os.environ['BASE'], os.environ['CANDIDATE']
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True)
+          def once(text, old, new):
+              assert text.count(old) == 1, (old, text.count(old))
+              return text.replace(old, new, 1)
+          runner = 'scripts/typed-authoring-errors-smoke.mjs'
+          result = subprocess.run(['git', 'merge', '--no-commit', '--no-ff', base])
+          assert result.returncode in (0, 1)
+          conflicts = set(git('diff', '--name-only', '--diff-filter=U').splitlines())
+          assert conflicts <= {runner}, conflicts
+          resolved = []
+          def resolve(match):
+              ours, theirs = match.group(1), match.group(2)
+              if 'report.python = await page.evaluate' in ours:
+                  assert 'report.contentObservations = ' in theirs
+                  resolved.append('preserve content JS cases and callback Python input')
+                  return once(theirs, '{modules, tests, pyodideUrl}', '{modules, tests, callbackTests, pyodideUrl}')
+              if 'json.dumps(' in ours:
+                  assert '"callbackTests": callback_result.testsRun' in ours
+                  assert '"contentObservations": content_results' in theirs
+                  resolved.append('preserve both result collections')
+                  return once(ours, '"additionalTests": result.testsRun', '"contentObservations": content_results, "additionalTests": result.testsRun')
+              assert 'report.python.additionalTests, 11' in ours and 'report.python.additionalTests, 12' in theirs, (ours, theirs)
+              resolved.append('main12 plus callback7')
+              return theirs + '\n' + '\n'.join(line for line in ours.splitlines() if 'additionalTests' not in line) + '\n'
+          path = Path(runner)
+          text, count = re.subn(r'^<<<<<<<[^\n]*\n(.*?)^=======\n(.*?)^>>>>>>>[^\n]*\n', resolve, path.read_text(), flags=re.S | re.M)
+          assert count in (0, 3), count
+          path.write_text(text)
+          subprocess.run(['git', 'add', '--', runner], check=True)
+          assert not git('diff', '--name-only', '--diff-filter=U')
+          assert not git('diff', '--name-only')
+          expected = {
+              'crates/noon-web/src/authoring_error.rs',
+              'crates/noon-web/src/semantic_execution_player.rs',
+              'crates/noon-web/src/semantic_execution_player/callback_error_tests.rs',
+              runner, 'web/python/_manim_updaters.py', 'web/python/test_updater_snapshot.py',
+              'web/python/test_noon_callback_errors_wasm.py',
+              'web/python/examples/ordinary_callback_sparse_reads.py',
+          }
+          assert set(git('diff', '--cached', '--name-only', base).splitlines()) == expected
+          for name in expected - {runner, 'crates/noon-web/src/semantic_execution_player.rs'}:
+              assert Path(name).read_text() == git('show', f'{candidate}:{name}'), name
+          for name in ('crates/noon-web/src/canonical_authoring_scene.rs', 'web/python/_manim_scene.py', 'web/python/test_noon_errors_wasm.py'):
+              assert Path(name).read_text() == git('show', f'{base}:{name}'), name
+          tests = {}
+          for name, count in [('web/python/test_noon_errors_wasm.py', 12), ('web/python/test_noon_callback_errors_wasm.py', 7)]:
+              nodes = ast.walk(ast.parse(Path(name).read_text()))
+              names = [node.name for node in nodes if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test_')]
+              assert len(names) == len(set(names)) == count
+              tests[name] = sorted(names)
+          for expression in ('assert.equal(report.python.additionalTests, 12)', 'assert.equal(report.python.callbackTests, 7)', 'assert.equal(report.contentObservations.length, 11)', 'assert.equal(report.advancement.length, 9)', 'assert.equal(report.python.contentObservations.length, 11)'):
+              assert expression in text, expression
+          player = 'crates/noon-web/src/semantic_execution_player.rs'
+          final_names = set(re.findall(r'fn ([A-Za-z0-9_]+)\(', Path(player).read_text()))
+          for ref in (candidate, base):
+              names = set(re.findall(r'fn ([A-Za-z0-9_]+)\(', git('show', f'{ref}:{player}')))
+              assert names <= final_names, (ref, names - final_names)
+          report = {'base': base, 'candidate_parent': candidate, 'source_only': True,
+                    'rust_rebuilt': False, 'full_gate_repeated': False, 'conflicts': sorted(conflicts),
+                    'resolutions': resolved, 'scoped_paths': sorted(expected),
+                    'six_owned_files_byte_identical': True, 'main_suite_byte_identical_to_master': True,
+                    'python_test_methods': tests, 'matrix_cases_per_language': 59}
+          Path(os.environ['EVIDENCE'], 'preservation.json').write_text(json.dumps(report, indent=2))
           PY
-      - name: Install the existing pinned browser without an apt-index retry
-        run: |
-          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
-          npx playwright install chromium
-      - name: Existing paired authoring and actual production-worker family recovery
-        shell: bash
-        run: |
-          set -euo pipefail
-          node scripts/shared-authoring-smoke.mjs 2>&1 | tee "$EVIDENCE/shared-authoring.log"
-          node scripts/manim-compat-smoke.mjs 2>&1 | tee "$EVIDENCE/manim.log"
-      - name: Retain exact identity and results
-        if: always()
-        shell: bash
-        run: |
-          git diff --exit-code HEAD
+          git diff --cached --check
+          node --check scripts/typed-authoring-errors-smoke.mjs
+          git commit -m 'Merge landed content error coverage, preserving callback and advancement regressions'
+          test "$(git rev-parse HEAD^)" = "$CANDIDATE"
+          test "$(git rev-parse HEAD^2)" = "$BASE"
+          git rev-parse HEAD HEAD^{tree} HEAD^ HEAD^2 > "$EVIDENCE/revisions.txt"
+          git diff "$BASE" HEAD > "$EVIDENCE/product.patch"
+          git archive --format=tar.gz HEAD > "$EVIDENCE/source.tar.gz"
           git status --short > "$EVIDENCE/status.txt"
-          git rev-parse HEAD HEAD^{tree} > "$EVIDENCE/revisions.txt"
-          node --version > "$EVIDENCE/node.txt"
-          sha256sum web/pkg/noon_web_bg.wasm > "$EVIDENCE/wasm-sha256.txt"
+          git push origin HEAD:refs/heads/codex/1350-final-candidate
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r3-final-paired-browser
+          name: r3-callback-content-preservation
           path: ${{ env.EVIDENCE }}
           retention-days: 3
           if-no-files-found: error
