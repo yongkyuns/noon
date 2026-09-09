@@ -1,33 +1,48 @@
-# Current shared pipeline; the separate Python worker boundary is expanded in python-workers.d2.
-...@_style
-
-direction: down
-rust: "Rust authoring\nScene · Mobject · LiveSession" {class: node}
-python: "Python facade\nManim syntax · shared handles" {class: node}
-future: "Future JS/TS\noptional language adapter" {class: future}
-operations: "Shared Rust semantic operations\nidentity · family · layout · animation · mutation" {class: node}
-
-engine: "FOUR AUTHORITIES · one shared engine" {
-  grid-columns: 4
-  horizontal-gap: 100
-  scene: "01  Semantic Scene\nAuthored / base state" {class: authority}
-  plan: "02  Execution Plan\nDerived specialization" {class: authority}
-  runtime: "03  Runtime\nEffective state · time" {class: authority}
-  renderer: "04  Renderer\nRetained GPU state" {class: authority}
-  scene -> plan: "lower"
-  plan -> runtime: "instantiate"
-  runtime -> renderer: "dirty work"
+# Component composition; arrows are data flow, not Cargo dependencies.
+vars: {d2-config: {layout-engine: elk; theme-id: 0}}
+direction: right
+style.fill: "#FFFFFF"
+classes: {
+  component: {style: {font-size: 20; bold: false; font-color: "#263445"; fill: "#FFFFFF"; stroke: "#AEBBCB"; border-radius: 5; stroke-width: 1}}
+  group: {style: {font-size: 22; bold: true; font-color: "#263445"; fill: "#F1F5F9"; stroke: "#AEBBCB"; border-radius: 7; stroke-width: 1}}
 }
-
-hosts: "PLATFORM SHELLS · lifecycle, not scene or runtime truth" {
-  grid-columns: 2
-  horizontal-gap: 48
-  native: "noon-native\nwindow · event loop · surface" {class: host}
-  web: "noon-web + browser glue\ncanvas · resize · presentation" {class: host}
+grid-columns: 3
+horizontal-gap: 154
+model: "SemanticStore\nnoon-core" {
+  class: group
+  grid-columns: 1
+  grid-gap: 18
+  objects: "Objects & families\nidentity · membership" {class: component; width: 246; height: 60}
+  state: "Transforms & paint\nauthored values" {class: component; width: 246; height: 60}
+  animation: "Animation trees\ncomposition · targets" {class: component; width: 246; height: 60}
+  signals: "Signals & updaters\nbindings · callbacks" {class: component; width: 246; height: 60}
+  resources: "Content resources\ngeometry · text · fonts" {class: component; width: 246; height: 60}
 }
-
-rust -> operations
-python -> operations
-future -> operations: {style.stroke-dash: 4}
-operations -> engine: "author / mutate"
-engine -> hosts: "render output · host-owned presentation"
+session: "ExecutionSession\nnoon" {
+  class: group
+  grid-columns: 1
+  grid-gap: 18
+  mapping: "Identity / slot map" {class: component; width: 290; height: 50}
+  runtime: "SceneInstance · noon-runtime" {
+    class: group
+    style.fill: "#E7EDF4"
+    grid-columns: 1
+    grid-gap: 12
+    plan: "CompiledScene\nslots · tracks · resources" {class: component; width: 262; height: 70}
+    drivers: "Timeline + reactive" {class: component; width: 262; height: 50}
+    frame: "FrameState\neffective values" {class: component; width: 262; height: 70}
+  }
+  spatial: "Spatial index" {class: component; width: 290; height: 50}
+  gates: "Segment / callback gates" {class: component; width: 290; height: 50}
+}
+renderer: "Rendering\nnoon-render-wgpu" {
+  class: group
+  grid-columns: 1
+  grid-gap: 18
+  instances: "Instance buffers\ntransform · paint" {class: component; width: 234; height: 70}
+  meshes: "Mesh cache\nprepared geometry" {class: component; width: 234; height: 70}
+  atlas: "Glyph atlas\ntext rendering" {class: component; width: 234; height: 70}
+  batches: "Draw batches\npainter order" {class: component; width: 234; height: 70}
+}
+model -> session: "noon-compile\nlower / prepare" {style: {font-size: 18; stroke-width: 2; stroke: "#6B7F94"; font-color: "#4C5D70"}}
+session -> renderer: "publish\nframe + changes" {style: {font-size: 18; stroke-width: 2; stroke: "#6B7F94"; font-color: "#4C5D70"}}

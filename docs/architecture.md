@@ -98,9 +98,25 @@ Manim Community v0.21.x is the compatibility oracle for supported common 2D Pyth
 
 ## 2. Architecture in one picture
 
-![One shared Rust engine with Semantic Scene, Execution Plan, Runtime and Renderer authorities, reused by native and browser platform shells.](diagrams/overview.svg)
+![Component composition: SemanticStore contents, ExecutionSession with nested SceneInstance, spatial and identity indexes, and retained renderer resources.](diagrams/overview.svg)
 
-[D2 source](diagrams/overview.d2).
+[D2 source](diagrams/overview.d2) · [Domain projections](#domain-projections).
+
+This view shows current component composition, not a Cargo dependency graph.
+Rust authoring and Python/WASM handles reach `SemanticStore` through shared
+operations. `ExecutionSession` contains a `SceneInstance`, semantic/execution
+identity mappings, a spatial index and segment/callback coordination. The instance
+holds `CompiledScene`, evaluation machinery and effective `FrameState`.
+`noon-compile` supplies initial lowering and local publication preparation; its
+output is installed into that existing execution structure, not a parallel runtime.
+
+The rendering arrow abbreviates `RendererPublication`: a borrowed frame, accumulated
+changes, painter order and immutable resource lookups in direct Rust execution.
+A genuine Python worker boundary transports a derived representation instead.
+The separation lets authoring preserve identity and relationships, execution update
+only affected values/dependencies, and rendering retain unchanged geometry/text.
+Platform hosts, live transactions and callback ordering have separate views below;
+they are omitted here rather than drawn as long feedback arrows.
 
 There are four engine layers and exactly one authority at each layer:
 
@@ -293,6 +309,21 @@ The compiler lowers the Semantic Scene into an Execution Plan. This is **scene l
 For Rust, whether native or WASM, this is an ordinary typed in-memory Rust transformation when the compiler and runtime live in the same execution context. The Semantic Scene is not serialized into a wire document and reparsed by the compiler.
 
 Lowering is allowed to discard or refactor authoring structure whenever doing so preserves observable behavior.
+
+### Domain projections
+
+![Four aligned data paths: objects/families to slots and frames; animation trees to channels and timeline evaluation; signals to a reactive program; content to compiled resource references and GPU residency.](diagrams/domain-projection.svg)
+
+[D2 source](diagrams/domain-projection.d2).
+
+Each row follows a data domain across lowering and its consumers. These are
+projections, not four independent pipelines or a function-call sequence: timeline
+and reactive results contribute to the same effective frame; the frame also
+references content and participates in spatial/painter-order queries. Geometry
+meshes and glyph residency are prepared downstream by rendering, not baked into
+`SemanticStore`. `CompiledResources` retains the typed resource projection.
+Arbitrary host callback slots use the ordered barrier protocol in section 9 rather
+than being assumed to execute inside the native reactive graph.
 
 The optimizer classifies dependencies/properties, not whole scenes, into these execution classes:
 

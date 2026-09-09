@@ -6,13 +6,24 @@ The project treats Manim's common 2D authoring semantics as a cross-language con
 
 ## Architecture
 
-Noon exposes one expressive, mutable semantic scene and specializes it as aggressively as the program permits:
+Rust `Scene`/`Mobject` and Python/WASM handles invoke shared authoring operations.
+The component view below follows the resulting state into execution and rendering:
 
-![Shared Rust semantic operations feed one Semantic Scene, derived Execution Plan, effective Runtime and retained Renderer; native and browser hosts own lifecycle.](docs/diagrams/overview.svg)
+![SemanticStore contents lower into an ExecutionSession containing a SceneInstance, identity mapping, spatial index and completion gates; published frame changes feed retained rendering.](docs/diagrams/overview.svg)
 
-[D2 source](docs/diagrams/overview.d2) · [Current crate ownership](docs/architecture.md#current-implementation-ownership) · [Python worker topology](docs/architecture.md#host-language-or-multi-worker-topology).
+[D2 source](docs/diagrams/overview.d2) · [Domain projections](docs/architecture.md#domain-projections) · [Current crate ownership](docs/architecture.md#current-implementation-ownership) · [Python worker topology](docs/architecture.md#host-language-or-multi-worker-topology).
 
-The direct native and single-context Rust/WASM paths use typed in-process boundaries. The optional Python worker transport is a separate integration topology, not an extra engine layer.
+Nesting shows composition; arrows show data flow, not crate dependencies.
+`noon-compile` derives slot mappings, tracks and resource projections.
+`ExecutionSession` coordinates the existing `SceneInstance`; its compiled data is
+kept alongside effective `FrameState`, while rendering retains meshes, glyphs and
+instance buffers. This separates authored structure, time-varying values and GPU
+residency so a property change need not rebuild content.
+
+Native and direct single-context Rust/WASM hosts consume a typed
+`RendererPublication` (frame, changes and resource references). The optional Python
+worker path transports derived output instead; platform placement and callbacks
+are expanded in the linked detail views.
 
 Key invariants:
 
