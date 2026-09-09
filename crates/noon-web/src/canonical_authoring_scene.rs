@@ -4210,6 +4210,37 @@ mod wasm {
             ))
         }
 
+        /// Apply shared paint opacity while leaving whole-object opacity with its owner.
+        #[wasm_bindgen(js_name = callbackPaintSetOpacity)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn callback_paint_set_opacity(
+            &self,
+            fill_red: Option<f64>,
+            fill_green: Option<f64>,
+            fill_blue: Option<f64>,
+            fill_alpha: Option<f64>,
+            stroke_red: Option<f64>,
+            stroke_green: Option<f64>,
+            stroke_blue: Option<f64>,
+            stroke_alpha: Option<f64>,
+            opacity: f64,
+        ) -> Result<WasmCallbackPaint, JsValue> {
+            let style = callback_paint_style(
+                callback_color("callback fill", fill_red, fill_green, fill_blue, fill_alpha)?,
+                callback_color(
+                    "callback stroke",
+                    stroke_red,
+                    stroke_green,
+                    stroke_blue,
+                    stroke_alpha,
+                )?,
+            );
+            Ok(callback_paint_result(
+                noon::integration::effective_style_with_paint_opacity(style, opacity)
+                    .map_err(js_error)?,
+            ))
+        }
+
         /// Apply shared Manim `set_fill` semantics to callback-local paint.
         #[wasm_bindgen(js_name = callbackPaintSetFill)]
         #[allow(clippy::too_many_arguments)]

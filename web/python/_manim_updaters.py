@@ -775,6 +775,15 @@ class _CanonicalCallbackContext:
             _phase_callback_paint_color(result, "stroke"),
         )
 
+    def paint_set_opacity(self, style: _PhaseStyle, opacity: float):
+        from _noon_errors import engine_call
+        result = engine_call(self._operations.callbackPaintSetOpacity,
+            *_phase_optional_color_args(style.fill),
+            *_phase_optional_color_args(style.stroke), opacity,
+            operation="VMobject.set_opacity")
+        return (_phase_callback_paint_color(result, "fill"),
+                _phase_callback_paint_color(result, "stroke"))
+
     def paint_set_fill(
         self,
         style: _PhaseStyle,
@@ -1215,11 +1224,18 @@ def _canonical_vmobject_set_opacity(
     opacity: float,
     family: bool = True,
 ) -> _base.Mobject:
-    if _canonical_phase_context(self) is not None:
+    context = _canonical_phase_context(self)
+    if context is not None:
         del family
         from _manim_compat import _opacity
 
-        return _canonical_set_opacity(self, _opacity("opacity", opacity))
+        opacity = _opacity("opacity", opacity)
+        key, row = context.row(self)
+        before = row.style
+        fill, stroke = context.paint_set_opacity(before, opacity)
+        row.style = replace(before, fill=fill, stroke=stroke)
+        context.style_changed(key, before, row)
+        return self
     return _base._semantic_operations()._set_opacity(self, opacity, family=family)
 
 

@@ -442,7 +442,7 @@ class Mobject:
 
     def set_object_opacity(self, opacity: float) -> Mobject:
         """Set whole-object opacity independently of fill/stroke paint alpha."""
-        return _semantic_operations()._set_object_opacity(self, opacity)
+        return _callback_operations()._canonical_set_opacity(self, opacity)
 
     def next_to(
         self,
