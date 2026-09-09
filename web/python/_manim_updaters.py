@@ -31,9 +31,9 @@ def _semantic_operations():
     return _manim_semantic_handles
 
 
-def _compat_operations():
-    import _manim_compat
-    return _manim_compat
+def _coordinate_operations():
+    import _manim_shared_geometry
+    return _manim_shared_geometry
 
 
 def _track(mobject: _base.Mobject) -> None:
@@ -985,18 +985,22 @@ def _canonical_move_to(self: _base.Mobject, point: object, *args: object, **kwar
     return _canonical_shift(self, _base._as_vec2(point) - row.center())
 
 
-def _canonical_set_x(self: _base.Mobject, x: float) -> _base.Mobject:
+def _canonical_set_x(self: _base.Mobject, x: float, direction: object = _base.ORIGIN) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _compat_operations()._mobject_set_x(self, x)
+        return _coordinate_operations()._set_x(self, x, direction)
+    if _base._as_vec2(direction) != _base.ORIGIN:
+        raise NotImplementedError("callback coordinate placement supports center coordinates only")
     _, _, row = value
     return _canonical_shift(self, _base.Vec2(float(x) - row.center().x, 0.0))
 
 
-def _canonical_set_y(self: _base.Mobject, y: float) -> _base.Mobject:
+def _canonical_set_y(self: _base.Mobject, y: float, direction: object = _base.ORIGIN) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _compat_operations()._mobject_set_y(self, y)
+        return _coordinate_operations()._set_y(self, y, direction)
+    if _base._as_vec2(direction) != _base.ORIGIN:
+        raise NotImplementedError("callback coordinate placement supports center coordinates only")
     _, _, row = value
     return _canonical_shift(self, _base.Vec2(0.0, float(y) - row.center().y))
 
