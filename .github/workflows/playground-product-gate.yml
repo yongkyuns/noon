@@ -44,7 +44,7 @@ jobs:
       # Reuse dependency compilations between these two isolated source builds.
       # The cache lives only in this job; no executable or cross-PR seed is restored.
       SCCACHE_GHA_ENABLED: "false"
-      SCCACHE_DIR: ${{ runner.temp }}/noon-product-sccache
+      SCCACHE_DIR: ${{ github.workspace }}/.product-sccache
       SCCACHE_CACHE_SIZE: "1G"
       SCCACHE_LOCAL_RW_MODE: "READ_WRITE"
       NOON_SKIP_WEB_PREFLIGHT: "1"
