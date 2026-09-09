@@ -299,6 +299,75 @@ impl From<ExecutionSegmentCompletionError> for AuthoringFailure {
     }
 }
 
+// Runtime advancement is already typed. Keep the category and immediate source
+// at the optional host boundary; do not reinterpret or preflight the time here.
+impl From<noon_runtime::EvaluationError> for AuthoringFailure {
+    fn from(error: noon_runtime::EvaluationError) -> Self {
+        use noon_runtime::EvaluationError as E;
+        let message = error.to_string();
+        match error {
+            E::InvalidTime(_) => Self::new("invalid_input", "evaluation.invalid_time", message),
+            E::NonMonotonicPreparedAdvance { .. } => Self::new(
+                "invalid_input",
+                "evaluation.non_monotonic_prepared_advance",
+                message,
+            ),
+            E::RequiredCallbackPending => {
+                Self::new("pending_work", "evaluation.callback_pending", message)
+            }
+            E::RequiredCallbackBarrier => Self::new(
+                "unsupported_operation",
+                "evaluation.callback_barrier",
+                message,
+            ),
+            // Exhaustion and reactive producer domains have no inferred class.
+            other => Self::unclassified("evaluation.unclassified", &other),
+        }
+    }
+}
+
+impl From<noon::ExecutionSegmentAdvanceError> for AuthoringFailure {
+    fn from(error: noon::ExecutionSegmentAdvanceError) -> Self {
+        use noon::ExecutionSegmentAdvanceError as E;
+        let message = error.to_string();
+        match error {
+            E::ForeignSegment { .. } => {
+                Self::new("foreign_handle", "advance.foreign_segment", message)
+            }
+            E::NoPendingCompletion { .. } => Self::new(
+                "stale_publication",
+                "advance.no_pending_completion",
+                message,
+            ),
+            E::StaleSegment { .. } => {
+                Self::new("stale_publication", "advance.stale_segment", message)
+            }
+            E::Evaluation(cause) => Self::caused_by("advance.evaluation", message, cause.into()),
+            E::Callback(cause) => Self::caused_by(
+                "advance.callback",
+                message,
+                Self::unclassified("callback.unclassified", &cause),
+            ),
+        }
+    }
+}
+
+impl From<crate::ClockError> for AuthoringFailure {
+    fn from(error: crate::ClockError) -> Self {
+        // These are the existing presentation-clock guards used by liveEvaluate.
+        // Other browser-control entrypoints are outside this slice.
+        match error {
+            crate::ClockError::InvalidSceneTime(_) => {
+                Self::new("invalid_input", "clock.invalid_scene_time", error)
+            }
+            crate::ClockError::SceneTimeOutsideLoop { .. } => {
+                Self::new("invalid_input", "clock.time_outside_loop", error)
+            }
+            other => Self::unclassified("clock.unclassified", &other),
+        }
+    }
+}
+
 impl From<LiveSessionError> for AuthoringFailure {
     fn from(error: LiveSessionError) -> Self {
         use LiveSessionError as E;
@@ -307,6 +376,7 @@ impl From<LiveSessionError> for AuthoringFailure {
             E::Authoring(cause) => Self::caused_by("live.authoring", message, cause.into()),
             E::ForeignMobjectStore => Self::new("foreign_handle", "live.foreign_store", message),
             E::Segment(cause) => Self::caused_by("live.segment", message, cause.into()),
+            E::Advance(cause) => Self::caused_by("live.advance", message, cause.into()),
             E::Completion(cause) => Self::caused_by("live.completion", message, cause.into()),
             E::Publication(cause) => Self::caused_by("live.publication", message, cause.into()),
             other => Self::unclassified("live.unclassified", &other),
