@@ -8,91 +8,141 @@ permissions:
 concurrency:
   group: family-callback-translation-qualification
   cancel-in-progress: false
+env:
+  CARGO_BUILD_JOBS: '2'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+  QUALIFIED_HEAD: 7054b9630594b873cbbc1cb41964a6e60fa63454
+  LANDING_BASE: 10e9597611dad4dc4d1917f39dc685143fd37f3c
 jobs:
   qualify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: e1e44eb1d381d24ddb375240fdb5c2692745c18a
+          ref: 7054b9630594b873cbbc1cb41964a6e60fa63454
           fetch-depth: 0
-          path: source
-      - uses: actions/download-artifact@v8
-        with:
-          name: family-translation-browser-qualification
-          run-id: 34399111572
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/retained
-      - name: Retain proven test correction and use f32-aware paired observations
-        working-directory: source
+      - name: Preserve the reviewed family patch and current landed source
         run: |
-          mkdir -p "$RUNNER_TEMP/family-paired-evidence"
-          echo "EVIDENCE=$RUNNER_TEMP/family-paired-evidence" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/family-full-evidence"
+          echo "EVIDENCE=$RUNNER_TEMP/family-full-evidence" >> "$GITHUB_ENV"
           python3 - <<'PY'
           from pathlib import Path
-          import ast, hashlib, os, shutil, subprocess, tarfile
-          HEAD='e1e44eb1d381d24ddb375240fdb5c2692745c18a'
+          import ast, os, subprocess
+          HEAD=os.environ['QUALIFIED_HEAD'];BASE=os.environ['LANDING_BASE']
           def git(*a):return subprocess.check_output(['git',*a],text=True).strip()
-          assert git('rev-parse','HEAD')==HEAD and not git('status','--porcelain')
-          roots=list((Path(os.environ['RUNNER_TEMP'])/'retained').rglob('revisions.txt'))
-          assert len(roots)==1
-          bundle=roots[0].parent
-          assert roots[0].read_text().splitlines()==['7d86b419f85f199c1433bc63446ccfdd0a1b254d','09fdd6a1fb0a2f9ab9ec77adde388b2cb3ac2bfc']
-          test='web/python/test_noon_errors_wasm.py'
-          with tarfile.open(bundle/'source.tar.gz') as archive:
-              for member in archive:
-                  if member.isfile():
-                      data=archive.extractfile(member).read()
-                      if member.name==test:Path(test).write_bytes(data)
-                      else:assert Path(member.name).read_bytes()==data,member.name
-          for line in (bundle/'package-hashes.txt').read_text().splitlines():
-              expected,path=line.split()
-              assert hashlib.sha256((bundle/'pkg'/Path(path).name).read_bytes()).hexdigest()==expected,path
-          assert hashlib.sha256((bundle/'pkg/noon_web_bg.wasm').read_bytes()).hexdigest()=='1a90e03338ba898fde8be9963c6e8e525eb652f7e98fb1983a7439a953edd744'
-          shutil.copytree(bundle/'pkg','web/pkg',dirs_exist_ok=True)
-          p=Path('web/python/examples/ordinary_callback_sparse_reads.py');s=p.read_text()
-          old='        assert circle.get_center() == (-1.0, 1.0)'
-          assert s.count(old)==1
-          s=s.replace(old,'        center = circle.get_center()\n        assert abs(center.x + 1.0) < 1e-5 and abs(center.y - 1.0) < 1e-5, center')
-          old='        assert circle.get_center() == (2.0, 1.0)'
-          assert s.count(old)==1
-          p.write_text(s.replace(old,'        center = circle.get_center()\n        assert abs(center.x - 2.0) < 1e-5 and abs(center.y - 1.0) < 1e-5, center'))
-          subprocess.run(['git','add',test,str(p)],check=True)
-          assert git('write-tree')=='38502b5c1fb0d3907b35543794fc9793d57bdc75'
-          assert set(git('diff','--cached','--name-only').splitlines())=={test,str(p)}
-          subprocess.run(['git','diff','--cached','--check'],check=True)
+          def text(ref,path):return subprocess.check_output(['git','show',f'{ref}:{path}'],text=True)
+          def methods(s):
+              nodes=[n for n in ast.walk(ast.parse(s)) if isinstance(n,ast.FunctionDef) and n.name.startswith('test_')]
+              assert len(nodes)==len({n.name for n in nodes})
+              return {n.name:ast.dump(n,include_attributes=False) for n in nodes}
+          assert git('rev-parse','HEAD')==HEAD and git('rev-parse','HEAD^{tree}')=='38502b5c1fb0d3907b35543794fc9793d57bdc75'
+          assert not git('status','--porcelain')
+          subprocess.run(['git','merge-base','--is-ancestor','dd23347d4675d13395468d4ccd1bc06c22c9e1bb',BASE],check=True)
           subprocess.run(['git','config','user.name','Noon development tooling'],check=True)
           subprocess.run(['git','config','user.email','development@noon.invalid'],check=True)
-          subprocess.run(['git','-c','commit.gpgSign=false','-c','core.hooksPath=/dev/null','commit','-m','test: respect effective-bound precision in paired family callback proof'],check=True)
-          evidence=Path(os.environ['RUNNER_TEMP'])/'family-paired-evidence'
-          (evidence/'revisions.txt').write_text(git('rev-parse','HEAD','HEAD^{tree}')+'\n')
-          (evidence/'test-example.patch').write_text(subprocess.check_output(['git','diff',HEAD,'HEAD'],text=True))
+          subprocess.run(['git','-c','core.hooksPath=/dev/null','merge','--no-ff','--no-commit',BASE],check=True)
+          allowed={'crates/noon-web/src/canonical_authoring_scene.rs','crates/noon/src/example_scenes.rs','crates/noon/src/family_callback_translation.rs','crates/noon/src/host_callbacks.rs','crates/noon/src/lib.rs','crates/noon/tests/family_callback_translation.rs','scripts/typed-authoring-errors-smoke.mjs','web/python/_manim_compat.py','web/python/_manim_semantic_handles.py','web/python/_manim_updaters.py','web/python/examples/ordinary_callback_sparse_reads.py','web/python/test_manim_callback_family_translation.py','web/python/test_manim_group_animate_shared_target.py','web/python/test_noon_errors_wasm.py'}
+          assert set(git('diff','--cached','--name-only',BASE).splitlines())==allowed
+          for path in allowed:
+              assert Path(path).read_text()==text(HEAD,path),path
+          for path in ('crates/noon-web/src/authoring_error.rs','web/python/test_noon_callback_errors_wasm.py'):
+              assert Path(path).read_text()==text(BASE,path),path
+          p='web/python/test_noon_errors_wasm.py'
+          before=methods(text(BASE,p));after=methods(Path(p).read_text())
+          assert len(before)==12 and len(after)==13 and all(after[n]==v for n,v in before.items())
+          assert len(methods(Path('web/python/test_noon_callback_errors_wasm.py').read_text()))==7
+          runner=Path('scripts/typed-authoring-errors-smoke.mjs').read_text()
+          assert runner==text(BASE,'scripts/typed-authoring-errors-smoke.mjs').replace('assert.equal(report.python.additionalTests, 12);','assert.equal(report.python.additionalTests, 13);')
+          subprocess.run(['git','diff','--cached','--check'],check=True)
+          subprocess.run(['git','-c','commit.gpgSign=false','-c','core.hooksPath=/dev/null','commit','-m','fix: integrate qualified family callback translation for final validation'],check=True)
+          evidence=Path(os.environ['RUNNER_TEMP'])/'family-full-evidence'
+          (evidence/'revisions.txt').write_text(git('rev-parse','HEAD','HEAD^{tree}')+'\n'+BASE+'\n')
+          (evidence/'product.patch').write_text(subprocess.check_output(['git','diff',BASE,'HEAD'],text=True))
+          (evidence/'test-inventory.txt').write_text('\n'.join(sorted(after))+'\nmain=13\ncallback=7\nmatrices=10+29+9+11 per language\n')
           subprocess.run(['git','archive','--format=tar.gz','--output='+str(evidence/'source.tar.gz'),'HEAD'],check=True)
-          shutil.copytree(bundle/'pkg',evidence/'pkg')
-          shutil.copyfile(bundle/'package-hashes.txt',evidence/'package-hashes.txt')
           PY
-      - name: Install only the existing browser dependencies
+          test "$(git ls-remote origin refs/heads/codex/1359-callback-family-translation | cut -f1)" = e1e44eb1d381d24ddb375240fdb5c2692745c18a
+          git push origin HEAD:refs/heads/codex/1359-callback-family-translation
+      - uses: actions/upload-artifact@v7
+        with:
+          name: family-translation-final-source
+          path: ${{ runner.temp }}/family-full-evidence
+          retention-days: 3
+          if-no-files-found: error
+      - uses: actions/download-artifact@v8
+        with:
+          name: family-translation-focused-qualification
+          run-id: 34397811300
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/retained
+      - name: Preserve dependency inputs and record tools
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,os
+          locks=list((Path(os.environ['RUNNER_TEMP'])/'retained').rglob('Cargo.lock'))
+          assert locks
+          data=locks[0].read_bytes()
+          assert hashlib.sha256(data).hexdigest()=='9fc77831ae25df351229c9902c073657062501a8e5faf8ea313dd9c8284062dd'
+          Path('Cargo.lock').write_bytes(data)
+          PY
+          sha256sum Cargo.lock > "$EVIDENCE/lock-before.txt"
+          { rustup show; node --version; python3 --version; } > "$EVIDENCE/toolchain.txt"
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: Linux-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            Linux-cargo-sources-
+            provider-sources-Linux-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+      - name: Run the one integrated full gate and default optimized WASM
+        run: |
+          bash scripts/check.sh full "$LANDING_BASE" > "$EVIDENCE/full.log" 2>&1 || { tail -160 "$EVIDENCE/full.log"; exit 1; }
+          git diff --exit-code
+          sha256sum Cargo.lock > "$EVIDENCE/lock-after.txt"
+          diff "$EVIDENCE/lock-before.txt" "$EVIDENCE/lock-after.txt"
+          cp -r web/pkg "$EVIDENCE/release-pkg"
+          sha256sum web/pkg/* > "$EVIDENCE/release-package-hashes.txt"
+          tail -25 "$EVIDENCE/full.log"
+      - name: Build the diagnostic-enabled package for existing debug fixtures
+        run: |
+          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh > "$EVIDENCE/dev-build.log" 2>&1 || { tail -140 "$EVIDENCE/dev-build.log"; exit 1; }
+          cp -r web/pkg "$EVIDENCE/pkg"
+          cp Cargo.lock "$EVIDENCE/Cargo.lock"
+          sha256sum web/pkg/* > "$EVIDENCE/package-hashes.txt"
+      - name: Install the existing runner dependencies without an APT retry
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-      - name: Complete the paired production-worker examples on the identical WASM
-        working-directory: source
+      - name: Qualify retained callback, error and paired worker regressions
         run: |
-          node scripts/build-python-worker.mjs
+          NOON_TYPED_ERRORS_ARTIFACTS="$EVIDENCE/typed-errors" node scripts/typed-authoring-errors-smoke.mjs > "$EVIDENCE/typed-errors.log" 2>&1 || { tail -140 "$EVIDENCE/typed-errors.log"; exit 1; }
           node scripts/shared-authoring-smoke.mjs > "$EVIDENCE/shared.log" 2>&1 || { tail -120 "$EVIDENCE/shared.log"; exit 1; }
           node scripts/manim-compat-smoke.mjs > "$EVIDENCE/manim.log" 2>&1 || { tail -120 "$EVIDENCE/manim.log"; exit 1; }
           git diff --exit-code
+          git archive --format=tar.gz --output="$EVIDENCE/source-after.tar.gz" HEAD
           sha256sum web/pkg/* > "$EVIDENCE/package-hashes-after.txt"
           diff "$EVIDENCE/package-hashes.txt" "$EVIDENCE/package-hashes-after.txt"
-          test "$(git ls-remote origin refs/heads/codex/1359-callback-family-translation | cut -f1)" = e1e44eb1d381d24ddb375240fdb5c2692745c18a
-          git push origin HEAD:refs/heads/codex/1359-integrated-candidate
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: family-translation-paired-qualification
+          name: family-translation-full-qualification
           path: |
-            ${{ runner.temp }}/family-paired-evidence
-            source/browser-smoke-artifacts/
+            ${{ runner.temp }}/family-full-evidence
+            browser-smoke-artifacts/
           retention-days: 3
           if-no-files-found: error
