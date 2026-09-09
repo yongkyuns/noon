@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use crate::{GeometryRef, ObjectId, Property, SceneDefinition, SignalId, ValueKind, Vec2};
+use crate::{ObjectId, Property, SignalId, ValueKind, Vec2};
 
 mod compute_ir;
 pub use compute_ir::*;
@@ -245,67 +245,6 @@ impl ReactiveGraphDefinition {
     }
 }
 
-/// High-level mutable semantic scene.
-///
-/// `SceneDefinition` remains the normalized deterministic timeline/object program
-/// consumed by the existing compiler. `SemanticScene` adds native reactive
-/// dependencies without encoding them as fake timeline tracks. Future host callback
-/// slots and high-level authoring state can live beside the same definition.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct SemanticScene {
-    definition: SceneDefinition,
-    reactive: ReactiveGraphDefinition,
-}
-
-impl SemanticScene {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn from_definition(definition: SceneDefinition) -> Self {
-        Self {
-            definition,
-            reactive: ReactiveGraphDefinition::new(),
-        }
-    }
-
-    pub fn definition(&self) -> &SceneDefinition {
-        &self.definition
-    }
-
-    pub fn definition_mut(&mut self) -> &mut SceneDefinition {
-        &mut self.definition
-    }
-
-    pub fn reactive(&self) -> &ReactiveGraphDefinition {
-        &self.reactive
-    }
-
-    pub fn reactive_mut(&mut self) -> &mut ReactiveGraphDefinition {
-        &mut self.reactive
-    }
-
-    pub fn add(&mut self, geometry: GeometryRef) -> ObjectId {
-        self.definition.add(geometry)
-    }
-
-    pub fn add_input(&mut self, value: impl Into<ReactiveValue>) -> SignalId {
-        self.reactive.add_input(value)
-    }
-
-    pub fn add_derived(&mut self, expression: ReactiveExpr) -> SignalId {
-        self.reactive.add_derived(expression)
-    }
-
-    pub fn bind(&mut self, signal: SignalId, object: ObjectId, property: Property) {
-        self.reactive.bind(signal, object, property);
-    }
-
-    pub fn compile_reactive(&self) -> Result<ReactiveProgram, ReactiveError> {
-        ReactiveProgram::compile(&self.definition, &self.reactive)
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObjectExecutionClass {
     Static,
@@ -368,25 +307,6 @@ pub struct ReactiveProgram {
 }
 
 impl ReactiveProgram {
-    /// Compile through the migration-era normalized scene wrapper.
-    ///
-    /// Target validation itself is execution-domain based so the canonical semantic
-    /// lowering path can reuse the same native reactive VM without reconstructing the
-    /// legacy authored-scene wrapper.
-    pub fn compile(
-        scene: &SceneDefinition,
-        graph: &ReactiveGraphDefinition,
-    ) -> Result<Self, ReactiveError> {
-        Self::compile_for_execution_domain(
-            scene.objects().iter().map(|object| object.id),
-            scene
-                .tracks()
-                .iter()
-                .map(|track| (track.object, track.property)),
-            graph,
-        )
-    }
-
     /// Compile the existing native reactive graph against an execution object/driver
     /// domain instead of an authored scene representation.
     ///
@@ -972,33 +892,32 @@ impl std::error::Error for ReactiveError {}
 
 #[cfg(test)]
 mod tests {
-    use crate::{RateFunction, TrackTiming};
-
     use super::*;
 
     #[test]
     fn reactive_update_evaluates_only_affected_dependency_branch() {
-        let mut scene = SemanticScene::new();
-        let first = scene.add(GeometryRef::circle(1.0));
-        let second = scene.add(GeometryRef::circle(1.0));
-        let a = scene.add_input(1.0_f32);
-        let b = scene.add_input(10.0_f32);
-        let twice_a = scene.add_derived(ReactiveExpr::Mul(
+        let mut graph = ReactiveGraphDefinition::new();
+        let first = ObjectId::new(0);
+        let second = ObjectId::new(1);
+        let a = graph.add_input(1.0_f32);
+        let b = graph.add_input(10.0_f32);
+        let twice_a = graph.add_derived(ReactiveExpr::Mul(
             Box::new(ReactiveExpr::signal(a)),
             Box::new(ReactiveExpr::scalar(2.0)),
         ));
-        let a_branch = scene.add_derived(ReactiveExpr::Add(
+        let a_branch = graph.add_derived(ReactiveExpr::Add(
             Box::new(ReactiveExpr::signal(twice_a)),
             Box::new(ReactiveExpr::scalar(3.0)),
         ));
-        let b_branch = scene.add_derived(ReactiveExpr::Add(
+        let b_branch = graph.add_derived(ReactiveExpr::Add(
             Box::new(ReactiveExpr::signal(b)),
             Box::new(ReactiveExpr::scalar(1.0)),
         ));
-        scene.bind(a_branch, first, Property::Rotation);
-        scene.bind(b_branch, second, Property::Opacity);
+        graph.bind(a_branch, first, Property::Rotation);
+        graph.bind(b_branch, second, Property::Opacity);
 
-        let program = scene.compile_reactive().expect("graph must compile");
+        let program = ReactiveProgram::compile_for_execution_domain([first, second], [], &graph)
+            .expect("graph must compile");
         let mut state = program.instantiate();
         let update = state.set_input(a, 2.0_f32).expect("input update must work");
 
@@ -1018,21 +937,20 @@ mod tests {
 
     #[test]
     fn unchanged_derived_value_stops_dirty_propagation() {
-        let mut scene = SemanticScene::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let input = scene.add_input(1.0_f32);
-        let always_zero = scene.add_derived(ReactiveExpr::Mul(
+        let mut graph = ReactiveGraphDefinition::new();
+        let object = ObjectId::new(0);
+        let input = graph.add_input(1.0_f32);
+        let always_zero = graph.add_derived(ReactiveExpr::Mul(
             Box::new(ReactiveExpr::signal(input)),
             Box::new(ReactiveExpr::scalar(0.0)),
         ));
-        let downstream = scene.add_derived(ReactiveExpr::Add(
+        let downstream = graph.add_derived(ReactiveExpr::Add(
             Box::new(ReactiveExpr::signal(always_zero)),
             Box::new(ReactiveExpr::scalar(1.0)),
         ));
-        scene.bind(downstream, object, Property::Opacity);
+        graph.bind(downstream, object, Property::Opacity);
 
-        let mut state = scene
-            .compile_reactive()
+        let mut state = ReactiveProgram::compile_for_execution_domain([object], [], &graph)
             .expect("graph must compile")
             .instantiate();
         let update = state
@@ -1047,38 +965,31 @@ mod tests {
 
     #[test]
     fn execution_analysis_is_local_to_dynamic_objects() {
-        let mut scene = SemanticScene::new();
-        let static_object = scene.add(GeometryRef::circle(1.0));
-        let timeline_object = scene.add(GeometryRef::circle(1.0));
-        let reactive_object = scene.add(GeometryRef::circle(1.0));
-        let mixed_object = scene.add(GeometryRef::circle(1.0));
+        let mut graph = ReactiveGraphDefinition::new();
+        let static_object = ObjectId::new(0);
+        let timeline_object = ObjectId::new(1);
+        let reactive_object = ObjectId::new(2);
+        let mixed_object = ObjectId::new(3);
 
-        scene
-            .definition_mut()
-            .animate_scalar(
+        let reactive = graph.add_input(0.5_f32);
+        let mixed = graph.add_input(0.25_f32);
+        graph.bind(reactive, reactive_object, Property::Opacity);
+        graph.bind(mixed, mixed_object, Property::Rotation);
+
+        let program = ReactiveProgram::compile_for_execution_domain(
+            [
+                static_object,
                 timeline_object,
-                Property::Rotation,
-                0.0,
-                1.0,
-                TrackTiming::new(0.0, 1.0, RateFunction::Linear),
-            )
-            .expect("timeline track must be valid");
-        scene
-            .definition_mut()
-            .animate_position(
+                reactive_object,
                 mixed_object,
-                Vec2::ZERO,
-                Vec2::ONE,
-                TrackTiming::new(0.0, 1.0, RateFunction::Linear),
-            )
-            .expect("timeline track must be valid");
-
-        let reactive = scene.add_input(0.5_f32);
-        let mixed = scene.add_input(0.25_f32);
-        scene.bind(reactive, reactive_object, Property::Opacity);
-        scene.bind(mixed, mixed_object, Property::Rotation);
-
-        let program = scene.compile_reactive().expect("graph must compile");
+            ],
+            [
+                (timeline_object, Property::Rotation),
+                (mixed_object, Property::Position),
+            ],
+            &graph,
+        )
+        .expect("graph must compile");
         let analysis = program.analysis();
         assert_eq!(analysis.static_objects, 1);
         assert_eq!(analysis.timeline_only_objects, 1);
@@ -1100,39 +1011,6 @@ mod tests {
             analysis.class_for(mixed_object),
             Some(ObjectExecutionClass::TimelineAndReactive)
         );
-    }
-
-    #[test]
-    fn execution_domain_compile_matches_scene_wrapper() {
-        let mut scene = SemanticScene::new();
-        let timeline_object = scene.add(GeometryRef::circle(1.0));
-        let reactive_object = scene.add(GeometryRef::circle(1.0));
-        scene
-            .definition_mut()
-            .animate_scalar(
-                timeline_object,
-                Property::Rotation,
-                0.0,
-                1.0,
-                TrackTiming::new(0.0, 1.0, RateFunction::Linear),
-            )
-            .unwrap();
-        let signal = scene.add_input(0.5_f32);
-        scene.bind(signal, reactive_object, Property::Opacity);
-
-        let direct = ReactiveProgram::compile_for_execution_domain(
-            scene.definition().objects().iter().map(|object| object.id),
-            scene
-                .definition()
-                .tracks()
-                .iter()
-                .map(|track| (track.object, track.property)),
-            scene.reactive(),
-        )
-        .unwrap();
-        let wrapped = scene.compile_reactive().unwrap();
-
-        assert_eq!(direct, wrapped);
     }
 
     #[test]
@@ -1194,23 +1072,13 @@ mod tests {
 
     #[test]
     fn same_property_cannot_have_timeline_and_reactive_drivers() {
-        let mut scene = SemanticScene::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        scene
-            .definition_mut()
-            .animate_scalar(
-                object,
-                Property::Opacity,
-                0.0,
-                1.0,
-                TrackTiming::new(0.0, 1.0, RateFunction::Linear),
-            )
-            .expect("timeline track must be valid");
-        let signal = scene.add_input(0.5_f32);
-        scene.bind(signal, object, Property::Opacity);
+        let mut graph = ReactiveGraphDefinition::new();
+        let object = ObjectId::new(0);
+        let signal = graph.add_input(0.5_f32);
+        graph.bind(signal, object, Property::Opacity);
 
         assert!(matches!(
-            scene.compile_reactive(),
+            ReactiveProgram::compile_for_execution_domain([object], [(object, Property::Opacity)], &graph),
             Err(ReactiveError::ConflictingDriver {
                 object: conflict_object,
                 property: Property::Opacity,
@@ -1238,20 +1106,20 @@ mod tests {
         .expect("transported IDs are unique");
 
         assert!(matches!(
-            ReactiveProgram::compile(&SceneDefinition::new(), &graph),
+            ReactiveProgram::compile_for_execution_domain([], [], &graph),
             Err(ReactiveError::DependencyCycle)
         ));
     }
 
     #[test]
     fn binding_types_are_checked_before_execution() {
-        let mut scene = SemanticScene::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let scalar = scene.add_input(1.0_f32);
-        scene.bind(scalar, object, Property::Position);
+        let mut graph = ReactiveGraphDefinition::new();
+        let object = ObjectId::new(0);
+        let scalar = graph.add_input(1.0_f32);
+        graph.bind(scalar, object, Property::Position);
 
         assert!(matches!(
-            scene.compile_reactive(),
+            ReactiveProgram::compile_for_execution_domain([object], [], &graph),
             Err(ReactiveError::BindingTypeMismatch {
                 signal,
                 property: Property::Position,

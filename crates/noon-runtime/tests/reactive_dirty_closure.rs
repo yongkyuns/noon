@@ -1,28 +1,43 @@
-use noon_core::{GeometryRef, Property, ReactiveExpr, SemanticScene};
+use noon_compile::{lower_semantic_execution, SemanticExecutionIndex};
+use noon_core::{
+    SemanticObjectProperty, SemanticObjectState, SemanticSignalExpr, SemanticStore, StoredGeometry,
+};
 use noon_runtime::{ReactiveRuntimeStats, SceneInstance};
 
 const BRANCH_COUNT: usize = 10_000;
 
 #[test]
 fn one_input_update_only_evaluates_its_reactive_branch_in_large_graph() {
-    let mut scene = SemanticScene::new();
+    let mut scene = SemanticStore::new();
     let mut inputs = Vec::with_capacity(BRANCH_COUNT);
 
     for _ in 0..BRANCH_COUNT {
-        let object = scene.add(GeometryRef::circle(1.0));
-        let input = scene.add_input(0.0_f32);
-        let derived = scene.add_derived(ReactiveExpr::Add(
-            Box::new(ReactiveExpr::signal(input)),
-            Box::new(ReactiveExpr::scalar(1.0)),
-        ));
-        scene.bind(derived, object, Property::Rotation);
+        let object =
+            scene.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        scene.attach_to_scene(object).unwrap();
+        let input = scene.insert_semantic_input_signal(0.0_f64).unwrap();
+        let derived = scene
+            .insert_semantic_derived_signal(SemanticSignalExpr::Add(
+                Box::new(SemanticSignalExpr::signal(input)),
+                Box::new(SemanticSignalExpr::scalar(1.0)),
+            ))
+            .unwrap();
+        scene
+            .bind_semantic_signal(derived, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
         inputs.push(input);
     }
 
     let target_index = BRANCH_COUNT / 2;
     let target_input = inputs[target_index];
-    let mut instance =
-        SceneInstance::from_semantic(&scene).expect("large reactive graph must compile");
+    let lowered = lower_semantic_execution(&scene, &mut SemanticExecutionIndex::new()).unwrap();
+    let target_input = lowered
+        .reactive()
+        .execution_signal_id(target_input)
+        .unwrap();
+    let mut instance = SceneInstance::from_semantic_execution(lowered);
     instance.take_frame_changes();
 
     instance
