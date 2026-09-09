@@ -6,11 +6,10 @@ permissions:
   contents: write
   actions: read
 concurrency:
-  group: r2a-callback-integration
+  group: r2a-paint-cause-review
   cancel-in-progress: false
 env:
-  INPUT_HEAD: d607b7c3d4fae515d08c3b432dd49ce2e7b40c01
-  CALLBACK_HEAD: 9b647bf1455035f1d2d7b28db9fbe6c7a4cfdcbd
+  SOURCE_HEAD: cf7d000b773d47fd62bd5b56f636e689d5585f28
   CARGO_BUILD_JOBS: '2'
   CARGO_INCREMENTAL: '0'
   CARGO_PROFILE_DEV_DEBUG: '0'
@@ -19,43 +18,205 @@ env:
   SCCACHE_GHA_ENABLED: 'true'
   SCCACHE_GHA_RW_MODE: READ_ONLY
 jobs:
-  callback-integration:
+  paint-cause-review:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: d607b7c3d4fae515d08c3b432dd49ce2e7b40c01
+          ref: cf7d000b773d47fd62bd5b56f636e689d5585f28
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
-          name: r2a-final-source
-          run-id: 34393940697
+          name: r2a-callback-integration
+          run-id: 34396553863
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/r2a-source-input
-      - name: Integrate the callback owner's exact source without changing its implementation
+      - name: Apply only the proposed three-file cause correction
         run: |
           set -euo pipefail
-          mkdir -p /tmp/r2a-callback
-          test "$(git rev-parse HEAD)" = "$INPUT_HEAD"
+          mkdir -p /tmp/r2a-paint
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
           git diff --exit-code
-          git config user.name 'Noon development tooling'
-          git config user.email 'development@noon.invalid'
-          git archive "$CALLBACK_HEAD" | gzip > /tmp/r2a-callback/base.tar.gz
-          git merge --no-commit --no-ff "$CALLBACK_HEAD" > /tmp/r2a-callback/merge.log 2>&1 || { cat /tmp/r2a-callback/merge.log; exit 1; }
-          git diff --cached --check
-          git diff --exit-code "$CALLBACK_HEAD" -- crates/noon-web/src/authoring_error.rs crates/noon-web/src/semantic_execution_player.rs crates/noon/src/execution_session/callback.rs crates/noon-compile/src/semantic_lowering/root_order.rs scripts/typed-authoring-errors-smoke.mjs web/python
           cp "$RUNNER_TEMP/r2a-source-input/Cargo.lock" Cargo.lock
           echo '9fc77831ae25df351229c9902c073657062501a8e5faf8ea313dd9c8284062dd  Cargo.lock' | sha256sum --check
-          git -c commit.gpgSign=false commit -m 'refactor: integrate reviewed callback forwarding with typed R2a producers (#1354)'
-          git diff --exit-code
-          git show -s --format='%H %T %P' HEAD | tee /tmp/r2a-callback/source-identity.txt
-          git archive HEAD | gzip > /tmp/r2a-callback/source.tar.gz
-          git diff "$CALLBACK_HEAD" HEAD > /tmp/r2a-callback/source.patch
-          git diff "$INPUT_HEAD" HEAD > /tmp/r2a-callback/callback-integration.patch
-          cp Cargo.lock /tmp/r2a-callback/Cargo.lock
-          printf '%s\n' "$GITHUB_SHA" > /tmp/r2a-callback/helper-event-sha.txt
-          rustc --version > /tmp/r2a-callback/toolchain.txt
+          git apply - <<'PATCH'
+          diff --git a/crates/noon-web/src/authoring_error.rs b/crates/noon-web/src/authoring_error.rs
+          index 7814b0c..d803aef 100644
+          --- a/crates/noon-web/src/authoring_error.rs
+          +++ b/crates/noon-web/src/authoring_error.rs
+          @@ -85,8 +85,8 @@ impl From<noon::FamilyCallbackPaintError> for AuthoringFailure {
+                       StaleRevision { .. } => {
+                           Self::new("stale_handle", "callback.family.stale_revision", error)
+                       }
+          -            InvalidPaint(message) => {
+          -                Self::new("invalid_input", "callback.family.invalid_paint", message)
+          +            InvalidPaint(cause) => {
+          +                Self::caused_by("callback.family.invalid_paint", cause.to_string(), cause.into())
+                       }
+                   }
+               }
+          @@ -126,6 +126,15 @@ impl From<AuthoringError> for AuthoringFailure {
+                           "authoring.missing_text_resource",
+                           message,
+                       ),
+          +            AuthoringError::InvalidRenderNumber { .. } => {
+          +                Self::new("invalid_input", "authoring.invalid_render_number", message)
+          +            }
+          +            AuthoringError::InvalidOpacity { .. } => {
+          +                Self::new("invalid_input", "authoring.invalid_opacity", message)
+          +            }
+          +            AuthoringError::NegativeStrokeWidth(_) => {
+          +                Self::new("invalid_input", "authoring.negative_stroke_width", message)
+          +            }
+                       // The public producer is non-exhaustive; future domains must opt in
+                       // with a reviewed projection, not silently acquire a guessed class.
+                       other => Self::unclassified("authoring.unclassified", &other),
+          @@ -517,6 +526,51 @@ mod tests {
+                   assert!(!failure.message.is_empty());
+               }
+           
+          +    #[test]
+          +    fn typed_family_paint_rejections_keep_their_concrete_cause() {
+          +        for (cause, code) in [
+          +            (
+          +                AuthoringError::InvalidOpacity {
+          +                    name: "opacity".into(),
+          +                    value: 1.5,
+          +                },
+          +                "authoring.invalid_opacity",
+          +            ),
+          +            (
+          +                AuthoringError::InvalidRenderNumber {
+          +                    name: "stroke width".into(),
+          +                    value: f64::INFINITY,
+          +                },
+          +                "authoring.invalid_render_number",
+          +            ),
+          +            (
+          +                AuthoringError::NegativeStrokeWidth(-1.0),
+          +                "authoring.negative_stroke_width",
+          +            ),
+          +        ] {
+          +            let diagnostic = cause.to_string();
+          +            let failure = AuthoringFailure::from(noon::FamilyCallbackPaintError::InvalidPaint(cause));
+          +            assert_eq!(failure.category, "invalid_input");
+          +            assert_eq!(failure.code, "callback.family.invalid_paint");
+          +            assert_eq!(failure.message, diagnostic);
+          +            let nested = failure.cause.as_deref().unwrap();
+          +            assert_eq!(nested.category, "invalid_input");
+          +            assert_eq!(nested.code, code);
+          +            assert_eq!(nested.message, diagnostic);
+          +            assert!(nested.cause.is_none());
+          +            assert!(std::ptr::eq(
+          +                nested,
+          +                failure.source().unwrap().downcast_ref::<AuthoringFailure>().unwrap()
+          +            ));
+          +        }
+          +        // Unaccepted domains remain explicit, even with category-like input text.
+          +        let failure = AuthoringFailure::from(AuthoringError::InvalidStrokeCap(
+          +            "invalid opacity; negative stroke width".into(),
+          +        ));
+          +        assert_eq!(failure.category, "unclassified");
+          +        assert_eq!(failure.code, "authoring.unclassified");
+          +    }
+          +
+               #[test]
+               fn diagnostics_cannot_select_categories() {
+                   for text in [
+          diff --git a/scripts/typed-authoring-errors-smoke.mjs b/scripts/typed-authoring-errors-smoke.mjs
+          index 051daaa..2dbdf51 100644
+          --- a/scripts/typed-authoring-errors-smoke.mjs
+          +++ b/scripts/typed-authoring-errors-smoke.mjs
+          @@ -647,7 +647,7 @@ json.dumps({"matrix": results, "liveProperties": property_results, "advancement"
+             assert.equal(report.python.additionalTests, 12);
+           
+           
+          -  assert.equal(report.python.callbackTests, 7);
+          +  assert.equal(report.python.callbackTests, 8);
+             assert.equal(report.python.sparseCallbackRead, true);
+             assert.equal(report.python.skipped, 0);
+             assert.equal(report.python.promiseRejectionAndRecovery, true);
+          diff --git a/web/python/test_noon_callback_errors_wasm.py b/web/python/test_noon_callback_errors_wasm.py
+          index 4a03e21..6f47b7a 100644
+          --- a/web/python/test_noon_callback_errors_wasm.py
+          +++ b/web/python/test_noon_callback_errors_wasm.py
+          @@ -15,7 +15,7 @@ except ImportError:
+               wasm = None
+           
+           from _noon_errors import (
+          -    NoonError, NoonCallbackError, NoonStaleHandleError, NoonStalePublicationError,
+          +    NoonError, NoonCallbackError, NoonStaleHandleError, NoonStalePublicationError, NoonValueError,
+               engine_call,
+           )
+           
+          @@ -201,6 +201,59 @@ class CallbackErrorBoundaryTests(unittest.TestCase):
+                   self.assertIsNone(fixture.player.drainDeltaJson())
+                   fixture.finish()
+           
+          +    def test_family_paint_retains_typed_causes_and_same_player_recovery(self):
+          +        cases = (
+          +            ("Opacity", None, 1.5, "authoring.invalid_opacity"),
+          +            ("Opacity", None, float("nan"), "authoring.invalid_render_number"),
+          +            ("Stroke", -1.0, None, "authoring.negative_stroke_width"),
+          +            ("Stroke", float("inf"), None, "authoring.invalid_render_number"),
+          +        )
+          +        for operation, width, opacity, cause_code in cases:
+          +            with self.subTest(operation=operation, cause=cause_code):
+          +                fixture = CallbackFixture(with_families=True)
+          +                self.addCleanup(fixture.close)
+          +                family = fixture.families[1]
+          +                revision = fixture.phase["token"]["publication"]["scene_revision"]
+          +                authored = (fixture.target.snapshotJson(), fixture.detached.snapshotJson())
+          +                # An empty read cache proves input rejection precedes effective reads.
+          +                error = self.rejection(
+          +                    fixture, fixture.context.callbackFamilyPaint,
+          +                    [family, revision, operation, "[]", False, 0.0, 0.0, 0.0, 1.0,
+          +                     width, opacity],
+          +                    NoonValueError, "invalid_input", "callback.family.invalid_paint",
+          +                )
+          +                self.assertIsNotNone(error.rust_cause)
+          +                self.assertEqual(error.rust_cause.category, "invalid_input")
+          +                self.assertEqual(error.rust_cause.code, cause_code)
+          +                self.assertIsNone(error.rust_cause.cause)
+          +                self.assertTrue(host.isError(error.js_error.cause))
+          +                self.assertEqual(str(error.js_error.cause.code), cause_code)
+          +                self.assertTrue(error.rust_cause.message)
+          +                self.assertEqual((fixture.target.snapshotJson(), fixture.detached.snapshotJson()),
+          +                                 authored)
+          +
+          +                rows = [[row["node"]["slot"], row["node"]["generation"], row["style"]]
+          +                        for row in fixture.phase["objects"]]
+          +                before = fixture.state()
+          +                changes = json.loads(engine_call(
+          +                    fixture.context.callbackFamilyPaint, family, revision, operation,
+          +                    json.dumps(rows), False, 0.0, 0.0, 0.0, 1.0,
+          +                    0.1 if operation == "Stroke" else None, 0.5,
+          +                    operation="callback.family.paint",
+          +                ))
+          +                self.assertEqual(len(changes), 1)
+          +                self.assertEqual(fixture.state(), before)
+          +                self.assertEqual((fixture.target.snapshotJson(), fixture.detached.snapshotJson()),
+          +                                 authored)
+          +                fixture.commit([{
+          +                    "kind": "style", "object": {"slot": slot, "generation": generation},
+          +                    "style": style,
+          +                } for slot, generation, style in changes])
+          +                self.assertNotEqual(fixture.state(), before)
+          +                self.assertEqual((fixture.target.snapshotJson(), fixture.detached.snapshotJson()),
+          +                                 authored)
+          +                fixture.finish()
+          +
+               def test_valid_abort_remains_terminal_and_repeat_keeps_no_pending_precedence(self):
+                   for method, kind in (("failCallbackPhaseJson", "failed"),
+                                        ("interruptCallbackPhaseJson", "interrupted")):
+          PATCH
+          cargo fmt --all
+          git diff --check
+          git diff --stat > /tmp/r2a-paint/scope.txt
+          git diff > /tmp/r2a-paint/proposed.patch
+          cp crates/noon-web/src/authoring_error.rs /tmp/r2a-paint/corrected.rs
       - uses: actions/cache@v6
         with:
           path: |
@@ -68,30 +229,59 @@ jobs:
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
-      - name: Qualify the meaningful Rust producer and callback overlap
+      - name: Require the exact native cause regression to fail the old mapper
         run: |
-          set -o pipefail
-          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests > /tmp/r2a-callback/consumers.log 2>&1 || { tail -160 /tmp/r2a-callback/consumers.log; exit 1; }
-          bash scripts/check.sh rust "$CALLBACK_HEAD" > /tmp/r2a-callback/rust.log 2>&1 || { tail -180 /tmp/r2a-callback/rust.log; exit 1; }
-          cargo check -p noon-web --all-features --target wasm32-unknown-unknown > /tmp/r2a-callback/wasm.log 2>&1 || { tail -180 /tmp/r2a-callback/wasm.log; exit 1; }
-          git diff --exit-code
+          set -euo pipefail
+          trap 'cp /tmp/r2a-paint/corrected.rs crates/noon-web/src/authoring_error.rs' EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          p=Path('crates/noon-web/src/authoring_error.rs')
+          fixed=p.read_text()
+          start=fixed.index('    #[test]\n    fn typed_family_paint_rejections_keep_their_concrete_cause')
+          marker='    #[test]\n    fn diagnostics_cannot_select_categories'
+          end=fixed.index(marker,start)
+          old=subprocess.check_output(['git','show','HEAD:crates/noon-web/src/authoring_error.rs'],text=True)
+          assert old.count(marker)==1
+          p.write_text(old.replace(marker,fixed[start:end]+marker))
+          PY
+          set +e
+          cargo test -p noon-web --locked --all-features --lib authoring_error::tests::typed_family_paint_rejections_keep_their_concrete_cause -- --exact > /tmp/r2a-paint/red.log 2>&1
+          status=$?
+          set -e
+          tail -50 /tmp/r2a-paint/red.log
+          test "$status" != 0
+          grep -q 'test authoring_error::tests::typed_family_paint_rejections_keep_their_concrete_cause ... FAILED' /tmp/r2a-paint/red.log
+          grep -q '0 passed; 1 failed' /tmp/r2a-paint/red.log
+      - name: Qualify the proposed mapper correction without a full rebuild
+        run: |
+          set -euo pipefail
+          cargo test -p noon-web --locked --all-features --lib authoring_error::tests > /tmp/r2a-paint/green.log 2>&1 || { tail -100 /tmp/r2a-paint/green.log; exit 1; }
+          grep -q '3 passed; 0 failed; 0 ignored' /tmp/r2a-paint/green.log
+          cargo clippy -p noon-web --locked --all-features --all-targets -- -D warnings > /tmp/r2a-paint/clippy.log 2>&1 || { tail -100 /tmp/r2a-paint/clippy.log; exit 1; }
+          PYTHONPATH=web/python PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s web/python -p 'test_*.py' > /tmp/r2a-paint/python.log 2>&1 || { tail -100 /tmp/r2a-paint/python.log; exit 1; }
+          node --check scripts/typed-authoring-errors-smoke.mjs
+          bash scripts/check.sh architecture "$SOURCE_HEAD" > /tmp/r2a-paint/architecture.log 2>&1
+          cargo fmt --all -- --check
+          git diff --check
           echo '9fc77831ae25df351229c9902c073657062501a8e5faf8ea313dd9c8284062dd  Cargo.lock' | sha256sum --check
-      - name: Retain only the integration candidate, not the product PR ref
-        run: |
-          git push origin HEAD:refs/heads/codex/1354-callback-integrated
-          git show -s --format='%H %T %P' HEAD | tee /tmp/r2a-callback/published.txt
-      - name: Retain exact source and diagnostics
+      - name: Retain source and logs without publishing a product or mapper ref
         if: always()
         run: |
-          mkdir -p /tmp/r2a-callback
-          git status --short > /tmp/r2a-callback/status.txt
-          git diff --name-only --diff-filter=U > /tmp/r2a-callback/conflicts.txt
-          git diff HEAD > /tmp/r2a-callback/final-tracked.diff
-          git show -s --format='%H %T %P' HEAD > /tmp/r2a-callback/final-identity.txt
+          mkdir -p /tmp/r2a-paint
+          test ! -f /tmp/r2a-paint/corrected.rs || cp /tmp/r2a-paint/corrected.rs crates/noon-web/src/authoring_error.rs
+          git add crates/noon-web/src/authoring_error.rs web/python/test_noon_callback_errors_wasm.py scripts/typed-authoring-errors-smoke.mjs
+          git write-tree > /tmp/r2a-paint/tree.txt
+          git archive "$(git write-tree)" | gzip > /tmp/r2a-paint/source.tar.gz
+          git diff --cached > /tmp/r2a-paint/final.patch
+          git status --short > /tmp/r2a-paint/status.txt
+          git show -s --format='%H %T %P' HEAD > /tmp/r2a-paint/source-parent.txt
+          printf '%s\n' "$GITHUB_SHA" > /tmp/r2a-paint/helper-event.txt
+          rustc --version > /tmp/r2a-paint/toolchain.txt
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r2a-callback-integration
-          path: /tmp/r2a-callback
+          name: r2a-paint-cause-review
+          path: /tmp/r2a-paint
           retention-days: 3
           if-no-files-found: error
