@@ -766,6 +766,8 @@ try {
     },
     { filename: "ordinary_filled_path_transform.py", objectCount: 1, expectedDuration: 3.2, endpointTime: null },
     { filename: "ordinary_family_affine.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_family_paint.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_family_grid.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_create_shapes.py", objectCount: 4, expectedDuration: 3.2, endpointTime: null },
     { filename: "ordinary_morph_stress.py", objectCount: 96, expectedDuration: 3.4, endpointTime: null },
     {

@@ -7,6 +7,31 @@ use noon_core::SemanticNodeId;
 use noon_core::SemanticStore;
 
 #[cfg(target_arch = "wasm32")]
+pub(crate) fn family_color(
+    enabled: bool,
+    red: f64,
+    green: f64,
+    blue: f64,
+    alpha: f64,
+) -> Result<Option<noon::Color>, String> {
+    if !enabled {
+        return Ok(None);
+    }
+    if ![red, green, blue, alpha]
+        .iter()
+        .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+    {
+        return Err("family color components must be finite and between zero and one".into());
+    }
+    Ok(Some(noon::Color::rgba(
+        red as f32,
+        green as f32,
+        blue as f32,
+        alpha as f32,
+    )))
+}
+
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn text_authoring_f32(field: &str, value: f64) -> Result<f32, String> {
     let value = render_f64(field, value)? as f32;
     if !value.is_finite() {
@@ -479,6 +504,83 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = setColor)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_color(
+            &self,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_color(red, green, blue, alpha)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setFill)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_fill(
+            &self,
+            has_color: bool,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
+                .map_err(js_error)?;
+            self.semantic_family()?
+                .set_fill(color, opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setStroke)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_stroke(
+            &self,
+            has_color: bool,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            width: Option<f64>,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
+                .map_err(js_error)?;
+            self.semantic_family()?
+                .set_stroke(color, width, opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setOpacity)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_opacity(&self, opacity: f64) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_opacity(opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = arrangeInGrid)]
+        pub fn arrange_in_grid(
+            &self,
+            rows: Option<u32>,
+            columns: Option<u32>,
+            gap_x: f64,
+            gap_y: f64,
+        ) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .arrange_in_grid(
+                    rows.map(|v| v as usize),
+                    columns.map(|v| v as usize),
+                    gap_x,
+                    gap_y,
+                )
+                .map_err(js_error)
+        }
+
         pub fn scale(&self, x: f64, y: f64) -> Result<(), JsValue> {
             self.semantic_family()?.scale(x, y).map_err(js_error)
         }

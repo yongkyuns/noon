@@ -5707,6 +5707,109 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetFamilyColor)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_set_family_color(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_set_family_color(&family, red, green, blue, alpha)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetFamilyFill)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_set_family_fill(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            has_color: bool,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
+                .map_err(js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_set_family_fill(&family, color, opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetFamilyStroke)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_set_family_stroke(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            has_color: bool,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            width: Option<f64>,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
+                .map_err(js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_set_family_stroke(&family, color, width, opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetFamilyOpacity)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_set_family_opacity(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            opacity: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_set_family_opacity(&family, opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveArrangeFamilyInGrid)]
+        pub fn live_arrange_family_in_grid(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            rows: Option<u32>,
+            columns: Option<u32>,
+            gap_x: f64,
+            gap_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_arrange_family_in_grid(
+                    &family,
+                    rows.map(|v| v as usize),
+                    columns.map(|v| v as usize),
+                    gap_x,
+                    gap_y,
+                )
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = liveScaleFamily)]
         pub fn live_scale_family(
             &mut self,

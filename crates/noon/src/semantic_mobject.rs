@@ -20,9 +20,9 @@ use bounds::{layout_for_content, transform_layout_xy};
 pub(crate) use style::{
     edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
     edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
-    edit_stroke_opacity, manim_color_from_effective,
+    edit_stroke_opacity, edit_stroke_width, manim_color_from_effective,
 };
-use style::{edit_stroke_width, parse_stroke_cap, parse_stroke_join, parse_stroke_width_mode};
+use style::{parse_stroke_cap, parse_stroke_join, parse_stroke_width_mode};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ManimNextToArgs {
