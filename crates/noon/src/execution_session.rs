@@ -4139,6 +4139,79 @@ mod tests {
     }
 
     #[test]
+    fn scalar_track_gaps_and_rewind_use_the_shared_execution_schedule() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let tracker = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        let external = store.insert_semantic_input_signal(0.25_f64).unwrap();
+        store
+            .bind_semantic_signal(tracker, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
+        store
+            .bind_semantic_signal(external, object, SemanticObjectProperty::ObjectOpacity)
+            .unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_scalar_signal_track(
+            tracker,
+            0.0,
+            1.0,
+            TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        );
+        transaction.add_scalar_signal_track(
+            tracker,
+            1.0,
+            2.0,
+            TrackTiming::new(2.0, 1.0, RateFunction::Linear),
+        );
+        transaction.apply(&mut store).unwrap();
+        let mut forward = ExecutionSession::from_semantic_store(&store).unwrap();
+        let mut direct = ExecutionSession::from_semantic_store(&store).unwrap();
+        forward.set_reactive_input(external, 0.75_f32).unwrap();
+        direct.set_reactive_input(external, 0.75_f32).unwrap();
+        for (time, value) in [
+            (0.0, 0.0),
+            (0.5, 0.5),
+            (1.0, 1.0),
+            (1.5, 1.0),
+            (2.0, 1.0),
+            (2.5, 1.5),
+            (3.0, 2.0),
+            (4.0, 2.0),
+        ] {
+            forward.advance_to(time).unwrap();
+            direct.seek(time).unwrap();
+            assert_eq!(
+                forward.effective_signal_value(tracker),
+                Some(&ReactiveValue::Scalar(value))
+            );
+            assert_eq!(
+                direct.effective_signal_value(tracker),
+                forward.effective_signal_value(tracker)
+            );
+            assert_eq!(forward.frame().objects[0].transform.rotation, value);
+            assert_eq!(direct.frame().objects[0], forward.frame().objects[0]);
+            assert_eq!(forward.frame().objects[0].style.opacity, 0.75);
+        }
+        forward.seek(1.5).unwrap();
+        assert_eq!(
+            forward.effective_signal_value(tracker),
+            Some(&ReactiveValue::Scalar(1.0))
+        );
+        assert_eq!(forward.frame().objects[0].transform.rotation, 1.0);
+        let before = forward.publication_context();
+        assert_eq!(
+            forward.set_reactive_input(tracker, 9.0_f32),
+            Err(ExecutionSessionInputError::TimelineOwnedSignal { signal: tracker })
+        );
+        assert_eq!(forward.publication_context(), before);
+        assert_eq!(forward.frame().objects[0].style.opacity, 0.75);
+    }
+
+    #[test]
     fn scalar_track_active_at_zero_is_present_in_initial_coherent_frame() {
         let mut store = SemanticStore::new();
         let object =
