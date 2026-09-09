@@ -31,7 +31,7 @@ pub fn prepare_semantic_root_order(
             ))
         })?;
         match node_state.kind() {
-            SemanticNodeKind::Object(_) | SemanticNodeKind::AuthoringObject => output.push(node),
+            SemanticNodeKind::AuthoringObject => output.push(node),
             SemanticNodeKind::Family => {
                 for member in node_state.members() {
                     leaves(store, member, output)?;

@@ -399,9 +399,7 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
                     );
                     if !matches!(
                         kind.kind(),
-                        SemanticNodeKind::Object(_)
-                            | SemanticNodeKind::AuthoringObject
-                            | SemanticNodeKind::Family
+                        SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family
                     ) {
                         return Err(SemanticPublicationLoweringError::UnsupportedNodeRemoval {
                             node,
@@ -492,7 +490,7 @@ fn collect_existing_exit_leaves(
         SemanticLoweringError::Store(noon_core::SemanticStoreError::UnknownNode(node))
     })?;
     match semantic.kind() {
-        SemanticNodeKind::Object(_) | SemanticNodeKind::AuthoringObject => {
+        SemanticNodeKind::AuthoringObject => {
             let state = semantic.semantic_object_state();
             if state.is_some_and(|state| {
                 matches!(state.role(), noon_core::SemanticObjectRole::Camera2D)
