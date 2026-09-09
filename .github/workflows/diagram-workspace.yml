@@ -1,0 +1,31 @@
+name: Diagram workspace
+on:
+  push:
+    branches: [work/noon-d2-architecture-20260909]
+permissions:
+  contents: read
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: d6734d2a0626f5c9926e4043ad2017a94f5c8c5a
+          persist-credentials: false
+      - name: Prepare pinned diagram tooling and source snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://github.com/d2lang/d2/releases/download/v0.9.0/d2-v0.9.0-linux-amd64.tar.gz -o /tmp/d2.tar.gz
+          echo '5669ddc46b99e942cc96078f4a4e36d5e62103348f4c05179ede27802fdd87a9  /tmp/d2.tar.gz' | sha256sum -c -
+          mkdir /tmp/diagram-workspace
+          tar -xzf /tmp/d2.tar.gz -C /tmp
+          cp /tmp/d2-v0.9.0/bin/d2 /tmp/diagram-workspace/d2
+          /tmp/diagram-workspace/d2 version
+          git archive --format=tar.gz HEAD > /tmp/diagram-workspace/noon-source.tar.gz
+          printf '%s\n' d6734d2a0626f5c9926e4043ad2017a94f5c8c5a > /tmp/diagram-workspace/SOURCE_REVISION
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noon-diagram-workspace
+          path: /tmp/diagram-workspace/
+          retention-days: 1
