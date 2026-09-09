@@ -262,3 +262,118 @@ fn rejected_provisional_order_preserves_state_then_reuses_unpublished_identity()
         }
     }
 }
+
+#[test]
+fn live_root_must_belong_to_the_execution_domain_before_publication() {
+    use noon::{ExecutionSessionPublicationError, LiveSessionError};
+    use noon_core::{SemanticNodeCreation, SemanticObjectProperty, SemanticVec3};
+
+    for scene_owned in [false, true] {
+        for nested_alias in [false, true] {
+            for pending_dirty in [false, true] {
+                let mut store = SemanticStore::new();
+                let a = object(&mut store);
+                let b = object(&mut store);
+                let wrong_root = family(&mut store, &[a, b]);
+                let root = family(&mut store, &[a, b]);
+                if nested_alias {
+                    store.add_member(root, wrong_root).unwrap();
+                }
+                let mut session = if scene_owned {
+                    store.attach_to_scene(root).unwrap();
+                    ExecutionSession::from_semantic_store(&store).unwrap()
+                } else {
+                    ExecutionSession::from_semantic_root(&store, root).unwrap()
+                };
+                let owner = Rc::new(RefCell::new(store));
+                session.take_frame_changes();
+                if pending_dirty {
+                    let mut tx = SemanticMutationTransaction::new();
+                    tx.set_property(
+                        a,
+                        SemanticObjectProperty::Translation,
+                        SemanticVec3::new(3.0, 0.0, 0.0),
+                    );
+                    LiveSession::new(&owner, root, &mut session)
+                        .apply(tx)
+                        .unwrap();
+                }
+                let context = session.publication_context();
+                let frame = session.frame().clone();
+                let order = session.painter_order().to_vec();
+                let slots = (0..frame.objects.len())
+                    .map(|row| session.execution_slot_for_frame_index(row))
+                    .collect::<Vec<_>>();
+                let count = owner.borrow().len();
+                let root_members = owner.borrow().node(root).unwrap().members();
+                let mutation_stats = owner.borrow().last_mutation_stats();
+                let authored_b = owner
+                    .borrow()
+                    .semantic_object_state_checked(b)
+                    .unwrap()
+                    .clone();
+
+                // Equal leaf membership (even a reachable alias family) does not
+                // make this the root that defines the retained execution domain.
+                let mut tx = SemanticMutationTransaction::new();
+                tx.reorder_member(root, b, Some(a));
+                tx.set_property(b, SemanticObjectProperty::RotationZ, 0.5);
+                tx.create_node(SemanticNodeCreation::family());
+                assert!(matches!(
+                    LiveSession::new(&owner, wrong_root, &mut session).apply(tx),
+                    Err(LiveSessionError::Publication(
+                        ExecutionSessionPublicationError::UnknownObject(rejected)
+                    )) if rejected == wrong_root
+                ));
+
+                assert_eq!(session.publication_context(), context);
+                assert_eq!(owner.borrow().scene_revision(), context.scene_revision());
+                assert_eq!(owner.borrow().len(), count);
+                assert_eq!(owner.borrow().last_mutation_stats(), mutation_stats);
+                assert_eq!(owner.borrow().node(root).unwrap().members(), root_members);
+                assert_eq!(owner.borrow().node(wrong_root).unwrap().members(), [a, b]);
+                assert_eq!(
+                    owner.borrow().node(root).unwrap().compare_members(a, b),
+                    Some(std::cmp::Ordering::Less)
+                );
+                assert_eq!(
+                    owner.borrow().semantic_object_state_checked(b).unwrap(),
+                    &authored_b
+                );
+                assert_eq!(session.frame(), &frame);
+                assert_eq!(session.painter_order(), order);
+                for (row, slot) in slots.iter().enumerate() {
+                    assert_eq!(session.execution_slot_for_frame_index(row), *slot);
+                }
+                let changes = session.take_frame_changes();
+                assert_eq!(changes.painter_order_range(), None);
+                if pending_dirty {
+                    assert_eq!(changes.object_indices(), &[0]);
+                } else {
+                    assert!(changes.is_empty());
+                }
+
+                let mut valid = SemanticMutationTransaction::new();
+                valid.reorder_member(root, b, Some(a));
+                LiveSession::new(&owner, root, &mut session)
+                    .apply(valid)
+                    .unwrap();
+                assert_order(&owner.borrow(), root, &session);
+                assert_eq!(session.frame(), &frame);
+                let after = session.publication_context();
+                assert_eq!(
+                    after.scene_revision(),
+                    context.scene_revision().checked_next().unwrap()
+                );
+                assert_eq!(
+                    after.execution_revision(),
+                    context.execution_revision().checked_next().unwrap()
+                );
+                assert_eq!(
+                    after.frame_epoch(),
+                    context.frame_epoch().checked_next().unwrap()
+                );
+            }
+        }
+    }
+}
