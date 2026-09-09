@@ -101,7 +101,7 @@ reset_to_base() {
   rmdir crates/noon-web/src/legacy 2>/dev/null || true
 }
 
-# The one deletion-owned payload fixture is permitted only under cfg(test).
+# Retired compiler payloads stay forbidden even inside cfg(test) fixtures.
 reset_to_base
 mkdir -p crates/noon-compile/src/transaction_preflight
 cat > crates/noon-compile/src/transaction_preflight/tests.rs <<'EOF'
@@ -110,7 +110,7 @@ use noon_core::ObjectDefinition;
 EOF
 git add crates/noon-compile
 git commit -qm "test-only patch payload fixture"
-bash scripts/architecture-ratchet.sh "$BASE" >/dev/null
+expect_rejected 'retired patch payload in cfg(test) fixture'
 
 printf 'use noon_core::SceneDefinition;\n' >> crates/noon-compile/src/transaction_preflight/tests.rs
 git add crates/noon-compile
@@ -493,9 +493,9 @@ for symbol in SlottedSceneInstance FrameSlotId RetiredSlotCompactionPolicy Execu
 done
 git rm -q src/runtime_wrapper_probe.rs
 git commit -qm 'remove retired runtime wrapper probe'
-# Renderer and runtime fixtures must not preserve a second scene API, even when committed
+# Compiler, renderer and runtime fixtures must not preserve a second scene API, even when committed
 # before the comparison base.
-for canonical in crates/noon-render-wgpu/src/probe.rs crates/noon-render-wgpu/tests/probe.rs crates/noon-runtime/src/scene_probe.rs crates/noon-runtime/tests/scene_probe.rs; do
+for canonical in crates/noon-render-wgpu/src/probe.rs crates/noon-render-wgpu/tests/probe.rs crates/noon-runtime/src/scene_probe.rs crates/noon-runtime/tests/scene_probe.rs crates/noon-compile/src/scene_probe.rs crates/noon-compile/tests/scene_probe.rs; do
   mkdir -p "$(dirname "$canonical")"
   for symbol in SceneDefinition ObjectDefinition ObjectSnapshot ScenePatch MutationTransaction; do
     printf 'use noon_core::%s;\n' "$symbol" > "$canonical"

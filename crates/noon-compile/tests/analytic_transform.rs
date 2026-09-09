@@ -1,48 +1,45 @@
-use noon_compile::{CompiledScene, TransformGeometryPlan};
+use noon_compile::{CompiledObject, CompiledScene, TransformGeometryPlan};
 use noon_core::{
-    Easing, GeometryRef, ObjectSnapshot, SceneDefinition, TrackTiming, Transform2D, Vec2,
+    CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId,
+    TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
 };
-
-fn add_transform(scene: &mut SceneDefinition, from: GeometryRef, to: GeometryRef) {
-    let object = scene.add(from.clone());
-    scene
-        .animate_transform(
-            object,
-            ObjectSnapshot {
-                geometry: from,
-                transform: Transform2D::IDENTITY,
-                style: scene.object(object).unwrap().style,
-            },
-            ObjectSnapshot {
-                geometry: to,
-                transform: Transform2D::IDENTITY,
-                style: scene.object(object).unwrap().style,
-            },
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
-        .unwrap();
-}
 
 #[test]
 fn compiler_selects_analytic_geometry_plans() {
-    let mut scene = SceneDefinition::new();
-    add_transform(
-        &mut scene,
-        GeometryRef::circle(1.0),
-        GeometryRef::circle(3.0),
-    );
-    add_transform(
-        &mut scene,
-        GeometryRef::rectangle(2.0, 4.0),
-        GeometryRef::rectangle(6.0, 8.0),
-    );
-    add_transform(
-        &mut scene,
-        GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)),
-        GeometryRef::line(Vec2::new(0.0, -2.0), Vec2::new(0.0, 2.0)),
-    );
-
-    let compiled = CompiledScene::compile(&scene).unwrap();
+    let pairs = [
+        (GeometryRef::circle(1.0), GeometryRef::circle(3.0)),
+        (
+            GeometryRef::rectangle(2.0, 4.0),
+            GeometryRef::rectangle(6.0, 8.0),
+        ),
+        (
+            GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)),
+            GeometryRef::line(Vec2::new(0.0, -2.0), Vec2::new(0.0, 2.0)),
+        ),
+    ];
+    let mut objects = Vec::new();
+    let mut tracks = Vec::new();
+    for (index, (from, to)) in pairs.into_iter().enumerate() {
+        let object = ObjectId::new(index as u64);
+        objects.push(CompiledObject::new(
+            object,
+            from.clone(),
+            Transform2D::IDENTITY,
+            Style::default(),
+        ));
+        tracks.push(TrackDefinition {
+            id: TrackId::new(index as u64),
+            object,
+            property: Property::Transform,
+            values: TrackValues::Object {
+                from: TransformTrackEndpoint::new(from),
+                to: TransformTrackEndpoint::new(to),
+            },
+            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            time_map: CompositionTimeMap::identity(),
+        });
+    }
+    let compiled = CompiledScene::compile_objects(objects, &tracks).unwrap();
     assert!(matches!(
         compiled.tracks()[0].transform_geometry_plan,
         Some(TransformGeometryPlan::Circle {

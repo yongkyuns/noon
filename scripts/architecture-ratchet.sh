@@ -35,34 +35,22 @@ include_indirection_pattern='(^|[^[:alnum:]_])include![[:space:]]*(\(|\{|\[)'
 migration_found=0
 module_indirection_found=0
 current_file=""
-fixture_payload_allowed=0
 while IFS= read -r line; do
   case "$line" in
     "+++ b/"*)
       current_file="${line#+++ b/}"
-      fixture_payload_allowed=0
       current_relocation_tokens=""
       while IFS=$'\t' read -r allowed_path allowed_token; do
         if [[ "$allowed_path" == "$current_file" ]]; then
           current_relocation_tokens+=" $allowed_token"
         fi
       done <<< "$relocation_permissions"
-      if [[ "$current_file" == 'crates/noon-compile/src/transaction_preflight/tests.rs' ]] &&
-         [[ "$(sed -n '1p' "$current_file")" == '#![cfg(test)]' ]]; then
-        fixture_payload_allowed=1
-      fi
       ;;
     +*)
       [[ "$line" == "+++ "* ]] && continue
       added="${line:1}"
 
-      # A4/#959 permits only the existing CreateObject payload in this
-      # explicitly test-only regression fixture. All other migration tokens
-      # and all other files remain covered by the normal growth check.
       migration_checked="$added"
-      if (( fixture_payload_allowed != 0 )); then
-        migration_checked="$(printf '%s\n' "$migration_checked" | sed -E 's/(^|[^[:alnum:]_])ObjectDefinition([^[:alnum:]_]|$)/\1\2/g')"
-      fi
       # The checker is tooling, not an engine consumer: its own enforcement
       # vocabulary necessarily names the forbidden types it checks. No product
       # path receives this exemption.
