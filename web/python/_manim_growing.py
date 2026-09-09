@@ -12,7 +12,6 @@ from typing import Any
 
 import noon as _base
 import _manim_compat as _compat
-import _manim_phase_b as _phase_b
 
 
 def _point(value: object) -> _base.Vec2:
@@ -30,7 +29,7 @@ class GrowFromPoint:
         self.mobject = mobject
         self.target = mobject
         self.point = _point(point)
-        self.point_color = None if point_color is None else _phase_b._as_color("point_color", point_color)
+        self.point_color = None if point_color is None else _compat._as_color("point_color", point_color)
         self.anim_args = dict(kwargs)
 
 

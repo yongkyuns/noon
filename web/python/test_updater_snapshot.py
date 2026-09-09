@@ -375,7 +375,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
                 mobject.width
             with self.assertRaises(NotImplementedError):
                 mobject.geometry
-            with self.assertRaisesRegex(NotImplementedError, "callback raw geometry"):
+            with self.assertRaisesRegex(RuntimeError, "shared Rust semantic handle"):
                 mobject.copy()
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)

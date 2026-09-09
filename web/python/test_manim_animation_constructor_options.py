@@ -69,7 +69,6 @@ class ManimAnimationConstructorOptionsTests(unittest.TestCase):
             _manim_compat.install()
             import _manim_rate_functions
             _manim_rate_functions.install()
-            import _manim_phase_b  # noqa: F401
             from noon import Scene
             play_before = Scene.play
             import _manim_animate

@@ -23,7 +23,7 @@ _INSTALLED = False
 
 def _apply_candidate_color(candidate: object, color: object) -> None:
     if color is not None:
-        parsed = _shared._phase_b._as_color("color", color)
+        parsed = _shared._compat._as_color("color", color)
         _shared._apply_constructor_color(candidate, parsed)
 
 
@@ -330,7 +330,7 @@ class BackgroundRectangle(SurroundingRectangle):
             "corner_radius", options.pop("corner_radius", 0.0)
         )
         buff_x, buff_y = _shape_matcher_buff(buff)
-        fill_value = _shared._phase_b._opacity("fill_opacity", fill_opacity)
+        fill_value = _shared._compat._opacity("fill_opacity", fill_opacity)
         candidate = _shape_matcher_options(
             mobject,
             "beginBackgroundRectangle",

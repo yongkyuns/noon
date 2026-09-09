@@ -69,7 +69,6 @@ class ManimScaleInPlaceTests(unittest.TestCase):
             _manim_compat.install()
             import _manim_rate_functions
             _manim_rate_functions.install()
-            import _manim_phase_b  # noqa: F401
             import _manim_animate  # noqa: F401
             import _manim_animation_options  # installs the public ScaleInPlace request
 

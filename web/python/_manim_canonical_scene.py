@@ -24,7 +24,6 @@ import _manim_draw_border_then_fill as _draw_border_then_fill
 import _manim_family_creation as _family_creation
 import _manim_indication as _indication
 import _manim_lifecycle as _lifecycle
-import _manim_phase_b as _phase_b
 import _manim_rate_functions as _rate_functions
 import _manim_reactive as _reactive
 import _manim_semantic_handles as _semantic_handles
@@ -1767,7 +1766,7 @@ def _build_canonical_composition_candidate(
             rgba = (None, None, None, None) if color is None else tuple(
                 float(getattr(color, name)) for name in ("red", "green", "blue", "alpha")
             )
-            width = _phase_b._manim_stroke_width(animation.stroke_width)
+            width = _compat._manim_stroke_width(animation.stroke_width)
             introducer = bool(getattr(animation, "introducer", True))
             detached = [member for member in leaves if member._scene is None]
             if family is None:

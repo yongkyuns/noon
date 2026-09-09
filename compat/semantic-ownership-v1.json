@@ -11,8 +11,6 @@
   "duplicate_debt_budgets": [
     {"path": "web/python/noon.py", "token": "def _bounds(", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/noon.py", "token": "def _raw_mobject(", "maximum": 0, "migration_issue": "#61"},
-    {"path": "web/python/_manim_phase_b.py", "token": "_vector_path_world_bounds", "maximum": 0, "migration_issue": "#61"},
-    {"path": "web/python/_manim_phase_b.py", "token": "_manim_layout_bounds", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_semantic_handles.py", "token": "_ORIGINAL_CURRENT_RAW", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_geometry.py", "token": "_legacy_world_point", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_noon_ir.py", "token": "class Scene", "maximum": 0, "migration_issue": "#61"},

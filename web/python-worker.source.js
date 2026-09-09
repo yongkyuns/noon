@@ -146,7 +146,6 @@ import _manim_compat
 _manim_compat.install()
 import _manim_rate_functions
 _manim_rate_functions.install()
-import _manim_phase_b
 import _manim_geometry
 import _manim_semantic_handles
 _manim_semantic_handles.install()

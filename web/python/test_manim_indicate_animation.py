@@ -70,7 +70,6 @@ class ManimIndicateAnimationTests(unittest.TestCase):
             install_test_membership(_manim_compat)
             import _manim_rate_functions
             _manim_rate_functions.install()
-            import _manim_phase_b  # noqa: F401
             import _manim_animate  # noqa: F401
 
             from noon import BLUE, GREEN, Indicate, RIGHT, Scene, Square, VGroup, linear

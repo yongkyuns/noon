@@ -1,7 +1,7 @@
 """ManimCE-compatible public authoring foundation for the browser Python frontend.
 
-This module deliberately changes only Python authoring semantics. Objects still lower to
-Noon's existing semantic snapshots/tracks and analytic/path renderer representations.
+Python owns public class shape and argument coercion. Shared Rust operations own
+semantic geometry, mutation, layout and execution.
 """
 
 from __future__ import annotations
@@ -26,20 +26,34 @@ _STANDARD_MEMBERSHIP_VIEW = None
 _STANDARD_MEMBERSHIP_REGISTER = None
 
 
-def _manim_vmobject_kwargs(
-    kwargs: dict[str, Any], *, default_color: _base.Color = _base.WHITE
-) -> dict[str, Any]:
-    """Apply ManimCE VMobject defaults without changing native Noon IR defaults."""
-    result = dict(kwargs)
-    result.setdefault(
-        "fill",
-        _base.Color(default_color.red, default_color.green, default_color.blue, 0.0),
-    )
-    result.setdefault("stroke", default_color)
-    result.setdefault("stroke_width", 4.0)
-    result.setdefault("stroke_join", "miter")
-    result.setdefault("stroke_cap", "butt")
-    return result
+# Pinned ManimCE v0.21.0 Cairo presentation contract. Cairo converts
+# VMobject stroke widths to scene units with this multiplier and AUTO
+# leaves its native miter-join / butt-cap defaults in effect.
+MANIM_CAIRO_LINE_WIDTH_MULTIPLE = 0.01
+MANIM_DEFAULT_STROKE_WIDTH = 4.0
+
+
+def _manim_stroke_width(value: object) -> float:
+    width = _base._ir._finite_number("stroke width", value)
+    if width < 0.0:
+        raise ValueError("stroke width must be non-negative")
+    return width * MANIM_CAIRO_LINE_WIDTH_MULTIPLE
+
+
+def _opacity(name: str, value: object) -> float:
+    return _base._ir._unit_interval(name, value)
+
+
+def _as_color(name: str, value: object) -> _base.Color:
+    if isinstance(value, _base.Color):
+        return value
+    if isinstance(value, (str, int)) and not isinstance(value, bool):
+        try:
+            return _base.color_from_hex(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"invalid {name}") from error
+    raise TypeError(f"{name} must be a Color or #RRGGBB value")
+
 
 
 def _as_vec2(value: object) -> _base.Vec2:
@@ -109,10 +123,32 @@ class VMobject(_BaseMobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
 
     def copy(self) -> VMobject:
-        clone = object.__new__(type(self))
-        _BaseMobject.__init__(clone, self._current_raw())
-        copy_wrapper_attributes(self, clone, excluded={"_raw", "_scene", "_object"})
-        return clone
+        from _manim_semantic_handles import _copy_mobject
+        return _copy_mobject(self)
+
+    def set_color(self, color: object, family: bool = True) -> VMobject:
+        from _manim_semantic_handles import _set_vmobject_color
+        return _set_vmobject_color(self, color, family=family)
+
+    def set_fill(self, color: object = None, opacity: float | None = None, family: bool = True) -> VMobject:
+        from _manim_semantic_handles import _set_fill
+        return _set_fill(self, color=color, opacity=opacity, family=family)
+
+    def set_stroke(self, color: object = None, width: float | None = None, opacity: float | None = None, family: bool = True) -> VMobject:
+        from _manim_semantic_handles import _set_stroke
+        return _set_stroke(self, color=color, width=width, opacity=opacity, family=family)
+
+    def set_opacity(self, opacity: float, family: bool = True) -> VMobject:
+        from _manim_semantic_handles import _set_opacity
+        return _set_opacity(self, opacity, family=family)
+
+    def get_fill_opacity(self) -> float:
+        from _manim_semantic_handles import _get_fill_opacity
+        return _get_fill_opacity(self)
+
+    def get_stroke_opacity(self) -> float:
+        from _manim_semantic_handles import _get_stroke_opacity
+        return _get_stroke_opacity(self)
 
 
 class Circle(VMobject):
@@ -123,31 +159,21 @@ class Circle(VMobject):
         color: _base.Color | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(
-            _ir.Circle(
-                radius,
-                **_manim_vmobject_kwargs(kwargs, default_color=_base.RED),
-            )
-        )
-        self.radius = float(radius)
-        if color is not None:
-            self.set_color(color)
+        from _manim_semantic_handles import _circle_init
+        _circle_init(self, radius, color=color, **kwargs)
 
 
 class Rectangle(VMobject):
     def __init__(
         self,
-        width: float = 2.0,
-        height: float = 1.0,
+        width: float = 4.0,
+        height: float = 2.0,
         *,
         color: _base.Color | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(_ir.Rectangle(width, height, **_manim_vmobject_kwargs(kwargs)))
-        self.width_value = float(width)
-        self.height_value = float(height)
-        if color is not None:
-            self.set_color(color)
+        from _manim_semantic_handles import _rectangle_init
+        _rectangle_init(self, width, height, color=color, **kwargs)
 
 
 class Square(Rectangle):
@@ -158,8 +184,8 @@ class Square(Rectangle):
         color: _base.Color | None = None,
         **kwargs: Any,
     ) -> None:
-        self.side_length = float(side_length)
-        super().__init__(side_length, side_length, color=color, **kwargs)
+        from _manim_semantic_handles import _square_init
+        _square_init(self, side_length, color=color, **kwargs)
 
 
 class Line(VMobject):
@@ -171,13 +197,8 @@ class Line(VMobject):
         color: _base.Color | None = None,
         **kwargs: Any,
     ) -> None:
-        start_value = _base.LEFT if start is None else _as_vec2(start)
-        end_value = _base.RIGHT if end is None else _as_vec2(end)
-        super().__init__(_ir.Line(start_value, end_value, **_manim_vmobject_kwargs(kwargs)))
-        self.start = start_value
-        self.end = end_value
-        if color is not None:
-            self.set_color(color)
+        from _manim_semantic_handles import _line_init
+        _line_init(self, start, end, color=color, **kwargs)
 
 
 class Path(VMobject):
@@ -188,10 +209,8 @@ class Path(VMobject):
         color: _base.Color | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(_ir.Path(path, **_manim_vmobject_kwargs(kwargs)))
-        self.path = path
-        if color is not None:
-            self.set_color(color)
+        from _manim_semantic_handles import _path_init
+        _path_init(self, path, color=color, **kwargs)
 
 
 def _leaf_mobjects(value: object) -> list[_BaseMobject]:

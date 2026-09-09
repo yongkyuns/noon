@@ -54,7 +54,6 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
             _manim_compat.install()
             import _manim_rate_functions as rate_functions
             rate_functions.install()
-            import _manim_phase_b
             import _manim_geometry
             import _manim_semantic_handles as handles
             handles.install()

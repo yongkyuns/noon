@@ -1124,7 +1124,7 @@ def _canonical_vmobject_set_color(
 ) -> _base.Mobject:
     if _canonical_phase_context(self) is not None:
         del family
-        from _manim_phase_b import _as_color
+        from _manim_compat import _as_color
 
         return _canonical_set_color(self, _as_color("color", color))
     assert _ORIGINAL_VMOBJECT_SET_COLOR is not None
@@ -1140,7 +1140,7 @@ def _canonical_vmobject_set_fill(
     if _canonical_phase_context(self) is not None:
         del family
         if color is not None:
-            from _manim_phase_b import _as_color
+            from _manim_compat import _as_color
 
             color = _as_color("fill color", color)
         return _canonical_set_fill(self, color, opacity)
@@ -1162,7 +1162,7 @@ def _canonical_vmobject_set_stroke(
                 "canonical callback stroke opacity is not supported; use set_opacity"
             )
         if color is not None:
-            from _manim_phase_b import _as_color
+            from _manim_compat import _as_color
 
             color = _as_color("stroke color", color)
         return _canonical_set_stroke(self, color, width)
@@ -1179,7 +1179,7 @@ def _canonical_vmobject_set_opacity(
 ) -> _base.Mobject:
     if _canonical_phase_context(self) is not None:
         del family
-        from _manim_phase_b import _opacity
+        from _manim_compat import _opacity
 
         return _canonical_set_opacity(self, _opacity("opacity", opacity))
     assert _ORIGINAL_VMOBJECT_SET_OPACITY is not None
