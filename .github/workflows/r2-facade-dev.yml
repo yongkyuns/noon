@@ -1,0 +1,19 @@
+name: R2 facade development
+on:
+  push:
+    branches: [codex/1272-r2-public-facade-prep]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: r2-facade-development
+  cancel-in-progress: true
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Inventory public facade and raw integration consumers
+        run: python3 .github/r2-facade-inventory.py
