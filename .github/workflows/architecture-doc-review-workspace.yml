@@ -17,6 +17,15 @@ jobs:
         run: |
           set -euo pipefail
           git cat-file -e 8cadad70a9fdbdaf51de49369fb5c98c2d4750e0^{commit}
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/architecture_doc_refresh.py')
+          text = path.read_text()
+          old = '    return text[:i] + replacement + text[j:]\n'
+          new = '    if replacement.endswith(end):\n        return text[:i] + replacement + text[j + len(end):]\n    return text[:i] + replacement + text[j:]\n'
+          assert text.count(old) == 1
+          path.write_text(text.replace(old, new, 1))
+          PY
           python3 scripts/architecture_doc_refresh.py
           rm scripts/architecture_doc_refresh.py
           rm .github/workflows/architecture-doc-review-workspace.yml
@@ -41,6 +50,9 @@ jobs:
           git diff --check
           test "$(find docs/diagrams -maxdepth 1 -name '*.d2' ! -name '_style.d2' | wc -l)" -eq 10
           test "$(find docs/diagrams -maxdepth 1 -name '*.svg' | wc -l)" -eq 10
+          test "$(grep -c '^## Browser playground$' README.md)" -eq 1
+          test "$(grep -c '^## Phase B — complete common 2D semantics$' docs/architecture.md)" -eq 1
+          test "$(grep -c '^## 14. Correctness invariants$' docs/architecture.md)" -eq 1
           ! grep -R -E 'native-execution|wasm-execution|session-control|d6734d2a0626f5c9926e4043ad2017a94f5c8c5a' README.md docs/architecture.md docs/diagrams/*.d2
           grep -q 'revision-publication-lifetime.svg' docs/architecture.md
           grep -q 'locality-propagation.svg' docs/architecture.md
@@ -59,7 +71,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: noon-architecture-doc-review
+          name: noon-architecture-doc-review-v2
           path: ${{ runner.temp }}/delivery/
           if-no-files-found: ignore
           retention-days: 7
@@ -74,6 +86,6 @@ jobs:
           tree="$(git write-tree)"
           commit="$(git commit-tree "$tree" -p 8cadad70a9fdbdaf51de49369fb5c98c2d4750e0 -m 'docs: clarify architecture contracts and focused views')"
           git diff --check 8cadad70a9fdbdaf51de49369fb5c98c2d4750e0 "$commit"
-          git push origin "$commit:refs/heads/docs/architecture-clarity-20260909"
+          git push origin "$commit:refs/heads/docs/architecture-clarity-v2-20260909"
           printf 'BASE=%s\nHEAD=%s\nTREE=%s\n' 8cadad70a9fdbdaf51de49369fb5c98c2d4750e0 "$commit" "$tree" | tee "$RUNNER_TEMP/delivery/revisions.txt"
-          git push origin --delete work/architecture-doc-review-20260909
+          git push origin --delete work/architecture-doc-review-20260909 || true
