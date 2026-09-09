@@ -126,8 +126,6 @@ pub enum AuthoringError {
     UnorderedBounds(noon_core::Bounds2D64),
     /// An operation requested a dimension other than width or height.
     InvalidDimension(u32),
-    /// Replacement would divide by a zero source extent.
-    ZeroReplaceExtent,
     /// Stretch matching would divide by a zero target extent.
     ZeroStretchTarget,
     /// Height matching would divide by a zero target height.
@@ -237,7 +235,6 @@ impl std::fmt::Display for AuthoringError {
             Self::InvalidDimension(_) => {
                 f.write_str("dimension fitting supports width (0) and height (1) only")
             }
-            Self::ZeroReplaceExtent => f.write_str("cannot replace along a zero-length dimension"),
             Self::ZeroStretchTarget => {
                 f.write_str("cannot stretch a zero-width or zero-height target")
             }
