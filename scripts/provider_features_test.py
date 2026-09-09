@@ -18,24 +18,24 @@ def tree(*extra, fonts=False):
 class GraphTests(unittest.TestCase):
     def test_allowed_configurations(self):
         module.check_graph("minimal", tree())
-        module.check_graph("native-text", tree("noon-text-native", "swash"))
-        module.check_graph("native-bundled", tree("noon-text-native", "swash", "typst-assets", fonts=True))
+        module.check_graph("native-text", tree("noon-text", "swash"))
+        module.check_graph("native-bundled", tree("noon-text", "swash", "typst-assets", fonts=True))
         module.check_graph("typst", tree("noon-typst", "typst-library", "typst-layout", "typst-assets"))
-        module.check_graph("product", tree("noon-text-native", "swash", "noon-typst", "typst-library", "typst-layout", "typst-assets", fonts=True))
+        module.check_graph("product", tree("noon-text", "swash", "noon-typst", "typst-library", "typst-layout", "typst-assets", fonts=True))
 
     def test_minimal_rejects_provider_and_asset_edges(self):
-        for dependency in ("swash", "noon-text-native", "noon-typst", "typst", "typst-library", "typst-assets"):
+        for dependency in ("swash", "noon-text", "noon-typst", "typst", "typst-library", "typst-assets"):
             with self.subTest(dependency=dependency), self.assertRaises(ValueError):
                 module.check_graph("minimal", tree(dependency))
 
     def test_native_rejects_layout_or_bundles(self):
         for dependency in ("noon-typst", "typst-library", "typst-assets"):
             with self.subTest(dependency=dependency), self.assertRaises(ValueError):
-                module.check_graph("native-text", tree("noon-text-native", "swash", dependency))
+                module.check_graph("native-text", tree("noon-text", "swash", dependency))
 
     def test_native_bundles_do_not_enable_typst(self):
         with self.assertRaises(ValueError):
-            module.check_graph("native-bundled", tree("noon-text-native", "swash", "typst-assets", "noon-typst", fonts=True))
+            module.check_graph("native-bundled", tree("noon-text", "swash", "typst-assets", "noon-typst", fonts=True))
 
     def test_typst_allows_base_assets_but_rejects_fonts_and_native(self):
         dependencies = ("noon-typst", "typst-library", "typst-layout", "typst-assets")
@@ -43,11 +43,11 @@ class GraphTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             module.check_graph("typst", tree(*dependencies, fonts=True))
         with self.assertRaises(ValueError):
-            module.check_graph("typst", tree(*dependencies, "noon-text-native"))
+            module.check_graph("typst", tree(*dependencies, "noon-text"))
 
     def test_bundled_configuration_requires_actual_font_feature(self):
         with self.assertRaises(ValueError):
-            module.check_graph("native-bundled", tree("noon-text-native", "swash", "typst-assets"))
+            module.check_graph("native-bundled", tree("noon-text", "swash", "typst-assets"))
 
     def test_duplicate_features_are_unioned_not_overwritten(self):
         dependencies = ("noon-typst", "typst-library", "typst-layout", "typst-assets")

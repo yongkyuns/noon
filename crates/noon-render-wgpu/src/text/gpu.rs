@@ -796,7 +796,7 @@ mod tests {
 
     use crate::text::atlas::{GlyphAtlasEntry, GpuGlyphAtlas};
     use noon_core::{FontResourceHandle, FontResourceId, TextResourceHandle, TextResourceId};
-    use noon_text_raster::{
+    use noon_text::raster::{
         GlyphRaster, GlyphRasterFormat, GlyphRasterImage, GlyphRasterKey, GlyphRasterPlacement,
     };
 
