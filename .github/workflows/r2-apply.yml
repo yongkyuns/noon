@@ -1,0 +1,56 @@
+name: R2 development apply and focused validation
+on:
+  push:
+    branches: [codex/1272-r2-bootstrap]
+    paths: ['.github/workflows/r2-apply.yml', 'r2-membership.patch.gz.part*']
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/1272-r2-typed-membership
+      - name: Apply the exact R2 patch to its dedicated development branch
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = ab214ba048670746f77cda2b2ee5ec61d7e7b6ad
+          git fetch --depth=1 origin codex/1272-r2-bootstrap
+          for part in 1 2 3; do
+            git show "FETCH_HEAD:r2-membership.patch.gz.part$part"
+          done > "$RUNNER_TEMP/r2.patch.gz"
+          gunzip -c "$RUNNER_TEMP/r2.patch.gz" > "$RUNNER_TEMP/r2.patch"
+          echo 'b5740526d44abae3932d9df8834a36ca3975ffcb0a81f836e9ba441370ee8ba0  '"$RUNNER_TEMP/r2.patch" | sha256sum -c -
+          git apply --check "$RUNNER_TEMP/r2.patch"
+          git apply "$RUNNER_TEMP/r2.patch"
+          cargo fmt --all
+          cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
+          git diff --check
+          git config user.name 'Yongkyun Shin'
+          git config user.email 'yongkyuns@gmail.com'
+          git add -A
+          git commit -m 'feat: retain typed handle and scene membership errors (#1272 R2)'
+          git push origin HEAD:codex/1272-r2-typed-membership
+      - name: Test the real external defaults-disabled consumer
+        run: cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --test authoring_errors
+      - name: Validate facade and adapter compilation
+        run: cargo check -p noon-web --all-targets
+      - name: Export formatted development sources and diff for review
+        if: always()
+        run: |
+          git archive --format=tar.gz --output="$RUNNER_TEMP/r2-formatted.tar.gz" HEAD
+          git diff ab214ba048670746f77cda2b2ee5ec61d7e7b6ad HEAD > "$RUNNER_TEMP/r2-formatted.patch"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: r2-formatted-source
+          path: |
+            ${{ runner.temp }}/r2-formatted.tar.gz
+            ${{ runner.temp }}/r2-formatted.patch
+          retention-days: 1
