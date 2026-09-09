@@ -192,8 +192,8 @@ fn create_morph_fade_session() -> Result<ExecutionSession, String> {
     let target = scene.circle(0.75)?;
     let mut leaving = scene.circle(0.75)?;
     leaving.set_translation(2.0, 0.0)?;
-    scene.add(&source)?;
-    scene.add(&leaving)?;
+    scene.add(&source).map_err(|error| error.to_string())?;
+    scene.add(&leaving).map_err(|error| error.to_string())?;
     let mut session = scene
         .execution_session()
         .map_err(|error| error.to_string())?;

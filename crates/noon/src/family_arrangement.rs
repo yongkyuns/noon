@@ -103,7 +103,7 @@ impl FamilyArrangePlan {
         family: &MobjectFamily,
         options: &FamilyArrangeOptions,
     ) -> Result<Self, String> {
-        family.validate()?;
+        family.validate().map_err(|error| error.to_string())?;
         // Normalize/check even an empty request without publishing anything.
         RelativePlacement::Next(options.placement).delta(None, |_, _| Ok((0.0, 0.0)))?;
         let ids = family
@@ -166,7 +166,7 @@ impl FamilyArrangePlan {
         gap_x: f64,
         gap_y: f64,
     ) -> Result<Self, String> {
-        family.validate()?;
+        family.validate().map_err(|error| error.to_string())?;
         crate::semantic_mobject::authoring_render_f64("grid horizontal gap", gap_x)?;
         crate::semantic_mobject::authoring_render_f64("grid vertical gap", gap_y)?;
         if rows == Some(0) || columns == Some(0) {

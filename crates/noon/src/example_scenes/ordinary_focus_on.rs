@@ -57,7 +57,7 @@ pub fn program() -> Result<LiveProgram<OrdinaryFocusOn>, String> {
     square.set_fill_color(0.0, 0.0, 1.0, 1.0)?;
     square.set_fill_opacity(1.0)?;
     square.disable_stroke()?;
-    scene.add(&square)?;
+    scene.add(&square).map_err(|error| error.to_string())?;
     scene
         .into_live_program(OrdinaryFocusOn { square, stage: 0 })
         .map_err(|error| error.to_string())

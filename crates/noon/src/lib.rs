@@ -52,6 +52,7 @@
 
 mod animation_authoring;
 mod arc_authoring;
+mod authoring_error;
 mod camera_authoring;
 mod compact_value_authoring;
 mod dashed_line_authoring;
@@ -86,6 +87,7 @@ mod semantic_mobject;
 mod text_authoring;
 
 pub use animation_authoring::DeclaredAnimation;
+pub use authoring_error::AuthoringError;
 pub use dimension_fit::LayoutDimension;
 pub use execution_segment::{
     ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentError, ExecutionSegmentState,
@@ -148,10 +150,11 @@ pub use text_authoring::{
 /// Host integration and mutable arena access must be imported explicitly.
 pub mod prelude {
     pub use crate::{
-        AnimationOptions, Color, ContinuationStep, DeclaredAnimation, DrawBorderThenFillOptions,
-        EffectiveMobjectState, ExecutionSession, FadeEndpoint, FadeTranslation, LiveContinuation,
-        LiveProgram, LiveSession, LiveSessionError, Mobject, MobjectFamily, MobjectFamilyMember,
-        NativeBoolSignal, NativeVectorSignal, RateFunction, Scene, SemanticObjectState,
-        SemanticStyle, StoredGeometry, TrackerPosition, ValueTracker, Vec2, VectorPath,
+        AnimationOptions, AuthoringError, Color, ContinuationStep, DeclaredAnimation,
+        DrawBorderThenFillOptions, EffectiveMobjectState, ExecutionSession, FadeEndpoint,
+        FadeTranslation, LiveContinuation, LiveProgram, LiveSession, LiveSessionError, Mobject,
+        MobjectFamily, MobjectFamilyMember, NativeBoolSignal, NativeVectorSignal, RateFunction,
+        Scene, SemanticObjectState, SemanticStyle, StoredGeometry, TrackerPosition, ValueTracker,
+        Vec2, VectorPath,
     };
 }

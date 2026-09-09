@@ -215,9 +215,9 @@ pub fn live_affine_callbacks() -> Result<(ExecutionSession, RustHostCallbackTabl
     let mut drift = scene.circle(0.5)?;
     drift.set_fill(1.0, 1.0, 1.0, 1.0)?;
     drift.set_translation(-3.0, 0.0)?;
-    scene.add(&label)?;
-    scene.add(&source)?;
-    scene.add(&drift)?;
+    scene.add(&label).map_err(|error| error.to_string())?;
+    scene.add(&source).map_err(|error| error.to_string())?;
+    scene.add(&drift).map_err(|error| error.to_string())?;
 
     let mut target = source.target_editor()?;
     target.set_translation(2.0, 0.0)?;
@@ -271,7 +271,7 @@ pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable)
     source.set_stroke_width(0.12)?;
     assert_eq!(source.fill_opacity()?, 0.25);
     assert_eq!(source.stroke_opacity()?, 0.75);
-    scene.add(&source)?;
+    scene.add(&source).map_err(|error| error.to_string())?;
 
     let mut target = source.target_editor()?;
     target.set_translation(2.0, 0.0)?;
@@ -345,10 +345,10 @@ pub fn live_line_callback_rotation(
     moving.set_color(1.0, 0.8, 0.0, 1.0)?;
     let mut label = scene.text("Noon")?;
     label.set_translation(0.0, -2.0)?;
-    scene.add(&marker)?;
-    scene.add(&reference)?;
-    scene.add(&moving)?;
-    scene.add(&label)?;
+    scene.add(&marker).map_err(|error| error.to_string())?;
+    scene.add(&reference).map_err(|error| error.to_string())?;
+    scene.add(&moving).map_err(|error| error.to_string())?;
+    scene.add(&label).map_err(|error| error.to_string())?;
 
     let mut callbacks = RustHostCallbackTable::new();
     callbacks.insert(ROTATE_LINE_FORWARD, |context| {
@@ -406,9 +406,9 @@ pub fn live_line_match_callback(
         red.blue.into(),
         red.alpha.into(),
     )?;
-    scene.add(&left)?;
-    scene.add(&right)?;
-    scene.add(&line)?;
+    scene.add(&left).map_err(|error| error.to_string())?;
+    scene.add(&right).map_err(|error| error.to_string())?;
+    scene.add(&line).map_err(|error| error.to_string())?;
 
     let left_id = left.node_id();
     let right_id = right.node_id();
@@ -463,7 +463,7 @@ pub fn typst_text_reference() -> Result<ExecutionSession, Box<dyn Error>> {
                 1.0,
             )),
     )?;
-    scene.add(&label)?;
+    scene.add(&label).map_err(|error| error.to_string())?;
     Ok(scene.execution_session()?)
 }
 
@@ -473,7 +473,7 @@ pub fn math_typst_text_reference() -> Result<ExecutionSession, Box<dyn Error>> {
     let mut scene = Scene::new();
     let equation = scene
         .math_typst(MathTypst::new("sum_(k=1)^n k = frac(n(n + 1), 2)").with_font_size(72.0))?;
-    scene.add(&equation)?;
+    scene.add(&equation).map_err(|error| error.to_string())?;
     Ok(scene.execution_session()?)
 }
 
@@ -485,7 +485,7 @@ pub fn math_typst_text_reference() -> Result<ExecutionSession, Box<dyn Error>> {
 pub fn live_affine_completion() -> Result<ExecutionSession, Box<dyn Error>> {
     let mut scene = Scene::new();
     let circle = scene.circle(1.0)?;
-    scene.add(&circle)?;
+    scene.add(&circle).map_err(|error| error.to_string())?;
 
     let mut first_target = circle.target_editor()?;
     first_target.set_translation(2.0, -2.0)?;
@@ -567,7 +567,7 @@ pub fn ordinary_affine_play() -> Result<ExecutionSession, Box<dyn Error>> {
     let mut scene = Scene::new();
     let mut circle = scene.circle(0.4)?;
     circle.set_fill(0.0, 0.4, 1.0, 1.0)?;
-    scene.add(&circle)?;
+    scene.add(&circle).map_err(|error| error.to_string())?;
 
     let mut first_target = circle.target_editor()?;
     first_target.set_translation(2.0, -1.0)?;
@@ -2115,8 +2115,8 @@ pub fn ordinary_composition_play() -> Result<ExecutionSession, Box<dyn Error>> {
     left_position.set_translation(-2.0, 1.0)?;
     let mut right_position = right.target_editor()?;
     right_position.set_translation(2.0, -1.0)?;
-    scene.add(&left)?;
-    scene.add(&right)?;
+    scene.add(&left).map_err(|error| error.to_string())?;
+    scene.add(&right).map_err(|error| error.to_string())?;
     let linear = |duration| {
         AnimationOptions::new()
             .run_time(duration)
@@ -2201,7 +2201,7 @@ pub fn ordinary_style_play() -> Result<ExecutionSession, Box<dyn Error>> {
     let mut circle = scene.circle(0.4)?;
     circle.set_fill(0.0, 0.4, 1.0, 1.0)?;
     circle.set_object_opacity(1.0)?;
-    scene.add(&circle)?;
+    scene.add(&circle).map_err(|error| error.to_string())?;
 
     let mut session = scene.execution_session()?;
     {
@@ -2261,7 +2261,7 @@ pub fn ordinary_paint_play() -> Result<ExecutionSession, Box<dyn Error>> {
     let mut circle = scene.circle(0.4)?;
     circle.set_fill(0.0, 0.0, 1.0, 1.0)?;
     circle.set_stroke_color(1.0, 1.0, 1.0, 1.0)?;
-    scene.add(&circle)?;
+    scene.add(&circle).map_err(|error| error.to_string())?;
 
     let mut session = scene.execution_session()?;
     {
@@ -2373,7 +2373,7 @@ pub fn live_native_signals() -> Result<ExecutionSession, Box<dyn Error>> {
     let mut scene = Scene::new();
     let mut square = scene.square(0.9)?;
     square.set_fill(0.0, 0.4, 1.0, 1.0)?;
-    scene.add(&square)?;
+    scene.add(&square).map_err(|error| error.to_string())?;
 
     let pointer = scene.pointer_position_signal()?;
     scene.bind_native_translation(&square, &pointer)?;

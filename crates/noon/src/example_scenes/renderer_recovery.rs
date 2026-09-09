@@ -4,7 +4,7 @@ use crate::{AnimationOptions, ExecutionSession, RateFunction, Scene};
 pub fn circle() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
     let circle = scene.circle(0.75)?;
-    scene.add(&circle)?;
+    scene.add(&circle).map_err(|error| error.to_string())?;
     scene.wait(4.0)?;
     scene.execution_session().map_err(|e| e.to_string())
 }
@@ -19,12 +19,14 @@ pub fn four_animated() -> Result<ExecutionSession, String> {
     line.shift(-1.5, -1.4)?;
     let mut square = scene.square(0.8)?;
     square.shift(1.5, -1.4)?;
-    scene.add_many(&[
-        (&circle).into(),
-        (&rectangle).into(),
-        (&line).into(),
-        (&square).into(),
-    ])?;
+    scene
+        .add_many(&[
+            (&circle).into(),
+            (&rectangle).into(),
+            (&line).into(),
+            (&square).into(),
+        ])
+        .map_err(|error| error.to_string())?;
     let mut target = circle.target_editor()?;
     target.shift(1.6, 0.0)?;
     let animation = scene.declare_transform_to(
@@ -49,7 +51,7 @@ pub fn camera_density() -> Result<ExecutionSession, String> {
     rectangle.rotate(std::f64::consts::PI / 6.0)?;
     rectangle.set_fill(1.0, 1.0, 1.0, 1.0)?;
     rectangle.disable_stroke()?;
-    scene.add(&rectangle)?;
+    scene.add(&rectangle).map_err(|error| error.to_string())?;
     scene.wait(4.0)?;
     scene.execution_session().map_err(|e| e.to_string())
 }

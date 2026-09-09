@@ -108,3 +108,22 @@ The geometry program copied by `--baseline` uses the ordinary geometry API commo
 to both revisions. Shared text-contract visibility and arena assertions live in
 `public_facade` rather than adding a dependency on new integration accessor names
 to the historical-build workload. No historical baseline code is rewritten.
+
+## Public authoring error contract
+
+The provider-free `authoring_errors` integration tests exercise typed handle
+validation and authored/live Scene membership operations. `Scene::add`,
+`remove`, `add_many`, `remove_many`, `clear`, `replace` and `edit_membership`
+return `AuthoringError`. `Mobject::validate` and `MobjectFamily::validate` retain
+semantic node or resource identities. Existing `LiveSessionError` categories
+continue to distinguish foreign stores, publication/segment barriers and stale
+publications; its `Authoring` variant retains the membership or handle cause.
+`std::error::Error::source` preserves nested typed diagnostics.
+
+This is a bounded R2 slice, not a claim that every authoring API is typed yet.
+Other geometry/animation APIs and the current language bridge may still expose
+strings. Public export/raw-store narrowing is retained from #1290. Ordinary
+post-bootstrap edits should use `scene.live(&mut session)`. Direct authored/raw
+store edits invalidate an existing execution revision; rejection is intentional,
+not a signal to bypass revision checks. Tests use raw access only to construct
+stale-generation and callback-precondition fixtures.

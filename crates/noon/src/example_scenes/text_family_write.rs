@@ -170,7 +170,7 @@ pub fn program() -> Result<LiveProgram<TextFamilyWrite>, String> {
     let family = scene.family(&[(&left).into(), (&right).into()])?;
     let mut moving = scene.square(0.6)?;
     moving.set_translation(0.0, -1.25)?;
-    scene.add(&moving)?;
+    scene.add(&moving).map_err(|error| error.to_string())?;
     let mut moving_target = moving.target_editor()?;
     moving_target.shift(2.0, 0.0)?;
     let mut left_target = left.target_editor()?;

@@ -91,12 +91,14 @@ pub fn session(
             driver_origin = Some((x, y));
         }
     }
-    scene.add_many(
-        &circles
-            .iter()
-            .map(MobjectFamilyMember::Mobject)
-            .collect::<Vec<_>>(),
-    )?;
+    scene
+        .add_many(
+            &circles
+                .iter()
+                .map(MobjectFamilyMember::Mobject)
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|error| error.to_string())?;
     let circle = &circles[0];
     let (x, y) = driver_origin.expect("nonempty workload");
     let mut transaction = SemanticMutationTransaction::new();

@@ -1,10 +1,10 @@
 //! Lower authored family ordering into derived execution painter-order patches.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use noon_core::{
     PreparedSemanticMutationTransaction, SemanticMutation, SemanticNodeId, SemanticNodeKind,
-    SemanticStore, SemanticTransactionNodeRef,
+    SemanticStore, SemanticTransactionNodeRef, SemanticTransactionReadError,
 };
 
 use super::{
@@ -130,25 +130,67 @@ fn node_for_root_order(
     })
 }
 
-// An anchor needs only its first visible leaf, not a snapshot of its whole
-// descendant family. Empty branches are skipped in authoritative member order.
-fn first_leaf(
-    store: &SemanticStore,
-    node: SemanticNodeId,
-) -> Result<Option<SemanticNodeId>, SemanticPublicationLoweringError> {
-    let node = node_for_root_order(store, node)?;
-    match node.kind() {
-        SemanticNodeKind::AuthoringObject => Ok(Some(node.id())),
-        SemanticNodeKind::Family => {
-            for member in node.members_iter() {
-                if let Some(leaf) = first_leaf(store, member)? {
-                    return Ok(Some(leaf));
-                }
-            }
-            Ok(None)
-        }
-        SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => Ok(None),
+// The same first-occurrence traversal serves both a moved block and its anchor.
+// An anchor stops at its first leaf; a block visits each affected DAG node once.
+// Preserve provisional references until a leaf resolves through the held
+// transaction's allocator proof. Nothing is published or allocated in the store.
+fn visit_leaves(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    reference: SemanticTransactionNodeRef,
+    seen: &mut HashSet<SemanticTransactionNodeRef>,
+    visitor: &mut impl FnMut(SemanticNodeId) -> bool,
+) -> Result<bool, SemanticPublicationLoweringError> {
+    if !seen.insert(reference) || prepared.node_is_removed(reference) {
+        return Ok(false);
     }
+    match reference {
+        SemanticTransactionNodeRef::Existing(id) => {
+            let node = node_for_root_order(prepared.store(), id)?;
+            match node.kind() {
+                SemanticNodeKind::AuthoringObject => Ok(visitor(id)),
+                SemanticNodeKind::Family => {
+                    for member in node.members_iter() {
+                        if visit_leaves(prepared, member.into(), seen, visitor)? {
+                            return Ok(true);
+                        }
+                    }
+                    Ok(false)
+                }
+                SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => Ok(false),
+            }
+        }
+        SemanticTransactionNodeRef::Pending(token) => match prepared.object_state(reference) {
+            Ok(_) => {
+                let id = prepared
+                    .planned_node_id(reference)
+                    .ok_or(SemanticTransactionReadError::UnknownPendingNode(token))?;
+                Ok(visitor(id))
+            }
+            Err(SemanticTransactionReadError::NotObject(_)) => {
+                // A provisional family's members all belong to this affected
+                // transaction, never an unrelated published root snapshot.
+                for member in prepared.family_members(reference)? {
+                    if visit_leaves(prepared, member, seen, visitor)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            Err(error) => Err(error.into()),
+        },
+    }
+}
+
+fn leaves(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    member: SemanticTransactionNodeRef,
+) -> Result<Vec<SemanticNodeId>, SemanticPublicationLoweringError> {
+    let mut output = Vec::new();
+    visit_leaves(prepared, member, &mut HashSet::new(), &mut |leaf| {
+        output.push(leaf);
+        false
+    })?;
+    Ok(output)
 }
 
 /// Prepare execution order changes for an explicitly rooted authored transaction.
@@ -161,24 +203,6 @@ pub fn prepare_semantic_root_order(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     root: SemanticNodeId,
 ) -> Result<Vec<ExecutionPatch>, SemanticPublicationLoweringError> {
-    fn leaves(
-        store: &SemanticStore,
-        node: SemanticNodeId,
-        output: &mut Vec<SemanticNodeId>,
-    ) -> Result<(), SemanticPublicationLoweringError> {
-        let node_state = node_for_root_order(store, node)?;
-        match node_state.kind() {
-            SemanticNodeKind::AuthoringObject => output.push(node),
-            SemanticNodeKind::Family => {
-                for member in node_state.members_iter() {
-                    leaves(store, member, output)?;
-                }
-            }
-            SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => {}
-        }
-        Ok(())
-    }
-
     let root_node = node_for_root_order(prepared.store(), root)?;
     if !matches!(root_node.kind(), SemanticNodeKind::Family) {
         return Err(
@@ -209,11 +233,7 @@ pub fn prepare_semantic_root_order(
         }
         match mutation {
             SemanticMutation::AddMember { family, member } if family.existing() == Some(root) => {
-                let Some(member) = member.existing() else {
-                    continue;
-                };
-                let mut member_leaves = Vec::new();
-                leaves(prepared.store(), member, &mut member_leaves)?;
+                let member_leaves = leaves(prepared, *member)?;
                 for leaf in member_leaves {
                     patches.push(ExecutionPatch::ReorderObject {
                         object: semantic_execution_object_id(leaf),
@@ -226,24 +246,21 @@ pub fn prepare_semantic_root_order(
                 member,
                 before,
             } if family.existing() == Some(root) => {
-                let Some(member) = member.existing() else {
-                    continue;
-                };
-                let mut member_leaves = Vec::new();
-                leaves(prepared.store(), member, &mut member_leaves)?;
-                let mut before = before.and_then(SemanticTransactionNodeRef::existing);
+                let member_leaves = leaves(prepared, *member)?;
+                let mut before = *before;
                 let mut anchor = None;
+                let mut seen = HashSet::new();
                 while let Some(candidate) = before {
-                    if let Some(leaf) = first_leaf(prepared.store(), candidate)? {
+                    if visit_leaves(prepared, candidate, &mut seen, &mut |leaf| {
                         anchor = Some(semantic_execution_object_id(leaf));
+                        true
+                    })? {
                         break;
                     }
                     // An empty root member still marks a semantic position. Its
                     // next staged sibling, not the execution tail or a removed
                     // published sibling, supplies the anchor.
-                    before = order
-                        .next(candidate.into())
-                        .and_then(SemanticTransactionNodeRef::existing);
+                    before = order.next(candidate);
                 }
                 for leaf in member_leaves.into_iter().rev() {
                     let object = semantic_execution_object_id(leaf);
@@ -411,6 +428,93 @@ mod tests {
             // Root validation + moved leaf + empty anchor + anchor family + its
             // first leaf. No prefix, unrelated family, or anchor-tail traversal.
             assert_eq!(NODES_VISITED.with(|count| count.get()), 5);
+        }
+    }
+
+    #[test]
+    fn provisional_empty_anchor_keeps_the_next_existing_leaf() {
+        use noon_core::SemanticNodeCreation;
+        let mut store = SemanticStore::new();
+        let root = store.insert_family();
+        let source =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        let tail = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+            radius: 1.0,
+        }));
+        store.add_member(root, source).unwrap();
+        store.add_member(root, tail).unwrap();
+        let revision = store.scene_revision();
+        let mut tx = SemanticMutationTransaction::new();
+        let empty = tx.create_node(SemanticNodeCreation::family());
+        tx.add_member(root, empty);
+        tx.reorder_member(root, empty, Some(tail));
+        tx.reorder_member_ref(root, source, Some(empty.into()));
+        let prepared = tx.prepare(&mut store).unwrap();
+        assert_eq!(
+            prepare_semantic_root_order(&prepared, root).unwrap(),
+            vec![ExecutionPatch::ReorderObject {
+                object: semantic_execution_object_id(source),
+                before: Some(semantic_execution_object_id(tail)),
+            }]
+        );
+        drop(prepared);
+        assert_eq!(store.scene_revision(), revision);
+        assert_eq!(store.node(root).unwrap().members(), vec![source, tail]);
+    }
+
+    #[test]
+    fn alias_dag_work_counts_nodes_not_paths_for_blocks_and_empty_anchors() {
+        const DEPTH: usize = 12;
+        for empty in [false, true] {
+            let mut store = SemanticStore::new();
+            let leaf =
+                store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                    radius: 1.0,
+                }));
+            let anchor =
+                store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                    radius: 1.0,
+                }));
+            let mut child = if empty { store.insert_family() } else { leaf };
+            for _ in 0..DEPTH {
+                let left = store.insert_family();
+                let right = store.insert_family();
+                let parent = store.insert_family();
+                store.add_member(left, child).unwrap();
+                store.add_member(right, child).unwrap();
+                store.add_member(parent, left).unwrap();
+                store.add_member(parent, right).unwrap();
+                child = parent;
+            }
+            let root = store.insert_family();
+            let (member, before) = if empty {
+                for member in [child, anchor, leaf] {
+                    store.add_member(root, member).unwrap();
+                }
+                (leaf, child)
+            } else {
+                for member in [anchor, child] {
+                    store.add_member(root, member).unwrap();
+                }
+                (child, anchor)
+            };
+            let mut tx = SemanticMutationTransaction::new();
+            tx.reorder_member(root, member, Some(before));
+            let prepared = tx.prepare(&mut store).unwrap();
+            NODES_VISITED.with(|count| count.set(0));
+            assert_eq!(
+                prepare_semantic_root_order(&prepared, root).unwrap(),
+                vec![ExecutionPatch::ReorderObject {
+                    object: semantic_execution_object_id(leaf),
+                    before: Some(semantic_execution_object_id(anchor)),
+                }]
+            );
+            assert_eq!(
+                NODES_VISITED.with(|count| count.get()),
+                3 * DEPTH + if empty { 4 } else { 3 }
+            );
         }
     }
 }

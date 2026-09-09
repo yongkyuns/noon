@@ -22,7 +22,9 @@ pub fn session() -> Result<ExecutionSession, String> {
     let family = scene.family(&[(&a).into(), (&b).into(), (&a).into()])?;
     let group = LayoutAnchor::from(&family);
     group.rescale_to_fit(4.0, Width, false)?;
-    scene.add_many(&[(&family).into()])?;
+    scene
+        .add_many(&[(&family).into()])
+        .map_err(|error| error.to_string())?;
     let mut session = scene.execution_session().map_err(|e| e.to_string())?;
     {
         let mut live = scene.live(&mut session);

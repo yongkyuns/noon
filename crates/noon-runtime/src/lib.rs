@@ -76,7 +76,14 @@ impl std::fmt::Display for EvaluationError {
     }
 }
 
-impl std::error::Error for EvaluationError {}
+impl std::error::Error for EvaluationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Reactive(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 struct TrackGroup {

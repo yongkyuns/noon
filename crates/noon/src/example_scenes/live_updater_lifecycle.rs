@@ -46,8 +46,8 @@ pub fn program() -> Result<(LiveProgram<RotationUpdater>, RustHostCallbackTable)
     reference.set_color(1.0, 1.0, 1.0, 1.0)?;
     let mut moving = scene.line((0.0, 0.0), (-1.0, 0.0))?;
     moving.set_color(1.0, 1.0, 0.0, 1.0)?;
-    scene.add(&reference)?;
-    scene.add(&moving)?;
+    scene.add(&reference).map_err(|error| error.to_string())?;
+    scene.add(&moving).map_err(|error| error.to_string())?;
     let mut callbacks = RustHostCallbackTable::new();
     for (id, sign) in [(FORTH, 1.0), (BACK, -1.0)] {
         callbacks

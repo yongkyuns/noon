@@ -97,7 +97,7 @@ impl MobjectFamily {
         &self,
         edit: impl Fn(&mut SemanticStyle) -> Result<(), String>,
     ) -> Result<SemanticMutationTransaction, String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         // Validate arguments even for an empty family, before staging any writes.
         edit(&mut SemanticStyle::default())?;
         let store = self.integration_store().borrow();

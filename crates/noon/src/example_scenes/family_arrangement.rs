@@ -128,8 +128,8 @@ pub fn program() -> Result<LiveProgram<FamilyArrangement>, String> {
         return Err("shared family bounds differ from its authored members".into());
     }
     family.arrange(1.0, 0.0, 0.2, true)?;
-    scene.add(&first)?;
-    scene.add(&second)?;
+    scene.add(&first).map_err(|error| error.to_string())?;
+    scene.add(&second).map_err(|error| error.to_string())?;
     scene
         .into_live_program(FamilyArrangement {
             family,

@@ -14,7 +14,7 @@ on:
       - "crates/noon-runtime/**"
       - "crates/noon-web/**"
       - "crates/noon-render-wgpu/**"
-      - "crates/noon-text-*/**"
+      - "crates/noon-text/**"
       - "scripts/build-web-demo.sh"
       - "scripts/build-python-worker.mjs"
       - "scripts/manim-tutorial-smoke.mjs"
@@ -40,6 +40,13 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      # Reuse dependency compilations between two fresh builds at one stable path.
+      # The cache lives only in this job; no executable or cross-PR seed is restored.
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.product-sccache
+      SCCACHE_CACHE_SIZE: "1G"
+      SCCACHE_LOCAL_RW_MODE: "READ_WRITE"
       NOON_SKIP_WEB_PREFLIGHT: "1"
       NOON_WASM_PROFILE: "release"
       NOON_WASM_SKIP_OPT: "1"
@@ -55,10 +62,15 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           path: baseline
 
-      - name: Use stable Rust and WASM target
+      - name: Use each checkout's pinned Rust and WASM target
         run: |
-          rustup default stable
-          rustup target add wasm32-unknown-unknown
+          for noon_checkout in baseline candidate; do
+            (
+              cd "$noon_checkout"
+              rustup show active-toolchain
+              rustup target add wasm32-unknown-unknown
+            )
+          done
 
       - name: Cache Cargo sources
         uses: actions/cache@v6
@@ -70,6 +82,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-sources-
 
+      - name: Use pinned sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+
       - name: Install pinned wasm-pack
         uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
         with:
@@ -77,19 +94,35 @@ jobs:
           fallback: none
 
       - name: Build baseline production package
-        working-directory: baseline
         env:
-          CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target/baseline
-        run: bash scripts/build-web-demo.sh
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target
+        run: |
+          # Rust cache keys include cwd and CARGO_TARGET_DIR. Keep both stable,
+          # but discard all Cargo fingerprints/artifacts before each source build.
+          mv baseline .product-source
+          trap 'mv .product-source baseline' EXIT
+          rm -rf .product-target
+          sccache --zero-stats
+          noon_build_started=$SECONDS
+          (cd .product-source && bash scripts/build-web-demo.sh)
+          printf 'Baseline release build: %s seconds.\n' "$((SECONDS - noon_build_started))" >> "$GITHUB_STEP_SUMMARY"
+          sccache --show-stats
 
       - name: Build candidate production package
-        working-directory: candidate
         env:
-          # Separate checkout mtimes must not reuse baseline workspace artifacts.
-          CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target/candidate
+          # Compiler results are content-keyed; Cargo outputs are never reused.
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target
           # Exercise release code with only the typed recovery fixture exported.
           NOON_RENDERER_SMOKE: "1"
-        run: bash scripts/build-web-demo.sh
+        run: |
+          mv candidate .product-source
+          trap 'mv .product-source candidate' EXIT
+          rm -rf .product-target
+          sccache --zero-stats
+          noon_build_started=$SECONDS
+          (cd .product-source && bash scripts/build-web-demo.sh)
+          printf 'Candidate release build: %s seconds.\n' "$((SECONDS - noon_build_started))" >> "$GITHUB_STEP_SUMMARY"
+          sccache --show-stats
 
       - name: Cache Playwright Chromium
         uses: actions/cache@v6

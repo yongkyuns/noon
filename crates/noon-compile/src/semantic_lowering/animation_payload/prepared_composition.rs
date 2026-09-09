@@ -213,7 +213,19 @@ impl std::fmt::Display for PreparedSemanticAnimationLoweringError {
     }
 }
 
-impl std::error::Error for PreparedSemanticAnimationLoweringError {}
+impl std::error::Error for PreparedSemanticAnimationLoweringError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Schedule(error) => Some(error),
+            Self::TextGlyph(error) => Some(error),
+            Self::Target { error, .. } => Some(error),
+            Self::InvalidSubsetDisplayTimeMap { error, .. } => Some(error),
+            Self::InvalidTargetValue { error, .. } => Some(error),
+            Self::InvalidTargetStyle { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+}
 
 /// Lower one prepared animation graph through the canonical schedule and shared payload paths.
 ///

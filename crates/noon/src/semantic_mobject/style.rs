@@ -308,13 +308,13 @@ impl Mobject {
         self.commit_state(state)
     }
     pub fn set_color(&mut self, red: f64, green: f64, blue: f64, alpha: f64) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let mut state = self.state()?;
         edit_color(&mut state.style, red, green, blue, alpha)?;
         self.commit_state(state)
     }
     pub fn disable_fill(&mut self) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let mut state = self.state()?;
         edit_disable_fill(&mut state.style);
         self.commit_state(state)
@@ -326,13 +326,13 @@ impl Mobject {
         blue: f64,
         alpha: f64,
     ) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let mut state = self.state()?;
         edit_fill_color(&mut state.style, red, green, blue, alpha)?;
         self.commit_state(state)
     }
     pub fn set_fill_opacity(&mut self, opacity: f64) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let mut state = self.state()?;
         edit_fill_opacity(&mut state.style, opacity)?;
         self.commit_state(state)
@@ -344,7 +344,7 @@ impl Mobject {
         blue: f64,
         opacity: f64,
     ) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let mut state = self.state()?;
         edit_fill(&mut state.style, red, green, blue, opacity)?;
         self.commit_state(state)
@@ -354,7 +354,7 @@ impl Mobject {
         manim_paint_opacity(state.style.fill.as_ref(), state.style.fill_opacity)
     }
     pub fn disable_stroke(&mut self) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let mut state = self.state()?;
         edit_disable_stroke(&mut state.style);
         self.commit_state(state)
@@ -366,19 +366,19 @@ impl Mobject {
         blue: f64,
         alpha: f64,
     ) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let mut state = self.state()?;
         edit_stroke_color(&mut state.style, red, green, blue, alpha)?;
         self.commit_state(state)
     }
     pub fn set_stroke_width(&mut self, width: f64) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let mut state = self.state()?;
         edit_stroke_width(&mut state.style, width)?;
         self.commit_state(state)
     }
     pub fn set_stroke_opacity(&mut self, opacity: f64) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let mut state = self.state()?;
         edit_stroke_opacity(&mut state.style, opacity)?;
         self.commit_state(state)
@@ -388,7 +388,7 @@ impl Mobject {
         manim_paint_opacity(state.style.stroke.as_ref(), state.style.stroke_opacity)
     }
     pub fn set_opacity(&mut self, opacity: f64) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let mut state = self.state()?;
         edit_manim_opacity(&mut state.style, opacity)?;
         self.commit_state(state)

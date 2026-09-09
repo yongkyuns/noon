@@ -321,7 +321,14 @@ impl std::fmt::Display for SemanticLoweringError {
     }
 }
 
-impl std::error::Error for SemanticLoweringError {}
+impl std::error::Error for SemanticLoweringError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Store(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 struct LoweredObjectState {

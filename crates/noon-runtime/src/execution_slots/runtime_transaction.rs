@@ -102,7 +102,16 @@ impl std::fmt::Display for AuthoredPublicationError {
     }
 }
 
-impl std::error::Error for AuthoredPublicationError {}
+impl std::error::Error for AuthoredPublicationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Evaluation(error) => Some(error),
+            Self::PreparedFrame(error) => Some(error),
+            Self::Compile(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl From<CompilePatchError> for AuthoredPublicationError {
     fn from(value: CompilePatchError) -> Self {

@@ -81,7 +81,7 @@ pub fn filled_path_transform() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
     let shape = scene.path(rounded_loop(1.35), style(Some(BLUE), WHITE, 0.08))?;
     let target = scene.path(star(1.7, 0.7, 0.0), style(Some(PURPLE), WHITE, 0.08))?;
-    scene.add(&shape)?;
+    scene.add(&shape).map_err(|error| error.to_string())?;
     let mut session = scene
         .execution_session()
         .map_err(|error| error.to_string())?;
@@ -179,7 +179,7 @@ pub fn morph_stress(count: usize) -> Result<ExecutionSession, String> {
         let y = 1.9 - (index / columns) as f64 * dy;
         shape.set_translation(x, y)?;
         target.set_translation(x, y)?;
-        scene.add(&shape)?;
+        scene.add(&shape).map_err(|error| error.to_string())?;
         pairs.push((shape, target));
     }
     let mut session = scene

@@ -353,7 +353,7 @@ impl CanonicalAuthoringScene {
         if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
             return Err("mobject belongs to another authoring store".into());
         }
-        handle.validate()?;
+        handle.validate().map_err(|error| error.to_string())?;
         if !self.identities.contains_key(&handle.node_id()) {
             return Err("callback target is not bound to this canonical Scene".into());
         }
@@ -465,7 +465,7 @@ impl CanonicalAuthoringScene {
         if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
             return Err("mobject belongs to another authoring store".into());
         }
-        handle.validate()?;
+        handle.validate().map_err(|error| error.to_string())?;
         if !self.identities.contains_key(&handle.node_id()) {
             return Err("mobject is not bound to this canonical Scene".into());
         }
@@ -543,7 +543,7 @@ impl CanonicalAuthoringScene {
         if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
             return Err("mobject belongs to another authoring store".into());
         }
-        handle.validate()?;
+        handle.validate().map_err(|error| error.to_string())?;
         let mut bounds = handle
             .layout_bounds()?
             .ok_or("Underline target has no layout bounds")?;
@@ -827,7 +827,7 @@ impl CanonicalAuthoringScene {
         if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
             return Err("mobject belongs to another authoring store".into());
         }
-        target.validate()?;
+        target.validate().map_err(|error| error.to_string())?;
         if !self.identities.contains_key(&target.node_id()) {
             return Err("live Mobject is not bound to this canonical Scene".into());
         }
@@ -887,7 +887,7 @@ impl CanonicalAuthoringScene {
                 "ordinary affine lifecycle mobject belongs to another authoring store".into(),
             );
         }
-        target.validate()?;
+        target.validate().map_err(|error| error.to_string())?;
         let node = target.node_id();
         let is_bound = match (self.bindings.get(&id), self.identities.get(&node)) {
             (None, None) => false,
@@ -1412,7 +1412,7 @@ impl CanonicalAuthoringScene {
                                 .into(),
                         );
                     }
-                    target.validate()?;
+                    target.validate().map_err(|error| error.to_string())?;
                     let direct_members = self
                         .scene
                         .integration_store()
@@ -1448,7 +1448,7 @@ impl CanonicalAuthoringScene {
                                     .into(),
                             );
                         }
-                        member.validate()?;
+                        member.validate().map_err(|error| error.to_string())?;
                         if self.bindings.contains_key(id)
                             || self.identities.contains_key(&member.node_id())
                             || !ids.insert(*id)
@@ -1487,7 +1487,7 @@ impl CanonicalAuthoringScene {
                             "ordinary family animation belongs to another authoring store".into(),
                         );
                     }
-                    target.validate()?;
+                    target.validate().map_err(|error| error.to_string())?;
                     let family_leaves = self
                         .scene
                         .integration_store()
@@ -1534,7 +1534,7 @@ impl CanonicalAuthoringScene {
                                 "ordinary family member belongs to another authoring store".into(),
                             );
                         }
-                        member.validate()?;
+                        member.validate().map_err(|error| error.to_string())?;
                         if self.bindings.contains_key(id)
                             || self.identities.contains_key(&member.node_id())
                             || !ids.insert(*id)
@@ -1560,7 +1560,7 @@ impl CanonicalAuthoringScene {
                                 .into(),
                         );
                     }
-                    target.validate()?;
+                    target.validate().map_err(|error| error.to_string())?;
                     let family_leaves = self
                         .scene
                         .integration_store()
@@ -1592,7 +1592,7 @@ impl CanonicalAuthoringScene {
                         ) {
                             return Err("ordinary family DrawBorderThenFill member belongs to another authoring store".into());
                         }
-                        member.validate()?;
+                        member.validate().map_err(|error| error.to_string())?;
                         if self.bindings.contains_key(id)
                             || self.identities.contains_key(&member.node_id())
                             || !ids.insert(*id)
@@ -1619,8 +1619,8 @@ impl CanonicalAuthoringScene {
                             "ordinary family Transform belongs to another authoring store".into(),
                         );
                     }
-                    source.validate()?;
-                    target_state.validate()?;
+                    source.validate().map_err(|error| error.to_string())?;
+                    target_state.validate().map_err(|error| error.to_string())?;
                     noon_core::resolve_animation_options(
                         noon_core::AnimationDefaults::MANIM,
                         *options,
@@ -1640,7 +1640,7 @@ impl CanonicalAuthoringScene {
                             "ordinary family Indicate belongs to another authoring store".into(),
                         );
                     }
-                    target.validate()?;
+                    target.validate().map_err(|error| error.to_string())?;
                     noon_core::resolve_animation_options(
                         noon_core::AnimationDefaults::MANIM,
                         *options,
@@ -1676,7 +1676,7 @@ impl CanonicalAuthoringScene {
                             "ordinary composition target belongs to another authoring store".into(),
                         );
                     }
-                    target.validate()?;
+                    target.validate().map_err(|error| error.to_string())?;
                     if self.identities.contains_key(&target.node_id()) {
                         return Err(
                             "ordinary composition TransformTo target state must be detached".into(),
@@ -1756,7 +1756,7 @@ impl CanonicalAuthoringScene {
                     "ordinary composition target belongs to another authoring store".into(),
                 );
             }
-            target.validate()?;
+            target.validate().map_err(|error| error.to_string())?;
             let resolved = if matches!(child, OrdinaryCompositionChild::Add { .. }) {
                 noon_core::resolve_add_animation_options(
                     noon_core::AnimationDefaults::MANIM,
@@ -1814,7 +1814,7 @@ impl CanonicalAuthoringScene {
         if !std::rc::Rc::ptr_eq(self.scene.integration_store(), source.integration_store()) {
             return Err("mobject belongs to another authoring store".into());
         }
-        source.validate()?;
+        source.validate().map_err(|error| error.to_string())?;
         match &mut self.player_ownership {
             PlayerOwnership::Unstarted => source.target_editor(),
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
@@ -2005,7 +2005,7 @@ impl CanonicalAuthoringScene {
             if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
                 return Err("membership mobject belongs to another authoring store".into());
             }
-            handle.validate()?;
+            handle.validate().map_err(|error| error.to_string())?;
             let node = handle.node_id();
             if !seen_ids.insert(*wrapper_id) || !seen_nodes.insert(node) {
                 return Err("membership batch contains a duplicate mobject binding".into());
@@ -2039,7 +2039,7 @@ impl CanonicalAuthoringScene {
                     ) {
                         return Err("membership mobject belongs to another authoring store".into());
                     }
-                    handle.validate()?;
+                    handle.validate().map_err(|error| error.to_string())?;
                     let node = handle.node_id();
                     if let Some(wrapper_id) = wrapper_id {
                         if !batch
@@ -2067,7 +2067,7 @@ impl CanonicalAuthoringScene {
                     ) {
                         return Err("membership family belongs to another authoring store".into());
                     }
-                    family.validate()?;
+                    family.validate().map_err(|error| error.to_string())?;
                     if !seen_nodes.insert(family.node_id()) {
                         return Err("membership batch contains a duplicate family".into());
                     }
@@ -2095,11 +2095,15 @@ impl CanonicalAuthoringScene {
             }
         };
         #[cfg(not(any(target_arch = "wasm32", test)))]
-        self.scene.edit_membership(request)?;
+        self.scene
+            .edit_membership(request)
+            .map_err(|error| error.to_string())?;
         #[cfg(any(target_arch = "wasm32", test))]
         match &mut self.player_ownership {
             PlayerOwnership::Unstarted if self.scene.time() == 0.0 => {
-                self.scene.edit_membership(request)?;
+                self.scene
+                    .edit_membership(request)
+                    .map_err(|error| error.to_string())?;
             }
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
                 self.active_live_player()?.live_edit_membership(request)?;
@@ -2138,7 +2142,7 @@ impl CanonicalAuthoringScene {
         if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
             return Err("mobject belongs to another authoring store".into());
         }
-        target.validate()?;
+        target.validate().map_err(|error| error.to_string())?;
         noon_core::semantic_scene_root_contains(
             &self.scene.integration_store().borrow(),
             self.scene.root(),

@@ -111,6 +111,29 @@ versus integration boundary and the unchanged historical geometry-cost workload.
 These tests do not claim all authoring error producers or Python exception mapping
 have been converted; remaining R2 ownership stays with #958/#61.
 
+## Focused public authoring error qualification
+
+For #958 / #1272 R2 handle-validation and membership changes, the external
+provider consumer exercises the real public Rust result types without workspace
+feature unification or a new test engine:
+
+```sh
+cargo test --manifest-path fixtures/provider-consumer/Cargo.toml \
+  --no-default-features --test authoring_errors
+cargo test --manifest-path fixtures/provider-consumer/Cargo.toml \
+  --no-default-features --test authoring_errors \
+  --target wasm32-unknown-unknown --no-run
+```
+
+The existing provider matrix executes these tests in every native feature cell
+and compiles them in every WASM cell. Assertions inspect typed causes and verify
+that rejected batches, stale/foreign handles, stale publications and pending
+callbacks/segments do not change membership, resources, published frames or
+revisions. Recovery still uses the existing completion/publication path. WASM
+`--no-run` is compile evidence, not a claim of browser execution; ordinary
+browser/native product workflows remain required. Run `scripts/check.sh fast`
+and the applicable full gate in addition to these focused commands.
+
 ## Completed-attempt timings
 
 Run the collector with Node 22+ and a GitHub token with Actions read access:
