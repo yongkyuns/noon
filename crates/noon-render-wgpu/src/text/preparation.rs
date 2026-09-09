@@ -9,6 +9,10 @@
 
 use std::ops::Range;
 
+use crate::text::atlas::{
+    GlyphAtlasEntry, GlyphAtlasError, GlyphAtlasPlane, GlyphAtlasStats, GpuGlyphAtlas,
+    DEFAULT_GLYPH_ATLAS_EXTENT,
+};
 use bytemuck::{Pod, Zeroable};
 #[cfg(test)]
 use noon_core::TextResourceArena;
@@ -17,10 +21,6 @@ use noon_core::{
     TextResourceHandle, TextResourceLookup, Transform2D, Vec2,
 };
 use noon_runtime::{FrameChanges, FrameState};
-use noon_text_atlas::{
-    GlyphAtlasEntry, GlyphAtlasError, GlyphAtlasPlane, GlyphAtlasStats, GpuGlyphAtlas,
-    DEFAULT_GLYPH_ATLAS_EXTENT,
-};
 use noon_text_raster::{
     GlyphRaster, GlyphRasterCache, GlyphRasterCacheLimits, GlyphRasterError, GlyphRasterKey,
     GlyphRasterStats,

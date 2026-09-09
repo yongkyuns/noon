@@ -21,8 +21,8 @@ mod wasm {
         Camera2DState, NativeEventOccurrence, NativeEventSource, NativeInputValue,
         NativeStateSource, ReactiveValue, Rect, SemanticNodeId, Vec2,
     };
+    use noon_render_wgpu::text::TextDeviceMetrics;
     use noon_render_wgpu::{Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState};
-    use noon_text_render_wgpu::TextDeviceMetrics;
     use serde::Serialize;
     use wasm_bindgen::{prelude::*, JsCast};
     use web_sys::OffscreenCanvas;

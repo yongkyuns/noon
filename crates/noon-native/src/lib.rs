@@ -21,8 +21,8 @@ use noon_core::{
     Camera2DState, NativeEventOccurrence, NativeEventSource, NativeInputValue, NativeStateSource,
     Vec2,
 };
+use noon_render_wgpu::text::TextDeviceMetrics;
 use noon_render_wgpu::{Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState};
-use noon_text_render_wgpu::TextDeviceMetrics;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, MouseButton, WindowEvent};

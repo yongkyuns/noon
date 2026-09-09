@@ -1,8 +1,8 @@
 use noon_core::{ObjectContentRef, ObjectId, Style, TextResourceArena, Transform2D, Vec2};
-use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
-use noon_text_render_wgpu::{
+use noon_render_wgpu::text::{
     PreparedTextItem, RetainedTextIncrementalStats, RetainedTextQuadPreparer, TextDeviceMetrics,
 };
+use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use noon_typst::{compile_typst_resource, TypstMode};
 
 const OBJECT_COUNT: usize = 10_000;
