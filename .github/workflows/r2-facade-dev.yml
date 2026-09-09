@@ -4,82 +4,39 @@ on:
     branches: [codex/1272-r2-public-facade-prep]
   workflow_dispatch:
 permissions:
-  contents: write
+  contents: read
 concurrency:
   group: r2-facade-development
   cancel-in-progress: true
-env:
-  CARGO_BUILD_JOBS: '2'
-  CARGO_INCREMENTAL: '0'
-  CARGO_PROFILE_DEV_DEBUG: '0'
-  CARGO_PROFILE_TEST_DEBUG: '0'
-  RUSTC_WRAPPER: sccache
-  SCCACHE_GHA_ENABLED: 'true'
-  SCCACHE_GHA_RW_MODE: READ_ONLY
 jobs:
-  candidate:
+  sources:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
-          path: tooling
-          persist-credentials: false
-      - uses: actions/checkout@v7
-        with:
-          ref: codex/1272-r2-public-facade
-          path: source
+          ref: 7e3ee4feab9aa281efd7f256e292cffcc18265fa
           fetch-depth: 0
-      - name: Correct the pinned source candidate
-        working-directory: source
+          persist-credentials: false
+      - name: Capture only the pinned source and original R2 delta
         run: |
-          test "$(git rev-parse HEAD)" = 46711066ef688a119d0d5e459c9da1539b1238f5
-          python3 ../tooling/.github/r2-facade-correct.py
-          cargo fmt --all
-          cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
-          git diff --check
-          git diff --stat
-      - name: Publish source-only corrections
-        working-directory: source
-        run: |
-          git config user.name 'Noon development tooling'
-          git config user.email 'development@noon.invalid'
-          git add crates README.md fixtures/provider-consumer
-          git diff --cached --exit-code -- .github/workflows
-          git -c commit.gpgSign=false -c core.hooksPath=/dev/null commit -m 'fix: preserve prepared transaction access and historical consumer workload'
-          git archive --format=tar HEAD | gzip > ../candidate.tar.gz
-          git push origin HEAD:refs/heads/codex/1272-r2-public-facade
-          git rev-parse HEAD
-      - uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: r2-facade-sources-${{ runner.os }}-${{ hashFiles('source/Cargo.toml', 'source/crates/**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-sources-
-            provider-sources-${{ runner.os }}-
-      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
-        with:
-          version: v0.16.0
-      - name: Check all workspace callers and features
-        working-directory: source
-        run: cargo check --workspace --all-targets --all-features
-      - name: Exercise the independent public consumer
-        working-directory: source
-        run: cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --test public_facade
-      - name: Exercise public API documentation and paired Rust example
-        working-directory: source
-        run: |
-          cargo test -p noon --no-default-features --doc
-          cargo run -p noon --no-default-features --example shared_authoring
-      - name: Enforce the common architecture gate
-        working-directory: source
-        run: bash scripts/check.sh architecture 1641398818b6817678ae178faf2887e4ac1e730f
+          mkdir -p evidence/preimages
+          git archive --format=tar HEAD | gzip > evidence/master.tar.gz
+          base=$(git merge-base HEAD 6e97a36ac3834f1f0aac280e788b18055ec87d67)
+          printf 'master=%s\ntyped=%s\nmerge_base=%s\n' "$(git rev-parse HEAD)" 6e97a36ac3834f1f0aac280e788b18055ec87d67 "$base" > evidence/refs.txt
+          git diff --binary --full-index "$base" 6e97a36ac3834f1f0aac280e788b18055ec87d67 > evidence/typed.patch
+          git diff --name-status "$base" 6e97a36ac3834f1f0aac280e788b18055ec87d67 > evidence/changed.txt
+          git diff --raw --no-abbrev "$base" 6e97a36ac3834f1f0aac280e788b18055ec87d67 | awk '{print $3}' | sort -u | while read -r blob; do
+            if [ "$blob" != 0000000000000000000000000000000000000000 ]; then
+              git cat-file blob "$blob" > "evidence/preimages/$blob"
+            fi
+          done
+          cat evidence/refs.txt
+          cat evidence/changed.txt
+          sha256sum evidence/master.tar.gz evidence/typed.patch
       - uses: actions/upload-artifact@v7
-        if: always()
         with:
-          name: r2-facade-candidate-source
-          path: candidate.tar.gz
+          name: r2-typed-reconciliation-input
+          path: evidence/
           if-no-files-found: error
           retention-days: 1
