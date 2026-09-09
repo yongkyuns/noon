@@ -717,7 +717,8 @@ class _CanonicalCallbackContext:
             row = rows[node]
             before = row.style
             row.style = style
-            if style.stroke != before.stroke or style.stroke_width != before.stroke_width:
+            if ((style.stroke is None) != (before.stroke is None) or
+                    (style.stroke is not None and style.stroke_width != before.stroke_width)):
                 row.invalidate_bounds()
             self.style_changed(node, before, row)
 
