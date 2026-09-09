@@ -9,8 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      PRODUCER: d607b7c3d4fae515d08c3b432dd49ce2e7b40c01
-      BASE: 10e9597611dad4dc4d1917f39dc685143fd37f3c
+      BASE: 8cadad70a9fdbdaf51de49369fb5c98c2d4750e0
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -21,7 +20,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Assemble exact projection candidate
+      - name: Assemble exact current-master projection candidate
         shell: bash
         run: |
           set -euo pipefail
@@ -31,13 +30,12 @@ jobs:
           git config user.name 'Noon qualification bot'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git checkout --detach "$BASE"
-          git merge --no-commit --no-ff "$PRODUCER"
           git apply --3way "$RUNNER_TEMP/r3-r2a/projection.patch"
           cargo fmt --all
           git add crates/noon-web/src/authoring_error.rs crates/noon-web/src/authoring_mobject.rs crates/noon-web/src/canonical_authoring_scene.rs web/python/_manim_geometry.py web/python/_manim_semantic_handles.py web/python/test_noon_errors_wasm.py
           git diff --cached --check
           git commit -m 'fix: project typed R2a authoring failures through WASM and Python'
-          git rev-parse HEAD HEAD^{tree} HEAD^ HEAD^2 > "$RUNNER_TEMP/r3-r2a/revisions.txt"
+          git rev-parse HEAD HEAD^{tree} HEAD^ > "$RUNNER_TEMP/r3-r2a/revisions.txt"
           git diff "$BASE" HEAD > "$RUNNER_TEMP/r3-r2a/product.patch"
           git archive --format=tar.gz HEAD > "$RUNNER_TEMP/r3-r2a/source.tar.gz"
       - uses: actions/cache/restore@v6
@@ -97,7 +95,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r3-r2a-projection-qualification
+          name: r3-r2a-current-master-qualification
           path: ${{ runner.temp }}/r3-r2a
           if-no-files-found: error
           retention-days: 3
