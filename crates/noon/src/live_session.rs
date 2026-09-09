@@ -2003,8 +2003,30 @@ impl<'a> LiveSession<'a> {
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_family(family)?;
         self.session.require_published_store(&self.store.borrow())?;
-        let mut plan =
-            FamilyArrangePlan::begin(family, options).map_err(LiveSessionError::Mobject)?;
+        let plan = FamilyArrangePlan::begin(family, options).map_err(LiveSessionError::Mobject)?;
+        self.publish_family_arrangement(plan)
+    }
+
+    /// Arrange a family using coherent live bounds and one shared translation transaction.
+    pub fn arrange_family_in_grid(
+        &mut self,
+        family: &MobjectFamily,
+        rows: Option<usize>,
+        columns: Option<usize>,
+        gap_x: f64,
+        gap_y: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        let plan = FamilyArrangePlan::grid(family, rows, columns, gap_x, gap_y)
+            .map_err(LiveSessionError::Mobject)?;
+        self.publish_family_arrangement(plan)
+    }
+
+    fn publish_family_arrangement(
+        &mut self,
+        mut plan: FamilyArrangePlan,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         plan.observe_leaf_bounds(|leaf| {
             let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
             self.family_member_bounds(&mobject)
@@ -2267,6 +2289,62 @@ impl<'a> LiveSession<'a> {
         opacity: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.edit_style(mobject, |style| edit_object_opacity(style, opacity))
+    }
+
+    /// Recolor a family's unique leaves through one coherent authored publication.
+    pub fn set_family_color(
+        &mut self,
+        family: &MobjectFamily,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_family_style(family, |style| edit_color(style, red, green, blue, alpha))
+    }
+
+    pub fn set_family_fill(
+        &mut self,
+        family: &MobjectFamily,
+        color: Option<Color>,
+        opacity: Option<f64>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_family_style(family, |style| {
+            crate::family_style::fill(style, color, opacity)
+        })
+    }
+
+    pub fn set_family_stroke(
+        &mut self,
+        family: &MobjectFamily,
+        color: Option<Color>,
+        width: Option<f64>,
+        opacity: Option<f64>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_family_style(family, |style| {
+            crate::family_style::stroke(style, color, width, opacity)
+        })
+    }
+
+    pub fn set_family_opacity(
+        &mut self,
+        family: &MobjectFamily,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_family_style(family, |style| edit_manim_opacity(style, opacity))
+    }
+
+    fn edit_family_style(
+        &mut self,
+        family: &MobjectFamily,
+        edit: impl Fn(&mut SemanticStyle) -> Result<(), String>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        let transaction = family
+            .style_transaction(edit)
+            .map_err(LiveSessionError::Mobject)?;
+        self.apply(transaction)
     }
 
     fn edit_style(

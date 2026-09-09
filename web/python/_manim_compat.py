@@ -413,29 +413,22 @@ class Group(_base.Group, _BaseMobject):
         from _manim_semantic_handles import _group_rotate
         return _group_rotate(self, angle, axis, about_point=about_point, about_edge=about_edge, **kwargs)
 
-    def set_color(self, color: _base.Color) -> Group:
-        for member in self.submobjects:
-            member.set_color(color)
-        return self
+    def set_color(self, color: object) -> Group:
+        from _manim_semantic_handles import _group_set_color
+        return _group_set_color(self, color)
 
-    def set_fill(
-        self, color: _base.Color | None = None, opacity: float | None = None
-    ) -> Group:
-        for member in self.submobjects:
-            member.set_fill(color, opacity)
-        return self
+    def set_fill(self, color: object = None, opacity: float | None = None) -> Group:
+        from _manim_semantic_handles import _group_set_fill
+        return _group_set_fill(self, color, opacity)
 
-    def set_stroke(
-        self, color: _base.Color | None = None, width: float | None = None
-    ) -> Group:
-        for member in self.submobjects:
-            member.set_stroke(color, width)
-        return self
+    def set_stroke(self, color: object = None, width: float | None = None,
+                   opacity: float | None = None) -> Group:
+        from _manim_semantic_handles import _group_set_stroke
+        return _group_set_stroke(self, color, width, opacity)
 
     def set_opacity(self, opacity: float) -> Group:
-        for member in self.submobjects:
-            member.set_opacity(opacity)
-        return self
+        from _manim_semantic_handles import _group_set_opacity
+        return _group_set_opacity(self, opacity)
 
     def next_to(
         self,
@@ -507,32 +500,8 @@ class Group(_base.Group, _BaseMobject):
         cols: int | None = None,
         buff: float | tuple[float, float] = _base.MED_SMALL_BUFF,
     ) -> Group:
-        count = len(self.submobjects)
-        if count == 0:
-            return self
-        if rows is None and cols is None:
-            cols = math.ceil(math.sqrt(count))
-            rows = math.ceil(count / cols)
-        elif rows is None:
-            assert cols is not None
-            rows = math.ceil(count / cols)
-        elif cols is None:
-            cols = math.ceil(count / rows)
-        if rows <= 0 or cols <= 0:
-            raise ValueError("rows and cols must be positive")
-        gap = _as_vec2(buff) if isinstance(buff, (tuple, list, _base.Vec2)) else _base.Vec2(float(buff), float(buff))
-        cell_width = max((member.width for member in self.submobjects), default=0.0) + gap.x
-        cell_height = max((member.height for member in self.submobjects), default=0.0) + gap.y
-        for index, member in enumerate(self.submobjects):
-            row = index // cols
-            col = index % cols
-            member.move_to(
-                _base.Vec2(
-                    (col - (cols - 1) / 2.0) * cell_width,
-                    ((rows - 1) / 2.0 - row) * cell_height,
-                )
-            )
-        return self
+        from _manim_semantic_handles import _group_arrange_in_grid
+        return _group_arrange_in_grid(self, rows, cols, buff)
 
     @property
     def animate(self) -> _GroupAnimationBuilder:
