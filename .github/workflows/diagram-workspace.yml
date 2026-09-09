@@ -8,23 +8,30 @@ jobs:
   workspace:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      ORIGINAL_BASE: d6734d2a0626f5c9926e4043ad2017a94f5c8c5a
+      REVIEW_BASE: a98c6837c960bd5620d6a03c79560cc44b0015b6
+      OUTPUT_BRANCH: docs/noon-d2-architecture-20260909
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Apply exactly the locally validated documentation candidate
+      - name: Recover original candidate and reconcile with reviewed master
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse origin/master)" = d6734d2a0626f5c9926e4043ad2017a94f5c8c5a
-          cat .github/diagram-workspace-payload/{0,1,2,3} > "$RUNNER_TEMP/payload.gz"
-          echo "b8d3fea6fb3ac6ebce7bd8219dd6b20113595bc9f8c280b7066fed0486e7ede9  $RUNNER_TEMP/payload.gz" | sha256sum -c -
+          test "$(git rev-parse origin/master)" = "$REVIEW_BASE"
+          mkdir -p "$RUNNER_TEMP/diagram-artifacts"
+          git worktree add --detach "$RUNNER_TEMP/diagram-candidate" "$ORIGINAL_BASE"
           python3 - <<'PY'
           import gzip, hashlib, json, os
           from pathlib import Path
-          root = Path.cwd()
-          changes = json.loads(gzip.decompress((Path(os.environ['RUNNER_TEMP']) / 'payload.gz').read_bytes()))
-          prepared = []
+          source = Path.cwd()
+          root = (Path(os.environ['RUNNER_TEMP']) / 'diagram-candidate').resolve()
+          payload = b''.join((source / '.github/diagram-workspace-payload' / str(i)).read_bytes() for i in range(4))
+          assert hashlib.sha256(payload).hexdigest() == 'b8d3fea6fb3ac6ebce7bd8219dd6b20113595bc9f8c280b7066fed0486e7ede9'
+          changes = json.loads(gzip.decompress(payload))
+          assert len(changes) == 14
           for change in changes:
               path = (root / change['path']).resolve()
               assert path.is_relative_to(root)
@@ -38,12 +45,15 @@ jobs:
                   for start, end, replacement in reversed(change['edits']):
                       lines[start:end] = replacement
                   text = ''.join(lines)
-              prepared.append((path, text))
-          assert len(prepared) == 14
-          for path, text in prepared:
               path.parent.mkdir(parents=True, exist_ok=True)
               path.write_text(text, encoding='utf-8')
           PY
+          cd "$RUNNER_TEMP/diagram-candidate"
+          git add -- README.md docs/architecture.md docs/diagrams scripts/architecture_diagrams.py scripts/test_architecture_diagrams.py .github/workflows/architecture-diagrams.yml
+          git diff --cached --binary > "$RUNNER_TEMP/diagram-artifacts/original-candidate.patch"
+          git diff "$ORIGINAL_BASE" "$REVIEW_BASE" -- README.md docs/architecture.md crates/noon-core/src/lib.rs crates/noon-compile/src/lib.rs crates/noon/src/execution_session/publication.rs web/semantic-engine-endpoint.js > "$RUNNER_TEMP/diagram-artifacts/upstream-architecture-changes.diff"
+          git reset --hard "$REVIEW_BASE"
+          git apply --3way --index "$RUNNER_TEMP/diagram-artifacts/original-candidate.patch"
       - name: Install checksum-verified D2
         shell: bash
         run: |
@@ -56,43 +66,47 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cd "$RUNNER_TEMP/diagram-candidate"
           python3 scripts/architecture_diagrams.py
           python3 scripts/test_architecture_diagrams.py
           python3 scripts/architecture_diagrams.py --check
-          sha256sum -c <<'EOF'
-          feca48ce73e3e31221455faf79609512d0244b42e4139a3b231eb876193a1467  docs/diagrams/crate-ownership.svg
-          dbd322a75f16992c11e6045b015d9d8f6728e13fc4bdf122e95f36f509b9d13e  docs/diagrams/host-continuation.svg
-          db5558281d109c35c6c4c7d61ba881c2c38157902ec16e5a9798def630bc6d57  docs/diagrams/live-publication.svg
-          4830979d8001b8c640cb6d15339ec24170368123715e2c0bdd90ceb94f5b6b64  docs/diagrams/native-execution.svg
-          5e919edac37af6a607427acb147adfa080297c93610b65bb0f7a7ff25f0da80c  docs/diagrams/overview.svg
-          b37acc1bb18c735b792e82778cc834d48675b05a6f75051ea70bb0cba5a2f188  docs/diagrams/python-workers.svg
-          47506a42ea20cc390997c37ec08ce4651859a74a30de437b8fe64ffc4e8542cd  docs/diagrams/session-control.svg
-          659a8538929abe59c28a469c2327bd5283674339f560b3d175fc0bc2b3e67e9f  docs/diagrams/wasm-execution.svg
-          EOF
           git diff --check
-          rustup show
-          bash scripts/check.sh architecture d6734d2a0626f5c9926e4043ad2017a94f5c8c5a
-      - name: Publish clean documentation branch and remove temporary workspace
+          git diff --cached --check
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy --target wasm32-unknown-unknown
+          bash scripts/check.sh architecture "$REVIEW_BASE"
+      - name: Package candidate before attempting any push
         shell: bash
         run: |
           set -euo pipefail
-          rm .github/workflows/diagram-workspace.yml
-          rm -r .github/diagram-workspace-payload
-          git add -A -- README.md docs/architecture.md docs/diagrams scripts/architecture_diagrams.py scripts/test_architecture_diagrams.py .github/workflows/architecture-diagrams.yml .github/workflows/diagram-workspace.yml .github/diagram-workspace-payload
+          cd "$RUNNER_TEMP/diagram-candidate"
+          cp .github/workflows/architecture-diagrams.yml "$RUNNER_TEMP/diagram-artifacts/architecture-diagrams.yml"
+          git restore --staged -- .github/workflows/architecture-diagrams.yml
+          git add -- README.md docs/architecture.md docs/diagrams scripts/architecture_diagrams.py scripts/test_architecture_diagrams.py
+          git diff --cached --name-only > "$RUNNER_TEMP/diagram-artifacts/changed-files.txt"
+          test "$(wc -l < "$RUNNER_TEMP/diagram-artifacts/changed-files.txt")" -eq 21
+          if grep -q '^.github/' "$RUNNER_TEMP/diagram-artifacts/changed-files.txt"; then
+            echo 'CI must not push workflow-file changes' >&2
+            exit 1
+          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           tree="$(git write-tree)"
-          commit="$(git commit-tree "$tree" -p d6734d2a0626f5c9926e4043ad2017a94f5c8c5a -m 'docs: render current Noon architecture with reproducible D2 diagrams')"
-          test "$(git diff --name-only d6734d2a0626f5c9926e4043ad2017a94f5c8c5a "$commit" | wc -l)" -eq 22
-          git diff --name-only d6734d2a0626f5c9926e4043ad2017a94f5c8c5a "$commit"
-          git push origin "$commit:refs/heads/docs/noon-d2-architecture-20260909"
-          printf 'BASE=%s\nHEAD=%s\nTREE=%s\n' d6734d2a0626f5c9926e4043ad2017a94f5c8c5a "$commit" "$tree" | tee "$RUNNER_TEMP/diagram-revisions.txt"
-          git archive --format=zip "$commit" README.md docs/architecture.md docs/diagrams scripts/architecture_diagrams.py scripts/test_architecture_diagrams.py .github/workflows/architecture-diagrams.yml > "$RUNNER_TEMP/noon-architecture-diagrams.zip"
-          git push origin --delete work/noon-d2-architecture-20260909
-      - uses: actions/upload-artifact@v4
+          commit="$(git commit-tree "$tree" -p "$REVIEW_BASE" -m 'docs: render current Noon architecture with reproducible D2 diagrams')"
+          printf 'BASE=%s\nHEAD=%s\nTREE=%s\n' "$REVIEW_BASE" "$commit" "$tree" | tee "$RUNNER_TEMP/diagram-artifacts/diagram-revisions.txt"
+          echo "DIAGRAM_COMMIT=$commit" >> "$GITHUB_ENV"
+          git archive --format=zip "$commit" README.md docs/architecture.md docs/diagrams scripts/architecture_diagrams.py scripts/test_architecture_diagrams.py > "$RUNNER_TEMP/diagram-artifacts/noon-architecture-diagrams.zip"
+          git archive --format=tar.gz "$commit" > "$RUNNER_TEMP/diagram-artifacts/candidate-source.tar.gz"
+      - name: Preserve recovered source and rendered artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: noon-architecture-diagrams
-          path: |
-            ${{ runner.temp }}/noon-architecture-diagrams.zip
-            ${{ runner.temp }}/diagram-revisions.txt
+          name: noon-architecture-diagrams-recovered
+          path: ${{ runner.temp }}/diagram-artifacts/
+          if-no-files-found: error
           retention-days: 7
+      - name: Publish documentation-only branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/diagram-candidate"
+          git push origin "$DIAGRAM_COMMIT:refs/heads/$OUTPUT_BRANCH"
