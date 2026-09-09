@@ -1,0 +1,64 @@
+name: Architecture diagrams
+
+on:
+  pull_request:
+    paths:
+      - README.md
+      - docs/architecture.md
+      - docs/diagrams/**
+      - scripts/architecture_diagrams.py
+      - scripts/test_architecture_diagrams.py
+      - .github/workflows/architecture-diagrams.yml
+  push:
+    branches: [master]
+    paths:
+      - README.md
+      - docs/architecture.md
+      - docs/diagrams/**
+      - scripts/architecture_diagrams.py
+      - scripts/test_architecture_diagrams.py
+      - .github/workflows/architecture-diagrams.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: architecture-diagrams-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  diagrams:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install pinned D2
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            https://github.com/d2lang/d2/releases/download/v0.9.0/d2-v0.9.0-linux-amd64.tar.gz \
+            -o "$RUNNER_TEMP/d2.tar.gz"
+          echo "5669ddc46b99e942cc96078f4a4e36d5e62103348f4c05179ede27802fdd87a9  $RUNNER_TEMP/d2.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/d2.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/d2-v0.9.0/bin" >> "$GITHUB_PATH"
+      - name: Exercise generation and failure handling
+        run: python3 scripts/test_architecture_diagrams.py
+      - name: Check committed SVGs, formatting and links
+        run: python3 scripts/architecture_diagrams.py --check
+      - name: Preserve diagram sources and checked-in SVGs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: architecture-diagrams-${{ github.sha }}
+          path: |
+            docs/diagrams/
+            README.md
+            docs/architecture.md
+            scripts/architecture_diagrams.py
+            scripts/test_architecture_diagrams.py
+          if-no-files-found: error
+          retention-days: 14
