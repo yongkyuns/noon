@@ -85,9 +85,11 @@ impl From<noon::FamilyCallbackPaintError> for AuthoringFailure {
             StaleRevision { .. } => {
                 Self::new("stale_handle", "callback.family.stale_revision", error)
             }
-            InvalidPaint(message) => {
-                Self::new("invalid_input", "callback.family.invalid_paint", message)
-            }
+            InvalidPaint(cause) => Self::caused_by(
+                "callback.family.invalid_paint",
+                cause.to_string(),
+                cause.into(),
+            ),
         }
     }
 }
@@ -126,6 +128,15 @@ impl From<AuthoringError> for AuthoringFailure {
                 "authoring.missing_text_resource",
                 message,
             ),
+            AuthoringError::InvalidRenderNumber { .. } => {
+                Self::new("invalid_input", "authoring.invalid_render_number", message)
+            }
+            AuthoringError::InvalidOpacity { .. } => {
+                Self::new("invalid_input", "authoring.invalid_opacity", message)
+            }
+            AuthoringError::NegativeStrokeWidth(_) => {
+                Self::new("invalid_input", "authoring.negative_stroke_width", message)
+            }
             // The public producer is non-exhaustive; future domains must opt in
             // with a reviewed projection, not silently acquire a guessed class.
             other => Self::unclassified("authoring.unclassified", &other),
@@ -515,6 +526,56 @@ mod tests {
         );
         assert!(failure.source().is_some());
         assert!(!failure.message.is_empty());
+    }
+
+    #[test]
+    fn typed_family_paint_rejections_keep_their_concrete_cause() {
+        for (cause, code) in [
+            (
+                AuthoringError::InvalidOpacity {
+                    name: "opacity".into(),
+                    value: 1.5,
+                },
+                "authoring.invalid_opacity",
+            ),
+            (
+                AuthoringError::InvalidRenderNumber {
+                    name: "stroke width".into(),
+                    value: f64::INFINITY,
+                },
+                "authoring.invalid_render_number",
+            ),
+            (
+                AuthoringError::NegativeStrokeWidth(-1.0),
+                "authoring.negative_stroke_width",
+            ),
+        ] {
+            let diagnostic = cause.to_string();
+            let failure =
+                AuthoringFailure::from(noon::FamilyCallbackPaintError::InvalidPaint(cause));
+            assert_eq!(failure.category, "invalid_input");
+            assert_eq!(failure.code, "callback.family.invalid_paint");
+            assert_eq!(failure.message, diagnostic);
+            let nested = failure.cause.as_deref().unwrap();
+            assert_eq!(nested.category, "invalid_input");
+            assert_eq!(nested.code, code);
+            assert_eq!(nested.message, diagnostic);
+            assert!(nested.cause.is_none());
+            assert!(std::ptr::eq(
+                nested,
+                failure
+                    .source()
+                    .unwrap()
+                    .downcast_ref::<AuthoringFailure>()
+                    .unwrap()
+            ));
+        }
+        // Unaccepted domains remain explicit, even with category-like input text.
+        let failure = AuthoringFailure::from(AuthoringError::InvalidStrokeCap(
+            "invalid opacity; negative stroke width".into(),
+        ));
+        assert_eq!(failure.category, "unclassified");
+        assert_eq!(failure.code, "authoring.unclassified");
     }
 
     #[test]
