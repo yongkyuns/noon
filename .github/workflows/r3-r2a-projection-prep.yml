@@ -26,7 +26,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/r3-r2a"
-          base64 -d scripts/r3-r2a-projection-prep.patch.gz.b64 | gzip -d > "$RUNNER_TEMP/r3-r2a/projection.patch"
+          cat scripts/r3-r2a-projection-prep.part1.b64 scripts/r3-r2a-projection-prep.part2.b64 | base64 -d | gzip -d > "$RUNNER_TEMP/r3-r2a/projection.patch"
+          test "$(sha256sum "$RUNNER_TEMP/r3-r2a/projection.patch" | cut -d' ' -f1)" = "52e7a32e3744b9fdca49081318ef002d4aaac5d73020eb7057e7e6e1aafe6df6"
           git config user.name 'Noon qualification bot'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git checkout --detach "$BASE"
