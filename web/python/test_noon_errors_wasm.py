@@ -345,6 +345,55 @@ class WasmErrorProjectionTests(unittest.TestCase):
                         store.free()
 
 
+    def test_endpoint_wait_rejects_callbacks_before_publication_and_async_retry_works(self):
+        for started in (False, True):
+            store = wasm.WasmAuthoringStore.new()
+            context = store.createSceneContext()
+            target = circle(store)
+            player = None
+            try:
+                context.bindMobject("0", target)
+                context.addUpdater(target, "1", 0)
+                if started:
+                    context.beginLiveExecution(1)
+                def state():
+                    return (context.liveExecutionOwnership(), context.authoredDuration(),
+                            list(context.rootMembershipKeys()), context.liveHandoffDuration(),
+                            target.snapshotJson(), context.liveDebugFrameJson() if started else None)
+                before = state()
+                with self.assertRaises(NoonError) as caught:
+                    engine_call(context.ordinaryWait, 0.25, operation="Scene.wait")
+                self.assert_diagnostic(caught.exception, "unclassified")
+                self.assertEqual(str(caught.exception),
+                    "ordinary endpoint-only wait cannot execute required callbacks; use a continuation")
+                self.assertEqual(state(), before)
+                endpoint = engine_call(context.beginOrdinaryWait, 0.25)
+                player = context.createExecutionPlayer(0.25, 73)
+                def acknowledge(encoded, time):
+                    phase = json.loads(encoded)
+                    self.assertEqual(phase["time"], time)
+                    self.assertEqual([row["callback_id"] for row in phase["invocations"]], ["1"])
+                    engine_call(player.commitCallbackPhaseJson,
+                        json.dumps({"token": phase["token"], "writes": []}))
+                acknowledge(player.initialCallbackPhaseJson(), 0)
+                drive = player.driveLiveSegmentToAuthoredTime(endpoint)
+                acknowledge(drive.callbackPhaseJson, endpoint)
+                drive.free()
+                drive = player.driveLiveSegmentToAuthoredTime(endpoint)
+                self.assertTrue(drive.reachedEndpoint)
+                drive.free()
+                engine_call(player.completeLiveSegment)
+                self.assertEqual(json.loads(player.debugFrameJson())["time"], 0.25)
+                context.returnExecutionPlayer(player)
+                player = None
+            finally:
+                if player is not None:
+                    player.free()
+                context.free()
+                target.free()
+                store.free()
+
+
 async def check_real_promise_rejection():
     """A real JS Promise rejects with a failure produced by actual WASM completion."""
     store = wasm.WasmAuthoringStore.new()

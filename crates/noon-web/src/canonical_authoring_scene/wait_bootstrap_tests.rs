@@ -145,3 +145,81 @@ fn authored_cursor_guard_and_zero_length_wait_keep_existing_semantics() {
     assert_eq!(empty.live_execution_ownership(), "active");
     assert_eq!(empty.ordinary_wait(0.25).unwrap(), 0.25);
 }
+
+#[test]
+fn endpoint_wait_rejects_callbacks_before_publication_and_async_retry_keeps_them() {
+    for already_started in [false, true] {
+        let mut scene = CanonicalAuthoringScene::default();
+        let object = scene.scene.circle(0.5).unwrap();
+        scene.bind_mobject(ObjectId::new(0), &object).unwrap();
+        scene
+            .add_updater(&object, HostCallbackId::new(1), 0.0, None)
+            .unwrap();
+        if already_started {
+            scene.live_player(1.0).unwrap();
+        }
+        let ownership = scene.live_execution_ownership();
+        let duration = scene.authored_duration();
+        let revision = scene.scene.revision();
+        let root = scene.root_membership_keys().unwrap();
+        let authored = object.state().unwrap();
+        let player_before = scene.player_ownership.local().map(|player| {
+            (
+                player.ownership_identity(),
+                player.debug_frame_json(),
+                player.resource_bundle_bytes(),
+            )
+        });
+        let error = scene.ordinary_wait(0.25).unwrap_err();
+        assert_eq!(
+            error.message,
+            "ordinary endpoint-only wait cannot execute required callbacks; use a continuation"
+        );
+        assert_eq!(scene.live_execution_ownership(), ownership);
+        assert_eq!(scene.authored_duration(), duration);
+        assert_eq!(scene.scene.revision(), revision);
+        assert_eq!(scene.root_membership_keys().unwrap(), root);
+        assert_eq!(object.state().unwrap(), authored);
+        assert_eq!(
+            scene.player_ownership.local().map(|player| (
+                player.ownership_identity(),
+                player.debug_frame_json(),
+                player.resource_bundle_bytes()
+            )),
+            player_before
+        );
+
+        // The supported continuation still uses these exact callbacks and context.
+        let end = scene.begin_ordinary_wait(0.25).unwrap();
+        let player = scene.active_live_player().unwrap();
+        let identity = player.ownership_identity();
+        if let Some((previous, _, _)) = player_before {
+            assert_eq!(identity, previous);
+        }
+        let acknowledge =
+            |player: &mut crate::SemanticExecutionPlayer, phase: String, time: f64| {
+                let phase: serde_json::Value = serde_json::from_str(&phase).unwrap();
+                assert_eq!(phase["time"], time);
+                assert_eq!(phase["invocations"][0]["callback_id"], "1");
+                player
+                    .commit_callback_phase_json(
+                        &serde_json::json!({
+                            "token": phase["token"], "writes": [],
+                        })
+                        .to_string(),
+                    )
+                    .unwrap();
+            };
+        let initial = player.initial_callback_phase_json().unwrap().unwrap();
+        acknowledge(player, initial, 0.0);
+        let drive = player.live_drive_segment_to_authored_time(end).unwrap();
+        acknowledge(player, drive.callback_phase_json().unwrap(), end);
+        assert!(player
+            .live_drive_segment_to_authored_time(end)
+            .unwrap()
+            .reached_endpoint());
+        player.live_complete_segment().unwrap();
+        assert_eq!(player.time(), 0.25);
+        assert_eq!(player.ownership_identity(), identity);
+    }
+}

@@ -765,15 +765,7 @@ impl CanonicalAuthoringScene {
     /// keeps using the explicit `authored_wait` entry point.
     #[cfg(any(target_arch = "wasm32", test))]
     fn ordinary_wait(&mut self, duration: f64) -> Result<f64, AuthoringFailure> {
-        if self.player_ownership.local().is_some()
-            && self.active_live_player()?.has_required_callbacks()
-        {
-            return Err(
-                "ordinary endpoint-only wait cannot execute required callbacks; use a continuation"
-                    .into(),
-            );
-        }
-        let end_time = self.begin_ordinary_wait(duration)?;
+        let end_time = self.admit_ordinary_wait(duration, true)?;
         let player = self.active_live_player()?;
         player.live_advance_segment_to(end_time)?;
         player.live_complete_segment()?;
@@ -788,7 +780,18 @@ impl CanonicalAuthoringScene {
     /// from the player-owned segment; no Python or JavaScript cursor is created.
     #[cfg(any(target_arch = "wasm32", test))]
     fn begin_ordinary_wait(&mut self, duration: f64) -> Result<f64, AuthoringFailure> {
-        if self.player_ownership.is_unstarted() {
+        self.admit_ordinary_wait(duration, false)
+    }
+
+    /// Retain the first runtime only after this wait's execution mode is admitted.
+    /// Callback capability comes from the shared session, including fresh scenes.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn admit_ordinary_wait(
+        &mut self,
+        duration: f64,
+        endpoint_only: bool,
+    ) -> Result<f64, AuthoringFailure> {
+        let mut prepared = if self.player_ownership.is_unstarted() {
             if self.scene.time() != 0.0 {
                 return Err(
                     "ordinary asynchronous wait cannot follow pre-execution canonical timing"
@@ -797,15 +800,27 @@ impl CanonicalAuthoringScene {
             }
             // A wait has no animation extent, but the presentation clock still needs a
             // positive valid range before its session-derived deadline replaces it.
-            let mut player = self.build_live_player(duration.max(1.0), 0)?;
-            let end_time = player.live_wait(duration)?;
-            // Shared admission is fallible. Publish the first runtime only once
-            // it owns a valid segment; rejection leaves this context unstarted.
-            self.player_ownership = PlayerOwnership::Active(player);
-            return Ok(end_time);
+            Some(self.build_live_player(duration.max(1.0), 0)?)
+        } else {
+            None
+        };
+        let player = match prepared.as_mut() {
+            Some(player) => player,
+            None => self.active_live_player()?,
+        };
+        if endpoint_only && player.has_required_callbacks() {
+            return Err(
+                "ordinary endpoint-only wait cannot execute required callbacks; use a continuation"
+                    .into(),
+            );
         }
-        let player = self.active_live_player()?;
-        player.live_wait(duration)
+        let end_time = player.live_wait(duration)?;
+        // Shared admission is fallible. Rejection must leave a fresh context
+        // unstarted, while an existing player retains its exact ownership state.
+        if let Some(player) = prepared {
+            self.player_ownership = PlayerOwnership::Active(player);
+        }
+        Ok(end_time)
     }
 
     /// Read only the live runtime's authored handoff duration.
