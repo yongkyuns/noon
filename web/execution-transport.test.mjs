@@ -16,7 +16,7 @@ import {
   selectExecutionTransportMode,
 } from "./execution-transport.js";
 
-function delta(sequence, { session = 1, snapshot = sequence === 0, channel = "noon.execution" } = {}) {
+function delta(sequence, { session = 1, snapshot = sequence === 0, channel = RETAINED_EXECUTION_TRANSPORT_CHANNEL } = {}) {
   return JSON.stringify({
     channel,
     session,
@@ -190,9 +190,9 @@ test("transferable envelope metadata must match encoded payload", () => {
 
 test("metadata validates the current execution schema directly", () => {
   assert.equal(executionDeltaMetadata(delta(0)).sequence, 0);
-  assert.equal(
-    executionDeltaMetadata(delta(0, { channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL })).sequence,
-    0,
+  assert.throws(
+    () => executionDeltaMetadata(delta(0, { channel: "noon.execution" })),
+    /invalid channel/,
   );
 
   const unrelated = JSON.parse(delta(0));

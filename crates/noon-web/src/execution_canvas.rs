@@ -11,7 +11,7 @@ const MANIM_DEFAULT_CLEAR_COLOR: wgpu::Color = wgpu::Color {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use std::{cell::Cell, mem, rc::Rc};
+    use std::{cell::Cell, rc::Rc};
 
     use noon::integration::RendererPublication;
     use noon::{
@@ -21,10 +21,7 @@ mod wasm {
         Camera2DState, NativeEventOccurrence, NativeEventSource, NativeInputValue,
         NativeStateSource, ReactiveValue, Rect, SemanticNodeId, Vec2,
     };
-    use noon_render_wgpu::{
-        Camera2D, FramePreparer, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState,
-    };
-    use noon_runtime::{FrameChanges, FrameState};
+    use noon_render_wgpu::{Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState};
     use noon_text_render_wgpu::TextDeviceMetrics;
     use serde::Serialize;
     use wasm_bindgen::{prelude::*, JsCast};
@@ -34,7 +31,7 @@ mod wasm {
         gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
         gpu_timestamps::GpuTimestampProfiler,
         BrowserExecutionCadence, BrowserExecutionWakeClock, BrowserExecutionWakePlan,
-        BrowserHostWake, ExecutionFrameMirror, TransportApplyOutcome,
+        BrowserHostWake,
     };
 
     use super::MANIM_DEFAULT_CLEAR_COLOR;
@@ -340,68 +337,21 @@ mod wasm {
             self.next_native_event_sequence = next;
             Ok(())
         }
-    }
-
-    enum CanvasExecutionSource {
-        Transport(ExecutionFrameMirror),
-        Direct(DirectExecutionSource),
-    }
-
-    impl CanvasExecutionSource {
-        fn frame(&self) -> Option<&FrameState> {
-            match self {
-                Self::Transport(mirror) => mirror.frame(),
-                Self::Direct(direct) => Some(direct.session().frame()),
-            }
-        }
 
         fn live_object_count(&self) -> usize {
-            match self {
-                Self::Transport(mirror) => mirror.live_object_count(),
-                Self::Direct(direct) => {
-                    let session = direct.session();
+            let session = self.session();
+            session
+                .painter_order()
+                .iter()
+                .filter(|&&index| {
                     session
-                        .painter_order()
-                        .iter()
-                        .filter(|&&index| {
-                            session
-                                .frame()
-                                .presences
-                                .get(index as usize)
-                                .copied()
-                                .unwrap_or(false)
-                        })
-                        .count()
-                }
-            }
-        }
-
-        fn transport_mut(&mut self) -> Option<&mut ExecutionFrameMirror> {
-            match self {
-                Self::Transport(mirror) => Some(mirror),
-                Self::Direct(_) => None,
-            }
-        }
-
-        fn direct(&self) -> Option<&ExecutionSession> {
-            match self {
-                Self::Transport(_) => None,
-                Self::Direct(direct) => Some(direct.session()),
-            }
-        }
-
-        fn direct_mut(&mut self) -> Option<&mut ExecutionSession> {
-            match self {
-                Self::Transport(_) => None,
-                Self::Direct(direct) => direct.session_mut(),
-            }
-        }
-
-        fn direct_source_mut(&mut self) -> Option<&mut DirectExecutionSource> {
-            match self {
-                Self::Transport(_) => None,
-                Self::Direct(direct) => Some(direct),
-            }
+                        .frame()
+                        .presences
+                        .get(index as usize)
+                        .copied()
+                        .unwrap_or(false)
+                })
+                .count()
         }
     }
 
@@ -415,10 +365,8 @@ mod wasm {
         canvas: OffscreenCanvas,
         config: wgpu::SurfaceConfiguration,
         drawable: bool,
-        source: CanvasExecutionSource,
-        pending_changes: FrameChanges,
+        source: DirectExecutionSource,
         direct_wake_clock: BrowserExecutionWakeClock,
-        preparer: FramePreparer,
         direct_preparer: RetainedFramePreparer,
         renderer: GpuRenderer,
         direct_text_gpu: RetainedTextGpuState,
@@ -443,58 +391,8 @@ mod wasm {
 
     #[wasm_bindgen(js_class = ExecutionCanvasRenderer)]
     impl WasmExecutionCanvasRenderer {
-        #[wasm_bindgen(js_name = create)]
-        pub async fn create(
-            canvas: OffscreenCanvas,
-            initial_delta_json: &str,
-        ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
-            let mut mirror = ExecutionFrameMirror::default();
-            let (outcome, pending_changes) =
-                mirror.apply_json(initial_delta_json).map_err(js_error)?;
-            if outcome != TransportApplyOutcome::Applied || !pending_changes.is_all() {
-                return Err(js_message(
-                    "execution renderer must start from an applied transport snapshot",
-                ));
-            }
-            let camera = mirror.camera();
-            Self::create_with_source(
-                canvas,
-                CanvasExecutionSource::Transport(mirror),
-                pending_changes,
-                camera.center,
-                camera.height,
-            )
-            .await
-        }
-
-        #[wasm_bindgen(js_name = applyDeltaJson)]
-        pub fn apply_delta_json(&mut self, json: &str) -> Result<bool, JsValue> {
-            if !self.pending_changes.is_empty() {
-                return Err(js_message(
-                    "render worker must present the applied execution delta before accepting another",
-                ));
-            }
-            let (outcome, changes, camera) = {
-                let mirror = self.source.transport_mut().ok_or_else(|| {
-                    js_message("direct Rust/WASM execution source does not accept transport deltas")
-                })?;
-                let (outcome, changes) = mirror.apply_json(json).map_err(js_error)?;
-                (outcome, changes, mirror.camera())
-            };
-            match outcome {
-                TransportApplyOutcome::Applied => {
-                    self.sync_camera(camera)?;
-                    self.pending_changes = changes;
-                    Ok(true)
-                }
-                TransportApplyOutcome::DroppedStale => Ok(false),
-            }
-        }
-
-        /// Recreate the complete WebGL wgpu stack after the browser restores its
-        /// context. wgpu-hal's GL device and queue retain context-created VAOs,
-        /// framebuffers, and buffers, so rebuilding only renderer pipelines cannot
-        /// make the old stack valid again.
+        /// Recreate the complete WebGL wgpu stack after context restoration:
+        /// the old device and queue retain context-created GPU resources.
         #[wasm_bindgen(js_name = recoverWebGlContext)]
         pub async fn recover_webgl_context(&mut self) -> Result<bool, JsValue> {
             if self.backend != wgpu::Backend::Gl || !self.webgl_recovery_pending.get() {
@@ -537,12 +435,10 @@ mod wasm {
             self.timestamp_query_supported = timestamp_query_supported;
             self.renderer = renderer;
             self.direct_text_gpu = direct_text_gpu;
-            self.preparer = FramePreparer::new();
             self.direct_preparer = RetainedFramePreparer::new();
             self.timestamp_profiler =
                 profiling_enabled.then(|| GpuTimestampProfiler::new(&self.device, &self.queue));
             self.gpu_generation = next_generation;
-            self.pending_changes = FrameChanges::all();
             self.surface_frame_pending = true;
             self.last_draw_calls = 0;
             self.last_text_draw_calls = 0;
@@ -561,12 +457,8 @@ mod wasm {
             if self.webgl_recovery_pending.get() {
                 return Ok(false);
             }
-            let changes_pending = match &self.source {
-                CanvasExecutionSource::Transport(_) => !self.pending_changes.is_empty(),
-                CanvasExecutionSource::Direct(direct) => {
-                    direct.session().wake_state().frame_pending()
-                }
-            } || self.surface_frame_pending;
+            let changes_pending =
+                self.source.session().wake_state().frame_pending() || self.surface_frame_pending;
             if !self.drawable || !changes_pending {
                 return Ok(false);
             }
@@ -596,72 +488,11 @@ mod wasm {
                     wgpu::CurrentSurfaceTexture::Validation => return Ok(false),
                 };
 
-            if self.source.direct().is_some() {
-                let rendered = self.render_direct(surface_texture, reconfigure_after_present)?;
-                if rendered {
-                    self.surface_frame_pending = false;
-                }
-                return Ok(rendered);
+            let rendered = self.render_direct(surface_texture, reconfigure_after_present)?;
+            if rendered {
+                self.surface_frame_pending = false;
             }
-
-            let changes = mem::take(&mut self.pending_changes);
-            let frame = self
-                .source
-                .frame()
-                .ok_or_else(|| js_message("execution renderer has no frame snapshot"))?;
-            let prepared = self.preparer.prepare_incremental(frame, &changes);
-            self.last_geometry_cache_misses = prepared.stats.geometry_cache_misses;
-            let upload = self.renderer.upload(&self.device, &self.queue, &prepared);
-            self.last_bytes_uploaded = upload.bytes_uploaded;
-
-            let view = surface_texture
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Noon execution render worker frame"),
-                });
-            let timestamp_slot = self
-                .timestamp_profiler
-                .as_mut()
-                .and_then(GpuTimestampProfiler::reserve_slot);
-            let draw = if let Some(slot) = timestamp_slot {
-                self.renderer.encode_profiled(
-                    &mut encoder,
-                    &view,
-                    &prepared,
-                    self.clear_color,
-                    self.timestamp_profiler
-                        .as_ref()
-                        .expect("timestamp profiler reserved its own slot")
-                        .query_set(slot),
-                )
-            } else {
-                self.renderer
-                    .encode(&mut encoder, &view, &prepared, self.clear_color)
-            };
-            if let Some(slot) = timestamp_slot {
-                self.timestamp_profiler
-                    .as_ref()
-                    .expect("timestamp profiler reserved its own slot")
-                    .resolve(&mut encoder, slot);
-            }
-            self.queue.submit(Some(encoder.finish()));
-            if let Some(slot) = timestamp_slot {
-                self.timestamp_profiler
-                    .as_ref()
-                    .expect("timestamp profiler reserved its own slot")
-                    .map_after_submit(slot);
-            }
-            self.queue.present(surface_texture);
-            self.last_draw_calls = draw.draw_calls;
-            self.last_instances_drawn = draw.instances_drawn;
-            if reconfigure_after_present {
-                self.surface.configure(&self.device, &self.config);
-            }
-            self.surface_frame_pending = false;
-            Ok(true)
+            Ok(rendered)
         }
 
         pub fn resize(&mut self, width: u32, height: u32) -> Result<(), JsValue> {
@@ -684,7 +515,7 @@ mod wasm {
         }
 
         /// Manual camera control remains as a low-level host API. Authoritative
-        /// transport or direct-session camera updates overwrite it when published.
+        /// direct-session camera updates overwrite it when published.
         #[wasm_bindgen(js_name = setCamera)]
         pub fn set_camera(
             &mut self,
@@ -761,17 +592,14 @@ mod wasm {
         }
 
         pub fn time(&self) -> f64 {
-            self.source.frame().map_or(0.0, |frame| frame.time)
+            self.source.session().frame().time
         }
 
         /// Read-only diagnostic identity; never feeds back into engine execution.
         #[cfg(debug_assertions)]
         #[wasm_bindgen(js_name = directSceneRevision)]
         pub fn direct_scene_revision(&self) -> Result<u64, JsValue> {
-            let session = self
-                .source
-                .direct()
-                .ok_or_else(|| js_message("revision diagnostics require a direct session"))?;
+            let session = self.source.session();
             Ok(session.publication_context().scene_revision().get())
         }
 
@@ -780,7 +608,7 @@ mod wasm {
         pub fn seek(&mut self, time: f64) -> Result<bool, JsValue> {
             self.ensure_direct_source_idle()?;
             let (pending, camera) = {
-                let session = self.source.direct_mut().ok_or_else(|| {
+                let session = self.source.session_mut().ok_or_else(|| {
                     js_message("typed execution APIs require a direct session source")
                 })?;
                 if session.has_required_callbacks() {
@@ -802,7 +630,7 @@ mod wasm {
         /// dirtiness remain derived from the authoritative ExecutionSession.
         #[wasm_bindgen(js_name = directWakeDirectiveJson)]
         pub fn direct_wake_directive_json(&mut self, wall_time_ms: f64) -> Result<String, JsValue> {
-            let (plan, scene_time) = self.direct_wake_observation()?;
+            let (plan, scene_time) = self.direct_wake_observation();
             let directive = self
                 .direct_wake_clock
                 .directive(plan, wall_time_ms, scene_time)
@@ -827,7 +655,7 @@ mod wasm {
         /// runtime-authored deadline is due. Idle observations never advance scene time.
         #[wasm_bindgen(js_name = advanceDirectRealtime)]
         pub fn advance_direct_realtime(&mut self, wall_time_ms: f64) -> Result<bool, JsValue> {
-            let (plan, scene_time) = self.direct_wake_observation()?;
+            let (plan, scene_time) = self.direct_wake_observation();
             let directive = self
                 .direct_wake_clock
                 .directive(plan, wall_time_ms, scene_time)
@@ -857,9 +685,7 @@ mod wasm {
                 return Ok(false);
             };
             let (pending, camera, outcome) = {
-                let direct = self.source.direct_source_mut().ok_or_else(|| {
-                    js_message("direct realtime APIs require a direct ExecutionSession source")
-                })?;
+                let direct = &mut self.source;
                 let outcome = direct.drive_to(target_time)?;
                 let camera = direct.session().camera().map_err(js_error)?;
                 (
@@ -877,7 +703,7 @@ mod wasm {
             }
             self.sync_camera(camera)?;
 
-            let (next_plan, next_scene_time) = self.direct_wake_observation()?;
+            let (next_plan, next_scene_time) = self.direct_wake_observation();
             if !outcome.completed_callback_phase {
                 self.direct_wake_clock
                     .directive(next_plan, wall_time_ms, next_scene_time)
@@ -1036,10 +862,7 @@ mod wasm {
             let camera = session.camera().map_err(js_error)?;
             Self::create_with_source(
                 canvas,
-                CanvasExecutionSource::Direct(DirectExecutionSource::from_session(
-                    session, callbacks,
-                )),
-                FrameChanges::default(),
+                DirectExecutionSource::from_session(session, callbacks),
                 camera.center,
                 camera.height,
             )
@@ -1085,21 +908,14 @@ mod wasm {
             let source =
                 DirectExecutionSource::from_live_program_with_callbacks(program, callbacks)?;
             let camera = source.session().camera().map_err(js_error)?;
-            Self::create_with_source(
-                canvas,
-                CanvasExecutionSource::Direct(source),
-                FrameChanges::default(),
-                camera.center,
-                camera.height,
-            )
-            .await
+            Self::create_with_source(canvas, source, camera.center, camera.height).await
         }
 
         /// Evaluate a direct Rust/WASM execution session and publish only its runtime changes.
         pub fn evaluate(&mut self, time: f64) -> Result<bool, JsValue> {
             self.ensure_direct_source_idle()?;
             let (pending, camera) = {
-                let session = self.source.direct_mut().ok_or_else(|| {
+                let session = self.source.session_mut().ok_or_else(|| {
                     js_message("typed execution APIs require a direct session source")
                 })?;
                 if session.has_required_callbacks() {
@@ -1124,7 +940,7 @@ mod wasm {
         ) -> Result<bool, JsValue> {
             self.ensure_direct_source_idle()?;
             let (pending, camera) = {
-                let session = self.source.direct_mut().ok_or_else(|| {
+                let session = self.source.session_mut().ok_or_else(|| {
                     js_message("typed execution APIs require a direct session source")
                 })?;
                 session
@@ -1168,9 +984,7 @@ mod wasm {
             apply: impl FnOnce(&mut DirectExecutionSource) -> Result<(), JsValue>,
         ) -> Result<bool, JsValue> {
             let (pending, camera) = {
-                let direct = self.source.direct_source_mut().ok_or_else(|| {
-                    js_message("typed native input requires a direct ExecutionSession source")
-                })?;
+                let direct = &mut self.source;
                 apply(direct)?;
                 let camera = direct.session().camera().map_err(js_error)?;
                 (direct.session().wake_state().frame_pending(), camera)
@@ -1198,9 +1012,7 @@ mod wasm {
         }
 
         fn ensure_direct_source_idle(&self) -> Result<(), JsValue> {
-            let session = self.source.direct().ok_or_else(|| {
-                js_message("typed execution APIs require a direct ExecutionSession source")
-            })?;
+            let session = self.source.session();
             if session.wake_state().frame_pending() {
                 return Err(js_message(
                     "direct execution host must present pending runtime changes before advancing again",
@@ -1209,16 +1021,9 @@ mod wasm {
             Ok(())
         }
 
-        fn direct_wake_observation(&self) -> Result<(BrowserExecutionWakePlan, f64), JsValue> {
-            let direct = match &self.source {
-                CanvasExecutionSource::Transport(_) => {
-                    return Err(js_message(
-                        "direct wake APIs require a direct ExecutionSession source",
-                    ));
-                }
-                CanvasExecutionSource::Direct(direct) => direct,
-            };
-            Ok((direct.wake_plan(), direct.session().frame().time))
+        fn direct_wake_observation(&self) -> (BrowserExecutionWakePlan, f64) {
+            let direct = &self.source;
+            (direct.wake_plan(), direct.session().frame().time)
         }
 
         fn direct_scene_time_at(&self, wall_time_ms: f64) -> Result<f64, JsValue> {
@@ -1229,8 +1034,7 @@ mod wasm {
 
         async fn create_with_source(
             canvas: OffscreenCanvas,
-            source: CanvasExecutionSource,
-            pending_changes: FrameChanges,
+            source: DirectExecutionSource,
             camera_center: Vec2,
             camera_height: f32,
         ) -> Result<Self, JsValue> {
@@ -1267,9 +1071,7 @@ mod wasm {
                 config,
                 drawable: true,
                 source,
-                pending_changes,
                 direct_wake_clock: BrowserExecutionWakeClock::default(),
-                preparer: FramePreparer::new(),
                 direct_preparer: RetainedFramePreparer::new(),
                 renderer,
                 direct_text_gpu,
@@ -1312,11 +1114,7 @@ mod wasm {
             let half_extent = camera.world_size * 0.5;
             let publication_context;
             let draw = {
-                let direct = self.source.direct_source_mut().ok_or_else(|| {
-                    js_message(
-                        "direct retained rendering requires a direct ExecutionSession source",
-                    )
-                })?;
+                let direct = &mut self.source;
                 let visibility = direct.query_viewport(Rect::new(
                     camera.center - half_extent,
                     camera.center + half_extent,
@@ -1401,8 +1199,6 @@ mod wasm {
             }
             let resumed = self
                 .source
-                .direct_source_mut()
-                .expect("direct renderer source was checked before rendering")
                 .admit_rendered_publication(publication_context)?;
             if resumed {
                 // Endpoint admission is the only place presentation may release a
