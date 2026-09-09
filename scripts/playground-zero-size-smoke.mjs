@@ -44,7 +44,9 @@ async function waitForServer() {
 }
 
 async function snapshot(page) {
-  return page.evaluate(() => {
+  return page.evaluate(async () => {
+    const report = await window.__noonExampleGallery?.executionMetrics();
+    const metrics = report?.metrics;
     const canvas = document.querySelector("#scene");
     const status = document.querySelector("#status");
     const patchStatus = document.querySelector("#patch-status");
@@ -57,7 +59,9 @@ async function snapshot(page) {
       rendererBackend: status?.dataset.rendererBackend ?? "",
       runtimeState: status?.dataset.state ?? "",
       runtimeStartup: status?.dataset.runtimeStartup ?? "",
-      presentedFrames: Number(status?.dataset.presentedFrames ?? "0"),
+      presentedFrames: metrics?.presentedFrames ?? Number(status?.dataset.presentedFrames ?? "0"),
+      renderedTime: metrics?.time ?? null,
+      needsPresent: metrics?.needsPresent ?? null,
       executionMode: status?.dataset.executionMode ?? "",
       metricTime: document.querySelector("#metric-time")?.value ?? "",
       patchState: patchStatus?.dataset.state ?? "",
@@ -90,12 +94,10 @@ async function startDeferredRuntime(page) {
 
 async function waitForFrameAfter(page, previousFrames, label) {
   await page.waitForFunction(
-    (previous) => {
+    async (previous) => {
       const status = document.querySelector("#status");
-      return (
-        status?.dataset.state !== "error" &&
-        Number(status?.dataset.presentedFrames ?? "0") > previous
-      );
+      const report = await window.__noonExampleGallery.executionMetrics();
+      return status?.dataset.state !== "error" && report.metrics.presentedFrames > previous;
     },
     previousFrames,
     { timeout: 10_000 },
@@ -215,13 +217,25 @@ try {
   await page.screenshot({ path: path.join(artifactDir, "zero-size-page.png"), fullPage: true });
 
   await setCanvasContentSize(page, 1, 1);
-  diagnostics.snapshots.nearZero = await waitForFrameAfter(
-    page,
-    diagnostics.snapshots.zero.presentedFrames,
-    "near-zero transition",
-  );
+  // ResizeObserver clamps both 0px and 1px CSS content to the same 1px backing.
+  // Let layout/observer delivery finish, then query the existing renderer channel
+  // in FIFO order. A redundant resize must not invent work or wedge presentation.
+  await page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
+  diagnostics.snapshots.nearZero = await snapshot(page);
+  assert.equal(diagnostics.snapshots.nearZero.presentedFrames,
+    diagnostics.snapshots.zero.presentedFrames, "equivalent backing size must stay settled");
+  assert.equal(diagnostics.snapshots.nearZero.needsPresent, false,
+    "no-op resize must not leave a pending presentation");
+  assert.equal(diagnostics.snapshots.nearZero.renderedTime,
+    diagnostics.snapshots.zero.renderedTime, "resize must not advance authored time");
   assert.equal(diagnostics.snapshots.nearZero.cssWidth, 1, "canvas content width must reach 1px");
   assert.equal(diagnostics.snapshots.nearZero.cssHeight, 1, "canvas content height must reach 1px");
+
+  await setCanvasContentSize(page, 2, 2);
+  diagnostics.snapshots.small = await waitForFrameAfter(
+    page, diagnostics.snapshots.nearZero.presentedFrames, "changed small backing size");
 
   await page.evaluate(async () => {
     const canvas = document.querySelector("#scene");
@@ -242,7 +256,7 @@ try {
   });
   diagnostics.snapshots.rapidZero = await waitForFrameAfter(
     page,
-    diagnostics.snapshots.nearZero.presentedFrames,
+    diagnostics.snapshots.small.presentedFrames,
     "rapid resize burst",
   );
 
@@ -260,6 +274,11 @@ try {
     `zero-size transition produced unhandled page errors:\n${diagnostics.pageErrors.join("\n")}`,
   );
 
+  assert.equal(diagnostics.snapshots.restored.renderedTime,
+    diagnostics.snapshots.baseline.renderedTime, "resize recovery must preserve authored time");
+  assert.equal(diagnostics.snapshots.restored.needsPresent, false,
+    "restored surface must not retain stalled presentation work");
+  assert.deepEqual(diagnostics.consoleErrors, [], "resize recovery emitted console errors");
   await page.locator("#scene").screenshot({ path: path.join(artifactDir, "restored.png") });
   diagnostics.serverOutput = serverOutput;
   await writeFile(

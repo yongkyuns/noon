@@ -24,6 +24,21 @@ on:
       - "web/retained-execution-worker-client.js"
       - "web/authoring-execution-client.js"
       - "web/render-gpu-diagnostics.js"
+  pull_request:
+    paths:
+      - ".github/workflows/renderer-recovery.yml"
+      - "crates/noon-web/Cargo.toml"
+      - "crates/noon-web/src/lib.rs"
+      - "crates/noon-web/src/renderer_recovery_smoke.rs"
+      - "scripts/build-web-demo.sh"
+      - "scripts/renderer-init-failure-smoke.mjs"
+      - "scripts/renderer-webgl-context-loss-smoke.mjs"
+      - "scripts/renderer-webgpu-device-loss-smoke.mjs"
+      - "scripts/renderer-webgpu-validation-error-smoke.mjs"
+      - "scripts/renderer-worker-webgpu-validation-error-smoke.mjs"
+      - "scripts/playground-zero-size-smoke.mjs"
+      - "web/ci-workflow-topology.test.mjs"
+      - "web/authoring-render-transition-runtime.test.mjs"
   workflow_dispatch:
 
 permissions:
@@ -70,7 +85,18 @@ jobs:
       - name: Build browser package
         env:
           NOON_WASM_SKIP_OPT: "1"
+          NOON_RENDERER_SMOKE: "1"
         run: bash scripts/build-web-demo.sh
+      - name: Retain renderer qualification package before browser setup
+        uses: actions/upload-artifact@v7
+        with:
+          name: renderer-recovery-web-runtime
+          path: |
+            web/pkg
+            web/python-worker.js
+            web/python/compat-bundle.*.json
+          if-no-files-found: error
+          retention-days: 3
       - name: Cache Playwright Chromium
         uses: actions/cache@v6
         with:
@@ -104,6 +130,18 @@ jobs:
         env:
           NOON_RENDERER_VALIDATION_ARTIFACTS: browser-smoke-artifacts/render-worker-validation-error
         run: node scripts/renderer-worker-webgpu-validation-error-smoke.mjs
+      - name: Test settled zero-size and real resize recovery
+        env:
+          NOON_PLAYGROUND_ZERO_SIZE_ARTIFACTS: browser-smoke-artifacts/playground-zero-size
+        run: node scripts/playground-zero-size-smoke.mjs
+      - name: Upload resize diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: renderer-recovery-zero-size
+          path: browser-smoke-artifacts/playground-zero-size
+          if-no-files-found: warn
+          retention-days: 7
       - name: Upload renderer initialization diagnostics
         if: always()
         uses: actions/upload-artifact@v7

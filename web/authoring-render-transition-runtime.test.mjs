@@ -681,3 +681,30 @@ test("renderer startup reports browser surface creation diagnostics", async () =
   assert.ok(harness.mainMessages.some((message) =>
     message.type === "error" && message.message.includes("GPU surface unavailable")));
 });
+
+
+test("clamped zero-to-one resize stays idle and later real resizes still present", () => {
+  const sizes = [];
+  let presents = 0;
+  const context = vm.createContext({
+    rendererStub: {
+      resize: (width, height) => sizes.push([width, height]),
+      render: () => { presents += 1; return true; },
+    },
+    drainRendererGpuDiagnostics: () => true,
+    formatGpuDiagnostic: String,
+  });
+  vm.runInContext(harnessSource, context);
+  vm.runInContext(`renderer = rendererStub; width = 640; height = 360;
+    resize({width:0, height:0});`, context);
+  assert.equal(presents, 1);
+  vm.runInContext("resize({width:1, height:1});", context);
+  assert.equal(presents, 1, "equivalent 1px backing size must not force another frame");
+  assert.equal(vm.runInContext("needsPresent", context), false);
+  assert.equal(vm.runInContext("scheduledFrame", context), null);
+  vm.runInContext("resize({width:2, height:2}); resize({width:640, height:360});", context);
+  assert.equal(presents, 3, "changed backing dimensions must remain drawable after the no-op");
+  assert.deepEqual(sizes, [[1,1], [1,1], [2,2], [640,360]]);
+  assert.equal(vm.runInContext("needsPresent", context), false);
+  assert.equal(vm.runInContext("scheduledFrame", context), null);
+});
