@@ -1010,16 +1010,16 @@ try {
   const rejectedFinalizations = await page.evaluate(async () => {
     const failures = [];
     const corruptions = [
-      'scene._reactive_signals.append({"legacy": True})',
       'scene._semantic_geometry_handles.clear()',
       'scene._tracks.append({"property": "position"})',
-      'scene = Scene()\nassert getattr(scene, "_canonical_authoring_context", None) is None\nscene._reactive_signals.append({"legacy": True})',
     ];
     for (const corruption of corruptions) {
       const source = `from noon import Circle, Scene
 scene = Scene()
 scene.add(Circle(radius=0.4))
 assert scene._canonical_authoring_context is not None
+assert not hasattr(scene._canonical_authoring_context, "checkpoint")
+assert not hasattr(scene._canonical_authoring_context, "restore")
 ${corruption}
 def reject_export(*args, **kwargs):
     raise AssertionError("normal shared finalization invoked the document exporter")
@@ -1053,6 +1053,8 @@ class SelectedScene(Scene):
     def construct(self):
         raise AssertionError("prebuilt result construct ran twice")
 result = SelectedScene()
+for retired_state in ("_reactive_signals", "_reactive_bindings", "_reactive_signal_tracks", "_native_inputs"):
+    assert not hasattr(result, retired_state), retired_state
 # An obsolete Python cursor must never participate in shared time or admission.
 result._cursor = object()
 assert result.time == 0.0

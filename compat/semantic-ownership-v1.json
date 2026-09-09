@@ -9,6 +9,14 @@
     "shared-rust"
   ],
   "duplicate_debt_budgets": [
+    {"path": "web/python/_manim_reactive.py", "token": "_reactive_signals", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_reactive.py", "token": "_reactive_signal_tracks", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_reactive.py", "token": "_signal_id", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_reactive.py", "token": "self._value", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_reactive.py", "token": "_ORIGINAL_SCENE_PLAY", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_canonical_scene.py", "token": "_ORIGINAL_AUTHORING_CHECKPOINT", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_canonical_scene.py", "token": "_ORIGINAL_RESTORE_AUTHORING_CHECKPOINT", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_canonical_scene.py", "token": "_CHECKPOINT_TAG", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_composition.py", "token": "_schedule_composition", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_composition.py", "token": "_tracks", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_composition.py", "token": "_cursor", "maximum": 0, "migration_issue": "#61"},
@@ -434,8 +442,8 @@
       "id": "reactive.tracker-binding-adapter",
       "surface": "ValueTracker, native signal, and property-binding declarations",
       "classification": "python-adapter-only",
-      "owner": {"language": "python", "path": "web/python/_manim_reactive.py", "symbol": "ValueTracker/_register_native_state/_bind"},
-      "reason": "Python normalizes Manim call shapes and records language-neutral signal and binding declarations; it does not evaluate the graph or mutate rendered objects per frame.",
+      "owner": {"language": "python", "path": "web/python/_manim_reactive.py", "symbol": "ValueTracker/_NativeSignal"},
+      "reason": "Python normalizes Manim call shapes and carries shared Rust handles. It has no fallback scalar value, signal allocator, reactive document or alternate playback hook.",
       "replacement": "Keep the adapter thin and route any new deterministic reactive policy into Rust."
     },
     {
@@ -443,7 +451,7 @@
       "surface": "Reactive graph validation, evaluation, invalidation, and native input dispatch",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon-core/src/reactive/native_reactive.rs", "symbol": "ReactiveProgram/ReactiveState"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_reactive.py", "symbol": "_to_document"}]
+      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_value_tracker/_canonical_bind_position"}]
     }
   ]
 }

@@ -271,6 +271,7 @@ impl CanonicalAuthoringScene {
         Ok(frame)
     }
 
+    #[cfg(test)]
     fn members(&self) -> Result<Vec<noon_core::SemanticNodeId>, String> {
         self.scene
             .store()
@@ -278,66 +279,6 @@ impl CanonicalAuthoringScene {
             .node(self.scene.root())
             .map(|node| node.members().to_vec())
             .ok_or_else(|| "semantic scene root is no longer live".into())
-    }
-
-    pub fn checkpoint(&self) -> usize {
-        self.scene
-            .store()
-            .borrow()
-            .node(self.scene.root())
-            .expect("canonical semantic scene root remains live")
-            .members()
-            .len()
-    }
-
-    pub fn restore(&mut self, checkpoint: usize) -> Result<(), String> {
-        let members = self.members()?;
-        if checkpoint > members.len() {
-            return Err(format!(
-                "canonical authoring checkpoint {checkpoint} exceeds object count {}",
-                members.len()
-            ));
-        }
-        let removed = &members[checkpoint..];
-        let candidates = {
-            let store = self.scene.store().borrow();
-            let mut candidates = BTreeSet::new();
-            let mut pending = removed.to_vec();
-            while let Some(node) = pending.pop() {
-                if !candidates.insert(node) {
-                    continue;
-                }
-                let node = store
-                    .node(node)
-                    .ok_or_else(|| "canonical rollback member is no longer live".to_string())?;
-                pending.extend(node.members().iter().copied());
-            }
-            candidates
-        };
-        let mut transaction = noon_core::SemanticMutationTransaction::new();
-        for node in removed {
-            transaction.remove_member(self.scene.root(), *node);
-        }
-        transaction
-            .apply(&mut self.scene.store().borrow_mut())
-            .map_err(|error| error.to_string())?;
-        let unreachable = {
-            let store = self.scene.store().borrow();
-            candidates
-                .into_iter()
-                .filter_map(|node| {
-                    let bound = self.identities.get(&node).copied()?;
-                    (!noon_core::semantic_scene_root_contains(&store, self.scene.root(), node)
-                        .expect("validated rollback candidates and scene root remain live"))
-                    .then_some((node, bound))
-                })
-                .collect::<Vec<_>>()
-        };
-        for (node, id) in unreachable {
-            self.identities.remove(&node);
-            self.bindings.remove(&id);
-        }
-        Ok(())
     }
 
     pub fn lower_execution(&self) -> Result<noon::ExecutionSession, String> {
@@ -5732,14 +5673,6 @@ mod wasm {
                 .drain_returned_publication_json()
                 .map_err(js_error)
         }
-
-        pub fn checkpoint(&self) -> u32 {
-            u32::try_from(self.inner.checkpoint()).expect("canonical object count fits u32")
-        }
-
-        pub fn restore(&mut self, checkpoint: u32) -> Result<(), JsValue> {
-            self.inner.restore(checkpoint as usize).map_err(js_error)
-        }
     }
 }
 
@@ -5998,7 +5931,13 @@ mod tests {
         let mut other = CanonicalAuthoringScene::with_store(Rc::clone(&store));
         assert!(other.lower_execution().unwrap().frame().objects.is_empty());
         other.bind_mobject(ObjectId::new(0), &object).unwrap();
-        context.restore(0).unwrap();
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Clear,
+                members: Vec::new(),
+                bindings: Vec::new(),
+            })
+            .unwrap();
         assert!(context
             .lower_execution()
             .unwrap()
@@ -6024,10 +5963,10 @@ mod tests {
             first.lower_execution().unwrap().camera().unwrap(),
             noon_core::Camera2DState::default()
         );
-        let checkpoint = first.checkpoint();
+        let members = first.members().unwrap();
         let revision = store.borrow().scene_revision();
         assert!(first.create_camera_frame(ObjectId::new(5)).is_err());
-        assert_eq!(first.checkpoint(), checkpoint);
+        assert_eq!(first.members().unwrap(), members);
         assert_eq!(store.borrow().scene_revision(), revision);
         assert_eq!(
             first.bindings.get(&ObjectId::new(4)),
@@ -6052,106 +5991,9 @@ mod tests {
         assert_eq!(local.node_id(), foreign.node_id());
         let revision = first.scene.store().borrow().scene_revision();
         assert!(first.bind_mobject(ObjectId::new(0), &foreign).is_err());
-        assert_eq!(first.checkpoint(), 0);
+        assert!(first.members().unwrap().is_empty());
         assert_eq!(first.scene.store().borrow().scene_revision(), revision);
         first.bind_mobject(ObjectId::new(0), &local).unwrap();
-    }
-
-    #[test]
-    fn family_checkpoint_tracks_root_prefix_and_restores_descendant_bindings_atomically() {
-        let mut context = CanonicalAuthoringScene::default();
-        let anchor = context.scene.circle(0.25).unwrap();
-        context.bind_mobject(ObjectId::new(0), &anchor).unwrap();
-        let checkpoint = context.checkpoint();
-
-        let left = context.scene.circle(0.5).unwrap();
-        let right = context.scene.square(0.5).unwrap();
-        let family = context
-            .scene
-            .family(&[(&left).into(), (&right).into()])
-            .unwrap();
-        context
-            .edit_membership(SceneMembershipBatch {
-                kind: SceneMembershipBatchKind::Add,
-                members: vec![OwnedSceneMembershipMember::Family(family)],
-                bindings: vec![
-                    (ObjectId::new(1), left.clone()),
-                    (ObjectId::new(2), right.clone()),
-                ],
-            })
-            .unwrap();
-        assert_eq!(context.checkpoint(), checkpoint + 1);
-        assert_eq!(
-            context.bindings.get(&ObjectId::new(1)),
-            Some(&left.node_id())
-        );
-        assert_eq!(
-            context.bindings.get(&ObjectId::new(2)),
-            Some(&right.node_id())
-        );
-
-        context.restore(checkpoint).unwrap();
-        assert_eq!(context.root_membership_keys().unwrap().len(), checkpoint);
-        assert!(!context.bindings.contains_key(&ObjectId::new(1)));
-        assert!(!context.bindings.contains_key(&ObjectId::new(2)));
-        assert!(!context.identities.contains_key(&left.node_id()));
-        assert!(!context.identities.contains_key(&right.node_id()));
-        assert_eq!(
-            context.bindings.get(&ObjectId::new(0)),
-            Some(&anchor.node_id())
-        );
-
-        let revision = context.scene.store().borrow().scene_revision();
-        let bindings = context.bindings.clone();
-        let identities = context.identities.clone();
-        assert!(context.restore(checkpoint + 1).is_err());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
-        assert_eq!(context.bindings, bindings);
-        assert_eq!(context.identities, identities);
-    }
-
-    #[test]
-    fn checkpoint_restore_keeps_a_binding_reachable_through_a_retained_alias() {
-        let mut context = CanonicalAuthoringScene::default();
-        let shared = context.scene.circle(0.5).unwrap();
-        let retained = context.scene.family(&[(&shared).into()]).unwrap();
-        context
-            .edit_membership(SceneMembershipBatch {
-                kind: SceneMembershipBatchKind::Add,
-                members: vec![OwnedSceneMembershipMember::Family(retained)],
-                bindings: vec![(ObjectId::new(0), shared.clone())],
-            })
-            .unwrap();
-        let checkpoint = context.checkpoint();
-
-        let temporary = context.scene.square(0.5).unwrap();
-        let alias = context
-            .scene
-            .family(&[(&shared).into(), (&temporary).into()])
-            .unwrap();
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_member(context.scene.root(), alias.node_id());
-        transaction
-            .apply(&mut context.scene.store().borrow_mut())
-            .unwrap();
-        context
-            .bindings
-            .insert(ObjectId::new(1), temporary.node_id());
-        context
-            .identities
-            .insert(temporary.node_id(), ObjectId::new(1));
-
-        context.restore(checkpoint).unwrap();
-        assert_eq!(
-            context.bindings.get(&ObjectId::new(0)),
-            Some(&shared.node_id())
-        );
-        assert_eq!(
-            context.identities.get(&shared.node_id()),
-            Some(&ObjectId::new(0))
-        );
-        assert!(!context.bindings.contains_key(&ObjectId::new(1)));
-        assert!(!context.identities.contains_key(&temporary.node_id()));
     }
 
     #[test]
@@ -6433,38 +6275,6 @@ mod tests {
             assert_eq!(text.kind, kind);
             assert_eq!(text.source.as_ref(), source);
         }
-    }
-
-    #[test]
-    fn checkpoint_restore_preserves_shared_edits_and_reclaims_failed_binds() {
-        let mut context = CanonicalAuthoringScene::default();
-        let first = ObjectId::new(0);
-        let mut circle = context.scene.circle(0.5).unwrap();
-        context.bind_mobject(first, &circle).unwrap();
-        let checkpoint = context.checkpoint();
-        let temporary = context.scene.text(noon::Text::new("temporary")).unwrap();
-        context.bind_mobject(ObjectId::new(1), &temporary).unwrap();
-        circle.shift(0.75, 0.0).unwrap();
-        context.restore(checkpoint).unwrap();
-        let execution = context.lower_execution().unwrap();
-        assert_eq!(execution.frame().objects.len(), 1);
-        assert_eq!(execution.frame().objects[0].transform.translation.x, 0.75);
-        assert_eq!(context.bindings.get(&first), Some(&circle.node_id()));
-        assert!(!context.identities.contains_key(&temporary.node_id()));
-
-        circle.move_to(2.0, -1.0).unwrap();
-        let rectangle = context.scene.rectangle(2.0, 1.0).unwrap();
-        context.bind_mobject(ObjectId::new(1), &rectangle).unwrap();
-        let execution = context.lower_execution().unwrap();
-        assert_eq!(execution.frame().objects.len(), 2);
-        assert_eq!(
-            execution.execution_object_id(circle.node_id()),
-            Some(execution.frame().objects[0].id)
-        );
-        assert_eq!(
-            execution.frame().objects[0].transform.translation,
-            Vec2::new(2.0, -1.0)
-        );
     }
 
     #[test]

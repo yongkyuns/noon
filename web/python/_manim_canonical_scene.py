@@ -38,9 +38,6 @@ except ImportError:  # pragma: no cover - native import smoke only
     _create_context = None
 
 _INSTALLED = False
-_CHECKPOINT_TAG = object()
-_ORIGINAL_AUTHORING_CHECKPOINT = _ir.Scene._authoring_checkpoint
-_ORIGINAL_RESTORE_AUTHORING_CHECKPOINT = _ir.Scene._restore_authoring_checkpoint
 _ORIGINAL_TO_DOCUMENT = _ir.Scene.to_document
 _ORIGINAL_IDENTITY_DOCUMENT = _ir.Scene.identity_document
 _ASYNC_CONTINUATION_MODE = "_noon_async_continuation_mode"
@@ -2381,19 +2378,6 @@ def _identity_document(self: _ir.Scene) -> dict[str, list[dict[str, Any]]]:
 def execution_context(scene, callbacks=None):
     """Select typed geometry/native-Text execution; unsupported contracts stay explicit."""
     del callbacks  # Callback declarations now lower through the canonical context.
-    # The canonical static context does not yet lower the legacy reactive/native
-    # declarations.  Reject them here rather than silently constructing a live
-    # session that omits their drivers; #61 owns their shared-semantic migration.
-    if any(
-        getattr(scene, attribute, [])
-        for attribute in (
-            "_reactive_signals",
-            "_reactive_bindings",
-            "_reactive_signal_tracks",
-            "_native_inputs",
-        )
-    ):
-        return None
     handles = getattr(scene, "_semantic_geometry_handles", {})
     text_handles = getattr(scene, "_semantic_text_handles", {})
     if len(handles) + len(text_handles) != len(scene._object_positions):
@@ -2575,35 +2559,6 @@ def _live_execution(
     return LiveExecution(self, duration)
 
 
-def _authoring_checkpoint(self: _ir.Scene) -> tuple[object, tuple[Any, ...], int]:
-    legacy = _ORIGINAL_AUTHORING_CHECKPOINT(self)
-    canonical = int(_context(self).checkpoint())
-    return (_CHECKPOINT_TAG, legacy, canonical)
-
-
-def _restore_authoring_checkpoint(
-    self: _ir.Scene,
-    checkpoint: tuple[Any, ...],
-) -> None:
-    if (
-        len(checkpoint) == 3
-        and checkpoint[0] is _CHECKPOINT_TAG
-        and isinstance(checkpoint[1], tuple)
-    ):
-        canonical = int(checkpoint[2])
-        _context(self).restore(canonical)
-        _ORIGINAL_RESTORE_AUTHORING_CHECKPOINT(self, checkpoint[1])
-        handles = getattr(self, "_semantic_geometry_handles", {})
-        for object_id in list(handles):
-            if object_id not in self._object_positions:
-                del handles[object_id]
-        return
-    # Compatibility with an opaque checkpoint captured before this adapter was
-    # installed. Browser authoring installs adapters before user scenes are built,
-    # but accepting the old shape keeps direct module-level tests unsurprising.
-    _ORIGINAL_RESTORE_AUTHORING_CHECKPOINT(self, checkpoint)
-
-
 def _bind_text(
     self: _typst._RetainedTextMobject,
     scene: _base.Scene,
@@ -2626,8 +2581,6 @@ def install() -> None:
     _compat._STANDARD_MEMBERSHIP_VIEW = _canonical_scene_mobjects
     _compat._STANDARD_MEMBERSHIP_REGISTER = _register_membership_wrappers
 
-    _ir.Scene._authoring_checkpoint = _authoring_checkpoint
-    _ir.Scene._restore_authoring_checkpoint = _restore_authoring_checkpoint
     _typst._RetainedTextMobject._bind_to_scene = _bind_text
     _base.Mobject._bind_to_scene = _bind_mobject
     _base.Scene._bind_camera_frame = _bind_camera_frame
