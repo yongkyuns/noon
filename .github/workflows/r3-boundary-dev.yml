@@ -3,25 +3,102 @@ on:
   push:
     branches: [codex/1292-r3-boundary-prep]
 permissions:
-  contents: read
+  contents: write
 jobs:
-  source:
+  qualify:
     runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: d6734d2a0626f5c9926e4043ad2017a94f5c8c5a
           fetch-depth: 0
-      - name: Integrate the pinned typed foundation without changing its branch
+      - name: Assemble only the scoped product patch on the reconciled R2 foundation
         run: |
+          mkdir -p /tmp/r3-evidence
+          python3 - <<'PY'
+          import base64, gzip, hashlib, pathlib
+          encoded = ''.join(p.read_text().strip() for p in sorted(pathlib.Path('.github/r3-payload').glob('*.b64')))
+          patch = gzip.decompress(base64.b64decode(encoded))
+          assert hashlib.sha256(patch).hexdigest() == 'bbcfab342b0681978749db8bde71913c49a2b87d55069e218e9992b0cea8c919'
+          pathlib.Path('/tmp/r3-evidence/input.patch').write_bytes(patch)
+          PY
+          git checkout --detach fe833fc640cb267bbf213cab7ff266269ae6c5a5
+          git apply --index /tmp/r3-evidence/input.patch
+          rustup show active-toolchain
+          cargo fmt --all
+          git add -u
+          git diff --cached --check
           git config user.name 'Yongkyun Shin'
           git config user.email '4311628+yongkyuns@users.noreply.github.com'
-          git merge --no-edit d1c72e55f03817b4bb2efe815c80e8b9f32b8747
-          mkdir -p /tmp/r3-source
-          git rev-parse HEAD HEAD^{tree} > /tmp/r3-source/revisions.txt
-          git archive --format=tar.gz HEAD > /tmp/r3-source/source.tar.gz
-      - uses: actions/upload-artifact@v7
+          tree=$(git write-tree)
+          parent=fe833fc640cb267bbf213cab7ff266269ae6c5a5
+          if git show-ref --verify --quiet refs/remotes/origin/codex/1292-r3-typed-boundary; then parent=$(git rev-parse refs/remotes/origin/codex/1292-r3-typed-boundary); fi
+          candidate=$(git commit-tree "$tree" -p "$parent" -m 'feat: project typed authoring failures through WASM and Python (#1292 R3)')
+          git reset --hard "$candidate"
+          git rev-parse HEAD HEAD^{tree} > /tmp/r3-evidence/revisions.txt
+          git diff fe833fc640cb267bbf213cab7ff266269ae6c5a5 HEAD > /tmp/r3-evidence/product.patch
+          git archive --format=tar.gz HEAD > /tmp/r3-evidence/source.tar.gz
+      - uses: actions/cache/restore@v6
         with:
-          name: r3-source
-          path: /tmp/r3-source
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Native architecture, format, workspace check, strict Clippy and library tests
+        run: |
+          set -o pipefail
+          bash scripts/check.sh fast d6734d2a0626f5c9926e4043ad2017a94f5c8c5a 2>&1 | tee /tmp/r3-evidence/native.log
+      - name: Web static and Python tests
+        run: |
+          set -o pipefail
+          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/r3-evidence/preflight.log
+      - name: Build actual dev WASM from this exact candidate
+        run: |
+          set -o pipefail
+          rustup target add wasm32-unknown-unknown
+          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/r3-evidence/wasm.log
+      - uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install pinned browser dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Real WASM and Python error categories, atomicity and recovery
+        run: |
+          set -o pipefail
+          node scripts/authoring-errors-smoke.mjs 2>&1 | tee /tmp/r3-evidence/errors-browser.log
+      - name: Existing real authoring and continuation regression
+        run: |
+          set -o pipefail
+          node scripts/manim-compat-smoke.mjs 2>&1 | tee /tmp/r3-evidence/manim-browser.log
+      - name: Publish only the verified scoped candidate to its own branch
+        run: git push origin HEAD:refs/heads/codex/1292-r3-typed-boundary
+      - name: Retain exact dependency resolution and final working-tree status
+        if: always()
+        run: |
+          if test -f Cargo.lock; then cp Cargo.lock /tmp/r3-evidence/Cargo.lock; fi
+          git status --short > /tmp/r3-evidence/status.txt
+          git rev-parse HEAD > /tmp/r3-evidence/final-head.txt
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: r3-boundary-qualification
+          path: /tmp/r3-evidence
           retention-days: 3
