@@ -141,6 +141,39 @@ impl ExecutionSession {
         Ok(())
     }
 
+    fn require_publication_ready(
+        &self,
+        purpose: SemanticPublicationPurpose,
+    ) -> Result<(), ExecutionSessionPublicationError> {
+        if self.pending_callback.is_some() {
+            return Err(ExecutionSessionPublicationError::RequiredCallbackPending);
+        }
+        if self.pending_segment_completion.is_some()
+            && purpose != SemanticPublicationPurpose::SegmentCompletion
+        {
+            return Err(ExecutionSessionPublicationError::SegmentCompletionPending);
+        }
+        Ok(())
+    }
+
+    /// Admit resource-producing detached construction before it can change the arena.
+    /// Ordinary waits remain admissible: only animation completion and required
+    /// callback publication block authored construction. No scene traversal is needed.
+    pub(crate) fn require_resource_creation_at_root(
+        &self,
+        store: &SemanticStore,
+        root: SemanticNodeId,
+    ) -> Result<(), ExecutionSessionPublicationError> {
+        self.require_published_store(store)?;
+        self.require_publication_ready(SemanticPublicationPurpose::AuthoredMutation)?;
+        noon_compile::validate_semantic_publication_root(store, root)
+            .map_err(ExecutionSessionPublicationError::Lowering)?;
+        if !self.reachability.is_execution_root(root) {
+            return Err(ExecutionSessionPublicationError::UnknownObject(root));
+        }
+        Ok(())
+    }
+
     /// Commit authored values and their local execution projection together.
     ///
     /// The caller must use this entry point for mutations after initial lowering.
@@ -201,14 +234,7 @@ impl ExecutionSession {
         effective: Option<PreparedEffectivePropertyBatch>,
         purpose: SemanticPublicationPurpose,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
-        if self.pending_callback.is_some() {
-            return Err(ExecutionSessionPublicationError::RequiredCallbackPending);
-        }
-        if self.pending_segment_completion.is_some()
-            && purpose != SemanticPublicationPurpose::SegmentCompletion
-        {
-            return Err(ExecutionSessionPublicationError::SegmentCompletionPending);
-        }
+        self.require_publication_ready(purpose)?;
         self.require_published_store(store)?;
         if !is_semantic_updater_publication(transaction.mutations()) {
             validate_semantic_publication(&transaction)
@@ -299,14 +325,7 @@ impl ExecutionSession {
         scalar: Option<PreparedScalarPublicationContract>,
         order_root: Option<SemanticNodeId>,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
-        if self.pending_callback.is_some() {
-            return Err(ExecutionSessionPublicationError::RequiredCallbackPending);
-        }
-        if self.pending_segment_completion.is_some()
-            && purpose != SemanticPublicationPurpose::SegmentCompletion
-        {
-            return Err(ExecutionSessionPublicationError::SegmentCompletionPending);
-        }
+        self.require_publication_ready(purpose)?;
         self.require_published_store(prepared.store())?;
         if order_root.is_none() {
             if let Some(SemanticMutation::ReorderMember { family, .. }) = prepared
