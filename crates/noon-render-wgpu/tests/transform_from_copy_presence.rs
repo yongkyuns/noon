@@ -1,50 +1,82 @@
-use noon_compile::CompiledScene;
+use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    Easing, GeometryRef, ObjectSnapshot, SceneDefinition, TrackTiming, Transform2D, Vec2,
+    Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId, TrackTiming,
+    TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
 };
 use noon_render_wgpu::FramePreparer;
 use noon_runtime::SceneInstance;
 
 fn copy_scene() -> SceneInstance {
-    let mut scene = SceneDefinition::new();
-    let source = scene.add(GeometryRef::circle(1.0));
-    let target = scene.add(GeometryRef::circle(3.0));
-    let copy = scene.add(GeometryRef::circle(1.0));
-
-    scene.object_mut(source).expect("source exists").transform = Transform2D {
-        translation: Vec2::new(-2.0, 0.0),
-        ..Transform2D::IDENTITY
+    let source = ObjectId::new(0);
+    let target = ObjectId::new(1);
+    let copy = ObjectId::new(2);
+    let from = TransformTrackEndpoint {
+        geometry: GeometryRef::circle(1.0),
+        transform: Transform2D {
+            translation: Vec2::new(-2.0, 0.0),
+            ..Transform2D::IDENTITY
+        },
+        style: Style::default(),
     };
-    scene.object_mut(copy).expect("copy exists").transform = Transform2D {
-        translation: Vec2::new(-2.0, 0.0),
-        ..Transform2D::IDENTITY
+    let to = TransformTrackEndpoint {
+        geometry: GeometryRef::circle(3.0),
+        transform: Transform2D {
+            translation: Vec2::new(4.0, -2.0),
+            ..Transform2D::IDENTITY
+        },
+        style: Style::default(),
     };
-    scene.object_mut(target).expect("target exists").transform = Transform2D {
-        translation: Vec2::new(4.0, -2.0),
-        ..Transform2D::IDENTITY
-    };
-
-    let source_snapshot = ObjectSnapshot::from(scene.object(source).expect("source exists"));
-    let target_snapshot = ObjectSnapshot::from(scene.object(target).expect("target exists"));
-    scene
-        .animate_transform(
-            copy,
-            source_snapshot,
-            target_snapshot,
-            TrackTiming::new(1.0, 2.0, Easing::Linear),
-        )
-        .expect("copy transform must be valid");
-    scene
-        .set_presence_at(copy, false, true, 1.0)
-        .expect("copy show must be valid");
-    scene
-        .set_presence_at(copy, true, false, 3.0)
-        .expect("copy hide must be valid");
-    scene
-        .set_presence_at(target, false, true, 3.0)
-        .expect("target show must be valid");
-
-    SceneInstance::new(CompiledScene::compile(&scene).expect("scene must compile"))
+    let objects = vec![
+        CompiledObject::new(source, from.geometry.clone(), from.transform, from.style),
+        CompiledObject::new(target, to.geometry.clone(), to.transform, to.style),
+        CompiledObject::new(copy, from.geometry.clone(), from.transform, from.style),
+    ];
+    let tracks = [
+        TrackDefinition {
+            id: TrackId::new(0),
+            object: copy,
+            property: Property::Transform,
+            values: TrackValues::Object { from, to },
+            timing: TrackTiming::new(1.0, 2.0, Easing::Linear),
+            time_map: Default::default(),
+        },
+        TrackDefinition {
+            id: TrackId::new(1),
+            object: copy,
+            property: Property::Presence,
+            values: TrackValues::Bool {
+                from: false,
+                to: true,
+            },
+            timing: TrackTiming::instant(1.0),
+            time_map: Default::default(),
+        },
+        TrackDefinition {
+            id: TrackId::new(2),
+            object: copy,
+            property: Property::Presence,
+            values: TrackValues::Bool {
+                from: true,
+                to: false,
+            },
+            timing: TrackTiming::instant(3.0),
+            time_map: Default::default(),
+        },
+        TrackDefinition {
+            id: TrackId::new(3),
+            object: target,
+            property: Property::Presence,
+            values: TrackValues::Bool {
+                from: false,
+                to: true,
+            },
+            timing: TrackTiming::instant(3.0),
+            time_map: Default::default(),
+        },
+    ];
+    SceneInstance::new(
+        CompiledScene::compile_objects(objects, &tracks).expect("execution data compiles"),
+    )
 }
 
 fn prepared_ids(instance: &mut SceneInstance, preparer: &mut FramePreparer, time: f64) -> Vec<u64> {

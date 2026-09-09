@@ -480,6 +480,22 @@ for canonical in crates/noon/src/semantic_mobject.rs crates/noon/src/scene.rs cr
   git rm -q "$canonical"
   git commit -qm "remove canonical poison"
 done
+# Renderer fixtures must not preserve a second scene API, even when committed
+# before the comparison base.
+for canonical in crates/noon-render-wgpu/src/probe.rs crates/noon-render-wgpu/tests/probe.rs; do
+  mkdir -p "$(dirname "$canonical")"
+  for symbol in SceneDefinition ObjectDefinition ObjectSnapshot ScenePatch MutationTransaction; do
+    printf 'use noon_core::%s;\n' "$symbol" > "$canonical"
+    git add "$canonical"
+    git commit -qm 'poison renderer execution boundary'
+    if bash scripts/architecture-ratchet.sh HEAD >/dev/null 2>&1; then
+      echo "architecture ratchet test failed: accepted $symbol in $canonical" >&2
+      exit 1
+    fi
+  done
+  git rm -q "$canonical"
+  git commit -qm 'remove renderer boundary poison'
+done
 # Lowering and live publication must stay typed even when an old patch-codec
 # dependency already exists at the comparison base.
 for canonical in crates/noon-compile/src/semantic_lowering.rs crates/noon-compile/src/semantic_lowering/publication.rs crates/noon/src/execution_session.rs crates/noon/src/execution_session/publication.rs crates/noon/src/live_session.rs; do
