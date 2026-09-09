@@ -215,6 +215,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn path_morph_completion_publishes_target_content_without_replacing_identity() {
+        let mut scene = Scene::new();
+        let source = scene
+            .path(rounded_loop(1.35), style(Some(BLUE), WHITE, 0.08))
+            .unwrap();
+        let target = scene
+            .path(star(1.7, 0.7, 0.0), style(Some(PURPLE), WHITE, 0.08))
+            .unwrap();
+        scene.add(&source).unwrap();
+        let identity = source.node_id();
+        let mut session = scene.execution_session().unwrap();
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_composition(
+                &AnimationCompositionRequest::TransformTo(
+                    TransformToRequest::point_correspondence(&source, &target, options()),
+                ),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert_eq!(source.node_id(), identity);
+        assert_eq!(
+            source.state().unwrap().content,
+            target.state().unwrap().content
+        );
+        assert_eq!(source.state().unwrap().style, target.state().unwrap().style);
+    }
+
+    #[test]
     fn renderer_fixtures_advance_seek_and_keep_static_frames_clean() {
         for (build, count) in [
             (
