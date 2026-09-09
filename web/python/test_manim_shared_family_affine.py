@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import _manim_compat as compat
-compat.install()
+
 import _manim_semantic_handles as handles
 from _typed_geometry_test_support import identity_only_wrapper
 

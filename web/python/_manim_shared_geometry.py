@@ -97,7 +97,7 @@ def _dot_init(
     if _shared._create_geometry_handle is None:
         raise RuntimeError("Geometry construction requires the shared Rust authoring host")
 
-    point_value = _compat._as_vec2(point)
+    point_value = _base._as_vec2(point)
     radius_value = _shared._ir._positive_number("radius", radius)
     options = dict(kwargs)
     options["stroke_width"] = stroke_width
@@ -192,7 +192,7 @@ def _shape_matcher_buff(buff: object) -> tuple[float, float]:
     if isinstance(buff, (int, float)) and not isinstance(buff, bool):
         value = _shared._ir._finite_number("buff", buff)
         return value, value
-    value = _compat._as_vec2(buff)
+    value = _base._as_vec2(buff)
     return (
         _shared._ir._finite_number("buff.x", value.x),
         _shared._ir._finite_number("buff.y", value.y),
@@ -347,7 +347,7 @@ def _sector_options(
 ) -> tuple[dict[str, Any], int, _base.Vec2]:
     options = dict(kwargs)
     component_count = _sector_component_count(options.pop("num_components", 9))
-    center = _compat._as_vec2(options.pop("arc_center", _base.ORIGIN))
+    center = _base._as_vec2(options.pop("arc_center", _base.ORIGIN))
     return options, component_count, center
 
 

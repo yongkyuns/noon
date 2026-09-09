@@ -25,8 +25,8 @@ class DashedLine(_compat.Line):
         if _shared._create_geometry_handle is None:
             raise RuntimeError("DashedLine requires the shared browser geometry bridge")
 
-        start_value = _compat._as_vec2(start)
-        end_value = _compat._as_vec2(end)
+        start_value = _base._as_vec2(start)
+        end_value = _base._as_vec2(end)
         dash_length_value = _shared._ir._positive_number("dash_length", dash_length)
         dashed_ratio_value = _shared._ir._finite_number("dashed_ratio", dashed_ratio)
         if not 0.0 <= dashed_ratio_value <= 1.0:

@@ -35,7 +35,6 @@ import _manim_compat as _manim_compat  # noqa: E402
 # The browser worker installs this facade before user code runs. Differential
 # fixtures must exercise that same public Manim-compatible surface rather than
 # the lower-level authoring primitives that happen to back it.
-_manim_compat.install()
 
 try:
     import manim as manim  # noqa: E402

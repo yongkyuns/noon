@@ -103,8 +103,8 @@ class Arrow(_compat.Group):
         color: _base.Color = _base.WHITE,
         **kwargs: Any,
     ) -> None:
-        start_point = _compat._as_vec2(start)
-        end_point = _compat._as_vec2(end)
+        start_point = _base._as_vec2(start)
+        end_point = _base._as_vec2(end)
         delta = end_point - start_point
         length = delta.length()
         if length <= 0.0:

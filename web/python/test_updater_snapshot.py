@@ -71,7 +71,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
 
     @staticmethod
     def _mobject_and_context() -> tuple[object, object, object]:
-        compat.install()
+
         install_test_membership(compat)
         # Public paint methods always enter the phase dispatcher; no final
         # installer is needed to reclaim VMobject's overrides.
@@ -319,7 +319,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
     def test_callback_bound_copy_uses_canonical_target_editor_without_copying_callbacks(
         self,
     ) -> None:
-        compat.install()
+
         import _manim_semantic_handles as semantic_handles
 
         scene = updaters._base.Scene()

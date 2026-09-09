@@ -146,7 +146,7 @@ class FocusOn:
             point = focus_point.get_center()
             self.focus_mobject: _base.Mobject | None = focus_point
         else:
-            point = _compat._as_vec2(focus_point)
+            point = _base._as_vec2(focus_point)
             self.focus_mobject = None
 
         opacity_value = float(opacity)

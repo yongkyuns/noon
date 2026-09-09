@@ -1956,10 +1956,10 @@ def _build_canonical_composition_candidate(
             child = _canonical_composition_child_options(animation, child_kwargs)
             angle = float(animation.angle) * _rotate._axis_sign(animation.axis)
             if animation.about_point is not None:
-                point = _compat._as_vec2(animation.about_point)
+                point = _base._as_vec2(animation.about_point)
                 pivot_kind, pivot_x, pivot_y = "point", point.x, point.y
             elif animation.about_edge is not None:
-                edge = _compat._as_vec2(animation.about_edge)
+                edge = _base._as_vec2(animation.about_edge)
                 pivot_kind, pivot_x, pivot_y = "edge", edge.x, edge.y
             else:
                 pivot_kind, pivot_x, pivot_y = "center", 0.0, 0.0

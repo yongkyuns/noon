@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import noon
 import _manim_compat
-_manim_compat.install()
+
 import _manim_semantic_handles as shared
 
 

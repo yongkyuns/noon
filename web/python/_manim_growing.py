@@ -17,7 +17,7 @@ import _manim_compat as _compat
 def _point(value: object) -> _base.Vec2:
     if isinstance(value, (_base.Mobject, _compat.Group)):
         return value.get_center()
-    return _compat._as_vec2(value)
+    return _base._as_vec2(value)
 
 
 class GrowFromPoint:
@@ -48,7 +48,7 @@ class GrowFromEdge(GrowFromPoint):
     def __init__(self, mobject: object, edge: object, point_color: object | None = None, **kwargs: Any) -> None:
         if not isinstance(mobject, _base.Mobject) or isinstance(mobject, _compat.Group):
             raise NotImplementedError("GrowFromEdge currently supports one leaf 2D Mobject; retained groups remain partial")
-        direction = _compat._as_vec2(edge)
+        direction = _base._as_vec2(edge)
         super().__init__(mobject, mobject.get_critical_point(direction), point_color=point_color, **kwargs)
         self.edge = direction
 

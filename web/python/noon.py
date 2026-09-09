@@ -1,7 +1,7 @@
 """Public Noon authoring API.
 
-The public surface favors Manim-like semantic vocabulary. Browser authoring installs
-the shared Rust semantic scene facade used for execution.
+Public classes and methods delegate to shared Rust semantic operations. Python
+owns authoring syntax, argument conversion, and wrapper identity.
 """
 
 from __future__ import annotations
@@ -84,11 +84,35 @@ class Vec2(tuple):
 
 
 def _as_vec2(value: object) -> Vec2:
+    """Accept Noon's Vec2 plus common Manim 2D/3D vector inputs.
+
+    Manim commonly represents 2D directions as three-component NumPy vectors. Noon
+    remains 2D internally, so z=0 is accepted and non-zero z is rejected explicitly.
+    """
+
     if isinstance(value, Vec2):
         return value
-    if isinstance(value, (tuple, list)) and len(value) == 2:
-        return Vec2(value[0], value[1])
-    raise TypeError("expected a Vec2 or a two-value tuple/list")
+
+    try:
+        length = len(value)  # type: ignore[arg-type]
+    except (TypeError, AttributeError):
+        length = None
+
+    if length in (2, 3):
+        try:
+            x = float(value[0])  # type: ignore[index]
+            y = float(value[1])  # type: ignore[index]
+            if length == 3:
+                z = float(value[2])  # type: ignore[index]
+                if not math.isclose(z, 0.0, abs_tol=1e-12):
+                    raise NotImplementedError(
+                        "Noon currently supports 2D Manim vectors only; z must be 0"
+                    )
+            return Vec2(x, y)
+        except (TypeError, ValueError, IndexError) as error:
+            raise TypeError("expected a two- or three-component numeric vector") from error
+
+    raise TypeError("expected a two- or three-component vector")
 
 
 ORIGIN = Vec2(0.0, 0.0)
@@ -250,6 +274,80 @@ class Mobject:
 
     def _apply(self, raw: object) -> Mobject:
         return _callback_operations()._canonical_apply(self, raw)
+
+    def get_edge_center(self: Mobject, direction: object) -> Vec2:
+        return self.get_critical_point(direction)
+
+    def get_corner(self: Mobject, direction: object) -> Vec2:
+        return self.get_critical_point(direction)
+
+    def get_left(self: Mobject) -> Vec2:
+        return self.get_critical_point(LEFT)
+
+    def get_right(self: Mobject) -> Vec2:
+        return self.get_critical_point(RIGHT)
+
+    def get_top(self: Mobject) -> Vec2:
+        return self.get_critical_point(UP)
+
+    def get_bottom(self: Mobject) -> Vec2:
+        return self.get_critical_point(DOWN)
+
+    def get_coord(
+        self: Mobject, dim: int, direction: object = ORIGIN
+    ) -> float:
+        if dim not in (0, 1):
+            raise NotImplementedError("Noon currently exposes x/y authoring coordinates only")
+        point = self.get_critical_point(direction)
+        return float(point[dim])
+
+    def get_x(self: Mobject, direction: object = ORIGIN) -> float:
+        return self.get_coord(0, direction)
+
+    def get_y(self: Mobject, direction: object = ORIGIN) -> float:
+        return self.get_coord(1, direction)
+
+    def scale_to_fit_width(self: Mobject, width: float, **kwargs: Any) -> Mobject:
+        return self.rescale_to_fit(width, 0, stretch=False, **kwargs)
+
+    def scale_to_fit_height(self: Mobject, height: float, **kwargs: Any) -> Mobject:
+        return self.rescale_to_fit(height, 1, stretch=False, **kwargs)
+
+    def stretch_to_fit_width(self: Mobject, width: float, **kwargs: Any) -> Mobject:
+        return self.rescale_to_fit(width, 0, stretch=True, **kwargs)
+
+    def stretch_to_fit_height(self: Mobject, height: float, **kwargs: Any) -> Mobject:
+        return self.rescale_to_fit(height, 1, stretch=True, **kwargs)
+
+    def match_width(
+        self: Mobject, mobject: Mobject, **kwargs: Any
+    ) -> Mobject:
+        return self.match_dim_size(mobject, 0, **kwargs)
+
+    def match_height(
+        self: Mobject, mobject: Mobject, **kwargs: Any
+    ) -> Mobject:
+        return self.match_dim_size(mobject, 1, **kwargs)
+
+    def rescale_to_fit(self, length: float, dim: int, stretch: bool = False, **kwargs: Any) -> Mobject:
+        from _manim_compat import _mobject_rescale_to_fit
+        return _mobject_rescale_to_fit(self, length, dim, stretch, **kwargs)
+
+    def match_dim_size(self, mobject: Mobject, dim: int, **kwargs: Any) -> Mobject:
+        from _manim_compat import _mobject_match_dim_size
+        return _mobject_match_dim_size(self, mobject, dim, **kwargs)
+
+    def generate_target(self, use_deepcopy: bool = False) -> Mobject:
+        from _manim_compat import _mobject_generate_target
+        return _mobject_generate_target(self, use_deepcopy)
+
+    def save_state(self) -> Mobject:
+        from _manim_compat import _mobject_save_state
+        return _mobject_save_state(self)
+
+    def restore(self) -> Mobject:
+        from _manim_compat import _mobject_restore
+        return _mobject_restore(self)
 
     def get_color(self) -> Color:
         from _manim_geometry import _mobject_get_color
@@ -417,94 +515,6 @@ class Mobject:
         return deepcopy_semantic_wrapper(self, memo)
 
 
-class Group:
-    """Lightweight authoring collection; it does not add runtime hierarchy."""
-
-    def __init__(self, *mobjects: Mobject) -> None:
-        raise RuntimeError("Mobject construction requires the shared Rust authoring host")
-
-    def __iter__(self) -> Iterator[Mobject]:
-        return iter(self.submobjects)
-
-    def __len__(self) -> int:
-        return len(self.submobjects)
-
-    def __getitem__(self, index: int) -> Mobject:
-        return self.submobjects[index]
-
-    def add(self, *mobjects: Mobject) -> Group:
-        self.submobjects.extend(mobjects)
-        return self
-
-    def get_center(self) -> Vec2:
-        raise RuntimeError("Mobject layout requires the shared Rust authoring host")
-
-    def shift(self, direction: Vec2 | tuple[float, float]) -> Group:
-        raise RuntimeError("Mobject edits require the shared Rust authoring host")
-
-    def arrange(
-        self,
-        direction: Vec2 | tuple[float, float] = RIGHT,
-        buff: float = DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
-        center: bool = True,
-    ) -> Group:
-        raise RuntimeError("family layout requires the shared Rust authoring host")
-
-    def arrange_in_grid(
-        self,
-        rows: int | None = None,
-        cols: int | None = None,
-        buff: float | tuple[float, float] = MED_SMALL_BUFF,
-    ) -> Group:
-        raise RuntimeError("family layout requires the shared Rust authoring host")
-
-
-class VGroup(Group):
-    pass
-
-
-def _wrap(raw: _ir.Mobject) -> Mobject:
-    return Mobject(raw)
-
-
-def Circle(radius: float = 1.0, *, color: Color | None = None, **kwargs: Any) -> Mobject:
-    result = _wrap(_ir.Circle(radius, **kwargs))
-    return result if color is None else result.set_color(color)
-
-
-def Rectangle(
-    width: float = 2.0,
-    height: float = 1.0,
-    *,
-    color: Color | None = None,
-    **kwargs: Any,
-) -> Mobject:
-    result = _wrap(_ir.Rectangle(width, height, **kwargs))
-    return result if color is None else result.set_color(color)
-
-
-def Square(
-    side_length: float = 2.0, *, color: Color | None = None, **kwargs: Any
-) -> Mobject:
-    return Rectangle(side_length, side_length, color=color, **kwargs)
-
-
-def Line(
-    start: Vec2 | tuple[float, float] = LEFT,
-    end: Vec2 | tuple[float, float] = RIGHT,
-    *,
-    color: Color | None = None,
-    **kwargs: Any,
-) -> Mobject:
-    result = _wrap(_ir.Line(_as_vec2(start), _as_vec2(end), **kwargs))
-    return result if color is None else result.set_color(color)
-
-
-def Path(path: VectorPath, *, color: Color | None = None, **kwargs: Any) -> Mobject:
-    result = _wrap(_ir.Path(path, **kwargs))
-    return result if color is None else result.set_color(color)
-
-
 @dataclass(frozen=True, slots=True)
 class Transform:
     source: Mobject | _ir.Object
@@ -584,9 +594,55 @@ class Scene:
         self._object_key_ids: dict[str, int] = {}
         self._object_positions: dict[int, int] = {}
         self._next_object_id = 0
+        self._compat_top_level: list[object] = []
 
-    def add(self, *mobjects: Mobject, **kwargs: Any) -> Scene:
-        raise RuntimeError("Scene membership requires the shared Rust authoring host")
+    def setup(self) -> None:
+        pass
+
+    def construct(self) -> None:
+        pass
+
+    def tear_down(self) -> None:
+        pass
+
+    def _register_top_level(self, value: object) -> None:
+        if (
+            getattr(value, "_semantic_handle", None) is not None
+            or getattr(value, "_semantic_family_handle", None) is not None
+        ):
+            _scene_operations()._register_membership_wrappers(self, value)
+            return
+        if not any(existing is value for existing in self._compat_top_level):
+            self._compat_top_level.append(value)
+
+    @property
+    def mobjects(self) -> list[object]:
+        return _scene_operations()._canonical_scene_mobjects(self)
+
+    def _edit_membership(self, kind: str, values: tuple[object, ...] = (), *, key=None) -> None:
+        _scene_operations()._canonical_edit_membership(self, kind, values, key=key)
+
+    def add(self, *mobjects: object, key: str | None = None) -> Mobject | Scene:
+        if not mobjects:
+            return self
+        self._edit_membership("add", mobjects, key=key)
+
+        # Python returns the wrapper for a single leaf, or the Scene for a batch.
+        from _manim_compat import _leaf_mobjects
+        leaves = [member for value in mobjects for member in _leaf_mobjects(value)]
+        return leaves[0] if len(leaves) == 1 else self
+
+    def remove(self, *mobjects: object) -> Scene:
+        self._edit_membership("remove", mobjects)
+        return self
+
+    def clear(self) -> Scene:
+        self._edit_membership("clear")
+        return self
+
+    def replace(self, old_mobject: object, new_mobject: object) -> Scene:
+        self._edit_membership("replace", (old_mobject, new_mobject))
+        return self
 
     def _bind_camera_frame(self, mobject: Mobject) -> Any:
         return _scene_operations()._bind_camera_frame(self, mobject)
@@ -689,6 +745,17 @@ Object = Mobject
 
 # Public wrappers resolve from their defining modules without startup mutation.
 _PUBLIC_EXPORTS = {
+    "VMobject": "_manim_compat",
+    "Circle": "_manim_compat",
+    "Rectangle": "_manim_compat",
+    "Square": "_manim_compat",
+    "Line": "_manim_compat",
+    "Path": "_manim_compat",
+    "Group": "_manim_compat",
+    "VGroup": "_manim_compat",
+    "MoveToTarget": "_manim_compat",
+    "OUT": "_manim_compat",
+    "IN": "_manim_compat",
     "Elbow": "_manim_shared_geometry",
     "RoundedRectangle": "_manim_shared_geometry",
     "SurroundingRectangle": "_manim_shared_geometry",
@@ -730,7 +797,6 @@ __all__ = [
     "BLUE_C",
     "BLUE_D",
     "BLUE_E",
-    "Circle",
     "Color",
     "Create",
     "Uncreate",
@@ -757,7 +823,6 @@ __all__ = [
     "GREEN_C",
     "GREEN_D",
     "GREEN_E",
-    "Group",
     "GREY",
     "GREY_A",
     "GREY_B",
@@ -766,7 +831,6 @@ __all__ = [
     "GREY_E",
     "LEFT",
     "LIGHT_PINK",
-    "Line",
     "MAROON",
     "Mobject",
     "Object",
@@ -780,7 +844,6 @@ __all__ = [
     "PURPLE_C",
     "PURPLE_D",
     "PURPLE_E",
-    "Path",
     "RED",
     "RED_A",
     "RED_B",
@@ -788,10 +851,8 @@ __all__ = [
     "RED_D",
     "RED_E",
     "RIGHT",
-    "Rectangle",
     "ReplacementTransform",
     "Scene",
-    "Square",
     "TAU",
     "TEAL",
     "TEAL_A",
@@ -805,7 +866,6 @@ __all__ = [
     "UL",
     "UP",
     "UR",
-    "VGroup",
     "Vec2",
     "VectorPath",
     "WHITE",

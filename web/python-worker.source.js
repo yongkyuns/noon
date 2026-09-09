@@ -143,7 +143,7 @@ async function initializePyodide() {
 import sys
 sys.path.insert(0, "/tmp")
 import _manim_compat
-_manim_compat.install()
+
 import _manim_rate_functions
 _manim_rate_functions.install()
 import _manim_geometry

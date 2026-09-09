@@ -19,9 +19,12 @@ class ManimConstantExportTests(unittest.TestCase):
 
         source = textwrap.dedent(
             """
+            from noon import Mobject, Scene, Vec2
+            assert Vec2(1, 2) + [3, 4, 0] == Vec2(4, 6)
             import _manim_compat
-            _manim_compat.install()
-            import _manim_geometry  # noqa: F401
+            assert _manim_compat.Mobject is Mobject
+            assert _manim_compat.Scene is Scene
+            assert _manim_compat.Group.__bases__ == (Mobject,)
 
             namespace = {}
             exec("from noon import *", namespace)

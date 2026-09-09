@@ -24,7 +24,7 @@ class ManimSharedFamilyRelativePlacementTests(unittest.TestCase):
             import json
 
             import _manim_compat
-            _manim_compat.install()
+
             import _manim_semantic_handles as handles
 
 

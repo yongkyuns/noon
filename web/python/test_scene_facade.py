@@ -20,7 +20,7 @@ class SceneFacadeTests(unittest.TestCase):
             import noon
             original_play, original_wait = noon.Scene.play, noon.Scene.wait
             import _manim_compat as compat
-            compat.install()
+
             import _manim_scene as canonical
             from _manim_source_execution import has_portable_scene_methods
             assert noon.Scene.play is original_play

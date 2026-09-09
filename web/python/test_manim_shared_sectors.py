@@ -111,7 +111,7 @@ class ManimSharedSectorTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_compat
-            _manim_compat.install()
+
             import _manim_geometry
             import _manim_semantic_handles as handles
 
