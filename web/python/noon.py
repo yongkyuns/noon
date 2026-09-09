@@ -293,6 +293,25 @@ class Mobject:
     def set_y(self, y: float, direction: object = ORIGIN) -> Mobject:
         return _callback_operations()._canonical_set_y(self, y, direction)
 
+    def set_coord(self, value: float, dim: int, direction: object = ORIGIN) -> Mobject:
+        from _manim_shared_geometry import _set_coord
+        return _set_coord(self, value, dim, direction)
+
+    def match_coord(self, mobject: Mobject, dim: int, direction: object = ORIGIN) -> Mobject:
+        from _manim_shared_geometry import _match_coord
+        return _match_coord(self, mobject, dim, direction)
+
+    def match_x(self, mobject: Mobject, direction: object = ORIGIN) -> Mobject:
+        return self.match_coord(mobject, 0, direction)
+
+    def match_y(self, mobject: Mobject, direction: object = ORIGIN) -> Mobject:
+        return self.match_coord(mobject, 1, direction)
+
+    def rotate_about_origin(
+        self, angle: float, axis: object = (0.0, 0.0, 1.0), **kwargs: Any,
+    ) -> Mobject:
+        return self.rotate(angle, axis=axis, about_point=ORIGIN, **kwargs)
+
     def scale(self, *args: object, **kwargs: object) -> Mobject:
         return _callback_operations()._canonical_scale(self, *args, **kwargs)
 
