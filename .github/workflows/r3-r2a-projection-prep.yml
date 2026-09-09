@@ -11,6 +11,7 @@ jobs:
     env:
       BASE: ee1de6a0418c6da8559f891f98820aa8dc57809d
       ORIGINAL_MAPPER_BASE: 10e9597611dad4dc4d1917f39dc685143fd37f3c
+      PAYLOAD_COMMIT: 044c054fa6c157c11e0e9eb163ff1f645fba7996
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -27,8 +28,10 @@ jobs:
           set -euo pipefail
           E="$RUNNER_TEMP/r3-r2a"
           mkdir -p "$E/oldtree/crates/noon-web/src"
-          cat scripts/r3-r2a-projection-prep.part1.b64 scripts/r3-r2a-projection-prep.part2.b64 | base64 -d | gzip -d > "$E/projection.patch"
-          test "$(sha256sum "$E/projection.patch" | cut -d' ' -f1)" = "aaf30d3d01faa4b81c781af07fc3033ac460d78af18fa7588822013abb39e6a4"
+          git show "$PAYLOAD_COMMIT:scripts/r3-r2a-projection-prep.part1.b64" > "$E/part1.b64"
+          git show "$PAYLOAD_COMMIT:scripts/r3-r2a-projection-prep.part2.b64" > "$E/part2.b64"
+          cat "$E/part1.b64" "$E/part2.b64" | base64 -d | gzip -d > "$E/projection.patch"
+          test "$(sha256sum "$E/projection.patch" | cut -d' ' -f1)" = "5068b00b0bba1040df242a54067f01ef3644fb89c860cac0bc80bfbc1c4ca446"
           python3 - "$E" <<'PY'
           from pathlib import Path
           import re, sys
@@ -75,6 +78,18 @@ jobs:
           assert 'other => Self::unclassified("authoring.unclassified", &other)' in current
           assert '_ => return Self::unclassified("unsupported.unclassified", &error)' in current
           path.write_text(current)
+
+          tests = Path("web/python/test_noon_errors_wasm.py")
+          text = tests.read_text()
+          import_old = "    NoonStaleHandleError, NoonStalePublicationError, NoonValueError,\n"
+          import_new = "    NoonStaleHandleError, NoonStalePublicationError, NoonUnsupportedError, NoonValueError,\n"
+          assert text.count(import_old) == 1
+          text = text.replace(import_old, import_new, 1)
+          opacity_old = '        self.assertAlmostEqual(json.loads(circle_handle.snapshotJson())["style"]["opacity"], 0.5)\n'
+          opacity_new = '        style = json.loads(circle_handle.snapshotJson())["style"]\n        self.assertAlmostEqual(style["fill"]["alpha"], 0.5)\n        self.assertAlmostEqual(style["stroke"]["alpha"], 0.5)\n        self.assertAlmostEqual(style["opacity"], 1.0)\n'
+          assert text.count(opacity_old) == 1
+          text = text.replace(opacity_old, opacity_new, 1)
+          tests.write_text(text)
           PY
           cargo fmt --all
           git add crates/noon-web/src/authoring_error.rs crates/noon-web/src/authoring_mobject.rs crates/noon-web/src/canonical_authoring_scene.rs web/python/_manim_geometry.py web/python/_manim_semantic_handles.py web/python/test_noon_errors_wasm.py
