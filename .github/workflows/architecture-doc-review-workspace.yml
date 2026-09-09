@@ -1,0 +1,79 @@
+name: Architecture documentation review workspace
+on:
+  push:
+    branches: [work/architecture-doc-review-20260909]
+permissions:
+  contents: write
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Apply reviewed documentation changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -e 8cadad70a9fdbdaf51de49369fb5c98c2d4750e0^{commit}
+          python3 scripts/architecture_doc_refresh.py
+          rm scripts/architecture_doc_refresh.py
+          rm .github/workflows/architecture-doc-review-workspace.yml
+      - name: Install checksum-verified D2
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://github.com/d2lang/d2/releases/download/v0.9.0/d2-v0.9.0-linux-amd64.tar.gz -o "$RUNNER_TEMP/d2.tar.gz"
+          echo '5669ddc46b99e942cc96078f4a4e36d5e62103348f4c05179ede27802fdd87a9  '"$RUNNER_TEMP/d2.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/d2.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/d2-v0.9.0/bin" >> "$GITHUB_PATH"
+      - name: Format, render and qualify architecture docs
+        shell: bash
+        run: |
+          set -euo pipefail
+          d2 fmt docs/diagrams/*.d2
+          D2=d2 python3 scripts/architecture_diagrams.py
+          D2=d2 python3 scripts/test_architecture_diagrams.py
+          D2=d2 python3 scripts/architecture_diagrams.py --check
+          node --test web/ci-workflow-topology.test.mjs
+          bash scripts/check.sh architecture 8cadad70a9fdbdaf51de49369fb5c98c2d4750e0
+          git diff --check
+          test "$(find docs/diagrams -maxdepth 1 -name '*.d2' ! -name '_style.d2' | wc -l)" -eq 10
+          test "$(find docs/diagrams -maxdepth 1 -name '*.svg' | wc -l)" -eq 10
+          ! grep -R -E 'native-execution|wasm-execution|session-control|d6734d2a0626f5c9926e4043ad2017a94f5c8c5a' README.md docs/architecture.md docs/diagrams/*.d2
+          grep -q 'revision-publication-lifetime.svg' docs/architecture.md
+          grep -q 'locality-propagation.svg' docs/architecture.md
+          grep -q 'callback-transaction.svg' docs/architecture.md
+          grep -q 'direct-execution-hosts.svg' docs/architecture.md
+      - name: Package qualified candidate
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/delivery"
+          cp README.md docs/architecture.md "$RUNNER_TEMP/delivery/"
+          cp -R docs/diagrams "$RUNNER_TEMP/delivery/"
+          git diff --stat 8cadad70a9fdbdaf51de49369fb5c98c2d4750e0 -- README.md docs/architecture.md docs/diagrams | tee "$RUNNER_TEMP/delivery/diff-stat.txt"
+      - name: Preserve qualified docs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: noon-architecture-doc-review
+          path: ${{ runner.temp }}/delivery/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Publish clean candidate branch
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A -- README.md docs/architecture.md docs/diagrams scripts/architecture_doc_refresh.py .github/workflows/architecture-doc-review-workspace.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          tree="$(git write-tree)"
+          commit="$(git commit-tree "$tree" -p 8cadad70a9fdbdaf51de49369fb5c98c2d4750e0 -m 'docs: clarify architecture contracts and focused views')"
+          git diff --check 8cadad70a9fdbdaf51de49369fb5c98c2d4750e0 "$commit"
+          git push origin "$commit:refs/heads/docs/architecture-clarity-20260909"
+          printf 'BASE=%s\nHEAD=%s\nTREE=%s\n' 8cadad70a9fdbdaf51de49369fb5c98c2d4750e0 "$commit" "$tree" | tee "$RUNNER_TEMP/delivery/revisions.txt"
+          git push origin --delete work/architecture-doc-review-20260909
