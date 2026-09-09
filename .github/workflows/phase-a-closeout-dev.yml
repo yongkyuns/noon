@@ -33,6 +33,30 @@ jobs:
           base=cf7d000b773d47fd62bd5b56f636e689d5585f28
           git checkout --detach "$base"
           git apply --index /tmp/phase-a-errors/input.patch
+          python3 - <<'PY'
+          import pathlib, re, subprocess
+          p=pathlib.Path('crates/noon-web/src/canonical_authoring_scene.rs')
+          text=p.read_text(); baseline=subprocess.check_output(['git','show','HEAD:'+str(p)],text=True)
+          marker='#[cfg(test)]\nmod tests {'
+          assert text.count(marker)==baseline.count(marker)==1
+          text=text.split(marker)[0]+marker+baseline.split(marker)[1]
+          select={'mobject_layout','mobject_line_endpoints','mobject_color','mobject_fill_opacity','mobject_stroke_opacity','begin_underline','live_create_text','live_create_typst','live_create_math_typst'}
+          count=[0]
+          def replace(m):
+              chain=m['chain']
+              if not any('.'+f+'(' in chain for f in select): return m[0]
+              count[0]+=1
+              return '{\n            let error = context'+chain+'.unwrap_err();\n            assert_eq!((error.category, error.code), ("unclassified", "unclassified"));\n            assert_eq!(error.message, "live execution session is running in the semantic engine");\n        }'
+          text=re.sub(r'assert!\(context(?P<chain>[^;]*?)\.unwrap_err\(\)\s*\.contains\("running in the semantic engine"\)\);',replace,text)
+          assert count[0]==9
+          old='assert!(context\n            .begin_underline(&foreign, 0.15)\n            .unwrap_err()\n            .contains("another authoring store"));'
+          assert text.count(old)==1
+          text=text.replace(old,'let error = context.begin_underline(&foreign, 0.15).unwrap_err();\n        assert_eq!((error.category, error.code), ("foreign_handle", "authoring.foreign_store"));')
+          old='assert!(\n            query_error.contains("has not been published"),\n            "{query_error}"\n        );'
+          assert text.count(old)==1
+          text=text.replace(old,'assert_eq!(query_error.category, "stale_publication");\n        assert_eq!(query_error.cause.as_ref().unwrap().code, "publication.stale_scene_revision");')
+          p.write_text(text)
+          PY
           cargo fmt --all
           git add -u
           git diff --cached --check
