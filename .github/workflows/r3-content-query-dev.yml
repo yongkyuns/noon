@@ -3,78 +3,82 @@ on:
   push:
     branches: [codex/1292-r3-content-query-prep]
 permissions:
-  contents: read
-  actions: write
-  pull-requests: read
+  contents: write
 jobs:
-  approve-and-inspect:
+  reconcile:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Approve only the explicitly authorized current-head held runs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p /tmp/r3-resume
-          python3 - <<'PY'
-          import json, os, pathlib, urllib.request, urllib.error
-          root = 'https://api.github.com/repos/yongkyuns/noon'
-          expected = 'e4c2b7ee44416eb328bb42a70e462e1da85eceaf'
-          ids = [34378530142,34378530219,34378530226,34378530283,34378530144,34378530159,34378530177,34378530157,34378530269,34378530244]
-          def api(path, method='GET'):
-              request = urllib.request.Request(root + path, method=method, headers={
-                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
-                  'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2026-03-10'})
-              with urllib.request.urlopen(request, timeout=30) as response:
-                  data = response.read()
-                  return response.status, json.loads(data) if data else None
-          _, pr = api('/pulls/1355')
-          assert pr['state'] == 'open' and pr['head']['sha'] == expected, 'PR moved; refuse stale approval'
-          results = []
-          try:
-              for run_id in ids:
-                  _, run = api('/actions/runs/' + str(run_id))
-                  assert run['head_sha'] == expected and run['event'] == 'pull_request'
-                  assert any(p['number'] == 1355 for p in run['pull_requests'])
-                  row = {'id': run_id, 'name': run['name'], 'head': run['head_sha'], 'before': run['conclusion']}
-                  results.append(row)
-                  if run['conclusion'] == 'action_required':
-                      try:
-                          status, body = api('/actions/runs/' + str(run_id) + '/approve', 'POST')
-                          row.update(approval_status=status, response=body)
-                          assert status == 201
-                      except urllib.error.HTTPError as error:
-                          row.update(approval_status=error.code, response=error.read().decode())
-                          raise
-                  else:
-                      row['action'] = 'already resolved; not rerun'
-                  print(json.dumps(row), flush=True)
-          finally:
-              pathlib.Path('/tmp/r3-resume/approvals.json').write_text(json.dumps(results, indent=2))
-          PY
       - uses: actions/checkout@v7
-        if: always()
         with:
-          ref: 5b56124312657c0959e1ca3936930cad0fe7e240
           fetch-depth: 0
-      - name: Retain exact master and ownership handoffs without building
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Retain the published content/query delta and every landed advancement test
         run: |
-          git rev-parse HEAD HEAD^{tree} > /tmp/r3-resume/master-revisions.txt
-          git archive --format=tar.gz HEAD > /tmp/r3-resume/master-source.tar.gz
-          git diff --stat e4c2b7ee44416eb328bb42a70e462e1da85eceaf...HEAD > /tmp/r3-resume/master-delta-stat.txt
-          git diff e4c2b7ee44416eb328bb42a70e462e1da85eceaf...HEAD -- crates/noon-web web/python scripts/typed-authoring-errors-smoke.mjs > /tmp/r3-resume/master-relevant.patch
-          for pr in 1350 1354 1355; do
-            gh api repos/yongkyuns/noon/pulls/$pr > /tmp/r3-resume/pr-$pr.json
-            gh api --paginate repos/yongkyuns/noon/issues/$pr/comments > /tmp/r3-resume/comments-$pr.json
-          done
-          gh api --paginate repos/yongkyuns/noon/issues/1292/comments > /tmp/r3-resume/comments-1292.json
-          git status --short > /tmp/r3-resume/status.txt
+          mkdir -p /tmp/r3-reconciled
+          base=5b56124312657c0959e1ca3936930cad0fe7e240
+          parent=e4c2b7ee44416eb328bb42a70e462e1da85eceaf
+          test "$(git rev-parse origin/codex/1292-r3-content-query)" = "$parent"
+          git show "$parent":scripts/typed-authoring-errors-smoke.mjs > /tmp/r3-reconciled/previous-runner.mjs
+          git diff b9d6c4cbd82a6333551663358946294538cc3842 "$parent" -- crates/noon-web/src/canonical_authoring_scene.rs crates/noon-web/src/semantic_execution_player.rs web/python/_manim_scene.py web/python/test_noon_errors_wasm.py > /tmp/r3-reconciled/retained.patch
+          git checkout --detach "$base"
+          git apply --index /tmp/r3-reconciled/retained.patch
+          python3 - <<'PY'
+          from pathlib import Path
+          import ast, subprocess
+          old=Path('/tmp/r3-reconciled/previous-runner.mjs').read_text()
+          p=Path('scripts/typed-authoring-errors-smoke.mjs'); text=p.read_text()
+          a=old.index('    const contentObservationCases = ['); b=old.index('    window.noonTypedErrorFixtures = ',a)
+          anchor='    window.noonTypedErrorFixtures = '
+          assert text.count(anchor)==1
+          text=text.replace(anchor,old[a:b]+anchor,1)
+          line=next(s for s in text.splitlines() if s.startswith(anchor))
+          assert 'advanceFixture' in line and 'contentObservationFixture' not in line
+          text=text.replace(line,line.replace('describe, requireFailure','contentObservationFixture, contentObservationCases, describe, requireFailure'),1)
+          a=old.index('  report.contentObservations = '); b=old.index('  report.python = ',a)
+          assert text.count('  report.python = ')==1
+          text=text.replace('  report.python = ',old[a:b]+'  report.python = ',1)
+          a=old.index('content_results = []'); b=old.index('import test_noon_errors_wasm as tests',a)
+          assert text.count('import test_noon_errors_wasm as tests')==1
+          text=text.replace('import test_noon_errors_wasm as tests',old[a:b]+'import test_noon_errors_wasm as tests',1)
+          needle='"additionalTests": result.testsRun'; assert text.count(needle)==1
+          text=text.replace(needle,'"contentObservations": content_results, '+needle,1)
+          needle='  assert.equal(report.python.additionalTests, 11);'; assert text.count(needle)==1
+          text=text.replace(needle,'  assert.equal(report.python.contentObservations.length, 11);\n  assert.equal(report.python.additionalTests, 12);')
+          p.write_text(text)
+          path='web/python/test_noon_errors_wasm.py'
+          before=ast.parse(subprocess.check_output(['git','show','HEAD:'+path],text=True)); after=ast.parse(Path(path).read_text())
+          def tests(tree):
+              return {n.name:ast.dump(n,include_attributes=False) for n in ast.walk(tree) if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name.startswith('test_')}
+          before,after=tests(before),tests(after)
+          assert len(before)==11 and len(after)==12 and all(after[k]==v for k,v in before.items())
+          print('All 11 existing main tests unchanged; only content/query test added.')
+          PY
+          node --check scripts/typed-authoring-errors-smoke.mjs
+          git add -u
+          git diff --cached --check
+          tree=$(git write-tree)
+          test "$tree" = cfb1475e6317804f4ccb3a52a4e853035cc516bf
+          test "$(git diff --cached --name-only | wc -l)" -eq 5
+          git config user.name 'Yongkyun Shin'
+          git config user.email '4311628+yongkyuns@users.noreply.github.com'
+          candidate=$(git commit-tree "$tree" -p "$parent" -p "$base" -m 'fix: retain content/query mapping alongside landed advancement coverage')
+          git reset --hard "$candidate"
+          git rev-parse HEAD HEAD^{tree} > /tmp/r3-reconciled/revisions.txt
+          echo "$base" > /tmp/r3-reconciled/base.txt
+          git diff "$base" HEAD > /tmp/r3-reconciled/product.patch
+          git archive --format=tar.gz HEAD > /tmp/r3-reconciled/source.tar.gz
+      - name: Complete Python discovery on the integrated source
+        run: |
+          set -o pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s web/python -p 'test_*.py' 2>&1 | tee /tmp/r3-reconciled/python.log
+      - name: Retain exact candidate on staging ref for connector publication
+        run: git push origin HEAD:refs/heads/codex/1292-r3-content-query-stage
+      - name: Record final state
+        if: always()
+        run: git status --short > /tmp/r3-reconciled/status.txt
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r3-1355-approval-and-source
-          path: /tmp/r3-resume
+          name: r3-1355-advancement-integration
+          path: /tmp/r3-reconciled
           retention-days: 7
