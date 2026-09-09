@@ -1,7 +1,7 @@
 use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId,
-    TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint,
+    CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, Style, TrackDefinition,
+    TrackId, TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint,
 };
 use noon_runtime::SceneInstance;
 
@@ -54,7 +54,7 @@ fn chained_scene() -> CompiledScene {
             from: first_snapshot,
             to: second_snapshot.clone(),
         },
-        timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
     tracks.push(TrackDefinition {
@@ -88,7 +88,7 @@ fn chained_scene() -> CompiledScene {
             from: second_snapshot,
             to: third_snapshot,
         },
-        timing: TrackTiming::new(1.0, 1.0, Easing::Linear),
+        timing: TrackTiming::new(1.0, 1.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
     tracks.push(TrackDefinition {

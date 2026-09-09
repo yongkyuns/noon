@@ -49,9 +49,6 @@ pub use semantic_family::*;
 mod animation_member_plan;
 pub use animation_member_plan::*;
 
-mod family_animation_request;
-pub use family_animation_request::*;
-
 mod semantic_model;
 pub use semantic_model::*;
 
@@ -78,9 +75,6 @@ pub use retained_family_animation_plan::*;
 
 mod family_animation;
 pub use family_animation::*;
-
-mod text_family_animation;
-pub use text_family_animation::*;
 
 mod resource_mutation;
 pub use resource_mutation::*;

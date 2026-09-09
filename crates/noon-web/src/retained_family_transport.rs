@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
 use noon_core::{
-    FamilyAnimationError, FamilyAnimationState, ObjectId, RetainedFamilyAnimationMemberPlanError,
-    RetainedFamilyAnimationPlan, RetainedFamilyAnimationPlanBuilder, RetainedObjectDefinition,
-    SemanticStore, SemanticStoreError, TextResourceLookup,
+    FamilyAnimationError, FamilyAnimationLeafBinding, FamilyAnimationState, ObjectId,
+    RetainedFamilyAnimationMemberPlanError, RetainedFamilyAnimationPlan,
+    RetainedFamilyAnimationPlanBuilder, SemanticNodeId, TextResourceLookup,
 };
 use noon_runtime::FrameState;
 use serde::{Deserialize, Serialize};
@@ -48,14 +48,16 @@ impl RetainedFamilyTransportState {
 
 /// Immutable wire description of one already-flattened semantic family plan.
 ///
-/// The engine sends retained leaf order and, for a projected leaf, its global range.
+/// The engine sends source semantic identities, retained leaf order and, for a
+/// projected leaf, its global range.
 /// The render worker rebuilds
 /// the core plan once from the resolved snapshot + immutable text resources, so shaped
 /// glyph descriptors never cross the wire and frame-time scheduling never recomputes
 /// semantic traversal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetainedFamilyPlanTransport {
-    pub objects: Vec<ObjectId>,
+    pub target: SemanticNodeId,
+    pub bindings: Vec<FamilyAnimationLeafBinding>,
     /// A single resident leaf may keep its range in a larger global sequence.
     /// Glyph identities remain derived from immutable worker-local resources.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -69,9 +71,13 @@ pub struct RetainedFamilyGlobalSpan {
 }
 
 impl RetainedFamilyPlanTransport {
-    pub fn new(objects: Vec<ObjectId>) -> Result<Self, RetainedFamilyTransportError> {
+    pub fn new(
+        target: SemanticNodeId,
+        bindings: Vec<FamilyAnimationLeafBinding>,
+    ) -> Result<Self, RetainedFamilyTransportError> {
         let plan = Self {
-            objects,
+            target,
+            bindings,
             global_span: None,
         };
         plan.validate()?;
@@ -93,29 +99,40 @@ impl RetainedFamilyPlanTransport {
             _ => None,
         };
         Self {
-            objects: plan
+            target: plan.member_plan().target(),
+            bindings: plan
                 .member_plan()
                 .leaves()
                 .iter()
-                .map(|leaf| leaf.object)
+                .map(|leaf| FamilyAnimationLeafBinding::new(leaf.semantic_leaf, leaf.object))
                 .collect(),
             global_span,
         }
     }
 
     pub fn validate(&self) -> Result<(), RetainedFamilyTransportError> {
-        if self.objects.is_empty() {
+        if self.bindings.is_empty() {
             return Err(RetainedFamilyTransportError::EmptyPlan);
         }
         if self.global_span.is_some_and(|span| {
-            self.objects.len() != 1 || span.first_member > span.total_member_count
+            self.bindings.len() != 1
+                || self.target != self.bindings[0].semantic_leaf
+                || span.first_member > span.total_member_count
         }) {
             return Err(RetainedFamilyTransportError::InvalidGlobalSpan);
         }
-        let mut seen = HashSet::with_capacity(self.objects.len());
-        for &object in &self.objects {
-            if !seen.insert(object) {
-                return Err(RetainedFamilyTransportError::DuplicateObject(object));
+        let mut seen = HashSet::with_capacity(self.bindings.len());
+        let mut semantic_leaves = HashSet::with_capacity(self.bindings.len());
+        for binding in &self.bindings {
+            if !seen.insert(binding.object) {
+                return Err(RetainedFamilyTransportError::DuplicateObject(
+                    binding.object,
+                ));
+            }
+            if !semantic_leaves.insert(binding.semantic_leaf) {
+                return Err(RetainedFamilyTransportError::DuplicateLeaf(
+                    binding.semantic_leaf,
+                ));
             }
         }
         Ok(())
@@ -124,10 +141,9 @@ impl RetainedFamilyPlanTransport {
     /// Rebuild the canonical retained family plan from authoritative leaf order and
     /// renderer-local retained content handles.
     ///
-    /// The temporary semantic store exists only to feed the shared plan builder; it
-    /// does not invent a frontend identity model. Leaf order is exactly the engine's
-    /// flattened order, while content-local member descriptors are resolved from the
-    /// already-installed local resources.
+    /// Source semantic identities and flattened leaf order cross the real worker
+    /// boundary unchanged. Only content-local descriptors are resolved from the
+    /// installed resources; receiving a plan never allocates a semantic store.
     pub fn install(
         &self,
         frame: &FrameState,
@@ -149,37 +165,18 @@ impl RetainedFamilyPlanTransport {
     ) -> Result<RetainedFamilyAnimationPlan, RetainedFamilyTransportError> {
         self.validate()?;
 
-        let mut semantics = SemanticStore::new();
         let leaves = self
-            .objects
+            .bindings
             .iter()
-            .map(|_| semantics.insert_authoring_object())
-            .collect::<Vec<_>>();
-        let target = if leaves.len() == 1 {
-            leaves[0]
-        } else {
-            let family = semantics.insert_family();
-            for &leaf in &leaves {
-                semantics
-                    .add_member(family, leaf)
-                    .map_err(RetainedFamilyTransportError::Semantic)?;
-            }
-            family
-        };
-
-        let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&semantics, target)
+            .map(|binding| binding.semantic_leaf)
+            .collect();
+        let mut builder = RetainedFamilyAnimationPlanBuilder::begin_ordered(self.target, leaves)
             .map_err(RetainedFamilyTransportError::Plan)?;
-        for (&leaf, &object_id) in leaves.iter().zip(&self.objects) {
-            let object = object_for_id(object_id)
-                .ok_or(RetainedFamilyTransportError::MissingObject(object_id))?;
-            let definition = RetainedObjectDefinition {
-                id: object.id,
-                content: object.content.clone(),
-                transform: object.transform,
-                style: object.style,
-            };
+        for binding in &self.bindings {
+            let object = object_for_id(binding.object)
+                .ok_or(RetainedFamilyTransportError::MissingObject(binding.object))?;
             builder
-                .accept_leaf(leaf, &definition, texts)
+                .accept_leaf(binding.semantic_leaf, object.id, &object.content, texts)
                 .map_err(RetainedFamilyTransportError::Plan)?;
         }
         let plan = builder
@@ -208,7 +205,7 @@ pub enum RetainedFamilyTransportError {
     DuplicateObject(ObjectId),
     MissingObject(ObjectId),
     InvalidState(FamilyAnimationError),
-    Semantic(SemanticStoreError),
+    DuplicateLeaf(SemanticNodeId),
     Plan(RetainedFamilyAnimationMemberPlanError),
 }
 
@@ -235,7 +232,12 @@ impl std::fmt::Display for RetainedFamilyTransportError {
                     "invalid retained family transport state: {error}"
                 )
             }
-            Self::Semantic(error) => error.fmt(formatter),
+            Self::DuplicateLeaf(leaf) => write!(
+                formatter,
+                "retained family transport repeats semantic leaf {}:{}",
+                leaf.slot(),
+                leaf.generation()
+            ),
             Self::Plan(error) => error.fmt(formatter),
         }
     }
@@ -358,11 +360,22 @@ mod tests {
             render_geometries: vec![None, None],
             render_transforms: vec![None, None],
         };
-        let transport = RetainedFamilyPlanTransport::new(vec![text_id, circle_id]).unwrap();
+        let target = SemanticNodeId::new(91, 8);
+        let bindings = vec![
+            FamilyAnimationLeafBinding::new(SemanticNodeId::new(47, 6), text_id),
+            FamilyAnimationLeafBinding::new(SemanticNodeId::new(12, 9), circle_id),
+        ];
+        let transport = RetainedFamilyPlanTransport::new(target, bindings.clone()).unwrap();
         let json = serde_json::to_string(&transport).unwrap();
         assert!(!json.contains("glyph"));
 
-        let installed = transport.install(&frame, &texts).unwrap();
+        let decoded: RetainedFamilyPlanTransport = serde_json::from_str(&json).unwrap();
+        let installed = decoded.install(&frame, &texts).unwrap();
+        assert_eq!(installed.member_plan().target(), target);
+        assert_eq!(
+            RetainedFamilyPlanTransport::from_plan(&installed).bindings,
+            bindings
+        );
         assert_eq!(installed.member_plan().total_member_count(), 3);
         assert_eq!(
             installed
@@ -383,12 +396,38 @@ mod tests {
     fn malformed_plan_descriptors_fail_before_installation() {
         let object = ObjectId::new(7);
         assert_eq!(
-            RetainedFamilyPlanTransport::new(Vec::new()).unwrap_err(),
+            RetainedFamilyPlanTransport::new(SemanticNodeId::new(1, 2), Vec::new()).unwrap_err(),
             RetainedFamilyTransportError::EmptyPlan
         );
         assert_eq!(
-            RetainedFamilyPlanTransport::new(vec![object, object]).unwrap_err(),
+            RetainedFamilyPlanTransport::new(
+                SemanticNodeId::new(1, 2),
+                vec![
+                    FamilyAnimationLeafBinding::new(SemanticNodeId::new(2, 3), object),
+                    FamilyAnimationLeafBinding::new(SemanticNodeId::new(3, 4), object),
+                ]
+            )
+            .unwrap_err(),
             RetainedFamilyTransportError::DuplicateObject(object)
+        );
+    }
+
+    #[test]
+    fn duplicate_semantic_leaf_is_rejected_before_resource_or_object_lookup() {
+        let leaf = SemanticNodeId::new(9, 13);
+        let transport = RetainedFamilyPlanTransport {
+            target: SemanticNodeId::new(2, 8),
+            bindings: vec![
+                FamilyAnimationLeafBinding::new(leaf, ObjectId::new(1)),
+                FamilyAnimationLeafBinding::new(leaf, ObjectId::new(2)),
+            ],
+            global_span: None,
+        };
+        assert_eq!(
+            transport.install_with_object_lookup(&TextResourceArena::new(), |_| {
+                panic!("invalid plan must fail before visiting resources or resident state")
+            }),
+            Err(RetainedFamilyTransportError::DuplicateLeaf(leaf))
         );
     }
 
@@ -407,7 +446,7 @@ mod tests {
         let members =
             noon_core::RetainedAnimationMembers::resolve(&object.content, &texts).unwrap();
         let plan = RetainedFamilyAnimationPlan::single_leaf_span(
-            noon_core::SemanticNodeId::new(42, 0),
+            noon_core::SemanticNodeId::new(42, 17),
             object.id,
             members,
             3,
@@ -421,6 +460,10 @@ mod tests {
         let installed = decoded
             .install_with_object_lookup(&texts, |id| (id == object.id).then_some(&object))
             .unwrap();
+        assert_eq!(
+            installed, plan,
+            "transport must preserve source identity and global range"
+        );
         assert_eq!(installed.leaves().len(), 1);
         assert_eq!(installed.member_plan().total_member_count(), 7);
         assert_eq!(installed.leaves()[0].span().first_member, 3);
@@ -446,7 +489,10 @@ mod tests {
             decoded.install_with_object_lookup(&texts, |_| Some(&object)),
             Err(RetainedFamilyTransportError::Plan(_))
         ));
-        decoded.objects.push(ObjectId::new(13));
+        decoded.bindings.push(FamilyAnimationLeafBinding::new(
+            SemanticNodeId::new(43, 2),
+            ObjectId::new(13),
+        ));
         assert_eq!(
             decoded.validate(),
             Err(RetainedFamilyTransportError::InvalidGlobalSpan)

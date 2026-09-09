@@ -1,7 +1,7 @@
 use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId,
-    TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
+    CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, Style, TrackDefinition,
+    TrackId, TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
 };
 use noon_runtime::SceneInstance;
 
@@ -85,7 +85,7 @@ fn matching_scene() -> CompiledScene {
             from: source_circle_snapshot,
             to: target_circle_snapshot,
         },
-        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
     tracks.push(TrackDefinition {
@@ -96,7 +96,7 @@ fn matching_scene() -> CompiledScene {
             from: source_rectangle_snapshot,
             to: target_rectangle_snapshot,
         },
-        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 

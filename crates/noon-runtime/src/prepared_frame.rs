@@ -582,7 +582,7 @@ mod tests {
         SemanticExecutionIndex,
     };
     use noon_core::{
-        CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, SemanticObjectProperty,
+        CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, SemanticObjectProperty,
         SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, Style, TrackDefinition,
         TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
     };
@@ -605,7 +605,7 @@ mod tests {
                 from: Vec2::ZERO,
                 to: Vec2::new(10.0, 0.0),
             },
-            timing: TrackTiming::new(1.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(1.0, 2.0, RateFunction::Linear),
             time_map: CompositionTimeMap::default(),
         };
         CompiledScene::compile_objects(vec![compiled], &[track]).expect("scene must compile")

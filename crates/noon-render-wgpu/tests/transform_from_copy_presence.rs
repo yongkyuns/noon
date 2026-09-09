@@ -1,6 +1,6 @@
 use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId, TrackTiming,
+    GeometryRef, ObjectId, Property, RateFunction, Style, TrackDefinition, TrackId, TrackTiming,
     TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
 };
 use noon_render_wgpu::FramePreparer;
@@ -37,7 +37,7 @@ fn copy_scene() -> SceneInstance {
             object: copy,
             property: Property::Transform,
             values: TrackValues::Object { from, to },
-            timing: TrackTiming::new(1.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(1.0, 2.0, RateFunction::Linear),
             time_map: Default::default(),
         },
         TrackDefinition {

@@ -1,6 +1,6 @@
 use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId, TrackTiming,
+    GeometryRef, ObjectId, Property, RateFunction, Style, TrackDefinition, TrackId, TrackTiming,
     TrackValues, Transform2D,
 };
 use noon_render_wgpu::FramePreparer;
@@ -24,7 +24,7 @@ fn appearance_multiplies_semantic_opacity_in_packed_instances() {
             object,
             property: Property::Appearance,
             values: TrackValues::Scalar { from: 1.0, to: 0.0 },
-            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
             time_map: Default::default(),
         }],
     )

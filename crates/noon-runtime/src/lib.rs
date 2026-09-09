@@ -2517,8 +2517,8 @@ mod tests {
     use noon_compile::{CompiledFamilyAnimation, CompiledObject, CompiledScene};
     use noon_core::TrackId;
     use noon_core::{
-        Color, CompositionTimeMap, CompositionTimeMapStep, Easing, GeometryRef, Property,
-        RateFunction, Style, TrackDefinition, TrackTiming,
+        Color, CompositionTimeMap, CompositionTimeMapStep, GeometryRef, Property, RateFunction,
+        Style, TrackDefinition, TrackTiming,
     };
     use noon_core::{
         FamilyAnimationMode, FamilyAnimationSpec, RetainedAnimationMembers,
@@ -2545,7 +2545,7 @@ mod tests {
                 from: Vec2::ZERO,
                 to: Vec2::new(10.0, 0.0),
             },
-            timing: TrackTiming::new(1.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(1.0, 2.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         CompiledScene::compile_objects(objects, &tracks).expect("scene must compile")
@@ -2726,7 +2726,7 @@ mod tests {
                 from: Vec2::ONE,
                 to: Vec2::new(3.0, 2.0),
             },
-            timing: TrackTiming::new(1.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(1.0, 2.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         let mut instance = SceneInstance::new(
@@ -3055,7 +3055,7 @@ mod tests {
             object,
             property: Property::Reveal,
             values: TrackValues::Scalar { from: 0.0, to: 1.0 },
-            timing: TrackTiming::new(1.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(1.0, 2.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         let mut instance = SceneInstance::new(
@@ -3084,7 +3084,7 @@ mod tests {
             object,
             property: Property::Appearance,
             values: TrackValues::Scalar { from: 1.0, to: 0.0 },
-            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         let mut instance = SceneInstance::new(
@@ -3117,7 +3117,7 @@ mod tests {
             object,
             property: Property::Reveal,
             values: TrackValues::Scalar { from: 0.0, to: 1.0 },
-            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         tracks.push(TrackDefinition {
@@ -3125,7 +3125,7 @@ mod tests {
             object,
             property: Property::Morph,
             values: TrackValues::Scalar { from: 0.0, to: 1.0 },
-            timing: TrackTiming::new(0.0, 4.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 4.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         let mut instance = SceneInstance::new(
@@ -3234,7 +3234,7 @@ mod tests {
                     from: Vec2::new(from, 0.0),
                     to: Vec2::new(from + 1.0, 0.0),
                 },
-                timing: TrackTiming::new(start, 0.5, Easing::Linear),
+                timing: TrackTiming::new(start, 0.5, RateFunction::Linear),
                 time_map: CompositionTimeMap::identity(),
             });
         }
@@ -3265,7 +3265,7 @@ mod tests {
             object,
             property: Property::Opacity,
             values: TrackValues::Scalar { from: 1.0, to: 0.0 },
-            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         let compiled =
@@ -3304,7 +3304,7 @@ mod tests {
                 from: Vec2::ZERO,
                 to: Vec2::new(4.0, 0.0),
             },
-            timing: TrackTiming::new(0.0, 4.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 4.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         };
         let compiled =
@@ -3319,7 +3319,7 @@ mod tests {
                 from: Vec2::ZERO,
                 to: Vec2::new(8.0, 2.0),
             },
-            timing: TrackTiming::new(0.0, 4.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 4.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         };
         let track_patch = ExecutionPatch::ReplaceTrack(replacement.clone());
@@ -3395,7 +3395,7 @@ mod tests {
             object,
             property: Property::Opacity,
             values: TrackValues::Scalar { from: 1.0, to: 0.0 },
-            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         let compiled =
@@ -3420,7 +3420,7 @@ mod tests {
                 from: None,
                 to: Some(Color::RED),
             },
-            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         };
         let compiled = CompiledScene::compile_objects(
@@ -3468,7 +3468,7 @@ mod tests {
                     ..Color::BLUE
                 }),
             },
-            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         };
         let compiled = CompiledScene::compile_objects(
@@ -3537,7 +3537,7 @@ mod tests {
                 object: target,
                 property: Property::StrokeWidth,
                 values: TrackValues::Scalar { from: 0.0, to: 2.0 },
-                timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+                timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
                 time_map: CompositionTimeMap::identity(),
             }],
         )
@@ -3584,7 +3584,7 @@ mod tests {
             object,
             property: Property::Opacity,
             values: TrackValues::Scalar { from: 1.0, to: 0.0 },
-            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         let mut instance = SceneInstance::new(
@@ -3656,7 +3656,7 @@ mod tests {
                 from: Vec2::ZERO,
                 to: Vec2::new(10.0, 0.0),
             },
-            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         let mut instance = SceneInstance::new(

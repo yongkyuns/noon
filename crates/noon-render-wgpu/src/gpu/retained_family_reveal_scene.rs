@@ -150,7 +150,7 @@ impl std::error::Error for RetainedFamilyRevealSceneError {}
 mod tests {
     use noon_core::{
         FamilyAnimationMode, GeometryRef, RateFunction, RetainedFamilyAnimationPlanBuilder,
-        RetainedObjectDefinition, SemanticStore, TextResourceArena,
+        SemanticStore, TextResourceArena,
     };
 
     use super::*;
@@ -173,10 +173,17 @@ mod tests {
         let family = store.insert_family();
         store.add_member(family, leaf).unwrap();
 
-        let object = RetainedObjectDefinition::geometry(object, GeometryRef::circle(1.0));
+        let object = noon_runtime::FrameObjectState {
+            id: object,
+            content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+            transform: noon_core::Transform2D::IDENTITY,
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&store, family).unwrap();
         builder
-            .accept_leaf(leaf, &object, &TextResourceArena::new())
+            .accept_leaf(leaf, object.id, &object.content, &TextResourceArena::new())
             .unwrap();
         builder.finish().unwrap()
     }

@@ -1,7 +1,7 @@
 use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId,
-    TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint,
+    CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, Style, TrackDefinition,
+    TrackId, TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint,
 };
 use noon_runtime::SceneInstance;
 
@@ -27,7 +27,7 @@ fn scene() -> CompiledScene {
         object,
         property: Property::Transform,
         values: TrackValues::Object { from, to },
-        timing: TrackTiming::new(0.0, 2.0, Easing::EaseInOutCubic),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::EaseInOutCubic),
         time_map: CompositionTimeMap::identity(),
     });
     CompiledScene::compile_objects(objects, &tracks).unwrap()
