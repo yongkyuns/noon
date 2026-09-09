@@ -199,6 +199,14 @@ async function loadDirectFixture(page, example) {
     const renderer = await wasm[factory](canvas.transferControlToOffscreen(), ...args);
     renderer.resize(960, 540);
     window.qualifiedRenderer = renderer;
+    // Drain the initial resource/frame publication before the first seek. The
+    // host must present every pending publication before advancing its session.
+    let presented = false;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      if (renderer.render()) { presented = true; break; }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (!presented) throw new Error(`${factory}: initial publication did not present`);
     return { backend: renderer.rendererBackend(), objectCount: renderer.objectCount() };
   }, example);
 }
