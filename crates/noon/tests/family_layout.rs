@@ -1,4 +1,4 @@
-use noon::{semantic_mobject::ManimNextToArgs, FamilyLayoutTarget as Target, Scene};
+use noon::{FamilyLayoutTarget as Target, ManimNextToArgs, Scene};
 
 #[test]
 fn placement_shares_object_family_and_point_targets_with_masks_and_nonunit_directions() {
@@ -60,7 +60,7 @@ fn invalid_or_foreign_placement_targets_do_not_publish() {
         .layout()
         .unwrap();
     let observation = family.layout().unwrap();
-    let before = scene.store().borrow().scene_revision();
+    let before = scene.integration_store().borrow().scene_revision();
     for target in [
         Target::Mobject(&foreign),
         Target::Family(&foreign_family),
@@ -79,7 +79,7 @@ fn invalid_or_foreign_placement_targets_do_not_publish() {
             }
         )
         .is_err());
-    assert_eq!(scene.store().borrow().scene_revision(), before);
+    assert_eq!(scene.integration_store().borrow().scene_revision(), before);
     assert_eq!(object.center().unwrap(), (0.0, 0.0));
 }
 
@@ -87,11 +87,11 @@ fn invalid_or_foreign_placement_targets_do_not_publish() {
 fn empty_family_observation_has_origin_bounds_without_scene_changes() {
     let scene = Scene::new();
     let family = scene.family(&[]).unwrap();
-    let before = scene.store().borrow().scene_revision();
+    let before = scene.integration_store().borrow().scene_revision();
     let observation = family.layout().unwrap();
     assert_eq!(observation.bounds(), None);
     assert_eq!(observation.critical_point(1.0, -1.0), (0.0, 0.0));
     assert_eq!((observation.width(), observation.height()), (0.0, 0.0));
     observation.shift(3.0, 4.0).unwrap();
-    assert_eq!(scene.store().borrow().scene_revision(), before);
+    assert_eq!(scene.integration_store().borrow().scene_revision(), before);
 }

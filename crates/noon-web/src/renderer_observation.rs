@@ -1,4 +1,6 @@
-use noon::{CallbackRendererDirtyClassification, CommittedCallbackRendererObservation};
+use noon::integration::{
+    CallbackRendererDirtyClassification, CommittedCallbackRendererObservation,
+};
 use noon_core::{ObjectId, Style, Transform2D};
 use serde::{Deserialize, Serialize};
 

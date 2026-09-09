@@ -1,90 +1,62 @@
-//! Direct Rust proof for the generic shared authoring path, without serialization.
-use noon::{
-    AnimationOptions, RateFunction, Scene, SemanticAnimationIntent, SemanticAnimationState,
-    SemanticMutationImpact, SemanticMutationTransaction, SemanticObjectProperty, SemanticVec3,
-    Vec2,
-};
+//! Direct public-API counterpart of web/python/examples/live_affine_completion.py.
+//! Construction, authored/effective queries, live edits and logical completion
+//! need no raw store, compiler transaction, or host ownership knowledge.
+use noon::{AnimationOptions, RateFunction, Scene, Vec2};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
-    let mut circle = scene.circle(1.0)?;
-    circle.shift(2.0, -1.0)?;
-    circle.set_fill(0.0, 1.0, 0.0, 0.5)?;
-    assert_eq!(circle.center()?, (2.0, -1.0));
-    assert_eq!(circle.width()?, 2.0);
-    assert_eq!(circle.fill_opacity()?, 0.5);
+    let circle = scene.circle(1.0)?;
     scene.add(&circle)?;
-
-    let mut target = circle.target_editor()?;
-    target.shift(4.0, 0.0)?;
-    target.manim_scale(2.0, 2.0)?;
+    let mut first_target = circle.target_editor()?;
+    first_target.shift(2.0, -2.0)?;
+    let mut second_target = circle.target_editor()?;
+    second_target.shift(5.0, -2.0)?;
     let options = AnimationOptions::new()
-        .run_time(1.0)
+        .run_time(2.0)
         .rate_func(RateFunction::Linear);
-    let mut transaction = SemanticMutationTransaction::new();
-    transaction.add_animation(SemanticAnimationState::new(
-        SemanticAnimationIntent::TransformTo {
-            target: circle.node_id(),
-            target_state: target.node_id(),
-            interpolation: noon_core::SemanticTransformInterpolation::Affine,
-        },
-        options,
-    ));
+    let first = scene.declare_transform_to(&circle, &first_target, options)?;
+    let second = scene.declare_transform_to(&circle, &second_target, options)?;
     let mut session = scene.execution_session()?;
-    let result =
-        session.apply_semantic_transaction(&mut scene.store().borrow_mut(), transaction)?;
-    let [SemanticMutationImpact::AnimationAdded { animation }] = result.impacts() else {
-        unreachable!()
-    };
-    session.activate_animation_segment(&scene.store().borrow(), *animation, options)?;
-    session.seek(0.5)?;
-    assert_eq!(session.frame().objects.len(), 1);
+    let mut live = scene.live(&mut session);
+    let segment = live.play_animation(&first)?;
+    live.advance_segment_to(segment, 1.0)?;
     assert_eq!(
-        session.frame().objects[0].transform.translation,
-        Vec2::new(4.0, -1.0)
+        live.effective(&circle)?.transform.translation,
+        Vec2::new(1.0, -1.0)
     );
+    assert_eq!(live.authored(&circle)?.transform.translation.x, 0.0);
+    live.advance_segment_to(segment, segment.end_time())?;
+    assert!(!live.segment_state(segment).is_complete());
+    live.complete_segment(segment)?;
+    assert!(live.segment_state(segment).is_complete());
     assert_eq!(
-        session.frame().objects[0].transform.scale,
-        Vec2::new(1.5, 1.5)
+        live.effective(&circle)?.transform.translation,
+        Vec2::new(2.0, -2.0)
     );
-    session.seek(1.0)?;
+    assert_eq!(live.authored(&circle)?.transform.translation.x, 2.0);
+    live.set_translation(&circle, 3.0, -2.0)?;
+    let wait = live.wait_segment(0.25)?;
+    live.advance_segment_to(wait, wait.end_time())?;
+    live.complete_segment(wait)?;
     assert_eq!(
-        session.frame().objects[0].transform.translation,
-        Vec2::new(6.0, -1.0)
+        live.effective(&circle)?.transform.translation,
+        Vec2::new(3.0, -2.0)
     );
-    assert_eq!(circle.center()?, (2.0, -1.0));
-
-    // Continuation reads the published effective endpoint, then prepares the next
-    // target and a persistent base edit through the same atomic publication path.
-    let endpoint = session
-        .effective_semantic_object(&scene.store().borrow(), circle.node_id())?
-        .object
-        .transform
-        .translation;
-    let mut next = SemanticMutationTransaction::new();
-    next.set_property(
-        circle.node_id(),
-        SemanticObjectProperty::Translation,
-        SemanticVec3::new(endpoint.x as f64, endpoint.y as f64, 0.0),
-    );
-    next.set_property(
-        target.node_id(),
-        SemanticObjectProperty::Translation,
-        SemanticVec3::new(endpoint.x as f64 + 4.0, endpoint.y as f64, 0.0),
-    );
-    session.apply_semantic_transaction(&mut scene.store().borrow_mut(), next)?;
-    let segment =
-        session.activate_animation_segment(&scene.store().borrow(), *animation, options)?;
-    session.advance_segment_to(segment, segment.end_time())?;
-    assert!(session.segment_state(segment).is_complete());
+    // Activation reads the edited effective value, not the declaration-time base.
+    let segment = live.play_animation(&second)?;
+    live.advance_segment_to(segment, segment.end_time() - 1.0)?;
     assert_eq!(
-        session
-            .effective_semantic_object(&scene.store().borrow(), circle.node_id())?
-            .object
-            .transform
-            .translation,
-        Vec2::new(10.0, -1.0)
+        live.effective(&circle)?.transform.translation,
+        Vec2::new(4.0, -2.0)
     );
-    assert_eq!(circle.center()?, (6.0, -1.0));
+    assert_eq!(live.authored(&circle)?.transform.translation.x, 3.0);
+    live.advance_segment_to(segment, segment.end_time())?;
+    live.complete_segment(segment)?;
+    assert_eq!(
+        live.effective(&circle)?.transform.translation,
+        Vec2::new(5.0, -2.0)
+    );
+    assert_eq!(live.authored(&circle)?.transform.translation.x, 5.0);
+    assert!(live.segment_state(segment).is_complete());
     Ok(())
 }

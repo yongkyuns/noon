@@ -57,7 +57,7 @@ impl LiveContinuation for TextFamilyFade {
                     return Err("Text Write did not admit its direct scene root".into());
                 }
                 {
-                    let store = self.family.store().borrow();
+                    let store = self.family.integration_store().borrow();
                     let family = store
                         .node(self.family.node_id())
                         .ok_or("Text family identity disappeared after FadeIn")?;
@@ -95,7 +95,7 @@ impl LiveContinuation for TextFamilyFade {
                     );
                 }
                 {
-                    let store = self.family.store().borrow();
+                    let store = self.family.integration_store().borrow();
                     let family = store
                         .node(self.family.node_id())
                         .ok_or("Text family identity disappeared after FadeOut")?;

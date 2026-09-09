@@ -52,7 +52,7 @@ fn transferred_context_cannot_drive_query_publish_or_take_again() {
     let (mut scene, circle) = scene_with_circle();
     let player = scene.take_execution_player(1.0, 41).unwrap();
     let identity = player.ownership_identity();
-    let revision = scene.scene.store().borrow().scene_revision();
+    let revision = scene.scene.integration_store().borrow().scene_revision();
     assert!(scene.mobject_layout(&circle).is_err());
     assert!(scene.live_contains_mobject(&circle).is_err());
     assert!(scene.active_live_player().is_err());
@@ -62,7 +62,10 @@ fn transferred_context_cannot_drive_query_publish_or_take_again() {
     assert!(scene
         .add_updater(&circle, HostCallbackId::new(3), 0.0, None)
         .is_err());
-    assert_eq!(scene.scene.store().borrow().scene_revision(), revision);
+    assert_eq!(
+        scene.scene.integration_store().borrow().scene_revision(),
+        revision
+    );
     assert_eq!(scene.live_execution_ownership(), "transferred");
     scene.return_execution_player(player).unwrap();
     assert_eq!(
@@ -105,7 +108,7 @@ fn foreign_store_return_does_not_replace_either_contexts_lease() {
 fn different_root_in_the_same_store_is_not_the_leased_scene() {
     let (mut scene, _) = scene_with_circle();
     let mut other_scene =
-        CanonicalAuthoringScene::with_store(std::rc::Rc::clone(scene.scene.store()));
+        CanonicalAuthoringScene::with_store(std::rc::Rc::clone(scene.scene.integration_store()));
     let expected = scene.take_execution_player(1.0, 41).unwrap();
     let other = other_scene.take_execution_player(1.0, 41).unwrap();
     let rejection = scene.return_execution_player(other).unwrap_err();

@@ -6,9 +6,9 @@ use crate::{
     family_authoring::translation_transaction,
     family_layout::{bounds_critical_point, RelativePlacement},
     semantic_mobject::ManimNextToArgs,
-    Bounds2D64, LayoutAnchor, Mobject, MobjectFamily, SemanticMutationTransaction, SemanticNodeId,
-    SemanticVec3,
+    Bounds2D64, LayoutAnchor, Mobject, MobjectFamily, SemanticNodeId, SemanticVec3,
 };
+use noon_core::SemanticMutationTransaction;
 use std::{
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
@@ -48,16 +48,18 @@ impl MobjectFamily {
     pub fn arrange_with_options(&self, options: &FamilyArrangeOptions) -> Result<(), String> {
         let mut plan = FamilyArrangePlan::begin(self, options)?;
         plan.observe_leaf_bounds(|leaf| {
-            Mobject::from_node(Rc::clone(self.store()), leaf)?.layout_bounds()
+            Mobject::from_node(Rc::clone(self.integration_store()), leaf)?.layout_bounds()
         })?;
         let transaction = plan.transaction(|leaf| {
-            Ok(Mobject::from_node(Rc::clone(self.store()), leaf)?
-                .state()?
-                .transform
-                .translation)
+            Ok(
+                Mobject::from_node(Rc::clone(self.integration_store()), leaf)?
+                    .state()?
+                    .transform
+                    .translation,
+            )
         })?;
         transaction
-            .apply(&mut self.store().borrow_mut())
+            .apply(&mut self.integration_store().borrow_mut())
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
@@ -88,25 +90,25 @@ impl FamilyArrangePlan {
         // Normalize/check even an empty request without publishing anything.
         RelativePlacement::Next(options.placement).delta(None, |_, _| Ok((0.0, 0.0)))?;
         let ids = family
-            .store()
+            .integration_store()
             .borrow()
             .node(family.node_id())
             .unwrap()
             .members()
             .to_vec();
         let leaves = |anchor: LayoutAnchor| -> Result<Vec<SemanticNodeId>, String> {
-            if !Rc::ptr_eq(family.store(), anchor.store()) {
+            if !Rc::ptr_eq(family.integration_store(), anchor.integration_store()) {
                 return Err("arrangement anchors belong to different authoring stores".into());
             }
             let node = anchor.resolve()?;
             family
-                .store()
+                .integration_store()
                 .borrow()
                 .ordered_leaf_nodes(node)
                 .map_err(|e| e.to_string())
         };
         let selected = |node| {
-            let anchor = LayoutAnchor::from_node(Rc::clone(family.store()), node);
+            let anchor = LayoutAnchor::from_node(Rc::clone(family.integration_store()), node);
             match options.member_index {
                 Some(index) => anchor.member(index),
                 None => anchor,
@@ -120,7 +122,10 @@ impl FamilyArrangePlan {
             let target = leaves(selected(pair[0]))?;
             required.extend(source.iter().chain(&target).copied());
             steps.push(PlacementStep {
-                moved: leaves(LayoutAnchor::from_node(Rc::clone(family.store()), pair[1]))?,
+                moved: leaves(LayoutAnchor::from_node(
+                    Rc::clone(family.integration_store()),
+                    pair[1],
+                ))?,
                 source,
                 target,
             });

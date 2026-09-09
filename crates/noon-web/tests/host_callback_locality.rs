@@ -1,9 +1,12 @@
-use noon::{
+use noon::integration::{
     CallbackAdvance, CallbackTerminationKind, EffectivePropertyBatch,
-    EffectiveSemanticPropertyWrite, ExecutionSession, ExecutionSessionCallbackError,
-    HostCallbackId, SemanticMutationTransaction, SemanticNodeId, SemanticObjectState,
-    SemanticStore, StoredGeometry, Style, Transform2D, Vec2,
+    EffectiveSemanticPropertyWrite,
 };
+use noon::{
+    ExecutionSession, ExecutionSessionCallbackError, SemanticNodeId, SemanticObjectState,
+    StoredGeometry, Style, Transform2D, Vec2,
+};
+use noon_core::{HostCallbackId, SemanticMutationTransaction, SemanticStore};
 
 const SCENE_OBJECTS: usize = 10_000;
 const HOST_OBJECT_INDEX: usize = SCENE_OBJECTS / 2;

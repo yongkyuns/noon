@@ -147,7 +147,7 @@ fn rejected_composition_cannot_partially_admit_uncreate() {
         .is_err());
     assert_eq!(execution.publication_context(), before);
     assert_eq!(
-        scene.store().borrow().scene_revision(),
+        scene.integration_store().borrow().scene_revision(),
         before.scene_revision()
     );
     assert!(!scene.live(&mut execution).contains(&target).unwrap());

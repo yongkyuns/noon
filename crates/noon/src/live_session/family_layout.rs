@@ -143,7 +143,7 @@ impl LiveSession<'_> {
         &self,
         anchor: &crate::LayoutAnchor,
     ) -> Result<(Vec<SemanticNodeId>, Option<Bounds2D64>), LiveSessionError> {
-        if !Rc::ptr_eq(self.store, anchor.store()) {
+        if !Rc::ptr_eq(self.store, anchor.integration_store()) {
             return Err(LiveSessionError::Mobject(
                 "layout anchors belong to different authoring stores".into(),
             ));

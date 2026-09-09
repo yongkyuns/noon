@@ -46,7 +46,9 @@ fn morph_endpoint_publishes_geometry_after_clearing_render_override() {
         TrackTiming::new(1.0, 1.0, RateFunction::Linear),
         CompositionTimeMap::identity(),
     );
-    let committed = transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+    let committed = transaction
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
     let root = scene
         .declare_animation(
             SemanticAnimationIntent::Composition {

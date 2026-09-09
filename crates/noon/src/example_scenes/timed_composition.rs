@@ -115,9 +115,9 @@ impl LiveContinuation for TimedComposition {
 pub fn program() -> Result<LiveProgram<TimedComposition>, String> {
     let scene = Scene::new();
     let mut squares = [
-        Mobject::manim_square(Rc::clone(scene.store()), 1.0)?,
-        Mobject::manim_square(Rc::clone(scene.store()), 1.0)?,
-        Mobject::manim_square(Rc::clone(scene.store()), 1.0)?,
+        Mobject::manim_square(Rc::clone(scene.integration_store()), 1.0)?,
+        Mobject::manim_square(Rc::clone(scene.integration_store()), 1.0)?,
+        Mobject::manim_square(Rc::clone(scene.integration_store()), 1.0)?,
     ];
     for (square, x) in squares.iter_mut().zip([-2.0, 0.0, 2.0]) {
         square.set_translation(x, 0.0)?;

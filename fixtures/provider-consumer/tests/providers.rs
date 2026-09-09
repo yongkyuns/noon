@@ -22,7 +22,7 @@ fn assert_shared_resource_path(mut scene: Scene, label: noon::Mobject) {
     scene.add(&circle).unwrap();
     scene.add(&label).unwrap();
     let resource = label.state().unwrap().content.text().unwrap();
-    let stats = scene.store().borrow().text_resources().stats();
+    let stats = scene.integration_store().borrow().text_resources().stats();
     let mut session = scene.execution_session().unwrap();
     assert!(session.frame().objects[0].geometry().is_some());
     assert_eq!(session.frame().objects[1].text(), Some(resource));
@@ -37,7 +37,10 @@ fn assert_shared_resource_path(mut scene: Scene, label: noon::Mobject) {
         live.authored(&label).unwrap().content.text(),
         Some(resource)
     );
-    assert_eq!(scene.store().borrow().text_resources().stats(), stats);
+    assert_eq!(
+        scene.integration_store().borrow().text_resources().stats(),
+        stats
+    );
 }
 
 #[cfg(feature = "native-text")]
@@ -58,8 +61,8 @@ fn missing_native_fonts_do_not_mutate_resources_or_identity() {
     let circle = scene.circle(1.0).unwrap();
     scene.add(&circle).unwrap();
     let mut session = scene.execution_session().unwrap();
-    let revision = scene.store().borrow().scene_revision();
-    let stats = scene.store().borrow().text_resources().stats();
+    let revision = scene.integration_store().borrow().scene_revision();
+    let stats = scene.integration_store().borrow().text_resources().stats();
     assert!(matches!(
         scene.text("No font"),
         Err(TextAuthoringError::FontUnavailable(_))
@@ -73,8 +76,14 @@ fn missing_native_fonts_do_not_mutate_resources_or_identity() {
         scene.text(text),
         Err(TextAuthoringError::FontUnavailable(_))
     ));
-    assert_eq!(scene.store().borrow().scene_revision(), revision);
-    assert_eq!(scene.store().borrow().text_resources().stats(), stats);
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        revision
+    );
+    assert_eq!(
+        scene.integration_store().borrow().text_resources().stats(),
+        stats
+    );
     let mut live = scene.live(&mut session);
     assert!(live.create_text(noon::Text::new("No font")).is_err());
     live.set_translation(&circle, 3.0, 0.0).unwrap();
@@ -82,7 +91,10 @@ fn missing_native_fonts_do_not_mutate_resources_or_identity() {
         live.effective(&circle).unwrap().transform.translation.x,
         3.0
     );
-    assert_eq!(scene.store().borrow().text_resources().stats(), stats);
+    assert_eq!(
+        scene.integration_store().borrow().text_resources().stats(),
+        stats
+    );
 }
 
 #[cfg(feature = "typst")]
@@ -98,8 +110,8 @@ fn typst_with_explicit_fonts_uses_the_shared_store() {
 #[test]
 fn invalid_or_empty_explicit_typst_fonts_never_fall_back() {
     let scene = Scene::new();
-    let revision = scene.store().borrow().scene_revision();
-    let stats = scene.store().borrow().text_resources().stats();
+    let revision = scene.integration_store().borrow().scene_revision();
+    let stats = scene.integration_store().borrow().text_resources().stats();
     let error = scene
         .typst(noon::Typst::new("Noon").with_fonts([]))
         .unwrap_err();
@@ -121,8 +133,14 @@ fn invalid_or_empty_explicit_typst_fonts_never_fall_back() {
         error,
         TextAuthoringError::Typst(noon::TypstBackendError::FontsUnavailable)
     );
-    assert_eq!(scene.store().borrow().scene_revision(), revision);
-    assert_eq!(scene.store().borrow().text_resources().stats(), stats);
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        revision
+    );
+    assert_eq!(
+        scene.integration_store().borrow().text_resources().stats(),
+        stats
+    );
 }
 
 #[cfg(all(feature = "typst", not(feature = "bundled-fonts")))]
@@ -132,12 +150,15 @@ fn unavailable_typst_fonts_leave_the_live_session_usable() {
     let circle = scene.circle(1.0).unwrap();
     scene.add(&circle).unwrap();
     let mut session = scene.execution_session().unwrap();
-    let revision = scene.store().borrow().scene_revision();
+    let revision = scene.integration_store().borrow().scene_revision();
     assert_eq!(
         scene.typst(noon::Typst::new("Noon")).unwrap_err(),
         TextAuthoringError::Typst(noon::TypstBackendError::FontsUnavailable)
     );
-    assert_eq!(scene.store().borrow().scene_revision(), revision);
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        revision
+    );
     let mut live = scene.live(&mut session);
     assert!(live.create_typst(noon::Typst::new("Noon")).is_err());
     assert!(live.create_math_typst(noon::MathTypst::new("x")).is_err());
@@ -146,7 +167,11 @@ fn unavailable_typst_fonts_leave_the_live_session_usable() {
         live.effective(&circle).unwrap().transform.translation.x,
         3.0
     );
-    assert!(scene.store().borrow().text_resources().is_empty());
+    assert!(scene
+        .integration_store()
+        .borrow()
+        .text_resources()
+        .is_empty());
 }
 
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]

@@ -57,7 +57,7 @@ impl LiveContinuation for OrdinarySubsetDisplay {
 }
 
 fn colored_circle(scene: &Scene, x: f64, y: f64, color: Color) -> Result<Mobject, String> {
-    let mut circle = Mobject::manim_circle(Rc::clone(scene.store()), 0.3)?;
+    let mut circle = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.3)?;
     circle.set_translation(x, y)?;
     circle.set_fill(
         f64::from(color.red),

@@ -1,6 +1,6 @@
 #[cfg(target_arch = "wasm32")]
-use noon::semantic_mobject::authoring_render_f64 as render_f64;
-pub use noon::semantic_mobject::{ManimNextToArgs, Mobject};
+use noon::integration::authoring_render_f64 as render_f64;
+pub use noon::{ManimNextToArgs, Mobject};
 #[cfg(target_arch = "wasm32")]
 use noon_core::SemanticNodeId;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -234,7 +234,7 @@ mod wasm {
                 .next_to_aligned(
                     noon::FamilyLayoutTarget::Anchor(&target.anchor),
                     &aligner.anchor,
-                    noon::semantic_mobject::ManimNextToArgs {
+                    noon::ManimNextToArgs {
                         direction: (direction_x, direction_y),
                         buff,
                         aligned_edge: (edge_x, edge_y),
@@ -262,7 +262,7 @@ mod wasm {
                 .next_to_aligned(
                     noon::FamilyLayoutTarget::Point(x, y),
                     &aligner.anchor,
-                    noon::semantic_mobject::ManimNextToArgs {
+                    noon::ManimNextToArgs {
                         direction: (direction_x, direction_y),
                         buff,
                         aligned_edge: (edge_x, edge_y),
@@ -467,7 +467,7 @@ mod wasm {
     impl WasmAuthoringFamilyHandle {
         pub(crate) fn from_semantic_family(family: noon::MobjectFamily) -> Self {
             Self {
-                semantics: Rc::clone(family.store()),
+                semantics: Rc::clone(family.integration_store()),
                 id: family.node_id(),
             }
         }
@@ -691,7 +691,7 @@ mod wasm {
             semantics: &SharedSemanticStore,
             context: &str,
         ) -> Result<SemanticNodeId, JsValue> {
-            if !Rc::ptr_eq(semantics, self.handle.store()) {
+            if !Rc::ptr_eq(semantics, self.handle.integration_store()) {
                 return Err(js_error(format!(
                     "{context} and mobject belong to different authoring stores"
                 )));
@@ -1546,7 +1546,7 @@ mod tests {
     #[test]
     fn wire_projection_matches_typed_runtime_after_shared_edits() {
         let mut scene = noon::Scene::new();
-        let authoring_store = std::rc::Rc::clone(scene.store());
+        let authoring_store = std::rc::Rc::clone(scene.integration_store());
         let mut options = ManimGeometryOptions::rectangle(2.0, 1.0).unwrap();
         options.set_fill(0.2, 0.3, 0.4, 0.5).unwrap();
         options.set_stroke(0.6, 0.7, 0.8, 0.9).unwrap();

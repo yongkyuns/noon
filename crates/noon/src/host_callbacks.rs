@@ -3,13 +3,18 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 
-use crate::{
+use crate::execution_session::{
     CallbackAdvance, CallbackPhaseOverlay, CallbackReadRequest, CallbackReadValue,
-    EffectiveObjectProperties, ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSession,
-    ExecutionSessionCallbackError, FrameState, HostCallbackId, SemanticMutationTransaction,
-    SemanticMutationTransactionError, SemanticMutationTransactionResult, SemanticNodeId,
-    SemanticStore, Style, Transform2D, Vec2,
 };
+use crate::{
+    ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSession,
+    ExecutionSessionCallbackError, SemanticNodeId, Style, Transform2D, Vec2,
+};
+use noon_core::{
+    HostCallbackId, SemanticMutationTransaction, SemanticMutationTransactionError,
+    SemanticMutationTransactionResult, SemanticStore,
+};
+use noon_runtime::{EffectiveObjectProperties, FrameState};
 
 type BoxedCallbackError = Box<dyn Error + 'static>;
 type RustHostCallback =
@@ -679,7 +684,7 @@ mod tests {
             .unwrap();
         callbacks
             .add_updater(
-                &mut scene.store().borrow_mut(),
+                &mut scene.integration_store().borrow_mut(),
                 active.node_id(),
                 SET_Y,
                 0.0,
@@ -688,7 +693,7 @@ mod tests {
             .unwrap();
         let mut session = scene.execution_session().unwrap();
         callbacks.advance_to(&mut session, 0.0).unwrap();
-        let store = scene.store().borrow();
+        let store = scene.integration_store().borrow();
         let effective = session
             .effective_semantic_object(&store, active.node_id())
             .unwrap();
@@ -754,7 +759,7 @@ mod tests {
             })
             .unwrap();
         {
-            let mut store = scene.store().borrow_mut();
+            let mut store = scene.integration_store().borrow_mut();
             callbacks
                 .add_updater(&mut store, source.node_id(), SET_Y, 0.0, None)
                 .unwrap();
@@ -817,7 +822,7 @@ mod tests {
             .unwrap();
         authoring_table
             .add_updater(
-                &mut scene.store().borrow_mut(),
+                &mut scene.integration_store().borrow_mut(),
                 target.node_id(),
                 SET_Y,
                 0.0,
@@ -856,7 +861,7 @@ mod tests {
             .unwrap();
         callbacks
             .add_updater(
-                &mut scene.store().borrow_mut(),
+                &mut scene.integration_store().borrow_mut(),
                 target.node_id(),
                 SET_Y,
                 0.0,
@@ -898,7 +903,7 @@ mod tests {
             .unwrap();
         callbacks
             .add_updater(
-                &mut scene.store().borrow_mut(),
+                &mut scene.integration_store().borrow_mut(),
                 target.node_id(),
                 SET_OPACITY,
                 0.0,
@@ -927,7 +932,7 @@ mod tests {
         source: &crate::Mobject,
         drift: &crate::Mobject,
     ) -> ((Vec2, f32), (Vec2, f32)) {
-        let store = scene.store().borrow();
+        let store = scene.integration_store().borrow();
         let source = session
             .effective_semantic_object(&store, source.node_id())
             .unwrap()

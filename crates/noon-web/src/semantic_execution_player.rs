@@ -1,10 +1,11 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
 #[cfg(any(target_arch = "wasm32", test))]
-use noon::TimelineWakeState;
-use noon::{
+use noon::integration::TimelineWakeState;
+use noon::integration::{
     CallbackAdvance, CallbackPhaseToken, CallbackReadRequest, CallbackReadValue,
-    EffectivePropertyBatch, EffectiveSemanticPropertyWrite, ExecutionSession, RuntimeIdentity,
+    EffectivePropertyBatch, EffectiveSemanticPropertyWrite, RuntimeIdentity,
 };
+use noon::ExecutionSession;
 use noon_core::{
     ExecutionRevision, FrameEpoch, PublicationContext, Rect, SceneRevision, SemanticNodeId, Style,
     Transform2D,
@@ -192,8 +193,8 @@ impl SemanticExecutionPlayer {
 
     fn retain_callback_phase(
         &mut self,
-        invocations: Vec<noon::RequiredCallbackInvocation>,
-        overlay: noon::CallbackPhaseOverlay,
+        invocations: Vec<noon::integration::RequiredCallbackInvocation>,
+        overlay: noon::integration::CallbackPhaseOverlay,
     ) -> Result<String, String> {
         let token = overlay.token();
         let phase_time = overlay.time();
@@ -749,7 +750,7 @@ impl SemanticExecutionPlayer {
         source: &noon::LayoutAnchor,
         target: noon::LiveLayoutTarget<'_>,
         aligner: &noon::LayoutAnchor,
-        args: noon::semantic_mobject::ManimNextToArgs,
+        args: noon::ManimNextToArgs,
     ) -> Result<(), String> {
         self.with_live_session(|live| live.next_layout_to_aligned(source, target, aligner, args))
             .map(|_| ())
@@ -1740,7 +1741,7 @@ impl TryFrom<CallbackTokenWire> for CallbackPhaseToken {
                 )?),
                 FrameEpoch::new(parse("frame epoch", token.publication.frame_epoch)?),
             ),
-            noon::CallbackSequence::new(parse("sequence", token.sequence)?),
+            noon::integration::CallbackSequence::new(parse("sequence", token.sequence)?),
         ))
     }
 }
@@ -1928,8 +1929,8 @@ fn decode_callback_batch(json: &str) -> Result<EffectivePropertyBatch, String> {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 impl SemanticExecutionPlayer {
     fn callback_phase_json(
-        overlay: &noon::CallbackPhaseOverlay,
-        invocations: &[noon::RequiredCallbackInvocation],
+        overlay: &noon::integration::CallbackPhaseOverlay,
+        invocations: &[noon::integration::RequiredCallbackInvocation],
     ) -> Result<String, String> {
         let phase = CallbackPhaseWire {
             token: overlay.token().into(),
@@ -2186,8 +2187,8 @@ impl SemanticExecutionPlayer {
             .callback_termination()
             .map(|termination| {
                 let kind = match termination.kind() {
-                    noon::CallbackTerminationKind::Failed => "failed",
-                    noon::CallbackTerminationKind::Interrupted => "interrupted",
+                    noon::integration::CallbackTerminationKind::Failed => "failed",
+                    noon::integration::CallbackTerminationKind::Interrupted => "interrupted",
                 };
                 serde_json::to_string(&CallbackTerminationWire {
                     token: termination.token().into(),
@@ -2240,14 +2241,16 @@ impl SemanticExecutionPlayer {
             .session
             .committed_callback_renderer_observation(token, target)
         {
-            noon::CallbackRendererObservationOutcome::Committed(observation) => observation,
-            noon::CallbackRendererObservationOutcome::StaleCallback { .. } => {
+            noon::integration::CallbackRendererObservationOutcome::Committed(observation) => {
+                observation
+            }
+            noon::integration::CallbackRendererObservationOutcome::StaleCallback { .. } => {
                 return Err("callback renderer observation token is stale".into());
             }
-            noon::CallbackRendererObservationOutcome::StalePublication { .. } => {
+            noon::integration::CallbackRendererObservationOutcome::StalePublication { .. } => {
                 return Err("callback renderer observation publication is stale".into());
             }
-            noon::CallbackRendererObservationOutcome::Absent { .. } => {
+            noon::integration::CallbackRendererObservationOutcome::Absent { .. } => {
                 return Err("callback renderer observation target is absent".into());
             }
         };
@@ -2376,7 +2379,7 @@ mod tests {
         let session = scene.execution_session().unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
             session,
-            std::rc::Rc::clone(scene.store()),
+            std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             1.0,
             1,
@@ -2429,7 +2432,7 @@ mod tests {
         let mut target = circle.target_editor().unwrap();
         target.shift(4.0, 0.0).unwrap();
         let animation = scene
-            .store()
+            .integration_store()
             .borrow_mut()
             .insert_semantic_transform_animation(
                 circle.node_id(),
@@ -2440,7 +2443,7 @@ mod tests {
         let mut session = scene.execution_session().unwrap();
         session
             .activate_animation(
-                &scene.store().borrow(),
+                &scene.integration_store().borrow(),
                 animation,
                 AnimationOptions::new()
                     .run_time(1.0)
@@ -2535,7 +2538,7 @@ mod tests {
         let session = scene.execution_session().unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
             session,
-            std::rc::Rc::clone(scene.store()),
+            std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             2.0,
             63,
@@ -2615,7 +2618,7 @@ mod tests {
         let session = scene.execution_session().unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
             session,
-            std::rc::Rc::clone(scene.store()),
+            std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             4.0,
             67,
@@ -2676,11 +2679,13 @@ mod tests {
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_updater(circle.node_id(), HostCallbackId::new(7), 0.0, None);
         transaction.add_updater(circle.node_id(), HostCallbackId::new(8), 0.0, None);
-        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        transaction
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let session = scene.execution_session().unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
             session,
-            std::rc::Rc::clone(scene.store()),
+            std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             1.0,
             64,
@@ -2843,11 +2848,13 @@ mod tests {
         transaction.add_updater(source.node_id(), HostCallbackId::new(9), 0.0, None);
         transaction.add_updater(source.node_id(), HostCallbackId::new(4), 0.0, None);
         transaction.add_updater(drift.node_id(), HostCallbackId::new(2), 0.0, None);
-        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        transaction
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let session = scene.execution_session().unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
             session,
-            std::rc::Rc::clone(scene.store()),
+            std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             2.0,
             12,
@@ -2950,11 +2957,13 @@ mod tests {
         scene.add(&circle).unwrap();
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, None);
-        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        transaction
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let session = scene.execution_session().unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
             session,
-            std::rc::Rc::clone(scene.store()),
+            std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             1.0,
             13,
@@ -3000,11 +3009,13 @@ mod tests {
         scene.add(&circle).unwrap();
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, None);
-        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        transaction
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let session = scene.execution_session().unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
             session,
-            std::rc::Rc::clone(scene.store()),
+            std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             2.0,
             13,
@@ -3025,11 +3036,13 @@ mod tests {
         scene.add(&circle).unwrap();
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, None);
-        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        transaction
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let session = scene.execution_session().unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
             session,
-            std::rc::Rc::clone(scene.store()),
+            std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             2.0,
             14,
@@ -3154,7 +3167,9 @@ mod tests {
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, None);
         transaction.remove_updater(circle.node_id(), HostCallbackId::new(1), 0.5);
-        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        transaction
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let mut player =
             SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 7)
                 .unwrap();
@@ -3185,7 +3200,7 @@ mod tests {
         let scene = noon::Scene::new();
         let mut player = SemanticExecutionPlayer::from_live_session(
             scene.execution_session().unwrap(),
-            std::rc::Rc::clone(scene.store()),
+            std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             2.0,
             81,

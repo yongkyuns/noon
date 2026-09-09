@@ -1,15 +1,13 @@
 //! Explicit differential-test observations from a normal typed Rust session.
-use noon::{
-    GeometryRef, GeometryResource, GeometryResourceLookup, ManimGeometryOptions, Mobject,
-    PathCommand, Scene,
-};
+use noon::{GeometryRef, ManimGeometryOptions, Mobject, PathCommand, Scene};
+use noon_core::{GeometryResource, GeometryResourceLookup};
 use serde_json::{json, Map, Value};
 use std::rc::Rc;
 
 fn observation(width: f32, angle: f32) -> Value {
     let mut scene = Scene::new();
     let elbow = Mobject::from_manim_geometry(
-        Rc::clone(scene.store()),
+        Rc::clone(scene.integration_store()),
         ManimGeometryOptions::elbow(width.into(), angle.into()).unwrap(),
     )
     .unwrap();

@@ -2,9 +2,17 @@ mod callback;
 mod completion;
 mod publication;
 mod signal_timeline;
-pub use callback::*;
-pub use completion::*;
-pub use publication::*;
+pub use callback::{
+    CallbackAdvance, CallbackPhaseOverlay, CallbackPhaseToken, CallbackReadRequest,
+    CallbackReadValue, CallbackRendererDirtyClassification, CallbackRendererObservationOutcome,
+    CallbackSequence, CallbackTermination, CallbackTerminationKind,
+    CommittedCallbackRendererObservation, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
+    ExecutionSessionCallbackError, ExecutionSessionCallbackReadError, RequiredCallbackInvocation,
+};
+pub use completion::ExecutionSegmentCompletionError;
+pub use publication::{
+    EffectiveSemanticObject, ExecutionSessionPublicationError, StructuralPublicationStats,
+};
 pub use signal_timeline::SignalTimelineAppendError;
 
 use callback::{CallbackPublicationReceipt, CallbackSchedule, PendingCallbackPhase};

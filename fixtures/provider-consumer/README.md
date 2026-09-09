@@ -84,3 +84,27 @@ table, graph/cache-mode expectations, provider-input tests and ten isolated comp
 cells. Existing all-feature Rust and normal browser/native checks remain in place.
 Artifacts distinguish `qualification.json` from opt-in `measurements.json`; no
 fixed speed/size promise is encoded here.
+
+## Public authoring boundary
+
+The `public_facade` target depends on `noon` alone. It qualifies the ordinary
+constructor/live-query/edit/completion path, immutable effective observations, and
+an explicitly opted-in raw integration edit that must retain typed stale-publication
+rejection and leave the old runtime/frame unchanged. It runs in the existing
+native provider cells and is compiled (not executed) in WASM cells.
+
+```sh
+cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --test public_facade
+cargo test -p noon --no-default-features --doc
+cargo run -p noon --no-default-features --example shared_authoring
+```
+
+The doc tests reject accidental root exports, the private implementation module,
+and unqualified raw-store access. These boundary checks complement typed membership
+and provider qualification; they do not claim all geometry/animation errors or
+Python exception producers have been converted to structured errors.
+
+The geometry program copied by `--baseline` uses the ordinary geometry API common
+to both revisions. Shared text-contract visibility and arena assertions live in
+`public_facade` rather than adding a dependency on new integration accessor names
+to the historical-build workload. No historical baseline code is rewritten.

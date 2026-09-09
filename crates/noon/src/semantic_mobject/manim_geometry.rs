@@ -282,7 +282,7 @@ impl Mobject {
             .layout_bounds()?
             .ok_or("underline target has no finite bounds")?;
         Self::from_manim_geometry(
-            Rc::clone(target.store()),
+            Rc::clone(target.integration_store()),
             ManimGeometryOptions::underline(bounds, buff)?,
         )
     }

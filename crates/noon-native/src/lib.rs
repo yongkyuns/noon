@@ -12,10 +12,10 @@ mod execution_source;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use noon::integration::{RendererPublication, TimelineWakeState};
 use noon::{
     EvaluationError, ExecutionSession, ExecutionSessionCameraError, ExecutionSessionInputError,
-    LiveContinuation, LiveProgram, RendererPublication, RustHostCallbackError,
-    RustHostCallbackTable, TimelineWakeState,
+    LiveContinuation, LiveProgram, RustHostCallbackError, RustHostCallbackTable,
 };
 use noon_core::{
     Camera2DState, NativeEventOccurrence, NativeEventSource, NativeInputValue, NativeStateSource,
@@ -1220,7 +1220,8 @@ mod tests {
         use std::cell::Cell;
         use std::rc::Rc;
 
-        use noon::{HostCallbackId, RustHostCallbackTable};
+        use noon::RustHostCallbackTable;
+        use noon_core::HostCallbackId;
         use noon_core::{
             SemanticMutationTransaction, SemanticObjectState, SemanticStore, StoredGeometry,
         };
@@ -1272,7 +1273,8 @@ mod tests {
 
     #[test]
     fn native_callback_completion_reanchors_the_next_authored_interval() {
-        use noon::{HostCallbackId, RustHostCallbackTable};
+        use noon::RustHostCallbackTable;
+        use noon_core::HostCallbackId;
         use noon_core::{
             AnimationOptions, RateFunction, SemanticMutationTransaction, SemanticObjectState,
             SemanticStore, SemanticVec3, StoredGeometry,

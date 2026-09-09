@@ -205,18 +205,18 @@ pub fn program() -> Result<LiveProgram<LiveGeometryConstruction>, String> {
     options.set_translation(-2.0, 0.0)?;
     options.set_fill(0.0, 0.0, 1.0, 1.0)?;
     options.disable_stroke();
-    let path = Mobject::from_manim_geometry(Rc::clone(scene.store()), options)?;
+    let path = Mobject::from_manim_geometry(Rc::clone(scene.integration_store()), options)?;
     let bounds = path.layout_bounds()?.ok_or("path has no bounds")?;
     let family_bounds = scene
         .family(&[(&path).into()])?
         .layout_bounds()?
         .ok_or("path family has no bounds")?;
     let outline = Mobject::from_manim_geometry(
-        Rc::clone(scene.store()),
+        Rc::clone(scene.integration_store()),
         ManimGeometryOptions::surrounding_rectangle(bounds, 0.15, 0.15, 0.1)?,
     )?;
     let background = Mobject::from_manim_geometry(
-        Rc::clone(scene.store()),
+        Rc::clone(scene.integration_store()),
         ManimGeometryOptions::background_rectangle(family_bounds, 0.25, 0.25, 0.1, 0.5)?,
     )?;
     scene.add_many(&[
