@@ -21,7 +21,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/r3-preservation"
-          echo "EVIDENCE=$RUNNER_TEMP/r3-preservation" >> "$GITHUB_ENV"
+          export EVIDENCE="$RUNNER_TEMP/r3-preservation"
+          echo "EVIDENCE=$EVIDENCE" >> "$GITHUB_ENV"
           git config user.name 'Noon qualification bot'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git checkout --detach "$CANDIDATE"
