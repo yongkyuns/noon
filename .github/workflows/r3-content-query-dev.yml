@@ -3,82 +3,67 @@ on:
   push:
     branches: [codex/1292-r3-content-query-prep]
 permissions:
-  contents: write
+  contents: read
+  actions: read
 jobs:
-  reconcile:
+  full:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: 2ebf43857584e6fafdde8bd9955191400d642e1b
           fetch-depth: 0
-      - name: Retain the published content/query delta and every landed advancement test
+      - name: Record exact product source and retain approved predecessor results
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p /tmp/r3-reconciled
-          base=5b56124312657c0959e1ca3936930cad0fe7e240
-          parent=e4c2b7ee44416eb328bb42a70e462e1da85eceaf
-          test "$(git rev-parse origin/codex/1292-r3-content-query)" = "$parent"
-          git show "$parent":scripts/typed-authoring-errors-smoke.mjs > /tmp/r3-reconciled/previous-runner.mjs
-          git diff b9d6c4cbd82a6333551663358946294538cc3842 "$parent" -- crates/noon-web/src/canonical_authoring_scene.rs crates/noon-web/src/semantic_execution_player.rs web/python/_manim_scene.py web/python/test_noon_errors_wasm.py > /tmp/r3-reconciled/retained.patch
-          git checkout --detach "$base"
-          git apply --index /tmp/r3-reconciled/retained.patch
-          python3 - <<'PY'
-          from pathlib import Path
-          import ast, subprocess
-          old=Path('/tmp/r3-reconciled/previous-runner.mjs').read_text()
-          p=Path('scripts/typed-authoring-errors-smoke.mjs'); text=p.read_text()
-          a=old.index('    const contentObservationCases = ['); b=old.index('    window.noonTypedErrorFixtures = ',a)
-          anchor='    window.noonTypedErrorFixtures = '
-          assert text.count(anchor)==1
-          text=text.replace(anchor,old[a:b]+anchor,1)
-          line=next(s for s in text.splitlines() if s.startswith(anchor))
-          assert 'advanceFixture' in line and 'contentObservationFixture' not in line
-          text=text.replace(line,line.replace('describe, requireFailure','contentObservationFixture, contentObservationCases, describe, requireFailure'),1)
-          a=old.index('  report.contentObservations = '); b=old.index('  report.python = ',a)
-          assert text.count('  report.python = ')==1
-          text=text.replace('  report.python = ',old[a:b]+'  report.python = ',1)
-          a=old.index('content_results = []'); b=old.index('import test_noon_errors_wasm as tests',a)
-          assert text.count('import test_noon_errors_wasm as tests')==1
-          text=text.replace('import test_noon_errors_wasm as tests',old[a:b]+'import test_noon_errors_wasm as tests',1)
-          needle='"additionalTests": result.testsRun'; assert text.count(needle)==1
-          text=text.replace(needle,'"contentObservations": content_results, '+needle,1)
-          needle='  assert.equal(report.python.additionalTests, 11);'; assert text.count(needle)==1
-          text=text.replace(needle,'  assert.equal(report.python.contentObservations.length, 11);\n  assert.equal(report.python.additionalTests, 12);')
-          p.write_text(text)
-          path='web/python/test_noon_errors_wasm.py'
-          before=ast.parse(subprocess.check_output(['git','show','HEAD:'+path],text=True)); after=ast.parse(Path(path).read_text())
-          def tests(tree):
-              return {n.name:ast.dump(n,include_attributes=False) for n in ast.walk(tree) if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name.startswith('test_')}
-          before,after=tests(before),tests(after)
-          assert len(before)==11 and len(after)==12 and all(after[k]==v for k,v in before.items())
-          print('All 11 existing main tests unchanged; only content/query test added.')
-          PY
-          node --check scripts/typed-authoring-errors-smoke.mjs
-          git add -u
-          git diff --cached --check
-          tree=$(git write-tree)
-          test "$tree" = cfb1475e6317804f4ccb3a52a4e853035cc516bf
-          test "$(git diff --cached --name-only | wc -l)" -eq 5
-          git config user.name 'Yongkyun Shin'
-          git config user.email '4311628+yongkyuns@users.noreply.github.com'
-          candidate=$(git commit-tree "$tree" -p "$parent" -p "$base" -m 'fix: retain content/query mapping alongside landed advancement coverage')
-          git reset --hard "$candidate"
-          git rev-parse HEAD HEAD^{tree} > /tmp/r3-reconciled/revisions.txt
-          echo "$base" > /tmp/r3-reconciled/base.txt
-          git diff "$base" HEAD > /tmp/r3-reconciled/product.patch
-          git archive --format=tar.gz HEAD > /tmp/r3-reconciled/source.tar.gz
-      - name: Complete Python discovery on the integrated source
+          mkdir -p /tmp/r3-full
+          test "$(git rev-parse HEAD^{tree})" = cfb1475e6317804f4ccb3a52a4e853035cc516bf
+          git rev-parse HEAD HEAD^{tree} > /tmp/r3-full/revisions.txt
+          echo 5b56124312657c0959e1ca3936930cad0fe7e240 > /tmp/r3-full/base.txt
+          git archive --format=tar.gz HEAD > /tmp/r3-full/source.tar.gz
+          git diff 5b56124312657c0959e1ca3936930cad0fe7e240 HEAD > /tmp/r3-full/product.patch
+          gh api repos/yongkyuns/noon/actions/jobs/102591146255/logs > /tmp/r3-full/approved-predecessor-browser.log
+          gh api 'repos/yongkyuns/noon/actions/runs?event=pull_request&head_sha=e4c2b7ee44416eb328bb42a70e462e1da85eceaf&per_page=100' > /tmp/r3-full/approved-predecessor-runs.json
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Required full architecture, Rust, Python and optimized release-WASM gate
         run: |
           set -o pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s web/python -p 'test_*.py' 2>&1 | tee /tmp/r3-reconciled/python.log
-      - name: Retain exact candidate on staging ref for connector publication
-        run: git push origin HEAD:refs/heads/codex/1292-r3-content-query-stage
-      - name: Record final state
+          bash scripts/check.sh full 5b56124312657c0959e1ca3936930cad0fe7e240 2>&1 | tee /tmp/r3-full/full.log
+      - name: Preserve exact lockfile, compiled release package and source state
         if: always()
-        run: git status --short > /tmp/r3-reconciled/status.txt
+        run: |
+          if test -f Cargo.lock; then cp Cargo.lock /tmp/r3-full/Cargo.lock; fi
+          if test -f web/pkg/noon_web_bg.wasm; then
+            tar -czf /tmp/r3-full/release-package.tar.gz web/pkg web/python-worker.js web/compat-bundle.*.json
+            sha256sum web/pkg/noon_web_bg.wasm > /tmp/r3-full/wasm-sha256.txt
+          fi
+          git status --short > /tmp/r3-full/status.txt
+          git diff --exit-code
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r3-1355-advancement-integration
-          path: /tmp/r3-reconciled
+          name: r3-1355-full-qualification
+          path: /tmp/r3-full
           retention-days: 7
