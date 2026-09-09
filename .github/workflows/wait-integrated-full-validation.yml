@@ -1,0 +1,125 @@
+name: Integrated wait exact-head full validation
+on:
+  push:
+    branches: [codex/1346-full-validation]
+permissions:
+  contents: write
+  actions: read
+env:
+  CARGO_BUILD_JOBS: '2'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 03cd6b03ed2de0f45a89cbebb87ef6459c498641
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          name: r3-live-property-qualification
+          run-id: 34361452592
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/input
+      - name: Reconcile only after the independent transform PR has landed
+        run: |
+          test "$(git rev-parse HEAD)" = 03cd6b03ed2de0f45a89cbebb87ef6459c498641
+          test "$(cat "$RUNNER_TEMP/input/final-head.txt")" = 166b166f25e27a13d2d940f8ac802d0e59fc2f8f
+          mkdir -p "$RUNNER_TEMP/evidence"
+          base=$(git rev-parse origin/master)
+          git merge-base --is-ancestor 166b166f25e27a13d2d940f8ac802d0e59fc2f8f "$base"
+          git merge-base --is-ancestor 0eca24ef7c74478d0810332179a9197f19a1c39c "$base"
+          printf '%s\n' "$base" > "$RUNNER_TEMP/evidence/base.txt"
+          git config user.name 'Noon development tooling'
+          git config user.email 'development@noon.invalid'
+          git merge --no-commit --no-ff "$base"
+          python3 - <<'PY'
+          from pathlib import Path
+          import ast
+          p = Path('scripts/typed-authoring-errors-smoke.mjs')
+          s = p.read_text()
+          old = 'assert.equal(report.python.additionalTests, 9);'
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, 'assert.equal(report.python.additionalTests, 10);'))
+          module = ast.parse(Path('web/python/test_noon_errors_wasm.py').read_text())
+          cls = next(n for n in module.body if isinstance(n, ast.ClassDef) and n.name == 'WasmErrorProjectionTests')
+          tests = [n.name for n in cls.body if isinstance(n, ast.FunctionDef) and n.name.startswith('test_')]
+          assert len(tests) == 10, tests
+          assert 'test_invalid_first_wait_does_not_publish_a_player_and_retries' in tests
+          assert 'test_public_live_transform_errors_preserve_python_coercion_and_recover' in tests
+          PY
+          cargo fmt --all
+          git add crates/noon-web/src/canonical_authoring_scene.rs crates/noon-web/src/canonical_authoring_scene/wait_bootstrap_tests.rs scripts/typed-authoring-errors-smoke.mjs web/python/test_noon_errors_wasm.py
+          git diff --cached --check
+          git -c commit.gpgSign=false -c core.hooksPath=/dev/null commit -m 'fix: retain wait and transform regressions on current master'
+          export BASE="$base"
+          python3 - <<'PY'
+          import os, subprocess
+          expected = {'crates/noon-web/src/canonical_authoring_scene.rs', 'crates/noon-web/src/canonical_authoring_scene/wait_bootstrap_tests.rs', 'scripts/typed-authoring-errors-smoke.mjs', 'web/python/test_noon_errors_wasm.py'}
+          actual = set(subprocess.check_output(['git','diff','--name-only',os.environ['BASE'],'HEAD'], text=True).splitlines())
+          assert actual == expected, actual
+          PY
+          git diff --exit-code
+          cp "$RUNNER_TEMP/input/Cargo.lock" Cargo.lock
+          git rev-parse HEAD > "$RUNNER_TEMP/evidence/head.txt"
+          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/evidence/tree.txt"
+          git diff "$base" HEAD --binary > "$RUNNER_TEMP/evidence/patch.txt"
+          git archive HEAD | gzip > "$RUNNER_TEMP/evidence/source.tar.gz"
+          sha256sum Cargo.lock > "$RUNNER_TEMP/evidence/lock-before.txt"
+          { git rev-parse HEAD HEAD^{tree}; rustup show; node --version; python3 --version; } > "$RUNNER_TEMP/evidence/environment.txt"
+          # A candidate ref permits exact-head review/PR CI while this full gate
+          # runs. It is not a merge, approval or completed-test assertion.
+          git push origin HEAD:refs/heads/codex/1346-wait-integrated-candidate
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            Linux-cargo-sources-
+            provider-sources-Linux-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Run exact integrated full gate and optimized release build
+        run: |
+          bash scripts/check.sh full "$(cat "$RUNNER_TEMP/evidence/base.txt")" > "$RUNNER_TEMP/evidence/full.log" 2>&1 || { tail -150 "$RUNNER_TEMP/evidence/full.log"; exit 1; }
+          git diff --exit-code
+          sha256sum Cargo.lock > "$RUNNER_TEMP/evidence/lock-after.txt"
+          diff "$RUNNER_TEMP/evidence/lock-before.txt" "$RUNNER_TEMP/evidence/lock-after.txt"
+          sha256sum web/pkg/noon_web_bg.wasm web/pkg/noon_web.js > "$RUNNER_TEMP/evidence/release-package.txt"
+          tail -25 "$RUNNER_TEMP/evidence/full.log"
+      - name: Build the existing diagnostic-enabled package for the full fixture matrix
+        run: |
+          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh > "$RUNNER_TEMP/evidence/dev-build.log" 2>&1 || { tail -100 "$RUNNER_TEMP/evidence/dev-build.log"; exit 1; }
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Run both additions through the single real WASM and Pyodide suite
+        run: |
+          node scripts/typed-authoring-errors-smoke.mjs > "$RUNNER_TEMP/evidence/browser.log" 2>&1 || { tail -150 "$RUNNER_TEMP/evidence/browser.log"; exit 1; }
+          node scripts/manim-compat-smoke.mjs > "$RUNNER_TEMP/evidence/manim.log" 2>&1 || { tail -100 "$RUNNER_TEMP/evidence/manim.log"; exit 1; }
+          git diff --exit-code
+          test "$(git rev-parse HEAD)" = "$(cat "$RUNNER_TEMP/evidence/head.txt")"
+          sha256sum web/pkg/noon_web_bg.wasm > "$RUNNER_TEMP/evidence/dev-package.txt"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: integrated-wait-full-qualification
+          path: |
+            ${{ runner.temp }}/evidence
+            browser-smoke-artifacts/typed-authoring-errors
+            Cargo.lock
+          retention-days: 3
+          if-no-files-found: error
