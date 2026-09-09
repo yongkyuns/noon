@@ -4,7 +4,7 @@ Rust counterpart: `cargo run -p noon-native --example painter_order_overlap`.
 Both predeclare the same animation and permit deterministic midpoint sampling.
 """
 
-from noon import BLUE, GREEN, RED, Circle, Rectangle, Scene, Vec2, VectorPath, linear
+from noon import BLUE, GREEN, RED, Circle, Path, Rectangle, Scene, Vec2, VectorPath, linear
 
 scene = Scene()
 
@@ -24,13 +24,7 @@ square = (
     .line_to(Vec2(-0.8, 0.8))
     .close()
 )
-scene.path(
-    square,
-    fill=GREEN,
-    stroke=GREEN,
-    stroke_width=0.0,
-    key="painter.path",
-)
+scene.add(Path(square, fill=GREEN, stroke=GREEN, stroke_width=0.0), key="painter.path")
 
 # Predeclare the shared affine animation so either host can seek deterministically
 # without keeping a Python source continuation on the playback path.
