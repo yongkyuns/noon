@@ -1164,14 +1164,14 @@ fn normalized_direction(x: f64, y: f64) -> Result<(f64, f64), AuthoringError> {
 }
 
 fn positive_f32(name: &str, value: f64) -> Result<f32, AuthoringError> {
-    let value = finite_f32(name, value)?;
-    if value <= 0.0 {
+    let lowered = finite_f32(name, value)?;
+    if lowered <= 0.0 {
         return Err(AuthoringError::NonPositiveNumber {
             name: name.to_owned(),
-            value: f64::from(value),
+            value,
         });
     }
-    Ok(value)
+    Ok(lowered)
 }
 fn manim_style(color: Color) -> SemanticStyle {
     SemanticStyle {

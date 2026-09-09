@@ -570,3 +570,33 @@ fn scalar_callback_paint_preserves_typed_rejection_and_composite_domain() -> Tes
     assert_eq!(next.stroke_width, before.stroke_width);
     Ok(())
 }
+
+#[test]
+fn positive_number_rejection_retains_original_f64_and_recovers() -> TestResult {
+    let scene = Scene::new();
+    let before = snapshot(&scene, &[]);
+    for supplied in [
+        f64::MIN_POSITIVE,
+        -f64::MIN_POSITIVE,
+        f64::from_bits(1),
+        -f64::from_bits(1),
+        1.0e-200,
+        -1.0e-200,
+        -1.23456789012345,
+        0.0,
+        -0.0,
+    ] {
+        match scene.circle(supplied).unwrap_err() {
+            AuthoringError::NonPositiveNumber { name, value } => {
+                assert_eq!(name, "radius");
+                assert_eq!(value.to_bits(), supplied.to_bits());
+            }
+            other => panic!("expected NonPositiveNumber, got {other:?}"),
+        }
+        assert_eq!(snapshot(&scene, &[]), before);
+    }
+    scene.circle(f64::from(f32::MIN_POSITIVE))?;
+    scene.circle(1.0)?;
+    assert_eq!(snapshot(&scene, &[]).nodes, before.nodes + 2);
+    Ok(())
+}
