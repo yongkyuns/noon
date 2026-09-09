@@ -1,0 +1,130 @@
+name: Phase A3 error projection prep
+
+on:
+  push:
+    branches: [codex/61-error-projection-prep]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phase-a3-error-projection-prep
+  cancel-in-progress: false
+
+env:
+  BASE_SHA: ee1de6a0418c6da8559f891f98820aa8dc57809d
+  PRODUCT_BRANCH: codex/61-supported-error-projection
+  CARGO_BUILD_JOBS: '2'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout bounded patch tooling
+        uses: actions/checkout@v7
+        with:
+          path: tooling
+          persist-credentials: false
+
+      - name: Checkout exact current master
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.BASE_SHA }}
+          path: source
+          fetch-depth: 0
+
+      - name: Apply only the claimed representation patch
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          base64 -d ../tooling/.github/61-error-projection.patch.gz.b64 | gzip -dc | git apply --3way
+          cargo fmt --all
+          git diff --check
+          git diff --stat
+          test "$(git status --porcelain | wc -l)" -eq 12
+
+      - name: Restore Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: phase-a3-error-sources-${{ runner.os }}-${{ hashFiles('source/Cargo.toml', 'source/crates/**/Cargo.toml') }}
+          restore-keys: |
+            Linux-cargo-sources-
+            provider-sources-Linux-
+
+      - name: Use repository compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+
+      - name: Compile and execute focused Rust projection tests
+        working-directory: source
+        run: |
+          cargo test -p noon-web --all-features --lib authoring_error::tests -- --nocapture | tee ../rust-focused.log
+          count=$(cargo test -p noon-web --all-features --lib -- --list | grep -c '^authoring_error::tests::')
+          test "$count" -ge 4
+          printf 'authoring_error_tests=%s\n' "$count"
+
+      - name: Exercise existing Python mapper and caller contracts
+        working-directory: source
+        run: |
+          PYTHONPATH=web/python python3 -m unittest -v \
+            test_noon_errors \
+            test_manim_shared_family_arrange \
+            test_ordinary_tracker_scope
+          python3 -m py_compile \
+            web/python/_manim_geometry.py \
+            web/python/_manim_reactive.py \
+            web/python/_manim_scene.py \
+            web/python/_manim_semantic_handles.py \
+            web/python/_noon_errors.py \
+            web/python/noon.py \
+            web/python/test_manim_shared_family_arrange.py \
+            web/python/test_noon_errors.py \
+            web/python/test_noon_errors_wasm.py \
+            web/python/test_ordinary_tracker_scope.py
+          node --check scripts/typed-authoring-errors-smoke.mjs
+
+      - name: Compile the direct WASM boundary
+        working-directory: source
+        run: cargo check -p noon-web --all-features --target wasm32-unknown-unknown
+
+      - name: Publish source-only product candidate
+        working-directory: source
+        run: |
+          git config user.name 'Noon development tooling'
+          git config user.email 'development@noon.invalid'
+          git add crates/noon-web/src/authoring_error.rs \
+            scripts/typed-authoring-errors-smoke.mjs \
+            web/python/_manim_geometry.py \
+            web/python/_manim_reactive.py \
+            web/python/_manim_scene.py \
+            web/python/_manim_semantic_handles.py \
+            web/python/_noon_errors.py \
+            web/python/noon.py \
+            web/python/test_manim_shared_family_arrange.py \
+            web/python/test_noon_errors.py \
+            web/python/test_noon_errors_wasm.py \
+            web/python/test_ordinary_tracker_scope.py
+          git diff --cached --check
+          git diff --cached --exit-code -- .github || true
+          git -c commit.gpgSign=false -c core.hooksPath=/dev/null commit \
+            -m 'fix: project settled authoring errors through the Python facade (#61)'
+          candidate=$(git rev-parse HEAD)
+          tree=$(git rev-parse HEAD^{tree})
+          printf 'candidate=%s\ntree=%s\nbase=%s\n' "$candidate" "$tree" "$BASE_SHA"
+          if git ls-remote --exit-code origin "refs/heads/$PRODUCT_BRANCH" >/dev/null 2>&1; then
+            echo "product branch already exists; refusing to overwrite" >&2
+            exit 2
+          fi
+          git push origin HEAD:"refs/heads/$PRODUCT_BRANCH"
