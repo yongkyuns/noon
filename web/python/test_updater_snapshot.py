@@ -363,6 +363,22 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         self.assertFalse(hasattr(target, "_noon_updater_registration_history"))
         self.assertIs(circle._noon_updater_registrations[0], registration)
 
+    def test_only_active_callback_phase_masks_the_shared_handle(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        import _manim_semantic_handles as semantic_handles
+
+        handle = object()
+        mobject._semantic_handle = handle
+        mobject._semantic_handle_fresh = True
+        # Captured objects without their own updater still belong to the overlay.
+        self.assertIs(semantic_handles._handle_for(mobject), handle)
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            self.assertIsNone(semantic_handles._handle_for(mobject))
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+        self.assertIs(semantic_handles._handle_for(mobject), handle)
+
     def test_callback_bound_copy_rejects_inside_the_active_phase(self) -> None:
         scene, mobject, context = self._mobject_and_context()
         import _manim_semantic_handles as semantic_handles

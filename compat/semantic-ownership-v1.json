@@ -384,7 +384,7 @@
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject::target_editor"},
       "reason": "Outside an active callback phase, copies use the shared live target editor; missing/stale handles and active-phase copies fail without snapshot materialization.",
-      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_clone_mobject/_canonical_target_editor_source"}]
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_clone_mobject"}]
     },
     {
       "id": "group-family",
