@@ -11,7 +11,9 @@ pub fn session() -> Result<ExecutionSession, String> {
     let family = scene.family(&[(&nested).into(), (&a).into()])?;
     family.set_fill(Some(Color::rgba(1.0, 0.0, 0.0, 1.0)), Some(0.8))?;
     family.set_stroke(Some(Color::rgba(0.0, 0.0, 1.0, 1.0)), Some(0.04), Some(1.0))?;
-    scene.add_many(&[(&family).into()])?;
+    scene
+        .add_many(&[(&family).into()])
+        .map_err(|error| error.to_string())?;
     let mut session = scene.execution_session().map_err(|e| e.to_string())?;
     {
         let mut live = scene.live(&mut session);

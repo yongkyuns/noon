@@ -146,7 +146,7 @@ impl LayoutAnchor {
 impl MobjectFamily {
     /// Observe only this family's layout and ordered semantic leaves.
     pub fn layout(&self) -> Result<FamilyLayout, String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let leaves = self
             .integration_store()
             .borrow()

@@ -3,6 +3,7 @@
 //! Handles retain only their originating store and generational identity. All
 //! durable edits use the canonical transaction vocabulary; snapshots are explicit
 //! migration/export adapters owned for deletion by #958/#959.
+use crate::AuthoringError;
 use noon_core::{
     Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticGeometryContent,
     SemanticGeometryLayout, SemanticMutationImpact, SemanticMutationTransaction,
@@ -341,7 +342,7 @@ impl Mobject {
         store: Rc<RefCell<SemanticStore>>,
         state: SemanticObjectState,
     ) -> Result<Self, String> {
-        validate_content(&store.borrow(), state.content)?;
+        validate_content(&store.borrow(), state.content).map_err(|error| error.to_string())?;
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_node(SemanticNodeCreation::object(state));
         let result = transaction
@@ -358,7 +359,7 @@ impl Mobject {
         id: SemanticNodeId,
     ) -> Result<Self, String> {
         let handle = Self { store, id };
-        handle.validate()?;
+        handle.validate().map_err(|error| error.to_string())?;
         Ok(handle)
     }
 
@@ -375,18 +376,17 @@ impl Mobject {
         self.id
     }
     pub fn state(&self) -> Result<SemanticObjectState, String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         self.store
             .borrow()
             .semantic_object_state_checked(self.id)
             .cloned()
             .map_err(|error| error.to_string())
     }
-    pub fn validate(&self) -> Result<(), String> {
+    /// Validate this handle without mutation, preserving typed identity/resource errors.
+    pub fn validate(&self) -> Result<(), AuthoringError> {
         let store = self.store.borrow();
-        let state = store
-            .semantic_object_state_checked(self.id)
-            .map_err(|error| error.to_string())?;
+        let state = store.semantic_object_state_checked(self.id)?;
         validate_content(&store, state.content)?;
         Ok(())
     }
@@ -394,14 +394,14 @@ impl Mobject {
         if !Rc::ptr_eq(&self.store, &other.store) {
             return Err("mobjects belong to different authoring stores".into());
         }
-        self.validate()?;
-        other.validate()
+        self.validate().map_err(|error| error.to_string())?;
+        other.validate().map_err(|error| error.to_string())
     }
 
     /// Commit presentation changes atomically while retaining node-owned identity,
     /// source/painter metadata, role, bindings, and family membership.
     pub fn commit_state(&mut self, state: SemanticObjectState) -> Result<(), String> {
-        validate_content(&self.store.borrow(), state.content)?;
+        validate_content(&self.store.borrow(), state.content).map_err(|error| error.to_string())?;
         let previous = self.state()?;
         let mut transaction = SemanticMutationTransaction::new();
         stage_state_changes(&mut transaction, self.id, &previous, &state);
@@ -636,7 +636,7 @@ impl Mobject {
         line_match_transform(start, end, target_start, target_end)
     }
     pub fn manim_scale(&mut self, x: f64, y: f64) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let center = self.center()?;
         self.scale_about_center(x, y, center)
     }
@@ -672,7 +672,7 @@ impl Mobject {
         self.scale_about_center(x, y, other.center()?)
     }
     pub fn move_to(&mut self, x: f64, y: f64) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         semantic_xy(x, y)?;
         let center = self.center()?;
         self.shift(x - center.0, y - center.1)
@@ -702,7 +702,7 @@ impl Mobject {
     }
 
     pub fn shift(&mut self, x: f64, y: f64) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let mut state = self.state()?;
         let offset = authoring_xy_f64(x, y)?;
         let translation = SemanticVec3::new(
@@ -718,7 +718,7 @@ impl Mobject {
     }
 
     pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let mut state = self.state()?;
         let value = authoring_xy_f64(x, y)?;
         state.transform.translation.x = value.x;
@@ -727,7 +727,7 @@ impl Mobject {
     }
 
     pub fn set_scale(&mut self, x: f64, y: f64) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let mut state = self.state()?;
         let value = authoring_xy_f64(x, y)?;
         state.transform.scale.x = value.x;
@@ -736,14 +736,14 @@ impl Mobject {
     }
 
     pub fn set_rotation(&mut self, angle: f64) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let mut state = self.state()?;
         state.transform.rotation_z = authoring_render_f64("rotation", angle)?;
         self.commit_state(state)
     }
 
     pub fn scale(&mut self, x: f64, y: f64) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let mut state = self.state()?;
         let x = authoring_render_f64("scale.x", x)?;
         let y = authoring_render_f64("scale.y", y)?;
@@ -758,7 +758,7 @@ impl Mobject {
     }
 
     pub fn rotate(&mut self, angle: f64) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let mut state = self.state()?;
         let angle = authoring_render_f64("rotation", angle)?;
         let rotation = state.transform.rotation_z + angle;
@@ -773,7 +773,7 @@ impl Mobject {
         point_x: f64,
         point_y: f64,
     ) -> Result<(), String> {
-        self.validate()?;
+        self.validate().map_err(|error| error.to_string())?;
         let mut state = self.state()?;
         let ((translation_x, translation_y), rotation) = rotate_affine_about_point(
             (state.transform.translation.x, state.transform.translation.y),
@@ -854,8 +854,8 @@ pub(crate) fn prepare_become_state(
     mut target: SemanticObjectState,
     options: ManimBecomeOptions,
 ) -> Result<SemanticObjectState, String> {
-    validate_content(store, source.content)?;
-    validate_content(store, target.content)?;
+    validate_content(store, source.content).map_err(|error| error.to_string())?;
+    validate_content(store, target.content).map_err(|error| error.to_string())?;
 
     if options.stretch {
         let source_width = state_dimension(store, source, true)?;
@@ -1176,21 +1176,24 @@ pub(crate) fn import_geometry(
 #[cfg(test)]
 mod tests;
 
-fn validate_content(store: &SemanticStore, content: SemanticObjectContent) -> Result<(), String> {
+fn validate_content(
+    store: &SemanticStore,
+    content: SemanticObjectContent,
+) -> Result<(), AuthoringError> {
     match content {
         SemanticObjectContent::Geometry(content) => {
             if let StoredGeometry::Resource(handle) = content.geometry() {
                 store
                     .geometry_resources()
                     .get(handle)
-                    .ok_or("unknown or stale geometry resource")?;
+                    .ok_or(AuthoringError::MissingGeometryResource(handle))?;
             }
         }
         SemanticObjectContent::Text(handle) => {
             store
                 .text_resources()
                 .get(handle)
-                .ok_or("unknown or stale text resource")?;
+                .ok_or(AuthoringError::MissingTextResource(handle))?;
         }
     }
     Ok(())

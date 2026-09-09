@@ -14,7 +14,9 @@ pub fn session() -> Result<ExecutionSession, String> {
     let family = scene.family(&members.iter().map(Into::into).collect::<Vec<_>>())?;
     family.arrange_in_grid(None, Some(2), 0.5, 0.25)?;
     assert_eq!(family.layout()?.center(), (1.0, 0.0));
-    scene.add_many(&[(&family).into()])?;
+    scene
+        .add_many(&[(&family).into()])
+        .map_err(|error| error.to_string())?;
     let mut session = scene.execution_session().map_err(|e| e.to_string())?;
     {
         let mut live = scene.live(&mut session);

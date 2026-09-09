@@ -1,6 +1,7 @@
 //! Typed handle for authoritative semantic family membership.
 
 use crate::semantic_mobject::authoring_xy_f64 as semantic_xy_f64;
+use crate::AuthoringError;
 use noon_core::{
     Bounds2D64, SemanticMutationTransaction, SemanticNodeId, SemanticObjectProperty, SemanticStore,
     SemanticVec3,
@@ -135,7 +136,7 @@ impl MobjectFamilyMember<'_> {
         if !Rc::ptr_eq(self.integration_store(), store) {
             return Err("family members belong to different authoring stores".into());
         }
-        self.validate()
+        self.validate().map_err(|error| error.to_string())
     }
 
     pub(crate) fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
@@ -152,7 +153,7 @@ impl MobjectFamilyMember<'_> {
         }
     }
 
-    pub(crate) fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), AuthoringError> {
         match self {
             Self::Mobject(member) => member.validate(),
             Self::Family(member) => member.validate(),
@@ -191,7 +192,7 @@ pub(crate) fn family_membership_transaction(
     members: &[MobjectFamilyMember<'_>],
     adding: bool,
 ) -> Result<(SemanticMutationTransaction, Vec<bool>), String> {
-    family.validate()?;
+    family.validate().map_err(|error| error.to_string())?;
     for member in members {
         member.require_store(family.integration_store())?;
     }
@@ -291,12 +292,13 @@ impl MobjectFamily {
         self.node
     }
 
-    pub fn validate(&self) -> Result<(), String> {
+    /// Validate this handle without mutation, preserving typed identity/resource errors.
+    pub fn validate(&self) -> Result<(), AuthoringError> {
         self.store
             .borrow()
             .semantic_family_checked(self.node)
             .map(|_| ())
-            .map_err(|error| error.to_string())
+            .map_err(Into::into)
     }
 
     /// Aggregate the current layout bounds of this family's authoritative leaves.

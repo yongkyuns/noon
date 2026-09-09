@@ -878,7 +878,9 @@ mod wasm {
                     "{context} and mobject belong to different authoring stores"
                 )));
             }
-            self.handle.validate().map_err(js_error)?;
+            self.handle
+                .validate()
+                .map_err(|error| js_error(error.to_string()))?;
             Ok(self.handle.node_id())
         }
     }

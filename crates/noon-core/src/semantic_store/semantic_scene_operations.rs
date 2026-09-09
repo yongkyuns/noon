@@ -80,7 +80,14 @@ impl std::fmt::Display for SemanticSceneOperationError {
     }
 }
 
-impl std::error::Error for SemanticSceneOperationError {}
+impl std::error::Error for SemanticSceneOperationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Store(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl From<SemanticStoreError> for SemanticSceneOperationError {
     fn from(value: SemanticStoreError) -> Self {

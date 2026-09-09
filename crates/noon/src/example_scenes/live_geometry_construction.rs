@@ -219,11 +219,13 @@ pub fn program() -> Result<LiveProgram<LiveGeometryConstruction>, String> {
         Rc::clone(scene.integration_store()),
         ManimGeometryOptions::background_rectangle(family_bounds, 0.25, 0.25, 0.1, 0.5)?,
     )?;
-    scene.add_many(&[
-        MobjectFamilyMember::Mobject(&background),
-        MobjectFamilyMember::Mobject(&path),
-        MobjectFamilyMember::Mobject(&outline),
-    ])?;
+    scene
+        .add_many(&[
+            MobjectFamilyMember::Mobject(&background),
+            MobjectFamilyMember::Mobject(&path),
+            MobjectFamilyMember::Mobject(&outline),
+        ])
+        .map_err(|error| error.to_string())?;
     scene
         .into_live_program(LiveGeometryConstruction {
             stage: 0,

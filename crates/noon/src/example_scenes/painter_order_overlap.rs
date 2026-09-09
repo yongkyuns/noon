@@ -18,8 +18,8 @@ pub fn session() -> Result<ExecutionSession, String> {
         )?;
         object.disable_stroke()?;
     }
-    scene.add(&circle)?;
-    scene.add(&rectangle)?;
+    scene.add(&circle).map_err(|error| error.to_string())?;
+    scene.add(&rectangle).map_err(|error| error.to_string())?;
     let path = scene.path(
         VectorPath::new()
             .move_to(Vec2::new(-0.8, -0.8))
@@ -34,7 +34,7 @@ pub fn session() -> Result<ExecutionSession, String> {
             ..SemanticStyle::default()
         },
     )?;
-    scene.add(&path)?;
+    scene.add(&path).map_err(|error| error.to_string())?;
     let mut target = rectangle.target_editor()?;
     target.rotate(std::f64::consts::FRAC_PI_2)?;
     let rotation = scene.declare_transform_to(
