@@ -15,5 +15,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Inventory public facade and raw integration consumers
-        run: python3 .github/r2-facade-inventory.py
+          fetch-depth: 0
+      - name: Retain pinned tracked source for facade editing
+        run: |
+          git archive --format=tar 1641398818b6817678ae178faf2887e4ac1e730f | gzip > source.tar.gz
+          sha256sum source.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: r2-facade-pinned-source
+          path: source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
