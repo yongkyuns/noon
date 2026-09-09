@@ -1,7 +1,7 @@
 use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    Color, CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition,
-    TrackId, TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
+    Color, CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, Style,
+    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
 };
 use noon_runtime::SceneInstance;
 
@@ -55,7 +55,7 @@ fn build_scene() -> CompiledScene {
             from: snapshot(GeometryRef::circle(1.0), transform_a, style_a),
             to: snapshot(GeometryRef::circle(3.0), transform_b, style_b),
         },
-        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 
@@ -82,7 +82,7 @@ fn build_scene() -> CompiledScene {
                 Style::default(),
             ),
         },
-        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 
@@ -109,7 +109,7 @@ fn build_scene() -> CompiledScene {
                 Style::default(),
             ),
         },
-        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
     CompiledScene::compile_objects(objects, &tracks).unwrap()
@@ -187,7 +187,7 @@ fn sequential_circle_transforms_are_continuous_at_boundary() {
             from: snapshot(GeometryRef::circle(1.0), Transform2D::IDENTITY, style),
             to: snapshot(GeometryRef::circle(3.0), Transform2D::IDENTITY, style),
         },
-        timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
     tracks.push(TrackDefinition {
@@ -198,7 +198,7 @@ fn sequential_circle_transforms_are_continuous_at_boundary() {
             from: snapshot(GeometryRef::circle(3.0), Transform2D::IDENTITY, style),
             to: snapshot(GeometryRef::circle(5.0), Transform2D::IDENTITY, style),
         },
-        timing: TrackTiming::new(1.0, 1.0, Easing::Linear),
+        timing: TrackTiming::new(1.0, 1.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 

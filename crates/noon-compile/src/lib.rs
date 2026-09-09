@@ -1638,7 +1638,7 @@ const fn property_rank(property: Property) -> u8 {
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        CompositionTimeMap, CompositionTimeMapStep, Easing, GeometryRef, Property, RateFunction,
+        CompositionTimeMap, CompositionTimeMapStep, GeometryRef, Property, RateFunction,
         TextResourceHandle, TextResourceId, TrackTiming, TrackValues, Vec2,
     };
 
@@ -1705,7 +1705,7 @@ mod tests {
             object,
             property: Property::Transform,
             values: TrackValues::Object { from, to },
-            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         let compiled = CompiledScene::compile_objects(source_objects, &source_tracks)
@@ -1737,7 +1737,7 @@ mod tests {
             object,
             property: Property::Transform,
             values: TrackValues::Object { from, to },
-            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         assert!(matches!(
@@ -1791,7 +1791,7 @@ mod tests {
                 from: Vec2::new(5.0, 0.0),
                 to: Vec2::new(6.0, 0.0),
             },
-            timing: TrackTiming::new(5.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(5.0, 1.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         source_tracks.push(TrackDefinition {
@@ -1802,7 +1802,7 @@ mod tests {
                 from: Vec2::ZERO,
                 to: Vec2::ONE,
             },
-            timing: TrackTiming::new(1.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(1.0, 1.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         let compiled = CompiledScene::compile_objects(source_objects, &source_tracks)
@@ -1903,7 +1903,7 @@ mod tests {
             object: animated,
             property: Property::Opacity,
             values: TrackValues::Scalar { from: 1.0, to: 0.0 },
-            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         let compiled = CompiledScene::compile_objects(source_objects, &source_tracks)
@@ -1949,7 +1949,7 @@ mod tests {
                 from: Vec2::ONE,
                 to: Vec2::new(2.0, 0.5),
             },
-            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         let compiled = CompiledScene::compile_objects(source_objects, &source_tracks)
@@ -1978,7 +1978,7 @@ mod tests {
                 object,
                 property: Property::StrokeWidth,
                 values: TrackValues::Scalar { from: 1.0, to: 2.0 },
-                timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+                timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
                 time_map: CompositionTimeMap::identity(),
             }],
         )
@@ -2008,7 +2008,7 @@ mod tests {
             object,
             property: Property::Appearance,
             values: TrackValues::Scalar { from: 0.0, to: 1.0 },
-            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         let compiled = CompiledScene::compile_objects(source_objects, &source_tracks)
@@ -2169,7 +2169,7 @@ mod tests {
                 from: false,
                 to: true,
             },
-            timing: TrackTiming::new(2.0, 0.0, Easing::Linear),
+            timing: TrackTiming::new(2.0, 0.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         };
         assert_eq!(
@@ -2259,7 +2259,7 @@ mod tests {
             object,
             property: Property::Reveal,
             values: TrackValues::Scalar { from: 0.0, to: 1.0 },
-            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         let compiled = CompiledScene::compile_objects(source_objects, &source_tracks)
@@ -2303,7 +2303,7 @@ mod tests {
             object,
             property: Property::Morph,
             values: TrackValues::Scalar { from: 0.0, to: 1.0 },
-            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         let compiled = CompiledScene::compile_objects(source_objects, &source_tracks)
@@ -2333,7 +2333,7 @@ mod tests {
                     from: Vec2::ZERO,
                     to: Vec2::new(3.0, 4.0),
                 },
-                timing: TrackTiming::new(0.5, 2.0, Easing::EaseInOutCubic),
+                timing: TrackTiming::new(0.5, 2.0, RateFunction::EaseInOutCubic),
                 time_map: CompositionTimeMap::identity(),
             });
             CompiledScene::compile_objects(source_objects, &source_tracks).unwrap()
@@ -2377,7 +2377,7 @@ mod tests {
             object: second,
             property: Property::Opacity,
             values: TrackValues::Scalar { from: 1.0, to: 0.0 },
-            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         };
         compiled
@@ -2408,7 +2408,7 @@ mod tests {
                     from: Vec2::ZERO,
                     to: Vec2::ONE,
                 },
-                timing: TrackTiming::new(index as f64, 1.0, Easing::Linear),
+                timing: TrackTiming::new(index as f64, 1.0, RateFunction::Linear),
                 time_map: CompositionTimeMap::identity(),
             });
         }
@@ -2421,7 +2421,7 @@ mod tests {
                 object: target,
                 property: Property::Opacity,
                 values: TrackValues::Scalar { from: 1.0, to: 0.0 },
-                timing: TrackTiming::new(0.5, 1.0, Easing::Linear),
+                timing: TrackTiming::new(0.5, 1.0, RateFunction::Linear),
                 time_map: CompositionTimeMap::identity(),
             }))
             .expect("local track add must compile");
@@ -2463,7 +2463,7 @@ mod tests {
                     from: Vec2::ZERO,
                     to: Vec2::ONE,
                 },
-                timing: TrackTiming::new(index as f64, 1.0, Easing::Linear),
+                timing: TrackTiming::new(index as f64, 1.0, RateFunction::Linear),
                 time_map: CompositionTimeMap::identity(),
             });
         }
@@ -2477,7 +2477,7 @@ mod tests {
                 object: objects[5_000],
                 property: Property::Opacity,
                 values: TrackValues::Scalar { from: 1.0, to: 0.5 },
-                timing: TrackTiming::new(0.25, 1.0, Easing::Linear),
+                timing: TrackTiming::new(0.25, 1.0, RateFunction::Linear),
                 time_map: CompositionTimeMap::identity(),
             }))
             .unwrap();
@@ -2514,7 +2514,7 @@ mod tests {
                 from: Vec2::ZERO,
                 to: Vec2::ONE,
             },
-            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         source_tracks.push(TrackDefinition {
@@ -2525,7 +2525,7 @@ mod tests {
                 from: Vec2::ZERO,
                 to: Vec2::ONE,
             },
-            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         let replaced = TrackId::new(source_tracks.len() as u64);
@@ -2534,7 +2534,7 @@ mod tests {
             object: first,
             property: Property::Opacity,
             values: TrackValues::Scalar { from: 1.0, to: 0.0 },
-            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         let mut compiled = CompiledScene::compile_objects(source_objects, &source_tracks).unwrap();
@@ -2547,7 +2547,7 @@ mod tests {
                     from: 0.5,
                     to: 0.25,
                 },
-                timing: TrackTiming::new(2.0, 1.0, Easing::Linear),
+                timing: TrackTiming::new(2.0, 1.0, RateFunction::Linear),
                 time_map: CompositionTimeMap::identity(),
             }))
             .unwrap();
@@ -2606,7 +2606,7 @@ mod tests {
                     from: Vec2::ZERO,
                     to: Vec2::ONE,
                 },
-                timing: TrackTiming::new(index as f64, 1.0, Easing::Linear),
+                timing: TrackTiming::new(index as f64, 1.0, RateFunction::Linear),
                 time_map: CompositionTimeMap::identity(),
             });
         }
@@ -2663,7 +2663,7 @@ mod tests {
                 from: Vec2::ZERO,
                 to: Vec2::ONE,
             },
-            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         let mut compiled = CompiledScene::compile_objects(source_objects, &source_tracks).unwrap();
@@ -2722,7 +2722,7 @@ mod tests {
                 object,
                 property: Property::Transform,
                 values: TrackValues::Object { from, to },
-                timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+                timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
                 time_map: CompositionTimeMap::identity(),
             }),
         ]);

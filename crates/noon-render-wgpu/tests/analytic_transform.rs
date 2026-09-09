@@ -1,6 +1,6 @@
 use noon_compile::{CompiledObject, CompiledScene, ExecutionPatch};
 use noon_core::{
-    Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId, TrackTiming,
+    GeometryRef, ObjectId, Property, RateFunction, Style, TrackDefinition, TrackId, TrackTiming,
     TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
 };
 use noon_render_wgpu::FramePreparer;
@@ -33,7 +33,7 @@ fn analytic_geometry_transform_dirties_only_one_instance_without_path_work() {
                 from: endpoint(GeometryRef::circle(1.0), style),
                 to: endpoint(GeometryRef::circle(3.0), style),
             },
-            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
             time_map: Default::default(),
         }],
     )
@@ -82,7 +82,7 @@ fn rectangle_and_line_geometry_transforms_stay_on_analytic_instance_paths() {
                 from: endpoint(rectangle_from, style),
                 to: endpoint(GeometryRef::rectangle(6.0, 8.0), style),
             },
-            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
             time_map: Default::default(),
         },
         TrackDefinition {
@@ -96,7 +96,7 @@ fn rectangle_and_line_geometry_transforms_stay_on_analytic_instance_paths() {
                     style,
                 ),
             },
-            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
             time_map: Default::default(),
         },
     ];

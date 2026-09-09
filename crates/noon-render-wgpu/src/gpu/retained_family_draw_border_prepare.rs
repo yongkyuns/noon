@@ -293,7 +293,8 @@ impl RetainedFramePreparer {
         for member in members {
             let member = member?;
             if member.glyph.run_index == run_index
-                && (stable_rows || !matches!(member.phase, RetainedDrawBorderThenFillPhase::Fill { progress } if progress >= 1.0))
+                && (stable_rows
+                    || !matches!(member.phase, RetainedDrawBorderThenFillPhase::Fill { progress } if progress >= 1.0))
             {
                 return Ok(true);
             }
@@ -483,9 +484,9 @@ mod draw_border_tests {
 
     use noon_core::{
         FamilyAnimationMode, FamilyAnimationState, FontFaceIdentity, GlyphRun, ObjectContentRef,
-        PositionedGlyph, RateFunction, Rect, RetainedFamilyAnimationPlanBuilder,
-        RetainedObjectDefinition, SemanticStore, TextAffineTransform, TextClusterIdentity,
-        TextDirection, TextRenderItem, TextResource, TextSourceKind, TextSourceSpan,
+        PositionedGlyph, RateFunction, Rect, RetainedFamilyAnimationPlanBuilder, SemanticStore,
+        TextAffineTransform, TextClusterIdentity, TextDirection, TextRenderItem, TextResource,
+        TextSourceKind, TextSourceSpan,
     };
     use noon_runtime::{FrameObjectState, FrameState};
 
@@ -560,9 +561,18 @@ mod draw_border_tests {
         let text = texts.insert(resource).unwrap();
         let mut store = SemanticStore::new();
         let leaf = store.insert_authoring_object();
-        let object = RetainedObjectDefinition::text(ObjectId::new(20), text);
+        let object = noon_runtime::FrameObjectState {
+            id: ObjectId::new(20),
+            content: noon_core::ObjectContentRef::Text(text),
+            transform: noon_core::Transform2D::IDENTITY,
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&store, leaf).unwrap();
-        builder.accept_leaf(leaf, &object, &texts).unwrap();
+        builder
+            .accept_leaf(leaf, object.id, &object.content, &texts)
+            .unwrap();
         let plan = builder.finish().unwrap();
         let frame = FrameState {
             family_animations: Vec::new(),

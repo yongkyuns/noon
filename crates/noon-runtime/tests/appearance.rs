@@ -1,7 +1,7 @@
 use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId,
-    TrackTiming, TrackValues, Transform2D,
+    CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, Style, TrackDefinition,
+    TrackId, TrackTiming, TrackValues, Transform2D,
 };
 use noon_runtime::SceneInstance;
 
@@ -21,7 +21,7 @@ fn appearance_scene() -> CompiledScene {
         object,
         property: Property::Appearance,
         values: TrackValues::Scalar { from: 1.0, to: 0.0 },
-        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
     CompiledScene::compile_objects(objects, &tracks).expect("appearance scene compiles")
@@ -73,7 +73,7 @@ fn appearance_values_are_clamped_to_normalized_visibility() {
             from: 2.0,
             to: -1.0,
         },
-        timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
     let compiled = CompiledScene::compile_objects(objects, &tracks).expect("scene compiles");

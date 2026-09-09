@@ -121,10 +121,6 @@ pub struct GraphTopology {
     incident_edges: HashMap<GraphVertexId, Vec<GraphEdgeId>>,
 }
 
-/// The shared topology primitive used by the future `Graph` and `DiGraph`
-/// semantic facades.
-pub type RetainedGraphTopology = GraphTopology;
-
 impl GraphTopology {
     pub fn new() -> Self {
         Self::default()

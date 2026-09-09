@@ -1,7 +1,7 @@
 use noon_compile::{CompilePatchError, CompiledObject, CompiledScene, ExecutionPatch};
 use noon_core::{
-    CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId,
-    TrackTiming, TrackValues, Transform2D, Vec2,
+    CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, Style, TrackDefinition,
+    TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
 };
 use noon_runtime::SceneInstance;
 
@@ -88,7 +88,7 @@ fn create_add_track_and_remove_match_full_recompile() {
             from: Vec2::new(2.0, -1.0),
             to: Vec2::new(6.0, 3.0),
         },
-        timing: TrackTiming::new(1.0, 2.0, Easing::Linear),
+        timing: TrackTiming::new(1.0, 2.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     };
     let add_track = ExecutionPatch::AddTrack(track.clone());
@@ -127,7 +127,7 @@ fn rejected_patch_is_transactional() {
         object: ObjectId::new(999),
         property: Property::Opacity,
         values: TrackValues::Scalar { from: 1.0, to: 0.0 },
-        timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 
@@ -165,7 +165,7 @@ fn replacing_track_preserves_unrelated_object_identity_and_time() {
             from: Vec2::ZERO,
             to: Vec2::new(4.0, 0.0),
         },
-        timing: TrackTiming::new(0.0, 4.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 4.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     };
     let compiled = CompiledScene::compile_objects(objects.clone(), &[initial_track])
@@ -181,7 +181,7 @@ fn replacing_track_preserves_unrelated_object_identity_and_time() {
             from: Vec2::ZERO,
             to: Vec2::new(8.0, 2.0),
         },
-        timing: TrackTiming::new(0.0, 4.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 4.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     };
     live.apply_execution_patch(&ExecutionPatch::ReplaceTrack(replacement.clone()))
@@ -216,7 +216,7 @@ fn timeline_patch_relowers_only_affected_runtime_channel() {
                 from: Vec2::ZERO,
                 to: Vec2::new(1.0, 0.0),
             },
-            timing: TrackTiming::new(1000.0 + index as f64, 1.0, Easing::Linear),
+            timing: TrackTiming::new(1000.0 + index as f64, 1.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         })
         .collect();
@@ -234,7 +234,7 @@ fn timeline_patch_relowers_only_affected_runtime_channel() {
             from: 1.0,
             to: 0.25,
         },
-        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     };
     live.apply_execution_patch(&ExecutionPatch::AddTrack(track.clone()))
@@ -273,7 +273,7 @@ fn moving_a_track_between_objects_relowers_only_old_and_new_channels() {
         object: first,
         property: Property::Opacity,
         values: TrackValues::Scalar { from: 1.0, to: 0.0 },
-        timing: TrackTiming::new(0.0, 4.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 4.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     };
     let compiled = CompiledScene::compile_objects(objects.clone(), &[initial_track]).unwrap();
@@ -285,7 +285,7 @@ fn moving_a_track_between_objects_relowers_only_old_and_new_channels() {
         object: second,
         property: Property::Rotation,
         values: TrackValues::Scalar { from: 0.0, to: 1.0 },
-        timing: TrackTiming::new(0.0, 4.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 4.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     };
     live.apply_execution_patch(&ExecutionPatch::ReplaceTrack(replacement.clone()))
