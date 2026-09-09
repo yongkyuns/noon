@@ -1,0 +1,120 @@
+name: Wait bootstrap publication qualification
+on:
+  push:
+    branches: [codex/1343-wait-bootstrap-prep]
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: wait-bootstrap-publication-qualification
+  cancel-in-progress: false
+env:
+  CARGO_BUILD_JOBS: '2'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: tooling
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: ef2e4a894a7795471795e62351c8241db59af4ce
+          path: source
+          fetch-depth: 0
+      - name: Pin source and dependency evidence
+        uses: actions/download-artifact@v8
+        with:
+          name: r3-boundary-qualification
+          run-id: 34357373370
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/r3-input
+      - name: Verify baseline
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = ef2e4a894a7795471795e62351c8241db59af4ce
+          test "$(cat "$RUNNER_TEMP/r3-input/final-head.txt")" = ef2e4a894a7795471795e62351c8241db59af4ce
+          cp "$RUNNER_TEMP/r3-input/Cargo.lock" Cargo.lock
+          mkdir -p "$RUNNER_TEMP/wait-evidence"
+          { git rev-parse HEAD HEAD^{tree}; rustup show; python3 --version; node --version; } > "$RUNNER_TEMP/wait-evidence/environment.txt"
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('source/Cargo.toml', 'source/crates/**/Cargo.toml') }}
+          restore-keys: |
+            Linux-cargo-sources-
+            provider-sources-Linux-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Prove all four fresh-context regressions fail unchanged production
+        working-directory: source
+        run: |
+          python3 ../tooling/.github/wait-bootstrap-fix.py tests-only
+          set +e
+          cargo test -p noon-web --lib wait_bootstrap_tests > "$RUNNER_TEMP/wait-evidence/red.log" 2>&1
+          status=$?
+          set -e
+          test "$status" = 101
+          grep -F '2 passed; 4 failed' "$RUNNER_TEMP/wait-evidence/red.log"
+          grep -F 'scene.player_ownership.is_unstarted()' "$RUNNER_TEMP/wait-evidence/red.log"
+      - name: Apply only deferred first-player publication and regressions
+        working-directory: source
+        run: |
+          python3 ../tooling/.github/wait-bootstrap-fix.py
+          cargo fmt --all
+          git diff --check
+          git add crates/noon-web/src/canonical_authoring_scene.rs crates/noon-web/src/canonical_authoring_scene/wait_bootstrap_tests.rs web/python/test_noon_errors_wasm.py
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git diff --cached --binary > "$RUNNER_TEMP/wait-evidence/candidate.patch"
+          git config user.name 'Noon development tooling'
+          git config user.email 'development@noon.invalid'
+          git -c commit.gpgSign=false -c core.hooksPath=/dev/null commit -m 'fix: publish initial wait ownership only after shared admission'
+          git rev-parse HEAD > "$RUNNER_TEMP/wait-evidence/candidate-head.txt"
+          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/wait-evidence/candidate-tree.txt"
+      - name: Prove corrected ownership and complete fast qualification
+        working-directory: source
+        run: |
+          cargo test -p noon-web --lib canonical_authoring_scene > "$RUNNER_TEMP/wait-evidence/green.log" 2>&1 || { tail -120 "$RUNNER_TEMP/wait-evidence/green.log"; exit 1; }
+          bash scripts/check.sh fast 100228bd97fee5d7e44aab3a0cf9736808c04858 > "$RUNNER_TEMP/wait-evidence/fast.log" 2>&1 || { tail -120 "$RUNNER_TEMP/wait-evidence/fast.log"; exit 1; }
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build actual development WASM using existing product commands
+        working-directory: source
+        run: |
+          NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh > "$RUNNER_TEMP/wait-evidence/wasm.log" 2>&1 || { tail -100 "$RUNNER_TEMP/wait-evidence/wasm.log"; exit 1; }
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Exercise the single real WASM and Pyodide boundary suite
+        working-directory: source
+        run: |
+          node scripts/typed-authoring-errors-smoke.mjs > "$RUNNER_TEMP/wait-evidence/browser.log" 2>&1 || { tail -150 "$RUNNER_TEMP/wait-evidence/browser.log"; exit 1; }
+          git diff --exit-code
+          cp Cargo.lock "$RUNNER_TEMP/wait-evidence/Cargo.lock"
+          git archive HEAD | gzip > "$RUNNER_TEMP/wait-evidence/source.tar.gz"
+      - name: Publish only the validated three-file product candidate
+        working-directory: source
+        run: |
+          git push origin HEAD:refs/heads/codex/1343-wait-bootstrap-atomicity
+      - name: Retain actual evidence without publishing helpers to the product
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: wait-bootstrap-red-green
+          path: |
+            ${{ runner.temp }}/wait-evidence
+            source/browser-smoke-artifacts/typed-authoring-errors
+          retention-days: 3
+          if-no-files-found: error
