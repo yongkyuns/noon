@@ -1,0 +1,42 @@
+name: R2 producer development
+on:
+  push:
+    branches: [codex/1292-r2-producers-prep]
+permissions:
+  contents: read
+concurrency:
+  group: r2-producers-development
+  cancel-in-progress: true
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: master
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Snapshot master and inspect the existing foundation merge
+        working-directory: source
+        run: |
+          git config user.name 'Noon development tooling'
+          git config user.email 'development@noon.invalid'
+          git rev-parse HEAD > ../master-sha.txt
+          git archive HEAD | gzip > ../master.tar.gz
+          git merge --no-commit --no-ff d1c72e55f03817b4bb2efe815c80e8b9f32b8747 > ../merge.log 2>&1 || true
+          git status --short >> ../merge.log
+          git diff --name-only --diff-filter=U >> ../merge.log
+          tar --exclude=.git -czf ../reconciled-worktree.tar.gz .
+          cat ../master-sha.txt ../merge.log
+      - uses: actions/upload-artifact@v7
+        with:
+          name: r2-producer-source-inspection
+          path: |
+            master-sha.txt
+            master.tar.gz
+            merge.log
+            reconciled-worktree.tar.gz
+          retention-days: 3
+          if-no-files-found: error
