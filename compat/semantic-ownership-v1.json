@@ -463,6 +463,14 @@
       "reason": "Rust selects unique leaves and stages one validated transaction using existing leaf paint operations. Existing active callback per-leaf dispatch remains under #955 until shared family callback overlay operations replace it; this row covers persistent authoring only."
     },
     {
+      "id": "group-grid-layout",
+      "surface": "Group/VGroup arrange_in_grid rows, columns and spacing",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/family_arrangement.rs", "symbol": "FamilyArrangePlan::grid"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_arrange_in_grid"}],
+      "reason": "The existing Rust layout planner owns membership, per-row/column dimensions, sequential alias handling, center preservation and atomic translation. Python only coerces dimensions/gaps and forwards one authored/live call. Active callback family layout remains unsupported under #955."
+    },
+    {
       "id": "group-affine-mutation",
       "surface": "Authored and live Group/VGroup scale and rotate with aliased semantic members",
       "classification": "shared-rust",

@@ -500,32 +500,8 @@ class Group(_base.Group, _BaseMobject):
         cols: int | None = None,
         buff: float | tuple[float, float] = _base.MED_SMALL_BUFF,
     ) -> Group:
-        count = len(self.submobjects)
-        if count == 0:
-            return self
-        if rows is None and cols is None:
-            cols = math.ceil(math.sqrt(count))
-            rows = math.ceil(count / cols)
-        elif rows is None:
-            assert cols is not None
-            rows = math.ceil(count / cols)
-        elif cols is None:
-            cols = math.ceil(count / rows)
-        if rows <= 0 or cols <= 0:
-            raise ValueError("rows and cols must be positive")
-        gap = _as_vec2(buff) if isinstance(buff, (tuple, list, _base.Vec2)) else _base.Vec2(float(buff), float(buff))
-        cell_width = max((member.width for member in self.submobjects), default=0.0) + gap.x
-        cell_height = max((member.height for member in self.submobjects), default=0.0) + gap.y
-        for index, member in enumerate(self.submobjects):
-            row = index // cols
-            col = index % cols
-            member.move_to(
-                _base.Vec2(
-                    (col - (cols - 1) / 2.0) * cell_width,
-                    ((rows - 1) / 2.0 - row) * cell_height,
-                )
-            )
-        return self
+        from _manim_semantic_handles import _group_arrange_in_grid
+        return _group_arrange_in_grid(self, rows, cols, buff)
 
     @property
     def animate(self) -> _GroupAnimationBuilder:

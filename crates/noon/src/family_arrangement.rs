@@ -46,7 +46,22 @@ impl MobjectFamily {
 
     /// Resolve all selections and stage successive placements before one commit.
     pub fn arrange_with_options(&self, options: &FamilyArrangeOptions) -> Result<(), String> {
-        let mut plan = FamilyArrangePlan::begin(self, options)?;
+        self.commit_arrangement(FamilyArrangePlan::begin(self, options)?)
+    }
+
+    /// Arrange direct members in a row-major grid, sizing rows/columns independently
+    /// and preserving the family center. Gaps are in scene units.
+    pub fn arrange_in_grid(
+        &self,
+        rows: Option<usize>,
+        columns: Option<usize>,
+        gap_x: f64,
+        gap_y: f64,
+    ) -> Result<(), String> {
+        self.commit_arrangement(FamilyArrangePlan::grid(self, rows, columns, gap_x, gap_y)?)
+    }
+
+    fn commit_arrangement(&self, mut plan: FamilyArrangePlan) -> Result<(), String> {
         plan.observe_leaf_bounds(|leaf| {
             Mobject::from_node(Rc::clone(self.integration_store()), leaf)?.layout_bounds()
         })?;
@@ -66,6 +81,7 @@ impl MobjectFamily {
 }
 
 struct PlacementStep {
+    cell: Option<usize>,
     moved: Vec<SemanticNodeId>,
     source: Vec<SemanticNodeId>,
     target: Vec<SemanticNodeId>,
@@ -79,6 +95,7 @@ pub(crate) struct FamilyArrangePlan {
     observed: bool,
     placement: ManimNextToArgs,
     center: bool,
+    grid: Option<(usize, f64, f64)>,
 }
 
 impl FamilyArrangePlan {
@@ -122,6 +139,7 @@ impl FamilyArrangePlan {
             let target = leaves(selected(pair[0]))?;
             required.extend(source.iter().chain(&target).copied());
             steps.push(PlacementStep {
+                cell: None,
                 moved: leaves(LayoutAnchor::from_node(
                     Rc::clone(family.integration_store()),
                     pair[1],
@@ -137,6 +155,67 @@ impl FamilyArrangePlan {
             observed: false,
             placement: options.placement,
             center: options.center,
+            grid: None,
+        })
+    }
+
+    pub(crate) fn grid(
+        family: &MobjectFamily,
+        rows: Option<usize>,
+        columns: Option<usize>,
+        gap_x: f64,
+        gap_y: f64,
+    ) -> Result<Self, String> {
+        family.validate()?;
+        crate::semantic_mobject::authoring_render_f64("grid horizontal gap", gap_x)?;
+        crate::semantic_mobject::authoring_render_f64("grid vertical gap", gap_y)?;
+        if rows == Some(0) || columns == Some(0) {
+            return Err("grid rows and columns must be positive".into());
+        }
+        let store = family.integration_store().borrow();
+        let ids = store.node(family.node_id()).unwrap().members();
+        let count = ids.len();
+        let columns = columns.unwrap_or_else(|| match rows {
+            Some(rows) => count.div_ceil(rows).max(1),
+            None => (count as f64).sqrt().ceil().max(1.0) as usize,
+        });
+        let used_rows = count.div_ceil(columns);
+        if rows.is_some_and(|rows| rows < used_rows) {
+            return Err("too few grid rows and columns to fit all members".into());
+        }
+        let roots = store
+            .ordered_leaf_nodes(family.node_id())
+            .map_err(|e| e.to_string())?;
+        let mut steps = Vec::with_capacity(count);
+        // Manim places bottom rows first; preserve that ordering for shared aliases.
+        for row in (0..used_rows).rev() {
+            let start = row * columns;
+            for (column, &id) in ids[start..start + columns.min(count - start)]
+                .iter()
+                .enumerate()
+            {
+                let moved = store.ordered_leaf_nodes(id).map_err(|e| e.to_string())?;
+                steps.push(PlacementStep {
+                    cell: Some(start + column),
+                    source: moved.clone(),
+                    moved,
+                    target: Vec::new(),
+                });
+            }
+        }
+        Ok(Self {
+            bounds: roots.iter().map(|&id| (id, None)).collect(),
+            roots,
+            steps,
+            observed: false,
+            placement: ManimNextToArgs {
+                direction: (1.0, 0.0),
+                buff: 0.0,
+                aligned_edge: (0.0, 0.0),
+                mask: (1.0, 1.0),
+            },
+            center: true,
+            grid: Some((columns, gap_x, gap_y)),
         })
     }
 
@@ -181,11 +260,50 @@ impl FamilyArrangePlan {
             }
             total
         };
+        let original_center = if self.grid.is_some() {
+            bounds_critical_point(aggregate(&self.roots, &deltas), 0.0, 0.0)
+        } else {
+            (0.0, 0.0)
+        };
+        let grid_points = self.grid.map(|(columns, gap_x, gap_y)| {
+            let count = self.steps.len();
+            // Only occupied rows/columns consume memory, even for huge explicit capacities.
+            let mut widths = vec![0.0_f64; columns.min(count)];
+            let mut heights = vec![0.0_f64; count.div_ceil(columns)];
+            for step in &self.steps {
+                let cell = step.cell.unwrap();
+                if let Some(bounds) = aggregate(&step.source, &deltas) {
+                    widths[cell % columns] = widths[cell % columns].max(bounds.width());
+                    heights[cell / columns] = heights[cell / columns].max(bounds.height());
+                }
+            }
+            let centers = |sizes: Vec<f64>, gap: f64| {
+                let mut offset = 0.0;
+                sizes
+                    .into_iter()
+                    .map(|size| {
+                        let center = offset + size / 2.0;
+                        offset += size + gap;
+                        center
+                    })
+                    .collect::<Vec<_>>()
+            };
+            (centers(widths, gap_x), centers(heights, gap_y), columns)
+        });
         for step in &self.steps {
             let source = aggregate(&step.source, &deltas);
-            let target = aggregate(&step.target, &deltas);
-            let delta = RelativePlacement::Next(self.placement)
-                .delta(source, |x, y| Ok(bounds_critical_point(target, x, y)))?;
+            let delta = if let Some((xs, ys, columns)) = &grid_points {
+                let cell = step.cell.unwrap();
+                let center = bounds_critical_point(source, 0.0, 0.0);
+                (
+                    xs[cell % columns] - center.0,
+                    -ys[cell / columns] - center.1,
+                )
+            } else {
+                let target = aggregate(&step.target, &deltas);
+                RelativePlacement::Next(self.placement)
+                    .delta(source, |x, y| Ok(bounds_critical_point(target, x, y)))?
+            };
             for leaf in &step.moved {
                 let total = deltas.get_mut(leaf).unwrap();
                 total.0 += delta.0;
@@ -195,8 +313,8 @@ impl FamilyArrangePlan {
         if self.center {
             let center = bounds_critical_point(aggregate(&self.roots, &deltas), 0.0, 0.0);
             for delta in deltas.values_mut() {
-                delta.0 -= center.0;
-                delta.1 -= center.1;
+                delta.0 -= center.0 - original_center.0;
+                delta.1 -= center.1 - original_center.1;
             }
         }
         translation_transaction(

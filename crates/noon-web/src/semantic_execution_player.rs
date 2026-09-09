@@ -752,6 +752,21 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_arrange_family_in_grid(
+        &mut self,
+        family: &noon::MobjectFamily,
+        rows: Option<usize>,
+        columns: Option<usize>,
+        gap_x: f64,
+        gap_y: f64,
+    ) -> Result<(), String> {
+        self.with_live_session(|live| {
+            live.arrange_family_in_grid(family, rows, columns, gap_x, gap_y)
+        })
+        .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_scale_family(
         &mut self,
         family: &noon::MobjectFamily,

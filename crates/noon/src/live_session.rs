@@ -2003,8 +2003,30 @@ impl<'a> LiveSession<'a> {
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_family(family)?;
         self.session.require_published_store(&self.store.borrow())?;
-        let mut plan =
-            FamilyArrangePlan::begin(family, options).map_err(LiveSessionError::Mobject)?;
+        let plan = FamilyArrangePlan::begin(family, options).map_err(LiveSessionError::Mobject)?;
+        self.publish_family_arrangement(plan)
+    }
+
+    /// Arrange a family using coherent live bounds and one shared translation transaction.
+    pub fn arrange_family_in_grid(
+        &mut self,
+        family: &MobjectFamily,
+        rows: Option<usize>,
+        columns: Option<usize>,
+        gap_x: f64,
+        gap_y: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        let plan = FamilyArrangePlan::grid(family, rows, columns, gap_x, gap_y)
+            .map_err(LiveSessionError::Mobject)?;
+        self.publish_family_arrangement(plan)
+    }
+
+    fn publish_family_arrangement(
+        &mut self,
+        mut plan: FamilyArrangePlan,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         plan.observe_leaf_bounds(|leaf| {
             let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
             self.family_member_bounds(&mobject)
