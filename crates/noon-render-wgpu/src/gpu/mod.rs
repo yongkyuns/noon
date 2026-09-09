@@ -4,7 +4,6 @@ use bytemuck::{Pod, Zeroable};
 use noon_core::Vec2;
 use wgpu::util::DeviceExt;
 
-#[path = "presentation.rs"]
 mod presentation;
 pub use presentation::OutputTransfer;
 use presentation::PresentationBridge;
@@ -418,7 +417,7 @@ impl GpuRenderer {
             }],
         });
 
-        let shader = device.create_shader_module(wgpu::include_wgsl!("analytic.wgsl"));
+        let shader = device.create_shader_module(wgpu::include_wgsl!("../analytic.wgsl"));
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Noon analytic pipeline layout"),
             bind_group_layouts: &[Some(&camera_layout)],
@@ -502,7 +501,7 @@ impl GpuRenderer {
                 instance_layout: line_instance_layout(),
             },
         );
-        let path_shader = device.create_shader_module(wgpu::include_wgsl!("path.wgsl"));
+        let path_shader = device.create_shader_module(wgpu::include_wgsl!("../path.wgsl"));
         let path_pipeline =
             create_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
         let mega_path_pipeline =
@@ -1021,12 +1020,8 @@ impl GpuRenderer {
             }
         }
         if let Some(current) = pending {
-            let drawn = self.draw_resolved_ordered_batch(
-                pass,
-                prepared,
-                &current,
-                single_sample_analytics,
-            );
+            let drawn =
+                self.draw_resolved_ordered_batch(pass, prepared, &current, single_sample_analytics);
             stats.draw_calls += drawn.draw_calls;
             stats.instances_drawn += drawn.instances_drawn;
         }
@@ -1727,7 +1722,7 @@ mod tests {
 
     #[test]
     fn analytic_shader_uses_derivative_based_edge_coverage() {
-        let shader = include_str!("analytic.wgsl");
+        let shader = include_str!("../analytic.wgsl");
         assert!(shader.contains("fwidth(signed_distance)"));
         assert!(shader.contains("smoothstep(-half_width, half_width, signed_distance)"));
         assert!(shader.contains("local_units_per_pixel"));
@@ -1949,3 +1944,15 @@ mod tests {
         assert_eq!(renderer.path_render_bundle_rebuilds(), 1);
     }
 }
+
+mod retained_text;
+pub use retained_text::*;
+
+mod retained_family_reveal;
+pub use retained_family_reveal::*;
+
+mod retained_family_draw_border_then_fill;
+pub use retained_family_draw_border_then_fill::*;
+
+mod retained_family_reveal_scene;
+pub use retained_family_reveal_scene::*;
