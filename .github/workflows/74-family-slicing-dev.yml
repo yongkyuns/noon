@@ -1,0 +1,132 @@
+name: B1 family slicing development
+on:
+  push:
+    branches: [codex/74-family-slicing-prep]
+permissions:
+  contents: write
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Assemble exact product candidate
+        run: |
+          mkdir -p /tmp/b1-slicing
+          base=7edd6b41feee02355943868d48754bf0e23a706b
+          git checkout --detach "$base"
+          git apply --index <(git show codex/74-family-slicing-prep:.github/74-family-slicing.patch)
+          python3 -m py_compile web/python/_manim_compat.py scripts/manim-differential.py
+          git diff --cached --check
+          git config user.name 'Yongkyun Shin'
+          git config user.email '4311628+yongkyuns@users.noreply.github.com'
+          candidate=$(git commit-tree "$(git write-tree)" -p "$base" -m 'fix: preserve Manim group semantics when slicing (#74)')
+          git reset --hard "$candidate"
+          git rev-parse HEAD HEAD^{tree} > /tmp/b1-slicing/revisions.txt
+          git diff "$base" HEAD > /tmp/b1-slicing/product.patch
+          git archive --format=tar.gz HEAD > /tmp/b1-slicing/source.tar.gz
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Python facade and web preflight
+        run: |
+          set -o pipefail
+          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/b1-slicing/preflight.log
+      - name: Build one diagnostic WASM package
+        run: |
+          set -o pipefail
+          rustup target add wasm32-unknown-unknown
+          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/b1-slicing/wasm-build.log
+      - uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install pinned browser and Manim reference
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+          python3 -m pip install --disable-pip-version-check 'manim==0.21.0'
+      - name: Pinned Manim semantic differential
+        run: |
+          set -o pipefail
+          node scripts/manim-differential-noon.mjs /tmp/b1-slicing/noon-observations.json 2>&1 | tee /tmp/b1-slicing/noon-differential.log
+          python3 scripts/manim-differential.py --noon-observations /tmp/b1-slicing/noon-observations.json --json > /tmp/b1-slicing/manim-differential.json
+          python3 - <<'PY'
+          import json
+          p=json.load(open('/tmp/b1-slicing/manim-differential.json'))
+          row=next(x for x in p['fixtures'] if x['fixture']=='vgroup_slicing')
+          assert row['status']=='pass', row
+          assert not row['differences'], row
+          print('vgroup_slicing semantic differential: pass')
+          PY
+      - name: Canonical one-fixture raster differential
+        run: |
+          cp parity/manim-v0.21/quickstart.py /tmp/b1-slicing/quickstart.py
+          cp parity/manim-v0.21/manifest.json /tmp/b1-slicing/manifest.json
+          cat >> parity/manim-v0.21/quickstart.py <<'PY'
+
+          class FamilySlicing(Scene):
+              def construct(self):
+                  first = Square(side_length=0.5).shift(LEFT * 2.0)
+                  middle = Circle(radius=0.3)
+                  last = Rectangle(width=0.8, height=0.4).shift(RIGHT * 2.0)
+                  family = VGroup(first, middle, last)
+                  self.add(*family)
+                  family[1:].shift(UP * 0.75)
+                  self.wait(1.0)
+          PY
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          path=Path('parity/manim-v0.21/manifest.json')
+          data=json.loads(path.read_text())
+          data['fixtures']=[{
+              'id':'family-slicing',
+              'scene':'FamilySlicing',
+              'expected_duration':1.0,
+              'raster_tolerance':{
+                  'max_bounds_delta_px':3,
+                  'max_differing_ratio':0.006,
+                  'max_mean_absolute_channel_error':0.09,
+              },
+          }]
+          path.write_text(json.dumps(data, indent=2)+'\n')
+          PY
+          set -o pipefail
+          NOON_MANIM_RASTER_BACKENDS=webgl NOON_MANIM_RASTER_ENFORCE=1 NOON_MANIM_RASTER_ARTIFACTS=/tmp/b1-slicing/raster node scripts/manim-raster-differential.mjs 2>&1 | tee /tmp/b1-slicing/raster.log
+          cp /tmp/b1-slicing/quickstart.py parity/manim-v0.21/quickstart.py
+          cp /tmp/b1-slicing/manifest.json parity/manim-v0.21/manifest.json
+          git diff --exit-code
+      - name: Publish same tested candidate
+        run: git push origin HEAD:refs/heads/codex/74-family-slicing
+      - name: Retain exact evidence
+        if: always()
+        run: |
+          if test -f Cargo.lock; then cp Cargo.lock /tmp/b1-slicing/Cargo.lock; fi
+          git status --short > /tmp/b1-slicing/status.txt
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: b1-family-slicing-qualification
+          path: /tmp/b1-slicing
+          retention-days: 7
