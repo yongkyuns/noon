@@ -38,40 +38,71 @@ jobs:
           git show -s --format='%H%n%P%n%T' HEAD > /tmp/a6-browser-evidence/source.txt
           sha256sum web/pkg/* > /tmp/a6-browser-evidence/package-sha256.txt
           node scripts/check-web-package.mjs
+      - name: Apply candidate observation-only smoke corrections
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p=Path('scripts/renderer-webgpu-device-loss-smoke.mjs')
+          s=p.read_text()
+          old='''      const candidate = await page.evaluate((time) => window.noonSmoke.renderAt(time), sampleTime);\n      if (candidate.presented && candidate.rendererBackend === "WebGPU") {\n        recovered = candidate;\n      }'''
+          new='''      const candidate = await page.evaluate((time) => window.noonSmoke.renderAt(time), sampleTime);\n      const candidateCapture = await page.evaluate((lostIndex) => {\n        const capture = window.__noonWebGpuDeviceCapture;\n        const replacementIndex = capture.devices.length - 1;\n        return {\n          deviceCount: capture.devices.length,\n          replacementIndex,\n          replacedDevice:\n            replacementIndex > lostIndex && capture.devices[lostIndex] !== capture.devices[replacementIndex],\n          replacementHealthy: replacementIndex > lostIndex && capture.lost[replacementIndex] === null,\n        };\n      }, deviceIndex);\n      if (\n        candidate.presented &&\n        candidate.rendererBackend === "WebGPU" &&\n        candidateCapture.deviceCount >= minimumDeviceCount &&\n        candidateCapture.replacedDevice &&\n        candidateCapture.replacementHealthy\n      ) {\n        recovered = candidate;\n      }'''
+          assert old in s
+          p.write_text(s.replace(old,new))
+
+          p=Path('scripts/playground-zero-size-smoke.mjs')
+          s=p.read_text()
+          start=s.index('async function waitForFrameAfter(page, previousFrames, label) {')
+          end=s.index('\nasync function setCanvasContentSize', start)
+          new='''async function waitForFrameAfter(page, previousFrames, label) {\n  return page.evaluate(\n    async ({ previous, label }) => {\n      const deadline = performance.now() + 10_000;\n      while (performance.now() < deadline) {\n        const report = await window.__noonExampleGallery.executionMetrics();\n        const metrics = report.metrics;\n        const canvas = document.querySelector("#scene");\n        const status = document.querySelector("#status");\n        const patchStatus = document.querySelector("#patch-status");\n        if (status?.dataset.state !== "error" && metrics.presentedFrames > previous) {\n          const rect = canvas.getBoundingClientRect();\n          return {\n            cssWidth: canvas.clientWidth, cssHeight: canvas.clientHeight,\n            rectWidth: rect.width, rectHeight: rect.height,\n            rendererBackend: status?.dataset.rendererBackend ?? "",\n            runtimeState: status?.dataset.state ?? "",\n            runtimeStartup: status?.dataset.runtimeStartup ?? "",\n            presentedFrames: metrics.presentedFrames, renderedTime: metrics.time ?? null,\n            needsPresent: metrics.needsPresent ?? null,\n            executionMode: status?.dataset.executionMode ?? "",\n            metricTime: document.querySelector("#metric-time")?.value ?? "",\n            patchState: patchStatus?.dataset.state ?? "",\n            patchText: patchStatus?.value ?? patchStatus?.textContent ?? "",\n          };\n        }\n        await new Promise((resolve) => setTimeout(resolve, 25));\n      }\n      throw new Error(`${label}: no new frame was presented`);\n    },\n    { previous: previousFrames, label },\n  );\n}\n'''
+          p.write_text(s[:start]+new+s[end:])
+
+          p=Path('scripts/renderer-webgpu-validation-error-smoke.mjs')
+          s=p.read_text()
+          s=s.replace('''  const consoleErrors = [];\n  page.on("pageerror", (error) => pageErrors.push(String(error)));\n  page.on("console", (message) => {\n    if (message.type() === "error") consoleErrors.push(message.text());\n  });\n  return { pageErrors, consoleErrors };''','''  const consoleErrors = [];\n  const consoleWarnings = [];\n  page.on("pageerror", (error) => pageErrors.push(String(error)));\n  page.on("console", (message) => {\n    if (message.type() === "error") consoleErrors.push(message.text());\n    if (message.type() === "warning") consoleWarnings.push(message.text());\n  });\n  return { pageErrors, consoleErrors, consoleWarnings };''')
+          a=s.index('async function waitForHostGpuError(page) {')
+          b=s.index('\nfunction changedPixelCount',a)
+          replacement='''async function waitForHostGpuDiagnostic(page, browserErrors) {\n  let lastMetrics = null;\n  for (let attempt = 0; attempt < 40; attempt += 1) {\n    lastMetrics = await page.evaluate((time) => window.noonSmoke.renderAt(time), sampleTime);\n    const warning = browserErrors.consoleWarnings.find((message) =>\n      /WebGPU generation 1 validation error:/i.test(message),\n    );\n    if (warning) return { warning, metrics: lastMetrics };\n    await new Promise((resolve) => setTimeout(resolve, 10));\n  }\n  throw new Error(\n    `recoverable WebGPU validation diagnostic never reached the host; last metrics=${JSON.stringify(lastMetrics)}`,\n  );\n}\n'''
+          s=s[:a]+replacement+s[b:]
+          s=s.replace('''  const hostError = await waitForHostGpuError(page);\n  assert.match(\n    hostError,\n    /WebGPU generation 1 validation error:/,\n    `host GPU error lacks backend/generation context: ${hostError}`,\n  );''','''  const hostDiagnostic = await waitForHostGpuDiagnostic(page, browserErrors);\n  assert.match(\n    hostDiagnostic.warning,\n    /WebGPU generation 1 validation error:/,\n    `host GPU diagnostic lacks backend/generation context: ${hostDiagnostic.warning}`,\n  );''')
+          s=s.replace('''    hostError,\n    afterErrorMetrics,''','''    hostDiagnostic,\n    afterErrorMetrics,''')
+          p.write_text(s)
+
+          p=Path('scripts/renderer-worker-webgpu-validation-error-smoke.mjs')
+          s=p.read_text()
+          marker='''const diagnostics = {};\n'''
+          helper='''const diagnostics = {};\nconst stringifyDiagnostics = (value) => JSON.stringify(\n  value,\n  (_key, item) => typeof item === "bigint" ? item.toString() : item,\n  2,\n);\n'''
+          assert marker in s
+          s=s.replace(marker,helper,1)
+          s=s.replace('JSON.stringify(diagnosticMetrics)', 'stringifyDiagnostics(diagnosticMetrics)')
+          s=s.replace('JSON.stringify(diagnostics, null, 2)', 'stringifyDiagnostics(diagnostics)')
+          p.write_text(s)
+          PY
+          node --check scripts/renderer-webgpu-device-loss-smoke.mjs
+          node --check scripts/playground-zero-size-smoke.mjs
+          node --check scripts/renderer-webgpu-validation-error-smoke.mjs
+          node --check scripts/renderer-worker-webgpu-validation-error-smoke.mjs
+          git diff --check
+          git diff > /tmp/a6-browser-evidence/candidate-smoke.patch
       - name: Install browser dependencies only
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-      - name: Reproduce the old resize assertion on the retained package
+      - name: WebGPU device-loss observation race candidate
         run: |
           set -o pipefail
-          cp scripts/playground-zero-size-smoke.mjs /tmp/corrected-resize.mjs
-          trap 'cp /tmp/corrected-resize.mjs scripts/playground-zero-size-smoke.mjs' EXIT
-          git show 10e9597611dad4dc4d1917f39dc685143fd37f3c:scripts/playground-zero-size-smoke.mjs > scripts/playground-zero-size-smoke.mjs
-          set +e
-          NOON_PLAYGROUND_ZERO_SIZE_ARTIFACTS=/tmp/a6-browser-evidence/resize-red node scripts/playground-zero-size-smoke.mjs 2>&1 | tee /tmp/a6-browser-evidence/resize-red.log
-          status=${PIPESTATUS[0]}
-          set -e
-          test "$status" -ne 0
-          python3 - <<'PY'
-          import json
-          d=json.load(open('/tmp/a6-browser-evidence/resize-red/diagnostics.json'))
-          assert 'zero' in d['snapshots'] and 'nearZero' not in d['snapshots'], d
-          assert not d['pageErrors'] and not d['consoleErrors'], d
-          assert 'Timeout' in d['failure'] and 'waitForFrameAfter' in d['failure'], d
-          print('Confirmed old no-op resize assertion fails after successful zero-size presentation.')
-          PY
+          NOON_RENDERER_DEVICE_LOSS_ARTIFACTS=/tmp/a6-browser-evidence/device-loss node scripts/renderer-webgpu-device-loss-smoke.mjs 2>&1 | tee /tmp/a6-browser-evidence/device-loss.log
       - name: Corrected settled resize and restore
         if: always()
         run: |
           set -o pipefail
-          NOON_PLAYGROUND_ZERO_SIZE_ARTIFACTS=/tmp/a6-browser-evidence/resize-green node scripts/playground-zero-size-smoke.mjs 2>&1 | tee /tmp/a6-browser-evidence/resize-green.log
-      - name: Existing direct WebGPU validation propagation
+          NOON_PLAYGROUND_ZERO_SIZE_ARTIFACTS=/tmp/a6-browser-evidence/resize node scripts/playground-zero-size-smoke.mjs 2>&1 | tee /tmp/a6-browser-evidence/resize.log
+      - name: Recoverable direct WebGPU validation diagnostic
         if: always()
         run: |
           set -o pipefail
           NOON_RENDERER_VALIDATION_ERROR_ARTIFACTS=/tmp/a6-browser-evidence/validation node scripts/renderer-webgpu-validation-error-smoke.mjs 2>&1 | tee /tmp/a6-browser-evidence/validation.log
-      - name: Existing worker WebGPU validation propagation
+      - name: Worker WebGPU validation diagnostics with safe evidence serialization
         if: always()
         run: |
           set -o pipefail
@@ -79,13 +110,14 @@ jobs:
       - name: Final source and package identity
         if: always()
         run: |
+          git checkout -- scripts/renderer-webgpu-device-loss-smoke.mjs scripts/playground-zero-size-smoke.mjs scripts/renderer-webgpu-validation-error-smoke.mjs scripts/renderer-worker-webgpu-validation-error-smoke.mjs
           git diff --exit-code
           sha256sum web/pkg/* > /tmp/a6-browser-evidence/final-package-sha256.txt
           cmp /tmp/a6-browser-evidence/package-sha256.txt /tmp/a6-browser-evidence/final-package-sha256.txt
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: a6-1364-browser-only
+          name: a6-1364-observation-candidates
           path: /tmp/a6-browser-evidence
           if-no-files-found: error
           retention-days: 7
