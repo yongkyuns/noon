@@ -1912,22 +1912,21 @@ struct CallbackPhaseTokenEnvelope {
 enum CallbackReadRequestWire {
     ScalarSignal { node: CallbackNodeWire },
     Object { node: CallbackNodeWire },
-}
-
-impl From<CallbackReadRequestWire> for CallbackReadRequest {
-    fn from(value: CallbackReadRequestWire) -> Self {
-        match value {
-            CallbackReadRequestWire::ScalarSignal { node } => Self::ScalarSignal(node.into()),
-            CallbackReadRequestWire::Object { node } => Self::Object(node.into()),
-        }
-    }
+    Family { node: CallbackNodeWire },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum CallbackReadValueWire {
-    Scalar { value: f32 },
-    Object { object: CallbackPhaseObjectWire },
+    Scalar {
+        value: f32,
+    },
+    Object {
+        object: CallbackPhaseObjectWire,
+    },
+    Family {
+        objects: Vec<CallbackPhaseObjectWire>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -2252,11 +2251,43 @@ impl SemanticExecutionPlayer {
             .map_err(|error| format!("invalid callback read request JSON: {error}"))?;
         let requested_object = match &request_wire {
             CallbackReadRequestWire::Object { node } => Some(node.clone()),
-            CallbackReadRequestWire::ScalarSignal { .. } => None,
+            CallbackReadRequestWire::ScalarSignal { .. }
+            | CallbackReadRequestWire::Family { .. } => None,
+        };
+        let request = match request_wire {
+            CallbackReadRequestWire::Family { node } => {
+                let store = self
+                    .semantics
+                    .as_ref()
+                    .ok_or("family callback reads require a live semantic store")?;
+                let rows = self
+                    .session
+                    .required_callback_family_read(&store.borrow(), token, node.into())
+                    .map_err(|error| error.to_string())?;
+                let objects = rows
+                    .into_iter()
+                    .map(|(node, properties)| CallbackPhaseObjectWire {
+                        node: node.into(),
+                        transform: properties.transform,
+                        style: properties.style,
+                        appearance: properties.appearance,
+                        presence: properties.presence,
+                        reveal: properties.reveal,
+                        morph: properties.morph,
+                        bounds: properties.bounds,
+                    })
+                    .collect();
+                return serde_json::to_string(&CallbackReadValueWire::Family { objects })
+                    .map_err(|error| error.to_string());
+            }
+            CallbackReadRequestWire::Object { node } => CallbackReadRequest::Object(node.into()),
+            CallbackReadRequestWire::ScalarSignal { node } => {
+                CallbackReadRequest::ScalarSignal(node.into())
+            }
         };
         let value = self
             .session
-            .required_callback_read(token, request_wire.into())
+            .required_callback_read(token, request)
             .map_err(|error| error.to_string())?;
         let wire = match value {
             CallbackReadValue::Scalar(value) => CallbackReadValueWire::Scalar { value },

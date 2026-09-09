@@ -418,6 +418,11 @@ test("callback sparse reads are pinned to the pending phase and never publish it
     }]);
     assert.equal(f.stats().committedPhases, 0);
     assert.equal(f.stats().drained, 0, "a sparse read cannot drain a renderer delta");
+    readPhase(token, { request_id: 12, kind: "family", node: { slot: 9, generation: 2 } });
+    assert.equal(f.stats().callbackReads[1].request,
+      JSON.stringify({ kind: "family", node: { slot: 9, generation: 2 } }));
+    assert.equal(f.stats().committedPhases, 0, "a bulk family read cannot publish the phase");
+
 
     assert.throws(
       () => readPhase(JSON.stringify({ ...phase.token, sequence: 5 }), {

@@ -576,7 +576,7 @@ class _CanonicalCallbackContext:
             result = json.loads(str(result_json))
         except Exception as error:
             raise RuntimeError(f"canonical callback sparse read failed: {error}") from None
-        expected_kind = "scalar" if kind == "scalar_signal" else "object"
+        expected_kind = "scalar" if kind == "scalar_signal" else kind
         if not isinstance(result, dict) or result.get("kind") != expected_kind:
             raise RuntimeError("canonical callback sparse read returned the wrong typed value")
         return result
@@ -670,6 +670,56 @@ class _CanonicalCallbackContext:
         row = _PhasePropertyRow.from_wire(self._object_item(key))
         self._rows[key] = row
         return key, row
+
+    def paint_family(self, family, operation, arguments):
+        # Rust selects the unique leaves and reads them against this phase token
+        # in one request. Python only retains the permitted callback read view.
+        from _noon_errors import engine_call
+        revision = str(self.token["publication"]["scene_revision"])
+        keys = [tuple(int(part) for part in str(key).split(":")) for key in
+                engine_call(self._operations.callbackFamilyKeys, family, revision)]
+        if any(node not in self._rows and node not in self._frame_items for node in keys):
+            family_key = (int(family.semanticSlot), int(family.semanticGeneration))
+            result = self._read("family", family_key)
+            items = result.get("objects")
+            if not isinstance(items, list):
+                raise RuntimeError("family callback read did not return object rows")
+            received = {_phase_node_key(item["node"]): item for item in items}
+            if set(received) != set(keys):
+                raise RuntimeError("family callback read returned different membership")
+        else:
+            received = self._frame_items
+        rows = {node: self._rows.get(node) or _PhasePropertyRow.from_wire(received[node])
+                for node in keys}
+        # Row selection preserves preceding writes, including scalar leaf edits.
+        styles = [[*node, row.style.to_wire()] for node, row in rows.items()]
+        if operation == "Color":
+            paint = (True, *arguments, None, None)
+        elif operation == "Fill":
+            paint = (*arguments[:5], None, arguments[5])
+        elif operation == "Stroke":
+            paint = arguments
+        else:
+            paint = (False, 0.0, 0.0, 0.0, 1.0, None, arguments[0])
+        raw = engine_call(self._operations.callbackFamilyPaint, family,
+            str(self.token["publication"]["scene_revision"]), operation,
+            json.dumps(styles, separators=(",", ":")), *paint)
+        # Decode and validate every returned row before exposing any writes, so
+        # user code may catch a failure without a partially changed family.
+        changes = []
+        for slot, generation, style in json.loads(str(raw)):
+            node = (slot, generation)
+            if node not in rows:
+                raise RuntimeError("family paint returned an unread semantic node")
+            changes.append((node, _PhaseStyle.from_wire(style)))
+        self._rows.update(rows)
+        for node, style in changes:
+            row = rows[node]
+            before = row.style
+            row.style = style
+            if style.stroke != before.stroke or style.stroke_width != before.stroke_width:
+                row.invalidate_bounds()
+            self.style_changed(node, before, row)
 
     def transform_changed(
         self, key: tuple[int, int], before: _PhaseTransform, row: _PhasePropertyRow

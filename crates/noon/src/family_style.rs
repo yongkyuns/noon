@@ -3,13 +3,14 @@ use crate::{
     semantic_mobject::{
         edit_color, edit_disable_fill, edit_disable_stroke, edit_fill_color, edit_fill_opacity,
         edit_manim_opacity, edit_stroke_color, edit_stroke_opacity, edit_stroke_width,
+        PaintStyleEdit,
     },
     Color, MobjectFamily,
 };
 use noon_core::{SemanticMutationTransaction, SemanticStyle};
 
-pub(crate) fn fill(
-    style: &mut SemanticStyle,
+pub(crate) fn fill<S: PaintStyleEdit>(
+    style: &mut S,
     color: Option<Color>,
     opacity: Option<f64>,
 ) -> Result<(), String> {
@@ -30,8 +31,8 @@ pub(crate) fn fill(
     Ok(())
 }
 
-pub(crate) fn stroke(
-    style: &mut SemanticStyle,
+pub(crate) fn stroke<S: PaintStyleEdit>(
+    style: &mut S,
     color: Option<Color>,
     width: Option<f64>,
     opacity: Option<f64>,

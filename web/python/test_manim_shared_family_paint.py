@@ -38,12 +38,71 @@ class SharedFamilyPaintTests(unittest.TestCase):
         member.set_fill = Mock()
         family = identity_only_wrapper(compat.VGroup, submobjects=[member])
         family._semantic_family_handle = Mock()
-        with patch.object(updaters, "_canonical_phase_context", return_value=Mock()):
+        phase = Mock()
+        token = updaters._ACTIVE_CANONICAL_CONTEXT.set(phase)
+        try:
             family.set_fill(compat._base.RED, 0.5)
-        member.set_fill.assert_called_once_with(compat._base.RED, 0.5)
+        finally:
+            updaters._ACTIVE_CANONICAL_CONTEXT.reset(token)
+        color = compat._base.RED
+        phase.paint_family.assert_called_once_with(family._semantic_family_handle, "Fill",
+            (True, color.red, color.green, color.blue, color.alpha, 0.5))
+        member.set_fill.assert_not_called()
         family._semantic_family_handle.setFill.assert_not_called()
 
     def test_unbacked_family_cannot_mutate(self):
         family = identity_only_wrapper(compat.VGroup, submobjects=[])
         with self.assertRaisesRegex(RuntimeError, "shared Rust"):
             family.set_opacity(0.5)
+
+
+class FamilyCallbackBatchTests(unittest.TestCase):
+    def fixture(self):
+        import copy
+        from types import SimpleNamespace
+        from test_updater_snapshot import CanonicalCallbackPropertyRowTests
+        _, mobject, context = CanonicalCallbackPropertyRowTests._mobject_and_context()
+        context.token["publication"]["scene_revision"] = "9"
+        _, row = context.row(mobject)
+        second = copy.deepcopy(context._frame_items[(11, 3)])
+        second["node"] = {"slot": 12, "generation": 3}
+        context._operations.callbackFamilyKeys = Mock(return_value=["11:3", "12:3"])
+        context._operations.callbackFamilyPaint = Mock()
+        family = SimpleNamespace(semanticSlot=21, semanticGeneration=3)
+        return context, row, second, family
+
+    def test_sparse_family_is_one_read_and_preserves_preceding_overlay_writes(self):
+        import json
+        from dataclasses import replace
+        context, row, second, family = self.fixture()
+        row.style = replace(row.style, opacity=0.25)
+        context._read = Mock(return_value={"kind": "family", "objects": [context._frame_items[(11, 3)], second]})
+        # No changes returned by the Rust operation: verify adaptation, not paint math.
+        context._operations.callbackFamilyPaint.return_value = "[]"
+        context.paint_family(family, "Opacity", (0.5,))
+        context._read.assert_called_once_with("family", (21, 3))
+        forwarded = json.loads(context._operations.callbackFamilyPaint.call_args.args[3])
+        self.assertEqual(forwarded[0][2]["opacity"], 0.25)
+        self.assertEqual(context.effective_batch()["writes"], [])
+        context._read.reset_mock()
+        context.paint_family(family, "Opacity", (0.5,))
+        context._read.assert_not_called()
+
+    def test_failed_bulk_read_or_late_result_decode_cannot_publish_partial_edits(self):
+        import json
+        context, row, second, family = self.fixture()
+        before = row.style
+        context._read = Mock(side_effect=RuntimeError("last member is not live"))
+        with self.assertRaisesRegex(RuntimeError, "last member"):
+            context.paint_family(family, "Opacity", (0.5,))
+        context._operations.callbackFamilyPaint.assert_not_called()
+        self.assertEqual(row.style, before)
+        self.assertEqual(context.effective_batch()["writes"], [])
+        context._read = Mock(return_value={"kind": "family", "objects": [context._frame_items[(11, 3)], second]})
+        changed = {**before.to_wire(), "opacity": 0.5}
+        context._operations.callbackFamilyPaint.return_value = json.dumps([[11, 3, changed], [12, 3, {}]])
+        with self.assertRaises(TypeError):
+            context.paint_family(family, "Opacity", (0.5,))
+        self.assertEqual(row.style, before)
+        self.assertEqual(context.effective_batch()["writes"], [])
+        self.assertNotIn((12, 3), context._rows)
