@@ -225,6 +225,55 @@ class WasmErrorProjectionTests(unittest.TestCase):
         self.assertEqual(caught.exception.category, "callback_failure")
         self.assertEqual(snapshot(context), returned)
 
+    def test_public_live_transform_errors_preserve_python_coercion_and_recover(self):
+        host.resetStore()
+        from noon import Circle, Scene
+        from _manim_scene import _context
+        from _noon_errors import NoonError
+        scene = Scene()
+        target = Circle(radius=0.5)
+        scene.add(target)
+        live = scene.live_execution(1)
+        context = _context(scene)
+        operations = [
+            ("set_translation", (2.0, -1.0), "translation", {"x": 2.0, "y": -1.0}),
+            ("shift", (1.0, 2.0), "translation", {"x": 3.0, "y": 1.0}),
+            ("set_scale", (2.0, 0.5), "scale", {"x": 2.0, "y": 0.5}),
+            ("set_rotation", (0.5,), "rotation", 0.5),
+        ]
+        live.wait(0.25)
+        for name, valid, field, expected in operations:
+            with self.subTest(operation=name):
+                method = getattr(live, name)
+                before = (snapshot(context), target._semantic_handle.snapshotJson())
+                # All argument coercion stays outside the shared engine call.
+                sentinel = ValueError("foreign stale pending unsupported")
+                class BadFloat:
+                    def __float__(self):
+                        raise sentinel
+                with self.assertRaises(ValueError) as caught:
+                    method(target, BadFloat(), *valid[1:])
+                self.assertIs(caught.exception, sentinel)
+                self.assertNotIsInstance(caught.exception, NoonError)
+                self.assertEqual((snapshot(context), target._semantic_handle.snapshotJson()), before)
+                with self.assertRaises(NoonValueError) as caught:
+                    method(target, float("nan"), *valid[1:])
+                error = caught.exception
+                self.assert_diagnostic(error, "invalid_input")
+                self.assertEqual(error.operation, "LiveExecution." + name)
+                self.assertEqual(codes(error), ["live.publication", "publication.semantic",
+                                               "transaction.non_finite_property_value"])
+                self.assertEqual((snapshot(context), target._semantic_handle.snapshotJson()), before)
+                method(target, *valid)
+                authored = json.loads(target._semantic_handle.snapshotJson())
+                effective = snapshot(context)[1]
+                self.assertEqual(authored["transform"][field], expected)
+                self.assertEqual(effective["objects"][0]["transform"][field], expected)
+                self.assertEqual(effective["time"], 0)
+        live.advance_to(0.25)
+        live.complete()
+        self.assertEqual(snapshot(context)[1]["time"], 0.25)
+
     def test_public_python_scene_batch_failure_is_atomic_and_recovers(self):
         host.resetStore()
         from noon import Circle, Scene, NoonForeignHandleError as PublicError
