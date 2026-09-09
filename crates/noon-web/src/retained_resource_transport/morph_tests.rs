@@ -6,8 +6,8 @@ use noon_core::{GeometryRef, Vec2};
 #[test]
 fn compiled_table_keeps_stable_local_pairs_but_excludes_dynamic_screen_space_fallback() {
     use noon_core::{
-        Easing, ObjectId, Property, StrokeWidthMode, Style, TrackDefinition, TrackId, TrackTiming,
-        TrackValues, Transform2D, TransformTrackEndpoint,
+        ObjectId, Property, RateFunction, StrokeWidthMode, Style, TrackDefinition, TrackId,
+        TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint,
     };
     for (mode, target_mode, target_scale_x, expected_count, expected_preparations) in [
         (
@@ -77,7 +77,7 @@ fn compiled_table_keeps_stable_local_pairs_but_excludes_dynamic_screen_space_fal
             object: object.id,
             property: Property::Transform,
             values: TrackValues::Object { from, to },
-            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
             time_map: Default::default(),
         };
         let compiled =

@@ -1,7 +1,8 @@
 use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    Color, CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition,
-    TrackId, TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2, VectorPath,
+    Color, CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, Style,
+    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
+    VectorPath,
 };
 use noon_runtime::SceneInstance;
 
@@ -75,7 +76,7 @@ fn generic_transform_has_exact_semantic_endpoints_and_detached_render_geometry()
             from: from.clone(),
             to: to.clone(),
         },
-        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 
@@ -156,7 +157,7 @@ fn steady_generic_transform_reuses_path_allocations() {
         object,
         property: Property::Transform,
         values: TrackValues::Object { from, to },
-        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 
@@ -201,7 +202,7 @@ fn direct_seek_and_forward_playback_match_for_generic_transform() {
         object,
         property: Property::Transform,
         values: TrackValues::Object { from, to },
-        timing: TrackTiming::new(0.0, 2.0, Easing::EaseInOutCubic),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::EaseInOutCubic),
         time_map: CompositionTimeMap::identity(),
     });
     let compiled = CompiledScene::compile_objects(objects, &tracks).unwrap();
@@ -255,7 +256,7 @@ fn sequential_transforms_are_continuous_and_choose_new_pair_at_boundary() {
             from: a.clone(),
             to: b.clone(),
         },
-        timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
     tracks.push(TrackDefinition {
@@ -266,7 +267,7 @@ fn sequential_transforms_are_continuous_and_choose_new_pair_at_boundary() {
             from: b.clone(),
             to: c.clone(),
         },
-        timing: TrackTiming::new(1.0, 1.0, Easing::Linear),
+        timing: TrackTiming::new(1.0, 1.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 
@@ -313,7 +314,7 @@ fn narrow_tracks_override_corresponding_generic_transform_channels() {
         object,
         property: Property::Transform,
         values: TrackValues::Object { from, to },
-        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
     tracks.push(TrackDefinition {
@@ -324,7 +325,7 @@ fn narrow_tracks_override_corresponding_generic_transform_channels() {
             from: Vec2::ZERO,
             to: Vec2::new(20.0, 0.0),
         },
-        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
     tracks.push(TrackDefinition {
@@ -332,7 +333,7 @@ fn narrow_tracks_override_corresponding_generic_transform_channels() {
         object,
         property: Property::Opacity,
         values: TrackValues::Scalar { from: 1.0, to: 0.8 },
-        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 
@@ -364,7 +365,7 @@ fn generic_path_transform_does_not_reuse_reveal_channel() {
         object,
         property: Property::Transform,
         values: TrackValues::Object { from, to },
-        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
     tracks.push(TrackDefinition {
@@ -372,7 +373,7 @@ fn generic_path_transform_does_not_reuse_reveal_channel() {
         object,
         property: Property::Reveal,
         values: TrackValues::Scalar { from: 0.0, to: 1.0 },
-        timing: TrackTiming::new(0.0, 4.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 4.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 
@@ -410,7 +411,7 @@ fn rotation_transform_interpolates_source_and_target_points_not_angle() {
             from: from.clone(),
             to: to.clone(),
         },
-        timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 

@@ -1,7 +1,7 @@
 use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    Color, Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId, TrackTiming,
-    TrackValues, Transform2D, TransformTrackEndpoint, Vec2, VectorPath,
+    Color, GeometryRef, ObjectId, Property, RateFunction, Style, TrackDefinition, TrackId,
+    TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2, VectorPath,
 };
 use noon_render_wgpu::FramePreparer;
 use noon_runtime::SceneInstance;
@@ -74,7 +74,7 @@ fn assert_steady_transform(stroke_mode: noon_core::StrokeWidthMode) {
         object,
         property: Property::Transform,
         values: TrackValues::Object { from, to },
-        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
         time_map: Default::default(),
     }];
     let mut instance =
@@ -125,7 +125,7 @@ fn sequential_path_pair_transition_prepares_new_geometry_once() {
                 from: a,
                 to: b.clone(),
             },
-            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
             time_map: Default::default(),
         },
         TrackDefinition {
@@ -133,7 +133,7 @@ fn sequential_path_pair_transition_prepares_new_geometry_once() {
             object,
             property: Property::Transform,
             values: TrackValues::Object { from: b, to: c },
-            timing: TrackTiming::new(1.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(1.0, 1.0, RateFunction::Linear),
             time_map: Default::default(),
         },
     ];

@@ -1,7 +1,7 @@
 use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId,
-    TrackTiming, TrackValues, Transform2D, Vec2,
+    CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, Style, TrackDefinition,
+    TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
 };
 use noon_runtime::{EvaluationStats, SceneInstance};
 
@@ -29,7 +29,7 @@ fn completed_long_timeline_history_is_not_rescanned_on_forward_frames() {
                 from: Vec2::new(x, 0.0),
                 to: Vec2::new(x + 1.0, 0.0),
             },
-            timing: TrackTiming::new(index as f64, 0.5, Easing::Linear),
+            timing: TrackTiming::new(index as f64, 0.5, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
     }

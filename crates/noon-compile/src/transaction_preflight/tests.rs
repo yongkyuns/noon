@@ -3,7 +3,7 @@
 // Fixtures originate in shared semantic lowering. Preflight and the sequential
 // compiler oracle both consume the typed execution mutation vocabulary.
 use noon_core::{
-    Easing, GeometryRef, ObjectId, SemanticObjectState, SemanticStore, StoredGeometry, Style,
+    GeometryRef, ObjectId, RateFunction, SemanticObjectState, SemanticStore, StoredGeometry, Style,
     TrackDefinition, TrackId, TrackTiming, TrackValues,
 };
 
@@ -47,7 +47,7 @@ fn add_position(compiled: &mut CompiledScene, object: ObjectId, id: u64) -> Trac
                 from: noon_core::Vec2::ZERO,
                 to: noon_core::Vec2::ONE,
             },
-            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
             time_map: noon_core::CompositionTimeMap::identity(),
         }))
         .unwrap();
@@ -166,9 +166,9 @@ fn mapped_presence_preflight_orders_by_compiled_event_boundary() {
             from: false,
             to: true,
         },
-        timing: TrackTiming::new(0.0, 6.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 6.0, RateFunction::Linear),
         time_map: noon_core::CompositionTimeMap::from_steps(vec![
-            noon_core::CompositionTimeMapStep::new(0.5, 0.5, Easing::Linear),
+            noon_core::CompositionTimeMapStep::new(0.5, 0.5, RateFunction::Linear),
         ]),
     };
     let transaction =
@@ -199,7 +199,7 @@ fn unsupported_mapped_presence_transaction_is_atomic() {
                 from: false,
                 to: true,
             },
-            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
             time_map: noon_core::CompositionTimeMap::from_steps(vec![
                 noon_core::CompositionTimeMapStep::new(
                     0.0,
@@ -230,7 +230,7 @@ fn remove_recreate_and_track_replacement_use_only_transaction_overlay() {
             from: noon_core::Vec2::ONE,
             to: noon_core::Vec2::new(2.0, 2.0),
         },
-        timing: TrackTiming::new(1.0, 1.0, Easing::Linear),
+        timing: TrackTiming::new(1.0, 1.0, RateFunction::Linear),
         time_map: noon_core::CompositionTimeMap::identity(),
     };
     let stats = compiled
@@ -265,7 +265,7 @@ fn removing_original_owner_preserves_a_track_moved_earlier_in_the_batch() {
             from: noon_core::Vec2::ZERO,
             to: noon_core::Vec2::ONE,
         },
-        timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         time_map: noon_core::CompositionTimeMap::identity(),
     };
     let prefix = [
@@ -366,7 +366,7 @@ fn sparse_preflight_agrees_with_sequential_compiler_validation() {
                 timing: if presence {
                     TrackTiming::instant((random >> 48) as f64 % 4.0)
                 } else {
-                    TrackTiming::new(0.0, 1.0, Easing::Linear)
+                    TrackTiming::new(0.0, 1.0, RateFunction::Linear)
                 },
                 time_map: noon_core::CompositionTimeMap::identity(),
             };
