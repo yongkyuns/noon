@@ -98,25 +98,49 @@ Manim Community v0.21.x is the compatibility oracle for supported common 2D Pyth
 
 ## 2. Architecture in one picture
 
-![Component composition: SemanticStore contents, ExecutionSession with nested SceneInstance, spatial and identity indexes, and retained renderer resources.](diagrams/overview.svg)
+![Horizontal architecture: shared authoring operations populate the semantic scene, lowering produces execution data, runtime publishes changes to the renderer, and aligned host services supply input/ticks and device/presentation.](diagrams/overview.svg)
 
-[D2 source](diagrams/overview.d2) · [Domain projections](#domain-projections).
+[D2 source](diagrams/overview.d2) · [Domain projections](#domain-projections) · [Current crate ownership](#current-implementation-ownership).
 
-This view shows current component composition, not a Cargo dependency graph.
-Rust authoring and Python/WASM handles reach `SemanticStore` through shared
-operations. `ExecutionSession` contains a `SceneInstance`, semantic/execution
-identity mappings, a spatial index and segment/callback coordination. The instance
-holds `CompiledScene`, evaluation machinery and effective `FrameState`.
-`noon-compile` supplies initial lowering and local publication preparation; its
-output is installed into that existing execution structure, not a parallel runtime.
+**Reading the view.** Solid arrows follow scene/execution data from left to right;
+dashed arrows show platform services. The two lower boxes are responsibilities of
+each native/browser host, not additional engine stages or two new crates. This is
+a component/data view, not a Cargo dependency graph, worker deployment map or a
+complete call graph. Live-mutation feedback and callback ordering are expanded in
+the focused views below instead of adding long return arrows to this overview.
 
-The rendering arrow abbreviates `RendererPublication`: a borrowed frame, accumulated
-changes, painter order and immutable resource lookups in direct Rust execution.
-A genuine Python worker boundary transports a derived representation instead.
-The separation lets authoring preserve identity and relationships, execution update
-only affected values/dependencies, and rendering retain unchanged geometry/text.
-Platform hosts, live transactions and callback ordering have separate views below;
-they are omitted here rather than drawn as long feedback arrows.
+| Component | Composition and interface |
+| --- | --- |
+| Authoring | Rust `Scene`/`Mobject` APIs and Python/WASM handles invoke shared semantic operations. Frontends provide language syntax and argument conversion. |
+| Semantic scene | `SemanticStore` holds object/family identity, membership, authored transforms/paint, animation trees, signals/updaters and content-resource references. Lowering reads these declarations without replacing their authored identity. |
+| Lowering | `noon-compile` derives the execution projection, slot mappings, tracks and resource lookups, and prepares local publication changes. `CompiledScene` labels the main compiled-data handoff; it is not the entire future host program. |
+| Runtime + session | `ExecutionSession` coordinates a `SceneInstance`, identity mappings, spatial indexing and segment/callback gates. The instance contains compiled data, evaluation machinery and effective `FrameState`. |
+| Renderer | `noon-render-wgpu` consumes published state and changes while retaining instance buffers, geometry meshes, glyph resources and painter-ordered draw work. |
+
+**The publication interface.** `FrameEpoch + changes` abbreviates the
+`RendererPublication` boundary: a borrowed frame, accumulated changes, painter
+order and immutable resource lookups in direct Rust execution. `FrameEpoch`
+identifies a coherent published effective state and references its compatible
+`SceneRevision`/`ExecutionRevision`; it is neither the delta payload itself nor an
+extra processing stage. A genuine Python worker boundary transports derived
+output instead. The direct native and single-context WASM paths remain typed
+in-process.
+
+**Platform integration.** The host loop supplies normalized input and frame
+wake/tick delivery; the runtime retains authored-time and completion policy. The
+surface adapter supplies device/surface access and handles acquisition,
+submission, presentation and recovery. These are two aspects of the same host
+integration (`noon-native`, or `noon-web` plus browser glue). Their placement
+beneath runtime and renderer expresses the service connection, not ownership of
+engine state. Actual worker placement is shown in [Browser topology](#11-browser-topology).
+
+**Why these boundaries exist.** Authored structure preserves identities and
+relationships while lowering selects an execution representation. Active drivers
+can update effective values without rewriting authored declarations every frame;
+rendering can reuse geometry/text residency when only properties change.
+Persistent edits still pass through staged semantic preparation and coherent
+publication. This separates language ergonomics, execution dependencies and GPU
+lifetime without turning each representation into another authoring model.
 
 There are four engine layers and exactly one authority at each layer:
 

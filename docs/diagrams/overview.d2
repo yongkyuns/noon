@@ -1,48 +1,103 @@
-# Component composition; arrows are data flow, not Cargo dependencies.
-vars: {d2-config: {layout-engine: elk; theme-id: 0}}
-direction: right
+# Component/data view; interface details and rationale are in README.md and docs/architecture.md.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    pad: 22
+  }
+}
 style.fill: "#FFFFFF"
 classes: {
-  component: {style: {font-size: 20; bold: false; font-color: "#263445"; fill: "#FFFFFF"; stroke: "#AEBBCB"; border-radius: 5; stroke-width: 1}}
-  group: {style: {font-size: 22; bold: true; font-color: "#263445"; fill: "#F1F5F9"; stroke: "#AEBBCB"; border-radius: 7; stroke-width: 1}}
-}
-grid-columns: 3
-horizontal-gap: 154
-model: "SemanticStore\nnoon-core" {
-  class: group
-  grid-columns: 1
-  grid-gap: 18
-  objects: "Objects & families\nidentity · membership" {class: component; width: 246; height: 60}
-  state: "Transforms & paint\nauthored values" {class: component; width: 246; height: 60}
-  animation: "Animation trees\ncomposition · targets" {class: component; width: 246; height: 60}
-  signals: "Signals & updaters\nbindings · callbacks" {class: component; width: 246; height: 60}
-  resources: "Content resources\ngeometry · text · fonts" {class: component; width: 246; height: 60}
-}
-session: "ExecutionSession\nnoon" {
-  class: group
-  grid-columns: 1
-  grid-gap: 18
-  mapping: "Identity / slot map" {class: component; width: 290; height: 50}
-  runtime: "SceneInstance · noon-runtime" {
-    class: group
-    style.fill: "#E7EDF4"
-    grid-columns: 1
-    grid-gap: 12
-    plan: "CompiledScene\nslots · tracks · resources" {class: component; width: 262; height: 70}
-    drivers: "Timeline + reactive" {class: component; width: 262; height: 50}
-    frame: "FrameState\neffective values" {class: component; width: 262; height: 70}
+  component: {
+    width: 186
+    height: 86
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#8394AC"
+      stroke-width: 2
+      border-radius: 8
+      font-size: 19
+      font-color: "#172C47"
+      bold: false
+    }
   }
-  spatial: "Spatial index" {class: component; width: 290; height: 50}
-  gates: "Segment / callback gates" {class: component; width: 290; height: 50}
+  hidden: {
+    width: 186
+    height: 86
+    label: ""
+    style: {fill: transparent; stroke: transparent}
+  }
+  flow: {
+    style: {
+      stroke: "#365E94"
+      stroke-width: 2
+      font-size: 14
+      font-color: "#43566E"
+      italic: false
+    }
+  }
+  host: {
+    style: {
+      stroke: "#718198"
+      stroke-width: 2
+      stroke-dash: 5
+      font-size: 14
+      font-color: "#43566E"
+      italic: false
+    }
+  }
 }
-renderer: "Rendering\nnoon-render-wgpu" {
-  class: group
-  grid-columns: 1
-  grid-gap: 18
-  instances: "Instance buffers\ntransform · paint" {class: component; width: 234; height: 70}
-  meshes: "Mesh cache\nprepared geometry" {class: component; width: 234; height: 70}
-  atlas: "Glyph atlas\ntext rendering" {class: component; width: 234; height: 70}
-  batches: "Draw batches\npainter order" {class: component; width: 234; height: 70}
+
+# Fixed five-column grid: the first row is the data path. Empty cells in
+# row two keep the two host responsibilities directly below their consumers.
+grid-columns: 5
+horizontal-gap: 126
+vertical-gap: 114
+
+# D2 fills this five-column grid column-first. Each pair below is a
+# component on the first row, then its aligned cell on the host row.
+frontends: {
+  class: component
+  label: "Authoring\nRust API · Python"
+  style.fill: "#F2F5F9"
 }
-model -> session: "noon-compile\nlower / prepare" {style: {font-size: 18; stroke-width: 2; stroke: "#6B7F94"; font-color: "#4C5D70"}}
-session -> renderer: "publish\nframe + changes" {style: {font-size: 18; stroke-width: 2; stroke: "#6B7F94"; font-color: "#4C5D70"}}
+spacer1.class: hidden
+semantic: {
+  class: component
+  label: "Semantic scene\nObjects · families"
+  style.fill: "#EDF4FF"
+}
+spacer2.class: hidden
+compile: {
+  class: component
+  label: "Lowering\nTracks · reactive plan"
+  style.fill: "#FFF7E8"
+}
+spacer3.class: hidden
+runtime: {
+  class: component
+  label: "Runtime + session\nEffective state"
+  style.fill: "#F4F0FB"
+}
+host_loop: {
+  class: component
+  label: "Host loop\nNative / browser"
+  style.fill: "#F2F5F9"
+}
+renderer: {
+  class: component
+  label: "Renderer\nRetained GPU state"
+  style.fill: "#EAF7F4"
+}
+host_surface: {
+  class: component
+  label: "Surface adapter\nWindow / canvas"
+  style.fill: "#F2F5F9"
+}
+
+frontends -> semantic: "semantic ops" {class: flow}
+semantic -> compile: "declarations" {class: flow}
+compile -> runtime: "CompiledScene" {class: flow}
+runtime -> renderer: "FrameEpoch\n+ changes" {class: flow}
+host_loop -> runtime: "input / tick" {class: host}
+host_surface -> renderer: "device / present" {class: host}

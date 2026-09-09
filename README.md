@@ -6,24 +6,23 @@ The project treats Manim's common 2D authoring semantics as a cross-language con
 
 ## Architecture
 
-Rust `Scene`/`Mobject` and Python/WASM handles invoke shared authoring operations.
-The component view below follows the resulting state into execution and rendering:
+Rust APIs and Python wrappers invoke shared authoring operations. The main data
+path runs left to right; platform services enter directly beneath their consumers.
 
-![SemanticStore contents lower into an ExecutionSession containing a SceneInstance, identity mapping, spatial index and completion gates; published frame changes feed retained rendering.](docs/diagrams/overview.svg)
+![Horizontal architecture: authoring feeds the semantic scene, lowering produces CompiledScene, runtime publishes frame changes to the renderer, and host services supply input/ticks and device/presentation.](docs/diagrams/overview.svg)
 
 [D2 source](docs/diagrams/overview.d2) · [Domain projections](docs/architecture.md#domain-projections) · [Current crate ownership](docs/architecture.md#current-implementation-ownership) · [Python worker topology](docs/architecture.md#host-language-or-multi-worker-topology).
 
-Nesting shows composition; arrows show data flow, not crate dependencies.
-`noon-compile` derives slot mappings, tracks and resource projections.
-`ExecutionSession` coordinates the existing `SceneInstance`; its compiled data is
-kept alongside effective `FrameState`, while rendering retains meshes, glyphs and
-instance buffers. This separates authored structure, time-varying values and GPU
-residency so a property change need not rebuild content.
+**Solid arrows** follow scene/execution data. The semantic scene holds authored
+state; lowering derives execution data; the runtime maintains effective values;
+the renderer retains GPU resources. **Dashed arrows** show two responsibilities
+of each native/browser host, not extra engine stages or separate crates.
 
-Native and direct single-context Rust/WASM hosts consume a typed
-`RendererPublication` (frame, changes and resource references). The optional Python
-worker path transports derived output instead; platform placement and callbacks
-are expanded in the linked detail views.
+`FrameEpoch + changes` labels the runtime-to-renderer interface, not another
+processing block. Direct Rust/native and single-context Rust/WASM use a borrowed
+`RendererPublication`; the Python worker path transports derived output across
+its actual context boundary. [The architecture guide](docs/architecture.md#2-architecture-in-one-picture)
+explains the components, interfaces and reasons for this separation.
 
 Key invariants:
 
