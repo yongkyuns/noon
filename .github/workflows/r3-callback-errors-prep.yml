@@ -1,0 +1,129 @@
+name: R3 callback boundary qualification (development only)
+on:
+  push:
+    branches: [codex/1292-r3-callback-errors-prep]
+permissions:
+  contents: write
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      BASE: 0eca24ef7c74478d0810332179a9197f19a1c39c
+      PRODUCT_BRANCH: codex/1292-r3-callback-errors
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Assemble only the six product files on the pinned master
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/callback-input" "$RUNNER_TEMP/callback-evidence"
+          cp scripts/r3-callback-errors-prep.py "$RUNNER_TEMP/callback-input/apply.py"
+          cp crates/noon-web/src/semantic_execution_player/callback_error_tests.rs "$RUNNER_TEMP/callback-input/"
+          cp web/python/test_noon_callback_errors_wasm.py "$RUNNER_TEMP/callback-input/"
+          git checkout --detach "$BASE"
+          test "$(git rev-parse HEAD)" = "$BASE"
+          python3 "$RUNNER_TEMP/callback-input/apply.py"
+          cp "$RUNNER_TEMP/callback-input/callback_error_tests.rs" crates/noon-web/src/semantic_execution_player/
+          cp "$RUNNER_TEMP/callback-input/test_noon_callback_errors_wasm.py" web/python/
+          cargo fmt --all
+          python3 - <<'PY'
+          import subprocess
+          expected = {
+              'crates/noon-web/src/authoring_error.rs',
+              'crates/noon-web/src/semantic_execution_player.rs',
+              'crates/noon-web/src/semantic_execution_player/callback_error_tests.rs',
+              'web/python/_manim_updaters.py',
+              'web/python/test_noon_callback_errors_wasm.py',
+              'scripts/typed-authoring-errors-smoke.mjs',
+          }
+          changed = set(subprocess.check_output(['git','diff','--name-only'], text=True).splitlines())
+          changed |= set(subprocess.check_output(['git','ls-files','--others','--exclude-standard'], text=True).splitlines())
+          assert changed == expected, (changed, expected)
+          subprocess.run(['git','add','--',*sorted(expected)], check=True)
+          PY
+          git diff --cached --check
+          git config user.name 'Noon qualification bot'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: retain callback transaction failures through WASM and Python'
+          git rev-parse HEAD HEAD^{tree} HEAD^ > "$RUNNER_TEMP/callback-evidence/revisions.txt"
+          git diff "$BASE" HEAD > "$RUNNER_TEMP/callback-evidence/product.patch"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/callback-evidence/source.tar.gz"
+      - name: Restore native Cargo sources
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - name: Focused native callback rejection and recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p noon-web --all-features --lib callback_error_tests -- --nocapture 2>&1 | tee "$RUNNER_TEMP/callback-evidence/native-focused.log"
+      - name: Common native fast gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh fast "$BASE" 2>&1 | tee "$RUNNER_TEMP/callback-evidence/native-fast.log"
+      - name: Web and Python preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh 2>&1 | tee "$RUNNER_TEMP/callback-evidence/preflight.log"
+      - name: Build actual dev WASM with the existing qualified action
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          preflight: "false"
+          cache-ref: ${{ env.BASE }}
+      - name: Install browser test dependencies
+        shell: bash
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Existing typed boundary runner including callback transactions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/typed-authoring-errors-smoke.mjs 2>&1 | tee "$RUNNER_TEMP/callback-evidence/boundary.log"
+      - name: Existing Manim authoring and continuation regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/manim-compat-smoke.mjs 2>&1 | tee "$RUNNER_TEMP/callback-evidence/manim.log"
+      - name: Retain exact code and actual runtime evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/callback-evidence"
+          git status --short > "$RUNNER_TEMP/callback-evidence/status.txt"
+          rustc --version > "$RUNNER_TEMP/callback-evidence/toolchain.txt"
+          node --version >> "$RUNNER_TEMP/callback-evidence/toolchain.txt"
+          if test -f Cargo.lock; then cp Cargo.lock "$RUNNER_TEMP/callback-evidence/"; fi
+          if test -d web/pkg; then cp -r web/pkg "$RUNNER_TEMP/callback-evidence/pkg"; fi
+          if test -f web/ci-artifact.json; then cp web/ci-artifact.json "$RUNNER_TEMP/callback-evidence/"; fi
+          if test -d browser-smoke-artifacts/typed-authoring-errors; then cp -r browser-smoke-artifacts/typed-authoring-errors "$RUNNER_TEMP/callback-evidence/browser"; fi
+          if test -f web/pkg/noon_web_bg.wasm; then sha256sum web/pkg/noon_web_bg.wasm > "$RUNNER_TEMP/callback-evidence/wasm-sha256.txt"; fi
+      - name: Upload evidence before publication
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: r3-callback-boundary-qualification
+          path: ${{ runner.temp }}/callback-evidence
+          if-no-files-found: error
+          retention-days: 3
+      - name: Publish the same qualified product commit without force or merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git diff --name-only)"
+          test -z "$(git diff --cached --name-only)"
+          test "$(git rev-parse HEAD^)" = "$BASE"
+          git push origin "HEAD:refs/heads/$PRODUCT_BRANCH"
