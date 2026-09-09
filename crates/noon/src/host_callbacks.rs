@@ -219,6 +219,39 @@ impl RustHostCallbackContext<'_> {
         effective_style_with_stroke_color(self.target_state().style, red, green, blue, alpha)
     }
 
+    /// Apply one family paint operation atomically to this ordered effective overlay.
+    pub fn paint_family(
+        &mut self,
+        family: &crate::MobjectFamily,
+        operation: crate::FamilyPaint,
+    ) -> Result<(), crate::FamilyCallbackPaintError> {
+        let token = self.overlay.token();
+        let rows = self.session.required_callback_family_read(
+            &family.integration_store().borrow(),
+            token,
+            family.node_id(),
+        )?;
+        for (node, properties) in rows {
+            self.overlay.cache_read_object(node, properties);
+        }
+        let changes = family.prepare_callback_paint(
+            token.publication().scene_revision(),
+            operation,
+            |node| {
+                self.overlay
+                    .object(node)
+                    .map(|p| p.style)
+                    .ok_or(ExecutionSessionCallbackError::UnknownObject(node))
+            },
+        )?;
+        for (node, style) in changes {
+            self.overlay
+                .set_style(node, style)
+                .expect("all family rows were read before writing");
+        }
+        Ok(())
+    }
+
     pub fn set_target_style(&mut self, style: Style) -> Result<(), ExecutionSessionCallbackError> {
         self.overlay.set_style(self.target, style)
     }
