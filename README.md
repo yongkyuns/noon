@@ -1,42 +1,26 @@
 # Noon
 
-Noon is a high-performance 2D animation system targeting **Manim-compatible Python authoring** on top of a deterministic, language-neutral Rust/WebGPU execution core.
+Noon is a **Rust-native 2D animation and interactive graphics engine** with Manim-compatible Python authoring, built around a shared semantic scene, a deterministic runtime, and a retained GPU renderer.
 
-The project treats Manim's common 2D authoring semantics as a cross-language contract: Python should be source-compatible where Noon can reproduce the behavior without a fundamental design or performance regression, while Rust and future frontends expose the same concepts and observable semantics idiomatically. Python adapters normalize syntax and types; they do not implement a second animation engine.
+Rust and Python expose the same observable scene semantics through shared Rust operations. Python supplies Manim-compatible syntax and arbitrary host callbacks where they are genuinely required; it does not implement a second scene, scheduler, runtime, or renderer.
 
 ## Architecture
 
-Rust APIs and Python wrappers invoke shared authoring operations. The main data
-path runs left to right; platform services enter directly beneath their consumers.
+The main data path is intentionally small. Focused diagrams carry the detailed publication, locality, callback, deployment, and ownership contracts instead of crowding them into one picture.
 
 ![Horizontal architecture: authoring feeds the semantic scene, lowering produces CompiledScene, runtime publishes frame changes to the renderer, and host services supply input/ticks and device/presentation.](docs/diagrams/overview.svg)
 
-[D2 source](docs/diagrams/overview.d2) · [Domain projections](docs/architecture.md#domain-projections) · [Current crate ownership](docs/architecture.md#current-implementation-ownership) · [Python worker topology](docs/architecture.md#host-language-or-multi-worker-topology).
+[D2 source](docs/diagrams/overview.d2) · [Domain projections](docs/architecture.md#domain-projections) · [Revision and lifetime model](docs/architecture.md#identity-generations-revisions-versions-and-sequences) · [Locality propagation](docs/architecture.md#runtime-complexity-contract) · [Callback transaction](docs/architecture.md#ordered-transactional-host-callback-overlay) · [Current ownership](docs/architecture.md#current-implementation-ownership) · [Python worker topology](docs/architecture.md#host-language-or-multi-worker-topology).
 
-**Solid arrows** follow scene/execution data. The semantic scene holds authored
-state; lowering derives execution data; the runtime maintains effective values;
-the renderer retains GPU resources. **Dashed arrows** show two responsibilities
-of each native/browser host, not extra engine stages or separate crates.
+The overview separates responsibilities rather than advertising another framework:
 
-`FrameEpoch + changes` labels the runtime-to-renderer interface, not another
-processing block. Direct Rust/native and single-context Rust/WASM use a borrowed
-`RendererPublication`; the Python worker path transports derived output across
-its actual context boundary. [The architecture guide](docs/architecture.md#2-architecture-in-one-picture)
-explains the components, interfaces and reasons for this separation.
+- **Authoring** supplies Rust/Python ergonomics and invokes shared semantic operations.
+- **Semantic scene** (`SemanticStore`) owns authored identity, structure, declarations, and persistent state.
+- **Lowering** (`noon-compile`) derives replaceable execution data such as slots, tracks, reactive dependencies, and resource projections.
+- **Runtime/session** owns effective time-varying state, ordering, completion, wake/sleep, and coherent publication.
+- **Renderer** owns retained GPU resources and dirty draw work only; native/browser hosts own platform lifecycle.
 
-Key invariants:
-
-- one Semantic Scene is the only authored scene authority;
-- high-level object, lifecycle, layout, animation, signal, updater, and interaction semantics are implemented once and shared by every frontend;
-- Python wrappers hold handles into shared semantic state rather than duplicating scene state, timing, layout, or scheduling logic;
-- lowering specializes immutable, timeline, native-reactive, and host-dynamic dependencies independently;
-- static/prepared geometry and resources remain retained and are not rebuilt for unrelated property changes;
-- local semantic/runtime changes remain local through execution and rendering;
-- arbitrary Python callbacks are explicit host-dynamic slots and do not put Python on the normal frame path;
-- playback is deterministic and supports arbitrary seek/rewind wherever the program semantics permit it;
-- serialization is a codec, not another scene architecture.
-
-The single authoritative architecture and roadmap is [`docs/architecture.md`](docs/architecture.md). If code or an older document conflicts with it, `docs/architecture.md` wins. Noon is greenfield: migration compatibility is not a reason to preserve obsolete internal architecture.
+Normal native and single-context Rust/WASM engine boundaries are typed in-process Rust boundaries. Serialization is reserved for explicit codecs or genuine cross-context transport. The [architecture guide](docs/architecture.md) is the single normative source for the contracts and roadmap.
 
 ## Authoring
 
@@ -81,41 +65,13 @@ assert_eq!(session.frame().objects.len(), 2);
 
 Constructors are scene-bound factories, `Scene::add` attaches the existing node, and handle queries return errors for stale identities. Copies allocate independent nodes in the same store. See [`shared_authoring.rs`](crates/noon/examples/shared_authoring.rs) for typed lowering and runtime execution.
 
-### Ordinary API versus integration
+### Live authoring and integration boundaries
 
-The crate root and `noon::prelude` deliberately export authoring handles, values,
-live operations, completion and errors. Implementation modules and blanket
-lower-layer exports are not public authoring APIs. `noon::integration` explicitly
-exposes the raw semantic/resource types and host/callback/renderer plumbing needed
-by adapters. `noon::diagnostics` is feature-gated debug/export access. None of these
-namespaces introduces another scene, runtime, scheduler or integration crate.
+The crate root and `noon::prelude` expose ordinary authoring handles, values, live operations, completion, and typed errors. `noon::integration` is the explicit raw semantic/resource and host plumbing boundary; `noon::diagnostics` is opt-in debug/export access. Neither namespace creates another scene or runtime.
 
-`Scene::revision()` reads the authored revision without mutable arena access.
-`Scene::geometry(ManimGeometryOptions)` constructs a detached specialized shape;
-after lowering, use `LiveSession::create_manim_geometry` instead. The
-[`shared_authoring` example](crates/noon/examples/shared_authoring.rs) shows
-construction, authored/effective queries, live edits and two logical completions
-using only ordinary public APIs. It is the direct Rust counterpart of
-[`live_affine_completion.py`](web/python/examples/live_affine_completion.py), which
-remains in the browser authoring qualification suite.
+After creating an execution session, `scene.live(&mut session)` applies supported persistent edits and animation/completion operations through the same staged semantic/execution publication path. Rust `Mobject` inspection reads authored/base state; live/effective queries read the latest coherent runtime state. Failed preparation leaves both authored and effective published state unchanged.
 
-Raw integration is deliberately named: `Scene::with_integration_store` accepts a
-shared arena; `Scene`, `Mobject` and `MobjectFamily` expose it through
-`integration_store()`. This is not a snapshot or a live-mutation shortcut. Release
-RefCell borrows before calling authoring/session APIs. Edits made outside coherent
-publication can stale the existing session; its identity/revision checks still
-reject them. A consumer that already made such an edit must explicitly discard
-and rebuild that session, not alter its revision bookkeeping. No old-name aliases
-are retained. The `RetainedScene` text adapter in `noon::integration` remains a
-transport-consumer facility owned for deletion by #959, not the ordinary Scene API.
-
-After creating a session, use `scene.live(&mut session)` for shared property edits, append-compatible membership changes, predeclared affine animations, and replacement with content already owned by the semantic store. Property and structural edits use `ExecutionSession::apply_semantic_transaction` to prepare semantic changes and typed execution publication together, so a failed edit leaves authored and live states unchanged.
-
-Rust uses `live.effective(&object)` or `live.effective_layout(&object)` for coherent runtime values; ordinary Rust `Mobject` inspection explicitly reads authored/base state. Python `get_center`, `width`, and `height` route through the same effective layout while its canonical context owns a live session, fall back to authored layout before bootstrap, and reject reads while that session is transferred.
-
-`live.complete_segment(segment)` in Rust and `live.complete()` in Python reconcile a supported affine endpoint into authored state before releasing its timeline driver, so later authored setters survive subsequent frames. Flat Parallel/Sequence compositions use the same prepared semantic transaction, shared schedule, runtime, and mapped completion barrier. Direct handle mutations after initial lowering make that session's scene revision stale. Live resource allocation, interleaved membership ordering, reactive-topology changes, instantaneous completion, overlapping-driver release, sequential duplicate-property drivers, and historical replay of unrecorded authored mutations remain unsupported. Original deterministic track intervals remain available for seek.
-
-Python geometry and text scenes, including the explicit `live_execution()` facade, execute from their shared semantic handles. The browser sends execution deltas across the actual worker boundary. The native and direct Rust/WASM paths remain typed in-process. Some Manim timeline and callback features still use migration code while their shared continuation contracts are completed. `PythonAuthoringClient.run` returns only a shared semantic execution descriptor; document exports are not authoring results.
+Raw integration-store access is deliberately not a live-mutation shortcut: edits outside coherent publication can stale a session and must be handled explicitly. See [`shared_authoring.rs`](crates/noon/examples/shared_authoring.rs) for the public typed path and `docs/architecture.md` for the authored/effective and publication contracts.
 
 Equivalent examples run through the native Rust renderer and the Python browser host:
 
@@ -123,44 +79,18 @@ Equivalent examples run through the native Rust renderer and the Python browser 
 | --- | --- | --- |
 | Geometry and text | [shared_text.rs](crates/noon-native/examples/shared_text.rs) | [shared_text.py](web/python/examples/shared_text.py) |
 | Live membership | [live_semantic_scene.rs](crates/noon-native/examples/live_semantic_scene.rs) | [live_semantic_scene.py](web/python/examples/live_semantic_scene.py) |
-| Affine animation | [live_affine_animation.rs](crates/noon-native/examples/live_affine_animation.rs) | [live_affine_animation.py](web/python/examples/live_affine_animation.py) |
-| Returning transform completion | [returning_transform.rs](crates/noon-native/examples/returning_transform.rs) | [returning_transform.py](web/python/examples/returning_transform.py) |
-| Mixed geometry/Text family fades | [mixed_family_fade.rs](crates/noon-native/examples/mixed_family_fade.rs) | [mixed_family_fade.py](web/python/examples/mixed_family_fade.py) |
-| Live masked placement | [live_masked_placement.rs](crates/noon-native/examples/live_masked_placement.rs) | [live_masked_placement.py](web/python/examples/live_masked_placement.py) |
-| Affine completion | [live_affine_completion.rs](crates/noon-native/examples/live_affine_completion.rs) | [live_affine_completion.py](web/python/examples/live_affine_completion.py) |
-| Sequential ordinary affine play | [ordinary_affine_play.rs](crates/noon-native/examples/ordinary_affine_play.rs) | [ordinary_affine_play.py](web/python/examples/ordinary_affine_play.py) |
-| Ordinary FadeIn/FadeOut lifecycle | [ordinary_fade_play.rs](crates/noon-native/examples/ordinary_fade_play.rs) | [ordinary_fade_synchronous_continuation.py](web/python/examples/ordinary_fade_synchronous_continuation.py) |
-| Ordinary affine callback continuation | [ordinary_affine_callback_continuation.rs](crates/noon-native/examples/ordinary_affine_callback_continuation.rs) | [ordinary_affine_callback_continuation.py](web/python/examples/ordinary_affine_callback_continuation.py) |
-| Scoped scalar callback reads | [ordinary_callback_sparse_reads.rs](crates/noon-native/examples/ordinary_callback_sparse_reads.rs) | [ordinary_callback_sparse_reads.py](web/python/examples/ordinary_callback_sparse_reads.py) |
-| Flat ordinary composition | [ordinary_composition_play.rs](crates/noon-native/examples/ordinary_composition_play.rs) | [ordinary_composition_play.py](web/python/examples/ordinary_composition_play.py) |
-| Flat ordinary composition continuation | [ordinary_composition_continuation.rs](crates/noon-native/examples/ordinary_composition_continuation.rs) | [ordinary_composition_continuation.py](web/python/examples/ordinary_composition_continuation.py) |
-| Sequential transform targets | [sequential_transform_targets.rs](crates/noon-native/examples/sequential_transform_targets.rs) | [sequential_transform_targets.py](web/python/examples/sequential_transform_targets.py) |
-| Point-correspondence and angular rotation | [ordinary_different_rotations.rs](crates/noon-native/examples/ordinary_different_rotations.rs) | [manim_parity_different_rotations.py](web/python/examples/manim_parity_different_rotations.py) |
-| Construct Circle/Square after a wait | [ordinary_live_primitive_construction.rs](crates/noon-native/examples/ordinary_live_primitive_construction.rs) | [ordinary_live_primitive_construction.py](web/python/examples/ordinary_live_primitive_construction.py) |
-| Affine Grow/Spin/Shrink lifecycle | [ordinary_affine_lifecycle.rs](crates/noon-native/examples/ordinary_affine_lifecycle.rs) | [manim_parity_affine_lifecycle.py](web/python/examples/manim_parity_affine_lifecycle.py) |
-| Nested Add/Wait, staggered Fade and re-entry | [ordinary_timed_composition.rs](crates/noon-native/examples/ordinary_timed_composition.rs) | [ordinary_timed_composition.py](web/python/examples/ordinary_timed_composition.py) |
-| Mixed scalar and object composition | [ordinary_mixed_scalar_composition.rs](crates/noon-native/examples/ordinary_mixed_scalar_composition.rs) | [ordinary_mixed_scalar_composition.py](web/python/examples/ordinary_mixed_scalar_composition.py) |
-| Family transform and restoring Indicate | [ordinary_family_transform_indicate.rs](crates/noon-native/examples/ordinary_family_transform_indicate.rs) | [ordinary_family_transform_indicate.py](web/python/examples/ordinary_family_transform_indicate.py) |
-| Forward vector Write / DrawBorderThenFill | [ordinary_draw_border_then_fill.rs](crates/noon-native/examples/ordinary_draw_border_then_fill.rs) | [ordinary_draw_border_then_fill.py](web/python/examples/ordinary_draw_border_then_fill.py) |
-| Scaled and translated fade lifecycle | [ordinary_affine_fade.rs](crates/noon-native/examples/ordinary_affine_fade.rs) | [ordinary_affine_fade.py](web/python/examples/ordinary_affine_fade.py) |
-| Scalar ValueTracker continuation | [ordinary_value_tracker_continuation.rs](crates/noon-native/examples/ordinary_value_tracker_continuation.rs) | [ordinary_value_tracker_continuation.py](web/python/examples/ordinary_value_tracker_continuation.py) |
-| Ordered property callbacks | [live_affine_callbacks.rs](crates/noon-native/examples/live_affine_callbacks.rs) | [live_affine_callbacks.py](web/python/examples/live_affine_callbacks.py) |
-| Shared callback paint | [live_callback_paint.rs](crates/noon-native/examples/live_callback_paint.rs) | [live_callback_paint.py](web/python/examples/live_callback_paint.py) |
-| Analytic Line endpoint callbacks | [live_line_match_callback.rs](crates/noon-native/examples/live_line_match_callback.rs) | [live_line_match_callback.py](web/python/examples/live_line_match_callback.py) |
-| Windowed Line rotation callbacks | [live_line_callback_rotation.rs](crates/noon-native/examples/live_line_callback_rotation.rs) | [renderer_observation_line_callbacks.py](web/python/examples/renderer_observation_line_callbacks.py) |
+| Ordinary affine playback | [ordinary_affine_play.rs](crates/noon-native/examples/ordinary_affine_play.rs) | [ordinary_affine_play.py](web/python/examples/ordinary_affine_play.py) |
+| Composition | [ordinary_composition_play.rs](crates/noon-native/examples/ordinary_composition_play.rs) | [ordinary_composition_play.py](web/python/examples/ordinary_composition_play.py) |
+| Ordered callbacks | [live_affine_callbacks.rs](crates/noon-native/examples/live_affine_callbacks.rs) | [live_affine_callbacks.py](web/python/examples/live_affine_callbacks.py) |
 | Content replacement | [live_content_switch.rs](crates/noon-native/examples/live_content_switch.rs) | [live_content_switch.py](web/python/examples/live_content_switch.py) |
+
+The complete qualification corpus lives under [`crates/noon-native/examples`](crates/noon-native/examples) and [`web/python/examples`](web/python/examples).
 
 Run a Rust example with `cargo run -p noon-native --example live_content_switch`, or paste its paired Python source into the playground. The shared browser smoke executes the published Python files and checks their rendered output.
 
-The callback examples run forward through compiler-selected barriers. The ordinary continuation pairs one affine transform with ordered transform/style updates and resumes authoring only after its exact endpoint publication. The broader callback example also includes a separate `dt` accumulator. Callback `set_color` and `set_fill` use the same shared Rust paint rules as ordinary authoring; callback `set_opacity` remains the independent object-composite property. Callbacks read phase-consistent object and scalar values and stage property writes for active callback targets. Analytic Line endpoint matching stages a transform and preserves source paint; its temporary endpoint operand cannot escape the callback phase. Family callbacks, structural callback edits, and seeking or looping opaque callbacks are not supported. A callback failure stops progression at the last coherent frame.
+The broader example corpus covers callback ordering, sparse reads, family operations, composition, transforms, text, and renderer behavior. Required host callbacks hold authored progress at their ordered barrier; deterministic segments do not require per-frame Python execution when no host-dynamic work is scheduled. Unsupported compatibility behavior remains explicit rather than silently approximated.
 
-The sequential transform examples use two preauthored target snapshots for one object. The second animation starts from the first animation's completed effective state. Overlapping writes still reject atomically. Repeated-target sequences involving content morphs, host updaters, or effects with precomputed family centers retain their existing restrictions until later activation can capture those dependencies safely.
-
-The slow callback example, `web/python/examples/slow_host_updater.py`, demonstrates required callback barriers: slow Python holds authored time until its ordered writes are ready. `node scripts/execution-worker-host-smoke.mjs` checks exact samples and final shared rendering over both worker transports. The browser main thread remains responsive; required callback results are never dropped to maintain frame rate.
-
-The API is intentionally mutable and interactive. The implementation is not forced to remain dynamic: predetermined animation lowers to compiled tracks, common reactive behavior lowers to a native dependency graph, and only semantics that genuinely require arbitrary host-language execution retain host callback slots.
-
-When exact Manim behavior would require a material architectural or performance regression, Noon should first look for a deterministic or native-reactive equivalent. If none exists, the incompatibility must be explicit rather than silently approximated.
+Current Phase A acceptance status is intentionally not duplicated here; use the [Phase A umbrella](https://github.com/yongkyuns/noon/issues/953) and the architecture guide for current ownership and invariants.
 
 ## Browser playground
 
@@ -198,9 +128,9 @@ The active implementation lives under `crates/`. Current responsibilities are:
 - `noon-web` — WASM/browser integration;
 - supporting geometry/text crates only where a real dependency or compilation boundary justifies them.
 
-`noon-ir` and the obsolete browser scene/execution mirrors have been deleted. Explicit codec/export and frontend cleanup remain tracked by #959 and #61. Serialization is reserved for explicit codecs and genuine cross-context transport; it is not an in-process engine boundary.
+`noon-ir`, migration scene/document models, and obsolete browser execution mirrors have been deleted. Module/crate normalization is complete: `SemanticStore` remains in `noon-core`, `CompiledScene` in `noon-compile`, effective execution in `noon-runtime`, and session orchestration in `noon`. Serialization remains only for explicit codecs and genuine cross-context transport.
 
-The [current ownership diagram](docs/architecture.md#current-implementation-ownership) distinguishes this implementation from the target crate responsibilities. `SemanticStore` remains in `noon-core`, `CompiledScene` in `noon-compile`, and execution-session orchestration in `noon`. The target boundary remains defined by `docs/architecture.md`; #960 tracks the remaining separation. Diagram sources and checked-in SVGs are refreshed with `python3 scripts/architecture_diagrams.py`; CI checks that they agree.
+The [current ownership diagram](docs/architecture.md#current-implementation-ownership) shows these settled responsibility boundaries. Remaining finite Phase A acceptance work is tracked from [#953](https://github.com/yongkyuns/noon/issues/953), rather than by reopening completed migration/module-normalization tracks. Diagram sources and checked-in SVGs are refreshed with `python3 scripts/architecture_diagrams.py`; CI checks that they agree.
 
 Crates should correspond to real dependency or compilation boundaries. Prefer modules over crates until an independent build/dependency/reuse boundary exists.
 
@@ -224,12 +154,12 @@ The architecture roadmap requires additional validation around single-authority 
 
 In order:
 
-1. one authoritative Semantic Scene and one lowering boundary;
-2. Manim-compatible Python ergonomics and semantics for the supported 2D surface;
-3. shared semantics across Python, Rust, and future frontends;
+1. one authoritative Semantic Scene and one typed lowering/publication boundary;
+2. first-class Rust authoring and execution on native and direct Rust/WASM targets;
+3. Manim-compatible Python ergonomics over the same shared semantics;
 4. unrestricted interactivity and mutability without imposing dynamic overhead on static content;
-5. deterministic correctness and direct-seek semantics where semantically possible;
-6. automatic specialization and strict locality for high realtime and offline-render performance;
+5. deterministic correctness, direct-seek semantics, and coherent authored/effective state;
+6. automatic specialization and strict locality through validation, execution, rendering, and GPU publication;
 7. explicit, measured deviations only where exact Manim behavior has a fundamental design or performance blocker.
 
 Compatibility is an API/semantic goal, not an implementation constraint: Noon does not copy Manim's renderer, internal point-cloud representation, Python-side scene engine, or Python-per-frame execution model.
