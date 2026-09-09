@@ -363,6 +363,30 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         self.assertFalse(hasattr(target, "_noon_updater_registration_history"))
         self.assertIs(circle._noon_updater_registrations[0], registration)
 
+    def test_copy_before_live_bootstrap_does_not_traverse_registration_backreferences(self):
+        import _manim_semantic_handles as semantic_handles
+
+        circle = identity_only_wrapper(compat.Circle)
+        scene = updaters._base.Scene()
+        scene.add(circle)
+        target_handle = object()
+        class Handle:
+            def cloneHandle(self):
+                return target_handle
+        circle._semantic_handle = Handle()
+        circle._semantic_handle_fresh = True
+        registration = updaters._UpdaterRegistration(circle, lambda m: None, None)
+        circle._noon_updaters = [registration.callback]
+        circle._noon_updater_registrations = [registration]
+        circle._noon_updater_registration_history = [registration]
+        self.assertIsNone(semantic_handles._live_mutation_context(circle))
+        copied = semantic_handles._copy_mobject(circle)
+        self.assertIs(copied._semantic_handle, target_handle)
+        self.assertFalse(hasattr(copied, "_noon_updaters"))
+        self.assertFalse(hasattr(copied, "_noon_updater_registrations"))
+        self.assertFalse(hasattr(copied, "_noon_updater_registration_history"))
+        self.assertIs(registration.mobject, circle)
+
     def test_only_active_callback_phase_masks_the_shared_handle(self) -> None:
         scene, mobject, context = self._mobject_and_context()
         import _manim_semantic_handles as semantic_handles
