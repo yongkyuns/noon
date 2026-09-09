@@ -58,7 +58,7 @@ jobs:
       - name: Run root-order acceptance against real native runtime
         run: |
           set -o pipefail
-          cargo test -p noon --no-default-features --test root_order_acceptance -- --nocapture 2>&1 | tee evidence/acceptance.log
+          cargo test -p noon --no-default-features --test root_order_acceptance --test root_order_transaction_regressions --no-fail-fast -- --nocapture 2>&1 | tee evidence/acceptance.log
       - name: Qualify existing architecture and Rust gates
         run: |
           set -o pipefail
@@ -73,8 +73,9 @@ jobs:
           mkdir -p evidence
           git diff --binary --full-index "$BASE_SHA" -- crates > evidence/candidate.patch
           cp crates/noon/tests/root_order_acceptance.rs evidence/root_order_acceptance.rs
+          cp crates/noon/tests/root_order_transaction_regressions.rs evidence/root_order_transaction_regressions.rs
           cp crates/noon-compile/src/semantic_lowering/root_order.rs evidence/root_order.rs
-          sha256sum evidence/root_order_acceptance.rs evidence/root_order.rs > evidence/source-sha256.txt
+          sha256sum evidence/*.rs > evidence/source-sha256.txt
           tar --exclude=.git --exclude=target --exclude=evidence -czf evidence/source.tar.gz .
       - name: Upload qualification evidence
         if: always()
