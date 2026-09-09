@@ -5431,9 +5431,9 @@ mod wasm {
             )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_set_translation(handle.semantic_mobject(), x, y)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveMoveToLayout)]
@@ -5782,9 +5782,9 @@ mod wasm {
             )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_shift(handle.semantic_mobject(), x, y)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         /// Create a complete detached family through the current live publication.
@@ -6011,9 +6011,9 @@ mod wasm {
             )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_set_scale(handle.semantic_mobject(), x, y)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveScale)]
@@ -6046,9 +6046,9 @@ mod wasm {
             )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_set_rotation(handle.semantic_mobject(), angle)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveRotate)]
