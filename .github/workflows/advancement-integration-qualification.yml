@@ -1,0 +1,155 @@
+name: Advancement integration qualification
+on:
+  push:
+    branches: [codex/1349-full-landing]
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: advancement-integration-qualification
+  cancel-in-progress: false
+env:
+  CARGO_BUILD_JOBS: '2'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout the existing production PR
+        uses: actions/checkout@v7
+        with:
+          ref: e4ce9125d45ddf9a35ccfb6180040643b56c3f0c
+          fetch-depth: 0
+      - name: Reconcile only the additive test assertion with landed master
+        run: |
+          git config user.name 'Noon development tooling'
+          git config user.email 'development@noon.invalid'
+          python3 - <<'PY'
+          from pathlib import Path
+          import ast, re, subprocess
+          old = 'e4ce9125d45ddf9a35ccfb6180040643b56c3f0c'
+          base = '406944f8a58218629c14ff247894b3fd2e8c471a'
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          assert git('rev-parse', 'HEAD') == old
+          assert not git('status', '--porcelain')
+          result = subprocess.run(['git', '-c', 'merge.conflictStyle=merge', 'merge', '--no-ff', '--no-commit', base])
+          assert result.returncode in (0, 1)
+          unresolved = set(git('diff', '--name-only', '--diff-filter=U').splitlines())
+          path = Path('scripts/typed-authoring-errors-smoke.mjs')
+          assert unresolved in (set(), {str(path)}), unresolved
+          text = path.read_text()
+          if unresolved:
+              pattern = r'^<<<<<<< [^\n]*\n(.*?)^=======\n(.*?)^>>>>>>> [^\n]*\n'
+              matches = list(re.finditer(pattern, text, flags=re.M | re.S))
+              assert len(matches) == 1
+              ours, theirs = matches[0].groups()
+              expected = 'assert.equal(report.python.advancement.length, 9);'
+              assert {ours.strip(), theirs.strip()} == {'', expected}, (ours, theirs)
+              text = re.sub(pattern, '  ' + expected + '\n', text, flags=re.M | re.S)
+          assert text.count('assert.equal(report.python.additionalTests, 10);') == 1
+          text = text.replace('assert.equal(report.python.additionalTests, 10);',
+                              'assert.equal(report.python.additionalTests, 11);')
+          path.write_text(text)
+          module = ast.parse(Path('web/python/test_noon_errors_wasm.py').read_text())
+          tests = [n.name for n in ast.walk(module) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name.startswith('test_')]
+          assert len(tests) == len(set(tests)) == 11, tests
+          assert 'test_invalid_first_wait_does_not_publish_a_player_and_retries' in tests
+          assert 'test_public_live_advance_projection_preserves_coercion_and_time_rules' in tests
+          subprocess.run(['cargo', 'fmt', '--all'], check=True)
+          subprocess.run(['git', 'add', 'crates', 'scripts/typed-authoring-errors-smoke.mjs', 'web/python'], check=True)
+          expected_files = {
+              'crates/noon-web/src/authoring_error.rs',
+              'crates/noon-web/src/canonical_authoring_scene.rs',
+              'crates/noon-web/src/semantic_execution_player.rs',
+              'scripts/typed-authoring-errors-smoke.mjs',
+              'web/python/_manim_live.py',
+              'web/python/test_noon_errors_wasm.py',
+          }
+          actual = set(git('diff', '--cached', '--name-only', base).splitlines())
+          assert actual == expected_files, actual
+          subprocess.run(['git', 'diff', '--cached', '--check'], check=True)
+          subprocess.run(['git', '-c', 'commit.gpgSign=false', 'commit', '-m',
+                          'fix: integrate typed advancement with first-wait and family callback regressions'], check=True)
+          assert git('show', '-s', '--format=%P', 'HEAD').split() == [old, base]
+          print('CANDIDATE', git('rev-parse', 'HEAD'), 'TREE', git('rev-parse', 'HEAD^{tree}'))
+          PY
+          mkdir -p "$RUNNER_TEMP/advance-evidence"
+          git rev-parse HEAD > "$RUNNER_TEMP/advance-evidence/head.txt"
+          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/advance-evidence/tree.txt"
+          printf '%s\n' 406944f8a58218629c14ff247894b3fd2e8c471a > "$RUNNER_TEMP/advance-evidence/base.txt"
+          git diff --binary 406944f8a58218629c14ff247894b3fd2e8c471a HEAD > "$RUNNER_TEMP/advance-evidence/patch.txt"
+          git archive --format=tar HEAD | gzip > "$RUNNER_TEMP/advance-evidence/source.tar.gz"
+          git push origin HEAD:refs/heads/codex/1349-integrated-candidate
+      - name: Retain the exact candidate before qualification
+        uses: actions/upload-artifact@v7
+        with:
+          name: advancement-integrated-source
+          path: ${{ runner.temp }}/advance-evidence/
+          retention-days: 3
+          if-no-files-found: error
+      - name: Reuse the original qualified dependency lock
+        uses: actions/download-artifact@v8
+        with:
+          name: r3-advancement-qualification
+          run-id: 34366396023
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/advance-input
+      - name: Record immutable input and prerequisites
+        run: |
+          test "$(head -1 "$RUNNER_TEMP/advance-input/product/revisions.txt")" = e4ce9125d45ddf9a35ccfb6180040643b56c3f0c
+          cp "$RUNNER_TEMP/advance-input/product/Cargo.lock" Cargo.lock
+          sha256sum Cargo.lock > "$RUNNER_TEMP/advance-evidence/lock-before.txt"
+          { git rev-parse HEAD HEAD^{tree}; rustup show; node --version; python3 --version; } > "$RUNNER_TEMP/advance-evidence/environment.txt"
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            Linux-cargo-sources-
+            provider-sources-Linux-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Run the integrated full gate and optimized release build
+        run: |
+          bash scripts/check.sh full 406944f8a58218629c14ff247894b3fd2e8c471a > "$RUNNER_TEMP/advance-evidence/full.log" 2>&1 || { tail -160 "$RUNNER_TEMP/advance-evidence/full.log"; exit 1; }
+          git diff --exit-code
+          sha256sum Cargo.lock > "$RUNNER_TEMP/advance-evidence/lock-after.txt"
+          diff "$RUNNER_TEMP/advance-evidence/lock-before.txt" "$RUNNER_TEMP/advance-evidence/lock-after.txt"
+          sha256sum web/pkg/noon_web_bg.wasm > "$RUNNER_TEMP/advance-evidence/release-package.txt"
+          tail -20 "$RUNNER_TEMP/advance-evidence/full.log"
+      - name: Build the diagnostic-enabled package for the existing fixture matrix
+        run: |
+          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh > "$RUNNER_TEMP/advance-evidence/dev-build.log" 2>&1 || { tail -160 "$RUNNER_TEMP/advance-evidence/dev-build.log"; exit 1; }
+          sha256sum web/pkg/noon_web_bg.wasm > "$RUNNER_TEMP/advance-evidence/dev-package.txt"
+      - name: Execute both additions and retained cases through real WASM and Pyodide
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+          node scripts/typed-authoring-errors-smoke.mjs > "$RUNNER_TEMP/advance-evidence/browser.log" 2>&1 || { tail -160 "$RUNNER_TEMP/advance-evidence/browser.log"; exit 1; }
+          node scripts/manim-compat-smoke.mjs > "$RUNNER_TEMP/advance-evidence/manim.log" 2>&1 || { tail -120 "$RUNNER_TEMP/advance-evidence/manim.log"; exit 1; }
+          git diff --exit-code
+      - name: Retain complete qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: advancement-integrated-full-qualification
+          path: |
+            ${{ runner.temp }}/advance-evidence/
+            browser-smoke-artifacts/typed-authoring-errors/
+            Cargo.lock
+          retention-days: 3
+          if-no-files-found: error
