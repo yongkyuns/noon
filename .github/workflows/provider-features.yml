@@ -8,7 +8,7 @@ on:
       - 'crates/**/Cargo.toml'
       - 'crates/noon/src/**'
       - 'crates/noon-typst/**'
-      - 'crates/noon-text-native/**'
+      - 'crates/noon-text/**'
       - 'fixtures/provider-consumer/**'
       - 'scripts/provider-features.py'
       - 'scripts/provider_features_test.py'

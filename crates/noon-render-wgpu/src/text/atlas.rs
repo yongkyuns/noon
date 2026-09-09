@@ -5,11 +5,11 @@
 //! This crate deliberately stops at texture ownership, deterministic placement,
 //! and uploads. It does not decide scene painter order, create text pipelines, or
 //! interpret layout semantics. Those remain renderer concerns built on top of the
-//! retained `TextResource` and `noon-text-raster` contracts.
+//! retained `TextResource` and `noon-text` contracts.
 
 use std::collections::HashMap;
 
-use noon_text_raster::{GlyphRaster, GlyphRasterFormat, GlyphRasterKey};
+use noon_text::raster::{GlyphRaster, GlyphRasterFormat, GlyphRasterKey};
 
 pub const DEFAULT_GLYPH_ATLAS_EXTENT: u32 = 2048;
 pub const GLYPH_ATLAS_GUTTER: u32 = 1;

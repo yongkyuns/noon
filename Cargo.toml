@@ -9,7 +9,6 @@ members = [
     "crates/noon-native",
     "crates/noon-web",
     "crates/noon-typst",
-    "crates/noon-text-native",
-    "crates/noon-text-raster",
+    "crates/noon-text",
 ]
 resolver = "2"

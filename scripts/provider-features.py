@@ -51,14 +51,14 @@ def check_graph(config: str, text: str) -> set[str]:
         features.setdefault(name, set()).update(filter(None, enabled.split(",")))
     required = set(COMMON)
     if config in {"native-text", "native-bundled", "product"}:
-        required |= {"noon-text-native", "swash"}
+        required |= {"noon-text", "swash"}
     if config in {"typst", "product"}:
         required |= {"noon-typst", "typst-library", "typst-layout"}
     if config in {"native-bundled", "product"}:
         required.add("typst-assets")
     forbidden = set()
     if config in {"minimal", "typst"}:
-        forbidden.add("noon-text-native")
+        forbidden.add("noon-text")
     if config == "minimal":
         forbidden.add("swash")
     if config not in {"typst", "product"}:

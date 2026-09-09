@@ -8,7 +8,7 @@ use noon_render_wgpu::text::{
     GlyphQuadInstance, PreparedRetainedTextFrame, PreparedTextItem, TextCamera2D,
     TextGlyphGpuRenderer,
 };
-use noon_text_raster::{
+use noon_text::raster::{
     GlyphRaster, GlyphRasterFormat, GlyphRasterImage, GlyphRasterKey, GlyphRasterPlacement,
 };
 

@@ -27,7 +27,7 @@ bytemuck = { version = "1", features = ["derive"] }
 noon-core = { path = "../noon-core" }
 noon-geometry = { path = "../noon-geometry" }
 noon-runtime = { path = "../noon-runtime" }
-noon-text-raster = { path = "../noon-text-raster" }
+noon-text = { path = "../noon-text" }
 swash = "=0.2.10"
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl"] }
 
