@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 3178a239f030106faa8b9ee2044da9cb7620d07b
+          ref: 6e97a36ac3834f1f0aac280e788b18055ec87d67
           fetch-depth: 0
       - uses: actions/cache@v6
         with:
@@ -41,7 +41,7 @@ jobs:
           set -euo pipefail
           git rev-parse HEAD
           rustup show
-          bash scripts/check.sh full fc5afc251fa2b18cf81929244717fca1facd3738 2>&1 | tee "$RUNNER_TEMP/r2-full-validation.txt"
+          bash scripts/check.sh full 1641398818b6817678ae178faf2887e4ac1e730f 2>&1 | tee "$RUNNER_TEMP/r2-full-validation.txt"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
