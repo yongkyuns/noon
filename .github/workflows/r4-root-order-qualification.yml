@@ -3,7 +3,7 @@ on:
   push:
     branches: [codex/1292-r4-root-order-prep]
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: r4-root-order-qualification
   cancel-in-progress: true
@@ -12,8 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      PRODUCT_SHA: a74343c97039e2322a23bb45582f49c829843aeb
-      BASE_SHA: 100228bd97fee5d7e44aab3a0cf9736808c04858
+      BASE_SHA: 0eca24ef7c74478d0810332179a9197f19a1c39c
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -23,8 +22,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: a74343c97039e2322a23bb45582f49c829843aeb
-          fetch-depth: 3
+          ref: 0eca24ef7c74478d0810332179a9197f19a1c39c
+          fetch-depth: 2
           persist-credentials: false
       - name: Use repository Rust toolchain
         run: |
@@ -43,44 +42,140 @@ jobs:
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
-      - name: Verify exact source and regressions
+      - name: Prepare pinned source and prove baseline failure
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, subprocess
+          root = pathlib.Path.cwd()
+          evidence = root / 'evidence'
+          evidence.mkdir()
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          assert git('rev-parse', 'HEAD') == os.environ['BASE_SHA']
+          (evidence / 'base.txt').write_text(git('show', '-s', '--format=%H%n%P%n%T%n%s', 'HEAD') + '\n')
+          def blob(sha):
+              result = json.loads(subprocess.check_output(['gh', 'api', f'repos/yongkyuns/noon/git/blobs/{sha}']))
+              data = base64.b64decode(result['content'])
+              assert hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest() == sha
+              return data
+          files = {
+              'crates/noon-compile/src/semantic_lowering/root_order.rs': 'ca9c8626646345a9a2d001997ff8687590694744',
+              'crates/noon-core/src/semantic_store/family_member_order.rs': 'd278f071a5e434d78da615761d88082a9ed82172',
+              'crates/noon/tests/root_order_alias_regressions.rs': '93f43f07ee9df6265186e4468c7a8d26db187dd2',
+          }
+          source = {path: blob(sha) for path, sha in files.items()}
+          test_path = 'crates/noon/tests/root_order_alias_regressions.rs'
+          old = b'(seed as usize >> 32) % (members.len() + 1)'
+          assert source[test_path].count(old) == 1
+          source[test_path] = source[test_path].replace(old, b'(seed >> 32) as usize % (members.len() + 1)')
+          baseline = root / 'crates/noon/tests/root_order_alias_baseline.rs'
+          baseline.write_bytes(source[test_path].split(b'\nfn oracle(')[0])
+          try:
+              command = ['cargo', 'test', '-p', 'noon', '--no-default-features', '--test', 'root_order_alias_baseline', '--', '--nocapture']
+              run = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+              (evidence / 'baseline.log').write_text(run.stdout)
+              print(run.stdout)
+              assert run.returncode == 101 and 'test result: FAILED. 1 passed; 1 failed' in run.stdout
+          finally:
+              baseline.unlink()
+          core = 'crates/noon-core/src/semantic_store.rs'
+          assert git('hash-object', core) == 'd7b68f1a9fd00aa9d939cdb4d1c37402bb741346'
+          patch = evidence / 'core.patch'
+          patch.write_bytes(blob('d96249b062a19144d1e6e0fe5d9688c4c9c376d4'))
+          subprocess.run(['git', 'apply', '--index', '--check', str(patch)], check=True)
+          subprocess.run(['git', 'apply', '--index', str(patch)], check=True)
+          for path, data in source.items():
+              target = root / path
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_bytes(data)
+          subprocess.run(['git', 'add', core, *source], check=True)
+          files[core] = 'fae4b8f49ed4d3a4cd1116bc14855a35e3d7cbcd'
+          files[test_path] = '62e2455e66d11734d53a5aaadf71d7e199445554'
+          assert set(git('diff', '--cached', '--name-only').splitlines()) == set(files)
+          for path, expected in files.items():
+              assert git('hash-object', path) == expected, path
+          (evidence / 'source-blobs.json').write_text(json.dumps(files, indent=2) + '\n')
+          (evidence / 'candidate-tree.txt').write_text(git('write-tree') + '\n')
+          subprocess.run(['git', 'diff', '--check'], check=True)
+          subprocess.run(['git', 'diff', '--cached', '--check'], check=True)
+          PY
+      - name: Qualify focused native regressions
         run: |
           set -o pipefail
-          mkdir -p evidence
-          git show -s --format='%H%n%P%n%T%n%s' HEAD | tee evidence/revisions.txt
-          test "$(git rev-parse HEAD)" = "$PRODUCT_SHA"
-          test "$(git rev-parse HEAD^2)" = "$BASE_SHA"
           rustc --version | tee evidence/toolchain.txt
           cargo --version | tee -a evidence/toolchain.txt
           cargo fmt --all -- --check
+          cargo test -p noon-core --no-default-features --lib family_member_order -- --nocapture 2>&1 | tee evidence/order-index.log
           cargo test -p noon-compile --no-default-features --lib root_order -- --nocapture 2>&1 | tee evidence/compiler.log
-          cargo test -p noon --no-default-features --test root_order_acceptance --test root_order_transaction_regressions --no-fail-fast -- --nocapture 2>&1 | tee evidence/acceptance.log
-          git diff --exit-code
+          cargo test -p noon --no-default-features --test root_order_acceptance --test root_order_transaction_regressions --test root_order_alias_regressions --no-fail-fast -- --nocapture 2>&1 | tee evidence/acceptance.log
       - name: Qualify repository architecture and Rust gates
         run: |
           set -o pipefail
           bash scripts/check.sh fast "$BASE_SHA" 2>&1 | tee evidence/fast.log
-      - name: Qualify direct WASM compilation
+      - name: Qualify direct WASM compilation and execution
         run: |
           set -o pipefail
-          cargo check -p noon-web --all-features --target wasm32-unknown-unknown 2>&1 | tee evidence/wasm.log
+          cargo check -p noon-web --all-features --target wasm32-unknown-unknown 2>&1 | tee evidence/wasm-check.log
+          python3 - <<'PY'
+          import json, pathlib, re
+          root = pathlib.Path.cwd()
+          fixture = root.parent / 'r4-direct-wasm'
+          (fixture / 'src').mkdir(parents=True, exist_ok=True)
+          source = (root / 'crates/noon/tests/root_order_alias_regressions.rs').read_text()
+          tests = re.findall(r'#\[test\]\nfn (\w+)\(', source)
+          assert len(tests) == 7
+          transformed = source.replace('#[test]\n', '') + '\n#[no_mangle]\npub extern "C" fn verify_root_order_aliases() -> u32 {\n' + ''.join(f'    {test}();\n' for test in tests) + '    7\n}\n'
+          (fixture / 'src/lib.rs').write_text(transformed)
+          manifest = '[package]\nname="r4-direct-wasm"\nversion="0.0.0"\nedition="2021"\n[workspace]\n[lib]\ncrate-type=["cdylib"]\n[dependencies]\n'
+          for name in ['noon', 'noon-core', 'noon-compile']:
+              manifest += f'{name} = {{ path = {json.dumps(str(root / "crates" / name))}, default-features = false }}\n'
+          (fixture / 'Cargo.toml').write_text(manifest)
+          (root / 'evidence/wasm-fixture.rs').write_text(transformed)
+          PY
+          cargo build --manifest-path ../r4-direct-wasm/Cargo.toml --target wasm32-unknown-unknown 2>&1 | tee evidence/wasm-execution-build.log
+          node - <<'JS' | tee evidence/direct-wasm-execution.json
+          const fs = require('node:fs'), crypto = require('node:crypto'), assert = require('node:assert/strict');
+          const bytes = fs.readFileSync('../r4-direct-wasm/target/wasm32-unknown-unknown/debug/r4_direct_wasm.wasm');
+          const module = new WebAssembly.Module(bytes);
+          const imports = WebAssembly.Module.imports(module);
+          assert.deepEqual(imports, []);
+          const instance = new WebAssembly.Instance(module, {});
+          const passed = instance.exports.verify_root_order_aliases();
+          assert.equal(passed, 7);
+          console.log(JSON.stringify({node: process.version, passed, imports, arrangements: 3600, sequential_publications: 4000, wasm_sha256: crypto.createHash('sha256').update(bytes).digest('hex')}, null, 2));
+          JS
+      - name: Retain qualified blobs without changing any branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          files = json.loads(pathlib.Path('evidence/source-blobs.json').read_text())
+          for path in ['crates/noon-core/src/semantic_store.rs', 'crates/noon/tests/root_order_alias_regressions.rs']:
+              payload = json.dumps({'content': pathlib.Path(path).read_text(), 'encoding': 'utf-8'})
+              response = json.loads(subprocess.check_output(['gh', 'api', '--method', 'POST', 'repos/yongkyuns/noon/git/blobs', '--input', '-'], input=payload, text=True))
+              assert response['sha'] == files[path]
+          assert subprocess.check_output(['git', 'write-tree'], text=True).strip() == pathlib.Path('evidence/candidate-tree.txt').read_text().strip()
+          subprocess.run(['git', 'diff', '--exit-code'], check=True)
+          pathlib.Path('evidence/qualified.txt').write_text('All required qualification steps passed. No remote branch/ref changed by this workflow.\n')
+          PY
       - name: Retain exact source and diagnostics
         if: always()
         run: |
-          mkdir -p evidence
-          git diff --binary --full-index "$BASE_SHA" HEAD -- crates > evidence/product.patch
-          git diff --binary --full-index HEAD^1 HEAD -- crates/noon-compile/src/semantic_lowering/root_order.rs crates/noon/tests/root_order_transaction_regressions.rs > evidence/continuation.patch
+          mkdir -p evidence/source
           git status --porcelain > evidence/worktree-status.txt
-          git ls-tree -r HEAD -- crates/noon-core/src/semantic_store.rs crates/noon-compile/src/semantic_lowering/root_order.rs crates/noon/tests/root_order_acceptance.rs crates/noon/tests/root_order_transaction_regressions.rs > evidence/source-blobs.txt
-          cp crates/noon-compile/src/semantic_lowering/root_order.rs evidence/
-          cp crates/noon/tests/root_order_acceptance.rs evidence/
-          cp crates/noon/tests/root_order_transaction_regressions.rs evidence/
-          cp Cargo.lock evidence/
-          sha256sum evidence/*.rs evidence/Cargo.lock > evidence/source-sha256.txt
+          git diff --cached --binary --full-index > evidence/candidate.patch
+          cp Cargo.lock evidence/ || true
+          for path in crates/noon-core/src/semantic_store.rs crates/noon-core/src/semantic_store/family_member_order.rs crates/noon-compile/src/semantic_lowering/root_order.rs crates/noon/tests/root_order_alias_regressions.rs; do
+            if test -f "$path"; then cp --parents "$path" evidence/source/; fi
+          done
+          find evidence/source -type f -print0 | sort -z | xargs -0 sha256sum > evidence/source-sha256.txt
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r4-continuation-qualification
+          name: r4-cross-root-qualification
           path: evidence
           retention-days: 7
           if-no-files-found: error
