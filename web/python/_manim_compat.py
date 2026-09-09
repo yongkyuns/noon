@@ -167,22 +167,6 @@ def _leaf_mobjects(value: object) -> list[Mobject]:
     raise TypeError("expected a Mobject or Group")
 
 
-def _bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
-    return _base._semantic_operations()._compat_bounds_for(value)
-
-
-def _critical_for(value: object, direction: _base.Vec2) -> _base.Vec2:
-    bounds = _bounds_for(value)
-    if bounds is None:
-        return _base.ORIGIN
-    minimum, maximum = bounds
-    center = (minimum + maximum) * 0.5
-    return _base.Vec2(
-        minimum.x if direction.x < 0 else maximum.x if direction.x > 0 else center.x,
-        minimum.y if direction.y < 0 else maximum.y if direction.y > 0 else center.y,
-    )
-
-
 def _rotation_angle_2d(angle: float, axis: object = OUT) -> float:
     try:
         if len(axis) != 3:  # type: ignore[arg-type]
@@ -249,20 +233,15 @@ class Group(Mobject):
         return _group_copy(self)
 
     def get_center(self) -> _base.Vec2:
-        bounds = _bounds_for(self)
-        if bounds is None:
-            return _base.ORIGIN
-        return (bounds[0] + bounds[1]) * 0.5
+        return _base._semantic_operations()._get_center(self)
 
     @property
     def width(self) -> float:
-        bounds = _bounds_for(self)
-        return 0.0 if bounds is None else bounds[1].x - bounds[0].x
+        return _base._semantic_operations()._width(self)
 
     @property
     def height(self) -> float:
-        bounds = _bounds_for(self)
-        return 0.0 if bounds is None else bounds[1].y - bounds[0].y
+        return _base._semantic_operations()._height(self)
 
     def shift(self, direction: object) -> Group:
         return _base._semantic_operations()._group_shift(self, direction)
@@ -279,12 +258,10 @@ class Group(Mobject):
         return self.move_to(_base.ORIGIN)
 
     def set_x(self, x: float) -> Group:
-        center = self.get_center()
-        return self.shift(_base.Vec2(float(x) - center.x, 0.0))
+        return self.move_to(_base.Vec2(float(x), 0.0), coor_mask=(1.0, 0.0, 0.0))
 
     def set_y(self, y: float) -> Group:
-        center = self.get_center()
-        return self.shift(_base.Vec2(0.0, float(y) - center.y))
+        return self.move_to(_base.Vec2(0.0, float(y)), coor_mask=(0.0, 1.0, 0.0))
 
     def scale(self, factor: float | tuple[float, float]) -> Group:
         from _manim_semantic_handles import _group_scale
@@ -349,21 +326,8 @@ class Group(Mobject):
         return self._align_on_frame(_base._as_vec2(_base.DL if corner is None else corner), float(buff))
 
     def _align_on_frame(self, direction: _base.Vec2, buff: float) -> Group:
-        point = _critical_for(self, direction)
-        target = _base.Vec2(
-            math.copysign(_base.DEFAULT_FRAME_WIDTH / 2.0, direction.x)
-            if direction.x
-            else point.x,
-            math.copysign(_base.DEFAULT_FRAME_HEIGHT / 2.0, direction.y)
-            if direction.y
-            else point.y,
-        )
-        return self.shift(
-            _base.Vec2(
-                target.x - point.x - (direction.x * buff if direction.x else 0.0),
-                target.y - point.y - (direction.y * buff if direction.y else 0.0),
-            )
-        )
+        return _base._semantic_operations()._group_align_on_frame(self, direction, buff)
+
 
     def arrange(
         self,

@@ -862,6 +862,17 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_align_family_on_frame(
+        &mut self,
+        family: &noon::MobjectFamily,
+        direction: (f64, f64),
+        buff: f64,
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.align_family_on_frame(family, direction, buff))
+            .map(|_| ())
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_align_family_to(
         &mut self,

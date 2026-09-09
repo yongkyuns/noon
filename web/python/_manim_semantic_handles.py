@@ -598,6 +598,9 @@ def _target_mobject(self: _base.Mobject) -> _base.Mobject:
 
 
 def _get_center(self: _base.Mobject) -> _base.Vec2:
+    if isinstance(self, _compat.Group):
+        layout = _group_layout_observation(self)
+        return _base.Vec2(float(layout.centerX), float(layout.centerY))
     observed = _bound_layout_observation(self)
     if observed is not None:
         return _base.Vec2(float(observed.centerX), float(observed.centerY))
@@ -611,8 +614,9 @@ def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
     """Read a leaf critical point from the authoritative semantic layout."""
     axis = _base._as_vec2(direction)
     if isinstance(self, _compat.Group):
-        # Groups query their shared family handle rather than a leaf binding.
-        return _compat._critical_for(self, axis)
+        layout = _group_layout_observation(self)
+        return _base.Vec2(float(layout.criticalX(axis.x, axis.y)),
+                          float(layout.criticalY(axis.x, axis.y)))
     observed = _bound_layout_observation(self)
     if observed is not None:
         return _base.Vec2(
@@ -623,6 +627,8 @@ def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
 
 
 def _width(self: _base.Mobject) -> float:
+    if isinstance(self, _compat.Group):
+        return float(_group_layout_observation(self).width)
     observed = _bound_layout_observation(self)
     if observed is not None:
         return float(observed.width)
@@ -633,6 +639,8 @@ def _width(self: _base.Mobject) -> float:
 
 
 def _height(self: _base.Mobject) -> float:
+    if isinstance(self, _compat.Group):
+        return float(_group_layout_observation(self).height)
     observed = _bound_layout_observation(self)
     if observed is not None:
         return float(observed.height)
@@ -1462,6 +1470,19 @@ def _group_move_to(
 
 
 
+def _group_align_on_frame(self: _compat.Group, direction: _base.Vec2, buff: float):
+    context = _group_live_layout_context(self)
+    if context is not None:
+        context.liveAlignFamilyOnFrame(self._semantic_family_handle,
+                                       direction.x, direction.y, float(buff))
+    else:
+        layout = _shared_family_layout(self, mutation=True)
+        if layout is None:
+            raise RuntimeError("frame alignment requires current shared Rust semantic handles")
+        layout.alignOnFrame(direction.x, direction.y, float(buff))
+    return self
+
+
 def _group_align_to(
     self: _compat.Group,
     mobject_or_point: object,
@@ -1540,41 +1561,14 @@ def _group_arrange(
     return self
 
 
-def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
-    if isinstance(value, _compat.Group):
-        context = _group_live_layout_context(value)
-        if context is not None:
-            layout = context.queryFamilyLayout(value._semantic_family_handle)
-            return (
-                _base.Vec2(float(layout.criticalX(-1.0, 0.0)), float(layout.criticalY(0.0, -1.0))),
-                _base.Vec2(float(layout.criticalX(1.0, 0.0)), float(layout.criticalY(0.0, 1.0))),
-            )
-    # Rust observes the complete semantic family directly. The wrapper list only
-    # selects whether this caller is eligible for the shared query.
-    if isinstance(value, _compat.Group):
-        shared = _shared_family_layout(value)
-        if shared is not None:
-            session = shared
-            return (
-                _base.Vec2(
-                    float(session.criticalX(-1.0, 0.0)),
-                    float(session.criticalY(0.0, -1.0)),
-                ),
-                _base.Vec2(
-                    float(session.criticalX(1.0, 0.0)),
-                    float(session.criticalY(0.0, 1.0)),
-                ),
-            )
-
-    if isinstance(value, _base.Mobject) and not isinstance(value, _compat.Group):
-        observed = _bound_layout_observation(value)
-        if observed is not None:
-            return (
-                _base.Vec2(float(observed.criticalX(-1.0, 0.0)), float(observed.criticalY(0.0, -1.0))),
-                _base.Vec2(float(observed.criticalX(1.0, 0.0)), float(observed.criticalY(0.0, 1.0))),
-            )
-        return _layout_bounds(value)
-    raise RuntimeError("family layout requires a current shared Rust semantic handle")
+def _group_layout_observation(value: _compat.Group):
+    context = _group_live_layout_context(value)
+    if context is not None:
+        return context.queryFamilyLayout(value._semantic_family_handle)
+    layout = _shared_family_layout(value)
+    if layout is None:
+        raise RuntimeError("family layout requires a current shared Rust semantic handle")
+    return layout
 
 
 def _family_member_handle(value: object) -> tuple[str | None, object | None]:

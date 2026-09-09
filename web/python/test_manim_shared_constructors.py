@@ -102,9 +102,9 @@ class ManimSharedConstructorTests(unittest.TestCase):
             public_methods = tuple(getattr(_manim_compat._base.Mobject, name)
                                    for name in ("__init__", "copy", "next_to", "width"))
             group_shift = _manim_compat.Group.shift
-            shared_bounds = _manim_compat._bounds_for
+            group_center = _manim_compat.Group.get_center
             import _manim_geometry
-            assert _manim_compat._bounds_for is shared_bounds
+            assert _manim_compat.Group.get_center is group_center
             import _manim_semantic_handles as handles
             assert not hasattr(handles, "install")
             assert public_methods == tuple(getattr(_manim_compat._base.Mobject, name)

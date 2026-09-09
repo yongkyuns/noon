@@ -8,6 +8,35 @@ from pathlib import Path
 
 
 class ManimSharedFamilyIdentityTests(unittest.TestCase):
+    def test_live_observations_and_coordinates_delegate_without_python_bounds_math(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        import _manim_compat as compat
+        import _manim_semantic_handles as handles
+        from _typed_geometry_test_support import identity_only_wrapper
+
+        family = identity_only_wrapper(compat.VGroup, submobjects=[])
+        family._semantic_family_handle = object()
+        layout = SimpleNamespace(centerX=7, centerY=-2, width=99, height=13,
+                                 criticalX=Mock(return_value=42),
+                                 criticalY=Mock(return_value=-17))
+        context = SimpleNamespace(queryFamilyLayout=Mock(return_value=layout))
+        with patch.object(handles, "_group_live_layout_context", return_value=context):
+            self.assertEqual(family.get_center(), compat._base.Vec2(7, -2))
+            self.assertEqual((family.width, family.height), (99, 13))
+            self.assertEqual(family.get_critical_point(compat._base.RIGHT),
+                             compat._base.Vec2(42, -17))
+        layout.criticalX.assert_called_once_with(1.0, 0.0)
+        layout.criticalY.assert_called_once_with(1.0, 0.0)
+        family.move_to = Mock(return_value=family)
+        family.get_center = Mock(side_effect=AssertionError("Python coordinate delta"))
+        self.assertIs(family.set_x(5), family)
+        self.assertIs(family.set_y(-3), family)
+        self.assertEqual(family.move_to.call_args_list[0].args, (compat._base.Vec2(5, 0),))
+        self.assertEqual(family.move_to.call_args_list[0].kwargs, {"coor_mask": (1.0, 0.0, 0.0)})
+        self.assertEqual(family.move_to.call_args_list[1].args, (compat._base.Vec2(0, -3),))
+        self.assertEqual(family.move_to.call_args_list[1].kwargs, {"coor_mask": (0.0, 1.0, 0.0)})
+
     def test_group_wrapper_mirrors_shared_family_membership(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()
@@ -55,6 +84,11 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
 
 
             class FakeLayoutObservation:
+                centerX = 1.0
+                centerY = 1.0
+                width = 8.0
+                height = 6.0
+
                 def __init__(self, store):
                     self.store = store
                     store.layout_queries += 1
