@@ -815,14 +815,10 @@ def _canonical_affine_animation(
     The returned detached target is already an opaque same-store handle.  Python
     does not create a track, timeline entry, or target snapshot for this path.
     """
-    # The final production compatibility bootstrap replaces the early generic
-    # builder with `_AlignedAnimationBuilder`. It deliberately does not inherit
-    # Noon’s original `_AnimationBuilder`, so accepting only the latter skips
-    # this canonical route and incorrectly lowers an ordinary legacy track.
     # Do not accept subclasses here. Several compatibility operations inherit the
     # builder solely to reuse option handling and materialize a target lazily;
     # reading that property before their own dispatcher runs can be invalid.
-    if type(animation) in (_base._AnimationBuilder, _compat._CompatAnimationBuilder):
+    if type(animation) is _animate._AlignedAnimationBuilder:
         source, target = animation.source, animation.target
     elif type(animation) is _base.Transform:
         source, target = animation.source, animation.target
@@ -1938,7 +1934,7 @@ def _build_canonical_composition_candidate(
             # transform uses the same Rust affine channels as native Text.
             point_correspondence = (
                 not isinstance(source, _typst._RetainedTextMobject)
-                and type(leaf) in (_base._AnimationBuilder, _compat._CompatAnimationBuilder)
+                and type(leaf) is _animate._AlignedAnimationBuilder
                 and not math.isclose(
                     float(source_handle.rotation),
                     float(target_handle.rotation),
