@@ -20,113 +20,68 @@ jobs:
           path: source
       - uses: actions/download-artifact@v8
         with:
-          name: family-translation-focused-qualification
-          run-id: 34397811300
+          name: family-translation-browser-qualification
+          run-id: 34399111572
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/retained
-      - uses: actions/download-artifact@v8
-        with:
-          name: r3-callback-final-qualification
-          run-id: 34381814450
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/baseline-input
-      - name: Correct only effective-center precision and reuse the compiled package
+      - name: Retain proven test correction and use f32-aware paired observations
         working-directory: source
         run: |
-          mkdir -p "$RUNNER_TEMP/family-browser-evidence"
-          echo "EVIDENCE=$RUNNER_TEMP/family-browser-evidence" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/family-paired-evidence"
+          echo "EVIDENCE=$RUNNER_TEMP/family-paired-evidence" >> "$GITHUB_ENV"
           python3 - <<'PY'
           from pathlib import Path
           import ast, hashlib, os, shutil, subprocess, tarfile
           HEAD='e1e44eb1d381d24ddb375240fdb5c2692745c18a'
-          def git(*a): return subprocess.check_output(['git',*a],text=True).strip()
+          def git(*a):return subprocess.check_output(['git',*a],text=True).strip()
           assert git('rev-parse','HEAD')==HEAD and not git('status','--porcelain')
           roots=list((Path(os.environ['RUNNER_TEMP'])/'retained').rglob('revisions.txt'))
           assert len(roots)==1
           bundle=roots[0].parent
-          assert roots[0].read_text().splitlines()==[HEAD,'0815cec4e627ed97e9cb5276a74ba078142464b9']
+          assert roots[0].read_text().splitlines()==['7d86b419f85f199c1433bc63446ccfdd0a1b254d','09fdd6a1fb0a2f9ab9ec77adde388b2cb3ac2bfc']
+          test='web/python/test_noon_errors_wasm.py'
           with tarfile.open(bundle/'source.tar.gz') as archive:
               for member in archive:
                   if member.isfile():
-                      assert Path(member.name).read_bytes()==archive.extractfile(member).read(),member.name
+                      data=archive.extractfile(member).read()
+                      if member.name==test:Path(test).write_bytes(data)
+                      else:assert Path(member.name).read_bytes()==data,member.name
           for line in (bundle/'package-hashes.txt').read_text().splitlines():
               expected,path=line.split()
               assert hashlib.sha256((bundle/'pkg'/Path(path).name).read_bytes()).hexdigest()==expected,path
           assert hashlib.sha256((bundle/'pkg/noon_web_bg.wasm').read_bytes()).hexdigest()=='1a90e03338ba898fde8be9963c6e8e525eb652f7e98fb1983a7439a953edd744'
           shutil.copytree(bundle/'pkg','web/pkg',dirs_exist_ok=True)
-          p=Path('web/python/test_noon_errors_wasm.py');s=p.read_text()
-          name='test_callback_family_shift_is_unique_and_atomic_with_same_phase_retry'
-          node=next(n for n in ast.walk(ast.parse(s)) if isinstance(n,ast.FunctionDef) and n.name==name)
-          old=''.join(s.splitlines(keepends=True)[node.lineno-1:node.end_lineno])
-          new=old.replace('            with self.subTest(reproduction="nested alias requested +1"):', '            # Centers come from f32 effective bounds; rejection snapshots and\n            # exact write counts below remain bit-for-bit checks.\n            with self.subTest(reproduction="nested alias requested +1"):')
-          replacements={
-              'self.assertEqual(first.get_center().x,1.25, "alias received a second translation")':'self.assertAlmostEqual(first.get_center().x, 1.25, delta=1e-6, msg="alias received a second translation")',
-              'self.assertEqual(second.get_center().x,1.0)':'self.assertAlmostEqual(second.get_center().x, 1.0, delta=1e-6)',
-              'self.assertEqual(first.get_center().x,0.25, "late failure retained an earlier +1 write")':'self.assertAlmostEqual(first.get_center().x, 0.25, delta=1e-6, msg="late failure retained an earlier +1 write")',
-              'self.assertEqual(first.get_center().x,0.25)':'self.assertAlmostEqual(first.get_center().x, 0.25, delta=1e-6)',
-              'self.assertEqual(second.get_center().x,0.0)':'self.assertAlmostEqual(second.get_center().x, 0.0, delta=1e-6)',
-          }
-          for a,b in replacements.items():
-              assert new.count(a)==1,a
-              new=new.replace(a,b)
-          p.write_text(s.replace(old,new,1))
-          subprocess.run(['git','add',str(p)],check=True)
-          assert git('write-tree')=='09fdd6a1fb0a2f9ab9ec77adde388b2cb3ac2bfc'
-          assert git('diff','--cached','--name-only')==str(p)
+          p=Path('web/python/examples/ordinary_callback_sparse_reads.py');s=p.read_text()
+          old='        assert circle.get_center() == (-1.0, 1.0)'
+          assert s.count(old)==1
+          s=s.replace(old,'        center = circle.get_center()\n        assert abs(center.x + 1.0) < 1e-5 and abs(center.y - 1.0) < 1e-5, center')
+          old='        assert circle.get_center() == (2.0, 1.0)'
+          assert s.count(old)==1
+          p.write_text(s.replace(old,'        center = circle.get_center()\n        assert abs(center.x - 2.0) < 1e-5 and abs(center.y - 1.0) < 1e-5, center'))
+          subprocess.run(['git','add',test,str(p)],check=True)
+          assert git('write-tree')=='38502b5c1fb0d3907b35543794fc9793d57bdc75'
+          assert set(git('diff','--cached','--name-only').splitlines())=={test,str(p)}
           subprocess.run(['git','diff','--cached','--check'],check=True)
           subprocess.run(['git','config','user.name','Noon development tooling'],check=True)
           subprocess.run(['git','config','user.email','development@noon.invalid'],check=True)
-          subprocess.run(['git','-c','commit.gpgSign=false','-c','core.hooksPath=/dev/null','commit','-m','test: allow render precision in family center observations'],check=True)
-          evidence=Path(os.environ['RUNNER_TEMP'])/'family-browser-evidence'
+          subprocess.run(['git','-c','commit.gpgSign=false','-c','core.hooksPath=/dev/null','commit','-m','test: respect effective-bound precision in paired family callback proof'],check=True)
+          evidence=Path(os.environ['RUNNER_TEMP'])/'family-paired-evidence'
           (evidence/'revisions.txt').write_text(git('rev-parse','HEAD','HEAD^{tree}')+'\n')
-          (evidence/'test-only.patch').write_text(subprocess.check_output(['git','diff',HEAD,'HEAD'],text=True))
+          (evidence/'test-example.patch').write_text(subprocess.check_output(['git','diff',HEAD,'HEAD'],text=True))
           subprocess.run(['git','archive','--format=tar.gz','--output='+str(evidence/'source.tar.gz'),'HEAD'],check=True)
           shutil.copytree(bundle/'pkg',evidence/'pkg')
           shutil.copyfile(bundle/'package-hashes.txt',evidence/'package-hashes.txt')
           PY
-      - name: Install the existing browser dependencies without an APT retry
+      - name: Install only the existing browser dependencies
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-      - name: Confirm the corrected test still exposes both original failures
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import ast, hashlib, os, shutil, tarfile
-          bundle=Path(os.environ['RUNNER_TEMP'])/'baseline-input'
-          assert (bundle/'final-revisions.txt').read_text().splitlines()[0]=='8a19ea03af9e4e87f48ccb761b196dbb8061ceb5'
-          binary=bundle/'pkg/noon_web_bg.wasm'
-          assert hashlib.sha256(binary.read_bytes()).hexdigest()=='cab275e552ec61373f62eb68a3f0e17ac713cd2afde7b84e7238081d516821d4'
-          root=Path('baseline'); root.mkdir()
-          with tarfile.open(bundle/'source.tar.gz') as archive: archive.extractall(root,filter='data')
-          shutil.copytree(bundle/'pkg',root/'web/pkg',dirs_exist_ok=True)
-          source=Path('source/web/python/test_noon_errors_wasm.py').read_text()
-          name='test_callback_family_shift_is_unique_and_atomic_with_same_phase_retry'
-          method=next(n for n in ast.walk(ast.parse(source)) if isinstance(n,ast.FunctionDef) and n.name==name)
-          addition='\n'+''.join(source.splitlines(keepends=True)[method.lineno-1:method.end_lineno])+'\n'
-          p=root/'web/python/test_noon_errors_wasm.py';old=p.read_text()
-          cls=next(n for n in ast.parse(old).body if isinstance(n,ast.ClassDef) and n.name=='WasmErrorProjectionTests')
-          lines=old.splitlines(keepends=True);p.write_text(''.join(lines[:cls.end_lineno])+addition+''.join(lines[cls.end_lineno:]))
-          p=root/'scripts/typed-authoring-errors-smoke.mjs';s=p.read_text()
-          assert s.count('assert.equal(report.python.additionalTests, 10);')==1
-          p.write_text(s.replace('assert.equal(report.python.additionalTests, 10);','assert.equal(report.python.additionalTests, 11);'))
-          Path(os.environ['EVIDENCE'],'baseline-wasm-sha256.txt').write_text(hashlib.sha256(binary.read_bytes()).hexdigest()+'\n')
-          PY
-          (cd baseline && node scripts/build-python-worker.mjs)
-          set +e
-          (cd baseline && NOON_TYPED_ERRORS_ARTIFACTS="$EVIDENCE/baseline-browser" node scripts/typed-authoring-errors-smoke.mjs) > "$EVIDENCE/baseline.log" 2>&1
-          status=$?
-          set -e
-          test "$status" != 0
-          grep -F 'alias received a second translation' "$EVIDENCE/baseline.log"
-          grep -F 'late failure retained an earlier +1 write' "$EVIDENCE/baseline.log"
-      - name: Run repaired callback proof and paired production-worker examples
+      - name: Complete the paired production-worker examples on the identical WASM
         working-directory: source
         run: |
           node scripts/build-python-worker.mjs
-          NOON_TYPED_ERRORS_ARTIFACTS="$EVIDENCE/typed-errors" node scripts/typed-authoring-errors-smoke.mjs > "$EVIDENCE/typed-errors.log" 2>&1 || { tail -140 "$EVIDENCE/typed-errors.log"; exit 1; }
-          node scripts/shared-authoring-smoke.mjs > "$EVIDENCE/shared.log" 2>&1 || { tail -100 "$EVIDENCE/shared.log"; exit 1; }
-          node scripts/manim-compat-smoke.mjs > "$EVIDENCE/manim.log" 2>&1 || { tail -100 "$EVIDENCE/manim.log"; exit 1; }
+          node scripts/shared-authoring-smoke.mjs > "$EVIDENCE/shared.log" 2>&1 || { tail -120 "$EVIDENCE/shared.log"; exit 1; }
+          node scripts/manim-compat-smoke.mjs > "$EVIDENCE/manim.log" 2>&1 || { tail -120 "$EVIDENCE/manim.log"; exit 1; }
           git diff --exit-code
           sha256sum web/pkg/* > "$EVIDENCE/package-hashes-after.txt"
           diff "$EVIDENCE/package-hashes.txt" "$EVIDENCE/package-hashes-after.txt"
@@ -135,9 +90,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: family-translation-browser-qualification
+          name: family-translation-paired-qualification
           path: |
-            ${{ runner.temp }}/family-browser-evidence
+            ${{ runner.temp }}/family-paired-evidence
             source/browser-smoke-artifacts/
           retention-days: 3
           if-no-files-found: error
