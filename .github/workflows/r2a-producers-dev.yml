@@ -3,50 +3,144 @@ on:
   push:
     branches: [codex/1292-r2a-producers-prep]
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: r2a-producers-development
   cancel-in-progress: true
 env:
   CURRENT_BASE: 406944f8a58218629c14ff247894b3fd2e8c471a
   PRODUCT_HEAD: 461fb1743fe9ee4037089ccd65d5573195d62b61
+  CARGO_BUILD_JOBS: '2'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  CARGO_TARGET_DIR: ${{ github.workspace }}/source/target
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_GHA_RW_MODE: READ_ONLY
 jobs:
-  inspect-integration:
+  qualify-integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 461fb1743fe9ee4037089ccd65d5573195d62b61
-          fetch-depth: 0
+          path: tooling
           persist-credentials: false
-      - name: Preserve both exact inputs and inspect merge without publishing
+      - uses: actions/checkout@v7
+        with:
+          ref: 461fb1743fe9ee4037089ccd65d5573195d62b61
+          path: source
+          fetch-depth: 0
+      - name: Integrate the exact existing source without erasing current master
+        id: apply
+        working-directory: source
         run: |
           set -euo pipefail
-          mkdir -p /tmp/r2a-integration
+          mkdir -p ../evidence
           test "$(git rev-parse HEAD)" = "$PRODUCT_HEAD"
           git diff --exit-code
-          git archive "$CURRENT_BASE" | gzip > /tmp/r2a-integration/master.tar.gz
-          git archive "$PRODUCT_HEAD" | gzip > /tmp/r2a-integration/product.tar.gz
-          git show -s --format='%H %T %P' "$CURRENT_BASE" "$PRODUCT_HEAD" > /tmp/r2a-integration/inputs.txt
           git config user.name 'Noon development tooling'
           git config user.email 'development@noon.invalid'
+          git show -s --format='%H %T %P' "$PRODUCT_HEAD" "$CURRENT_BASE" > ../evidence/inputs.txt
+          git archive "$CURRENT_BASE" | gzip > ../evidence/base.tar.gz
           set +e
-          git merge --no-commit --no-ff "$CURRENT_BASE" > /tmp/r2a-integration/merge.log 2>&1
-          result=$?
+          git merge --no-commit --no-ff "$CURRENT_BASE" > ../evidence/merge.log 2>&1
+          merged=$?
           set -e
-          git status --short > /tmp/r2a-integration/status.txt
-          git diff --name-only --diff-filter=U > /tmp/r2a-integration/conflicts.txt
-          git diff > /tmp/r2a-integration/unstaged.patch
-          git diff --cached "$CURRENT_BASE" > /tmp/r2a-integration/staged.patch
-          git ls-files -z | sort -zu | tar --null -T - -czf /tmp/r2a-integration/merged-worktree.tar.gz
-          cat /tmp/r2a-integration/inputs.txt /tmp/r2a-integration/merge.log /tmp/r2a-integration/conflicts.txt
-          printf '%s\n' "$result" > /tmp/r2a-integration/merge-exit.txt
-          test "$result" = 0
+          test "$merged" = 1
+          test "$(git diff --name-only --diff-filter=U)" = crates/noon/src/semantic_mobject/style.rs
+          python3 ../tooling/.github/r2a-current-integration.py
+          cargo fmt --all
+          cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
+          git add -u
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --cached --check
+          git diff --cached "$CURRENT_BASE" --name-only > ../evidence/changed-files.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          names = Path('../evidence/changed-files.txt').read_text().splitlines()
+          assert names
+          for name in names:
+              path = Path(name)
+              assert path.suffix == '.rs' and 'target' not in path.parts, name
+              assert name.startswith('crates/') or name.startswith('fixtures/provider-consumer/tests/'), name
+          print('Product-only Rust delta:', len(names), 'files')
+          PY
+          git write-tree > ../evidence/candidate-tree.txt
+          git diff --cached "$CURRENT_BASE" --binary > ../evidence/candidate.patch
+          git diff --cached "$CURRENT_BASE" --stat
+          rustc --version > ../evidence/toolchain.txt
+          cargo --version >> ../evidence/toolchain.txt
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: r2-sources-${{ runner.os }}-${{ hashFiles('source/Cargo.toml', 'source/crates/**/Cargo.toml') }}
+          restore-keys: |
+            Linux-cargo-sources-
+            provider-sources-Linux-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Run independent typed-error consumers and family callback recovery
+        id: focused
+        working-directory: source
+        run: |
+          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests > ../evidence/focused.log 2>&1 || { tail -200 ../evidence/focused.log; exit 1; }
+          cargo test -p noon --no-default-features --test family_callback_paint >> ../evidence/focused.log 2>&1 || { tail -200 ../evidence/focused.log; exit 1; }
+          tail -70 ../evidence/focused.log
+      - name: Run the complete native Rust gate and minimal public contract
+        id: native
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
+        working-directory: source
+        run: |
+          bash scripts/check.sh rust "$CURRENT_BASE" > ../evidence/rust-gate.log 2>&1 || { tail -220 ../evidence/rust-gate.log; exit 1; }
+          cargo test -p noon --no-default-features --doc > ../evidence/public-contract.log 2>&1 || { tail -150 ../evidence/public-contract.log; exit 1; }
+          cargo run -p noon --no-default-features --example shared_authoring >> ../evidence/public-contract.log 2>&1 || { tail -150 ../evidence/public-contract.log; exit 1; }
+          tail -50 ../evidence/rust-gate.log
+      - name: Compile all direct-WASM callers and independent test executables
+        id: wasm
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
+        working-directory: source
+        run: |
+          cargo check -p noon-web --all-features --target wasm32-unknown-unknown > ../evidence/wasm.log 2>&1 || { tail -220 ../evidence/wasm.log; exit 1; }
+          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests --target wasm32-unknown-unknown --no-run >> ../evidence/wasm.log 2>&1 || { tail -200 ../evidence/wasm.log; exit 1; }
+          tail -45 ../evidence/wasm.log
+      - name: Publish the qualified product merge without force-pushing
+        if: ${{ !cancelled() && steps.focused.outcome == 'success' && steps.native.outcome == 'success' && steps.wasm.outcome == 'success' }}
+        working-directory: source
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          git diff --cached --check
+          test "$(git write-tree)" = "$(cat ../evidence/candidate-tree.txt)"
+          test "$(git rev-parse HEAD)" = "$PRODUCT_HEAD"
+          test "$(git rev-parse MERGE_HEAD)" = "$CURRENT_BASE"
+          git -c commit.gpgSign=false commit -m 'fix: reconcile typed R2a producers with current family paint and boundary (#1354)'
+          test "$(git rev-parse HEAD^1)" = "$PRODUCT_HEAD"
+          test "$(git rev-parse HEAD^2)" = "$CURRENT_BASE"
+          git diff --exit-code
+          git push origin HEAD:refs/heads/codex/1292-r2a-typed-producers
+          git rev-parse HEAD > ../evidence/candidate-sha.txt
+          git show -s --format='%H %T %P' HEAD > ../evidence/published.txt
+          cat ../evidence/published.txt
+      - name: Preserve the actual candidate even when a gate rejects it
+        if: always()
+        working-directory: source
+        run: |
+          mkdir -p ../evidence
+          git status --short > ../evidence/final-status.txt
+          if test -z "$(git diff --name-only --diff-filter=U)"; then
+            git write-tree > ../evidence/final-tree.txt
+            git archive "$(git write-tree)" | gzip > ../evidence/candidate.tar.gz
+            git diff --cached "$CURRENT_BASE" --binary > ../evidence/final-candidate.patch
+          fi
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r2a-current-integration
-          path: /tmp/r2a-integration
+          name: r2a-integrated-qualification
+          path: evidence
           retention-days: 3
           if-no-files-found: error
