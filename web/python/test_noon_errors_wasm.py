@@ -274,6 +274,80 @@ class WasmErrorProjectionTests(unittest.TestCase):
         live.complete()
         self.assertEqual(snapshot(context)[1]["time"], 0.25)
 
+    def test_public_live_content_and_effective_query_errors_recover(self):
+        host.resetStore()
+        from noon import Circle, Square, Scene
+        from _manim_scene import _context
+        scene = Scene()
+        target, source = Circle(radius=0.5), Square(side_length=0.75)
+        scene.add(target)
+        live = scene.live_execution(1)
+        context = _context(scene)
+        foreign_store = wasm.WasmAuthoringStore.new()
+        foreign = circle(foreign_store)
+
+        def state():
+            return (snapshot(context), target._semantic_handle.snapshotJson(),
+                    source._semantic_handle.snapshotJson())
+
+        # Retain the ordinary Python wrapper; substitute only the real Rust
+        # handle to exercise provenance at the actual language boundary.
+        for wrapper, invoke, operation in [
+            (target, lambda: live.replace_content(target, source), "replace_content"),
+            (source, lambda: live.replace_content(target, source), "replace_content"),
+            (target, lambda: live.effective_center(target), "effective_center"),
+        ]:
+            original = wrapper._semantic_handle
+            before = state()
+            wrapper._semantic_handle = foreign
+            try:
+                with self.assertRaises(NoonForeignHandleError) as caught:
+                    invoke()
+                self.assert_diagnostic(caught.exception, "foreign_handle")
+                self.assertEqual(caught.exception.operation, "LiveExecution." + operation)
+            finally:
+                wrapper._semantic_handle = original
+            self.assertEqual(state(), before)
+
+        live.remove(target)
+        before = state()
+        with self.assertRaises(NoonStaleHandleError) as caught:
+            live.effective_center(target)
+        self.assertEqual(codes(caught.exception), ["live.publication", "publication.unknown_object"])
+        self.assertEqual(state(), before)
+        live.add(target)
+        self.assertEqual(live.effective_center(target).x, 0)
+
+        context.returnExecutionPlayer(context.createExecutionPlayer(1, 41))
+        target._semantic_handle.shift(2, -1)
+        before = state()
+        for invoke, operation in [
+            (lambda: live.replace_content(target, source), "replace_content"),
+            (lambda: live.effective_center(target), "effective_center"),
+        ]:
+            with self.assertRaises(NoonStalePublicationError) as caught:
+                invoke()
+            self.assert_diagnostic(caught.exception, "stale_publication")
+            self.assertEqual(caught.exception.operation, "LiveExecution." + operation)
+            self.assertEqual(codes(caught.exception), ["live.publication", "publication.stale_scene_revision"])
+            self.assertEqual(state(), before)
+        # The explicit existing new-run boundary, not exception mapping, owns
+        # replacement of the stale returned presentation runtime.
+        context.prepareExecutionRun()
+        context.beginLiveExecution(1)
+        prior = json.loads(target._semantic_handle.snapshotJson())
+        live.wait(0.25)
+        live.replace_content(target, source)
+        after = json.loads(target._semantic_handle.snapshotJson())
+        self.assertEqual(after["geometry"], json.loads(source._semantic_handle.snapshotJson())["geometry"])
+        self.assertEqual(after["transform"], prior["transform"])
+        self.assertEqual(after["style"], prior["style"])
+        center = live.effective_center(target)
+        self.assertEqual((center.x, center.y), (2, -1))
+        live.advance_to(0.25)
+        live.complete()
+        self.assertEqual(snapshot(context)[1]["time"], 0.25)
+
     def test_public_python_scene_batch_failure_is_atomic_and_recovers(self):
         host.resetStore()
         from noon import Circle, Scene, NoonForeignHandleError as PublicError

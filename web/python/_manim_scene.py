@@ -2370,9 +2370,11 @@ class LiveExecution:
 
     def replace_content(self, target: _base.Mobject, source: _base.Mobject) -> None:
         """Use preauthored source content while preserving target identity and state."""
-        self._context.liveReplaceContent(
+        engine_call(
+            self._context.liveReplaceContent,
             self._handle(target),
             self._handle(source, allow_detached=True),
+            operation="LiveExecution.replace_content",
         )
 
     def set_translation(self, mobject: _base.Mobject, x: float, y: float) -> None:
@@ -2400,7 +2402,10 @@ class LiveExecution:
         )
 
     def effective_center(self, mobject: _base.Mobject) -> _base.Vec2:
-        observed = self._context.liveEffectiveMobject(self._handle(mobject))
+        observed = engine_call(
+            self._context.liveEffectiveMobject, self._handle(mobject),
+            operation="LiveExecution.effective_center",
+        )
         return _base.Vec2(
             float(observed.translationX),
             float(observed.translationY),
