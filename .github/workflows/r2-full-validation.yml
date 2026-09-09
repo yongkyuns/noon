@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 882bf3063938338551a992cf6dc20f9d58df5af2
+          ref: 3178a239f030106faa8b9ee2044da9cb7620d07b
           fetch-depth: 0
       - uses: actions/cache@v6
         with:
