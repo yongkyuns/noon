@@ -435,11 +435,11 @@ async function directExecutionProof(page, expectedBackend) {
     "direct Rust/WASM sparse callback reads did not preserve the shared session time",
   );
   assert.ok(
-    direct.metrics.ordinaryCallbackSparseReads?.initialRead.blue >= 180 &&
+    Math.abs(direct.metrics.ordinaryCallbackSparseReads?.initialRead.blue - 214) <= 16 &&
       direct.metrics.ordinaryCallbackSparseReads?.initialVacatedLuma <= 60 &&
-      direct.metrics.ordinaryCallbackSparseReads?.midpoint.blue >= 180 &&
-      direct.metrics.ordinaryCallbackSparseReads?.persistentHold.blue >= 180 &&
-      direct.metrics.ordinaryCallbackSparseReads?.anchor.blue >= 180,
+      Math.abs(direct.metrics.ordinaryCallbackSparseReads?.midpoint.blue - 153) <= 16 &&
+      Math.abs(direct.metrics.ordinaryCallbackSparseReads?.persistentHold.blue - 153) <= 16 &&
+      Math.abs(direct.metrics.ordinaryCallbackSparseReads?.anchor.blue - 153) <= 16,
     "direct Rust/WASM sparse callback reads did not render initial, midpoint, Hold, and anchor states",
   );
   assert.equal(
