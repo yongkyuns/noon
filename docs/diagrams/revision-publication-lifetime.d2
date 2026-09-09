@@ -13,11 +13,9 @@ main: "STATE / LIFETIME PATH" {
   execution -> frame: "publish"
   frame -> submit: "submit"
 }
-context: "DISTINCT CONTEXTS" {
+context: "DISTINCT CONTEXT DOMAINS" {
   grid-columns: 2
   horizontal-gap: 100
   identity: "NodeId generation\nidentity validity" {class: node}
   inputs: "Publication context\nResourceVersion · InputSequence · CallbackEpoch" {class: node}
 }
-context.identity -> main.scene: "valid handle" {style.stroke-dash: 4}
-context.inputs -> main.frame: "versioned / ordered inputs" {style.stroke-dash: 4}
