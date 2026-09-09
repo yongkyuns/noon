@@ -57,6 +57,15 @@ jobs:
           PY
           cargo fmt --all
           cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
+          python3 ../tooling/.github/r2a-fix1.py
+          for fix in ../tooling/.github/r2a-fix[2-9].py; do
+            test ! -f "$fix" || python3 "$fix"
+          done
+          for test in ../tooling/.github/r2a-tests/*.rs; do
+            test ! -f "$test" || cp "$test" fixtures/provider-consumer/tests/
+          done
+          cargo fmt --all
+          cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
           git add .
           git diff --cached --check
           git diff --cached --stat
@@ -78,6 +87,12 @@ jobs:
           cargo check -p noon --no-default-features --all-targets > ../compile.log 2>&1 || { tail -250 ../compile.log; exit 1; }
           cargo check --workspace --all-targets --all-features >> ../compile.log 2>&1 || { tail -250 ../compile.log; exit 1; }
           tail -30 ../compile.log
+      - name: Test minimal producer and independent typed consumer
+        working-directory: source
+        run: |
+          cargo test -p noon --no-default-features --lib > ../tests.log 2>&1 || { tail -200 ../tests.log; exit 1; }
+          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests >> ../tests.log 2>&1 || { tail -200 ../tests.log; exit 1; }
+          tail -50 ../tests.log
       - name: Preserve staged candidate for inspection
         if: always()
         working-directory: source
@@ -92,8 +107,8 @@ jobs:
           name: r2a-producer-compile
           path: |
             compile.log
+            tests.log
             candidate.patch
             candidate.tar.gz
-            tooling/.github/r2a-edits.bz2.b64
           retention-days: 3
           if-no-files-found: error
