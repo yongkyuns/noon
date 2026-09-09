@@ -1,108 +1,93 @@
-name: R3 callback advancement overlap qualification (development only)
+name: R3 callback master preservation (development only)
 on:
   push:
     branches: [codex/1292-r3-callback-errors-prep]
 permissions:
   contents: write
 jobs:
-  qualify:
+  reconcile-source-only:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 8
     env:
-      BASE: 5b56124312657c0959e1ca3936930cad0fe7e240
-      CANDIDATE: ae2d56e236749cffc9db11d8ee7ed5bcaf55b341
-      CARGO_INCREMENTAL: "0"
-      CARGO_PROFILE_DEV_DEBUG: "0"
-      CARGO_PROFILE_TEST_DEBUG: "0"
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_RW_MODE: READ_ONLY
+      OLD_BASE: 5b56124312657c0959e1ca3936930cad0fe7e240
+      BASE: 35658f4a9468ca44cc5dcfb97e7aae8b62e38e08
+      CANDIDATE: 047f4b669583376f3c7a698763a57eb45c43dad3
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Correct two native-test lint findings without altering the integrated mapper
+      - name: Preserve both already-qualified changes without running Cargo or a full gate
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/r3-input" "$RUNNER_TEMP/r3-evidence"
-          echo "EVIDENCE=$RUNNER_TEMP/r3-evidence" >> "$GITHUB_ENV"
-          cp scripts/r3-callback-final-combine-prep.py "$RUNNER_TEMP/r3-input/combine.py"
+          mkdir -p "$RUNNER_TEMP/r3-preservation"
+          echo "EVIDENCE=$RUNNER_TEMP/r3-preservation" >> "$GITHUB_ENV"
           git config user.name 'Noon qualification bot'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git checkout --detach "$CANDIDATE"
-          RUSTC_WRAPPER= python3 "$RUNNER_TEMP/r3-input/combine.py"
+          python3 - <<'PY'
+          from pathlib import Path
+          import ast, json, os, subprocess
+          old, base, candidate = (os.environ[key] for key in ('OLD_BASE', 'BASE', 'CANDIDATE'))
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True)
+          path = 'crates/noon-web/src/semantic_execution_player.rs'
+          before = git('show', f'{old}:{path}')
+          incoming = git('show', f'{base}:{path}')
+          ours = git('show', f'{candidate}:{path}')
+          prefix = '    #[cfg(target_arch = "wasm32")]\n    pub(crate) fn live_align_family_on_frame('
+          start = incoming.index(prefix)
+          end = incoming.index('\n    }\n\n', start) + len('\n    }\n\n')
+          addition = incoming[start:end]
+          anchor = '    #[cfg(any(target_arch = "wasm32", test))]\n    pub(crate) fn live_align_family_to('
+          assert before.count(anchor) == ours.count(anchor) == 1
+          assert incoming == before.replace(anchor, addition + anchor, 1)
+          result = subprocess.run(['git', 'merge', '--no-commit', '--no-ff', base])
+          assert result.returncode in (0, 1)
+          conflicts = set(git('diff', '--name-only', '--diff-filter=U').splitlines())
+          assert conflicts <= {path}, conflicts
+          # Copy exactly the independently landed method; retain every callback
+          # and advancement statement rather than choosing a whole-file side.
+          Path(path).write_text(ours.replace(anchor, addition + anchor, 1))
+          subprocess.run(['git', 'add', '--', path], check=True)
+          assert not git('diff', '--name-only', '--diff-filter=U')
+          assert not git('diff', '--name-only')
+          expected = {
+              path, 'crates/noon-web/src/authoring_error.rs',
+              'crates/noon-web/src/semantic_execution_player/callback_error_tests.rs',
+              'scripts/typed-authoring-errors-smoke.mjs', 'web/python/_manim_updaters.py',
+              'web/python/test_updater_snapshot.py', 'web/python/test_noon_callback_errors_wasm.py',
+              'web/python/examples/ordinary_callback_sparse_reads.py',
+          }
+          assert set(git('diff', '--cached', '--name-only', base).splitlines()) == expected
+          for name in expected - {path}:
+              assert Path(name).read_text() == git('show', f'{candidate}:{name}'), name
+          tests = {}
+          for name, count in [('web/python/test_noon_errors_wasm.py', 11), ('web/python/test_noon_callback_errors_wasm.py', 7)]:
+              names = [node.name for node in ast.walk(ast.parse(Path(name).read_text())) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test_')]
+              assert len(names) == len(set(names)) == count
+              tests[name] = sorted(names)
+          report = {'old_base': old, 'base': base, 'candidate_parent': candidate,
+                    'source_only': True, 'rust_rebuilt': False, 'full_gate_repeated': False,
+                    'incoming_player_method_lines': len(addition.splitlines()),
+                    'original_conflicts': sorted(conflicts), 'scoped_paths': sorted(expected),
+                    'seven_owned_files_byte_identical': True, 'python_test_methods': tests}
+          Path(os.environ['RUNNER_TEMP'], 'r3-preservation', 'preservation.json').write_text(json.dumps(report, indent=2))
+          PY
           git diff --cached --check
-          git commit -m 'test: use direct error assertions in nested callback projection regression'
+          node --check scripts/typed-authoring-errors-smoke.mjs
+          git commit -m 'Merge landed family frame and observation work without altering callback mapping'
           test "$(git rev-parse HEAD^)" = "$CANDIDATE"
-          git merge-base --is-ancestor "$BASE" HEAD
-          git rev-parse HEAD HEAD^{tree} HEAD^ "$BASE" > "$RUNNER_TEMP/r3-evidence/revisions.txt"
-          git diff "$BASE" HEAD > "$RUNNER_TEMP/r3-evidence/product.patch"
-          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/r3-evidence/source.tar.gz"
+          test "$(git rev-parse HEAD^2)" = "$BASE"
+          git rev-parse HEAD HEAD^{tree} HEAD^ HEAD^2 > "$EVIDENCE/revisions.txt"
+          git diff "$BASE" HEAD > "$EVIDENCE/product.patch"
+          git archive --format=tar.gz HEAD > "$EVIDENCE/source.tar.gz"
+          git status --short > "$EVIDENCE/status.txt"
           git push origin HEAD:refs/heads/codex/1350-final-candidate
       - uses: actions/upload-artifact@v7
-        with:
-          name: r3-callback-overlap-source
-          path: ${{ env.EVIDENCE }}
-          retention-days: 3
-          if-no-files-found: error
-      - uses: actions/cache/restore@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-sources-
-      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
-        with:
-          version: v0.16.0
-      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
-        with:
-          tool: wasm-pack@0.15.0
-      - name: Full gate for the corrected meaningful mapping overlap
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash scripts/check.sh full "$BASE" 2>&1 | tee "$EVIDENCE/full.log"
-          sha256sum web/pkg/noon_web_bg.wasm > "$EVIDENCE/release-wasm-sha256.txt"
-      - name: Diagnostic WASM for the same integrated source
-        shell: bash
-        run: |
-          set -euo pipefail
-          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh 2>&1 | tee "$EVIDENCE/dev-build.log"
-      - name: Existing pinned browser without apt-index installation
-        run: |
-          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
-          npx playwright install chromium
-      - name: Existing real WASM and Pyodide matrix
-        shell: bash
-        run: |
-          set -euo pipefail
-          node scripts/typed-authoring-errors-smoke.mjs 2>&1 | tee "$EVIDENCE/boundary.log"
-      - name: Existing paired production-worker recovery
-        shell: bash
-        run: |
-          set -euo pipefail
-          node scripts/shared-authoring-smoke.mjs 2>&1 | tee "$EVIDENCE/shared-authoring.log"
-          node scripts/manim-compat-smoke.mjs 2>&1 | tee "$EVIDENCE/manim.log"
-      - name: Retain exact source, runtime and results
-        if: always()
-        shell: bash
-        run: |
-          git status --short > "$EVIDENCE/status.txt"
-          git rev-parse HEAD HEAD^{tree} > "$EVIDENCE/final-revisions.txt"
-          rustc --version > "$EVIDENCE/toolchain.txt"
-          node --version >> "$EVIDENCE/toolchain.txt"
-          test ! -f Cargo.lock || cp Cargo.lock "$EVIDENCE/"
-          test ! -d web/pkg || cp -r web/pkg "$EVIDENCE/pkg"
-          test ! -f web/pkg/noon_web_bg.wasm || sha256sum web/pkg/noon_web_bg.wasm > "$EVIDENCE/dev-wasm-sha256.txt"
-          test ! -d browser-smoke-artifacts/typed-authoring-errors || cp -r browser-smoke-artifacts/typed-authoring-errors "$EVIDENCE/boundary-results"
-          git diff --exit-code HEAD
-      - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r3-callback-overlap-qualification
+          name: r3-callback-final-master-source
           path: ${{ env.EVIDENCE }}
           retention-days: 3
           if-no-files-found: error
