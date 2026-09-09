@@ -1,0 +1,16 @@
+# One ordered callback invocation with a coherent read view and staged overlay.
+shape: sequence_diagram
+runtime: "Runtime"
+view: "Read view"
+host: "Host callback"
+overlay: "Staged overlay"
+prepare: "Preflight"
+
+runtime -> view: "pin S / E / F"
+view -> host: "invoke"
+host -> overlay: "reads + staged writes"
+host -> view: "read miss: suspend / resume"
+overlay -> prepare: "authored / resource work"
+prepare -> runtime: "prepared effects / reject"
+overlay -> runtime: "effective writes"
+runtime -> runtime: "atomic FrameEpoch"
