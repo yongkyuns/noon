@@ -39,7 +39,14 @@ jobs:
           printf '%s\n' "$base" > "$RUNNER_TEMP/evidence/base.txt"
           git config user.name 'Noon development tooling'
           git config user.email 'development@noon.invalid'
-          git merge --no-commit --no-ff "$base"
+          if ! git merge --no-commit --no-ff "$base"; then
+            test "$(git diff --name-only --diff-filter=U)" = scripts/typed-authoring-errors-smoke.mjs
+            # The wait branch changes only the exact count in this runner.
+            # Retain every landed transform fixture/assertion, then count both
+            # independently added Python tests below. No suite is discarded.
+            git checkout --theirs -- scripts/typed-authoring-errors-smoke.mjs
+            git add scripts/typed-authoring-errors-smoke.mjs
+          fi
           python3 - <<'PY'
           from pathlib import Path
           import ast
