@@ -19,7 +19,7 @@ env:
 jobs:
   qualify:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
         with:
@@ -46,8 +46,7 @@ jobs:
           assert git('rev-parse','HEAD^{tree}')=='157fac4faafb24a3c2c6f7551dbf7237f259f101'
           subprocess.run(['git','config','user.name','Noon development tooling'],check=True)
           subprocess.run(['git','config','user.email','development@noon.invalid'],check=True)
-          # This prerequisite combines published #1354 with landed master. It is
-          # explicitly recorded as a qualification base, not an already-landed PR.
+          # Explicit qualification prerequisite, not an already-landed PR.
           tree=git('merge-tree','--write-tree',MASTER,PRODUCERS)
           assert len(tree)==40 and all(c in '0123456789abcdef' for c in tree)
           base=subprocess.check_output(['git','commit-tree',tree,'-p',MASTER,'-p',PRODUCERS],input='Qualification prerequisite: existing typed producers plus landed master\n',text=True).strip()
@@ -131,20 +130,21 @@ jobs:
       - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
         with:
           tool: wasm-pack@0.15.0
-      - name: Qualify corrected numeric admission and typed integration through the full gate
+      - name: Qualify the bounded numeric and typed integration without repeating the full release gate
         run: |
-          bash scripts/check.sh full "$LANDING_BASE" > "$EVIDENCE/full.log" 2>&1 || { tail -180 "$EVIDENCE/full.log"; exit 1; }
+          bash scripts/check.sh architecture "$LANDING_BASE" > "$EVIDENCE/native.log" 2>&1
+          cargo test -p noon --no-default-features --test family_callback_translation --test family_callback_paint >> "$EVIDENCE/native.log" 2>&1 || { tail -140 "$EVIDENCE/native.log"; exit 1; }
+          cargo test -p noon --no-default-features --lib example_scenes::continuation_tests::ordinary_sparse_reads_cover_initial_signal_track_and_persistent_hold -- --exact >> "$EVIDENCE/native.log" 2>&1 || { tail -140 "$EVIDENCE/native.log"; exit 1; }
+          grep -F 'test result: ok. 1 passed' "$EVIDENCE/native.log"
+          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests > "$EVIDENCE/consumer.log" 2>&1 || { tail -140 "$EVIDENCE/consumer.log"; exit 1; }
           git diff --exit-code
-          sha256sum Cargo.lock > "$EVIDENCE/lock-after.txt"
-          diff "$EVIDENCE/lock-before.txt" "$EVIDENCE/lock-after.txt"
-          cp -r web/pkg "$EVIDENCE/release-pkg"
-          sha256sum web/pkg/* > "$EVIDENCE/release-package-hashes.txt"
-          tail -25 "$EVIDENCE/full.log"
-      - name: Build the diagnostic package for retained debug fixtures
+      - name: Build the diagnostic WASM with existing preflight for the final combined source
         run: |
-          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh > "$EVIDENCE/dev-build.log" 2>&1 || { tail -140 "$EVIDENCE/dev-build.log"; exit 1; }
+          NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh > "$EVIDENCE/dev-build.log" 2>&1 || { tail -140 "$EVIDENCE/dev-build.log"; exit 1; }
           cp -r web/pkg "$EVIDENCE/pkg"
           cp Cargo.lock "$EVIDENCE/Cargo.lock"
+          sha256sum Cargo.lock > "$EVIDENCE/lock-after.txt"
+          diff "$EVIDENCE/lock-before.txt" "$EVIDENCE/lock-after.txt"
           sha256sum web/pkg/* > "$EVIDENCE/package-hashes.txt"
       - name: Install existing browser dependencies without an APT retry
         run: |
@@ -162,7 +162,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: family-translation-corrected-full
+          name: family-translation-final-integration
           path: |
             ${{ runner.temp }}/family-final-evidence
             browser-smoke-artifacts/
