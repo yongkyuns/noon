@@ -69,7 +69,7 @@ class ManimScaleInPlaceTests(unittest.TestCase):
 
             import _manim_rate_functions
             import _manim_animate  # noqa: F401
-            import _manim_animation_options  # installs the public ScaleInPlace request
+            import _manim_animation_options  # shared option resolver
 
             from noon import (
                 BLUE,

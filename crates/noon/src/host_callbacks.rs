@@ -324,6 +324,15 @@ pub fn effective_style_with_fill_color(
     Ok(style)
 }
 
+/// Apply shared Manim paint opacity without changing the object-composite multiplier.
+pub fn effective_style_with_paint_opacity(
+    mut style: Style,
+    opacity: f64,
+) -> Result<Style, crate::AuthoringError> {
+    crate::semantic_mobject::edit_manim_opacity(&mut style, opacity)?;
+    Ok(style)
+}
+
 /// Apply shared Manim opacity-only fill semantics to an effective runtime style.
 pub fn effective_style_with_fill_opacity(
     mut style: Style,
@@ -695,6 +704,38 @@ mod tests {
 
         assert!(effective_style_with_fill_opacity(style, f64::NAN).is_err());
         assert_eq!(style.fill.unwrap().alpha, 0.25);
+    }
+
+    #[test]
+    fn callback_paint_opacity_matches_authored_style_and_preserves_composite_domain() {
+        let mut scene = Scene::new();
+        let mut object = scene.circle(0.5).unwrap();
+        object.set_fill(0.1, 0.2, 0.3, 0.25).unwrap();
+        object.set_stroke_color(0.4, 0.5, 0.6, 0.75).unwrap();
+        object.set_stroke_width(3.0).unwrap();
+        object.set_object_opacity(0.6).unwrap();
+        scene.add(&object).unwrap();
+        let before = scene.execution_session().unwrap().frame().objects[0].style;
+        let effective = effective_style_with_paint_opacity(before, 0.4).unwrap();
+        object.set_opacity(0.4).unwrap();
+        let authored = scene.execution_session().unwrap().frame().objects[0].style;
+        assert_eq!(effective, authored);
+        assert_eq!(effective.fill.unwrap().alpha, 0.4);
+        assert_eq!(effective.stroke.unwrap().alpha, 0.4);
+        assert_eq!(effective.opacity, before.opacity);
+        assert_eq!(effective.stroke_width, before.stroke_width);
+        for opacity in [-1.0, 2.0, f64::NAN, f64::INFINITY] {
+            assert!(effective_style_with_paint_opacity(before, opacity).is_err());
+        }
+        let unpainted = Style {
+            fill: None,
+            stroke: None,
+            ..before
+        };
+        assert_eq!(
+            effective_style_with_paint_opacity(unpainted, 0.4).unwrap(),
+            unpainted
+        );
     }
 
     #[test]

@@ -308,8 +308,9 @@ pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable)
     callbacks.insert(FILL_AND_COMPOSITE_OPACITY, move |context| {
         let before = context.target_state().style;
         let expected_fill_alpha = if context.time() == 0.0 { 0.25 } else { 0.4 };
+        let expected_stroke_alpha = if context.time() == 0.0 { 0.75 } else { 0.4 };
         if before.fill.map(|color| color.alpha) != Some(expected_fill_alpha)
-            || before.stroke.map(|color| color.alpha) != Some(0.75)
+            || before.stroke.map(|color| color.alpha) != Some(expected_stroke_alpha)
         {
             return Err(std::io::Error::other(
                 "ordered paint callback did not observe preserved layer alpha",
@@ -324,7 +325,13 @@ pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable)
                 },
             )
             .map_err(std::io::Error::other)?;
-        let mut style = context.target_state().style;
+        let mut style = crate::integration::effective_style_with_paint_opacity(
+            context.target_state().style,
+            0.4,
+        )
+        .map_err(std::io::Error::other)?;
+        assert_eq!(style.fill.map(|color| color.alpha), Some(0.4));
+        assert_eq!(style.stroke.map(|color| color.alpha), Some(0.4));
         style.opacity = 0.5;
         context
             .set_target_style(style)
@@ -1225,7 +1232,12 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                         args,
                     )
                     .unwrap_err();
-                assert!(error.to_string().contains("active effective affine driver"));
+                assert!(matches!(
+                    error,
+                    crate::LiveSessionError::Authoring(crate::AuthoringError::Unsupported(
+                        crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver
+                    ))
+                ));
                 assert_eq!(
                     live.effective(&self.circle)
                         .map_err(|error| error.to_string())?,
@@ -3155,7 +3167,7 @@ mod callback_paint_tests {
         let initial_style = initial.style;
         assert_eq!(initial.transform.translation, Vec2::ZERO);
         assert_eq!(initial.style.fill, Some(Color::rgba(0.8, 0.4, 0.2, 0.4)));
-        assert_eq!(initial.style.stroke, Some(Color::rgba(0.8, 0.4, 0.2, 0.75)));
+        assert_eq!(initial.style.stroke, Some(Color::rgba(0.8, 0.4, 0.2, 0.4)));
         assert_eq!(initial.style.stroke_width, 0.12);
         assert_eq!(initial.style.opacity, 0.5);
 

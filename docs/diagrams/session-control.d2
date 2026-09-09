@@ -1,0 +1,18 @@
+# The live-session control plane coordinates the existing four authorities.
+...@_style
+
+direction: down
+script: "Script continuation\nplay / wait / completion" {class: node}
+input: "Native input + callbacks\nordered events / required phases" {class: node}
+editor: "Future editor / hot reload\nshared mutation vocabulary" {class: future}
+control: "LiveProgram / ExecutionSession\nordering · barriers · revision checks\nCoordination, not a fifth state authority" {class: node}
+semantic: "Shared semantic operations\npersistent authored changes\nvalidated preparation / publication" {class: authority}
+runtime: "Runtime advance / wake\neffective state · scheduling\nno extra scene or timeline" {class: authority}
+renderer: "Renderer publication\ncoherent dirty output to the existing renderer" {class: node}
+script -> control
+input -> control
+editor -> control: {style.stroke-dash: 4}
+control -> semantic: "author / reconcile"
+control -> runtime: "tick / resume"
+semantic -> runtime: "prepared coherent publication"
+runtime -> renderer: "effective frame"

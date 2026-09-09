@@ -28,17 +28,18 @@ class LiveCallbackPaint(Scene):
 
         def recolor(mobject, _dt):
             before_fill = mobject.get_fill_opacity()
+            before_stroke = mobject.get_stroke_opacity()
             mobject.set_color(Color(0.8, 0.4, 0.2, 0.9))
             assert abs(mobject.get_fill_opacity() - before_fill) < 1e-6
-            assert mobject.get_stroke_opacity() == 0.75
+            assert abs(mobject.get_stroke_opacity() - before_stroke) < 1e-6
 
         def fill_and_composite_opacity(mobject, _dt):
-            assert mobject.get_stroke_opacity() == 0.75
             family.set_fill(opacity=0.4)
             assert abs(mobject.get_fill_opacity() - 0.4) < 1e-6
-            # Callback set_opacity remains the separately qualified object
-            # composite domain rather than Manim's ordinary paint-alpha edit.
-            mobject.set_opacity(0.5)
+            mobject.set_opacity(0.4)
+            assert abs(mobject.get_fill_opacity() - 0.4) < 1e-6
+            assert abs(mobject.get_stroke_opacity() - 0.4) < 1e-6
+            mobject.set_object_opacity(0.5)
 
         circle.add_updater(recolor)
         circle.add_updater(fill_and_composite_opacity)

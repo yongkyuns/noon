@@ -160,7 +160,7 @@ class ApplyMethod:
             raise TypeError("ApplyMethod requires a bound Mobject/Group method")
         name = _public_bound_method_name(source, method)
 
-        # Resolve lazily because _manim_geometry is installed before _manim_animate.
+        # Resolve the defining module lazily to avoid an import cycle.
         import _manim_animate as _animate
 
         builder = (

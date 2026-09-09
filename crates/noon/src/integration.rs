@@ -35,8 +35,8 @@ pub use crate::execution_session::{
 };
 pub use crate::host_callbacks::{
     effective_style_with_color, effective_style_with_fill, effective_style_with_fill_color,
-    effective_style_with_fill_opacity, effective_style_with_stroke_color,
-    rotate_effective_transform_about_point,
+    effective_style_with_fill_opacity, effective_style_with_paint_opacity,
+    effective_style_with_stroke_color, rotate_effective_transform_about_point,
 };
 pub use crate::semantic_mobject::{authoring_render_f64, authoring_xy_f64, line_match_transform};
 #[cfg(feature = "native-text")]

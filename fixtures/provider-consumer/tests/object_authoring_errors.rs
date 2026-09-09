@@ -537,3 +537,36 @@ fn callback_family_invalid_paint_retains_shared_cause_before_reads_and_recovers(
     assert_eq!(snapshot(&scene, &[&first, &second]), before);
     Ok(())
 }
+
+#[test]
+fn scalar_callback_paint_preserves_typed_rejection_and_composite_domain() -> TestResult {
+    use noon::integration::effective_style_with_paint_opacity;
+    use noon::{Color, Style};
+    let before = Style {
+        fill: Some(Color::rgba(0.1, 0.2, 0.3, 0.25)),
+        stroke: Some(Color::rgba(0.4, 0.5, 0.6, 0.75)),
+        opacity: 0.6,
+        stroke_width: 3.0,
+        ..Style::default()
+    };
+    for value in [-1.0, 2.0] {
+        assert!(matches!(
+            effective_style_with_paint_opacity(before, value),
+            Err(AuthoringError::InvalidOpacity { value: rejected, .. }) if rejected == value
+        ));
+    }
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert!(matches!(
+            effective_style_with_paint_opacity(before, value),
+            Err(AuthoringError::InvalidRenderNumber { .. })
+        ));
+    }
+    let next = effective_style_with_paint_opacity(before, 0.4)?;
+    assert_eq!(before.fill.unwrap().alpha, 0.25);
+    assert_eq!(before.stroke.unwrap().alpha, 0.75);
+    assert_eq!(next.fill.unwrap(), Color::rgba(0.1, 0.2, 0.3, 0.4));
+    assert_eq!(next.stroke.unwrap(), Color::rgba(0.4, 0.5, 0.6, 0.4));
+    assert_eq!(next.opacity, before.opacity);
+    assert_eq!(next.stroke_width, before.stroke_width);
+    Ok(())
+}

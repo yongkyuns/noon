@@ -65,7 +65,19 @@ class ManimAnimationConstructorOptionsTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             from _typed_geometry_test_support import identity_only_wrapper as identity
+            import noon
+            names = ("Transform", "ReplacementTransform", "TransformFromCopy",
+                     "TransformMatchingShapes", "Create", "Uncreate", "FadeIn",
+                     "FadeOut", "Indicate", "ScaleInPlace", "ShrinkToCenter")
+            exports = {name: getattr(noon, name) for name in names}
+            # Public requests accept options before Scene/bootstrap imports. Later
+            # imports must preserve class identity and existing instances.
+            early = exports["Create"](object(), run_time=2.0)
+            assert early.anim_args == {"run_time": 2.0}
             import _manim_compat
+            import _manim_animation_options
+            assert all(getattr(noon, name) is value for name, value in exports.items())
+            assert isinstance(early, noon.Create)
 
             import _manim_rate_functions
             from noon import Scene

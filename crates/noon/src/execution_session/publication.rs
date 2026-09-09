@@ -359,6 +359,13 @@ impl ExecutionSession {
             .map(|root| prepare_semantic_root_order(&prepared, root))
             .transpose()
             .map_err(ExecutionSessionPublicationError::Lowering)?;
+        // Compiler validation preserves stale/wrong-kind root diagnostics. A valid
+        // family with the same leaves still cannot select a different execution domain.
+        if let Some(root) = order_root {
+            if !self.reachability.is_execution_root(root) {
+                return Err(ExecutionSessionPublicationError::UnknownObject(root));
+            }
+        }
         let (execution_suffix, execution_prefix): (Vec<_>, Vec<_>) =
             execution_prefix.into_iter().partition(|patch| {
                 matches!(
