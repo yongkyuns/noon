@@ -2,7 +2,6 @@ name: R2 facade development
 on:
   push:
     branches: [codex/1272-r2-public-facade-prep]
-  workflow_dispatch:
 permissions:
   contents: write
 concurrency:
@@ -13,13 +12,10 @@ env:
   CARGO_INCREMENTAL: '0'
   CARGO_PROFILE_DEV_DEBUG: '0'
   CARGO_PROFILE_TEST_DEBUG: '0'
-  RUSTC_WRAPPER: sccache
-  SCCACHE_GHA_ENABLED: 'true'
-  SCCACHE_GHA_RW_MODE: READ_ONLY
 jobs:
-  reconcile:
+  transaction-causes:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -27,73 +23,44 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v7
         with:
-          ref: 7e3ee4feab9aa281efd7f256e292cffcc18265fa
+          ref: d6734d2a0626f5c9926e4043ad2017a94f5c8c5a
           path: source
           fetch-depth: 0
-      - name: Apply original typed delta with reviewed conflict resolutions
+      - name: Apply the disjoint transaction cause fix
         working-directory: source
         run: |
-          python3 ../tooling/.github/r2-membership-reconcile.py
+          python3 ../tooling/.github/r2-transaction-causes.py
           cargo fmt --all
-          cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
-          git add .
-          git diff --cached --check
-          git diff --cached --stat
-          git diff --cached --binary > ../candidate.patch
-      - uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: r2-sources-${{ runner.os }}-${{ hashFiles('source/Cargo.toml', 'source/crates/**/Cargo.toml') }}
-          restore-keys: |
-            Linux-cargo-sources-
-            provider-sources-Linux-
-      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
-        with:
-          version: v0.16.0
-      - name: Run the repository fast gate
+          git diff --check
+          cargo test -p noon-core --test transaction_error_causes > ../causes.log 2>&1 || { tail -120 ../causes.log; exit 1; }
+          cargo test -p noon-core --lib semantic_transaction >> ../causes.log 2>&1 || { tail -120 ../causes.log; exit 1; }
+          cargo clippy -p noon-core --all-targets -- -D warnings >> ../causes.log 2>&1 || { tail -120 ../causes.log; exit 1; }
+          bash scripts/check.sh architecture d6734d2a0626f5c9926e4043ad2017a94f5c8c5a >> ../causes.log 2>&1
+          cargo test -p noon-core --test transaction_error_causes --target wasm32-unknown-unknown --no-run >> ../causes.log 2>&1 || { tail -120 ../causes.log; exit 1; }
+          tail -30 ../causes.log
+      - name: Publish source-only candidate and provenance
         working-directory: source
         run: |
-          bash scripts/check.sh fast 7e3ee4feab9aa281efd7f256e292cffcc18265fa > ../fast.log 2>&1 || { tail -120 ../fast.log; exit 1; }
-          tail -15 ../fast.log
-      - name: Run both independent minimal consumer contracts and public documentation
-        working-directory: source
-        run: |
-          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --test authoring_errors --test public_facade > ../consumer.log 2>&1 || { tail -120 ../consumer.log; exit 1; }
-          cargo test -p noon --no-default-features --doc > ../docs.log 2>&1 || { tail -120 ../docs.log; exit 1; }
-          cargo run -p noon --no-default-features --example shared_authoring >> ../docs.log 2>&1
-          tail -30 ../consumer.log
-          tail -15 ../docs.log
-      - name: Check the direct WASM boundary and independent consumer
-        working-directory: source
-        run: |
-          cargo check -p noon-web --target wasm32-unknown-unknown --all-features > ../wasm.log 2>&1 || { tail -120 ../wasm.log; exit 1; }
-          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --test authoring_errors --test public_facade --target wasm32-unknown-unknown --no-run >> ../wasm.log 2>&1 || { tail -120 ../wasm.log; exit 1; }
-          tail -20 ../wasm.log
-      - name: Preserve the validated merge candidate without changing the PR branch
-        working-directory: source
-        run: |
-          test "$(git ls-remote origin refs/heads/codex/1272-r2-typed-membership | cut -f1)" = 6e97a36ac3834f1f0aac280e788b18055ec87d67
           git config user.name 'Noon development tooling'
           git config user.email 'development@noon.invalid'
+          git add crates/noon-core/src/semantic_store/semantic_transaction.rs crates/noon-core/src/semantic_store/semantic_transaction/prepared.rs crates/noon-core/tests/transaction_error_causes.rs
+          git diff --cached --check
+          test "$(git diff --cached --name-only | wc -l)" = 3
+          git -c commit.gpgSign=false -c core.hooksPath=/dev/null commit -m 'fix: expose existing semantic transaction error causes (#1272 R2)'
           git diff --exit-code
-          git diff --cached --exit-code -- .github/workflows
-          tree=$(git write-tree)
-          commit=$(printf '%s\n' 'fix: reconcile typed authoring errors with the narrowed public facade (#1286)' | git commit-tree "$tree" -p 6e97a36ac3834f1f0aac280e788b18055ec87d67 -p 7e3ee4feab9aa281efd7f256e292cffcc18265fa)
-          printf '%s\n' "$commit" > ../candidate-sha.txt
-          git push origin "$commit":refs/heads/codex/1272-r2-membership-reconcile
-          git archive --format=tar "$commit" | gzip > ../candidate.tar.gz
+          git push origin HEAD:refs/heads/codex/1272-r2-transaction-causes
+          git rev-parse HEAD > ../candidate-sha.txt
+          git archive HEAD | gzip > ../candidate.tar.gz
+          git diff HEAD^ HEAD > ../candidate.patch
           cat ../candidate-sha.txt
-      - name: Retain detailed qualification evidence
+      - uses: actions/upload-artifact@v7
         if: always()
-        uses: actions/upload-artifact@v7
         with:
-          name: r2-membership-reconciliation
+          name: r2-transaction-causes
           path: |
-            *.log
-            candidate.patch
+            causes.log
             candidate-sha.txt
             candidate.tar.gz
-          if-no-files-found: error
+            candidate.patch
           retention-days: 3
+          if-no-files-found: error
