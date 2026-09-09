@@ -375,7 +375,7 @@ class Text(_RetainedTextMobject):
         self.scale(target / current)
 
     def get_critical_point(self, direction: object) -> _base.Vec2:
-        axis = _compat._as_vec2(direction)
+        axis = _base._as_vec2(direction)
         handle = _native_layout_handle(self._semantic_handle)
         return _base.Vec2(
             float(handle.criticalX(float(axis.x), float(axis.y))),

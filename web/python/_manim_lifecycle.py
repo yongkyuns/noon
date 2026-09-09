@@ -10,10 +10,8 @@ import math
 from typing import Any
 
 import noon as _base
-import _manim_animate as _animate
 import _manim_compat as _compat
 
-_INSTALLED = False
 
 
 def _int_func_mode(value: object) -> str:
@@ -126,26 +124,3 @@ class ShowSubmobjectsOneByOne(ShowIncreasingSubsets):
         self.group, _ = _prepare_subset_family(_compat.Group(*members))
         self.mobject = self.group
         self.anim_args = dict(kwargs)
-
-
-def install() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-
-    public = {
-        "ShowIncreasingSubsets": ShowIncreasingSubsets,
-        "ShowSubmobjectsOneByOne": ShowSubmobjectsOneByOne,
-    }
-    for name, value in public.items():
-        setattr(_base, name, value)
-        setattr(_compat, name, value)
-        setattr(_animate, name, value)
-    exports = list(_base.__all__)
-    for name in public:
-        if name not in exports:
-            exports.append(name)
-    _base.__all__ = exports
-
-install()

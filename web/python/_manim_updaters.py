@@ -1033,7 +1033,7 @@ def _canonical_rotate(self: _base.Mobject, *args: object, **kwargs: object) -> _
     import _manim_compat as compat
 
     angle = compat._rotation_angle_2d(args[0], axis)
-    pivot = compat._as_vec2(about_point)
+    pivot = _base._as_vec2(about_point)
     before = row.transform
     row.transform = context.rotate_transform_about_point(before, angle, pivot)
     row.invalidate_bounds()

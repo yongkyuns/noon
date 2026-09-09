@@ -1,3 +1,9 @@
+//! One generational semantic identity space and its authored scene state.
+//!
+//! Declarations, membership, object/family operations and atomic transactions
+//! live with the store they mutate. Immutable resources are shared contracts in
+//! the sibling resources module; execution and rendering remain downstream.
+
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
@@ -20,9 +26,44 @@ impl std::hash::Hash for SemanticStoreIdentity {
     }
 }
 
-use crate::{
-    SemanticAnimationState, SemanticObjectState, SemanticSignalState, SemanticUpdaterRegistration,
+mod semantic_scene_operations;
+pub use semantic_scene_operations::*;
+
+mod semantic_scene_restructure;
+pub use semantic_scene_restructure::{
+    plan_semantic_scene_membership, semantic_scene_root_contains, SemanticSceneMembershipRequest,
 };
+
+mod semantic_declarations;
+
+mod semantic_signals;
+pub use semantic_signals::*;
+
+mod semantic_bindings;
+pub use semantic_bindings::*;
+
+mod semantic_animations;
+pub use semantic_animations::*;
+
+mod semantic_transaction;
+pub use semantic_transaction::*;
+
+mod semantic_family;
+pub use semantic_family::*;
+
+mod semantic_model;
+pub use semantic_model::*;
+
+mod object_content;
+pub use object_content::*;
+
+mod lifecycle;
+pub use lifecycle::*;
+
+mod host_callbacks;
+pub use host_callbacks::*;
+
+mod camera;
 
 mod semantic_references;
 mod semantic_text_resources;

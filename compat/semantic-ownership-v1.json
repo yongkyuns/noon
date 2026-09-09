@@ -150,7 +150,7 @@
       "id": "geometry.path-layout-query",
       "surface": "Vector-path and Manim-specialized geometry layout bounds",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-core/src/reactive/semantic_model.rs", "symbol": "semantic_path_bounds"},
+      "owner": {"language": "rust", "path": "crates/noon-core/src/semantic_store/semantic_model.rs", "symbol": "semantic_path_bounds"},
       "reason": "Ordinary layout reads typed shared authored/live observations. Missing typed observations fail explicitly; Python curve extrema and raw bounds fallback are deleted.",
       "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_layout_bounds/_bound_layout_observation"}]
     },
@@ -329,7 +329,7 @@
       "id": "animation.options",
       "surface": "Animation and Scene.play timing/rate options",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-core/src/reactive/authoring.rs", "symbol": "resolve_animation_options"},
+      "owner": {"language": "rust", "path": "crates/noon-core/src/animation/options.rs", "symbol": "resolve_animation_options"},
       "adapters": [{"language": "python", "path": "web/python/_manim_animation_options.py", "symbol": "resolve"}]
     },
     {
@@ -414,7 +414,7 @@
       "id": "scene-membership-lifecycle",
       "surface": "Scene.remove/replace/clear and top-level ordering",
       "classification": "shared-rust",
-      "owner": {"language": "rust", "path": "crates/noon-core/src/reactive/semantic_scene_restructure.rs", "symbol": "plan_semantic_scene_membership"},
+      "owner": {"language": "rust", "path": "crates/noon-core/src/semantic_store/semantic_scene_restructure.rs", "symbol": "plan_semantic_scene_membership"},
       "adapters": [{"language": "python", "path": "web/python/_manim_scene.py", "symbol": "_canonical_edit_membership/_canonical_scene_mobjects"}],
       "reason": "One shared Rust planner validates and atomically applies family-aware add/remove/clear/replace requests and owns authoritative root painter order. Python reserves derived wrapper identities, submits one typed request, and maps the ordered Rust projection back to public wrappers after success."
     },

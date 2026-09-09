@@ -20,7 +20,7 @@ class ManimGroupCopyTests(unittest.TestCase):
         source = textwrap.dedent(
             """
             import _manim_compat
-            _manim_compat.install()
+
             import _manim_geometry  # noqa: F401
 
             from noon import Circle, VGroup
@@ -35,8 +35,6 @@ class ManimGroupCopyTests(unittest.TestCase):
             leaf = identity(Circle)
             family = identity(CustomFamily, submobjects=[leaf], selected=leaf)
             nested = identity(VGroup, submobjects=[family], selected=family)
-            _manim_compat.Group.__deepcopy__ = _manim_compat.deepcopy_semantic_wrapper
-            _manim_compat._BaseMobject.__deepcopy__ = _manim_compat.deepcopy_semantic_wrapper
             clone, pairs = _manim_compat.prepare_family_wrapper_copy(nested, lambda value: set())
             assert isinstance(clone[0], CustomFamily)
             assert clone is not nested and clone[0] is not family

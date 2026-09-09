@@ -17,7 +17,6 @@ try:
 except ImportError:  # Native CPython may inspect wrappers without a browser store.
     _create_tracker_handle = None
 
-_INSTALLED = False
 # Python invocation ownership only; scalar values and identity remain in Rust.
 _AUTHORING_SCENE: ContextVar[object | None] = ContextVar(
     "noon_authoring_scene", default=None
@@ -255,21 +254,3 @@ public = {
     "NativeVectorSignal": NativeVectorSignal,
     "NativeBoolSignal": NativeBoolSignal,
 }
-
-
-def install() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-
-    _base.ValueTracker = ValueTracker
-    _base.NativeVectorSignal = NativeVectorSignal
-    _base.NativeBoolSignal = NativeBoolSignal
-
-    for name in ("ValueTracker", "NativeVectorSignal", "NativeBoolSignal"):
-        if name not in _base.__all__:
-            _base.__all__.append(name)
-
-
-install()

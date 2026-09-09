@@ -17,7 +17,7 @@ class ManimRotateSemanticsTests(unittest.TestCase):
   import json
   import math
   import _manim_compat
-  _manim_compat.install()
+
   from noon import IN, LEFT, Line, ORIGIN, PI, RIGHT
 
   def close(a, b, eps=1e-9):

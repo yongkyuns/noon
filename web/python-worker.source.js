@@ -142,36 +142,7 @@ async function initializePyodide() {
   pyodide.runPython(`
 import sys
 sys.path.insert(0, "/tmp")
-import _manim_compat
-_manim_compat.install()
-import _manim_rate_functions
-_manim_rate_functions.install()
-import _manim_geometry
-import _manim_semantic_handles
-
-import _manim_shared_geometry
-import _manim_dashed_line
-_manim_dashed_line.install()
-import _manim_animate
-import _manim_rotate
-_manim_rotate.install()
-import _manim_composition
-_manim_composition.install()
-import _manim_lifecycle
-# Text and Typst bind ordinary shared semantic Mobjects; membership stays in Rust.
-import _manim_typst
-
-import _manim_growing
-_manim_growing.install()
-import _manim_draw_border_then_fill
-_manim_draw_border_then_fill.install()
-import _manim_indication
-_manim_indication.install()
-import _manim_reactive
-import _manim_updaters
-
-import _manim_camera
-_manim_camera.install()
+import noon
 `);
   const importsReadyAt = performance.now();
   self.__noonAuthoringStartupMetrics = Object.freeze({
@@ -737,8 +708,6 @@ else:
 if isinstance(__noon_result, Scene):
     from js import noonRegisterSemanticExecution, noonSemanticContinuationGeneration
     __noon_context = execution_context(__noon_result)
-    if __noon_context is None:
-        raise RuntimeError("shared Scene cannot fall back to scene-document execution; remove incompatible legacy declarations")
     __noon_live_duration = __noon_context.liveHandoffDuration()
     __noon_semantic = {
         "context_id": str(noonRegisterSemanticExecution(__noon_context)),

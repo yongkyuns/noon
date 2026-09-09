@@ -11,7 +11,6 @@ import _manim_rate_functions as _rate_functions
 import _manim_typst as _typst
 
 
-_INSTALLED = False
 
 
 def _native_text(value: object) -> bool:
@@ -86,19 +85,3 @@ class Unwrite(Write):
             reverse=reverse,
             **animation_kwargs,
         )
-
-
-
-def install() -> None:
-    """Install inert Write/Unwrite syntax for shared canonical playback."""
-
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-
-    for name, value in {"Write": Write, "Unwrite": Unwrite}.items():
-        setattr(_base, name, value)
-        setattr(_compat, name, value)
-        if name not in _base.__all__:
-            _base.__all__.append(name)

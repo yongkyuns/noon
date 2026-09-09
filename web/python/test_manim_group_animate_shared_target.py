@@ -117,9 +117,8 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_compat
-            _manim_compat.install()
+
             import _manim_rate_functions
-            _manim_rate_functions.install()
             import _manim_geometry  # installs constructor-free custom Group copy
             import _manim_semantic_handles as handles
 

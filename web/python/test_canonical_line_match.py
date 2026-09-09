@@ -43,7 +43,7 @@ class CanonicalLineMatchTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_compat as manim
-            manim.install()
+
             import _manim_semantic_handles as handles
 
             assert handles._create_geometry_handle is not None
