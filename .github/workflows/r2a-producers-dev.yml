@@ -103,6 +103,13 @@ jobs:
           consumer=$?
           tail -160 ../tests.log
           test "$library" = 0 && test "$consumer" = 0
+      - name: Retain early test diagnostics
+        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: r2a-test-diagnostics
+          path: tests.log
+          retention-days: 3
       - name: Compile minimal producer and all native callers
         id: native
         if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
@@ -115,6 +122,23 @@ jobs:
           workspace=$?
           tail -200 ../compile.log
           test "$minimal" = 0 && test "$workspace" = 0
+      - name: Qualify repository gate and public facade
+        id: gate
+        if: ${{ !cancelled() && steps.native.outcome == 'success' }}
+        working-directory: source
+        run: |
+          bash scripts/check.sh fast "$CURRENT_BASE" > ../fast.log 2>&1 || { tail -200 ../fast.log; exit 1; }
+          cargo test -p noon --no-default-features --doc > ../docs.log 2>&1 || { tail -120 ../docs.log; exit 1; }
+          cargo run -p noon --no-default-features --example shared_authoring >> ../docs.log 2>&1 || { tail -120 ../docs.log; exit 1; }
+      - name: Retain early fast-gate diagnostics
+        if: ${{ !cancelled() && steps.native.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: r2a-fast-diagnostics
+          path: |
+            fast.log
+            docs.log
+          retention-days: 3
       - name: Compile direct-WASM callers and independent tests
         id: wasm
         if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
@@ -127,16 +151,8 @@ jobs:
           consumer=$?
           tail -200 ../wasm.log
           test "$web" = 0 && test "$consumer" = 0
-      - name: Qualify repository gate and public facade
-        id: gate
-        if: ${{ !cancelled() && steps.tests.outcome == 'success' && steps.native.outcome == 'success' && steps.wasm.outcome == 'success' }}
-        working-directory: source
-        run: |
-          bash scripts/check.sh fast "$CURRENT_BASE" > ../fast.log 2>&1 || { tail -200 ../fast.log; exit 1; }
-          cargo test -p noon --no-default-features --doc > ../docs.log 2>&1 || { tail -120 ../docs.log; exit 1; }
-          cargo run -p noon --no-default-features --example shared_authoring >> ../docs.log 2>&1 || { tail -120 ../docs.log; exit 1; }
       - name: Publish only qualified Rust source as a new review branch
-        if: ${{ !cancelled() && steps.gate.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' && steps.native.outcome == 'success' && steps.gate.outcome == 'success' && steps.wasm.outcome == 'success' }}
         working-directory: source
         run: |
           git diff --exit-code
@@ -160,8 +176,6 @@ jobs:
         if: always()
         working-directory: source
         run: |
-          # Only track edits to files already staged before the build. The
-          # standalone consumer's generated target directory is never staged.
           git add -u
           git diff --cached "$CURRENT_BASE" --binary > ../candidate.patch
           git write-tree > ../candidate-tree.txt
