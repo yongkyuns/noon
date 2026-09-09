@@ -251,6 +251,14 @@ class Mobject:
     def _apply(self, raw: object) -> Mobject:
         return _callback_operations()._canonical_apply(self, raw)
 
+    def get_color(self) -> Color:
+        from _manim_geometry import _mobject_get_color
+        return _mobject_get_color(self)
+
+    def match_points(self, mobject: object) -> Mobject:
+        from _manim_geometry import match_points
+        return match_points(self, mobject)
+
     def get_center(self) -> Vec2:
         return _callback_operations()._canonical_get_center(self)
 
