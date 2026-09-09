@@ -414,6 +414,18 @@ mod wasm {
             self.layout.height()
         }
 
+        #[wasm_bindgen(js_name = alignOnFrame)]
+        pub fn align_on_frame(
+            &self,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+        ) -> Result<(), JsValue> {
+            self.layout
+                .align_on_frame((direction_x, direction_y), buff)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = shiftBy)]
         pub fn shift_by(&self, delta_x: f64, delta_y: f64) -> Result<(), JsValue> {
             self.layout.shift(delta_x, delta_y).map_err(js_error)

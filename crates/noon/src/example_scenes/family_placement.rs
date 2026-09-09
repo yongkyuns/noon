@@ -101,9 +101,48 @@ pub fn session() -> Result<ExecutionSession, String> {
             (1.0, 0.0),
         )
         .map_err(|error| error.to_string())?;
+    // Exercise shared frame placement, then restore the demonstration layout.
+    let center = family.layout().map_err(|error| error.to_string())?.center();
+    family
+        .layout()
+        .map_err(|error| error.to_string())?
+        .align_on_frame((2.0, 1.0), 0.25)
+        .map_err(|error| error.to_string())?;
+    let corner = family
+        .layout()
+        .map_err(|error| error.to_string())?
+        .critical_point(1.0, 1.0);
+    assert!((corner.0 - (f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5 - 0.5)).abs() < 1e-6);
+    assert!((corner.1 - 3.75).abs() < 1e-6);
+    family
+        .layout()
+        .map_err(|error| error.to_string())?
+        .move_to(Target::Point(center.0, center.1), (0.0, 0.0), (1.0, 1.0))
+        .map_err(|error| error.to_string())?;
     family.shift(0.0, 0.2).map_err(|error| error.to_string())?;
     for object in [&first, &second, &anchor] {
         scene.add(object).map_err(|error| error.to_string())?;
     }
-    scene.execution_session().map_err(|e| e.to_string())
+    let mut execution = scene.execution_session().map_err(|e| e.to_string())?;
+    {
+        let mut live = scene.live(&mut execution);
+        let center = live
+            .effective_family_layout(&family)
+            .map_err(|e| e.to_string())?
+            .center;
+        live.align_family_on_frame(&family, (0.0, -1.0), 0.5)
+            .map_err(|e| e.to_string())?;
+        let layout = live
+            .effective_family_layout(&family)
+            .map_err(|e| e.to_string())?;
+        assert!((layout.center.1 - layout.height * 0.5 + 3.5).abs() < 1e-6);
+        live.move_family_to(
+            &family,
+            crate::LiveLayoutTarget::Point(center.0, center.1),
+            (0.0, 0.0),
+            (1.0, 1.0),
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(execution)
 }

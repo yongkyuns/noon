@@ -224,6 +224,13 @@ impl FamilyLayout {
             .apply(&mut self.store.borrow_mut())
     }
 
+    /// Align selected family edges to the default frame in one transaction.
+    /// Direction magnitude scales the buffer, as with object frame alignment.
+    pub fn align_on_frame(&self, direction: (f64, f64), buff: f64) -> Result<(), AuthoringError> {
+        let target = frame_alignment_target(direction, buff)?;
+        self.align_to(FamilyLayoutTarget::Point(target.0, target.1), direction)
+    }
+
     pub fn move_to(
         &self,
         target: FamilyLayoutTarget<'_>,
@@ -362,4 +369,24 @@ pub(crate) fn bounds_critical_point(bounds: Option<Bounds2D64>, x: f64, y: f64) 
             (b.min_y + b.max_y) * 0.5
         },
     )
+}
+
+/// Shared frame target; placement owns bounds, alias selection and publication.
+pub(crate) fn frame_alignment_target(
+    direction: (f64, f64),
+    buff: f64,
+) -> Result<(f64, f64), AuthoringError> {
+    let direction = authoring_xy_f64(direction.0, direction.1)?;
+    let buff = authoring_render_f64("buffer", buff)?;
+    let coordinate = |direction: f64, extent: f32| {
+        if direction == 0.0 {
+            0.0
+        } else {
+            direction.signum() * f64::from(extent) * 0.5 - direction * buff
+        }
+    };
+    Ok((
+        coordinate(direction.x, noon_core::DEFAULT_FRAME_WIDTH),
+        coordinate(direction.y, noon_core::DEFAULT_FRAME_HEIGHT),
+    ))
 }

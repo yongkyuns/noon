@@ -600,3 +600,38 @@ fn positive_number_rejection_retains_original_f64_and_recovers() -> TestResult {
     assert_eq!(snapshot(&scene, &[]).nodes, before.nodes + 2);
     Ok(())
 }
+
+#[test]
+fn frame_alignment_preserves_typed_rejection_and_live_recovery() -> TestResult {
+    let mut scene = Scene::new();
+    let object = scene.circle(0.25)?;
+    let family = scene.family(&[(&object).into()])?;
+    scene.add(&object)?;
+    let before = snapshot(&scene, &[&object]);
+    assert!(matches!(
+        family.layout()?.align_on_frame((1.0, 0.0), f64::NAN),
+        Err(AuthoringError::InvalidRenderNumber { .. })
+    ));
+    assert_eq!(snapshot(&scene, &[&object]), before);
+    let mut session = scene.execution_session()?;
+    session.take_frame_changes();
+    let frame = session.frame().clone();
+    let publication = session.publication_context();
+    let error = scene
+        .live(&mut session)
+        .align_family_on_frame(&family, (1.0, 0.0), f64::NAN)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        LiveSessionError::Authoring(AuthoringError::InvalidRenderNumber { .. })
+    ));
+    assert!(error.source().unwrap().is::<AuthoringError>());
+    assert_live_unchanged(&scene, &mut session, &[&object], before, frame, publication);
+    let old = object.state()?.transform;
+    scene
+        .live(&mut session)
+        .align_family_on_frame(&family, (2.0, 0.0), 0.25)?;
+    assert_ne!(object.state()?.transform, old);
+    assert!(!session.take_frame_changes().is_empty());
+    Ok(())
+}
