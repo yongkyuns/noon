@@ -32,6 +32,7 @@ await mkdir(artifactDir, { recursive: true });
 const examples = [
   { name: "Filled path Transform", factory: "createDirectFilledPathTransformRenderer", objectCount: 1, duration: 3.2 },
   { name: "Family affine", factory: "createDirectFamilyAffineSmokeRenderer", objectCount: 2, duration: 0.2 },
+  { name: "Family paint", factory: "createDirectFamilyPaintSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Create shapes", factory: "createDirectCreateShapesRenderer", objectCount: 4, duration: 3.2 },
   { name: "Morph stress · 1,000", factory: "createDirectMorphStressRenderer", objectCount: 1000, duration: 3.4 },
   { name: "Instanced field · 1,000", factory: "createDirectAnalyticProfileRenderer", args: [1000, "fit", 16 / 9, 3.4], objectCount: 1001, duration: 3.4 },

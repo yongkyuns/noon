@@ -517,6 +517,52 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_color(
+        &mut self,
+        family: &noon::MobjectFamily,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.set_family_color(family, red, green, blue, alpha))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_fill(
+        &mut self,
+        family: &noon::MobjectFamily,
+        color: Option<noon::Color>,
+        opacity: Option<f64>,
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.set_family_fill(family, color, opacity))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_stroke(
+        &mut self,
+        family: &noon::MobjectFamily,
+        color: Option<noon::Color>,
+        width: Option<f64>,
+        opacity: Option<f64>,
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.set_family_stroke(family, color, width, opacity))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_opacity(
+        &mut self,
+        family: &noon::MobjectFamily,
+        opacity: f64,
+    ) -> Result<(), String> {
+        self.with_live_session(|live| live.set_family_opacity(family, opacity))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_fill(
         &mut self,
         mobject: &noon::Mobject,

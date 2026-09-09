@@ -8,6 +8,7 @@ pub mod draw_border_then_fill;
 pub mod exact_property_tracks;
 pub mod family_affine;
 pub mod family_arrangement;
+pub mod family_paint;
 pub mod family_placement;
 pub mod family_transform_indicate;
 pub mod line_passing_flash;

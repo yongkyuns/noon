@@ -99,6 +99,9 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
                     self.members = []
                     self.calls = []
 
+                def setFill(self, *arguments):
+                    self.calls.append(("setFill", arguments))
+
                 def identity(self):
                     return ("family", self.semanticSlot, self.semanticGeneration)
 
@@ -165,8 +168,10 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
             assert second._current_raw().to_ir() == source_second
             assert target_first._current_raw().transform["translation"]["x"] == 1.0
             assert target_second._current_raw().transform["translation"]["x"] == 1.0
-            assert target_first._current_raw().style["fill"]["alpha"] == 0.5
-            assert target_second._current_raw().style["fill"]["alpha"] == 0.5
+            # Rust owns family paint semantics; this frontend test checks one dispatch.
+            assert target._semantic_family_handle.calls[-1] == (
+                "setFill", (True, ORANGE.red, ORANGE.green, ORANGE.blue, ORANGE.alpha, 0.5)
+            )
 
             class FakeCanonicalContext:
                 def __init__(self):

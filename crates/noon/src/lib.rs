@@ -66,6 +66,7 @@ mod family_arrangement;
 mod family_authoring;
 mod family_copy;
 mod family_layout;
+mod family_style;
 mod focus_on_authoring;
 mod geometry_authoring;
 mod host_callbacks;
