@@ -25,7 +25,9 @@ impl LiveContinuation for OrdinaryMembership {
         let expected = match self.stage {
             0 => {
                 // A bad final argument must not partially admit the valid first one.
-                let foreign = Scene::new().square(1.0)?;
+                let foreign = Scene::new()
+                    .square(1.0)
+                    .map_err(|error| error.to_string())?;
                 if live.add_many(&[Leaf(&self.red), Leaf(&foreign)]).is_ok()
                     || live.contains(&self.red).map_err(|e| e.to_string())?
                 {
@@ -82,15 +84,23 @@ impl LiveContinuation for OrdinaryMembership {
 
 pub fn program() -> Result<LiveProgram<OrdinaryMembership>, String> {
     let scene = Scene::new();
-    let mut red = scene.square(2.0)?;
-    red.set_fill(1.0, 0.0, 0.0, 1.0)?;
-    red.set_translation(-0.5, 0.0)?;
-    let mut blue = scene.square(2.0)?;
-    blue.set_fill(0.0, 0.0, 1.0, 1.0)?;
-    blue.set_translation(0.5, 0.0)?;
-    let mut green = scene.square(2.0)?;
-    green.set_fill(0.0, 1.0, 0.0, 1.0)?;
-    let family = scene.family(&[(&red).into(), (&blue).into()])?;
+    let mut red = scene.square(2.0).map_err(|error| error.to_string())?;
+    red.set_fill(1.0, 0.0, 0.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    red.set_translation(-0.5, 0.0)
+        .map_err(|error| error.to_string())?;
+    let mut blue = scene.square(2.0).map_err(|error| error.to_string())?;
+    blue.set_fill(0.0, 0.0, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    blue.set_translation(0.5, 0.0)
+        .map_err(|error| error.to_string())?;
+    let mut green = scene.square(2.0).map_err(|error| error.to_string())?;
+    green
+        .set_fill(0.0, 1.0, 0.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    let family = scene
+        .family(&[(&red).into(), (&blue).into()])
+        .map_err(|error| error.to_string())?;
     let continuation = OrdinaryMembership {
         red,
         blue,

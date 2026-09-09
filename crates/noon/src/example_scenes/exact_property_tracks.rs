@@ -13,14 +13,26 @@ use noon_core::{
 /// Python's paired example expresses the same endpoints with ordinary animation builders.
 pub fn session() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
-    let mut circle = scene.circle(0.75)?;
-    circle.set_translation(-2.0, 1.0)?;
-    circle.set_color(1.0, 0.0, 0.0, 1.0)?;
-    circle.set_fill(1.0, 0.0, 0.0, 1.0)?;
-    let mut square = scene.square(1.5)?;
-    square.set_translation(0.0, -1.0)?;
-    square.set_color(0.0, 0.0, 1.0, 1.0)?;
-    square.set_fill(0.0, 0.0, 1.0, 1.0)?;
+    let mut circle = scene.circle(0.75).map_err(|error| error.to_string())?;
+    circle
+        .set_translation(-2.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    circle
+        .set_color(1.0, 0.0, 0.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    circle
+        .set_fill(1.0, 0.0, 0.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    let mut square = scene.square(1.5).map_err(|error| error.to_string())?;
+    square
+        .set_translation(0.0, -1.0)
+        .map_err(|error| error.to_string())?;
+    square
+        .set_color(0.0, 0.0, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    square
+        .set_fill(0.0, 0.0, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
     scene.add(&circle).map_err(|error| error.to_string())?;
     scene.add(&square).map_err(|error| error.to_string())?;
 

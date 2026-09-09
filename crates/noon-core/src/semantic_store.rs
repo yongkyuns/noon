@@ -72,6 +72,7 @@ mod semantic_references;
 mod semantic_text_resources;
 use semantic_references::SemanticIncomingReference;
 pub(crate) use semantic_references::{SemanticRemoveNodeEffect, SemanticRemoveNodeOutcome};
+pub use semantic_text_resources::SemanticTextImportError;
 
 /// Stable semantic identity independent of execution/render dense indices.
 ///
@@ -616,9 +617,9 @@ impl SemanticStore {
     pub fn insert_geometry_path(
         &mut self,
         path: crate::VectorPath,
-    ) -> Result<crate::GeometryResourceHandle, String> {
+    ) -> Result<crate::GeometryResourceHandle, crate::GeometryResourceError> {
         if !path.is_finite() {
-            return Err("geometry path contains non-finite points".into());
+            return Err(crate::GeometryResourceError::NonFinitePath);
         }
         Ok(self.geometry_resources.insert_path(path))
     }

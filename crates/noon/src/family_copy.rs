@@ -1,4 +1,5 @@
 //! Atomic copies of the authoritative semantic family graph.
+use crate::AuthoringError;
 use crate::{Mobject, MobjectFamily, MobjectFamilyMember};
 use noon_core::{
     SemanticLocalNodeToken, SemanticMutationTransaction, SemanticMutationTransactionResult,
@@ -19,37 +20,37 @@ impl FamilyCopy {
         &self.root
     }
 
-    pub fn mobject(&self, source: &Mobject) -> Result<Mobject, String> {
+    pub fn mobject(&self, source: &Mobject) -> Result<Mobject, AuthoringError> {
         self.require_store(source.integration_store())?;
-        source.validate().map_err(|error| error.to_string())?;
+        source.validate()?;
         Mobject::from_node(
             Rc::clone(self.root.integration_store()),
             self.copied_id(source.node_id())?,
         )
     }
 
-    pub fn family(&self, source: &MobjectFamily) -> Result<MobjectFamily, String> {
+    pub fn family(&self, source: &MobjectFamily) -> Result<MobjectFamily, AuthoringError> {
         self.require_store(source.integration_store())?;
-        source.validate().map_err(|error| error.to_string())?;
+        source.validate()?;
         MobjectFamily::from_node(
             Rc::clone(self.root.integration_store()),
             self.copied_id(source.node_id())?,
         )
     }
 
-    fn require_store(&self, store: &Rc<RefCell<SemanticStore>>) -> Result<(), String> {
+    fn require_store(&self, store: &Rc<RefCell<SemanticStore>>) -> Result<(), AuthoringError> {
         if Rc::ptr_eq(self.root.integration_store(), store) {
             Ok(())
         } else {
-            Err("family copy source belongs to another semantic store".into())
+            Err(AuthoringError::ForeignStore)
         }
     }
 
-    fn copied_id(&self, source: SemanticNodeId) -> Result<SemanticNodeId, String> {
+    fn copied_id(&self, source: SemanticNodeId) -> Result<SemanticNodeId, AuthoringError> {
         self.copied
             .get(&source)
             .copied()
-            .ok_or_else(|| "source is not part of this family copy".into())
+            .ok_or(AuthoringError::MissingCopySource(source))
     }
 }
 
@@ -63,7 +64,7 @@ impl PendingFamilyCopy {
     pub(crate) fn resolve(
         self,
         result: &SemanticMutationTransactionResult,
-    ) -> Result<FamilyCopy, String> {
+    ) -> Result<FamilyCopy, AuthoringError> {
         let copied: BTreeMap<_, _> = self
             .copied
             .into_iter()
@@ -83,12 +84,12 @@ impl PendingFamilyCopy {
 
 /// Prepare every copied node and edge before the caller publishes anything.
 /// Shared aliases allocate once; traversal and temporary work stay family-local.
-pub(crate) fn prepare_family_copy(
+pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
     source: &MobjectFamily,
     references: &[MobjectFamilyMember<'_>],
-    mut capture: impl FnMut(&Mobject) -> Result<SemanticObjectState, String>,
-) -> Result<(SemanticMutationTransaction, PendingFamilyCopy), String> {
-    source.validate().map_err(|error| error.to_string())?;
+    mut capture: impl FnMut(&Mobject) -> Result<SemanticObjectState, E>,
+) -> Result<(SemanticMutationTransaction, PendingFamilyCopy), E> {
+    source.validate()?;
     let store = source.integration_store();
     let mut transaction = SemanticMutationTransaction::new();
     let mut copied = BTreeMap::new();
@@ -96,9 +97,9 @@ pub(crate) fn prepare_family_copy(
     let mut queue = Vec::with_capacity(references.len() + 1);
     for member in references {
         if !Rc::ptr_eq(store, member.integration_store()) {
-            return Err("family copy reference belongs to another semantic store".into());
+            return Err(AuthoringError::ForeignStore.into());
         }
-        member.validate().map_err(|error| error.to_string())?;
+        member.validate()?;
         queue.push(member.node_id());
     }
     queue.push(source.node_id());
@@ -108,13 +109,18 @@ pub(crate) fn prepare_family_copy(
         }
         let members = {
             let store = store.borrow();
-            let node = store
-                .node(id)
-                .ok_or("family copy contains an unknown semantic node")?;
+            let node = store.node(id).ok_or_else(|| {
+                AuthoringError::from(noon_core::SemanticSceneOperationError::UnknownNode(id))
+            })?;
             match node.kind() {
                 SemanticNodeKind::Family => Some(node.members_iter().collect::<Vec<_>>()),
                 SemanticNodeKind::AuthoringObject => None,
-                _ => return Err("family copy contains a non-mobject member".into()),
+                _ => {
+                    return Err(AuthoringError::from(
+                        noon_core::SemanticSceneOperationError::NotSemanticAuthoringNode(id),
+                    )
+                    .into())
+                }
             }
         };
         let creation = if let Some(members) = members {
@@ -144,7 +150,7 @@ pub(crate) fn prepare_family_copy(
 
 impl MobjectFamily {
     /// Copy the complete authored family, preserving order and internal aliases.
-    pub fn copy_family(&self) -> Result<FamilyCopy, String> {
+    pub fn copy_family(&self) -> Result<FamilyCopy, AuthoringError> {
         self.copy_with_references(&[])
     }
 
@@ -154,11 +160,11 @@ impl MobjectFamily {
     pub fn copy_with_references(
         &self,
         references: &[MobjectFamilyMember<'_>],
-    ) -> Result<FamilyCopy, String> {
+    ) -> Result<FamilyCopy, AuthoringError> {
         let (transaction, pending) = prepare_family_copy(self, references, Mobject::state)?;
         let result = transaction
             .apply(&mut self.integration_store().borrow_mut())
-            .map_err(|e| e.to_string())?;
+            .map_err(AuthoringError::from)?;
         pending.resolve(&result)
     }
 }

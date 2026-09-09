@@ -6,14 +6,25 @@ pub fn session() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
     let mut members = Vec::new();
     for (width, height) in [(2.0, 1.0), (1.0, 0.5), (0.5, 2.0), (1.0, 1.0)] {
-        let mut object = scene.rectangle(width, height)?;
-        object.shift(1.0, 0.0)?;
-        object.set_fill(0.2, 0.6, 1.0, 0.7)?;
+        let mut object = scene
+            .rectangle(width, height)
+            .map_err(|error| error.to_string())?;
+        object.shift(1.0, 0.0).map_err(|error| error.to_string())?;
+        object
+            .set_fill(0.2, 0.6, 1.0, 0.7)
+            .map_err(|error| error.to_string())?;
         members.push(object);
     }
-    let family = scene.family(&members.iter().map(Into::into).collect::<Vec<_>>())?;
-    family.arrange_in_grid(None, Some(2), 0.5, 0.25)?;
-    assert_eq!(family.layout()?.center(), (1.0, 0.0));
+    let family = scene
+        .family(&members.iter().map(Into::into).collect::<Vec<_>>())
+        .map_err(|error| error.to_string())?;
+    family
+        .arrange_in_grid(None, Some(2), 0.5, 0.25)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(
+        family.layout().map_err(|error| error.to_string())?.center(),
+        (1.0, 0.0)
+    );
     scene
         .add_many(&[(&family).into()])
         .map_err(|error| error.to_string())?;

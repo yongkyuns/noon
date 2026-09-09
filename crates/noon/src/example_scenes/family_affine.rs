@@ -3,17 +3,23 @@ use crate::{ExecutionSession, ManimRotationPivot, Scene};
 
 pub fn session() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
-    let mut a = scene.square(0.5)?;
-    let mut b = scene.square(0.5)?;
-    a.set_fill(0.2, 0.4, 1.0, 1.0)?;
-    b.set_fill(1.0, 0.8, 0.1, 1.0)?;
-    a.set_stroke_width(0.0)?;
-    b.set_stroke_width(0.0)?;
-    a.shift(-1.0, 0.0)?;
-    b.shift(1.0, 0.0)?;
-    let nested = scene.family(&[(&a).into(), (&b).into()])?;
-    let family = scene.family(&[(&nested).into(), (&a).into()])?;
-    family.scale(2.0, 1.0)?;
+    let mut a = scene.square(0.5).map_err(|error| error.to_string())?;
+    let mut b = scene.square(0.5).map_err(|error| error.to_string())?;
+    a.set_fill(0.2, 0.4, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    b.set_fill(1.0, 0.8, 0.1, 1.0)
+        .map_err(|error| error.to_string())?;
+    a.set_stroke_width(0.0).map_err(|error| error.to_string())?;
+    b.set_stroke_width(0.0).map_err(|error| error.to_string())?;
+    a.shift(-1.0, 0.0).map_err(|error| error.to_string())?;
+    b.shift(1.0, 0.0).map_err(|error| error.to_string())?;
+    let nested = scene
+        .family(&[(&a).into(), (&b).into()])
+        .map_err(|error| error.to_string())?;
+    let family = scene
+        .family(&[(&nested).into(), (&a).into()])
+        .map_err(|error| error.to_string())?;
+    family.scale(2.0, 1.0).map_err(|error| error.to_string())?;
     scene
         .add_many(&[(&family).into()])
         .map_err(|error| error.to_string())?;

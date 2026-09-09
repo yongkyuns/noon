@@ -1,4 +1,5 @@
 //! Family paint uses the same style edits and atomic semantic transaction as leaves.
+use crate::AuthoringError;
 use crate::{
     semantic_mobject::{
         edit_color, edit_disable_fill, edit_disable_stroke, edit_fill_color, edit_fill_opacity,
@@ -13,7 +14,7 @@ pub(crate) fn fill<S: PaintStyleEdit>(
     style: &mut S,
     color: Option<Color>,
     opacity: Option<f64>,
-) -> Result<(), String> {
+) -> Result<(), AuthoringError> {
     if let Some(c) = color {
         edit_fill_color(
             style,
@@ -36,7 +37,7 @@ pub(crate) fn stroke<S: PaintStyleEdit>(
     color: Option<Color>,
     width: Option<f64>,
     opacity: Option<f64>,
-) -> Result<(), String> {
+) -> Result<(), AuthoringError> {
     if let Some(c) = color {
         edit_stroke_color(
             style,
@@ -59,12 +60,22 @@ pub(crate) fn stroke<S: PaintStyleEdit>(
 
 impl MobjectFamily {
     /// Recolor each unique leaf's enabled paint channels, preserving their opacity.
-    pub fn set_color(&self, red: f64, green: f64, blue: f64, alpha: f64) -> Result<(), String> {
+    pub fn set_color(
+        &self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), AuthoringError> {
         self.edit_style(|style| edit_color(style, red, green, blue, alpha))
     }
 
     /// Change fill color/opacity atomically. With neither argument, disable fill.
-    pub fn set_fill(&self, color: Option<Color>, opacity: Option<f64>) -> Result<(), String> {
+    pub fn set_fill(
+        &self,
+        color: Option<Color>,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringError> {
         self.edit_style(|style| fill(style, color, opacity))
     }
 
@@ -75,41 +86,41 @@ impl MobjectFamily {
         color: Option<Color>,
         width: Option<f64>,
         opacity: Option<f64>,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         self.edit_style(|style| stroke(style, color, width, opacity))
     }
 
     /// Set enabled fill/stroke opacity, preserving the object-composite multiplier.
-    pub fn set_opacity(&self, opacity: f64) -> Result<(), String> {
+    pub fn set_opacity(&self, opacity: f64) -> Result<(), AuthoringError> {
         self.edit_style(|style| edit_manim_opacity(style, opacity))
     }
 
     fn edit_style(
         &self,
-        edit: impl Fn(&mut SemanticStyle) -> Result<(), String>,
-    ) -> Result<(), String> {
+        edit: impl Fn(&mut SemanticStyle) -> Result<(), AuthoringError>,
+    ) -> Result<(), AuthoringError> {
         self.style_transaction(edit)?
             .apply(&mut self.integration_store().borrow_mut())
             .map(|_| ())
-            .map_err(|e| e.to_string())
+            .map_err(AuthoringError::from)
     }
 
     pub(crate) fn style_transaction(
         &self,
-        edit: impl Fn(&mut SemanticStyle) -> Result<(), String>,
-    ) -> Result<SemanticMutationTransaction, String> {
-        self.validate().map_err(|error| error.to_string())?;
+        edit: impl Fn(&mut SemanticStyle) -> Result<(), AuthoringError>,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        self.validate()?;
         // Validate arguments even for an empty family, before staging any writes.
         edit(&mut SemanticStyle::default())?;
         let store = self.integration_store().borrow();
         let leaves = store
             .ordered_leaf_nodes(self.node_id())
-            .map_err(|e| e.to_string())?;
+            .map_err(AuthoringError::from)?;
         let mut transaction = SemanticMutationTransaction::new();
         for leaf in leaves {
             let previous = &store
                 .semantic_object_state_checked(leaf)
-                .map_err(|e| e.to_string())?
+                .map_err(AuthoringError::from)?
                 .style;
             let mut next = previous.clone();
             edit(&mut next)?;

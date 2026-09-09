@@ -248,14 +248,14 @@ pub(super) fn layout_for_content(
     store: &SemanticStore,
     content: SemanticObjectContent,
     transform: SemanticTransform2_5D,
-) -> Result<Option<Bounds2D64>, String> {
+) -> Result<Option<Bounds2D64>, AuthoringError> {
     let geometry = match content {
         SemanticObjectContent::Geometry(geometry) => geometry,
         SemanticObjectContent::Text(handle) => {
             let local = store
                 .text_resources()
                 .get(handle)
-                .ok_or("unknown or stale text resource")?
+                .ok_or(AuthoringError::MissingTextResource(handle))?
                 .bounds;
             let mut bounds = None;
             for point in [
@@ -288,7 +288,7 @@ pub(super) fn layout_for_content(
         StoredGeometry::Resource(handle) => match store
             .geometry_resources()
             .get(handle)
-            .ok_or("unknown or stale geometry resource")?
+            .ok_or(AuthoringError::MissingGeometryResource(handle))?
         {
             GeometryResource::VectorPath(path) => transformed_path_layout_bounds(path, transform),
         },

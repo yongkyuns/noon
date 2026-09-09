@@ -50,13 +50,13 @@ test("detached Mobject layout queries stay owned by the shared semantic handle",
 });
 
 test("Rust semantic handle remains the layout-query source of truth", () => {
-  assert.match(rustHandleSource, /pub fn layout_bounds\(&self\) -> Result<Option<Bounds2D64>, String>/);
-  assert.match(rustHandleSource, /pub fn center\(&self\) -> Result<\(f64, f64\), String>/);
-  assert.match(rustHandleSource, /pub fn width\(&self\) -> Result<f64, String>/);
-  assert.match(rustHandleSource, /pub fn height\(&self\) -> Result<f64, String>/);
+  assert.match(rustHandleSource, /pub fn layout_bounds\(&self\) -> Result<Option<Bounds2D64>, AuthoringError>/);
+  assert.match(rustHandleSource, /pub fn center\(&self\) -> Result<\(f64, f64\), AuthoringError>/);
+  assert.match(rustHandleSource, /pub fn width\(&self\) -> Result<f64, AuthoringError>/);
+  assert.match(rustHandleSource, /pub fn height\(&self\) -> Result<f64, AuthoringError>/);
   assert.match(
     rustHandleSource,
-    /pub fn critical_point\([\s\S]*?\) -> Result<\(f64, f64\), String>/,
+    /pub fn critical_point\([\s\S]*?\) -> Result<\(f64, f64\), AuthoringError>/,
   );
 
   const centerStart = rustHandleSource.indexOf("pub fn center(&self)");

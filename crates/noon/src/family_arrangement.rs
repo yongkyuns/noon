@@ -2,6 +2,7 @@
 //!
 //! Manim v0.21 sequences next_to against current bounds, then centers once:
 //! <https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py>.
+use crate::AuthoringError;
 use crate::{
     family_authoring::translation_transaction,
     family_layout::{bounds_critical_point, RelativePlacement},
@@ -40,12 +41,15 @@ impl FamilyArrangeOptions {
 }
 
 impl MobjectFamily {
-    pub fn arrange(&self, x: f64, y: f64, buff: f64, center: bool) -> Result<(), String> {
+    pub fn arrange(&self, x: f64, y: f64, buff: f64, center: bool) -> Result<(), AuthoringError> {
         self.arrange_with_options(&FamilyArrangeOptions::new(x, y, buff, center))
     }
 
     /// Resolve all selections and stage successive placements before one commit.
-    pub fn arrange_with_options(&self, options: &FamilyArrangeOptions) -> Result<(), String> {
+    pub fn arrange_with_options(
+        &self,
+        options: &FamilyArrangeOptions,
+    ) -> Result<(), AuthoringError> {
         self.commit_arrangement(FamilyArrangePlan::begin(self, options)?)
     }
 
@@ -57,15 +61,15 @@ impl MobjectFamily {
         columns: Option<usize>,
         gap_x: f64,
         gap_y: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         self.commit_arrangement(FamilyArrangePlan::grid(self, rows, columns, gap_x, gap_y)?)
     }
 
-    fn commit_arrangement(&self, mut plan: FamilyArrangePlan) -> Result<(), String> {
+    fn commit_arrangement(&self, mut plan: FamilyArrangePlan) -> Result<(), AuthoringError> {
         plan.observe_leaf_bounds(|leaf| {
             Mobject::from_node(Rc::clone(self.integration_store()), leaf)?.layout_bounds()
         })?;
-        let transaction = plan.transaction(|leaf| {
+        let transaction = plan.transaction::<AuthoringError>(|leaf| {
             Ok(
                 Mobject::from_node(Rc::clone(self.integration_store()), leaf)?
                     .state()?
@@ -76,7 +80,7 @@ impl MobjectFamily {
         transaction
             .apply(&mut self.integration_store().borrow_mut())
             .map(|_| ())
-            .map_err(|e| e.to_string())
+            .map_err(AuthoringError::from)
     }
 }
 
@@ -102,10 +106,11 @@ impl FamilyArrangePlan {
     pub(crate) fn begin(
         family: &MobjectFamily,
         options: &FamilyArrangeOptions,
-    ) -> Result<Self, String> {
-        family.validate().map_err(|error| error.to_string())?;
+    ) -> Result<Self, AuthoringError> {
+        family.validate()?;
         // Normalize/check even an empty request without publishing anything.
-        RelativePlacement::Next(options.placement).delta(None, |_, _| Ok((0.0, 0.0)))?;
+        RelativePlacement::Next(options.placement)
+            .delta::<AuthoringError>(None, |_, _| Ok((0.0, 0.0)))?;
         let ids = family
             .integration_store()
             .borrow()
@@ -113,16 +118,16 @@ impl FamilyArrangePlan {
             .unwrap()
             .members()
             .to_vec();
-        let leaves = |anchor: LayoutAnchor| -> Result<Vec<SemanticNodeId>, String> {
+        let leaves = |anchor: LayoutAnchor| -> Result<Vec<SemanticNodeId>, AuthoringError> {
             if !Rc::ptr_eq(family.integration_store(), anchor.integration_store()) {
-                return Err("arrangement anchors belong to different authoring stores".into());
+                return Err(AuthoringError::ForeignStore);
             }
             let node = anchor.resolve()?;
             family
                 .integration_store()
                 .borrow()
                 .ordered_leaf_nodes(node)
-                .map_err(|e| e.to_string())
+                .map_err(AuthoringError::from)
         };
         let selected = |node| {
             let anchor = LayoutAnchor::from_node(Rc::clone(family.integration_store()), node);
@@ -165,12 +170,12 @@ impl FamilyArrangePlan {
         columns: Option<usize>,
         gap_x: f64,
         gap_y: f64,
-    ) -> Result<Self, String> {
-        family.validate().map_err(|error| error.to_string())?;
+    ) -> Result<Self, AuthoringError> {
+        family.validate()?;
         crate::semantic_mobject::authoring_render_f64("grid horizontal gap", gap_x)?;
         crate::semantic_mobject::authoring_render_f64("grid vertical gap", gap_y)?;
         if rows == Some(0) || columns == Some(0) {
-            return Err("grid rows and columns must be positive".into());
+            return Err(AuthoringError::InvalidGridDimensions { rows, columns });
         }
         let store = family.integration_store().borrow();
         let ids = store.node(family.node_id()).unwrap().members();
@@ -181,11 +186,15 @@ impl FamilyArrangePlan {
         });
         let used_rows = count.div_ceil(columns);
         if rows.is_some_and(|rows| rows < used_rows) {
-            return Err("too few grid rows and columns to fit all members".into());
+            return Err(AuthoringError::InsufficientGridCapacity {
+                rows,
+                columns,
+                members: count,
+            });
         }
         let roots = store
             .ordered_leaf_nodes(family.node_id())
-            .map_err(|e| e.to_string())?;
+            .map_err(AuthoringError::from)?;
         let mut steps = Vec::with_capacity(count);
         // Manim places bottom rows first; preserve that ordering for shared aliases.
         for row in (0..used_rows).rev() {
@@ -194,7 +203,7 @@ impl FamilyArrangePlan {
                 .iter()
                 .enumerate()
             {
-                let moved = store.ordered_leaf_nodes(id).map_err(|e| e.to_string())?;
+                let moved = store.ordered_leaf_nodes(id).map_err(AuthoringError::from)?;
                 steps.push(PlacementStep {
                     cell: Some(start + column),
                     source: moved.clone(),
@@ -219,10 +228,10 @@ impl FamilyArrangePlan {
         })
     }
 
-    pub(crate) fn observe_leaf_bounds(
+    pub(crate) fn observe_leaf_bounds<E>(
         &mut self,
-        mut observe: impl FnMut(SemanticNodeId) -> Result<Option<Bounds2D64>, String>,
-    ) -> Result<(), String> {
+        mut observe: impl FnMut(SemanticNodeId) -> Result<Option<Bounds2D64>, E>,
+    ) -> Result<(), E> {
         for (&id, bounds) in &mut self.bounds {
             *bounds = observe(id)?;
         }
@@ -230,12 +239,12 @@ impl FamilyArrangePlan {
         Ok(())
     }
 
-    pub(crate) fn transaction(
+    pub(crate) fn transaction<E: From<AuthoringError>>(
         self,
-        authored_translation: impl FnMut(SemanticNodeId) -> Result<SemanticVec3, String>,
-    ) -> Result<SemanticMutationTransaction, String> {
+        authored_translation: impl FnMut(SemanticNodeId) -> Result<SemanticVec3, E>,
+    ) -> Result<SemanticMutationTransaction, E> {
         if !self.observed {
-            return Err("family arrangement bounds are incomplete".into());
+            return Err(AuthoringError::IncompleteArrangement.into());
         }
         let mut deltas: BTreeMap<_, _> = self.roots.iter().map(|&id| (id, (0.0, 0.0))).collect();
         let aggregate = |ids: &[SemanticNodeId], deltas: &BTreeMap<SemanticNodeId, (f64, f64)>| {
@@ -302,7 +311,9 @@ impl FamilyArrangePlan {
             } else {
                 let target = aggregate(&step.target, &deltas);
                 RelativePlacement::Next(self.placement)
-                    .delta(source, |x, y| Ok(bounds_critical_point(target, x, y)))?
+                    .delta::<AuthoringError>(source, |x, y| {
+                        Ok(bounds_critical_point(target, x, y))
+                    })?
             };
             for leaf in &step.moved {
                 let total = deltas.get_mut(leaf).unwrap();

@@ -7,36 +7,46 @@ use crate::{
 /// Paired with `web/python/examples/painter_order_overlap.py` on native and WASM.
 pub fn session() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
-    let mut circle = scene.circle(1.25)?;
-    let mut rectangle = scene.rectangle(2.1, 2.1)?;
+    let mut circle = scene.circle(1.25).map_err(|error| error.to_string())?;
+    let mut rectangle = scene
+        .rectangle(2.1, 2.1)
+        .map_err(|error| error.to_string())?;
     for (object, color) in [(&mut circle, RED), (&mut rectangle, BLUE)] {
-        object.set_fill(
-            f64::from(color.red),
-            f64::from(color.green),
-            f64::from(color.blue),
-            1.0,
-        )?;
-        object.disable_stroke()?;
+        object
+            .set_fill(
+                f64::from(color.red),
+                f64::from(color.green),
+                f64::from(color.blue),
+                1.0,
+            )
+            .map_err(|error| error.to_string())?;
+        object.disable_stroke().map_err(|error| error.to_string())?;
     }
     scene.add(&circle).map_err(|error| error.to_string())?;
     scene.add(&rectangle).map_err(|error| error.to_string())?;
-    let path = scene.path(
-        VectorPath::new()
-            .move_to(Vec2::new(-0.8, -0.8))
-            .line_to(Vec2::new(0.8, -0.8))
-            .line_to(Vec2::new(0.8, 0.8))
-            .line_to(Vec2::new(-0.8, 0.8))
-            .close(),
-        SemanticStyle {
-            fill: Some(SemanticPaint::Solid(GREEN)),
-            fill_opacity: 1.0,
-            stroke: None,
-            ..SemanticStyle::default()
-        },
-    )?;
+    let path = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::new(-0.8, -0.8))
+                .line_to(Vec2::new(0.8, -0.8))
+                .line_to(Vec2::new(0.8, 0.8))
+                .line_to(Vec2::new(-0.8, 0.8))
+                .close(),
+            SemanticStyle {
+                fill: Some(SemanticPaint::Solid(GREEN)),
+                fill_opacity: 1.0,
+                stroke: None,
+                ..SemanticStyle::default()
+            },
+        )
+        .map_err(|error| error.to_string())?;
     scene.add(&path).map_err(|error| error.to_string())?;
-    let mut target = rectangle.target_editor()?;
-    target.rotate(std::f64::consts::FRAC_PI_2)?;
+    let mut target = rectangle
+        .target_editor()
+        .map_err(|error| error.to_string())?;
+    target
+        .rotate(std::f64::consts::FRAC_PI_2)
+        .map_err(|error| error.to_string())?;
     let rotation = scene.declare_transform_to(
         &rectangle,
         &target,

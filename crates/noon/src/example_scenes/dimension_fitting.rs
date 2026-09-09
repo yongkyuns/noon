@@ -7,21 +7,33 @@ use crate::{
 
 pub fn session() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
-    let mut a = scene.rectangle(2.0, 1.0)?;
-    let mut b = scene.square(1.0)?;
-    a.set_fill(0.2, 0.4, 1.0, 1.0)?;
-    b.set_fill(1.0, 0.8, 0.1, 1.0)?;
-    a.set_stroke_width(0.0)?;
-    b.set_stroke_width(0.0)?;
+    let mut a = scene
+        .rectangle(2.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    let mut b = scene.square(1.0).map_err(|error| error.to_string())?;
+    a.set_fill(0.2, 0.4, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    b.set_fill(1.0, 0.8, 0.1, 1.0)
+        .map_err(|error| error.to_string())?;
+    a.set_stroke_width(0.0).map_err(|error| error.to_string())?;
+    b.set_stroke_width(0.0).map_err(|error| error.to_string())?;
     let source = LayoutAnchor::from(&a);
     let target = LayoutAnchor::from(&b);
-    source.rescale_to_fit(2.0, Height, false)?;
-    source.match_dim_size(&target, Height, true)?;
-    a.shift(-2.0, 0.0)?;
-    b.shift(2.0, 0.0)?;
-    let family = scene.family(&[(&a).into(), (&b).into(), (&a).into()])?;
+    source
+        .rescale_to_fit(2.0, Height, false)
+        .map_err(|error| error.to_string())?;
+    source
+        .match_dim_size(&target, Height, true)
+        .map_err(|error| error.to_string())?;
+    a.shift(-2.0, 0.0).map_err(|error| error.to_string())?;
+    b.shift(2.0, 0.0).map_err(|error| error.to_string())?;
+    let family = scene
+        .family(&[(&a).into(), (&b).into(), (&a).into()])
+        .map_err(|error| error.to_string())?;
     let group = LayoutAnchor::from(&family);
-    group.rescale_to_fit(4.0, Width, false)?;
+    group
+        .rescale_to_fit(4.0, Width, false)
+        .map_err(|error| error.to_string())?;
     scene
         .add_many(&[(&family).into()])
         .map_err(|error| error.to_string())?;
