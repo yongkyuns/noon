@@ -1108,7 +1108,7 @@ mod wasm {
         }
 
         pub fn scale(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
-            self.handle.scale(x, y).map_err(js_error)
+            self.handle.manim_scale(x, y).map_err(js_error)
         }
 
         pub fn rotate(&mut self, angle: f64) -> Result<(), JsValue> {
