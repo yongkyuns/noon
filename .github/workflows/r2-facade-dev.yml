@@ -13,9 +13,9 @@ env:
   CARGO_PROFILE_DEV_DEBUG: '0'
   CARGO_PROFILE_TEST_DEBUG: '0'
 jobs:
-  transaction-causes:
+  lowering-causes:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
         with:
@@ -26,29 +26,28 @@ jobs:
           ref: d6734d2a0626f5c9926e4043ad2017a94f5c8c5a
           path: source
           fetch-depth: 0
-      - name: Apply the disjoint transaction cause fix
+      - name: Apply only compiler/runtime source forwarding
         working-directory: source
         run: |
-          python3 ../tooling/.github/r2-transaction-causes.py
+          python3 ../tooling/.github/r2-lowering-causes.py
           cargo fmt --all
           git diff --check
-          cargo test -p noon-core --test transaction_error_causes > ../causes.log 2>&1 || { tail -120 ../causes.log; exit 1; }
-          cargo test -p noon-core --lib semantic_transaction >> ../causes.log 2>&1 || { tail -120 ../causes.log; exit 1; }
-          cargo clippy -p noon-core --all-targets -- -D warnings >> ../causes.log 2>&1 || { tail -120 ../causes.log; exit 1; }
+          cargo test -p noon-compile -p noon-runtime --test error_causes > ../causes.log 2>&1 || { tail -160 ../causes.log; exit 1; }
+          cargo test -p noon-compile -p noon-runtime --all-features >> ../causes.log 2>&1 || { tail -160 ../causes.log; exit 1; }
+          cargo clippy -p noon-compile -p noon-runtime --all-targets --all-features -- -D warnings >> ../causes.log 2>&1 || { tail -160 ../causes.log; exit 1; }
           bash scripts/check.sh architecture d6734d2a0626f5c9926e4043ad2017a94f5c8c5a >> ../causes.log 2>&1
-          cargo test -p noon-core --test transaction_error_causes --target wasm32-unknown-unknown --no-run >> ../causes.log 2>&1 || { tail -120 ../causes.log; exit 1; }
-          tail -30 ../causes.log
-      - name: Publish source-only candidate and provenance
+          cargo test -p noon-compile -p noon-runtime --test error_causes --target wasm32-unknown-unknown --no-run >> ../causes.log 2>&1 || { tail -160 ../causes.log; exit 1; }
+          tail -40 ../causes.log
+      - name: Publish exact source-only candidate
         working-directory: source
         run: |
           git config user.name 'Noon development tooling'
           git config user.email 'development@noon.invalid'
-          git add crates/noon-core/src/semantic_store/semantic_transaction.rs crates/noon-core/src/semantic_store/semantic_transaction/prepared.rs crates/noon-core/tests/transaction_error_causes.rs
+          git add crates/noon-compile crates/noon-runtime
           git diff --cached --check
-          test "$(git diff --cached --name-only | wc -l)" = 3
-          git -c commit.gpgSign=false -c core.hooksPath=/dev/null commit -m 'fix: expose existing semantic transaction error causes (#1272 R2)'
+          git -c commit.gpgSign=false -c core.hooksPath=/dev/null commit -m 'fix: preserve compiler and runtime error cause chains (#1272 R2)'
           git diff --exit-code
-          git push origin HEAD:refs/heads/codex/1272-r2-transaction-causes
+          git push origin HEAD:refs/heads/codex/1272-r2-lowering-causes
           git rev-parse HEAD > ../candidate-sha.txt
           git archive HEAD | gzip > ../candidate.tar.gz
           git diff HEAD^ HEAD > ../candidate.patch
@@ -56,7 +55,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r2-transaction-causes
+          name: r2-lowering-causes
           path: |
             causes.log
             candidate-sha.txt
