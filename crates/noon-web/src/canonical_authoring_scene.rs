@@ -5358,6 +5358,32 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = liveMoveToLayout)]
+        pub fn live_move_to_layout(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::authoring_mobject::WasmLayoutAnchor,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_move_to(
+                    handle.semantic_mobject(),
+                    noon::LiveLayoutTarget::Anchor(&target.anchor),
+                    (edge_x, edge_y),
+                    (mask_x, mask_y),
+                )
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = liveMoveToPoint)]
         #[allow(clippy::too_many_arguments)]
         pub fn live_move_to_point(

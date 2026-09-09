@@ -1405,7 +1405,7 @@ async function directFamilyPlacementProof(expectedBackend) {
   try {
     renderer.resize(canvas.width, canvas.height);
     const wake = await settleDirectPublication(renderer, 0);
-    const blue = await sampleRenderedColor(canvas, -0.4, 1);
+    const blue = await sampleRenderedColor(canvas, -0.4, 0.7);
     const yellow = await sampleRenderedColor(canvas, 0.4, 1);
     const red = await sampleRenderedColor(canvas, 0, 0);
     const metrics = { backend: renderer.rendererBackend(), objects: renderer.objectCount(), blue, yellow, red };

@@ -181,6 +181,23 @@ class ManimSharedFamilyRelativePlacementTests(unittest.TestCase):
             assert store.applied[before:] == ids
             assert first._semantic_handle.shift_calls[-1] == (-2.0, 0.0)
             assert store.finishes == 4
+
+            # A stale member must not leave a partially translated family.
+            first._semantic_handle_fresh = False
+            before = list(store.applied)
+            for operation in (
+                lambda: family.move_to((1, 2)),
+                lambda: family.align_to((1, 2)),
+                lambda: family.next_to((1, 2)),
+                lambda: family.arrange(),
+            ):
+                try:
+                    operation()
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError("invalid family placement must reject")
+            assert store.applied == before
             """
         )
         completed = subprocess.run(

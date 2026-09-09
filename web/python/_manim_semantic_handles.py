@@ -32,115 +32,6 @@ def _alignment_is_mobject(value: object) -> bool:
     return isinstance(value, _base.Mobject)
 
 
-def _alignment_critical(value: object, direction: _base.Vec2) -> _base.Vec2:
-    if not _alignment_is_mobject(value):
-        raise TypeError("critical-point target must be a Mobject")
-    return value.get_critical_point(direction)  # type: ignore[union-attr]
-
-
-def _alignment_indexed(value: object, index: int | None) -> object:
-    if index is None:
-        return value
-    try:
-        return value[index]  # type: ignore[index]
-    except (TypeError, AttributeError, IndexError) as error:
-        raise IndexError("alignment submobject index is unavailable") from error
-
-
-def _manim_move_to(
-    self: _base.Mobject,
-    point_or_mobject: object,
-    aligned_edge: object = _base.ORIGIN,
-    coor_mask: object = (1.0, 1.0, 1.0),
-) -> _base.Mobject:
-    """Pinned ManimCE v0.21.0 ``Mobject.move_to`` in Noon's x/y plane."""
-
-    edge = _base._as_vec2(aligned_edge)
-    if _alignment_is_mobject(point_or_mobject):
-        target = _alignment_critical(point_or_mobject, edge)
-    else:
-        target = _base._as_vec2(point_or_mobject)
-    source = _alignment_critical(self, edge)
-    mask = _alignment_mask2(coor_mask)
-    delta = target - source
-    return self.shift(_base.Vec2(delta.x * mask.x, delta.y * mask.y))
-
-
-def _manim_next_to(
-    self: _base.Mobject,
-    mobject_or_point: object,
-    direction: object = _base.RIGHT,
-    buff: float = _base.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
-    aligned_edge: object = _base.ORIGIN,
-    submobject_to_align: object | None = None,
-    index_of_submobject_to_align: int | None = None,
-    coor_mask: object = (1.0, 1.0, 1.0),
-) -> _base.Mobject:
-    """Pinned Manim ``next_to`` semantics, including unnormalized direction."""
-
-    vector = _base._as_vec2(direction)
-    edge = _base._as_vec2(aligned_edge)
-
-    if _alignment_is_mobject(mobject_or_point):
-        target_aligner = _alignment_indexed(
-            mobject_or_point, index_of_submobject_to_align
-        )
-        target = _alignment_critical(target_aligner, edge + vector)
-    else:
-        target = _base._as_vec2(mobject_or_point)
-
-    if submobject_to_align is not None:
-        aligner = submobject_to_align
-    elif index_of_submobject_to_align is not None:
-        aligner = _alignment_indexed(self, index_of_submobject_to_align)
-    else:
-        aligner = self
-    source = _alignment_critical(aligner, edge - vector)
-
-    mask = _alignment_mask2(coor_mask)
-    delta = target - source + vector * float(buff)
-    return self.shift(_base.Vec2(delta.x * mask.x, delta.y * mask.y))
-
-
-def _manim_align_to(
-    self: _base.Mobject,
-    mobject_or_point: object,
-    direction: object = _base.ORIGIN,
-) -> _base.Mobject:
-    """Pinned Manim ``align_to`` semantics for Mobject and point targets."""
-
-    axis = _base._as_vec2(direction)
-    target = (
-        _alignment_critical(mobject_or_point, axis)
-        if _alignment_is_mobject(mobject_or_point)
-        else _base._as_vec2(mobject_or_point)
-    )
-    source = _alignment_critical(self, axis)
-    return self.shift(
-        _base.Vec2(
-            target.x - source.x if axis.x != 0.0 else 0.0,
-            target.y - source.y if axis.y != 0.0 else 0.0,
-        )
-    )
-
-
-def _manim_arrange(
-    self: _compat.Group,
-    direction: object = _base.RIGHT,
-    buff: float = _base.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
-    center: bool = True,
-    **kwargs: Any,
-) -> _compat.Group:
-    """Pinned Manim ``arrange`` forwarding placement kwargs to ``next_to``."""
-
-    vector = _base.RIGHT if direction is None else direction
-    for previous, current in zip(self.submobjects, self.submobjects[1:]):
-        current.next_to(previous, vector, buff, **kwargs)
-    if center:
-        self.center()
-    return self
-
-
 _ir = _base._ir
 
 try:
@@ -848,53 +739,33 @@ def _move_to(
 ) -> _base.Mobject:
     handle = _handle_for(self)
     if handle is None:
-        return _manim_move_to(
-            self,
-            point_or_mobject,
-            aligned_edge=aligned_edge,
-            coor_mask=coor_mask,
-        )
-
-    context = _live_mutation_context(self)
-    if context is not None:
-        edge = _base._as_vec2(aligned_edge)
-        mask = _alignment_mask2(coor_mask)
-        try:
-            if _alignment_is_mobject(point_or_mobject):
-                target_handle = _handle_for(point_or_mobject)
-                if target_handle is None:
-                    raise ValueError("live move_to requires a shared semantic target")
-                context.liveMoveToMobject(handle, target_handle, edge.x, edge.y, mask.x, mask.y)
-            else:
-                point = _base._as_vec2(point_or_mobject)
-                context.liveMoveToPoint(handle, point.x, point.y, edge.x, edge.y, mask.x, mask.y)
-        except Exception as error:
-            raise ValueError(str(error)) from None
-        return self
-
+        raise RuntimeError("Mobject placement requires a current shared Rust semantic handle")
     edge = _base._as_vec2(aligned_edge)
-    if _alignment_is_mobject(point_or_mobject):
-        target_handle = _handle_for(point_or_mobject)
-        if target_handle is None or not hasattr(handle, "manimMoveToHandle"):
-            return _manim_move_to(
-                self,
-                point_or_mobject,
-                aligned_edge=aligned_edge,
-                coor_mask=coor_mask,
-            )
-        mask = _alignment_mask2(coor_mask)
-        handle.manimMoveToHandle(target_handle, edge.x, edge.y, mask.x, mask.y)
+    mask = _alignment_mask2(coor_mask)
+    args = (edge.x, edge.y, mask.x, mask.y)
+    context = _live_mutation_context(self)
+    if isinstance(point_or_mobject, _compat.Group):
+        target = _layout_anchor(point_or_mobject)
+        if target is None:
+            raise RuntimeError("placement target requires a current shared Rust semantic handle")
+        if context is None:
+            handle.layoutAnchor(None).moveTo(target, *args)
+        else:
+            context.liveMoveToLayout(handle, target, *args)
+    elif _alignment_is_mobject(point_or_mobject):
+        target = _handle_for(point_or_mobject)
+        if target is None:
+            raise RuntimeError("placement target requires a current shared Rust semantic handle")
+        if context is None:
+            handle.manimMoveToHandle(target, *args)
+        else:
+            context.liveMoveToMobject(handle, target, *args)
     else:
-        if not hasattr(handle, "manimMoveToPoint"):
-            return _manim_move_to(
-                self,
-                point_or_mobject,
-                aligned_edge=aligned_edge,
-                coor_mask=coor_mask,
-            )
         point = _base._as_vec2(point_or_mobject)
-        mask = _alignment_mask2(coor_mask)
-        handle.manimMoveToPoint(point.x, point.y, edge.x, edge.y, mask.x, mask.y)
+        if context is None:
+            handle.manimMoveToPoint(point.x, point.y, *args)
+        else:
+            context.liveMoveToPoint(handle, point.x, point.y, *args)
     return self
 
 
@@ -1169,12 +1040,12 @@ def _shared_next_to(self, target, direction, buff, aligned_edge,
     aligner = (_layout_anchor(submobject_to_align) if submobject_to_align is not None
                else _layout_anchor(self, index))
     if source is None or aligner is None:
-        return False
+        raise RuntimeError("placement requires current shared Rust source and aligner handles")
     target_anchor = None
     if isinstance(target, (_base.Mobject, _compat.Group)):
         target_anchor = _layout_anchor(target, index)
         if target_anchor is None:
-            return False
+            raise RuntimeError("placement target requires a current shared Rust semantic handle")
     vector = _base._as_vec2(direction)
     edge = _base._as_vec2(aligned_edge)
     mask = _alignment_mask2(coor_mask)
@@ -1197,7 +1068,6 @@ def _shared_next_to(self, target, direction, buff, aligned_edge,
         if "alignment submobject index" in str(error):
             raise IndexError(str(error)) from None
         raise ValueError(str(error)) from None
-    return True
 
 
 def _next_to(
@@ -1210,14 +1080,9 @@ def _next_to(
     index_of_submobject_to_align: int | None = None,
     coor_mask: object = (1.0, 1.0, 1.0),
 ) -> _base.Mobject | _compat.Group:
-    if _shared_next_to(self, mobject_or_point, direction, buff, aligned_edge,
-                       submobject_to_align, index_of_submobject_to_align, coor_mask):
-        return self
-    return _manim_next_to(
-        self, mobject_or_point, direction, buff,
-        aligned_edge=aligned_edge, submobject_to_align=submobject_to_align,
-        index_of_submobject_to_align=index_of_submobject_to_align, coor_mask=coor_mask,
-    )
+    _shared_next_to(self, mobject_or_point, direction, buff, aligned_edge,
+                    submobject_to_align, index_of_submobject_to_align, coor_mask)
+    return self
 
 
 def _align_to(
@@ -1227,20 +1092,23 @@ def _align_to(
 ) -> _base.Mobject:
     handle = _handle_for(self)
     if handle is None:
-        return _manim_align_to(self, mobject_or_point, direction)
+        raise RuntimeError("alignment requires current shared Rust semantic handles")
     if _live_mutation_context(self) is not None:
         raise NotImplementedError(
             "canonical live affine targets do not support layout alignment"
         )
     axis = _base._as_vec2(direction)
-    if _alignment_is_mobject(mobject_or_point):
+    if isinstance(mobject_or_point, _compat.Group):
+        target = _layout_anchor(mobject_or_point)
+        if target is None:
+            raise RuntimeError("alignment requires current shared Rust semantic handles")
+        handle.layoutAnchor(None).alignTo(target, axis.x, axis.y)
+    elif _alignment_is_mobject(mobject_or_point):
         target_handle = _handle_for(mobject_or_point)
-        if target_handle is None or not hasattr(handle, "alignToHandle"):
-            return _manim_align_to(self, mobject_or_point, direction)
+        if target_handle is None:
+            raise RuntimeError("alignment requires current shared Rust semantic handles")
         handle.alignToHandle(target_handle, axis.x, axis.y)
     else:
-        if not hasattr(handle, "alignToPoint"):
-            return _manim_align_to(self, mobject_or_point, direction)
         point = _base._as_vec2(mobject_or_point)
         handle.alignToPoint(point.x, point.y, axis.x, axis.y)
     return self
@@ -1640,36 +1508,25 @@ def _group_move_to(
         return self
     shared = _shared_family_layout(self, mutation=True)
     if shared is None:
-        return _manim_move_to(self, point_or_mobject, aligned_edge, coor_mask)
+        raise RuntimeError("placement requires current shared Rust semantic handles")
     session = shared
     edge = _base._as_vec2(aligned_edge)
     mask = _alignment_mask2(coor_mask)
 
-    applied = False
     if isinstance(point_or_mobject, _compat.Group):
-        target_shared = _shared_family_layout(point_or_mobject)
-        if target_shared is not None and hasattr(session, "moveToFamily"):
-            target_session = target_shared
-            session.moveToFamily(
-                target_session, edge.x, edge.y, mask.x, mask.y
-            )
-            applied = True
+        target = _shared_family_layout(point_or_mobject)
+        if target is None:
+            raise RuntimeError("placement target requires a current shared Rust semantic handle")
+        session.moveToFamily(target, edge.x, edge.y, mask.x, mask.y)
     elif _alignment_is_mobject(point_or_mobject):
-        target_adapter = _family_layout_leaf_adapter(point_or_mobject)
-        if target_adapter is not None and hasattr(session, "moveToMobject"):
-            session.moveToMobject(
-                target_adapter, edge.x, edge.y, mask.x, mask.y
-            )
-            applied = True
-    elif hasattr(session, "moveToPoint"):
+        target = _family_layout_leaf_adapter(point_or_mobject)
+        if target is None:
+            raise RuntimeError("placement target requires a current shared Rust semantic handle")
+        session.moveToMobject(target, edge.x, edge.y, mask.x, mask.y)
+    else:
         point = _base._as_vec2(point_or_mobject)
-        session.moveToPoint(
-            point.x, point.y, edge.x, edge.y, mask.x, mask.y
-        )
-        applied = True
+        session.moveToPoint(point.x, point.y, edge.x, edge.y, mask.x, mask.y)
 
-    if not applied:
-        return _manim_move_to(self, point_or_mobject, aligned_edge, coor_mask)
     return self
 
 
@@ -1687,28 +1544,24 @@ def _group_align_to(
         return self
     shared = _shared_family_layout(self, mutation=True)
     if shared is None:
-        return _manim_align_to(self, mobject_or_point, direction)
+        raise RuntimeError("alignment requires current shared Rust semantic handles")
     session = shared
     axis = _base._as_vec2(direction)
 
-    applied = False
     if isinstance(mobject_or_point, _compat.Group):
-        target_shared = _shared_family_layout(mobject_or_point)
-        if target_shared is not None and hasattr(session, "alignToFamily"):
-            session.alignToFamily(target_shared, axis.x, axis.y)
-            applied = True
+        target = _shared_family_layout(mobject_or_point)
+        if target is None:
+            raise RuntimeError("alignment target requires a current shared Rust semantic handle")
+        session.alignToFamily(target, axis.x, axis.y)
     elif _alignment_is_mobject(mobject_or_point):
-        target_adapter = _family_layout_leaf_adapter(mobject_or_point)
-        if target_adapter is not None and hasattr(session, "alignToMobject"):
-            session.alignToMobject(target_adapter, axis.x, axis.y)
-            applied = True
-    elif hasattr(session, "alignToPoint"):
+        target = _family_layout_leaf_adapter(mobject_or_point)
+        if target is None:
+            raise RuntimeError("alignment target requires a current shared Rust semantic handle")
+        session.alignToMobject(target, axis.x, axis.y)
+    else:
         point = _base._as_vec2(mobject_or_point)
         session.alignToPoint(point.x, point.y, axis.x, axis.y)
-        applied = True
 
-    if not applied:
-        return _manim_align_to(self, mobject_or_point, direction)
     return self
 
 
@@ -1722,7 +1575,7 @@ def _group_arrange(
 ) -> _compat.Group:
     family_handle = getattr(self, "_semantic_family_handle", None)
     if family_handle is None or not hasattr(family_handle, "arrangeOptions"):
-        return _manim_arrange(self, direction=direction, buff=buff, center=center, **kwargs)
+        raise RuntimeError("arrange requires current shared Rust semantic handles")
     if not self.submobjects:
         return self
     unknown = set(kwargs) - {"aligned_edge", "coor_mask", "submobject_to_align", "index_of_submobject_to_align"}
@@ -1738,9 +1591,9 @@ def _group_arrange(
     if aligner is not None:
         anchor = _layout_anchor(aligner)
         if anchor is None:
-            return _manim_arrange(self, direction=direction, buff=buff, center=center, **kwargs)
+            raise RuntimeError("arrange requires current shared Rust semantic handles")
         options.setAligner(anchor)
-    context = _group_target_context(self)
+    context = _group_live_layout_context(self)
     try:
         if context is not None:
             context.liveArrangeFamily(family_handle, options)
@@ -1748,7 +1601,7 @@ def _group_arrange(
         leaves = _compat._leaf_mobjects(self)
         leaf_handles = [_family_layout_leaf_adapter(member, mutation=True) for member in leaves]
         if any(handle is None for handle in leaf_handles):
-            return _manim_arrange(self, direction=direction, buff=buff, center=center, **kwargs)
+            raise RuntimeError("arrange requires current shared Rust semantic handles")
         family_handle.arrange(options)
     except Exception as error:
         if "alignment submobject index" in str(error):
