@@ -1,0 +1,155 @@
+name: Architecture diagram polish
+on:
+  push:
+    branches: [work/architecture-diagram-polish-20260909]
+permissions:
+  contents: write
+jobs:
+  polish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Replace focused diagram sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > docs/diagrams/direct-execution-hosts.d2 <<'D2'
+          # Native and direct Rust/WASM use the same typed engine; only the platform shell changes.
+          ...@_style
+
+          direction: down
+          app: "Compiled Rust application\nnative binary or Rust/WASM" {class: node}
+          engine: "SHARED TYPED RUST ENGINE" {
+            grid-columns: 4
+            horizontal-gap: 54
+            scene: "Semantic Scene\nSemanticStore" {class: authority}
+            plan: "Execution Plan\nnoon-compile" {class: authority}
+            runtime: "Runtime\nnoon-runtime" {class: authority}
+            renderer: "Renderer\nnoon-render-wgpu" {class: authority}
+            scene -> plan: "typed lowering"
+            plan -> runtime: "typed execution"
+            runtime -> renderer: "FrameEpoch"
+          }
+          hosts: "PLATFORM EDGE" {
+            grid-columns: 2
+            horizontal-gap: 120
+            native: "Native host\nnoon-native" {class: host}
+            web: "Browser host\nnoon-web" {class: host}
+          }
+          app -> engine.scene: "author / mutate"
+          engine.renderer -> hosts: "surface / presentation"
+          D2
+
+          cat > docs/diagrams/revision-publication-lifetime.d2 <<'D2'
+          # Distinct identity/revision/lifetime domains; not one global generation counter.
+          ...@_style
+
+          direction: down
+          main: "STATE / LIFETIME PATH" {
+            grid-columns: 4
+            horizontal-gap: 62
+            scene: "SceneRevision\nauthored state" {class: authority}
+            execution: "ExecutionRevision\nderived plan" {class: authority}
+            frame: "FrameEpoch\neffective publication" {class: authority}
+            submit: "SubmissionSerial\nGPU lifetime" {class: node}
+            scene -> execution: "derive"
+            execution -> frame: "publish"
+            frame -> submit: "submit"
+          }
+          context: "DISTINCT CONTEXTS" {
+            grid-columns: 2
+            horizontal-gap: 100
+            identity: "NodeId generation\nidentity validity" {class: node}
+            inputs: "Publication context\nResourceVersion · InputSequence · CallbackEpoch" {class: node}
+          }
+          context.identity -> main.scene: "valid handle" {style.stroke-dash: 4}
+          context.inputs -> main.frame: "versioned / ordered inputs" {style.stroke-dash: 4}
+          D2
+
+          cat > docs/diagrams/locality-propagation.d2 <<'D2'
+          # A local change stays local through validation, execution, rendering and GPU publication.
+          ...@_style
+
+          direction: right
+          source: "Change source" {
+            grid-columns: 1
+            vertical-gap: 30
+            authored: "Authored edit\nproperty · structure · content" {class: node}
+            effective: "Effective write\ntimeline · reactive · callback" {class: node}
+          }
+          impact: "Impact analysis\nlocal preparation" {class: node}
+          runtime: "Affected runtime\nslots · spatial state" {class: authority}
+          publish: "Publication\nchanged ranges · resources" {class: node}
+          renderer: "Retained renderer\nreuse clean state" {class: authority}
+          gpu: "GPU work\ndirty upload · visible draw" {class: node}
+
+          source.authored -> impact: "validate"
+          impact -> runtime: "prepared effects"
+          source.effective -> runtime: "no relowering"
+          runtime -> publish: "FrameEpoch"
+          publish -> renderer: "dirty projection"
+          renderer -> gpu: "upload / encode"
+          D2
+
+          cat > docs/diagrams/callback-transaction.d2 <<'D2'
+          # One ordered callback invocation with a coherent read view and staged overlay.
+          shape: sequence_diagram
+          runtime: "Runtime"
+          view: "Read view"
+          host: "Host callback"
+          overlay: "Staged overlay"
+          prepare: "Preflight"
+
+          runtime -> view: "pin S / E / F"
+          view -> host: "invoke"
+          host -> overlay: "reads + staged writes"
+          host -> view: "read miss: suspend / resume"
+          overlay -> prepare: "authored / resource work"
+          prepare -> runtime: "prepared effects / reject"
+          overlay -> runtime: "effective writes"
+          runtime -> runtime: "atomic FrameEpoch"
+          D2
+
+          rm .github/workflows/architecture-diagram-polish.yml
+      - name: Install D2
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://github.com/d2lang/d2/releases/download/v0.9.0/d2-v0.9.0-linux-amd64.tar.gz -o "$RUNNER_TEMP/d2.tar.gz"
+          echo '5669ddc46b99e942cc96078f4a4e36d5e62103348f4c05179ede27802fdd87a9  '"$RUNNER_TEMP/d2.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/d2.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/d2-v0.9.0/bin" >> "$GITHUB_PATH"
+      - name: Render and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          d2 fmt docs/diagrams/*.d2
+          D2=d2 python3 scripts/architecture_diagrams.py
+          D2=d2 python3 scripts/test_architecture_diagrams.py
+          D2=d2 python3 scripts/architecture_diagrams.py --check
+          bash scripts/check.sh architecture 8cadad70a9fdbdaf51de49369fb5c98c2d4750e0
+          git diff --check
+      - name: Preserve previews and sources
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: noon-architecture-polished
+          path: |
+            README.md
+            docs/architecture.md
+            docs/diagrams/
+          retention-days: 7
+      - name: Publish clean documentation commit
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A -- README.md docs/architecture.md docs/diagrams .github/workflows/architecture-diagram-polish.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          tree="$(git write-tree)"
+          commit="$(git commit-tree "$tree" -p b05d6c78e0e8cfff187df857ddcf5a10cbb5e0a8 -m 'docs: simplify focused architecture diagrams')"
+          git push origin "$commit:refs/heads/docs/architecture-clarity-polished-20260909"
