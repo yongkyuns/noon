@@ -184,8 +184,6 @@ _ORIGINAL_ALIGN_ON_FRAME = _base.Mobject._align_on_frame
 _ORIGINAL_BECOME = _base.Mobject.become
 _ORIGINAL_REPLACE = _base.Mobject.replace
 
-_ORIGINAL_GROUP_ADD = _compat.Group.add
-_ORIGINAL_GROUP_REMOVE = _compat.Group.remove
 _ORIGINAL_GROUP_SHIFT = _compat.Group.shift
 _ORIGINAL_GROUP_MOVE_TO = _compat.Group.move_to
 _ORIGINAL_GROUP_NEXT_TO = _compat.Group.next_to
@@ -1744,6 +1742,8 @@ def _family_membership_batch(context: object, kind: str, mobjects: tuple[object,
 
 
 def _group_init(self: _compat.Group, *mobjects: object) -> None:
+    if _create_family_handle is None or _new_membership_batch is None:
+        raise RuntimeError("Group construction requires the shared Rust authoring host")
     _validate_group_members(self, mobjects)
     context = _live_constructor_context("family")
     batch = _family_membership_batch(context, "add", mobjects)
@@ -1776,7 +1776,7 @@ def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
     )
     accepted = tuple(value for value, changed in zip(mobjects, changed) if changed)
     if accepted:
-        _ORIGINAL_GROUP_ADD(self, *accepted)
+        self.submobjects.extend(accepted)
     return self
 
 
@@ -1793,7 +1793,8 @@ def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
     )
     accepted = tuple(value for value, changed in zip(mobjects, changed) if changed)
     if accepted:
-        _ORIGINAL_GROUP_REMOVE(self, *accepted)
+        removed = {id(value) for value in accepted}
+        self.submobjects = [value for value in self.submobjects if id(value) not in removed]
     return self
 
 
@@ -1905,13 +1906,9 @@ def install() -> None:
 
 
     if _create_family_handle is not None:
-        _compat.Group.__init__ = _group_init
-        _compat.Group.add = _group_add
-        _compat.Group.remove = _group_remove
         _compat.Group.shift = _group_shift
         _compat.Group.move_to = _group_move_to
         _compat.Group.next_to = _next_to
         _compat.Group.align_to = _group_align_to
         _compat.Group.arrange = _group_arrange
-        _compat.Group.copy = _group_copy
         _compat.Group._copy_for_animate_target = _group_copy

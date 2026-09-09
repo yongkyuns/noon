@@ -211,13 +211,14 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
             assert square.get_center().x == 0.0
             assert square.get_center().y == 0.0
 
-            # Group wrapper identity remains Python metadata while the installed
-            # shared-family adapter owns membership and target topology in browsers.
-            group = VGroup(Square(), Square().shift(LEFT))
-            group_builder = group.animate
-            assert isinstance(group_builder.target, VGroup)
-            assert group_builder.target is not group
-            assert len(group_builder.target.submobjects) == 2
+            # A geometry-only host cannot create a valid family in Python.
+            # Shared family target behavior is covered by the family bridge tests.
+            try:
+                VGroup(Square(), Square().shift(LEFT))
+            except RuntimeError as error:
+                assert "Group construction requires the shared Rust authoring host" in str(error)
+            else:
+                raise AssertionError("Group construction bypassed shared Rust")
             """
         )
         completed = subprocess.run(
