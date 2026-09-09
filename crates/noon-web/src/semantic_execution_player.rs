@@ -1,5 +1,7 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
 #[cfg(any(target_arch = "wasm32", test))]
+use crate::authoring_error::AuthoringFailure;
+#[cfg(any(target_arch = "wasm32", test))]
 use noon::integration::TimelineWakeState;
 use noon::integration::{
     CallbackAdvance, CallbackPhaseToken, CallbackReadRequest, CallbackReadValue,
@@ -1040,7 +1042,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_edit_membership(
         &mut self,
         request: noon::SceneMembershipRequest<'_>,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.require_completed_live_segment()?;
         let semantics = self
             .semantics
@@ -1054,7 +1056,7 @@ impl SemanticExecutionPlayer {
         )
         .edit_membership(request)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     /// Route callback declarations through the same shared semantic publication
@@ -1064,7 +1066,8 @@ impl SemanticExecutionPlayer {
         &mut self,
         transaction: noon_core::SemanticMutationTransaction,
     ) -> Result<(), String> {
-        self.require_completed_live_segment()?;
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
         let semantics = self
             .semantics
             .clone()
@@ -1081,24 +1084,33 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn require_completed_live_segment(&self) -> Result<(), String> {
+    fn require_completed_live_segment(&self) -> Result<(), AuthoringFailure> {
         self.require_callback_progression_available()?;
         if self.has_pending_live_segment() {
-            return Err("complete the current live segment before continuing".into());
+            return Err(AuthoringFailure::from(
+                noon::ExecutionSessionPublicationError::SegmentCompletionPending,
+            )
+            .with_message("complete the current live segment before continuing"));
         }
         Ok(())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn require_callback_progression_available(&self) -> Result<(), String> {
+    pub(crate) fn require_callback_progression_available(&self) -> Result<(), AuthoringFailure> {
         if let Some(termination) = self.session.callback_termination() {
-            return Err(format!(
+            return Err(AuthoringFailure::from(
+                noon::ExecutionSegmentCompletionError::CallbackTerminated(termination),
+            )
+            .with_message(format!(
                 "required callback progression terminated: {:?}",
                 termination.kind()
-            ));
+            )));
         }
         if self.pending_callback_phase.is_some() {
-            return Err("a required callback phase is pending host completion".into());
+            return Err(AuthoringFailure::from(
+                noon::ExecutionSessionPublicationError::RequiredCallbackPending,
+            )
+            .with_message("a required callback phase is pending host completion"));
         }
         Ok(())
     }
@@ -1108,7 +1120,8 @@ impl SemanticExecutionPlayer {
         &mut self,
         animation: &noon::DeclaredAnimation,
     ) -> Result<f64, String> {
-        self.require_completed_live_segment()?;
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
         let semantics = self
             .semantics
             .clone()
@@ -1139,7 +1152,8 @@ impl SemanticExecutionPlayer {
         endpoint: noon::AffineLifecycleEndpoint,
         options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
-        self.require_completed_live_segment()?;
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
         let semantics = self
             .semantics
             .clone()
@@ -1164,7 +1178,10 @@ impl SemanticExecutionPlayer {
     /// Query root membership from the exact shared live session. This is a
     /// derived wrapper observation, never a frontend lifecycle authority.
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_contains(&mut self, target: &noon::Mobject) -> Result<bool, String> {
+    pub(crate) fn live_contains(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<bool, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -1176,7 +1193,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .contains(target)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     /// Atomically admit and activate one recursive composition request through the shared
@@ -1188,7 +1205,8 @@ impl SemanticExecutionPlayer {
         request: &noon::AnimationCompositionRequest<'_>,
         play_options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
-        self.require_completed_live_segment()?;
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
         let semantics = self
             .semantics
             .clone()
@@ -1216,7 +1234,8 @@ impl SemanticExecutionPlayer {
         &mut self,
         initial: f64,
     ) -> Result<noon::ValueTracker, String> {
-        self.require_completed_live_segment()?;
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
         let semantics = self
             .semantics
             .clone()
@@ -1237,7 +1256,8 @@ impl SemanticExecutionPlayer {
         &mut self,
         tracker: &noon::ValueTracker,
     ) -> Result<(), String> {
-        self.require_completed_live_segment()?;
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
         let semantics = self
             .semantics
             .clone()
@@ -1326,7 +1346,8 @@ impl SemanticExecutionPlayer {
         &mut self,
         family: &noon::MobjectFamily,
     ) -> Result<(), String> {
-        self.require_completed_live_segment()?;
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
         let semantics = self
             .semantics
             .clone()
@@ -1343,7 +1364,7 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_wait(&mut self, duration: f64) -> Result<f64, String> {
+    pub(crate) fn live_wait(&mut self, duration: f64) -> Result<f64, AuthoringFailure> {
         self.require_completed_live_segment()?;
         let semantics = self
             .semantics
@@ -1356,7 +1377,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .wait_segment(duration)
-        .map_err(|error| error.to_string())?;
+        .map_err(AuthoringFailure::from)?;
         let end_time = segment.end_time();
         self.clock = self
             .live_clock_at(self.session.frame().time, end_time, true)
@@ -1396,7 +1417,8 @@ impl SemanticExecutionPlayer {
         &mut self,
         wall_time_ms: f64,
     ) -> Result<WasmExecutionWake, String> {
-        self.require_callback_progression_available()?;
+        self.require_callback_progression_available()
+            .map_err(|error| error.to_string())?;
         let segment = self.live_segment()?;
         let plan = BrowserExecutionWakePlan::from_pending_segment(&self.session, segment);
         let directive = self
@@ -1464,7 +1486,8 @@ impl SemanticExecutionPlayer {
         &mut self,
         wall_time_ms: f64,
     ) -> Result<WasmExecutionWake, String> {
-        self.require_callback_progression_available()?;
+        self.require_callback_progression_available()
+            .map_err(|error| error.to_string())?;
         self.live_segment()?;
         self.live_wake_clock
             .reanchor(wall_time_ms, self.session.frame().time)
@@ -1482,7 +1505,8 @@ impl SemanticExecutionPlayer {
         &mut self,
         wall_time_ms: f64,
     ) -> Result<WasmLiveSegmentDrive, String> {
-        self.require_callback_progression_available()?;
+        self.require_callback_progression_available()
+            .map_err(|error| error.to_string())?;
         let segment = self.live_segment()?;
         let requested_time = self
             .live_wake_clock
@@ -1503,7 +1527,8 @@ impl SemanticExecutionPlayer {
         &mut self,
         requested_time: f64,
     ) -> Result<WasmLiveSegmentDrive, String> {
-        self.require_callback_progression_available()?;
+        self.require_callback_progression_available()
+            .map_err(|error| error.to_string())?;
         let current = self.session.frame().time;
         if !requested_time.is_finite() || requested_time < current {
             return Err(format!(
@@ -1564,7 +1589,7 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_complete_segment(&mut self) -> Result<(), String> {
+    pub(crate) fn live_complete_segment(&mut self) -> Result<(), AuthoringFailure> {
         let segment = self.live_segment()?;
         let semantics = self
             .semantics
@@ -1578,7 +1603,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .complete_segment(segment)
-        .map_err(|error| error.to_string())?;
+        .map_err(AuthoringFailure::from)?;
         self.clock = clock;
         self.live_segment = Some(LiveSegmentReceipt::Completed(segment));
         self.live_wake_clock = BrowserExecutionWakeClock::default();
@@ -2201,10 +2226,11 @@ impl SemanticExecutionPlayer {
         self.live_drive_segment_to_authored_time(requested_time)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = completeLiveSegment))]
-    pub fn complete_live_segment_wasm(&mut self) -> Result<(), String> {
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = completeLiveSegment)]
+    pub fn complete_live_segment_wasm(&mut self) -> Result<(), wasm_bindgen::JsValue> {
         self.live_complete_segment()
+            .map_err(crate::authoring_error::js_error)
     }
 
     /// Read one typed value from the exact pending callback phase without

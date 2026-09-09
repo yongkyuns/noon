@@ -31,7 +31,7 @@ pub(super) enum PlayerOwnership {
 
 /// Ownership failures remain typed until the language boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum PlayerReturnError {
+pub(crate) enum PlayerReturnError {
     NotLeased,
     ForeignScene,
     StaleLease,

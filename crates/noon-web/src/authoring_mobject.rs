@@ -60,6 +60,7 @@ pub(crate) fn manim_text(
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    use crate::authoring_error::{js_error as typed_js_error, AuthoringFailure};
     use std::{cell::RefCell, rc::Rc};
 
     use noon::{FamilyLayout, FamilyLayoutTarget};
@@ -215,8 +216,7 @@ mod wasm {
 
     #[wasm_bindgen]
     pub struct WasmAuthoringFamilyHandle {
-        semantics: SharedSemanticStore,
-        id: SemanticNodeId,
+        family: noon::MobjectFamily,
     }
 
     /// Host-normalized options for one shared arrangement transaction.
@@ -361,6 +361,21 @@ mod wasm {
                 )
                 .map_err(js_error)
         }
+    }
+
+    /// Real-WASM regression fixture only: invalidate a shared handle, not a JS wrapper.
+    #[cfg(debug_assertions)]
+    #[wasm_bindgen(js_name = authoringErrorStaleMobjectSmoke)]
+    pub fn authoring_error_stale_mobject_smoke(
+        store: &WasmAuthoringStore,
+    ) -> WasmAuthoringMobjectHandle {
+        let handle = Mobject::manim_circle(Rc::clone(&store.semantics), 1.0).unwrap();
+        store
+            .semantics
+            .borrow_mut()
+            .remove_node(handle.node_id())
+            .unwrap();
+        WasmAuthoringMobjectHandle::from_semantic_mobject(handle)
     }
 
     /// Thin browser wrapper over the shared authored family observation.
@@ -556,14 +571,12 @@ mod wasm {
 
     impl WasmAuthoringFamilyHandle {
         pub(crate) fn from_semantic_family(family: noon::MobjectFamily) -> Self {
-            Self {
-                semantics: Rc::clone(family.integration_store()),
-                id: family.node_id(),
-            }
+            Self { family }
         }
 
         pub(crate) fn semantic_family(&self) -> Result<noon::MobjectFamily, JsValue> {
-            noon::MobjectFamily::from_node(Rc::clone(&self.semantics), self.id).map_err(js_error)
+            self.family.validate().map_err(typed_js_error)?;
+            Ok(self.family.clone())
         }
     }
 
@@ -730,29 +743,30 @@ mod wasm {
 
         #[wasm_bindgen(getter, js_name = semanticSlot)]
         pub fn semantic_slot(&self) -> u32 {
-            self.id.slot()
+            self.family.node_id().slot()
         }
 
         #[wasm_bindgen(getter, js_name = semanticGeneration)]
         pub fn semantic_generation(&self) -> u32 {
-            self.id.generation()
+            self.family.node_id().generation()
         }
 
         #[wasm_bindgen(getter, js_name = memberCount)]
         pub fn member_count(&self) -> usize {
-            self.semantics
+            self.family
+                .integration_store()
                 .borrow()
-                .node(self.id)
+                .node(self.family.node_id())
                 .map_or(0, |node| node.member_count())
         }
 
         /// One bounded observation for mirroring a newly constructed wrapper list.
         #[wasm_bindgen(js_name = memberKeys)]
         pub fn member_keys(&self) -> Result<Vec<String>, JsValue> {
-            let store = self.semantics.borrow();
+            let store = self.family.integration_store().borrow();
             let node = store
-                .semantic_family_checked(self.id)
-                .map_err(|e| js_error(e.to_string()))?;
+                .semantic_family_checked(self.family.node_id())
+                .map_err(typed_js_error)?;
             Ok(node
                 .members_iter()
                 .map(|id| format!("{}:{}", id.slot(), id.generation()))
@@ -761,9 +775,10 @@ mod wasm {
 
         #[wasm_bindgen(js_name = memberSlot)]
         pub fn member_slot(&self, index: usize) -> Result<u32, JsValue> {
-            self.semantics
+            self.family
+                .integration_store()
                 .borrow()
-                .node(self.id)
+                .node(self.family.node_id())
                 .and_then(|node| node.members().get(index).copied())
                 .map(SemanticNodeId::slot)
                 .ok_or_else(|| JsValue::from_str("family member index is out of bounds"))
@@ -771,9 +786,10 @@ mod wasm {
 
         #[wasm_bindgen(js_name = memberGeneration)]
         pub fn member_generation(&self, index: usize) -> Result<u32, JsValue> {
-            self.semantics
+            self.family
+                .integration_store()
                 .borrow()
-                .node(self.id)
+                .node(self.family.node_id())
                 .and_then(|node| node.members().get(index).copied())
                 .map(SemanticNodeId::generation)
                 .ok_or_else(|| JsValue::from_str("family member index is out of bounds"))
@@ -874,13 +890,13 @@ mod wasm {
             context: &str,
         ) -> Result<SemanticNodeId, JsValue> {
             if !Rc::ptr_eq(semantics, self.handle.integration_store()) {
-                return Err(js_error(format!(
-                    "{context} and mobject belong to different authoring stores"
-                )));
+                return Err(typed_js_error(
+                    AuthoringFailure::from(noon::AuthoringError::ForeignStore).with_message(
+                        format!("{context} and mobject belong to different authoring stores"),
+                    ),
+                ));
             }
-            self.handle
-                .validate()
-                .map_err(|error| js_error(error.to_string()))?;
+            self.handle.validate().map_err(typed_js_error)?;
             Ok(self.handle.node_id())
         }
     }
