@@ -1,0 +1,55 @@
+from pathlib import Path
+
+# Compilation-discovered conversions only at the existing example String boundary.
+# Shared authoring and live publication never get a From<String> adapter.
+POSITIONS = {'crates/noon/src/example_scenes/affine_fade.rs': [(81, 35), (80, 6), (74, 86)], 'crates/noon/src/example_scenes/analytic_profile.rs': [(88, 37), (87, 39), (86, 47), (85, 48), (84, 37), (83, 46), (55, 35)], 'crates/noon/src/example_scenes/dimension_fitting.rs': [(24, 44), (22, 72), (21, 22), (20, 23), (19, 49), (18, 46), (15, 28), (14, 28), (13, 35), (12, 35), (11, 34), (10, 42)], 'crates/noon/src/example_scenes/draw_border_then_fill.rs': [(78, 40), (77, 69), (76, 33), (73, 6), (67, 86), (66, 34), (65, 6), (59, 6), (53, 86)], 'crates/noon/src/example_scenes/exact_property_tracks.rs': [(23, 40), (22, 41), (21, 38), (20, 39), (19, 40), (18, 41), (17, 38), (16, 40)], 'crates/noon/src/example_scenes/family_affine.rs': [(16, 27), (15, 64), (14, 59), (13, 22), (12, 23), (11, 28), (10, 28), (9, 35), (8, 35), (7, 34), (6, 34)], 'crates/noon/src/example_scenes/family_arrangement.rs': [(130, 40), (126, 40), (125, 68), (124, 68), (123, 27), (121, 37), (120, 10), (113, 86), (112, 85)], 'crates/noon/src/example_scenes/family_grid.rs': [(16, 31), (15, 53), (14, 83), (11, 44), (10, 31), (9, 56)], 'crates/noon/src/example_scenes/family_paint.rs': [(13, 84), (12, 70), (11, 64), (10, 59), (9, 22), (8, 23), (7, 34), (6, 34)], 'crates/noon/src/example_scenes/family_placement.rs': [(65, 27), (64, 76), (64, 49), (63, 18), (61, 55), (60, 18), (58, 6), (43, 30), (42, 31), (40, 63), (39, 18), (37, 73), (36, 18), (32, 51), (31, 58), (30, 61), (29, 75), (28, 35), (27, 51), (26, 27), (24, 37), (23, 10), (12, 86), (11, 86), (10, 85)], 'crates/noon/src/example_scenes/family_transform_indicate.rs': [(134, 27), (132, 70), (131, 42), (130, 66), (126, 39), (125, 10), (118, 36), (117, 36), (116, 85), (115, 84), (67, 61), (64, 62), (64, 52)], 'crates/noon/src/example_scenes/line_passing_flash.rs': [(94, 91), (93, 35), (92, 49), (90, 39), (89, 53), (88, 34), (87, 70)], 'crates/noon/src/example_scenes/live_geometry_construction.rs': [(221, 6), (220, 88), (217, 6), (216, 77), (212, 25), (211, 35), (209, 38), (208, 91), (206, 41), (205, 39), (204, 55), (139, 49), (137, 82), (124, 54), (123, 89), (121, 50), (120, 74), (66, 55), (65, 52), (64, 18), (57, 48), (56, 61), (52, 44), (51, 69), (50, 18), (44, 56), (43, 48), (42, 62), (41, 42), (40, 80), (35, 55), (34, 52), (33, 78)], 'crates/noon/src/example_scenes/live_updater_lifecycle.rs': [(48, 41), (47, 57), (46, 44), (45, 60)], 'crates/noon/src/example_scenes/mixed_scalar_composition.rs': [(111, 44), (110, 6), (105, 43), (102, 38), (100, 10), (93, 86), (92, 86)], 'crates/noon/src/example_scenes/moving_around.rs': [(64, 33), (63, 6), (57, 39)], 'crates/noon/src/example_scenes/ordinary_become_semantics.rs': [(182, 25), (180, 99), (177, 56), (176, 68), (175, 53), (174, 77), (173, 6), (168, 58), (167, 56), (166, 73), (164, 39), (154, 44), (153, 36), (152, 69), (86, 71), (85, 57)], 'crates/noon/src/example_scenes/ordinary_membership.rs': [(93, 64), (92, 39), (91, 38), (90, 35), (89, 38), (88, 37), (87, 35), (86, 37), (85, 36), (28, 55)], 'crates/noon/src/example_scenes/ordinary_subset_display.rs': [(92, 7), (87, 7), (67, 6), (61, 33), (60, 86)], 'crates/noon/src/example_scenes/ordinary_uncreate_options.rs': [(106, 10), (95, 40), (94, 38), (93, 38)], 'crates/noon/src/example_scenes/painter_order_overlap.rs': [(39, 47), (38, 47), (36, 6), (19, 32), (18, 10), (11, 50), (10, 40)], 'crates/noon/src/example_scenes/renderer_fixtures.rs': [(181, 37), (180, 36), (177, 83), (176, 66), (118, 57), (111, 56), (109, 37), (108, 39), (106, 38), (105, 39), (83, 83), (82, 79), (26, 35)], 'crates/noon/src/example_scenes/renderer_recovery.rs': [(53, 31), (52, 43), (51, 49), (50, 33), (49, 50), (31, 27), (30, 44), (21, 28), (20, 39), (19, 27), (18, 55), (17, 30), (16, 50), (15, 28), (14, 40), (6, 36)], 'crates/noon/src/example_scenes/specialized_geometry.rs': [(41, 38), (39, 39), (38, 52), (37, 45), (23, 31), (22, 66), (21, 86), (20, 75), (19, 86), (18, 96), (17, 31), (16, 81), (15, 26), (14, 60), (13, 29), (12, 56), (11, 58)], 'crates/noon/src/example_scenes/timed_composition.rs': [(129, 10), (123, 39), (120, 73), (119, 73), (118, 73)], 'crates/noon/src/example_scenes.rs': [(2087, 31), (2086, 65), (2069, 38), (2068, 6), (2062, 6), (2055, 39), (2053, 43), (2052, 49), (2051, 43), (2050, 48), (1681, 40), (1679, 6), (1673, 86), (1167, 44), (1151, 84), (1142, 42), (1141, 51), (1140, 49), (1137, 51), (1134, 49), (1131, 49), (882, 84), (153, 6), (147, 6), (141, 36), (140, 38), (139, 45), (138, 47), (137, 6), (131, 6), (125, 36), (124, 37)], 'crates/noon/src/example_scenes/ordinary_focus_on.rs': [(59, 28), (58, 33), (57, 46), (56, 39), (55, 39)], 'crates/noon/src/example_scenes/ordinary_rotating.rs': [(55, 31), (54, 36), (53, 49), (52, 40), (51, 50)], 'crates/noon/src/example_scenes/scale_in_place.rs': [(59, 28), (58, 33), (57, 46), (56, 39), (55, 39)]}
+for name, positions in POSITIONS.items():
+    path=Path(name)
+    lines=path.read_text().splitlines(keepends=True)
+    for row,column in positions:
+        line=lines[row-1]
+        assert line[column-1]=='?',(name,row,column,line)
+        lines[row-1]=line[:column-1]+'.map_err(|error| error.to_string())'+line[column-1:]
+    path.write_text(''.join(lines))
+
+def replace(name,old,new,count=None):
+    path=Path('crates/noon/src')/name
+    text=path.read_text()
+    actual=text.count(old)
+    assert actual>0 and (count is None or actual==count),(name,old,actual,count)
+    path.write_text(text.replace(old,new))
+
+replace('family_authoring.rs','    String,\n> {','    AuthoringError,\n> {',1)
+replace('family_arrangement.rs','plan.transaction(|leaf|','plan.transaction::<AuthoringError>(|leaf|',1)
+replace('family_arrangement.rs','.delta(None, |_, _| Ok((0.0, 0.0)))?','.delta::<AuthoringError>(None, |_, _| Ok((0.0, 0.0)))?',1)
+replace('family_layout.rs','"family placement source and target belong to different authoring stores".into(),','AuthoringError::ForeignStore,',1)
+replace('live_session.rs','prepare_subset_display_transaction(&store, target.node_id())\n                .map_err(LiveSessionError::from)?','prepare_subset_display_transaction(&store, target.node_id())\n                .map_err(LiveSessionError::Mobject)?',1)
+replace('live_session.rs','tracker\n            .require_store(self.store)\n            .map_err(LiveSessionError::Animation)?','tracker\n            .require_store(self.store)\n            .map_err(LiveSessionError::from)?',2)
+replace('live_session.rs','tracker\n                    .require_store(self.store)\n                    .map_err(LiveSessionError::Animation)?','tracker\n                    .require_store(self.store)\n                    .map_err(LiveSessionError::from)?',1)
+replace('live_session/family_layout.rs','.map_err(LiveSessionError::Mobject)','.map_err(LiveSessionError::from)')
+replace('live_session/family_layout.rs','.map_err(|e| LiveSessionError::Mobject(e.to_string()))?','.map_err(crate::AuthoringError::from)?',1)
+replace('live_session/family_layout.rs','return Err(LiveSessionError::Mobject(\n                "effective family layout cannot use render-content overrides".into(),\n            ));','return Err(crate::AuthoringError::Unsupported(\n                crate::UnsupportedAuthoringOperation::EffectiveFamilyLayoutRenderOverride,\n            ).into());',1)
+replace('live_session/family_layout.rs','return Err(LiveSessionError::Mobject(\n                "layout anchors belong to different authoring stores".into(),\n            ));','return Err(crate::AuthoringError::ForeignStore.into());',1)
+replace('live_session/family_layout.rs','.map_err(|e| e.to_string())','')
+replace('live_session/family_layout.rs','None => object.center(),','None => object.center().map_err(LiveSessionError::from),',1)
+replace('semantic_mobject/style.rs','assert!(manim_paint_opacity(Some(&SemanticPaint::Resource(7)), 0.5)\n            .unwrap_err()\n            .contains("resource paints"));','assert_eq!(manim_paint_opacity(Some(&SemanticPaint::Resource(7)), 0.5).unwrap_err(),\n            AuthoringError::Unsupported(crate::UnsupportedAuthoringOperation::ResourcePaintOpacityQuery));',1)
+
+# Camera frame construction is ordinary object/state authoring, not activation.
+replace('camera_authoring.rs','use crate::{Mobject, Scene};','use crate::{AuthoringError, Mobject, Scene};',1)
+replace('camera_authoring.rs','Result<Mobject, String>','Result<Mobject, AuthoringError>',1)
+replace('camera_authoring.rs','.ok_or("scene root is unavailable")?','.ok_or_else(|| AuthoringError::from(noon_core::SemanticSceneOperationError::UnknownNode(self.root())))?',1)
+replace('camera_authoring.rs','Err("2D camera frame must be created before scene content".into())','Err(AuthoringError::CameraRequiresEmptyScene(self.root()))',1)
+replace('camera_authoring.rs','.map_err(|error| error.to_string())?','.map_err(AuthoringError::from)?',1)
+replace('camera_authoring.rs','.ok_or("camera-frame transaction returned no semantic identity")?','.ok_or(AuthoringError::UnresolvedCreatedNode(frame))?',1)
+replace('camera_authoring.rs','"2D camera frame must be created before scene content"','AuthoringError::CameraRequiresEmptyScene(scene.root())',2)
+replace('authoring_error.rs','pub enum UnsupportedAuthoringOperation {','pub enum UnsupportedAuthoringOperation {\n    /// Effective family layout requires authored content without overrides.\n    EffectiveFamilyLayoutRenderOverride,',1)
+replace('authoring_error.rs','f.write_str(match self {','f.write_str(match self {\n            Self::EffectiveFamilyLayoutRenderOverride => "effective family layout cannot use render-content overrides",',1)
+replace('authoring_error.rs','pub enum AuthoringError {','pub enum AuthoringError {\n    /// The camera must be initialized before ordinary root content is added.\n    CameraRequiresEmptyScene(noon_core::SemanticNodeId),\n    /// A committed creation did not resolve its prepared local token.\n    UnresolvedCreatedNode(noon_core::SemanticLocalNodeToken),',1)
+replace('authoring_error.rs','        match self {\n            Self::FamilyPairing(error) => error.fmt(f),','        match self {\n            Self::CameraRequiresEmptyScene(_) => f.write_str("2D camera frame must be created before scene content"),\n            Self::UnresolvedCreatedNode(token) => write!(f,"committed creation did not resolve {token:?}"),\n            Self::FamilyPairing(error) => error.fmt(f),',1)
+
+# Preserve #1290: only named causes, no blanket implementation re-exports.
+replace('integration.rs','pub use noon_core::{','pub use noon_core::{\n    GeometryResourceError, SemanticFamilyPairingError, SemanticGeometryLayoutError,\n    SemanticLoweringError, SemanticScalarSignalQueryError, SemanticSignalBindingError,\n    SemanticSignalError, SemanticTextImportError,',1)
+
+for path in Path('crates/noon/src').glob('example_scenes*/**/*.rs'):
+    text=path.read_text()
+    path.write_text(text.replace('.camera_frame()?', '.camera_frame().map_err(|error| error.to_string())?'))
