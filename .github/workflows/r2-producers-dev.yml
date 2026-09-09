@@ -3,40 +3,93 @@ on:
   push:
     branches: [codex/1292-r2-producers-prep]
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: r2-producers-development
   cancel-in-progress: true
+env:
+  CARGO_BUILD_JOBS: '2'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_GHA_RW_MODE: READ_ONLY
 jobs:
-  inspect:
+  foundation:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: master
+          ref: d1c72e55f03817b4bb2efe815c80e8b9f32b8747
           path: source
           fetch-depth: 0
-          persist-credentials: false
-      - name: Snapshot master and inspect the existing foundation merge
+      - name: Reconcile the existing foundation without changing either owning branch
         working-directory: source
         run: |
           git config user.name 'Noon development tooling'
           git config user.email 'development@noon.invalid'
-          git rev-parse HEAD > ../master-sha.txt
-          git archive HEAD | gzip > ../master.tar.gz
-          git merge --no-commit --no-ff d1c72e55f03817b4bb2efe815c80e8b9f32b8747 > ../merge.log 2>&1 || true
-          git status --short >> ../merge.log
-          git diff --name-only --diff-filter=U >> ../merge.log
-          tar --exclude=.git -czf ../reconciled-worktree.tar.gz .
-          cat ../master-sha.txt ../merge.log
-      - uses: actions/upload-artifact@v7
+          git merge --no-commit --no-ff d6734d2a0626f5c9926e4043ad2017a94f5c8c5a
+          cargo fmt --all
+          cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
+          git add .
+          git diff --cached --check
+          git diff --cached --stat
+          git diff d6734d2a0626f5c9926e4043ad2017a94f5c8c5a -- .github/workflows | tee ../workflow-delta.txt
+          test ! -s ../workflow-delta.txt
+      - uses: actions/cache@v6
         with:
-          name: r2-producer-source-inspection
           path: |
-            master-sha.txt
-            master.tar.gz
-            merge.log
-            reconciled-worktree.tar.gz
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: r2-sources-${{ runner.os }}-${{ hashFiles('source/Cargo.toml', 'source/crates/**/Cargo.toml') }}
+          restore-keys: |
+            Linux-cargo-sources-
+            provider-sources-Linux-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Run repository fast gate
+        working-directory: source
+        run: |
+          bash scripts/check.sh fast d6734d2a0626f5c9926e4043ad2017a94f5c8c5a > ../fast.log 2>&1 || { tail -120 ../fast.log; exit 1; }
+          tail -20 ../fast.log
+      - name: Qualify independent consumers and public example
+        working-directory: source
+        run: |
+          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --test authoring_errors --test public_facade > ../consumer.log 2>&1 || { tail -120 ../consumer.log; exit 1; }
+          cargo test -p noon --no-default-features --doc > ../docs.log 2>&1 || { tail -120 ../docs.log; exit 1; }
+          cargo run -p noon --no-default-features --example shared_authoring >> ../docs.log 2>&1
+          tail -35 ../consumer.log
+          tail -20 ../docs.log
+      - name: Compile direct WASM and independent consumers
+        working-directory: source
+        run: |
+          cargo check -p noon-web --target wasm32-unknown-unknown --all-features > ../wasm.log 2>&1 || { tail -120 ../wasm.log; exit 1; }
+          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --test authoring_errors --test public_facade --target wasm32-unknown-unknown --no-run >> ../wasm.log 2>&1 || { tail -120 ../wasm.log; exit 1; }
+          tail -20 ../wasm.log
+      - name: Preserve exact tested foundation candidate only
+        working-directory: source
+        run: |
+          test "$(git ls-remote origin refs/heads/codex/1272-r2-typed-membership | cut -f1)" = d1c72e55f03817b4bb2efe815c80e8b9f32b8747
+          git diff --exit-code
+          tree=$(git write-tree)
+          commit=$(printf '%s\n' 'fix: reconcile typed membership foundation with current master (#1292 R2)' | git commit-tree "$tree" -p d1c72e55f03817b4bb2efe815c80e8b9f32b8747 -p d6734d2a0626f5c9926e4043ad2017a94f5c8c5a)
+          printf '%s\n' "$commit" > ../candidate-sha.txt
+          git diff d6734d2a0626f5c9926e4043ad2017a94f5c8c5a "$commit" --binary > ../candidate.patch
+          git push origin "$commit":refs/heads/codex/1292-r2-foundation
+          git archive "$commit" | gzip > ../candidate.tar.gz
+          cat ../candidate-sha.txt
+      - name: Retain complete evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: r2-foundation-current-master
+          path: |
+            *.log
+            candidate.patch
+            candidate-sha.txt
+            candidate.tar.gz
           retention-days: 3
           if-no-files-found: error
