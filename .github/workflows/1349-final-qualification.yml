@@ -1,0 +1,130 @@
+name: Typed advancement final integration
+on:
+  push:
+    branches: [codex/1349-final-qualification]
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: typed-advancement-final-integration
+  cancel-in-progress: false
+env:
+  CARGO_BUILD_JOBS: '2'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+  EVIDENCE: ${{ runner.temp }}/advancement-evidence
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout one-shot integration tooling
+        uses: actions/checkout@v7
+        with:
+          path: tooling
+          persist-credentials: false
+      - name: Checkout the already-reviewed advancement source
+        uses: actions/checkout@v7
+        with:
+          ref: e4ce9125d45ddf9a35ccfb6180040643b56c3f0c
+          fetch-depth: 0
+          path: source
+      - name: Integrate only the landed master and preserve all independent tests
+        working-directory: source
+        run: |
+          git config user.name 'Noon development tooling'
+          git config user.email 'development@noon.invalid'
+          python3 ../tooling/.github/1349-integrate.py
+          git archive --format=tar HEAD | gzip > "$EVIDENCE/source.tar.gz"
+          { git rev-parse HEAD HEAD^{tree}; rustup show; node --version; python3 --version; printf 'helper_event=%s\n' "$GITHUB_SHA"; } > "$EVIDENCE/environment.txt"
+      - name: Reuse the retained qualified dependency lockfile
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 34368140697
+          name: integrated-wait-full-qualification
+          path: ${{ runner.temp }}/prior-wait-evidence
+      - name: Preserve dependency inputs
+        working-directory: source
+        run: |
+          mapfile -t locks < <(find "$RUNNER_TEMP/prior-wait-evidence" -type f -name Cargo.lock)
+          test "${#locks[@]}" = 1
+          cp "${locks[0]}" Cargo.lock
+          echo '9fc77831ae25df351229c9902c073657062501a8e5faf8ea313dd9c8284062dd  Cargo.lock' | sha256sum -c -
+          cp Cargo.lock "$EVIDENCE/Cargo.lock"
+          sha256sum Cargo.lock > "$EVIDENCE/lock-before.txt"
+      - name: Restore Cargo sources
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('source/Cargo.toml', 'source/crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - name: Use repository-pinned compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Install repository-pinned wasm-pack
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Run the one full gate and optimized release package
+        working-directory: source
+        run: |
+          bash scripts/check.sh full 406944f8a58218629c14ff247894b3fd2e8c471a > "$EVIDENCE/full.log" 2>&1 || { tail -160 "$EVIDENCE/full.log"; exit 1; }
+          sha256sum web/pkg/noon_web_bg.wasm web/pkg/noon_web.js > "$EVIDENCE/release-package.txt"
+          tail -20 "$EVIDENCE/full.log"
+      - name: Build the diagnostic-enabled package for the existing full fixture matrix
+        working-directory: source
+        run: |
+          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh > "$EVIDENCE/dev-build.log" 2>&1 || { tail -160 "$EVIDENCE/dev-build.log"; exit 1; }
+          sha256sum web/pkg/noon_web_bg.wasm web/pkg/noon_web.js > "$EVIDENCE/dev-package.txt"
+          sha256sum Cargo.lock > "$EVIDENCE/lock-after.txt"
+          cp Cargo.lock "$EVIDENCE/Cargo.lock"
+      - name: Run existing real-WASM Pyodide and Manim suites
+        working-directory: source
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+          node scripts/typed-authoring-errors-smoke.mjs > "$EVIDENCE/browser.log" 2>&1 || { tail -160 "$EVIDENCE/browser.log"; exit 1; }
+          node scripts/manim-compat-smoke.mjs > "$EVIDENCE/manim.log" 2>&1 || { tail -160 "$EVIDENCE/manim.log"; exit 1; }
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path('browser-smoke-artifacts/typed-authoring-errors/results.json').read_text())
+          assert len(result['javascript']) == 10
+          assert len(result['liveProperties']) == 29
+          assert len(result['advancement']) == 9
+          python = result['python']
+          assert len(python['matrix']) == 10 and len(python['liveProperties']) == 29
+          assert len(python['advancement']) == 9
+          assert python['additionalTests'] == 11 and python['skipped'] == 0
+          assert python['promiseRejectionAndRecovery'] is True
+          assert result['publicPython'] == {'structuredScene': True, 'subsequentRun': True, 'terminated': False}
+          print('All 48 JS + 48 Python matrix cases, 11 discovered WASM tests, Promise and worker recovery passed.')
+          PY
+      - name: Publish the qualified integration candidate without modifying the PR branch
+        working-directory: source
+        run: |
+          git diff --exit-code
+          test "$(git rev-parse HEAD)" = "$(cat "$EVIDENCE/head.txt")"
+          test "$(git ls-remote origin refs/heads/codex/1292-r3-advancement | cut -f1)" = e4ce9125d45ddf9a35ccfb6180040643b56c3f0c
+          git diff --stat 406944f8a58218629c14ff247894b3fd2e8c471a HEAD
+          git push origin HEAD:refs/heads/codex/1349-integration-qualified
+          git status --porcelain > "$EVIDENCE/final-status.txt"
+      - name: Retain exact source and qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: advancement-final-integration
+          path: |
+            ${{ runner.temp }}/advancement-evidence/
+            source/browser-smoke-artifacts/typed-authoring-errors/
+          if-no-files-found: error
+          retention-days: 3
