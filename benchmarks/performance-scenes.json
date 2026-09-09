@@ -52,12 +52,12 @@
       "dimensions": ["groups", "layout", "animate", "independent-transforms"]
     },
     {
-      "id": "staggered-choreography",
-      "source": "./python/examples/staggered_choreography.py",
+      "id": "timed-composition",
+      "source": "./python/examples/ordinary_timed_composition.py",
       "tier": "interactive60",
       "classification": "representative",
       "domains": ["P1", "P2"],
-      "dimensions": ["timeline-active-set", "easing", "analytic-primitives"]
+      "dimensions": ["timeline-active-set", "easing", "analytic-primitives", "lifecycle"]
     },
     {
       "id": "tutorial-value-tracker",
@@ -68,8 +68,9 @@
       "dimensions": ["reactive", "ValueTracker", "native-reactive-evaluation", "browser-cadence"]
     },
     {
-      "id": "instanced-field",
-      "source": "./python/examples/instanced_field.py",
+      "id": "analytic-field-180",
+      "source": "./python/examples/analytic_profile.py",
+      "context": { "object_count": 180, "layout": "fit", "duration": 3.4 },
       "tier": "interactive60",
       "classification": "representative",
       "domains": ["P2", "P3", "P7"],
@@ -85,39 +86,23 @@
     },
     {
       "id": "create-shapes",
-      "source": "./python/examples/create_shapes.py",
+      "source": "./python/examples/ordinary_create_shapes.py",
       "tier": "interactive60",
       "classification": "representative",
-      "domains": ["P2", "P4"],
-      "dimensions": ["reveal", "analytic-to-path", "path-cache"]
-    },
-    {
-      "id": "path-reveal",
-      "source": "./python/examples/path_reveal.py",
-      "tier": "interactive60",
-      "classification": "representative",
-      "domains": ["P4", "P7"],
-      "dimensions": ["vector-path", "reveal", "tessellation"]
+      "domains": ["P2", "P4", "P7"],
+      "dimensions": ["reveal", "analytic-to-path", "vector-path", "tessellation", "path-cache"]
     },
     {
       "id": "filled-path-transform",
-      "source": "./python/examples/filled_path_transform.py",
+      "source": "./python/examples/ordinary_filled_path_transform.py",
       "tier": "interactive60",
       "classification": "representative",
       "domains": ["P4", "P7"],
       "dimensions": ["vector-path", "morph", "fixed-topology"]
     },
     {
-      "id": "matching-shapes",
-      "source": "./python/examples/matching_shapes.py",
-      "tier": "heavy60",
-      "classification": "representative",
-      "domains": ["P1", "P2", "P4"],
-      "dimensions": ["composition", "semantic-matching", "mixed-primitives"]
-    },
-    {
       "id": "morph-shared-1000",
-      "source": "./python/examples/morph_stress_test.py",
+      "source": "./python/examples/ordinary_morph_stress.py",
       "context": { "object_count": 1000, "target_variant_count": 12 },
       "tier": "scalability",
       "classification": "scalability-only",
@@ -126,7 +111,7 @@
     },
     {
       "id": "morph-unique-1000",
-      "source": "./python/examples/morph_stress_test.py",
+      "source": "./python/examples/ordinary_morph_stress.py",
       "context": { "object_count": 1000, "target_variant_count": 1000 },
       "tier": "scalability",
       "classification": "scalability-only",
@@ -153,15 +138,20 @@
     }
   ],
   "domainCoverage": {
-    "P1": ["getting-started", "staggered-choreography", "tutorial-value-tracker"],
-    "P2": ["getting-started", "instanced-field", "painter-order-overlap"],
-    "P3": ["instanced-field", "painter-order-overlap"],
-    "P4": ["create-shapes", "path-reveal", "filled-path-transform"],
+    "P1": ["getting-started", "timed-composition", "tutorial-value-tracker"],
+    "P2": ["getting-started", "analytic-field-180", "painter-order-overlap"],
+    "P3": ["analytic-field-180", "painter-order-overlap"],
+    "P4": ["create-shapes", "filled-path-transform"],
     "P5": ["tutorial-value-tracker", "host-updater-follow"],
     "P6": ["getting-started", "authoring-edit-rerun-seek"],
-    "P7": ["instanced-field", "path-reveal", "host-updater-follow", "authoring-edit-rerun-seek"]
+    "P7": ["analytic-field-180", "create-shapes", "host-updater-follow", "authoring-edit-rerun-seek"]
   },
   "futureCoverage": [
+    {
+      "feature": "semantic-shape-matching",
+      "dependency": 954,
+      "note": "Restore the matching workload after shared Rust matching is exposed through the Python facade; the retired Python-only implementation is not qualification evidence."
+    },
     {
       "feature": "text-math",
       "dependency": 83,
