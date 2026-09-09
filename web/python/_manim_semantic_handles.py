@@ -1462,6 +1462,19 @@ def _group_move_to(
 
 
 
+def _group_align_on_frame(self: _compat.Group, direction: _base.Vec2, buff: float):
+    context = _group_live_layout_context(self)
+    if context is not None:
+        context.liveAlignFamilyOnFrame(self._semantic_family_handle,
+                                       direction.x, direction.y, float(buff))
+    else:
+        layout = _shared_family_layout(self, mutation=True)
+        if layout is None:
+            raise RuntimeError("frame alignment requires current shared Rust semantic handles")
+        layout.alignOnFrame(direction.x, direction.y, float(buff))
+    return self
+
+
 def _group_align_to(
     self: _compat.Group,
     mobject_or_point: object,

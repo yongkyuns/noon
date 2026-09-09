@@ -216,6 +216,22 @@ impl LiveSession<'_> {
         self.place_family(family, target, RelativePlacement::Next(args))
     }
 
+    /// Align effective family bounds and publish only the selected leaves.
+    pub fn align_family_on_frame(
+        &mut self,
+        family: &MobjectFamily,
+        direction: (f64, f64),
+        buff: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let target = crate::family_layout::frame_alignment_target(direction, buff)
+            .map_err(LiveSessionError::Mobject)?;
+        self.align_family_to(
+            family,
+            LiveLayoutTarget::Point(target.0, target.1),
+            direction,
+        )
+    }
+
     pub fn align_family_to(
         &mut self,
         family: &MobjectFamily,

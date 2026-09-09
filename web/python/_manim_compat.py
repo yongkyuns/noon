@@ -349,21 +349,8 @@ class Group(Mobject):
         return self._align_on_frame(_base._as_vec2(_base.DL if corner is None else corner), float(buff))
 
     def _align_on_frame(self, direction: _base.Vec2, buff: float) -> Group:
-        point = _critical_for(self, direction)
-        target = _base.Vec2(
-            math.copysign(_base.DEFAULT_FRAME_WIDTH / 2.0, direction.x)
-            if direction.x
-            else point.x,
-            math.copysign(_base.DEFAULT_FRAME_HEIGHT / 2.0, direction.y)
-            if direction.y
-            else point.y,
-        )
-        return self.shift(
-            _base.Vec2(
-                target.x - point.x - (direction.x * buff if direction.x else 0.0),
-                target.y - point.y - (direction.y * buff if direction.y else 0.0),
-            )
-        )
+        return _base._semantic_operations()._group_align_on_frame(self, direction, buff)
+
 
     def arrange(
         self,

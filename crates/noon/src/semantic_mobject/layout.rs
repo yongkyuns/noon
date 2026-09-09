@@ -161,19 +161,8 @@ impl Mobject {
         buff: f64,
     ) -> Result<(), String> {
         self.validate().map_err(|error| error.to_string())?;
-        finite_f32("direction.x", direction_x)?;
-        finite_f32("direction.y", direction_y)?;
-        let point = self.critical_point(direction_x, direction_y)?;
-        let mut shift_x = 0.0;
-        let mut shift_y = 0.0;
-        if direction_x != 0.0 {
-            let target = direction_x.signum() * f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5;
-            shift_x = target - point.0 - direction_x * buff;
-        }
-        if direction_y != 0.0 {
-            let target = direction_y.signum() * f64::from(noon_core::DEFAULT_FRAME_HEIGHT) * 0.5;
-            shift_y = target - point.1 - direction_y * buff;
-        }
-        self.shift(shift_x, shift_y)
+        let target =
+            crate::family_layout::frame_alignment_target((direction_x, direction_y), buff)?;
+        self.align_to_point(target.0, target.1, direction_x, direction_y)
     }
 }
