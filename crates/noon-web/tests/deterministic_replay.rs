@@ -1,5 +1,5 @@
 use noon::ExecutionSession;
-use noon_web::{verify_scene_replay, ReplayVerificationError};
+use noon_web::{verify_example_replay, verify_execution_replay, ReplayVerificationError};
 
 type SessionFactory = fn() -> Result<ExecutionSession, String>;
 
@@ -41,13 +41,14 @@ fn typed_direct_seek_forward_playback_and_backward_scrub_have_identical_frames()
 }
 
 #[test]
-fn remaining_external_replay_verifier_validates_workloads_before_decoding() {
+fn typed_replay_verifier_rejects_invalid_sampling() {
+    let session = sessions()[0]().unwrap();
     assert!(matches!(
-        verify_scene_replay("", &[0.5], 1),
+        verify_execution_replay(&session, &[0.5], 1),
         Err(ReplayVerificationError::InvalidForwardSampleCount(1))
     ));
     assert!(matches!(
-        verify_scene_replay("", &[f64::NAN], 38),
+        verify_execution_replay(&session, &[f64::NAN], 38),
         Err(ReplayVerificationError::NonFiniteTarget { index: 0, .. })
     ));
 }
@@ -79,5 +80,25 @@ fn typed_repeated_evaluation_is_stable_at_boundaries_and_extreme_valid_times() {
             repeated.advance_to(time).unwrap();
             assert!(repeated.take_frame_changes().is_empty());
         }
+    }
+}
+
+#[test]
+fn direct_wasm_corpus_also_qualifies_on_native_rust() {
+    for example in [
+        "exact-property-tracks",
+        "specialized-geometry",
+        "family-placement",
+        "painter-order",
+        "analytic-stress",
+        "create-morph-fade",
+    ] {
+        verify_example_replay(
+            example,
+            &[0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.75],
+            32,
+            1000,
+        )
+        .unwrap_or_else(|error| panic!("{example}: {error}"));
     }
 }

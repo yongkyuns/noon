@@ -1,8 +1,7 @@
 //! Renderer-independent frame snapshots used by deterministic replay tests and tools.
 
-use noon_compile::{CompileError, CompiledScene};
-use noon_ir::{decode_scene, IrError};
-use noon_runtime::{EvaluationError, FrameState, SlottedSceneInstance};
+use noon::ExecutionSession;
+use noon_runtime::{EvaluationError, FrameState};
 
 fn normalize_playhead(time: f64) -> f64 {
     const SCALE: f64 = 1_000_000_000_000.0;
@@ -18,49 +17,6 @@ fn normalized_frames_equal(left: &FrameState, right: &FrameState) -> bool {
         && left.render_geometries == right.render_geometries
         && left.render_transforms == right.render_transforms
         && left.family_animations == right.family_animations
-}
-
-#[derive(Debug)]
-pub enum ReplayRuntimeError {
-    Ir(IrError),
-    Compile(CompileError),
-    Evaluation(EvaluationError),
-}
-
-impl std::fmt::Display for ReplayRuntimeError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Ir(error) => error.fmt(formatter),
-            Self::Compile(error) => error.fmt(formatter),
-            Self::Evaluation(error) => error.fmt(formatter),
-        }
-    }
-}
-
-impl std::error::Error for ReplayRuntimeError {}
-
-impl From<IrError> for ReplayRuntimeError {
-    fn from(value: IrError) -> Self {
-        Self::Ir(value)
-    }
-}
-
-impl From<CompileError> for ReplayRuntimeError {
-    fn from(value: CompileError) -> Self {
-        Self::Compile(value)
-    }
-}
-
-impl From<EvaluationError> for ReplayRuntimeError {
-    fn from(value: EvaluationError) -> Self {
-        Self::Evaluation(value)
-    }
-}
-
-fn runtime_from_scene_json(scene_json: &str) -> Result<SlottedSceneInstance, ReplayRuntimeError> {
-    let definition = decode_scene(scene_json)?;
-    let compiled = CompiledScene::compile(&definition)?;
-    Ok(SlottedSceneInstance::new(compiled))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,7 +36,8 @@ impl std::fmt::Display for ReplayVerificationMode {
 
 #[derive(Debug)]
 pub enum ReplayVerificationError {
-    Runtime(ReplayRuntimeError),
+    Evaluation(EvaluationError),
+    Fixture(String),
     InvalidForwardSampleCount(usize),
     NonFiniteTarget {
         index: usize,
@@ -99,7 +56,8 @@ pub enum ReplayVerificationError {
 impl std::fmt::Display for ReplayVerificationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Runtime(error) => error.fmt(formatter),
+            Self::Evaluation(error) => error.fmt(formatter),
+            Self::Fixture(error) => formatter.write_str(error),
             Self::InvalidForwardSampleCount(count) => {
                 write!(
                     formatter,
@@ -128,26 +86,18 @@ impl std::fmt::Display for ReplayVerificationError {
 
 impl std::error::Error for ReplayVerificationError {}
 
-impl From<ReplayRuntimeError> for ReplayVerificationError {
-    fn from(value: ReplayRuntimeError) -> Self {
-        Self::Runtime(value)
-    }
-}
-
 impl From<EvaluationError> for ReplayVerificationError {
     fn from(value: EvaluationError) -> Self {
-        Self::Runtime(ReplayRuntimeError::Evaluation(value))
+        Self::Evaluation(value)
     }
 }
 
-/// Verify direct seek, incremental playback, and rewind equivalence for one scene.
+/// Compare direct seek, incremental playback and rewind on independent runtime copies.
 ///
-/// The scene is decoded and compiled once. Three persistent runtime instances then
-/// exercise the independent direct, forward, and rewind paths for every target.
-/// Observable frame state is compared in Rust instead of serializing large snapshots
-/// through the WASM boundary merely to compare them in JavaScript.
-pub fn verify_scene_replay(
-    scene_json: &str,
+/// Cloning is qualification work only; the product still owns one mutable runtime.
+/// Construction and lowering are typed Rust. No scene or frame data crosses a codec.
+pub fn verify_execution_replay(
+    session: &ExecutionSession,
     targets: &[f64],
     forward_sample_count: usize,
 ) -> Result<(), ReplayVerificationError> {
@@ -162,7 +112,7 @@ pub fn verify_scene_replay(
         }
     }
 
-    let mut direct = runtime_from_scene_json(scene_json)?;
+    let mut direct = session.clone();
     let mut forward = direct.clone();
     let mut rewind = direct.clone();
     let denominator = (forward_sample_count - 1) as f64;
@@ -178,7 +128,9 @@ pub fn verify_scene_replay(
         for sample in 0..forward_sample_count {
             forward.advance_to(target * sample as f64 / denominator)?;
         }
-        if !normalized_frames_equal(direct.frame(), forward.frame()) {
+        if !normalized_frames_equal(direct.frame(), forward.frame())
+            || direct.painter_order() != forward.painter_order()
+        {
             return Err(ReplayVerificationError::Diverged {
                 mode: ReplayVerificationMode::Forward,
                 target,
@@ -189,7 +141,9 @@ pub fn verify_scene_replay(
         for time in [0.0, target.max(0.25) + 0.4, 0.1, target] {
             rewind.advance_to(time)?;
         }
-        if !normalized_frames_equal(direct.frame(), rewind.frame()) {
+        if !normalized_frames_equal(direct.frame(), rewind.frame())
+            || direct.painter_order() != rewind.painter_order()
+        {
             return Err(ReplayVerificationError::Diverged {
                 mode: ReplayVerificationMode::Rewind,
                 target,
@@ -200,24 +154,100 @@ pub fn verify_scene_replay(
     Ok(())
 }
 
-#[cfg(target_arch = "wasm32")]
+/// Qualify the same Rust-authored fixtures on native and direct WASM.
+pub fn verify_example_replay(
+    example: &str,
+    targets: &[f64],
+    forward_sample_count: usize,
+    stress_count: usize,
+) -> Result<(), ReplayVerificationError> {
+    use noon::example_scenes;
+    let session = match example {
+        "exact-property-tracks" => example_scenes::exact_property_tracks::session(),
+        "specialized-geometry" => example_scenes::specialized_geometry::session(),
+        "family-placement" => example_scenes::family_placement::session(),
+        "painter-order" => example_scenes::painter_order_overlap::session(),
+        "analytic-stress" => example_scenes::analytic_profile::session(
+            stress_count,
+            example_scenes::analytic_profile::Layout::Fit,
+            16.0 / 9.0,
+            2.0,
+        ),
+        "create-morph-fade" => create_morph_fade_session(),
+        _ => Err(format!("unknown direct replay example: {example}")),
+    }
+    .map_err(ReplayVerificationError::Fixture)?;
+    verify_execution_replay(&session, targets, forward_sample_count)
+}
+
+fn create_morph_fade_session() -> Result<ExecutionSession, String> {
+    use noon::{
+        AnimationCompositionRequest as Request, AnimationOptions, FadeEndpoint, RateFunction,
+        Scene, SemanticAnimationCompositionKind, SemanticFadeDirection, TransformToRequest,
+    };
+    let mut scene = Scene::new();
+    let mut entering = scene.circle(0.75)?;
+    entering.set_translation(-2.0, 0.0)?;
+    let source = scene.square(1.5)?;
+    let target = scene.circle(0.75)?;
+    let mut leaving = scene.circle(0.75)?;
+    leaving.set_translation(2.0, 0.0)?;
+    scene.add(&source).map_err(|error| error.to_string())?;
+    scene.add(&leaving).map_err(|error| error.to_string())?;
+    let mut session = scene
+        .execution_session()
+        .map_err(|error| error.to_string())?;
+    let options = AnimationOptions::new()
+        .run_time(2.0)
+        .rate_func(RateFunction::Linear);
+    let request = Request::Composition {
+        kind: SemanticAnimationCompositionKind::Parallel,
+        children: vec![
+            Request::Create {
+                target: &entering,
+                options,
+            },
+            Request::TransformTo(TransformToRequest::point_correspondence(
+                &source, &target, options,
+            )),
+            Request::Fade {
+                target: &leaving,
+                direction: SemanticFadeDirection::Out,
+                endpoint: FadeEndpoint::default(),
+                options,
+            },
+        ],
+        options: AnimationOptions::new(),
+    };
+    // Activate through the ordinary live API: initial exact-track lowering is
+    // intentionally narrower. Replay compares the activated execution channels;
+    // logical segment completion/publication has its own shared live tests.
+    scene
+        .live(&mut session)
+        .declare_and_activate_composition(&request, AnimationOptions::new())
+        .map_err(|error| error.to_string())?;
+    Ok(session)
+}
+
+#[cfg(all(target_arch = "wasm32", debug_assertions))]
 mod wasm {
     use wasm_bindgen::prelude::*;
 
-    use super::verify_scene_replay;
-
-    fn js_error(error: impl std::fmt::Display) -> JsValue {
-        JsValue::from_str(&error.to_string())
-    }
-
-    #[wasm_bindgen(js_name = verifySceneReplay)]
-    pub fn verify_scene_replay_wasm(
-        scene_json: &str,
-        targets_json: &str,
+    /// Only fixture selection and sample times cross the test-harness boundary.
+    #[wasm_bindgen(js_name = verifyDirectExecutionReplay)]
+    pub fn verify_direct_execution_replay(
+        example: &str,
+        targets: &[f64],
         forward_sample_count: u32,
+        stress_count: u32,
     ) -> Result<(), JsValue> {
-        let targets: Vec<f64> = serde_json::from_str(targets_json).map_err(js_error)?;
-        verify_scene_replay(scene_json, &targets, forward_sample_count as usize).map_err(js_error)
+        super::verify_example_replay(
+            example,
+            targets,
+            forward_sample_count as usize,
+            stress_count as usize,
+        )
+        .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 }
 
