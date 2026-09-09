@@ -175,7 +175,6 @@ const expectedJavascriptSurface = [
   "appendCreate(",
   "appendRotate(",
   "sceneJson(",
-  "export function verifySceneReplay(",
   "export function resolveAnimationOptions(",
 ];
 const expectedTypeSurface = [
@@ -369,7 +368,6 @@ const expectedTypeSurface = [
   "setObjectOpacity(opacity: number): void",
   "manimMoveToHandle(",
   "manimMoveToPoint(",
-  "export function verifySceneReplay(scene_json: string, targets_json: string, forward_sample_count: number): void",
   "export function resolveAnimationOptions(",
 ];
 
@@ -379,6 +377,7 @@ const expectedTypeSurface = [
 if (process.env.NOON_WASM_PROFILE === "dev"
     || javascript.includes("export function createDirectExecutionSmokeRenderer(")) {
   expectedJavascriptSurface.push(
+    "export function verifyDirectExecutionReplay(",
     "export function createDirectTypstTextSmokeRenderer(",
     "export function createDirectMathTypstTextSmokeRenderer(",
     "export function createDirectOrdinaryAffinePlaySmokeRenderer(",
@@ -418,6 +417,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectOrdinaryStylePlaySmokeRenderer(",
   );
   expectedTypeSurface.push(
+    "export function verifyDirectExecutionReplay(",
     "recoverWebGlContext(): Promise<boolean>",
     "export function createDirectTypstTextSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectMathTypstTextSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
@@ -475,6 +475,7 @@ for (const retired of ["ReactiveScenePlayer", "ReactiveCanvasPlayer",
   }
 }
 for (const retired of [
+  "export function verifySceneReplay(",
   "export function resolveUniformCompositionSchedule(",
   "export function resolveLifecyclePlan(",
   "export function validatePresenceTransition(",
