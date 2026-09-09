@@ -935,7 +935,7 @@ impl SemanticExecutionPlayer {
                 .expect("live semantic store has one scene root"),
             &mut self.session,
         )
-        .scale(mobject, x, y)
+        .manim_scale(mobject, x, y)
         .map(|_| ())
         .map_err(AuthoringFailure::from)
     }
