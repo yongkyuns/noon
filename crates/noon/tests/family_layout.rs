@@ -154,3 +154,61 @@ fn object_placement_to_family_anchor_is_shared_and_rejects_foreign_targets() {
     );
     assert_eq!(object.center().unwrap(), (2.5, 2.5));
 }
+
+#[test]
+fn frame_alignment_deduplicates_nested_aliases_and_rejects_invalid_input_atomically() {
+    let scene = Scene::new();
+    let first = scene.square(1.0).unwrap();
+    let mut second = scene.square(1.0).unwrap();
+    second.shift(2.0, 0.0).unwrap();
+    let nested = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+    let family = scene.family(&[(&first).into(), (&nested).into()]).unwrap();
+    let before = scene.integration_store().borrow().scene_revision();
+    family
+        .layout()
+        .unwrap()
+        .align_on_frame((2.0, -1.0), 0.25)
+        .unwrap();
+    let bounds = family.layout().unwrap().bounds().unwrap();
+    assert!((bounds.max_x - (f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5 - 0.5)).abs() < 1e-6);
+    assert!((bounds.min_y + f64::from(noon_core::DEFAULT_FRAME_HEIGHT) * 0.5 - 0.25).abs() < 1e-6);
+    assert!((second.center().unwrap().0 - first.center().unwrap().0 - 2.0).abs() < 1e-6);
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        before.checked_next().unwrap()
+    );
+
+    let revision = scene.integration_store().borrow().scene_revision();
+    for (direction, buff) in [((f64::NAN, 1.0), 0.0), ((1.0, 0.0), f64::INFINITY)] {
+        assert!(family
+            .layout()
+            .unwrap()
+            .align_on_frame(direction, buff)
+            .is_err());
+    }
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        revision
+    );
+    assert_eq!(family.layout().unwrap().bounds().unwrap(), bounds);
+
+    let y = first.center().unwrap().1;
+    family
+        .layout()
+        .unwrap()
+        .align_on_frame((-1.0, 0.0), 0.5)
+        .unwrap();
+    assert_eq!(first.center().unwrap().1, y);
+    assert!(
+        (family.layout().unwrap().bounds().unwrap().min_x
+            + f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5
+            - 0.5)
+            .abs()
+            < 1e-6
+    );
+}
+
+#[test]
+fn paired_frame_placement_example_executes_the_typed_rust_path() {
+    noon::example_scenes::family_placement::session().unwrap();
+}

@@ -5071,6 +5071,22 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = liveAlignFamilyOnFrame)]
+        pub fn live_align_family_on_frame(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            self.inner
+                .active_live_player()
+                .map_err(js_error)?
+                .live_align_family_on_frame(&family, (direction_x, direction_y), buff)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = liveAlignFamilyToPoint)]
         #[allow(clippy::too_many_arguments)]
         pub fn live_align_family_to_point(
