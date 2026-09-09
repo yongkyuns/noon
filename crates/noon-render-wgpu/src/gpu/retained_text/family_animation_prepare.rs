@@ -1,3 +1,7 @@
+use super::*;
+use noon_core::RetainedFamilyAnimationPlan;
+use noon_runtime::RetainedFamilyFrame;
+
 use noon_core::FamilyAnimationMode;
 
 /// Failure while selecting and realizing one active retained family operation.

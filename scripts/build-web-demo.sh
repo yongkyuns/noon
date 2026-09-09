@@ -63,6 +63,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/cross-language-parity.mjs
   node --check scripts/manim-compat-smoke.mjs
   node --check scripts/manim-tutorial-smoke.mjs
+  node --check scripts/python-editor-input-smoke.mjs
   node --check scripts/playground-layout-smoke.mjs
   node --check scripts/composition-authoring-smoke.mjs
   node --check scripts/reactive-authoring-smoke.mjs

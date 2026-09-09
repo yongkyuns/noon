@@ -197,6 +197,19 @@ if bash scripts/architecture-ratchet.sh "$RUNTIME_REGRESSION_BASE" >/dev/null 2>
   exit 1
 fi
 
+# Renderer normalization also rejects pre-existing include and path indirection.
+for declaration in '#[path = "hidden.rs"] mod hidden;' 'include!("hidden.rs");'; do
+  reset_to_base
+  mkdir -p crates/noon-render-wgpu/src
+  printf '%s\n' "$declaration" > crates/noon-render-wgpu/src/gpu.rs
+  git add crates/noon-render-wgpu/src/gpu.rs
+  git commit -qm 'model regressed normalized renderer baseline'
+  if bash scripts/architecture-ratchet.sh HEAD >/dev/null 2>&1; then
+    echo "architecture ratchet test failed: accepted pre-existing renderer module indirection" >&2
+    exit 1
+  fi
+done
+
 # Prove the completed A4.6 tool cutovers are structural, not just growth-ratcheted.
 # Put migration-player dependencies into the comparison base itself, then make an
 # unrelated later commit. The full-tree guard must still reject both tool paths.

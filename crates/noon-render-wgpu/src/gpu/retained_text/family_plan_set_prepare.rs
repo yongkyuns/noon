@@ -1,3 +1,10 @@
+use super::family_draw_border_prepare::draw_border_glyph_style;
+use super::*;
+use crate::{
+    retained_family_draw_border_then_fill_members_for_object, RetainedDrawBorderThenFillPhase,
+};
+use noon_core::RetainedFamilyAnimationPlan;
+
 use noon_runtime::{RetainedPlannedFamilyFrame, RetainedPlannedFamilyFrameError};
 
 /// Failure while realizing multiple concurrently installed family plans.
@@ -239,7 +246,13 @@ impl RetainedFramePreparer {
             metrics,
         )?;
         self.prepared_generation_ready = false;
-        if let Err(error) = self.apply_family_plan_set_to_scratch(frame, plans, texts, fonts, active_indices.is_some()) {
+        if let Err(error) = self.apply_family_plan_set_to_scratch(
+            frame,
+            plans,
+            texts,
+            fonts,
+            active_indices.is_some(),
+        ) {
             self.scratch_ready = false;
             return Err(error);
         }
@@ -430,7 +443,7 @@ impl RetainedFramePreparer {
                                     run_index,
                                     texts,
                                     fonts,
-                                    )?;
+                                )?;
                             } else {
                                 self.sources.push(SourceItem::FastGlyphRun {
                                     object_id,
@@ -490,15 +503,18 @@ impl RetainedFramePreparer {
         self.prepared_generation_ready = false;
         let partial_upload_base_generation = self.text_generation;
         if changes_include_text(frame.retained, changes) {
-            let prepared_text = self.text.prepare_with_changes(
-                device,
-                queue,
-                frame.retained,
-                changes,
-                texts,
-                fonts,
-                metrics,
-            ).map_err(RetainedPrepareError::from)?;
+            let prepared_text = self
+                .text
+                .prepare_with_changes(
+                    device,
+                    queue,
+                    frame.retained,
+                    changes,
+                    texts,
+                    fonts,
+                    metrics,
+                )
+                .map_err(RetainedPrepareError::from)?;
             copy_local_text_snapshot_updates(
                 &mut self.snapshot_mask_quads,
                 &mut self.snapshot_color_quads,
@@ -583,7 +599,9 @@ impl RetainedFramePreparer {
                 &family_frame,
                 plan,
                 object_index,
-            ).map_err(RetainedFamilyDrawBorderPrepareError::from)? else {
+            )
+            .map_err(RetainedFamilyDrawBorderPrepareError::from)?
+            else {
                 continue;
             };
             for member in members {

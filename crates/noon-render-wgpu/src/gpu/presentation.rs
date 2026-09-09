@@ -148,7 +148,7 @@ impl PresentationBridge {
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
-        let shader = device.create_shader_module(wgpu::include_wgsl!("presentation.wgsl"));
+        let shader = device.create_shader_module(wgpu::include_wgsl!("../presentation.wgsl"));
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Noon browser sRGB presentation pipeline"),
             layout: Some(&pipeline_layout),
