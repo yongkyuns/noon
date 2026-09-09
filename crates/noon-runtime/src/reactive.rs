@@ -4,7 +4,6 @@ pub(crate) use runtime::{
 };
 pub use runtime::{
     PreparedReactiveSignalEnrollment, PreparedReactiveSignalEnrollmentBatch, ReactiveRuntimeStats,
-    SceneBuildError,
 };
 
 mod host_policy;

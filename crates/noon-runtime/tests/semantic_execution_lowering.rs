@@ -3,10 +3,9 @@ use std::sync::Arc;
 use noon_compile::{lower_semantic_execution, SemanticExecutionIndex};
 use noon_core::{
     Color, CompositionTimeMap, FontResourceArena, GeometryRef, GeometryResourceArena, Property,
-    RateFunction, Rect, ScenePatch, SemanticObjectProperty, SemanticObjectState, SemanticPaint,
-    SemanticScene, SemanticStore, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, Style,
-    TextResource, TextSourceKind, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
-    Vec2,
+    RateFunction, Rect, SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticStore,
+    SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, Style, TextResource, TextSourceKind,
+    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
 };
 use noon_runtime::{frame_object_conservative_bounds, SceneInstance};
 
@@ -113,7 +112,7 @@ fn canonical_text_and_geometry_share_timeline_updates_and_spatial_bounds() {
         (TrackId::new(1), circle_id, Vec2::new(-2.0, 6.0)),
     ] {
         compiled
-            .apply_patch(&ScenePatch::AddTrack(TrackDefinition {
+            .apply_execution_patch(&noon_compile::ExecutionPatch::AddTrack(TrackDefinition {
                 id: track,
                 object,
                 property: Property::Position,
@@ -156,42 +155,7 @@ fn canonical_text_and_geometry_share_timeline_updates_and_spatial_bounds() {
 }
 
 #[test]
-fn representative_legacy_and_semantic_authoring_lower_to_equivalent_runtime_observables() {
-    // Exercise the already-owned migration constructor rather than importing its
-    // underlying flat authored representation into this new canonical-path fixture.
-    let mut legacy_scene = SemanticScene::new();
-    let legacy_circle = legacy_scene.add(GeometryRef::circle(2.0));
-    {
-        let object = legacy_scene
-            .definition_mut()
-            .object_mut(legacy_circle)
-            .unwrap();
-        object.transform = Transform2D {
-            translation: Vec2::new(4.5, -3.25),
-            rotation: 0.75,
-            scale: Vec2::new(2.0, 0.5),
-        };
-        object.style = Style {
-            fill: Some(Color::rgba(0.2, 0.4, 0.6, 0.25)),
-            stroke: Some(Color::rgba(0.8, 0.1, 0.3, 0.5)),
-            stroke_width: 3.5,
-            stroke_join: StrokeJoin::Bevel,
-            stroke_cap: StrokeCap::Square,
-            opacity: 0.6,
-            ..Style::default()
-        };
-    }
-    let legacy_rectangle = legacy_scene.add(GeometryRef::rectangle(3.0, 1.5));
-    {
-        let object = legacy_scene
-            .definition_mut()
-            .object_mut(legacy_rectangle)
-            .unwrap();
-        object.transform.translation = Vec2::new(-1.0, 2.0);
-        object.style.stroke_width = 0.0;
-    }
-    let legacy_instance = SceneInstance::from_semantic(&legacy_scene).unwrap();
-
+fn canonical_lowering_preserves_painter_order_transform_and_paint() {
     let mut semantic_store = SemanticStore::new();
     let mut semantic_circle = SemanticObjectState::new(StoredGeometry::Circle { radius: 2.0 });
     semantic_circle.transform.translation = SemanticVec3::new(4.5, -3.25, 0.0);
@@ -220,19 +184,41 @@ fn representative_legacy_and_semantic_authoring_lower_to_equivalent_runtime_obse
     let lowered = lower_semantic_execution(&semantic_store, &mut index).unwrap();
     let semantic_instance = SceneInstance::from_semantic_execution(lowered);
 
-    assert_eq!(legacy_instance.frame().objects.len(), 2);
-    assert_eq!(semantic_instance.frame().objects.len(), 2);
-    for (legacy, semantic) in legacy_instance
-        .frame()
-        .objects
-        .iter()
-        .zip(&semantic_instance.frame().objects)
-    {
-        // Identity representations intentionally remain migration-specific; compare
-        // only the observable execution state and authored painter order.
-        assert_eq!(legacy.content, semantic.content);
-        assert_eq!(legacy.transform, semantic.transform);
-        assert_eq!(legacy.style, semantic.style);
-        assert_eq!(legacy.appearance, semantic.appearance);
-    }
+    let objects = &semantic_instance.frame().objects;
+    assert_eq!(objects.len(), 2);
+    assert_eq!(
+        objects[0].id,
+        index.execution_object_id(semantic_circle).unwrap()
+    );
+    assert_eq!(
+        objects[1].id,
+        index.execution_object_id(semantic_rectangle).unwrap()
+    );
+    assert_eq!(objects[0].geometry(), Some(&GeometryRef::circle(2.0)));
+    assert_eq!(
+        objects[1].geometry(),
+        Some(&GeometryRef::rectangle(3.0, 1.5))
+    );
+    assert_eq!(
+        objects[0].transform,
+        Transform2D {
+            translation: Vec2::new(4.5, -3.25),
+            rotation: 0.75,
+            scale: Vec2::new(2.0, 0.5),
+        }
+    );
+    assert_eq!(
+        objects[0].style,
+        Style {
+            fill: Some(Color::rgba(0.2, 0.4, 0.6, 0.25)),
+            stroke: Some(Color::rgba(0.8, 0.1, 0.3, 0.5)),
+            stroke_width: 3.5,
+            stroke_join: StrokeJoin::Bevel,
+            stroke_cap: StrokeCap::Square,
+            opacity: 0.6,
+            ..Style::default()
+        }
+    );
+    assert_eq!(objects[1].transform.translation, Vec2::new(-1.0, 2.0));
+    assert_eq!(objects[1].style.stroke_width, 0.0);
 }

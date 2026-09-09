@@ -1,43 +1,14 @@
 use std::collections::BTreeMap;
 
-use noon_compile::{CompileError, CompiledScene, SemanticExecutionLoweringOutput};
+use noon_compile::{CompiledScene, SemanticExecutionLoweringOutput};
 use noon_core::{
     ComputeProgram, ComputeState, ObjectId, PreparedComputeInputBatch,
     PreparedComputeInputEnrollment, PreparedComputeInputEnrollmentBatch, Property,
-    PublicationContext, ReactiveBinding, ReactiveError, ReactiveEvaluationStats, ReactiveProgram,
-    ReactiveValue, SemanticScene, SignalId,
+    PublicationContext, ReactiveBinding, ReactiveError, ReactiveEvaluationStats, ReactiveValue,
+    SignalId,
 };
 
 use crate::{frame_row_mut, FrameRowMut, FrameState, SceneInstance};
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum SceneBuildError {
-    Compile(CompileError),
-    Reactive(ReactiveError),
-}
-
-impl std::fmt::Display for SceneBuildError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Compile(error) => write!(formatter, "scene compilation failed: {error}"),
-            Self::Reactive(error) => write!(formatter, "reactive compilation failed: {error}"),
-        }
-    }
-}
-
-impl std::error::Error for SceneBuildError {}
-
-impl From<CompileError> for SceneBuildError {
-    fn from(value: CompileError) -> Self {
-        Self::Compile(value)
-    }
-}
-
-impl From<ReactiveError> for SceneBuildError {
-    fn from(value: ReactiveError) -> Self {
-        Self::Reactive(value)
-    }
-}
 
 /// Work performed by the most recent native reactive input update.
 ///
@@ -321,37 +292,6 @@ impl SceneInstance {
         instance.reactive = Some(reactive);
         instance.reapply_reactive();
         instance
-    }
-
-    /// Compile a high-level semantic scene once and attach its validated native
-    /// reactive program to this runtime instance.
-    ///
-    /// Reactive expressions are flattened into typed compute kernels and bindings
-    /// are lowered to dense frame object indices here. Later input updates therefore
-    /// do not recurse through authoring ASTs, rebuild `SceneDefinition`, recompile
-    /// the timeline, or scan unrelated objects.
-    pub fn from_semantic(scene: &SemanticScene) -> Result<Self, SceneBuildError> {
-        let compiled = CompiledScene::compile(scene.definition())?;
-        let program = ReactiveProgram::compile_for_execution_domain(
-            compiled
-                .objects()
-                .iter()
-                .filter(|object| object.live)
-                .map(|object| object.id),
-            compiled.tracks_iter().map(|track| {
-                let object = compiled
-                    .object_id_at_slot(track.object_index)
-                    .expect("compiled timeline track must reference a live object slot");
-                (object, track.property)
-            }),
-            scene.reactive(),
-        )?
-        .into_compute()?;
-        let reactive = ReactiveRuntime::new(&compiled, scene.reactive().bindings(), program);
-        let mut instance = Self::new(compiled);
-        instance.reactive = Some(reactive);
-        instance.reapply_reactive();
-        Ok(instance)
     }
 
     /// Exact authored/executable/effective publication context of this runtime view.
@@ -670,18 +610,33 @@ pub(crate) fn apply_reactive_value_to_row(
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{GeometryRef, RateFunction, ReactiveExpr, TrackTiming, Vec2};
+    use noon_compile::{lower_semantic_execution, ExecutionPatch, SemanticExecutionIndex};
+    use noon_core::{
+        CompositionTimeMap, GeometryRef, RateFunction, SemanticObjectProperty, SemanticObjectState,
+        SemanticSignalExpr, SemanticStore, SemanticVec3, StoredGeometry, TrackDefinition, TrackId,
+        TrackTiming, TrackValues, Vec2,
+    };
 
     use super::*;
 
     #[test]
     fn initial_reactive_values_are_lowered_into_frame_state() {
-        let mut scene = SemanticScene::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let position = scene.add_input(Vec2::new(3.0, -2.0));
-        scene.bind(position, object, Property::Position);
+        let mut scene = SemanticStore::new();
+        let object =
+            scene.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        scene.attach_to_scene(object).unwrap();
+        let position = scene
+            .insert_semantic_input_signal(SemanticVec3::new(3.0, -2.0, 0.0))
+            .unwrap();
+        scene
+            .bind_semantic_signal(position, object, SemanticObjectProperty::Translation)
+            .unwrap();
 
-        let instance = SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = lower_semantic_execution(&scene, &mut index).unwrap();
+        let instance = SceneInstance::from_semantic_execution(lowered);
         assert_eq!(
             instance.frame().objects[0].transform.translation,
             Vec2::new(3.0, -2.0)
@@ -690,13 +645,23 @@ mod tests {
 
     #[test]
     fn reactive_scale_updates_transform_without_touching_geometry() {
-        let mut scene = SemanticScene::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let scale = scene.add_input(Vec2::ONE);
-        scene.bind(scale, object, Property::Scale);
+        let mut scene = SemanticStore::new();
+        let object =
+            scene.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        scene.attach_to_scene(object).unwrap();
+        let scale = scene
+            .insert_semantic_input_signal(SemanticVec3::new(1.0, 1.0, 1.0))
+            .unwrap();
+        scene
+            .bind_semantic_signal(scale, object, SemanticObjectProperty::Scale)
+            .unwrap();
 
-        let mut instance =
-            SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = lower_semantic_execution(&scene, &mut index).unwrap();
+        let scale = lowered.reactive().execution_signal_id(scale).unwrap();
+        let mut instance = SceneInstance::from_semantic_execution(lowered);
         assert_eq!(instance.frame().objects[0].transform.scale, Vec2::ONE);
         assert_eq!(
             instance.frame().objects[0].geometry(),
@@ -718,18 +683,34 @@ mod tests {
 
     #[test]
     fn input_update_mutates_only_lowered_dense_target() {
-        let mut scene = SemanticScene::new();
-        let untouched = scene.add(GeometryRef::circle(1.0));
-        let target = scene.add(GeometryRef::circle(1.0));
-        let input = scene.add_input(1.0_f32);
-        let doubled = scene.add_derived(ReactiveExpr::Mul(
-            Box::new(ReactiveExpr::signal(input)),
-            Box::new(ReactiveExpr::scalar(2.0)),
-        ));
-        scene.bind(doubled, target, Property::Rotation);
+        let mut scene = SemanticStore::new();
+        let untouched =
+            scene.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        scene.attach_to_scene(untouched).unwrap();
+        let target =
+            scene.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        scene.attach_to_scene(target).unwrap();
+        let input = scene.insert_semantic_input_signal(1.0_f64).unwrap();
+        let doubled = scene
+            .insert_semantic_derived_signal(SemanticSignalExpr::Mul(
+                Box::new(SemanticSignalExpr::signal(input)),
+                Box::new(SemanticSignalExpr::scalar(2.0)),
+            ))
+            .unwrap();
+        scene
+            .bind_semantic_signal(doubled, target, SemanticObjectProperty::RotationZ)
+            .unwrap();
 
-        let mut instance =
-            SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = lower_semantic_execution(&scene, &mut index).unwrap();
+        let untouched = index.execution_object_id(untouched).unwrap();
+        let target = index.execution_object_id(target).unwrap();
+        let input = lowered.reactive().execution_signal_id(input).unwrap();
+        let mut instance = SceneInstance::from_semantic_execution(lowered);
         instance.take_frame_changes();
         instance
             .set_reactive_input(input, 2.0_f32)
@@ -753,11 +734,21 @@ mod tests {
 
     #[test]
     fn signal_only_reactive_update_publishes_frame_epoch_without_frame_dirtiness() {
-        let mut scene = SemanticScene::new();
-        scene.add(GeometryRef::circle(1.0));
-        let input = scene.add_input(1.0_f32);
-        let mut instance =
-            SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
+        let mut scene = SemanticStore::new();
+        let node = scene.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+            radius: 1.0,
+        }));
+        scene.attach_to_scene(node).unwrap();
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = lower_semantic_execution(&scene, &mut index).unwrap();
+        let mut instance = SceneInstance::from_semantic_execution(lowered);
+        // Unbound semantic inputs are pruned by initial lowering. Exercise the
+        // runtime's explicit enrollment used when a live input enters execution.
+        let input = SignalId::new(0);
+        let enrollment = instance
+            .prepare_reactive_signal_enrollment(Some(input), ReactiveValue::Scalar(1.0))
+            .unwrap();
+        instance.commit_reactive_signal_enrollment(enrollment, input);
         instance.take_frame_changes();
         let before = instance.publication_context();
 
@@ -786,22 +777,35 @@ mod tests {
 
     #[test]
     fn seeks_reapply_reactive_values_after_timeline_evaluation() {
-        let mut scene = SemanticScene::new();
-        let object = scene.add(GeometryRef::circle(1.0));
+        let mut scene = SemanticStore::new();
+        let object =
+            scene.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        scene.attach_to_scene(object).unwrap();
+        let rotation = scene.insert_semantic_input_signal(0.25_f64).unwrap();
         scene
-            .definition_mut()
-            .animate_position(
-                object,
-                Vec2::ZERO,
-                Vec2::new(10.0, 0.0),
-                TrackTiming::new(0.0, 2.0, RateFunction::Linear),
-            )
-            .expect("timeline must be valid");
-        let rotation = scene.add_input(0.25_f32);
-        scene.bind(rotation, object, Property::Rotation);
+            .bind_semantic_signal(rotation, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
 
-        let mut instance =
-            SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = lower_semantic_execution(&scene, &mut index).unwrap();
+        let object = index.execution_object_id(object).unwrap();
+        let rotation = lowered.reactive().execution_signal_id(rotation).unwrap();
+        let mut instance = SceneInstance::from_semantic_execution(lowered);
+        instance
+            .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+                id: TrackId::new(0),
+                object,
+                property: Property::Position,
+                values: TrackValues::Vec2 {
+                    from: Vec2::ZERO,
+                    to: Vec2::new(10.0, 0.0),
+                },
+                timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }))
+            .unwrap();
         instance
             .set_reactive_input(rotation, 1.25_f32)
             .expect("input update must work");
@@ -816,24 +820,41 @@ mod tests {
 
     #[test]
     fn reactive_update_cost_does_not_scale_with_static_object_count() {
-        let mut scene = SemanticScene::new();
+        let mut scene = SemanticStore::new();
         for _ in 0..50_000 {
-            scene.add(GeometryRef::circle(1.0));
+            let node =
+                scene.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                    radius: 1.0,
+                }));
+            scene.attach_to_scene(node).unwrap();
         }
-        let target = scene.add(GeometryRef::circle(1.0));
-        let input = scene.add_input(1.0_f32);
-        let doubled = scene.add_derived(ReactiveExpr::Mul(
-            Box::new(ReactiveExpr::signal(input)),
-            Box::new(ReactiveExpr::scalar(2.0)),
-        ));
-        let shifted = scene.add_derived(ReactiveExpr::Add(
-            Box::new(ReactiveExpr::signal(doubled)),
-            Box::new(ReactiveExpr::scalar(1.0)),
-        ));
-        scene.bind(shifted, target, Property::Rotation);
+        let target =
+            scene.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        scene.attach_to_scene(target).unwrap();
+        let input = scene.insert_semantic_input_signal(1.0_f64).unwrap();
+        let doubled = scene
+            .insert_semantic_derived_signal(SemanticSignalExpr::Mul(
+                Box::new(SemanticSignalExpr::signal(input)),
+                Box::new(SemanticSignalExpr::scalar(2.0)),
+            ))
+            .unwrap();
+        let shifted = scene
+            .insert_semantic_derived_signal(SemanticSignalExpr::Add(
+                Box::new(SemanticSignalExpr::signal(doubled)),
+                Box::new(SemanticSignalExpr::scalar(1.0)),
+            ))
+            .unwrap();
+        scene
+            .bind_semantic_signal(shifted, target, SemanticObjectProperty::RotationZ)
+            .unwrap();
 
-        let mut instance =
-            SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = lower_semantic_execution(&scene, &mut index).unwrap();
+        let target = index.execution_object_id(target).unwrap();
+        let input = lowered.reactive().execution_signal_id(input).unwrap();
+        let mut instance = SceneInstance::from_semantic_execution(lowered);
         instance.take_frame_changes();
         let timeline_stats_before = instance.last_stats();
         instance
@@ -857,13 +878,22 @@ mod tests {
 
     #[test]
     fn removed_reactive_target_stays_hidden_and_rebinds_on_same_id_recreate() {
-        let mut scene = SemanticScene::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let visible = scene.add_input(true);
-        scene.bind(visible, object, Property::Presence);
+        let mut scene = SemanticStore::new();
+        let object =
+            scene.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        scene.attach_to_scene(object).unwrap();
+        let visible = scene.insert_semantic_input_signal(true).unwrap();
+        scene
+            .bind_semantic_signal(visible, object, SemanticObjectProperty::Presence)
+            .unwrap();
 
-        let mut instance =
-            SceneInstance::from_semantic(&scene).expect("semantic scene must compile");
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = lower_semantic_execution(&scene, &mut index).unwrap();
+        let object = index.execution_object_id(object).unwrap();
+        let visible = lowered.reactive().execution_signal_id(visible).unwrap();
+        let mut instance = SceneInstance::from_semantic_execution(lowered);
         instance
             .apply_execution_patch(&noon_compile::ExecutionPatch::RemoveObject(object))
             .expect("remove must compile");
