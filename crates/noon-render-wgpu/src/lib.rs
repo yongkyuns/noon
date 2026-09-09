@@ -11,6 +11,7 @@ mod mega_mesh;
 mod path_residency;
 mod render_order;
 mod reveal;
+pub mod text;
 
 pub use gpu::*;
 pub use path_residency::{PathMeshPreload, PathMeshPreloadError, PathMeshPreloadStats};

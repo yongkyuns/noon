@@ -2,9 +2,9 @@ use noon_core::{
     FontResourceArena, GeometryRef, GeometryResourceArena, ObjectContentRef, ObjectId, Style,
     TextResourceArena, Transform2D, Vec2,
 };
+use noon_render_wgpu::text::TextDeviceMetrics;
 use noon_render_wgpu::{GpuRenderer, RetainedFrameIncrementalStats, RetainedFramePreparer};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
-use noon_text_render_wgpu::TextDeviceMetrics;
 use noon_typst::{compile_typst_resource, TypstMode};
 
 const STATIC_OBJECTS: usize = 10_000;

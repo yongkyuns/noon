@@ -10,6 +10,11 @@ The renderer derives GPU state from runtime output. It does not read or own muta
 
 WGPU and its target feature matrix create a real dependency and compilation boundary, so this remains a crate rather than merely mirroring an architecture box.
 
+The `text` module owns glyph preparation, GPU atlas residency and quad drawing as
+components of this renderer. Hosts supply density through `text::TextDeviceMetrics`;
+text uses the same retained frame, painter order and platform surface as geometry.
+CPU shaping, glyph rasterization and Typst compilation remain provider dependencies.
+
 ## Platform boundary
 
 Platform hosts own native window or browser-canvas lifecycle, surface creation/configuration, event-loop/frame scheduling, input translation, presentation, and recovery policy. `noon-native` owns native lifecycle; `noon-web` owns browser/WASM integration. Keeping those concerns outside this crate leaves the renderer reusable by both hosts.
