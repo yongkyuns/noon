@@ -27,26 +27,25 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v7
         with:
-          ref: 1641398818b6817678ae178faf2887e4ac1e730f
+          ref: codex/1272-r2-public-facade
           path: source
           fetch-depth: 0
-      - name: Apply the reviewed facade edits to the pinned source
+      - name: Correct the pinned candidate and preserve independent consumers
         working-directory: source
         run: |
-          test "$(git rev-parse HEAD)" = 1641398818b6817678ae178faf2887e4ac1e730f
-          python3 ../tooling/.github/r2-facade-edit.py
+          test "$(git rev-parse HEAD)" = 62a6d78b6382e902ff3bef77956e98f2f67f650b
+          python3 ../tooling/.github/r2-facade-correct.py
           cargo fmt --all
           cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
           git diff --check
           git diff --stat
-      - name: Publish only the candidate source, without development helpers
+      - name: Publish the corrected candidate without development helpers
         working-directory: source
         run: |
-          git switch -c codex/1272-r2-public-facade
           git config user.name 'Noon development tooling'
           git config user.email 'development@noon.invalid'
-          git add crates README.md fixtures/provider-consumer
-          git -c commit.gpgSign=false -c core.hooksPath=/dev/null commit -m 'refactor: make public authoring and raw integration explicit (#1272 R2)'
+          git add crates README.md fixtures/provider-consumer .github/workflows/provider-features.yml
+          git -c commit.gpgSign=false -c core.hooksPath=/dev/null commit -m 'fix: preserve prepared transaction access and qualify the minimal facade'
           git push origin HEAD:refs/heads/codex/1272-r2-public-facade
           git rev-parse HEAD
           git archive --format=tar HEAD | gzip > ../candidate.tar.gz
