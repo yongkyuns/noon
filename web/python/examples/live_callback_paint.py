@@ -4,7 +4,7 @@ Rust owns preservation of enabled fill/stroke alpha and opacity-only fill
 behavior. Python supplies color coercion and the arbitrary callable bodies.
 """
 
-from noon import Circle, Color, Scene, linear
+from noon import Circle, Color, Scene, VGroup, linear
 
 
 class LiveCallbackPaint(Scene):
@@ -17,6 +17,7 @@ class LiveCallbackPaint(Scene):
         assert circle.get_fill_opacity() == 0.25
         assert circle.get_stroke_opacity() == 0.75
         self.add(circle)
+        family = VGroup(VGroup(circle), circle)
         target = circle.copy().shift((2.0, 0.0, 0.0))
         animation = self.declare_live_transform_to(
             circle,
@@ -33,7 +34,7 @@ class LiveCallbackPaint(Scene):
 
         def fill_and_composite_opacity(mobject, _dt):
             assert mobject.get_stroke_opacity() == 0.75
-            mobject.set_fill(opacity=0.4)
+            family.set_fill(opacity=0.4)
             assert abs(mobject.get_fill_opacity() - 0.4) < 1e-6
             # Callback set_opacity remains the separately qualified object
             # composite domain rather than Manim's ordinary paint-alpha edit.

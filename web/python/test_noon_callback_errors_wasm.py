@@ -21,11 +21,18 @@ from _noon_errors import (
 
 
 class CallbackFixture:
-    def __init__(self, with_tracker=False):
+    def __init__(self, with_tracker=False, with_families=False):
         self.store = wasm.WasmAuthoringStore.new()
         self.context = self.store.createSceneContext()
         self.target = self.store.createManimCircle(0.5)
         self.detached = self.store.createManimCircle(0.2)
+        self.families = []
+        if with_families:
+            for handles in ((self.target, self.detached), (self.target,)):
+                members = wasm.WasmSceneMembershipBatch.new("add")
+                for handle in handles:
+                    members.appendMobject("", handle)
+                self.families.append(self.store.createFamily(members))
         self.context.bindMobject("0", self.target)
         self.context.addUpdater(self.target, "1", 0)
         self.tracker = self.context.createValueTracker(2.0) if with_tracker else None
@@ -42,6 +49,8 @@ class CallbackFixture:
         self.detached.free()
         if self.tracker is not None:
             self.tracker.free()
+        for family in self.families:
+            family.free()
         self.store.free()
 
     def state(self):
@@ -165,6 +174,31 @@ class CallbackErrorBoundaryTests(unittest.TestCase):
         fixture.commit([valid])
         self.assertNotEqual(fixture.player.debugFrameJson(), before)
         self.assertIsNotNone(fixture.player.drainDeltaJson())
+        fixture.finish()
+
+    def test_family_read_preserves_nested_cause_and_same_player_recovery(self):
+        fixture = CallbackFixture(with_families=True)
+        self.addCleanup(fixture.close)
+        token = json.dumps(fixture.phase["token"])
+        def request(handle):
+            return json.dumps({"kind": "family", "node": {
+                "slot": handle.semanticSlot, "generation": handle.semanticGeneration,
+            }})
+        error = self.rejection(fixture, fixture.player.requiredCallbackReadJson,
+                               [token, request(fixture.families[0])],
+                               NoonStaleHandleError, "stale_handle", "callback.family.read")
+        self.assertEqual(error.rust_cause.code, "callback.read")
+        self.assertEqual(error.rust_cause.cause.code, "callback_read.unknown_object")
+        self.assertIsNone(error.rust_cause.cause.cause)
+        self.assertEqual(error.rust_cause.category, "stale_handle")
+        self.assertEqual(error.rust_cause.cause.category, "stale_handle")
+        before = fixture.state()
+        value = json.loads(engine_call(fixture.player.requiredCallbackReadJson,
+                           token, request(fixture.families[1]), operation="callback.read"))
+        self.assertEqual(value["kind"], "family")
+        self.assertEqual(value["objects"], fixture.phase["objects"])
+        self.assertEqual(fixture.state(), before)
+        self.assertIsNone(fixture.player.drainDeltaJson())
         fixture.finish()
 
     def test_valid_abort_remains_terminal_and_repeat_keeps_no_pending_precedence(self):

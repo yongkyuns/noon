@@ -235,3 +235,64 @@ fn callback_decoder_and_local_guards_remain_explicitly_unclassified() {
     assert_eq!(state(&player), before);
     finish(&mut player, Some(&phase));
 }
+
+#[test]
+fn family_read_rejection_preserves_nested_cause_and_the_same_pending_phase() {
+    let mut scene = noon::Scene::new();
+    let target = scene.circle(0.5).unwrap();
+    let detached = scene.circle(0.2).unwrap();
+    let mixed = scene
+        .family(&[(&target).into(), (&detached).into()])
+        .unwrap();
+    let live = scene.family(&[(&target).into()]).unwrap();
+    scene.add(&target).unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_updater(target.node_id(), HostCallbackId::new(1), 0.0, None);
+    transaction
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    let mut player = SemanticExecutionPlayer::from_live_session(
+        scene.execution_session().unwrap(),
+        std::rc::Rc::clone(scene.integration_store()),
+        scene.root(),
+        1.0,
+        41,
+    )
+    .unwrap();
+    let phase = phase(&mut player);
+    player.initial_delta_json().unwrap();
+    let before = state(&player);
+    let revision = scene.revision();
+    let request = |node: SemanticNodeId| {
+        json!({"kind": "family", "node": {
+            "slot": node.slot(), "generation": node.generation(),
+        }})
+        .to_string()
+    };
+    let error = player
+        .required_callback_read_json(&phase["token"].to_string(), &request(mixed.node_id()))
+        .unwrap_err();
+    assert_eq!(error.category, "stale_handle");
+    assert_eq!(error.code, "callback.family.read");
+    let callback = error.cause.as_ref().unwrap();
+    assert_eq!(callback.code, "callback.read");
+    let read = callback.cause.as_ref().unwrap();
+    assert_eq!(read.code, "callback_read.unknown_object");
+    assert!(read.cause.is_none());
+    assert!(error.source().unwrap().source().is_some());
+    assert_eq!(state(&player), before);
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(player.drain_delta_json().unwrap(), None);
+    let value: Value = serde_json::from_str(
+        &player
+            .required_callback_read_json(&phase["token"].to_string(), &request(live.node_id()))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(value["kind"], "family");
+    assert_eq!(value["objects"], phase["objects"]);
+    assert_eq!(state(&player), before);
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(player.drain_delta_json().unwrap(), None);
+    finish(&mut player, Some(&phase));
+}

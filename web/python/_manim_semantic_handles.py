@@ -1258,17 +1258,14 @@ def _shared_family_layout(value: object, *, mutation: bool = False):
     return family_handle.layout()
 
 
-def _group_paint(self, operation, arguments, callback_method, callback_arguments):
+def _group_paint(self, operation, arguments):
     handle = getattr(self, "_semantic_family_handle", None)
     if handle is None:
         raise RuntimeError("Group paint requires the shared Rust authoring host")
-    # #955 owns replacing the existing callback overlay's per-leaf dispatch.
-    # Keep callback writes effective; never publish them as authored style edits.
-    from _manim_updaters import _canonical_phase_context
-    leaves = _compat._leaf_mobjects(self)
-    if any(_canonical_phase_context(leaf) is not None for leaf in leaves):
-        for leaf in leaves:
-            getattr(leaf, callback_method)(*callback_arguments)
+    from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
+    phase = _ACTIVE_CANONICAL_CONTEXT.get()
+    if phase is not None:
+        phase.paint_family(handle, operation, arguments)
         return self
     context = _group_target_context(self)
     try:
@@ -1291,25 +1288,23 @@ def _family_color_arguments(color):
 def _group_set_color(self, color):
     parsed = _compat._as_color("color", color)
     arguments = (parsed.red, parsed.green, parsed.blue, parsed.alpha)
-    return _group_paint(self, "Color", arguments, "set_color", (color,))
+    return _group_paint(self, "Color", arguments)
 
 
 def _group_set_fill(self, color=None, opacity=None):
     alpha = None if opacity is None else _compat._opacity("fill opacity", opacity)
-    return _group_paint(self, "Fill", (*_family_color_arguments(color), alpha),
-                        "set_fill", (color, opacity))
+    return _group_paint(self, "Fill", (*_family_color_arguments(color), alpha))
 
 
 def _group_set_stroke(self, color=None, width=None, opacity=None):
     stroke_width = None if width is None else _compat._manim_stroke_width(width)
     alpha = None if opacity is None else _compat._opacity("stroke opacity", opacity)
-    return _group_paint(self, "Stroke", (*_family_color_arguments(color), stroke_width, alpha),
-                        "set_stroke", (color, width) if opacity is None else (color, width, opacity))
+    return _group_paint(self, "Stroke", (*_family_color_arguments(color), stroke_width, alpha))
 
 
 def _group_set_opacity(self, opacity):
     alpha = _compat._opacity("opacity", opacity)
-    return _group_paint(self, "Opacity", (alpha,), "set_opacity", (opacity,))
+    return _group_paint(self, "Opacity", (alpha,))
 
 
 def _group_arrange_in_grid(self, rows=None, cols=None, buff=_base.MED_SMALL_BUFF):

@@ -396,8 +396,8 @@ json.dumps({"matrix": results, "liveProperties": property_results, "additionalTe
   }, {modules, tests, callbackTests, pyodideUrl});
   assert.equal(report.python.matrix.length, 10);
   assert.equal(report.python.liveProperties.length, 29);
-  assert.equal(report.python.additionalTests, 9);
-  assert.equal(report.python.callbackTests, 6);
+  assert.equal(report.python.additionalTests, 10);
+  assert.equal(report.python.callbackTests, 7);
   assert.equal(report.python.sparseCallbackRead, true);
   assert.equal(report.python.skipped, 0);
   assert.equal(report.python.promiseRejectionAndRecovery, true);
