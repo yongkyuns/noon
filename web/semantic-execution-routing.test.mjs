@@ -1,96 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-class FakeCanvas {
-  clientWidth = 640;
-  clientHeight = 360;
-  width = 640;
-  height = 360;
-  transferred = false;
-  replacement = null;
-  transferControlToOffscreen() {
-    if (this.transferred) throw new Error("canvas transferred twice");
-    this.transferred = true;
-    return { width: this.width, height: this.height };
-  }
-  cloneNode() {
-    return new FakeCanvas();
-  }
-  replaceWith(canvas) { this.replacement = canvas; }
-}
+import {
+  FakeCanvas, FakeMessageChannel, FakeWorker, FakeResizeObserver, FakeSemanticAuthoringClient,
+} from "./test-support/execution-fakes.mjs";
 
-class FakePort {
-  listeners = new Map();
-  messages = [];
-  peer = null;
-  closed = false;
-  started = false;
-  addEventListener(type, listener) {
-    const listeners = this.listeners.get(type) ?? [];
-    listeners.push(listener);
-    this.listeners.set(type, listeners);
-  }
-  postMessage(message) {
-    this.messages.push(message);
-    queueMicrotask(() => this.peer?.emitMessage(message));
-  }
-  start() {
-    this.started = true;
-  }
-  close() {
-    this.closed = true;
-  }
-  emitMessage(message) {
-    for (const listener of this.listeners.get("message") ?? []) {
-      listener({ data: message });
-    }
-  }
-}
-
-class FakeMessageChannel {
-  constructor() {
-    this.port1 = new FakePort();
-    this.port2 = new FakePort();
-    this.port1.peer = this.port2;
-    this.port2.peer = this.port1;
-  }
-}
-
-class FakeWorker {
-  static instances = [];
-  listeners = new Map();
-  messages = [];
-  terminated = false;
-  constructor(_url, options = {}) {
-    this.name = options.name ?? "";
-    FakeWorker.instances.push(this);
-  }
-  addEventListener(type, listener) {
-    const listeners = this.listeners.get(type) ?? [];
-    listeners.push(listener);
-    this.listeners.set(type, listeners);
-  }
-  postMessage(message, transfer = []) {
-    this.messages.push({ message, transfer });
-  }
-  terminate() {
-    this.terminated = true;
-  }
-  emitMessage(message) {
-    for (const listener of this.listeners.get("message") ?? []) {
-      listener({ data: message });
-    }
-  }
-}
-
-class FakeResizeObserver {
-  static instances = [];
-  active = false;
-  constructor(callback) { this.callback = callback; FakeResizeObserver.instances.push(this); }
-  observe(canvas) { this.canvas = canvas; this.active = true; }
-  disconnect() { this.active = false; }
-  deliver() { this.callback(); }
-}
 globalThis.ResizeObserver = FakeResizeObserver;
 
 globalThis.HTMLCanvasElement = FakeCanvas;
@@ -136,49 +50,6 @@ function replyRender(worker, type, responseType, payload = {}) {
       ...payload,
     }),
   );
-}
-
-class FakeSemanticAuthoringClient {
-  attachments = [];
-  stoppedContexts = [];
-  releasedContexts = [];
-  failContext = null;
-
-  async attachSemanticExecution(contextId, controlPort, renderPort, options) {
-    this.attachments.push({ contextId, controlPort, renderPort, options });
-    if (contextId === this.failContext) {
-      throw new Error("semantic context rejected");
-    }
-    controlPort.addEventListener("message", ({ data: message }) => {
-      if (message.type === "stop") {
-        this.stoppedContexts.push(contextId);
-        return;
-      }
-      const state = {
-        requestId: message.requestId,
-        time: message.type === "seek" ? message.time : 0,
-        playing: message.type === "pause" ? false : true,
-        nextPatchSequence: "1",
-      };
-      controlPort.postMessage(envelope("noon.engine", message.type, state));
-    });
-    controlPort.start();
-    // The real Python endpoint queues transport setup and sequence-zero snapshot
-    // on renderPort before it publishes readiness on this control endpoint.
-    renderPort.postMessage({ type: "test-sequence-zero-snapshot", session: options.session });
-    controlPort.postMessage(
-      envelope("noon.engine", "ready", {
-        transportMode: options.transportMode,
-        semantic: true,
-      }),
-    );
-    return { type: "semantic_execution_attached", contextId };
-  }
-
-  async releaseSemanticExecution(contextId) {
-    this.releasedContexts.push(contextId);
-    return { type: "semantic_execution_released", contextId };
-  }
 }
 
 async function prepare(client) {

@@ -27,7 +27,6 @@ const sharedLifecycleChanges = [
   "scripts/pr-risk-classifier.mjs",
   "web/authoring-execution-client.js",
   "web/authoring-render-worker.js",
-  "web/execution-engine-worker.js",
   "web/execution-render-worker.js",
   "web/execution-transport.js",
   "web/execution-worker-client.js",

@@ -1,83 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-class FakeCanvas {
-  clientWidth = 640;
-  clientHeight = 360;
-  width = 640;
-  height = 360;
-  className = "";
-  id = "scene";
-  replacement = null;
-  transfers = 0;
-
-  remove() {}
-
-  transferControlToOffscreen() {
-    this.transfers += 1;
-    return { width: this.width, height: this.height };
-  }
-
-  cloneNode() {
-    const clone = new FakeCanvas();
-    clone.clientWidth = this.clientWidth;
-    clone.clientHeight = this.clientHeight;
-    clone.width = this.width;
-    clone.height = this.height;
-    clone.className = this.className;
-    clone.id = this.id;
-    return clone;
-  }
-
-  replaceWith(replacement) {
-    this.replacement = replacement;
-  }
-}
-
-class FakeWorker {
-  static instances = [];
-
-  listeners = new Map();
-  messages = [];
-  terminated = false;
-
-  constructor(_url, options = {}) {
-    this.name = options.name ?? "";
-    FakeWorker.instances.push(this);
-  }
-
-  addEventListener(type, listener) {
-    const listeners = this.listeners.get(type) ?? [];
-    listeners.push(listener);
-    this.listeners.set(type, listeners);
-  }
-
-  postMessage(message, transfer = []) {
-    this.messages.push({ message, transfer });
-  }
-
-  terminate() {
-    this.terminated = true;
-  }
-
-  emitMessage(message) {
-    this.#emit("message", { data: message });
-  }
-
-  emitError(message = "worker crashed", details = {}) {
-    this.#emit("error", { message, ...details });
-  }
-
-  emitMessageError() {
-    this.#emit("messageerror", {});
-  }
-
-  #emit(type, event) {
-    for (const listener of this.listeners.get(type) ?? []) {
-      listener(event);
-    }
-  }
-}
+import {
+  FakeCanvas, FakeMessageChannel, FakeWorker, FakeSemanticAuthoringClient,
+} from "./test-support/execution-fakes.mjs";
+globalThis.MessageChannel = FakeMessageChannel;
 
 globalThis.HTMLCanvasElement = FakeCanvas;
 globalThis.Worker = FakeWorker;
@@ -86,7 +13,6 @@ globalThis.window = { devicePixelRatio: 1 };
 const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
 const { resetRenderHostSelectionForTests } = await import("./render-host-selection.js");
 
-const SCENE_JSON = JSON.stringify({ version: 1, objects: [], tracks: [] });
 
 function engineMessage(type, payload = {}) {
   return {
@@ -104,15 +30,6 @@ function renderMessage(type, payload = {}) {
     type,
     ...payload,
   };
-}
-
-function workerPair(offset = 0) {
-  const pair = FakeWorker.instances.slice(offset, offset + 2);
-  const engine = pair.find(({ name }) => name === "noon-engine");
-  const render = pair.find(({ name }) => name === "noon-render");
-  assert.ok(engine, "engine worker must be created");
-  assert.ok(render, "render worker must be created");
-  return { engine, render };
 }
 
 function deferredRenderHostProbe(t) {
@@ -174,35 +91,44 @@ function deferredRenderHostProbe(t) {
   return (ok = true) => settleProbe(ok);
 }
 
+async function finishStartup(starting, authoring, offset) {
+  const render = await waitForNewWorker(offset, "noon-render");
+  replyRender(render, await waitForRequest(render, "prepare"), "prepared");
+  replyRender(render, await waitForRequest(render, "start_engine"), "engine_started");
+  const ready = await starting;
+  return { ready, render, engine: authoring.attachments.at(-1).controlPort.peer };
+}
+
+function replyRender(render, request, type) {
+  render.emitMessage(renderMessage(type, {
+    requestId: request.requestId, transportMode: "transferable", backend: "WebGL2",
+  }));
+}
+
 async function startClient(errors = []) {
   const offset = FakeWorker.instances.length;
+  const authoring = new FakeSemanticAuthoringClient();
+  authoring.autoRespond = false;
   const client = new ExecutionWorkerClient(new FakeCanvas(), {
-    onError(error, owner) {
-      errors.push(`${owner}: ${error.message}`);
-    },
+    onError(error, owner) { errors.push(`${owner}: ${error.message}`); },
   });
-  const readyPromise = client.start(SCENE_JSON, { transportMode: "transferable" });
-  const { engine, render } = workerPair(offset);
-  engine.emitMessage(engineMessage("ready", { transportMode: "transferable" }));
-  render.emitMessage(
-    renderMessage("ready", { transportMode: "transferable", backend: "WebGL2" }),
-  );
-  const ready = await readyPromise;
+  const starting = client.startSemanticExecution("scene", authoring, { transportMode: "transferable" });
+  const { ready, engine, render } = await finishStartup(starting, authoring, offset);
   assert.equal(ready.session, 1);
-  return { client, engine, render };
+  return { client, authoring, engine, render };
 }
 
 function requestMessage(worker, type) {
-  const entry = worker.messages.findLast(({ message }) => message.type === type);
+  const entry = worker.messages.findLast(entry => (entry.message ?? entry).type === type);
   assert.ok(entry, `missing ${worker.name} ${type} request`);
-  return entry.message;
+  return entry.message ?? entry;
 }
 
 async function waitForRequest(worker, type, occurrence = 1) {
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    const entries = worker.messages.filter(({ message }) => message.type === type);
+    const entries = worker.messages.filter(entry => (entry.message ?? entry).type === type);
     if (entries.length >= occurrence) {
-      return entries[occurrence - 1].message;
+      return entries[occurrence - 1].message ?? entries[occurrence - 1];
     }
     await Promise.resolve();
   }
@@ -217,7 +143,7 @@ test("reserves prepare and fresh startup while render-host probing is pending", 
 
   const preparing = client.prepare({ transportMode: "transferable" });
   await assert.rejects(
-    client.start(SCENE_JSON, { transportMode: "transferable" }),
+    client.startSemanticExecution("scene", new FakeSemanticAuthoringClient(), { transportMode: "transferable" }),
     /already started/,
   );
   assert.equal(canvas.transfers, 0, "host probing must finish before canvas ownership transfers");
@@ -242,9 +168,9 @@ test("reserves a fresh start and cancellation during host probing cannot transfe
   const canvas = new FakeCanvas();
   const client = new ExecutionWorkerClient(canvas);
 
-  const first = client.start(SCENE_JSON, { transportMode: "transferable" });
+  const first = client.startSemanticExecution("scene", new FakeSemanticAuthoringClient(), { transportMode: "transferable" });
   await assert.rejects(
-    client.start(SCENE_JSON, { transportMode: "transferable" }),
+    client.startSemanticExecution("scene", new FakeSemanticAuthoringClient(), { transportMode: "transferable" }),
     /already started/,
   );
   client.terminate();
@@ -262,10 +188,10 @@ test("engine and render requests use independent issuance spaces", async () => {
   const engineMetrics = requestMessage(engine, "metrics");
   const renderMetrics = requestMessage(render, "metrics");
   assert.equal(engineMetrics.requestId, 0);
-  assert.equal(renderMetrics.requestId, 0);
+  assert.equal(renderMetrics.requestId, 2);
 
   engine.emitMessage(engineMessage("metrics", { requestId: 0, metrics: { host: {} } }));
-  render.emitMessage(renderMessage("metrics", { requestId: 0, metrics: { ready: true } }));
+  render.emitMessage(renderMessage("metrics", { requestId: 2, metrics: { ready: true } }));
   const metrics = await metricsPromise;
   assert.deepEqual(metrics.metrics, { ready: true });
   assert.deepEqual(metrics.engineMetrics, { host: {} });
@@ -281,7 +207,7 @@ test("engine and render requests use independent issuance spaces", async () => {
       staleWorkerEvents: 0,
     },
     render: {
-      nextRequestId: 1,
+      nextRequestId: 3,
       pendingRequests: 0,
       staleResponses: 0,
       staleWorkerEvents: 0,
@@ -302,8 +228,6 @@ test("drops duplicate issued responses but keeps owner-local future IDs fatal", 
   const stateResponse = engineMessage("state", {
     requestId: 0,
     time: 0,
-    nextPatchSequence: "0",
-    sceneJson: SCENE_JSON,
   });
   engine.emitMessage(stateResponse);
   await statePromise;
@@ -317,7 +241,7 @@ test("drops duplicate issued responses but keeps owner-local future IDs fatal", 
   const engineMetrics = requestMessage(engine, "metrics");
   const renderMetrics = requestMessage(render, "metrics");
   assert.equal(engineMetrics.requestId, 1);
-  assert.equal(renderMetrics.requestId, 0);
+  assert.equal(renderMetrics.requestId, 2);
 
   // Render has never issued request 4. A fatal protocol violation rejects the
   // current render request immediately instead of leaving it hung for restart.
@@ -332,7 +256,7 @@ test("drops duplicate issued responses but keeps owner-local future IDs fatal", 
 
 test("ignores queued events from workers that were replaced by restart", async () => {
   const errors = [];
-  const { client, engine: oldEngine, render: oldRender } = await startClient(errors);
+  const { client, authoring, engine: oldEngine, render: oldRender } = await startClient(errors);
 
   const beforeRestart = client.state();
   await Promise.resolve();
@@ -342,22 +266,16 @@ test("ignores queued events from workers that were replaced by restart", async (
     engineMessage("state", {
       requestId: 0,
       time: 0,
-      nextPatchSequence: "0",
-      sceneJson: SCENE_JSON,
-    }),
+        }),
   );
   await beforeRestart;
 
   const offset = FakeWorker.instances.length;
   const restartPromise = client.restart();
-  const { engine: newEngine, render: newRender } = workerPair(offset);
-  newEngine.emitMessage(engineMessage("ready", { transportMode: "transferable" }));
-  newRender.emitMessage(
-    renderMessage("ready", { transportMode: "transferable", backend: "WebGL2" }),
-  );
-  const restarted = await restartPromise;
+  const { ready: restarted, engine: newEngine, render: newRender } =
+    await finishStartup(restartPromise, authoring, offset);
   assert.equal(restarted.session, 2);
-  assert.equal(oldEngine.terminated, true);
+  assert.equal(oldEngine.closed, true);
   assert.equal(oldRender.terminated, true);
 
   oldEngine.emitMessage({ malformed: true });
@@ -380,9 +298,7 @@ test("ignores queued events from workers that were replaced by restart", async (
     engineMessage("state", {
       requestId: 1,
       time: 0,
-      nextPatchSequence: "0",
-      sceneJson: SCENE_JSON,
-    }),
+        }),
   );
   await statePromise;
   assert.deepEqual(errors, []);
@@ -391,7 +307,7 @@ test("ignores queued events from workers that were replaced by restart", async (
 
 test("engine failure reconnects without replacing the render worker or canvas", async () => {
   const errors = [];
-  const { client, engine: oldEngine, render } = await startClient(errors);
+  const { client, authoring, engine: oldEngine, render } = await startClient(errors);
   const canvas = client.canvas;
 
   oldEngine.emitError("engine lost", {
@@ -406,26 +322,16 @@ test("engine failure reconnects without replacing the render worker or canvas", 
 
   const offset = FakeWorker.instances.length;
   const restartPromise = client.restart();
-  await Promise.resolve();
-  const newEngine = FakeWorker.instances[offset];
-  assert.ok(newEngine, "replacement engine worker must be created");
-  assert.equal(newEngine.name, "noon-engine");
-  assert.equal(FakeWorker.instances.length, offset + 1, "engine reconnect must not create a render worker");
-
-  const attachRequest = requestMessage(render, "attach_engine");
-  render.emitMessage(
-    renderMessage("engine_port_attached", {
-      requestId: attachRequest.requestId,
-      transportMode: "transferable",
-      backend: "WebGL2",
-    }),
-  );
-  newEngine.emitMessage(engineMessage("ready", { transportMode: "transferable" }));
+  const attachRequest = await waitForRequest(render, "rebuild_engine");
+  const newEngine = authoring.attachments.at(-1).controlPort.peer;
+  assert.notEqual(newEngine, oldEngine);
+  assert.equal(FakeWorker.instances.length, offset, "reconnect must reuse the existing render worker");
+  replyRender(render, attachRequest, "engine_rebuilt");
 
   const restarted = await restartPromise;
   assert.equal(restarted.session, 2);
   assert.equal(client.canvas, canvas, "engine reconnect must preserve the transferred canvas");
-  assert.equal(oldEngine.terminated, true);
+  assert.equal(oldEngine.closed, true);
   assert.equal(render.terminated, false);
 
   oldEngine.emitMessage({ malformed: true });
@@ -440,9 +346,7 @@ test("engine failure reconnects without replacing the render worker or canvas", 
     engineMessage("state", {
       requestId: stateRequest.requestId,
       time: 0,
-      nextPatchSequence: "0",
-      sceneJson: SCENE_JSON,
-    }),
+        }),
   );
   await statePromise;
   client.terminate();
@@ -450,7 +354,7 @@ test("engine failure reconnects without replacing the render worker or canvas", 
 
 test("engine reconnect restores pause mode", async () => {
   const errors = [];
-  const { client, engine: oldEngine, render } = await startClient(errors);
+  const { client, authoring, engine: oldEngine, render } = await startClient(errors);
   const pausePromise = client.pause();
   const initialPause = await waitForRequest(oldEngine, "pause");
   oldEngine.emitMessage(
@@ -459,9 +363,7 @@ test("engine reconnect restores pause mode", async () => {
       operation: "pause",
       time: 0.5,
       playing: false,
-      nextPatchSequence: "0",
-      sceneJson: SCENE_JSON,
-    }),
+        }),
   );
   await pausePromise;
 
@@ -469,29 +371,11 @@ test("engine reconnect restores pause mode", async () => {
   const canvas = client.canvas;
   const offset = FakeWorker.instances.length;
   const restartPromise = client.restart();
-  const newEngine = await waitForNewEngine(offset);
-
-  const renderAttach = await waitForRequest(render, "attach_engine");
-  render.emitMessage(
-    renderMessage("engine_port_attached", {
-      requestId: renderAttach.requestId,
-      transportMode: "transferable",
-      backend: "WebGL2",
-    }),
-  );
-  newEngine.emitMessage(engineMessage("ready", { transportMode: "transferable" }));
-
-  const restoredPause = await waitForRequest(newEngine, "pause");
-  newEngine.emitMessage(
-    engineMessage("result", {
-      requestId: restoredPause.requestId,
-      operation: "pause",
-      time: 0,
-      playing: false,
-      nextPatchSequence: "0",
-      sceneJson: SCENE_JSON,
-    }),
-  );
+  const renderAttach = await waitForRequest(render, "rebuild_engine");
+  const attachment = authoring.attachments.at(-1);
+  assert.equal(attachment.options.initiallyPaused, true, "shared attachment restores pause atomically");
+  assert.equal(FakeWorker.instances.length, offset);
+  replyRender(render, renderAttach, "engine_rebuilt");
 
   const restarted = await restartPromise;
   assert.equal(restarted.session, 2);
@@ -501,18 +385,6 @@ test("engine reconnect restores pause mode", async () => {
   client.terminate();
 });
 
-async function waitForNewEngine(offset) {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    const worker = FakeWorker.instances[offset];
-    if (worker !== undefined) {
-      assert.equal(worker.name, "noon-engine");
-      return worker;
-    }
-    await Promise.resolve();
-  }
-  assert.fail("replacement engine worker must be created");
-}
-
 async function waitForNewWorker(offset, name) {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const worker = FakeWorker.instances.slice(offset).find((candidate) => candidate.name === name);
@@ -521,3 +393,21 @@ async function waitForNewWorker(offset, name) {
   }
   assert.fail(`replacement ${name} worker must be created`);
 }
+
+test("render constructor failure rolls back transferred canvas and semantic startup can retry", async () => {
+  const original = new FakeCanvas();
+  const client = new ExecutionWorkerClient(original);
+  const authoring = new FakeSemanticAuthoringClient();
+  FakeWorker.failNextName = "noon-render";
+  await assert.rejects(client.startSemanticExecution("scene", authoring, { transportMode: "transferable" }),
+    /noon-render constructor failed/);
+  assert.equal(original.transferred, true);
+  assert.equal(original.replacement, client.canvas);
+  assert.equal(client.canvas.transferred, false);
+  assert.equal(authoring.attachments.length, 0, "failed render preparation must not attach a semantic context");
+  const offset = FakeWorker.instances.length;
+  const retry = client.startSemanticExecution("scene", authoring, { transportMode: "transferable" });
+  const { ready } = await finishStartup(retry, authoring, offset);
+  assert.equal(ready.session, 1, "no session was published by failed render preparation");
+  client.terminate();
+});
