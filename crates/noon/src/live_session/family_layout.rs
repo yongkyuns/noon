@@ -81,6 +81,50 @@ impl LiveSession<'_> {
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.manim_scale_with_pivot(mobject, x, y, crate::ManimRotationPivot::Center)
+    }
+
+    /// Apply Manim scale around an explicit world-space point atomically.
+    pub fn manim_scale_about_point(
+        &mut self,
+        mobject: &Mobject,
+        x: f64,
+        y: f64,
+        point_x: f64,
+        point_y: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.manim_scale_with_pivot(
+            mobject,
+            x,
+            y,
+            crate::ManimRotationPivot::Point(point_x, point_y),
+        )
+    }
+
+    /// Apply Manim scale around the current critical point selected by an edge vector.
+    pub fn manim_scale_about_edge(
+        &mut self,
+        mobject: &Mobject,
+        x: f64,
+        y: f64,
+        edge_x: f64,
+        edge_y: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.manim_scale_with_pivot(
+            mobject,
+            x,
+            y,
+            crate::ManimRotationPivot::Edge(edge_x, edge_y),
+        )
+    }
+
+    fn manim_scale_with_pivot(
+        &mut self,
+        mobject: &Mobject,
+        x: f64,
+        y: f64,
+        pivot: crate::ManimRotationPivot,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_mobject(mobject)?;
         self.session.require_published_store(&self.store.borrow())?;
         // Persistent placement-compatible edits may not overwrite an active affine
@@ -92,7 +136,7 @@ impl LiveSession<'_> {
                 f64::from(transform.translation.y),
             ))
         });
-        let transaction = crate::family_affine::FamilyAffine::Scale(x, y)
+        let transaction = crate::family_affine::FamilyAffine::ScaleAbout(x, y, pivot)
             .transaction(&self.store.borrow(), &[mobject.node_id()], bounds)
             .map_err(LiveSessionError::from)?;
         self.apply(transaction)
