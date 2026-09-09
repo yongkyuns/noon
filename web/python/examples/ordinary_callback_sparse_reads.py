@@ -71,7 +71,8 @@ class OrdinaryCallbackSparseReads(Scene):
         # track exists. This proves callback reads do not depend on active or
         # touched signal rows.
         await self.wait(0.25)
-        assert circle.get_center() == (-1.0, 1.0)
+        center = circle.get_center()
+        assert abs(center.x + 1.0) < 1e-5 and abs(center.y - 1.0) < 1e-5, center
         await self.play(tracker.animate.set_value(2.0), run_time=1.0, rate_func=linear)
 
         # The timed track has completed. Rust appends the persistent hold, and
@@ -82,4 +83,5 @@ class OrdinaryCallbackSparseReads(Scene):
 
         assert phase_counts.get(0.0) == 1
         assert self.time == 1.5
-        assert circle.get_center() == (2.0, 1.0)
+        center = circle.get_center()
+        assert abs(center.x - 2.0) < 1e-5 and abs(center.y - 1.0) < 1e-5, center

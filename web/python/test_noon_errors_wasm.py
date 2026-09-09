@@ -496,9 +496,11 @@ class WasmErrorProjectionTests(unittest.TestCase):
             first.shift((0.25,0))
             before_count=len(overlay.effective_batch()["writes"])
             self.assertIs(family.shift((1,0)),family)
+            # Centers come from f32 effective bounds; rejection snapshots and
+            # exact write counts below remain bit-for-bit checks.
             with self.subTest(reproduction="nested alias requested +1"):
-                self.assertEqual(first.get_center().x,1.25, "alias received a second translation")
-                self.assertEqual(second.get_center().x,1.0)
+                self.assertAlmostEqual(first.get_center().x, 1.25, delta=1e-6, msg="alias received a second translation")
+                self.assertAlmostEqual(second.get_center().x, 1.0, delta=1e-6)
                 self.assertEqual(len(overlay.effective_batch()["writes"])-before_count,2)
             family.shift((-1,0))
             before=observed()
@@ -508,7 +510,7 @@ class WasmErrorProjectionTests(unittest.TestCase):
                 with self.subTest(reproduction="caught late member failure"):
                     with self.assertRaises((RuntimeError,ReferenceError)):
                         invalid.shift((1,0))
-                    self.assertEqual(first.get_center().x,0.25, "late failure retained an earlier +1 write")
+                    self.assertAlmostEqual(first.get_center().x, 0.25, delta=1e-6, msg="late failure retained an earlier +1 write")
                     self.assertEqual(observed(),before)
             finally:
                 missing._semantic_handle=missing_handle
@@ -521,8 +523,8 @@ class WasmErrorProjectionTests(unittest.TestCase):
                 invalid.shift((1,0))
             self.assertEqual(observed(),successful)
             family.shift((-1,0))
-            self.assertEqual(first.get_center().x,0.25)
-            self.assertEqual(second.get_center().x,0.0)
+            self.assertAlmostEqual(first.get_center().x, 0.25, delta=1e-6)
+            self.assertAlmostEqual(second.get_center().x, 0.0, delta=1e-6)
             self.assertIsNone(player.drainDeltaJson())
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene),None)
