@@ -1,0 +1,26 @@
+name: R2 development source snapshot
+on:
+  push:
+    branches: [codex/1272-r2-bootstrap]
+    paths: ['.github/workflows/r2-source-snapshot.yml']
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ab214ba048670746f77cda2b2ee5ec61d7e7b6ad
+      - name: Export exact development baseline
+        run: |
+          git archive --format=tar.gz --output="$RUNNER_TEMP/noon-r2-source.tar.gz" HEAD
+          git rev-parse HEAD > "$RUNNER_TEMP/revision.txt"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: r2-source-snapshot
+          path: |
+            ${{ runner.temp }}/noon-r2-source.tar.gz
+            ${{ runner.temp }}/revision.txt
+          retention-days: 1
