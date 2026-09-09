@@ -119,7 +119,6 @@ class ManimSharedGeometryTests(unittest.TestCase):
             constructors = tuple(cls.__init__ for cls in
                                  (_manim_geometry.Dot, _manim_geometry.Ellipse, _manim_geometry.Triangle))
             import _manim_shared_geometry
-            _manim_shared_geometry.install()
             assert constructors == tuple(cls.__init__ for cls in
                                          (_manim_geometry.Dot, _manim_geometry.Ellipse, _manim_geometry.Triangle))
             assert not any(name.startswith("_ORIGINAL_") for name in vars(_manim_shared_geometry))

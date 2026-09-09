@@ -247,12 +247,7 @@ class _AnimateBuilderMixin:
     def _initialize_builder(self, source: object) -> None:
         self.source = source
         self.mobject = source
-        target_factory = getattr(source, "_copy_for_animate_target", None)
-        self.target = (
-            target_factory()
-            if target_factory is not None
-            else source.copy()  # type: ignore[attr-defined]
-        )
+        self.target = source._copy_for_animate_target()
         self.anim_args = {}
         self.cannot_pass_args = False
         self.is_chaining = False
@@ -291,7 +286,7 @@ class _AnimateBuilderMixin:
 
 class _AlignedAnimationBuilder(_AnimateBuilderMixin):
     def __init__(self, source: _base.Mobject) -> None:
-        # Unlike the old Noon builder, Manim allows ``self.play(Circle().animate...)``.
+        # Manim allows ``self.play(Circle().animate...)``.
         # Binding happens when Scene.play compiles the animation.
         self._initialize_builder(source)
 
@@ -299,8 +294,3 @@ class _AlignedAnimationBuilder(_AnimateBuilderMixin):
 class _AlignedGroupAnimationBuilder(_AnimateBuilderMixin):
     def __init__(self, source: _compat.Group) -> None:
         self._initialize_builder(source)
-
-
-# Both properties in _manim_compat resolve these globals at access time.
-_compat._CompatAnimationBuilder = _AlignedAnimationBuilder
-_compat._GroupAnimationBuilder = _AlignedGroupAnimationBuilder

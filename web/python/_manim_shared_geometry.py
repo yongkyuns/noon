@@ -14,9 +14,6 @@ import _manim_compat as _compat
 import _manim_geometry as _geometry
 import _manim_semantic_handles as _shared
 
-_INSTALLED = False
-
-
 def _apply_candidate_color(candidate: object, color: object) -> None:
     if color is not None:
         parsed = _shared._compat._as_color("color", color)
@@ -496,29 +493,3 @@ class Annulus(_compat.VMobject):
         self.mark_paths_closed = bool(mark_paths_closed)
         self.num_components = component_count
         self.arc_center = center
-
-
-def install() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-
-    public = {
-        "Elbow": Elbow,
-        "RoundedRectangle": RoundedRectangle,
-        "SurroundingRectangle": SurroundingRectangle,
-        "BackgroundRectangle": BackgroundRectangle,
-        "Underline": Underline,
-        "AnnularSector": AnnularSector,
-        "Sector": Sector,
-        "Annulus": Annulus,
-    }
-    for name, value in public.items():
-        setattr(_base, name, value)
-        setattr(_compat, name, value)
-        if name not in _base.__all__:
-            _base.__all__.append(name)
-
-
-install()

@@ -150,7 +150,6 @@ import _manim_geometry
 import _manim_semantic_handles
 
 import _manim_shared_geometry
-_manim_shared_geometry.install()
 import _manim_dashed_line
 _manim_dashed_line.install()
 import _manim_animate
@@ -161,7 +160,7 @@ _manim_composition.install()
 import _manim_lifecycle
 # Text and Typst bind ordinary shared semantic Mobjects; membership stays in Rust.
 import _manim_typst
-_manim_typst.install()
+
 import _manim_growing
 _manim_growing.install()
 import _manim_draw_border_then_fill

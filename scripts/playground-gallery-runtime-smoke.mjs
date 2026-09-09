@@ -17,7 +17,7 @@ const base = external ?? `http://127.0.0.1:${port}/web/`;
 const artifacts = path.resolve(root, process.env.NOON_PLAYGROUND_MATRIX_ARTIFACTS ??
   `browser-smoke-artifacts/gallery/${browserName}-${profile}`);
 const stringify = value => JSON.stringify(value, (_, v) => typeof v === 'bigint' ? String(v) : v, 2);
-const affected = ['manim-lagged-start-map', 'parity-moving-dots', 'parity-rotation-updater', 'compatible-indicate-square'];
+const affected = ['compatible-timed-composition', 'parity-moving-dots', 'parity-rotation-updater', 'compatible-indicate-square'];
 await mkdir(artifacts, { recursive: true });
 let server, browser, runtimeCache;
 const startedAt = performance.now();
@@ -55,7 +55,9 @@ try {
   const options = profile === 'android' ? playwright.devices['Pixel 7'] : profile.startsWith('mobile') ?
     playwright.devices['iPhone 13'] : { viewport: { width: 1280, height: 900 }, deviceScaleFactor: profile.endsWith('dpr2') ? 2 : 1 };
   const queue = entries.map(entry => ({ entry, noJspi: false }));
-  // The affected exact sources must also finish when JSPI is absent altogether.
+  // Mapped composition and callback examples must also finish without JSPI.
+  // The geometry-only composition has a paired Rust example; the upstream
+  // LaggedStartMap tutorial requires unsupported Tex and stays blocked.
   // This includes Chromium so a working desktop synchronous path cannot mask a
   // failure to enter the portable path.
   if (browserName !== 'firefox') for (const id of affected) queue.push({ entry: entries.find(e => e.id === id), noJspi: true });

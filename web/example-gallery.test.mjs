@@ -114,8 +114,6 @@ for (const id of [
   "manim-grow-from-center",
   "manim-grow-from-edge",
   "manim-spin-in-from-nothing",
-  "manim-using-focus-on",
-  "manim-lagged-start-map",
 ]) {
   assert.equal(
     gallery.examples.find((entry) => entry.id === id)?.parityStatus,
@@ -123,10 +121,17 @@ for (const id of [
     `${id}: exact upstream source should be public before separate raster qualification`,
   );
 }
-for (const id of ["manim-rotating-demo", "manim-using-indicate"]) {
+for (const id of ["manim-rotating-demo"]) {
   const entry = manifest.entries.find((candidate) => candidate.id === id);
   assert.equal(entry?.status, "blocked", `${id}: shared migration remains incomplete`);
   assert.equal(entry?.dependency, "#61/#959", `${id}: retain explicit migration owners`);
+}
+for (const id of ["manim-using-focus-on", "manim-using-indicate", "manim-lagged-start-map"]) {
+  const entry = manifest.entries.find((candidate) => candidate.id === id);
+  assert.equal(entry?.status, "blocked", `${id}: unsupported LaTeX cannot render placeholder geometry`);
+  assert.equal(entry?.dependency, "#83/#365");
+  assert.match(entry.blocked_reason, /LaTeX/);
+  assert.equal(gallery.examples.some((candidate) => candidate.id === id), false);
 }
 for (const syntheticProbeId of [
   "parity-dot-ellipse",

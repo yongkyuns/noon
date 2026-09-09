@@ -1,15 +1,15 @@
 """ManimCE v0.21 geometry/source-compatibility breadth over Noon primitives.
 
-The public wrappers in this module stay on Noon's existing semantic geometry and
-flat retained scene model. Besides exact affine Circle specializations, the module
-contains small 2D wrappers needed by Manim's own documentation examples.
+Geometry wrappers delegate to shared Rust semantic handles. Text is provided by
+the shared text-resource wrappers; this module never substitutes vector geometry
+for unsupported glyph rendering.
 """
 
 from __future__ import annotations
 
 import copy
 import math
-from typing import Any, Iterator
+from typing import Any
 
 import noon as _base
 import _manim_compat as _compat
@@ -129,58 +129,6 @@ class Arrow(_compat.Group):
         return self._tip.get_center()
 
 
-class Text(_compat.Rectangle):
-    """Single retained text handle used until the glyph backend lands.
-
-    The important compatibility property for the upstream examples is that a text
-    object behaves as one Mobject for animations such as Indicate while remaining
-    iterable for LaggedStartMap. Rendering is intentionally not marked parity-qualified
-    until the dedicated text/glyph implementation replaces this temporary geometry.
-    """
-
-    def __init__(
-        self,
-        text: object,
-        font_size: float = 48.0,
-        color: _base.Color = _base.WHITE,
-        **kwargs: Any,
-    ) -> None:
-        value = str(text)
-        scale = max(float(font_size), 1.0) / 48.0
-        visible = max(len(value), 1)
-        width = max(0.46 * visible + 0.08 * max(visible - 1, 0), 0.3) * scale
-        height = 0.72 * scale
-        super().__init__(
-            width=width,
-            height=height,
-            color=color,
-            fill_opacity=1.0,
-            stroke_opacity=0.0,
-        )
-        self.text = value
-        self.font_size = float(font_size)
-        self._text_kwargs = dict(kwargs)
-
-    def __iter__(self) -> Iterator[_base.Mobject]:
-        yield self
-
-    def __len__(self) -> int:
-        return 1
-
-    def __getitem__(self, index: int) -> _base.Mobject:
-        if index in (0, -1):
-            return self
-        raise IndexError(index)
-
-
-class Tex(Text):
-    """Source-compatible Tex Mobject pending exact LaTeX glyph rendering."""
-
-
-class MathTex(Tex):
-    """Source-compatible MathTex Mobject pending exact LaTeX glyph rendering."""
-
-
 def _public_bound_method_name(source: object, method: object) -> str:
     """Recover the public attribute name for a bound compatibility method.
 
@@ -262,37 +210,3 @@ def match_points(self: _base.Mobject, mobject: object) -> _base.Mobject:
     except Exception as error:
         raise ValueError(str(error)) from None
     return self
-
-
-def install() -> None:
-    public = {
-        "DEFAULT_DOT_RADIUS": DEFAULT_DOT_RADIUS,
-        "PURE_YELLOW": PURE_YELLOW,
-        "SMALL_BUFF": _base.SMALL_BUFF,
-        "MED_SMALL_BUFF": _base.MED_SMALL_BUFF,
-        "MED_LARGE_BUFF": _base.MED_LARGE_BUFF,
-        "LARGE_BUFF": _base.LARGE_BUFF,
-        "Dot": Dot,
-        "Ellipse": Ellipse,
-        "Triangle": Triangle,
-        "Arrow": Arrow,
-        "Text": Text,
-        "Tex": Tex,
-        "MathTex": MathTex,
-        "ApplyMethod": ApplyMethod,
-    }
-    for name, value in public.items():
-        setattr(_base, name, value)
-        if name not in {"DEFAULT_DOT_RADIUS", "PURE_YELLOW"}:
-            setattr(_compat, name, value)
-
-
-
-    exports = list(_base.__all__)
-    for name in public:
-        if name not in exports:
-            exports.append(name)
-    _base.__all__ = exports
-
-
-install()

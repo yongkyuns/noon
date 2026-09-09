@@ -25,6 +25,16 @@ class ManimConstantExportTests(unittest.TestCase):
 
             namespace = {}
             exec("from noon import *", namespace)
+            import noon
+            from importlib import import_module
+            for name, module in noon._PUBLIC_EXPORTS.items():
+                assert namespace[name] is getattr(import_module(module), name)
+                assert getattr(noon, name) is namespace[name]
+                assert name in dir(noon)
+            for module in set(noon._PUBLIC_EXPORTS.values()):
+                assert not hasattr(import_module(module), "install")
+            assert "Tex" not in namespace and "MathTex" not in namespace
+            assert not issubclass(namespace["Text"], noon.Rectangle)
             assert namespace["SMALL_BUFF"] == 0.1
             assert namespace["MED_SMALL_BUFF"] == 0.25
             assert namespace["MED_LARGE_BUFF"] == 0.5

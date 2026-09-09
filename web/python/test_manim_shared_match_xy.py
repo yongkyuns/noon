@@ -73,7 +73,6 @@ class ManimSharedMatchXYTests(unittest.TestCase):
             import _manim_semantic_handles as handles
 
             import _manim_shared_geometry
-            _manim_shared_geometry.install()
             assert all(getattr(noon.Mobject, name) is method for name, method in geometry_methods.items())
 
             from noon import Circle, RIGHT, UP
