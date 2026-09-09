@@ -66,6 +66,7 @@ mod execution_session;
 mod family_affine;
 mod family_arrangement;
 mod family_authoring;
+mod family_callback_paint;
 mod family_copy;
 mod family_layout;
 mod family_style;
@@ -100,6 +101,7 @@ pub use execution_session::{
 };
 pub use family_arrangement::FamilyArrangeOptions;
 pub use family_authoring::{MobjectFamily, MobjectFamilyMember};
+pub use family_callback_paint::{FamilyCallbackPaintError, FamilyPaint};
 pub use family_copy::FamilyCopy;
 pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor};
 pub use focus_on_authoring::FocusOnOptions;

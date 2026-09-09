@@ -74,6 +74,23 @@ impl Error for AuthoringFailure {
         self.cause.as_deref().map(|cause| cause as &dyn Error)
     }
 }
+impl From<noon::FamilyCallbackPaintError> for AuthoringFailure {
+    fn from(error: noon::FamilyCallbackPaintError) -> Self {
+        use noon::FamilyCallbackPaintError::*;
+        match error {
+            Authoring(e) => Self::from(e),
+            Store(e) => Self::from(e),
+            Callback(e) => Self::unclassified("callback.family.read", &e),
+            StaleRevision { .. } => {
+                Self::new("stale_handle", "callback.family.stale_revision", error)
+            }
+            InvalidPaint(message) => {
+                Self::new("invalid_input", "callback.family.invalid_paint", message)
+            }
+        }
+    }
+}
+
 impl From<String> for AuthoringFailure {
     fn from(message: String) -> Self {
         Self::new("unclassified", "unclassified", message)

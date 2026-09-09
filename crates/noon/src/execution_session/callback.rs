@@ -686,6 +686,52 @@ impl PendingCallbackPhase {
 impl ExecutionSession {
     /// Read through the exact unpublished evaluation pinned by `token`.
     /// This does not advance, commit, or mutate callback/runtime state.
+    /// Read unique family leaves through the existing pinned object read path.
+    pub fn required_callback_family_read(
+        &self,
+        store: &noon_core::SemanticStore,
+        token: CallbackPhaseToken,
+        family: SemanticNodeId,
+    ) -> Result<Vec<(SemanticNodeId, EffectiveObjectProperties)>, crate::FamilyCallbackPaintError>
+    {
+        use crate::FamilyCallbackPaintError as Error;
+        let pending = self.pending_callback.as_ref().ok_or(Error::Callback(
+            ExecutionSessionCallbackError::NoPendingPhase,
+        ))?;
+        if pending.token != token {
+            return Err(Error::Callback(ExecutionSessionCallbackError::StaleToken {
+                expected: pending.token,
+                actual: token,
+            }));
+        }
+        if store.identity() != self.store_identity {
+            return Err(Error::Authoring(crate::AuthoringError::ForeignStore));
+        }
+        if store.scene_revision() != token.publication().scene_revision() {
+            return Err(Error::StaleRevision {
+                expected: token.publication().scene_revision(),
+                actual: store.scene_revision(),
+            });
+        }
+        store
+            .semantic_family_checked(family)
+            .map_err(|e| Error::Authoring(e.into()))?;
+        store
+            .ordered_leaf_nodes(family)
+            .map_err(Error::Store)?
+            .into_iter()
+            .map(|node| {
+                match self
+                    .required_callback_read(token, CallbackReadRequest::Object(node))
+                    .map_err(|e| Error::Callback(e.into()))?
+                {
+                    CallbackReadValue::Object(properties) => Ok((node, properties)),
+                    CallbackReadValue::Scalar(_) => unreachable!("object request returns object"),
+                }
+            })
+            .collect()
+    }
+
     pub fn required_callback_read(
         &self,
         token: CallbackPhaseToken,

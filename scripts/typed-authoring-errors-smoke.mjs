@@ -493,7 +493,7 @@ json.dumps({"matrix": results, "liveProperties": property_results, "advancement"
   assert.equal(report.python.matrix.length, 10);
   assert.equal(report.python.liveProperties.length, 29);
   assert.equal(report.python.advancement.length, 9);
-  assert.equal(report.python.additionalTests, 10);
+  assert.equal(report.python.additionalTests, 11);
   assert.equal(report.python.skipped, 0);
   assert.equal(report.python.promiseRejectionAndRecovery, true);
   // Exercise actual deployed Python callsites and a rerun in the same worker.
