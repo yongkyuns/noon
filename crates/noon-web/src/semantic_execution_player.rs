@@ -704,7 +704,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         target: &noon::Mobject,
         source: &noon::Mobject,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -717,7 +717,7 @@ impl SemanticExecutionPlayer {
         )
         .replace_content(target, source)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -975,7 +975,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_effective(
         &mut self,
         mobject: &noon::Mobject,
-    ) -> Result<noon::EffectiveMobjectState, String> {
+    ) -> Result<noon::EffectiveMobjectState, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -987,7 +987,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .effective(mobject)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2756,6 +2756,70 @@ mod tests {
             assert_ne!(object.state().unwrap(), authored);
             assert_ne!(player.session.publication_context(), publication);
         }
+    }
+
+    #[test]
+    fn live_content_and_observation_errors_keep_atomicity_and_local_retry() {
+        let mut scene = noon::Scene::new();
+        let target = scene.circle(0.5).unwrap();
+        let source = scene.circle(0.75).unwrap();
+        let other = noon::Scene::new();
+        let foreign = other.circle(0.5).unwrap();
+        scene.add(&target).unwrap();
+        let session = scene.execution_session().unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            session,
+            std::rc::Rc::clone(scene.integration_store()),
+            scene.root(),
+            1.0,
+            41,
+        )
+        .unwrap();
+        player.delta(true).unwrap().unwrap();
+        let authored = target.state().unwrap();
+        let original_source = source.state().unwrap();
+        let publication = player.session.publication_context();
+        let frame = player.debug_frame_json();
+        let resources = player.resource_bundle_bytes();
+        for (invalid_target, invalid_source) in [(&foreign, &source), (&target, &foreign)] {
+            let error = player
+                .live_replace_content(invalid_target, invalid_source)
+                .unwrap_err();
+            assert_eq!(error.category, "foreign_handle");
+            assert_eq!(error.code, "live.foreign_store");
+            assert_eq!(target.state().unwrap(), authored);
+            assert_eq!(source.state().unwrap(), original_source);
+            assert_eq!(player.session.publication_context(), publication);
+            assert_eq!(player.debug_frame_json(), frame);
+            assert_eq!(player.resource_bundle_bytes(), resources);
+            assert!(player.delta(false).unwrap().is_none());
+        }
+        // A valid detached semantic object is not an effective execution row.
+        let error = player.live_effective(&source).unwrap_err();
+        assert_eq!(error.category, "stale_handle");
+        assert_eq!(error.code, "live.publication");
+        let cause = error.cause.as_ref().unwrap();
+        assert_eq!(cause.code, "publication.unknown_object");
+        assert!(cause.cause.is_none());
+        assert_eq!(player.session.publication_context(), publication);
+        assert_eq!(player.debug_frame_json(), frame);
+        assert_eq!(player.resource_bundle_bytes(), resources);
+        assert!(player.delta(false).unwrap().is_none());
+
+        player.live_replace_content(&target, &source).unwrap();
+        let after = target.state().unwrap();
+        assert_eq!(after.content, original_source.content);
+        assert_ne!(after.content, authored.content);
+        assert_eq!(after.transform, authored.transform);
+        assert_eq!(after.style, authored.style);
+        assert_eq!(source.state().unwrap(), original_source);
+        player.live_effective(&target).unwrap();
+        let delta = player.delta(false).unwrap().unwrap();
+        assert!(!delta.retained.snapshot);
+        assert_eq!(delta.retained.objects.len(), 1);
+        assert!(delta.retained.removed_slots.is_empty());
+        assert!(player.delta(false).unwrap().is_none());
+        assert_eq!(player.resource_bundle_bytes(), resources);
     }
 
     #[test]
