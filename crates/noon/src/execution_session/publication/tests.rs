@@ -805,3 +805,239 @@ fn live_updater_revision_preserves_target_preorder_and_future_barriers() {
         .commit_required_callback_phase(overlay.finish())
         .unwrap();
 }
+
+fn rooted_slot_fixture(
+    count: usize,
+) -> (
+    SemanticStore,
+    ExecutionSession,
+    SemanticNodeId,
+    Vec<SemanticNodeId>,
+) {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let nodes = (0..count)
+        .map(|_| {
+            let node =
+                store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                    radius: 1.0,
+                }));
+            store.add_member(root, node).unwrap();
+            node
+        })
+        .collect();
+    store.attach_to_scene(root).unwrap();
+    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+    session.take_frame_changes();
+    (store, session, root, nodes)
+}
+
+#[test]
+fn semantic_replacement_churn_reuses_durable_slots_and_publishes_atomically() {
+    // One slot, a rotating subset, and whole-set replacement exercise the same
+    // product publication path. No independent runtime wrapper drives mutations.
+    for (working_set, batch_size) in [(1, 1), (128, 1), (32, 32)] {
+        let (mut store, mut session, root, mut nodes) = rooted_slot_fixture(working_set);
+        for iteration in 0..1_000 {
+            let start = iteration % working_set;
+            let replaced: Vec<_> = (0..batch_size)
+                .map(|offset| (start + offset) % working_set)
+                .collect();
+            let stale: Vec<_> = replaced
+                .iter()
+                .map(|&index| {
+                    let object = session.execution_object_id(nodes[index]).unwrap();
+                    (nodes[index], session.slots.slot_for_object(object).unwrap())
+                })
+                .collect();
+            let untouched = if batch_size < working_set {
+                let node = nodes[(start + batch_size) % working_set];
+                Some((
+                    node,
+                    session
+                        .slots
+                        .slot_for_object(session.execution_object_id(node).unwrap())
+                        .unwrap(),
+                ))
+            } else {
+                None
+            };
+            let before = session.publication_context();
+            let mut transaction = SemanticMutationTransaction::new();
+            for &(node, _) in &stale {
+                transaction.remove_node(node);
+            }
+            let pending: Vec<_> = (0..batch_size)
+                .map(|_| {
+                    let node = transaction.create_node(SemanticNodeCreation::object(
+                        SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 }),
+                    ));
+                    transaction.add_member(root, node);
+                    node
+                })
+                .collect();
+            let result = session
+                .apply_semantic_transaction(&mut store, transaction)
+                .unwrap();
+            assert_eq!(session.slots.slot_capacity(), working_set);
+            assert_eq!(session.slots.len(), working_set);
+            let after = session.publication_context();
+            assert_eq!(
+                after.scene_revision(),
+                before.scene_revision().checked_next().unwrap()
+            );
+            assert_eq!(
+                after.execution_revision(),
+                before.execution_revision().checked_next().unwrap()
+            );
+            assert_eq!(
+                after.frame_epoch(),
+                before.frame_epoch().checked_next().unwrap()
+            );
+            assert_eq!(
+                session.last_structural_publication_stats().entered_objects,
+                batch_size
+            );
+            assert_eq!(
+                session.last_structural_publication_stats().exited_objects,
+                batch_size
+            );
+            assert_eq!(session.last_patch_stats().full_seeks, 0);
+            assert_eq!(session.last_patch_stats().full_group_rebuilds, 0);
+            for &(node, slot) in &stale {
+                assert!(store.node(node).is_none());
+                assert_eq!(session.slots.object_for_slot(slot), None);
+            }
+            for (index, pending) in replaced.into_iter().zip(pending) {
+                let node = result.resolve(pending).unwrap();
+                let object = session.execution_object_id(node).unwrap();
+                let slot = session.slots.slot_for_object(object).unwrap();
+                let previous = stale
+                    .iter()
+                    .find(|(_, old)| old.slot() == slot.slot())
+                    .unwrap()
+                    .1;
+                assert_eq!(slot.generation(), previous.generation() + 1);
+                assert_eq!(session.slots.object_for_slot(slot), Some(object));
+                nodes[index] = node;
+            }
+            if let Some((node, slot)) = untouched {
+                assert_eq!(
+                    session
+                        .slots
+                        .slot_for_object(session.execution_object_id(node).unwrap()),
+                    Some(slot)
+                );
+            }
+            session.take_frame_changes();
+        }
+    }
+}
+
+#[test]
+fn semantic_temporary_scene_releases_membership_and_spatial_leaves() {
+    const TEMPORARY_OBJECTS: usize = 4_096;
+    const SURVIVORS: usize = 8;
+    let (mut store, mut session, root, nodes) = rooted_slot_fixture(TEMPORARY_OBJECTS);
+    let viewport = Rect::new(
+        noon_core::Vec2::new(-2.0, -2.0),
+        noon_core::Vec2::new(2.0, 2.0),
+    );
+    assert_eq!(
+        session.query_viewport(viewport).object_indices().len(),
+        TEMPORARY_OBJECTS
+    );
+    let survivors: Vec<_> = nodes[..SURVIVORS]
+        .iter()
+        .map(|&node| {
+            let object = session.execution_object_id(node).unwrap();
+            (object, session.slots.slot_for_object(object).unwrap())
+        })
+        .collect();
+    let mut transaction = SemanticMutationTransaction::new();
+    for &node in &nodes[SURVIVORS..] {
+        transaction.remove_node(node);
+    }
+    session
+        .apply_semantic_transaction(&mut store, transaction)
+        .unwrap();
+    assert_eq!(session.slots.len(), SURVIVORS);
+    assert_eq!(
+        session.query_viewport(viewport).object_indices().len(),
+        SURVIVORS
+    );
+    assert_eq!(session.last_spatial_update_stats().full_rebuilds, 0);
+    assert_eq!(
+        session.last_spatial_update_stats().leaves_removed,
+        TEMPORARY_OBJECTS - SURVIVORS
+    );
+    for _ in 0..1_000 {
+        let mut create = SemanticMutationTransaction::new();
+        let pending = create.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+            StoredGeometry::Circle { radius: 1.0 },
+        )));
+        create.add_member(root, pending);
+        let result = session
+            .apply_semantic_transaction(&mut store, create)
+            .unwrap();
+        let node = result.resolve(pending).unwrap();
+        let object = session.execution_object_id(node).unwrap();
+        let slot = session.slots.slot_for_object(object).unwrap();
+        assert_eq!(session.slots.len(), SURVIVORS + 1);
+        assert_eq!(session.slots.slot_capacity(), TEMPORARY_OBJECTS);
+        let mut remove = SemanticMutationTransaction::new();
+        remove.remove_node(node);
+        session
+            .apply_semantic_transaction(&mut store, remove)
+            .unwrap();
+        assert_eq!(session.slots.object_for_slot(slot), None);
+        assert_eq!(session.slots.len(), SURVIVORS);
+        assert_eq!(session.slots.slot_capacity(), TEMPORARY_OBJECTS);
+        for &(object, slot) in &survivors {
+            assert_eq!(session.slots.slot_for_object(object), Some(slot));
+        }
+        session.take_frame_changes();
+    }
+}
+
+#[test]
+fn rejected_semantic_replacement_does_not_consume_slots_or_publication() {
+    let (mut store, mut session, root, nodes) = rooted_slot_fixture(1);
+    let node = nodes[0];
+    let object = session.execution_object_id(node).unwrap();
+    let slot = session.slots.slot_for_object(object).unwrap();
+    let before = session.publication_context();
+    let mut invalid = SemanticMutationTransaction::new();
+    invalid.remove_node(node);
+    let replacement = invalid.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 1.0 },
+    )));
+    invalid.add_member(root, replacement);
+    invalid.set_property(replacement, SemanticObjectProperty::Translation, f64::NAN);
+    assert!(session
+        .apply_semantic_transaction(&mut store, invalid)
+        .is_err());
+    assert_eq!(session.publication_context(), before);
+    assert_eq!(session.slots.slot_for_object(object), Some(slot));
+    assert_eq!(session.slots.len(), 1);
+    assert_eq!(session.slots.slot_capacity(), 1);
+    assert!(session.take_frame_changes().is_empty());
+    assert!(session.effective_semantic_object(&store, node).is_ok());
+
+    let mut valid = SemanticMutationTransaction::new();
+    valid.remove_node(node);
+    let replacement = valid.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
+        StoredGeometry::Circle { radius: 2.0 },
+    )));
+    valid.add_member(root, replacement);
+    let result = session
+        .apply_semantic_transaction(&mut store, valid)
+        .unwrap();
+    let replacement = result.resolve(replacement).unwrap();
+    let replacement_object = session.execution_object_id(replacement).unwrap();
+    let replacement_slot = session.slots.slot_for_object(replacement_object).unwrap();
+    assert_eq!(replacement_slot.slot(), slot.slot());
+    assert_eq!(replacement_slot.generation(), slot.generation() + 1);
+    assert_eq!(session.slots.object_for_slot(slot), None);
+    assert_eq!(session.slots.slot_capacity(), 1);
+}

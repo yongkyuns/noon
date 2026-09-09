@@ -136,6 +136,8 @@ def main() -> int:
             errors.append(f'{path}: deleted reactive runtime symbol returned; use the canonical execution session')
         if not path.endswith('.rs'):
             continue
+        if re.search(r'\b(?:SlottedSceneInstance|FrameSlotId|RetiredSlotCompactionPolicy|ExecutionCompactionStats|ExecutionCompactionError)\b', source):
+            errors.append(f'{path}: retired runtime wrapper returned; use ExecutionSession and shared runtime slots')
         if re.search(r'\bFrontendMobjectHandle\b', source):
             errors.append(f'{path}: deleted FrontendMobjectHandle authority returned')
         if path in {'crates/noon/src/scene.rs', 'crates/noon/src/semantic_mobject.rs'} or path.startswith(('crates/noon/src/scene/', 'crates/noon/src/semantic_mobject/')):
