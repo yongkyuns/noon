@@ -483,7 +483,19 @@ impl std::fmt::Display for SemanticAffineAnimationTrackError {
     }
 }
 
-impl std::error::Error for SemanticAffineAnimationTrackError {}
+impl std::error::Error for SemanticAffineAnimationTrackError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Animation(error) => Some(error),
+            Self::Target { error, .. } => Some(error),
+            Self::InvalidSubsetDisplayTimeMap { error, .. } => Some(error),
+            Self::InvalidTargetValue { error, .. } => Some(error),
+            Self::InvalidTargetStyle { error, .. } => Some(error),
+            Self::InvalidTrack { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+}
 
 /// Lower the supported transform/style payload of one resolved semantic activation.
 ///

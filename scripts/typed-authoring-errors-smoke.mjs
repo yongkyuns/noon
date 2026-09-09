@@ -46,9 +46,9 @@ try {
       }
       return value;
     };
-    const family = (store, handle) => {
+    const family = (store, ...handles) => {
       const members = new wasm.WasmSceneMembershipBatch("add");
-      members.appendMobject("", handle);
+      for (const handle of handles) members.appendMobject("", handle);
       return store.createFamily(members);
     };
     const snapshot = (context, live) => ({
@@ -76,10 +76,12 @@ try {
       const next = store.createManimSquare(0.5);
       const recovery = [store.createManimCircle(0.2), store.createManimSquare(0.2)];
       const families = [];
-      if (kind === "ambiguous") {
-        families.push(family(store, first), family(store, first));
+      if (kind === "ambiguous" || kind === "cross_root") {
+        const leaves = kind === "cross_root" ? [first, next] : [first];
+        families.push(family(store, ...leaves), family(store, ...leaves));
         const initial = new wasm.WasmSceneMembershipBatch("add");
         initial.reserveMobjectBinding("0", first);
+        if (kind === "cross_root") initial.reserveMobjectBinding("1", next);
         for (const value of families) initial.appendFamily(value);
         context.editMembership(initial);
       }
@@ -88,6 +90,7 @@ try {
       const before = snapshot(context, live);
       return {
         reject: () => {
+          if (kind === "cross_root") return context.editMembership(batch("remove", [[0, first]]));
           const replacing = kind === "missing" || kind === "ambiguous";
           context.editMembership(batch(replacing ? "replace" : "add", [[0, first], [1, kind === "foreign" ? foreign : next]]));
         },
@@ -99,7 +102,11 @@ try {
             check(drive.reachedEndpoint, "continuation did not reach its endpoint");
             drive.free(); player.completeLiveSegment(); context.returnExecutionPlayer(player);
           }
-          if (kind === "ambiguous") {
+          if (kind === "cross_root") {
+            context.editMembership(new wasm.WasmSceneMembershipBatch("clear"));
+            context.editMembership(batch("add", [[1, next]]));
+            equal(Array.from(context.rootMembershipKeys()), [key(next)], "cross-root recovery failed");
+          } else if (kind === "ambiguous") {
             context.editMembership(new wasm.WasmSceneMembershipBatch("clear"));
             // 0 was already bound; only rejected reservation 1 must be reusable.
             context.editMembership(batch("add", [[0, first], [1, recovery[1]]]));
@@ -151,6 +158,7 @@ try {
       ["foreign", false, "foreign_handle"], ["missing", false, "invalid_input"],
       ["ambiguous", false, "invalid_input"], ["foreign", true, "foreign_handle"],
       ["missing", true, "invalid_input"], ["pending", true, "pending_work"],
+      ["cross_root", false, "unsupported_operation"], ["cross_root", true, "unsupported_operation"],
     ]) {
       const fixture = membershipFixture(kind, live);
       try {
@@ -170,8 +178,8 @@ try {
     }
     return results;
   });
-  assert.equal(report.javascript.length, 8);
-  for (const row of report.javascript.filter(row => row.kind === "missing" || row.kind === "ambiguous")) {
+  assert.equal(report.javascript.length, 10);
+  for (const row of report.javascript.filter(row => row.kind === "missing" || row.kind === "ambiguous" || row.kind === "cross_root")) {
     assert.ok(row.error.cause, `${row.kind}: semantic cause was flattened`);
   }
   report.python = await page.evaluate(async ({modules, tests, pyodideUrl}) => {
@@ -218,6 +226,8 @@ for kind, live, category, exception_type in [
     ("foreign", True, "foreign_handle", ValueError),
     ("missing", True, "invalid_input", ValueError),
     ("pending", True, "pending_work", RuntimeError),
+    ("cross_root", False, "unsupported_operation", NotImplementedError),
+    ("cross_root", True, "unsupported_operation", NotImplementedError),
 ]:
     fixture = fixtures.membershipFixture(kind, live)
     try:
@@ -227,8 +237,13 @@ for kind, live, category, exception_type in [
             assert error.category == category, (kind, error.category)
             assert error.code and error.operation == kind and str(error)
             assert error.__cause__ is not None
-            if kind in ("missing", "ambiguous"):
+            if kind in ("missing", "ambiguous", "cross_root"):
                 assert error.rust_cause is not None and error.rust_cause.code
+            if kind == "cross_root":
+                cause = error.rust_cause
+                while cause.cause is not None:
+                    cause = cause.cause
+                assert cause.code == "membership.cross_root_alias"
             fixture.assertAtomic()
             fixture.recover()
             results.append({"kind": kind, "live": live, "category": error.category, "code": error.code})
@@ -265,8 +280,8 @@ await tests.check_real_promise_rejection()
 json.dumps({"matrix": results, "additionalTests": result.testsRun, "promiseRejectionAndRecovery": True, "skipped": len(result.skipped)})
 `));
   }, {modules, tests, pyodideUrl});
-  assert.equal(report.python.matrix.length, 8);
-  assert.equal(report.python.additionalTests, 7);
+  assert.equal(report.python.matrix.length, 10);
+  assert.equal(report.python.additionalTests, 8);
   assert.equal(report.python.skipped, 0);
   assert.equal(report.python.promiseRejectionAndRecovery, true);
   // Exercise actual deployed Python callsites and a rerun in the same worker.

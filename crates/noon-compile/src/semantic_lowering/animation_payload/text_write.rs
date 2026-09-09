@@ -51,7 +51,17 @@ impl std::fmt::Display for TextGlyphLoweringError {
     }
 }
 
-impl std::error::Error for TextGlyphLoweringError {}
+impl std::error::Error for TextGlyphLoweringError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidMembers(error) => Some(error),
+            Self::InvalidPlan(error) => Some(error),
+            Self::InvalidSpec(error) => Some(error),
+            Self::InvalidTimeMap(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 fn plan(
     store: &SemanticStore,

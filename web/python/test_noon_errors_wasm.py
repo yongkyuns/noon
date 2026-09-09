@@ -1,4 +1,4 @@
-"""Actual Rust/WASM -> JS -> Pyodide tests, run by authoring-errors-smoke.mjs.
+"""Actual Rust/WASM -> JS -> Pyodide tests, run by typed-authoring-errors-smoke.mjs.
 
 The native discovery suite skips this module; it is not mocked WASM coverage.
 Snapshots below use the existing explicit debug boundary only as test evidence.
@@ -13,7 +13,7 @@ except ImportError:
     wasm = None
 
 from _noon_errors import (
-    NoonForeignHandleError, NoonOwnershipError, NoonPendingError,
+    NoonForeignHandleError, NoonOwnershipError, NoonPendingError, NoonCallbackError,
     NoonStaleHandleError, NoonStalePublicationError, NoonValueError,
     engine_await, engine_call,
 )
@@ -177,6 +177,53 @@ class WasmErrorProjectionTests(unittest.TestCase):
         for context, player in zip(contexts, players):
             context.returnExecutionPlayer(player)
         self.assertEqual([c.liveExecutionOwnership() for c in contexts], ["returned"] * 3)
+
+    def test_actual_continuation_drive_retains_pending_and_terminal_callback_categories(self):
+        store = wasm.WasmAuthoringStore.new()
+        context = store.createSceneContext()
+        target = circle(store)
+        context.bindMobject("0", target)
+        context.addUpdater(target, "1", 0)
+        context.beginOrdinaryWait(0.25)
+        player = context.createExecutionPlayer(0.25, 41)
+        phase = player.initialCallbackPhaseJson()
+        self.assertIsNotNone(phase)
+
+        def state():
+            return (player.debugFrameJson(), bytes(player.resourceBundleBytes()),
+                    player.callbackTerminationJson(), context.liveExecutionOwnership())
+
+        # All four actual worker-drive entrypoints retain the very same guard.
+        calls = [(player.driveLiveSegmentToAuthoredTime, 0.25),
+                 (player.driveLiveSegmentFromWallTime, 1000),
+                 (player.reanchorLiveSegmentWake, 1000),
+                 (player.liveSegmentWake, 1000)]
+        before = state()
+        for function, value in calls:
+            with self.assertRaises(NoonPendingError) as caught:
+                engine_call(function, value, operation="continuation.drive")
+            self.assert_diagnostic(caught.exception, "pending_work")
+            self.assertEqual(caught.exception.code, "publication.callback_pending")
+            self.assertEqual(state(), before)
+        player.failCallbackPhaseJson(phase)
+        terminal = state()
+        for function, value in calls:
+            with self.assertRaises(NoonCallbackError) as caught:
+                engine_call(function, value, operation="continuation.drive")
+            self.assert_diagnostic(caught.exception, "callback_failure")
+            self.assertEqual(caught.exception.code, "completion.callback_terminated")
+            self.assertEqual(state(), terminal)
+        # Endpoint-before-termination completion precedence is shared Rust policy.
+        with self.assertRaises(NoonPendingError) as caught:
+            engine_call(player.completeLiveSegment)
+        self.assertEqual(codes(caught.exception)[-1], "completion.not_at_boundary")
+        self.assertEqual(state(), terminal)
+        context.returnExecutionPlayer(player)
+        returned = snapshot(context)
+        with self.assertRaises(NoonCallbackError) as caught:
+            engine_call(context.liveWait, 0.1)
+        self.assertEqual(caught.exception.category, "callback_failure")
+        self.assertEqual(snapshot(context), returned)
 
     def test_public_python_scene_batch_failure_is_atomic_and_recovers(self):
         host.resetStore()

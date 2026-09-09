@@ -41,7 +41,14 @@ impl std::fmt::Display for RetainedFamilyFramePlanError {
     }
 }
 
-impl std::error::Error for RetainedFamilyFramePlanError {}
+impl std::error::Error for RetainedFamilyFramePlanError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Evaluation(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl From<RetainedFamilyAnimationEvaluationError> for RetainedFamilyFramePlanError {
     fn from(value: RetainedFamilyAnimationEvaluationError) -> Self {

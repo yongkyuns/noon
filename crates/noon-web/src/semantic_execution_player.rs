@@ -1416,9 +1416,8 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_segment_wake(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmExecutionWake, String> {
-        self.require_callback_progression_available()
-            .map_err(|error| error.to_string())?;
+    ) -> Result<WasmExecutionWake, AuthoringFailure> {
+        self.require_callback_progression_available()?;
         let segment = self.live_segment()?;
         let plan = BrowserExecutionWakePlan::from_pending_segment(&self.session, segment);
         let directive = self
@@ -1485,9 +1484,8 @@ impl SemanticExecutionPlayer {
     pub(crate) fn reanchor_live_segment_wake(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmExecutionWake, String> {
-        self.require_callback_progression_available()
-            .map_err(|error| error.to_string())?;
+    ) -> Result<WasmExecutionWake, AuthoringFailure> {
+        self.require_callback_progression_available()?;
         self.live_segment()?;
         self.live_wake_clock
             .reanchor(wall_time_ms, self.session.frame().time)
@@ -1504,15 +1502,15 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_drive_segment_from_wall_time(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmLiveSegmentDrive, String> {
-        self.require_callback_progression_available()
-            .map_err(|error| error.to_string())?;
+    ) -> Result<WasmLiveSegmentDrive, AuthoringFailure> {
+        self.require_callback_progression_available()?;
         let segment = self.live_segment()?;
         let requested_time = self
             .live_wake_clock
             .scene_time_at(wall_time_ms)
             .ok_or("observe the live segment wake before driving it from wall time")?;
         self.live_drive_segment_to(segment, requested_time)
+            .map_err(AuthoringFailure::from)
     }
 
     /// Drive the active continuation segment toward one externally supplied
@@ -1526,17 +1524,17 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_drive_segment_to_authored_time(
         &mut self,
         requested_time: f64,
-    ) -> Result<WasmLiveSegmentDrive, String> {
-        self.require_callback_progression_available()
-            .map_err(|error| error.to_string())?;
+    ) -> Result<WasmLiveSegmentDrive, AuthoringFailure> {
+        self.require_callback_progression_available()?;
         let current = self.session.frame().time;
         if !requested_time.is_finite() || requested_time < current {
             return Err(format!(
                 "external continuation sample requires time at or after {current}, got {requested_time}"
-            ));
+            ).into());
         }
         let segment = self.live_segment()?;
         self.live_drive_segment_to(segment, requested_time)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2175,13 +2173,14 @@ impl SemanticExecutionPlayer {
     /// Derive one browser wake directive for the active ordinary continuation segment.
     ///
     /// This is deliberately a typed WASM value rather than a host-authored duration.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = liveSegmentWake))]
     pub fn live_segment_wake_wasm(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmExecutionWake, String> {
+    ) -> Result<WasmExecutionWake, wasm_bindgen::JsValue> {
         self.live_segment_wake(wall_time_ms)
+            .map_err(crate::authoring_error::js_error)
     }
 
     /// Derive the next generic browser wake from the canonical runtime/session.
@@ -2192,13 +2191,14 @@ impl SemanticExecutionPlayer {
     }
 
     /// Reanchor the next browser interval after a required callback completes.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = reanchorLiveSegmentWake))]
     pub fn reanchor_live_segment_wake_wasm(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmExecutionWake, String> {
+    ) -> Result<WasmExecutionWake, wasm_bindgen::JsValue> {
         self.reanchor_live_segment_wake(wall_time_ms)
+            .map_err(crate::authoring_error::js_error)
     }
 
     /// Advance one active ordinary continuation segment from an anchored browser timestamp.
@@ -2206,24 +2206,26 @@ impl SemanticExecutionPlayer {
     /// A callback phase must be committed before this is retried with the same wall
     /// timestamp. `reachedEndpoint` means shared completion is now permitted but
     /// remains a separate operation so authored reconciliation cannot be skipped.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = driveLiveSegmentFromWallTime))]
     pub fn drive_live_segment_from_wall_time_wasm(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmLiveSegmentDrive, String> {
+    ) -> Result<WasmLiveSegmentDrive, wasm_bindgen::JsValue> {
         self.live_drive_segment_from_wall_time(wall_time_ms)
+            .map_err(crate::authoring_error::js_error)
     }
 
     /// Advance one active continuation segment toward an absolute authored-time
     /// sample without involving a browser clock.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = driveLiveSegmentToAuthoredTime))]
     pub fn drive_live_segment_to_authored_time_wasm(
         &mut self,
         requested_time: f64,
-    ) -> Result<WasmLiveSegmentDrive, String> {
+    ) -> Result<WasmLiveSegmentDrive, wasm_bindgen::JsValue> {
         self.live_drive_segment_to_authored_time(requested_time)
+            .map_err(crate::authoring_error::js_error)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -2774,10 +2776,14 @@ mod tests {
         assert_eq!(player.time(), 1.25);
 
         let frame = player.session.frame().clone();
-        assert!(player
-            .live_drive_segment_to_authored_time(1.0)
-            .unwrap_err()
-            .contains("time at or after 1.25"));
+        let error = player.live_drive_segment_to_authored_time(1.0).unwrap_err();
+        // This legacy guard is not a settled R2 producer yet.
+        assert_eq!(error.category, "unclassified");
+        assert_eq!(error.code, "unclassified");
+        assert_eq!(
+            error.message,
+            "external continuation sample requires time at or after 1.25, got 1"
+        );
         assert_eq!(player.session.frame(), &frame);
 
         assert!(player
