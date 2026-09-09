@@ -12,6 +12,8 @@ jobs:
   fuzz:
     name: ${{ matrix.target }}
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: nightly
     strategy:
       fail-fast: false
       matrix:
@@ -24,7 +26,6 @@ jobs:
       - name: Use nightly Rust
         run: |
           rustup toolchain install nightly --profile minimal
-          rustup default nightly
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
       - name: Run bounded libFuzzer target
