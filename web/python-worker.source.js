@@ -160,7 +160,7 @@ _manim_composition.install()
 import _manim_lifecycle
 # Text and Typst bind ordinary shared semantic Mobjects; membership stays in Rust.
 import _manim_typst
-_manim_typst.install()
+
 import _manim_growing
 _manim_growing.install()
 import _manim_draw_border_then_fill

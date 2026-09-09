@@ -687,18 +687,34 @@ class Scene:
 
 Object = Mobject
 
-# Public geometry classes resolve from their defining module. Lazy imports avoid
-# cycles with the Mobject foundation without startup mutation of this namespace.
-_GEOMETRY_EXPORTS = (
-    "Elbow", "RoundedRectangle", "SurroundingRectangle", "BackgroundRectangle",
-    "Underline", "AnnularSector", "Sector", "Annulus",
-)
+# Public wrappers resolve from their defining modules without startup mutation.
+_PUBLIC_EXPORTS = {
+    "Elbow": "_manim_shared_geometry",
+    "RoundedRectangle": "_manim_shared_geometry",
+    "SurroundingRectangle": "_manim_shared_geometry",
+    "BackgroundRectangle": "_manim_shared_geometry",
+    "Underline": "_manim_shared_geometry",
+    "AnnularSector": "_manim_shared_geometry",
+    "Sector": "_manim_shared_geometry",
+    "Annulus": "_manim_shared_geometry",
+    "Dot": "_manim_geometry",
+    "Ellipse": "_manim_geometry",
+    "Triangle": "_manim_geometry",
+    "Arrow": "_manim_geometry",
+    "ApplyMethod": "_manim_geometry",
+    "DEFAULT_DOT_RADIUS": "_manim_geometry",
+    "PURE_YELLOW": "_manim_geometry",
+    "Text": "_manim_typst",
+    "Typst": "_manim_typst",
+    "MathTypst": "_manim_typst",
+}
 
 
 def __getattr__(name: str):
-    if name in _GEOMETRY_EXPORTS:
-        import _manim_shared_geometry
-        return getattr(_manim_shared_geometry, name)
+    module = _PUBLIC_EXPORTS.get(name)
+    if module is not None:
+        from importlib import import_module
+        return getattr(import_module(module), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -800,5 +816,9 @@ __all__ = [
     "YELLOW_D",
     "YELLOW_E",
     "color_from_hex",
-    *_GEOMETRY_EXPORTS,
+    "SMALL_BUFF",
+    "MED_SMALL_BUFF",
+    "MED_LARGE_BUFF",
+    "LARGE_BUFF",
+    *_PUBLIC_EXPORTS,
 ]
