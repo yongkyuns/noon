@@ -28,10 +28,16 @@ impl fmt::Display for TextPartQueryError {
         match self {
             Self::InvalidSourceSpan => write!(formatter, "invalid text source span"),
             Self::NonContiguousClusters => {
-                write!(formatter, "text source span maps to non-contiguous clusters")
+                write!(
+                    formatter,
+                    "text source span maps to non-contiguous clusters"
+                )
             }
             Self::NonContiguousVectors => {
-                write!(formatter, "text source span maps to non-contiguous vector items")
+                write!(
+                    formatter,
+                    "text source span maps to non-contiguous vector items"
+                )
             }
         }
     }
@@ -46,12 +52,11 @@ impl TextResource {
     /// therefore deterministic across resource recompilation, paint changes, and ordinary
     /// object transforms. Cluster/vector ranges are deliberately recomputed from the current
     /// normalized resource rather than cached in a frontend sidecar.
-    pub fn source_part(
-        &self,
-        source_span: TextSourceSpan,
-    ) -> Result<TextPart, TextPartQueryError> {
-        let start = usize::try_from(source_span.start).map_err(|_| TextPartQueryError::InvalidSourceSpan)?;
-        let end = usize::try_from(source_span.end).map_err(|_| TextPartQueryError::InvalidSourceSpan)?;
+    pub fn source_part(&self, source_span: TextSourceSpan) -> Result<TextPart, TextPartQueryError> {
+        let start = usize::try_from(source_span.start)
+            .map_err(|_| TextPartQueryError::InvalidSourceSpan)?;
+        let end =
+            usize::try_from(source_span.end).map_err(|_| TextPartQueryError::InvalidSourceSpan)?;
         if start > end
             || end > self.source.len()
             || !self.source.is_char_boundary(start)
@@ -78,10 +83,7 @@ impl TextResource {
     /// Empty needles intentionally select nothing. This mirrors text-part selection rather
     /// than Rust's zero-width string matching and avoids manufacturing identity-only parts at
     /// every source boundary.
-    pub fn source_parts_for(
-        &self,
-        needle: &str,
-    ) -> Result<Vec<TextPart>, TextPartQueryError> {
+    pub fn source_parts_for(&self, needle: &str) -> Result<Vec<TextPart>, TextPartQueryError> {
         if needle.is_empty() {
             return Ok(Vec::new());
         }
@@ -92,7 +94,8 @@ impl TextResource {
                 let end = start
                     .checked_add(matched.len())
                     .ok_or(TextPartQueryError::InvalidSourceSpan)?;
-                let start = u32::try_from(start).map_err(|_| TextPartQueryError::InvalidSourceSpan)?;
+                let start =
+                    u32::try_from(start).map_err(|_| TextPartQueryError::InvalidSourceSpan)?;
                 let end = u32::try_from(end).map_err(|_| TextPartQueryError::InvalidSourceSpan)?;
                 self.source_part(TextSourceSpan::new(start, end))
             })
@@ -158,8 +161,13 @@ fn contiguous_vector_range(
         .vector_items
         .iter()
         .enumerate()
-        .filter(|(_, item)| item.source_span.is_some_and(|span| spans_overlap(span, query)))
-        .map(|(index, _)| u32::try_from(index).map_err(|_| TextPartQueryError::NonContiguousVectors))
+        .filter(|(_, item)| {
+            item.source_span
+                .is_some_and(|span| spans_overlap(span, query))
+        })
+        .map(|(index, _)| {
+            u32::try_from(index).map_err(|_| TextPartQueryError::NonContiguousVectors)
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     if let (Some(first), Some(last)) = (selected.first().copied(), selected.last().copied()) {
@@ -255,10 +263,16 @@ mod tests {
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0].source_span, TextSourceSpan::new(0, 4));
         assert_eq!((parts[0].first_cluster, parts[0].cluster_count), (0, 3));
-        assert_eq!(parts[0].semantic_key.as_deref(), Some("noon:text:source:0:4"));
+        assert_eq!(
+            parts[0].semantic_key.as_deref(),
+            Some("noon:text:source:0:4")
+        );
         assert_eq!(parts[1].source_span, TextSourceSpan::new(5, 9));
         assert_eq!((parts[1].first_cluster, parts[1].cluster_count), (4, 3));
-        assert_eq!(parts[1].semantic_key.as_deref(), Some("noon:text:source:5:9"));
+        assert_eq!(
+            parts[1].semantic_key.as_deref(),
+            Some("noon:text:source:5:9")
+        );
     }
 
     #[test]
@@ -274,9 +288,7 @@ mod tests {
     #[test]
     fn source_only_newline_part_has_stable_empty_cluster_range() {
         let resource = sample_text("a\nb");
-        let part = resource
-            .source_part(TextSourceSpan::new(1, 2))
-            .unwrap();
+        let part = resource.source_part(TextSourceSpan::new(1, 2)).unwrap();
 
         assert_eq!(part.source_span, TextSourceSpan::new(1, 2));
         assert_eq!((part.first_cluster, part.cluster_count), (1, 0));
