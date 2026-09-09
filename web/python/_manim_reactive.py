@@ -11,6 +11,7 @@ from contextvars import ContextVar
 from typing import Any
 
 import noon as _base
+from _noon_errors import raise_engine_error
 
 try:
     from js import noonCreateAuthoringValueTrackerHandle as _create_tracker_handle
@@ -154,7 +155,7 @@ class ValueTracker:
         try:
             context.associateValueTracker(handle)
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error, operation="ValueTracker.associate")
         self._commit_canonical_association(scene, context)
 
     def _commit_canonical_association(self, scene: _base.Scene, context: object) -> None:
@@ -179,7 +180,7 @@ class ValueTracker:
             try:
                 return float(detached.detachedValue())
             except Exception as error:
-                raise ValueError(str(error)) from None
+                raise_engine_error(error, operation="ValueTracker.get_value")
         raise RuntimeError("ValueTracker has no shared semantic handle")
 
     def set_value(self, value: float) -> ValueTracker:
@@ -196,14 +197,14 @@ class ValueTracker:
             try:
                 context.setValueTracker(handle, value)
             except Exception as error:
-                raise ValueError(str(error)) from None
+                raise_engine_error(error, operation="ValueTracker.set_value")
             return self
         detached = self._detached_canonical_handle()
         if detached is not None:
             try:
                 detached.setDetachedValue(value)
             except Exception as error:
-                raise ValueError(str(error)) from None
+                raise_engine_error(error, operation="ValueTracker.set_value")
             return self
         raise RuntimeError("ValueTracker has no shared semantic handle")
 

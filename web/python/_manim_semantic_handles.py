@@ -13,6 +13,7 @@ from typing import Any
 
 import noon as _base
 import _manim_compat as _compat
+from _noon_errors import engine_call, raise_engine_error
 
 
 def _alignment_mask2(value: object) -> _base.Vec2:
@@ -668,9 +669,9 @@ def _shift(self: _base.Mobject, direction: object) -> _base.Mobject:
         try:
             context.liveShift(handle, offset.x, offset.y)
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error, operation="Mobject.shift")
         return self
-    handle.shift(offset.x, offset.y)
+    engine_call(handle.shift, offset.x, offset.y, operation="Mobject.shift")
     return self
 
 
@@ -735,7 +736,7 @@ def _rescale_to_fit(self, length, dim, stretch=False, **kwargs):
         else:
             context.liveRescaleToFit(anchor, length, dim, bool(stretch))
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error, operation="Mobject.rescale_to_fit")
     return self
 
 
@@ -752,7 +753,7 @@ def _match_dim_size(self, mobject, dim, stretch=False, **kwargs):
         else:
             context.liveMatchDimSize(anchor, target, dim, bool(stretch))
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error, operation="Mobject.match_dim_size")
     return self
 
 
@@ -770,9 +771,9 @@ def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
         try:
             context.liveScale(handle, value.x, value.y)
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error, operation="Mobject.scale")
         return self
-    handle.scale(value.x, value.y)
+    engine_call(handle.scale, value.x, value.y, operation="Mobject.scale")
     return self
 
 
@@ -813,7 +814,7 @@ def _rotate(
         try:
             context.liveRotate(handle, _compat._rotation_angle_2d(angle, axis))
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error, operation="Mobject.rotate")
         return self
     if kwargs:
         unsupported = ", ".join(sorted(kwargs))
@@ -846,10 +847,10 @@ def _set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobject:
                 handle, color.red, color.green, color.blue, color.alpha
             )
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error, operation="Mobject.set_color")
         return self
 
-    handle.setColor(color.red, color.green, color.blue, color.alpha)
+    engine_call(handle.setColor, color.red, color.green, color.blue, color.alpha, operation="Mobject.set_color")
     return self
 
 
@@ -1008,9 +1009,7 @@ def _shared_next_to(self, target, direction, buff, aligned_edge,
             else:
                 context.liveNextLayoutToPoint(source, point.x, point.y, aligner, *arguments)
     except Exception as error:
-        if "alignment submobject index" in str(error):
-            raise IndexError(str(error)) from None
-        raise ValueError(str(error)) from None
+        raise_engine_error(error, operation="Mobject.next_to")
 
 
 def _next_to(
@@ -1106,7 +1105,7 @@ def _set_fill(
                     handle, _compat._opacity("fill opacity", opacity)
                 )
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error, operation="Mobject.set_fill")
         return self
     if color is not None and opacity is not None:
         parsed = _compat._as_color("fill color", color)
@@ -1165,7 +1164,7 @@ def _set_stroke(
                     handle, _compat._opacity("stroke opacity", opacity)
                 )
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error, operation="Mobject.set_stroke")
         return self
     if color is not None:
         parsed = _compat._as_color("stroke color", color)
@@ -1192,9 +1191,9 @@ def _set_opacity(
         try:
             live_context.liveSetOpacity(handle, _compat._opacity("opacity", opacity))
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error, operation="Mobject.set_opacity")
         return self
-    handle.setOpacity(_compat._opacity("opacity", opacity))
+    engine_call(handle.setOpacity, _compat._opacity("opacity", opacity), operation="Mobject.set_opacity")
     return self
 
 
@@ -1215,7 +1214,7 @@ def _set_object_opacity(
         else:
             handle.setObjectOpacity(alpha)
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error, operation="Mobject.set_object_opacity")
     return self
 
 
@@ -1282,7 +1281,7 @@ def _group_paint(self, operation, arguments):
         else:
             getattr(context, f"liveSetFamily{operation}")(handle, *arguments)
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error, operation=f"Group.set_{operation.lower()}")
     return self
 
 
@@ -1339,7 +1338,7 @@ def _group_arrange_in_grid(self, rows=None, cols=None, buff=_base.MED_SMALL_BUFF
         else:
             context.liveArrangeFamilyInGrid(handle, rows, cols, gap.x, gap.y)
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error, operation="Group.arrange_in_grid")
     return self
 
 
@@ -1356,7 +1355,7 @@ def _group_scale(self: _compat.Group, factor: object) -> _compat.Group:
         else:
             handle.scale(scale.x, scale.y)
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error, operation="Group.scale")
     return self
 
 
@@ -1375,7 +1374,7 @@ def _group_rotate(self: _compat.Group, angle: float, axis: object = _compat.OUT,
         else:
             handle.rotate(signed_angle, point.x, point.y, about_point is not None)
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error, operation="Group.rotate")
     return self
 
 
@@ -1394,14 +1393,14 @@ def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
         try:
             context.liveShiftFamily(self._semantic_family_handle, offset.x, offset.y)
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error, operation="Group.shift")
         return self
     shared = _shared_family_layout(self, mutation=True)
     if shared is None:
         raise RuntimeError("Group shift requires the shared Rust authoring host")
     session = shared
     offset = _base._as_vec2(direction)
-    session.shiftBy(offset.x, offset.y)
+    engine_call(session.shiftBy, offset.x, offset.y, operation="Group.shift")
     return self
 
 
@@ -1561,9 +1560,7 @@ def _group_arrange(
             raise RuntimeError("arrange requires current shared Rust semantic handles")
         family_handle.arrange(options)
     except Exception as error:
-        if "alignment submobject index" in str(error):
-            raise IndexError(str(error)) from None
-        raise ValueError(str(error)) from None
+        raise_engine_error(error, operation="Group.arrange")
     return self
 
 

@@ -45,6 +45,7 @@ class OrdinaryTrackerScopeTests(unittest.TestCase):
             class Context:
                 def __init__(self, *, reject=False):
                     self.reject = reject
+                    self.rejection = RuntimeError("association rejected")
                     self.associations = []
 
                 def createValueTracker(self, value):
@@ -54,7 +55,8 @@ class OrdinaryTrackerScopeTests(unittest.TestCase):
 
                 def associateValueTracker(self, handle):
                     if self.reject:
-                        raise RuntimeError("association rejected")
+                        raise self.rejection
+
                     self.associations.append(handle)
 
                 def valueTrackerValue(self, handle):
@@ -91,8 +93,9 @@ class OrdinaryTrackerScopeTests(unittest.TestCase):
                     self.assertEqual(tracker.get_value(), 2.0)
 
                     rejected = Scene(Context(reject=True))
-                    with self.assertRaisesRegex(ValueError, "association rejected"):
+                    with self.assertRaises(RuntimeError) as caught:
                         tracker._associate_canonical(rejected, rejected.context)
+                    self.assertIs(caught.exception, rejected.context.rejection)
                     self.assertIsNone(tracker._scene)
                     self.assertIsNone(tracker._canonical_context)
 

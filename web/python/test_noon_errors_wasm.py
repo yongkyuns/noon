@@ -13,8 +13,9 @@ except ImportError:
     wasm = None
 
 from _noon_errors import (
-    NoonError, NoonForeignHandleError, NoonOwnershipError, NoonPendingError, NoonCallbackError,
-    NoonStaleHandleError, NoonStalePublicationError, NoonValueError,
+    NoonError, NoonForeignHandleError, NoonIndexError, NoonOwnershipError, NoonPendingError,
+    NoonCallbackError, NoonStaleHandleError, NoonStalePublicationError, NoonUnsupportedError,
+    NoonValueError,
     engine_await, engine_call,
 )
 
@@ -314,6 +315,81 @@ class WasmErrorProjectionTests(unittest.TestCase):
         live.advance_to(0.25)
         live.complete()
         self.assertEqual(snapshot(context)[1]["time"], 0.25)
+
+    def test_public_typed_authoring_domains_use_structured_mapper_and_recover(self):
+        host.resetStore()
+        from noon import Circle, Line, Scene, Square, VGroup
+
+        # Detached shared mutations exercise the same Rust producers without a
+        # live-session wrapper obscuring their direct authoring codes.
+        target = Circle(radius=0.5)
+        before = target._semantic_handle.snapshotJson()
+        with self.assertRaises(NoonValueError) as caught:
+            target.shift((1e100, 0.0))
+        self.assert_diagnostic(caught.exception, "invalid_input")
+        self.assertEqual(caught.exception.operation, "Mobject.shift")
+        self.assertEqual(codes(caught.exception), ["authoring.invalid_render_number"])
+        self.assertEqual(target._semantic_handle.snapshotJson(), before)
+        target.shift((1.0, 0.0))
+
+        family = VGroup(Circle(radius=0.2), Square(side_length=0.3))
+        family_before = [member._semantic_handle.snapshotJson() for member in family.submobjects]
+        with self.assertRaises(NoonValueError) as caught:
+            family.arrange_in_grid(rows=1, cols=1)
+        self.assert_diagnostic(caught.exception, "invalid_input")
+        self.assertEqual(caught.exception.operation, "Group.arrange_in_grid")
+        self.assertEqual(codes(caught.exception), ["authoring.insufficient_grid_capacity"])
+        self.assertEqual(
+            [member._semantic_handle.snapshotJson() for member in family.submobjects],
+            family_before,
+        )
+        family.arrange_in_grid(rows=1, cols=2)
+
+        before = [member._semantic_handle.snapshotJson() for member in family.submobjects]
+        with self.assertRaises(NoonIndexError) as caught:
+            family.next_to((0.0, 0.0), index_of_submobject_to_align=99)
+        self.assert_diagnostic(caught.exception, "invalid_input")
+        self.assertIsInstance(caught.exception, IndexError)
+        self.assertEqual(caught.exception.operation, "Mobject.next_to")
+        self.assertIn("authoring.invalid_submobject_index", codes(caught.exception))
+        self.assertEqual(
+            [member._semantic_handle.snapshotJson() for member in family.submobjects], before
+        )
+        family.next_to((0.0, 0.0))
+
+        line, wrong_target = Line(), Circle(radius=0.25)
+        before = line._semantic_handle.snapshotJson()
+        with self.assertRaises(NoonUnsupportedError) as caught:
+            line.match_points(wrong_target)
+        self.assert_diagnostic(caught.exception, "unsupported_operation")
+        self.assertEqual(caught.exception.operation, "Line.match_points")
+        self.assertEqual(
+            codes(caught.exception),
+            ["authoring.unsupported", "unsupported.line_match_target_content"],
+        )
+        self.assertEqual(line._semantic_handle.snapshotJson(), before)
+        line.match_points(Line((0.0, 0.0), (2.0, 0.0)))
+
+        scene = Scene()
+        with self.assertRaises(NoonValueError) as caught:
+            scene.value_tracker(float("nan"))
+        self.assert_diagnostic(caught.exception, "invalid_input")
+        self.assertEqual(caught.exception.operation, "Scene.value_tracker")
+        self.assertEqual(
+            codes(caught.exception), ["authoring.signal", "signal.non_finite_value"]
+        )
+        tracker = scene.value_tracker(1.0)
+        self.assertEqual(tracker.get_value(), 1.0)
+
+        # Python-only coercion remains Python-owned and must not be reclassified.
+        sentinel = ValueError("python coercion remains local")
+        class BadFloat:
+            def __float__(self):
+                raise sentinel
+        with self.assertRaises(ValueError) as caught:
+            target.shift((BadFloat(), 0.0))
+        self.assertIs(caught.exception, sentinel)
+        self.assertNotIsInstance(caught.exception, NoonError)
 
     def test_public_live_content_and_effective_query_errors_recover(self):
         host.resetStore()

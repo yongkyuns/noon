@@ -33,6 +33,10 @@ class NoonValueError(NoonError, ValueError):
     pass
 
 
+class NoonIndexError(NoonError, IndexError):
+    pass
+
+
 class NoonForeignHandleError(NoonError, ValueError):
     pass
 
@@ -83,6 +87,21 @@ _EXCEPTION_TYPES = {
     "ownership": NoonOwnershipError,
 }
 
+_CODE_EXCEPTION_TYPES = {
+    # Preserve Manim/Python's IndexError ergonomics without parsing diagnostics.
+    # Live wrappers may add outer cause frames, so map by any structured cause code.
+    "authoring.invalid_submobject_index": NoonIndexError,
+}
+
+
+def _exception_type(diagnostic: NoonErrorCause):
+    current = diagnostic
+    while current is not None:
+        if current.code in _CODE_EXCEPTION_TYPES:
+            return _CODE_EXCEPTION_TYPES[current.code]
+        current = current.cause
+    return _EXCEPTION_TYPES.get(diagnostic.category, NoonError)
+
 
 def _diagnostic(value: object) -> NoonErrorCause | None:
     if getattr(value, "noonErrorVersion", None) != 1:
@@ -104,7 +123,7 @@ def map_engine_error(error: Exception, *, operation: str | None = None) -> Excep
     diagnostic = _diagnostic(original)
     if diagnostic is None:
         return error
-    exception_type = _EXCEPTION_TYPES.get(diagnostic.category, NoonError)
+    exception_type = _exception_type(diagnostic)
     return exception_type(diagnostic, original, operation)
 
 

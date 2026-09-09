@@ -13,6 +13,7 @@ from typing import Any
 
 import noon as _base
 import _manim_compat as _compat
+from _noon_errors import raise_engine_error
 
 DEFAULT_DOT_RADIUS = 0.08
 PURE_YELLOW = _base.color_from_hex("#FFFF00")
@@ -208,5 +209,5 @@ def match_points(self: _base.Mobject, mobject: object) -> _base.Mobject:
     try:
         source_handle.matchLine(target_handle)
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error, operation="Line.match_points")
     return self

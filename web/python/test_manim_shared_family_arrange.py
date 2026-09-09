@@ -71,7 +71,7 @@ class ManimSharedFamilyArrangeTests(unittest.TestCase):
                         (self.identity, direction_x, direction_y, buff, center)
                     )
                     if self.store.reject_arrange:
-                        raise RuntimeError("invalid shared arrangement")
+                        raise self.store.arrange_error
 
                 @property
                 def memberCount(self):
@@ -83,6 +83,7 @@ class ManimSharedFamilyArrangeTests(unittest.TestCase):
                     self.entities = {}
                     self.arrange_calls = []
                     self.reject_arrange = False
+                    self.arrange_error = RuntimeError("invalid shared arrangement")
 
                 def allocate(self, entity):
                     value = self.next_identity
@@ -128,8 +129,8 @@ class ManimSharedFamilyArrangeTests(unittest.TestCase):
             try:
                 family.arrange()
                 raise AssertionError("shared rejection was swallowed")
-            except ValueError as error:
-                assert str(error) == "invalid shared arrangement"
+            except RuntimeError as error:
+                assert error is store.arrange_error
             store.reject_arrange = False
 
             class FakeLiveContext:

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import unittest
 
 from _noon_errors import (
-    NoonError, NoonForeignHandleError, NoonOwnershipError, NoonPendingError,
+    NoonError, NoonForeignHandleError, NoonIndexError, NoonOwnershipError, NoonPendingError,
     engine_await, engine_call, map_engine_error,
 )
 
@@ -34,6 +34,15 @@ class ErrorProjectionTests(unittest.TestCase):
             self.assertIsInstance(mapped, ValueError)
             self.assertEqual(str(mapped), message)
             self.assertIs(mapped.js_error, original)
+
+    def test_nested_structured_index_code_preserves_index_error_ergonomics(self):
+        cause = diagnostic("invalid_input", "authoring.invalid_submobject_index", "bad index")
+        outer = diagnostic("invalid_input", "live.authoring", "live failed", cause=cause)
+        mapped = map_engine_error(js_exception(outer), operation="Mobject.next_to")
+        self.assertIsInstance(mapped, NoonIndexError)
+        self.assertIsInstance(mapped, IndexError)
+        self.assertEqual(mapped.code, "live.authoring")
+        self.assertEqual(mapped.rust_cause.code, "authoring.invalid_submobject_index")
 
     def test_unknown_category_is_not_reclassified(self):
         error = map_engine_error(js_exception(diagnostic("future", "new.code", "foreign")))

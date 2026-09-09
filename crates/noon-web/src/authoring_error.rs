@@ -8,12 +8,16 @@
 use std::error::Error;
 
 use noon::{
-    AuthoringError, ExecutionSegmentCompletionError, ExecutionSegmentError,
-    ExecutionSessionCallbackError, ExecutionSessionCallbackReadError,
-    ExecutionSessionPublicationError, LiveSessionError,
+    ArcAuthoringError, AuthoringError, DashedLineAuthoringError, ElbowAuthoringError,
+    ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSessionCallbackError,
+    ExecutionSessionCallbackReadError, ExecutionSessionPublicationError, LiveSessionError,
+    RoundedRectangleAuthoringError, UnsupportedAuthoringOperation,
 };
 use noon_core::{
-    SemanticMutationTransactionError, SemanticSceneOperationError, SemanticStoreError,
+    GeometryResourceError, SemanticFamilyPairingError, SemanticGeometryLayoutError,
+    SemanticLoweringError, SemanticMutationTransactionError, SemanticScalarSignalQueryError,
+    SemanticSceneOperationError, SemanticSignalBindingError, SemanticSignalError,
+    SemanticStoreError,
 };
 
 /// Language-boundary diagnostics projected from shared Rust errors.
@@ -109,14 +113,16 @@ impl From<AuthoringError> for AuthoringFailure {
     fn from(error: AuthoringError) -> Self {
         let message = error.to_string();
         match error {
+            AuthoringError::CameraRequiresEmptyScene(_) => Self::new(
+                "invalid_input",
+                "authoring.camera_requires_empty_scene",
+                message,
+            ),
+            AuthoringError::FamilyPairing(cause) => {
+                Self::caused_by("authoring.family_pairing", message, cause.into())
+            }
             AuthoringError::ForeignStore => {
                 Self::new("foreign_handle", "authoring.foreign_store", message)
-            }
-            AuthoringError::Semantic(cause) => {
-                Self::caused_by("authoring.semantic", message, cause.into())
-            }
-            AuthoringError::Transaction(cause) => {
-                Self::caused_by("authoring.transaction", message, cause.into())
             }
             AuthoringError::MissingGeometryResource(_) => Self::new(
                 "missing_resource",
@@ -131,15 +137,355 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::InvalidRenderNumber { .. } => {
                 Self::new("invalid_input", "authoring.invalid_render_number", message)
             }
+            AuthoringError::NonPositiveNumber { .. } => {
+                Self::new("invalid_input", "authoring.non_positive_number", message)
+            }
             AuthoringError::InvalidOpacity { .. } => {
                 Self::new("invalid_input", "authoring.invalid_opacity", message)
+            }
+            AuthoringError::InvalidEllipseDimensions { .. } => Self::new(
+                "invalid_input",
+                "authoring.invalid_ellipse_dimensions",
+                message,
+            ),
+            AuthoringError::NonFiniteGeometry => {
+                Self::new("invalid_input", "authoring.non_finite_geometry", message)
+            }
+            AuthoringError::NonFiniteObjectState => Self::new(
+                "invalid_input",
+                "authoring.non_finite_object_state",
+                message,
+            ),
+            AuthoringError::NonFiniteTransform => {
+                Self::new("invalid_input", "authoring.non_finite_transform", message)
+            }
+            AuthoringError::NonFiniteStyle => {
+                Self::new("invalid_input", "authoring.non_finite_style", message)
             }
             AuthoringError::NegativeStrokeWidth(_) => {
                 Self::new("invalid_input", "authoring.negative_stroke_width", message)
             }
-            // The public producer is non-exhaustive; future domains must opt in
-            // with a reviewed projection, not silently acquire a guessed class.
+            AuthoringError::InvalidStrokeWidthMode(_) => Self::new(
+                "invalid_input",
+                "authoring.invalid_stroke_width_mode",
+                message,
+            ),
+            AuthoringError::InvalidStrokeJoin(_) => {
+                Self::new("invalid_input", "authoring.invalid_stroke_join", message)
+            }
+            AuthoringError::InvalidStrokeCap(_) => {
+                Self::new("invalid_input", "authoring.invalid_stroke_cap", message)
+            }
+            AuthoringError::NonFiniteDirection => {
+                Self::new("invalid_input", "authoring.non_finite_direction", message)
+            }
+            AuthoringError::ZeroDirection => {
+                Self::new("invalid_input", "authoring.zero_direction", message)
+            }
+            AuthoringError::NonFiniteLineEndpoints => Self::new(
+                "invalid_input",
+                "authoring.non_finite_line_endpoints",
+                message,
+            ),
+            AuthoringError::DegenerateLine => {
+                Self::new("invalid_input", "authoring.degenerate_line", message)
+            }
+            AuthoringError::UnorderedBounds(_) => {
+                Self::new("invalid_input", "authoring.unordered_bounds", message)
+            }
+            AuthoringError::InvalidDimension(_) => {
+                Self::new("invalid_input", "authoring.invalid_dimension", message)
+            }
+            AuthoringError::ZeroReplaceExtent => {
+                Self::new("invalid_input", "authoring.zero_replace_extent", message)
+            }
+            AuthoringError::ZeroStretchTarget => {
+                Self::new("invalid_input", "authoring.zero_stretch_target", message)
+            }
+            AuthoringError::ZeroMatchHeight => {
+                Self::new("invalid_input", "authoring.zero_match_height", message)
+            }
+            AuthoringError::ZeroMatchWidth => {
+                Self::new("invalid_input", "authoring.zero_match_width", message)
+            }
+            AuthoringError::MissingLayoutBounds(_) => {
+                Self::new("invalid_input", "authoring.missing_layout_bounds", message)
+            }
+            AuthoringError::InvalidSubmobjectIndex { .. } => Self::new(
+                "invalid_input",
+                "authoring.invalid_submobject_index",
+                message,
+            ),
+            AuthoringError::InvalidGridDimensions { .. } => Self::new(
+                "invalid_input",
+                "authoring.invalid_grid_dimensions",
+                message,
+            ),
+            AuthoringError::InsufficientGridCapacity { .. } => Self::new(
+                "invalid_input",
+                "authoring.insufficient_grid_capacity",
+                message,
+            ),
+            AuthoringError::MissingCopySource(_) => {
+                Self::new("invalid_input", "authoring.missing_copy_source", message)
+            }
+            AuthoringError::AlreadyScopedTracker(_) => {
+                Self::new("invalid_input", "authoring.already_scoped_tracker", message)
+            }
+            AuthoringError::EmptyInputName { .. } => {
+                Self::new("invalid_input", "authoring.empty_input_name", message)
+            }
+            AuthoringError::Unsupported(cause) => {
+                Self::caused_by("authoring.unsupported", message, cause.into())
+            }
+            AuthoringError::Semantic(cause) => {
+                Self::caused_by("authoring.semantic", message, cause.into())
+            }
+            AuthoringError::Transaction(cause) => {
+                Self::caused_by("authoring.transaction", message, cause.into())
+            }
+            AuthoringError::VectorLowering(cause) => {
+                Self::caused_by("authoring.vector_lowering", message, cause.into())
+            }
+            AuthoringError::GeometryResource(cause) => {
+                Self::caused_by("authoring.geometry_resource", message, cause.into())
+            }
+            AuthoringError::GeometryLayout(cause) => {
+                Self::caused_by("authoring.geometry_layout", message, cause.into())
+            }
+            AuthoringError::Arc(cause) => Self::caused_by("authoring.arc", message, cause.into()),
+            AuthoringError::Elbow(cause) => {
+                Self::caused_by("authoring.elbow", message, cause.into())
+            }
+            AuthoringError::RoundedRectangle(cause) => {
+                Self::caused_by("authoring.rounded_rectangle", message, cause.into())
+            }
+            AuthoringError::DashedLine(cause) => {
+                Self::caused_by("authoring.dashed_line", message, cause.into())
+            }
+            AuthoringError::Signal(cause) => {
+                Self::caused_by("authoring.signal", message, cause.into())
+            }
+            AuthoringError::SignalBinding(cause) => {
+                Self::caused_by("authoring.signal_binding", message, cause.into())
+            }
+            AuthoringError::ScalarQuery(cause) => {
+                Self::caused_by("authoring.scalar_query", message, cause.into())
+            }
+            // These are internal preparation invariants rather than supported
+            // public-operation categories. Keep them explicit until their owner
+            // decides whether they should ever escape the Rust facade.
+            AuthoringError::UnresolvedCreatedNode(_) | AuthoringError::IncompleteArrangement => {
+                Self::new("unclassified", "authoring.internal", message)
+            }
+            // The producer is non-exhaustive: future domains must opt in rather
+            // than silently inheriting a category from wording.
             other => Self::unclassified("authoring.unclassified", &other),
+        }
+    }
+}
+
+impl From<UnsupportedAuthoringOperation> for AuthoringFailure {
+    fn from(error: UnsupportedAuthoringOperation) -> Self {
+        use UnsupportedAuthoringOperation as E;
+        let code = match error {
+            E::EffectiveFamilyLayoutRenderOverride => {
+                "unsupported.effective_family_layout_render_override"
+            }
+            E::PlacementEffectiveAffineDriver => "unsupported.placement_effective_affine_driver",
+            E::PlacementRenderOverride => "unsupported.placement_render_override",
+            E::EffectiveLineRenderOverride => "unsupported.effective_line_render_override",
+            E::EffectiveLayoutRenderOverride => "unsupported.effective_layout_render_override",
+            E::CaptureNonUnitAppearance => "unsupported.capture_non_unit_appearance",
+            E::CaptureRenderOverride => "unsupported.capture_render_override",
+            E::CaptureReactiveBinding => "unsupported.capture_reactive_binding",
+            E::CaptureResourcePaint => "unsupported.capture_resource_paint",
+            E::ResourcePaintColorQuery => "unsupported.resource_paint_color_query",
+            E::ResourcePaintOpacityQuery => "unsupported.resource_paint_opacity_query",
+            E::ExternalGeometry => "unsupported.external_geometry",
+            E::LineMatchNonuniformScale => "unsupported.line_match_nonuniform_scale",
+            E::LineMatchTargetContent => "unsupported.line_match_target_content",
+            E::LineMatchSourceContent => "unsupported.line_match_source_content",
+            E::LineEndpointContent => "unsupported.line_endpoint_content",
+            E::RotatedDimensionStretch => "unsupported.rotated_dimension_stretch",
+            other => return Self::unclassified("unsupported.unclassified", &other),
+        };
+        Self::new("unsupported_operation", code, error)
+    }
+}
+
+impl From<SemanticFamilyPairingError> for AuthoringFailure {
+    fn from(error: SemanticFamilyPairingError) -> Self {
+        use SemanticFamilyPairingError as E;
+        let (category, code) = match &error {
+            E::UnknownNode(_) => ("stale_handle", "family_pairing.unknown_node"),
+            E::RootIsNotFamily(_) => ("invalid_input", "family_pairing.root_not_family"),
+            E::TopologyMismatch { .. } => ("invalid_input", "family_pairing.topology_mismatch"),
+            E::UnsupportedLeaf(_) => ("unsupported_operation", "family_pairing.unsupported_leaf"),
+            E::AliasMismatch { .. } => ("invalid_input", "family_pairing.alias_mismatch"),
+            E::Empty => ("invalid_input", "family_pairing.empty"),
+        };
+        Self::new(category, code, error)
+    }
+}
+
+impl From<SemanticLoweringError> for AuthoringFailure {
+    fn from(error: SemanticLoweringError) -> Self {
+        let code = match error {
+            SemanticLoweringError::NonFiniteVector(_) => "vector_lowering.non_finite",
+            SemanticLoweringError::CoordinateOutOfRange(_) => "vector_lowering.out_of_range",
+        };
+        Self::new("invalid_input", code, error)
+    }
+}
+
+impl From<GeometryResourceError> for AuthoringFailure {
+    fn from(error: GeometryResourceError) -> Self {
+        match error {
+            GeometryResourceError::NonFinitePath => {
+                Self::new("invalid_input", "geometry_resource.non_finite_path", error)
+            }
+            GeometryResourceError::UnknownResource(_) => {
+                Self::new("missing_resource", "geometry_resource.unknown", error)
+            }
+            GeometryResourceError::VersionExhausted(_) => Self::new(
+                "unsupported_operation",
+                "geometry_resource.version_exhausted",
+                error,
+            ),
+        }
+    }
+}
+
+impl From<SemanticGeometryLayoutError> for AuthoringFailure {
+    fn from(error: SemanticGeometryLayoutError) -> Self {
+        match error {
+            SemanticGeometryLayoutError::EllipseRequiresCircle(_) => Self::new(
+                "invalid_input",
+                "geometry_layout.ellipse_requires_circle",
+                error,
+            ),
+        }
+    }
+}
+
+impl From<ArcAuthoringError> for AuthoringFailure {
+    fn from(error: ArcAuthoringError) -> Self {
+        use ArcAuthoringError as E;
+        let code = match &error {
+            E::TooFewComponents(_) => "arc.too_few_components",
+            E::NonFiniteRadius(_) => "arc.non_finite_radius",
+            E::NonFiniteAngle(_) => "arc.non_finite_angle",
+            E::NonFiniteStartAngle(_) => "arc.non_finite_start_angle",
+            E::NonFinitePoint(_) => "arc.non_finite_point",
+        };
+        Self::new("invalid_input", code, error)
+    }
+}
+
+impl From<ElbowAuthoringError> for AuthoringFailure {
+    fn from(error: ElbowAuthoringError) -> Self {
+        let code = match error {
+            ElbowAuthoringError::NonFiniteWidth(_) => "elbow.non_finite_width",
+            ElbowAuthoringError::NonFiniteAngle(_) => "elbow.non_finite_angle",
+        };
+        Self::new("invalid_input", code, error)
+    }
+}
+
+impl From<RoundedRectangleAuthoringError> for AuthoringFailure {
+    fn from(error: RoundedRectangleAuthoringError) -> Self {
+        let code = match &error {
+            RoundedRectangleAuthoringError::InvalidWidth(_) => "rounded_rectangle.invalid_width",
+            RoundedRectangleAuthoringError::InvalidHeight(_) => "rounded_rectangle.invalid_height",
+            RoundedRectangleAuthoringError::NonFiniteCornerRadius(_) => {
+                "rounded_rectangle.non_finite_corner_radius"
+            }
+        };
+        Self::new("invalid_input", code, error)
+    }
+}
+
+impl From<DashedLineAuthoringError> for AuthoringFailure {
+    fn from(error: DashedLineAuthoringError) -> Self {
+        use DashedLineAuthoringError as E;
+        let code = match error {
+            E::NonFiniteStart(_) => "dashed_line.non_finite_start",
+            E::NonFiniteEnd(_) => "dashed_line.non_finite_end",
+            E::NonFiniteLineLength => "dashed_line.non_finite_length",
+            E::InvalidDashLength(_) => "dashed_line.invalid_dash_length",
+            E::InvalidDashedRatio(_) => "dashed_line.invalid_ratio",
+            E::DashCountOverflow(_) => "dashed_line.dash_count_overflow",
+        };
+        Self::new("invalid_input", code, error)
+    }
+}
+
+impl From<SemanticSignalError> for AuthoringFailure {
+    fn from(error: SemanticSignalError) -> Self {
+        use SemanticSignalError as E;
+        let (category, code) = match &error {
+            E::InvalidNativeInputInitialValue { .. } => {
+                ("invalid_input", "signal.invalid_native_input_initial_value")
+            }
+            E::UnknownSignal(_) => ("stale_handle", "signal.unknown"),
+            E::NotSignal(_) => ("invalid_input", "signal.not_signal"),
+            E::NonFiniteValue => ("invalid_input", "signal.non_finite_value"),
+            E::DependencyCycle(_) => ("invalid_input", "signal.dependency_cycle"),
+            E::InvalidUnaryExpression { .. } => {
+                ("invalid_input", "signal.invalid_unary_expression")
+            }
+            E::InvalidBinaryExpression { .. } => {
+                ("invalid_input", "signal.invalid_binary_expression")
+            }
+            E::SourceTypeMismatch { .. } => ("invalid_input", "signal.source_type_mismatch"),
+            E::NativeInputRequiresInputSignal { .. } => {
+                ("invalid_input", "signal.native_input_requires_input")
+            }
+            E::NativeInputTypeMismatch { .. } => {
+                ("invalid_input", "signal.native_input_type_mismatch")
+            }
+            E::TimelineOwnedSignal { .. } => ("unsupported_operation", "signal.timeline_owned"),
+            E::NativeOwnedSignal { .. } => ("unsupported_operation", "signal.native_owned"),
+        };
+        Self::new(category, code, error)
+    }
+}
+
+impl From<SemanticSignalBindingError> for AuthoringFailure {
+    fn from(error: SemanticSignalBindingError) -> Self {
+        use SemanticSignalBindingError as E;
+        let message = error.to_string();
+        match error {
+            E::Signal(cause) => Self::caused_by("signal_binding.signal", message, cause.into()),
+            E::Target(cause) => Self::caused_by("signal_binding.target", message, cause.into()),
+            E::TypeMismatch { .. } => {
+                Self::new("invalid_input", "signal_binding.type_mismatch", message)
+            }
+            E::PropertyAlreadyBound { .. } => Self::new(
+                "invalid_input",
+                "signal_binding.property_already_bound",
+                message,
+            ),
+        }
+    }
+}
+
+impl From<SemanticScalarSignalQueryError> for AuthoringFailure {
+    fn from(error: SemanticScalarSignalQueryError) -> Self {
+        use SemanticScalarSignalQueryError as E;
+        let message = error.to_string();
+        match error {
+            E::Signal(cause) => Self::caused_by("scalar_query.signal", message, cause.into()),
+            E::NotInputSignal(_) => Self::new(
+                "unsupported_operation",
+                "scalar_query.derived_signal",
+                message,
+            ),
+            E::NonScalarSignal(_) => {
+                Self::new("invalid_input", "scalar_query.non_scalar_signal", message)
+            }
+            E::InvalidTime => Self::new("invalid_input", "scalar_query.invalid_time", message),
         }
     }
 }
@@ -148,7 +494,7 @@ impl From<SemanticSceneOperationError> for AuthoringFailure {
     fn from(error: SemanticSceneOperationError) -> Self {
         use SemanticSceneOperationError as E;
         let message = error.to_string();
-        let (category, code) = match error {
+        let (category, code) = match &error {
             E::UnknownNode(_) => ("stale_handle", "semantic.unknown_node"),
             E::NotSemanticObject(_) => ("invalid_input", "semantic.not_object"),
             E::NotSemanticFamily(_) => ("invalid_input", "semantic.not_family"),
@@ -159,7 +505,9 @@ impl From<SemanticSceneOperationError> for AuthoringFailure {
             E::AmbiguousCrossRootAlias(_) => {
                 ("unsupported_operation", "membership.cross_root_alias")
             }
-            E::Store(cause) => return Self::caused_by("semantic.store", message, cause.into()),
+            E::Store(cause) => {
+                return Self::caused_by("semantic.store", message, cause.clone().into())
+            }
         };
         Self::new(category, code, message)
     }
@@ -570,12 +918,98 @@ mod tests {
                     .unwrap()
             ));
         }
-        // Unaccepted domains remain explicit, even with category-like input text.
         let failure = AuthoringFailure::from(AuthoringError::InvalidStrokeCap(
             "invalid opacity; negative stroke width".into(),
         ));
-        assert_eq!(failure.category, "unclassified");
-        assert_eq!(failure.code, "authoring.unclassified");
+        assert_eq!(failure.category, "invalid_input");
+        assert_eq!(failure.code, "authoring.invalid_stroke_cap");
+    }
+
+    #[test]
+    fn settled_public_authoring_domains_have_explicit_categories() {
+        use noon_core::{Bounds2D64, SemanticVec3};
+        let node = SemanticNodeId::new(7, 3);
+        let errors = vec![
+            AuthoringError::CameraRequiresEmptyScene(node),
+            AuthoringError::NonPositiveNumber {
+                name: "radius".into(),
+                value: 0.0,
+            },
+            AuthoringError::InvalidEllipseDimensions {
+                width: 0.0,
+                height: 1.0,
+            },
+            AuthoringError::NonFiniteGeometry,
+            AuthoringError::NonFiniteObjectState,
+            AuthoringError::NonFiniteTransform,
+            AuthoringError::NonFiniteStyle,
+            AuthoringError::InvalidStrokeWidthMode("bad".into()),
+            AuthoringError::InvalidStrokeJoin("bad".into()),
+            AuthoringError::InvalidStrokeCap("bad".into()),
+            AuthoringError::NonFiniteDirection,
+            AuthoringError::ZeroDirection,
+            AuthoringError::NonFiniteLineEndpoints,
+            AuthoringError::DegenerateLine,
+            AuthoringError::UnorderedBounds(Bounds2D64 {
+                min_x: 1.0,
+                min_y: 1.0,
+                max_x: 0.0,
+                max_y: 0.0,
+            }),
+            AuthoringError::InvalidDimension(3),
+            AuthoringError::ZeroReplaceExtent,
+            AuthoringError::ZeroStretchTarget,
+            AuthoringError::ZeroMatchHeight,
+            AuthoringError::ZeroMatchWidth,
+            AuthoringError::MissingLayoutBounds(node),
+            AuthoringError::InvalidSubmobjectIndex {
+                family: node,
+                index: 9,
+            },
+            AuthoringError::InvalidGridDimensions {
+                rows: Some(0),
+                columns: Some(1),
+            },
+            AuthoringError::InsufficientGridCapacity {
+                rows: Some(1),
+                columns: 1,
+                members: 2,
+            },
+            AuthoringError::MissingCopySource(node),
+            AuthoringError::AlreadyScopedTracker(node),
+            AuthoringError::EmptyInputName {
+                kind: "key code".into(),
+            },
+            AuthoringError::Unsupported(UnsupportedAuthoringOperation::LineEndpointContent),
+            AuthoringError::FamilyPairing(SemanticFamilyPairingError::Empty),
+            AuthoringError::VectorLowering(SemanticLoweringError::CoordinateOutOfRange(
+                SemanticVec3::new(f64::MAX, 0.0, 0.0),
+            )),
+            AuthoringError::GeometryResource(GeometryResourceError::NonFinitePath),
+            AuthoringError::Arc(ArcAuthoringError::TooFewComponents(1)),
+            AuthoringError::Elbow(ElbowAuthoringError::NonFiniteAngle(f32::NAN)),
+            AuthoringError::RoundedRectangle(RoundedRectangleAuthoringError::InvalidWidth(0.0)),
+            AuthoringError::DashedLine(DashedLineAuthoringError::InvalidDashLength(0.0)),
+            AuthoringError::Signal(SemanticSignalError::NonFiniteValue),
+            AuthoringError::SignalBinding(SemanticSignalBindingError::PropertyAlreadyBound {
+                target: node,
+                property: noon_core::SemanticObjectProperty::Translation,
+                existing_signal: node,
+            }),
+            AuthoringError::ScalarQuery(SemanticScalarSignalQueryError::InvalidTime),
+        ];
+        for error in errors {
+            let failure = AuthoringFailure::from(error);
+            assert_ne!(failure.category, "unclassified", "{}", failure.message);
+            assert!(
+                !failure.code.ends_with("unclassified"),
+                "{}",
+                failure.message
+            );
+        }
+        let internal = AuthoringFailure::from(AuthoringError::IncompleteArrangement);
+        assert_eq!(internal.category, "unclassified");
+        assert_eq!(internal.code, "authoring.internal");
     }
 
     #[test]

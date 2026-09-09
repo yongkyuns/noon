@@ -2051,7 +2051,7 @@ def _play(self, *args, **kwargs):
 def _canonical_value_tracker(self: _base.Scene, value: float = 0.0) -> _reactive.ValueTracker:
     context = _context(self)
     return _reactive.ValueTracker._from_canonical(
-        self, context, context.createValueTracker(float(value))
+        self, context, engine_call(context.createValueTracker, float(value), operation="Scene.value_tracker")
     )
 
 
@@ -2060,7 +2060,7 @@ def _canonical_vector_signal(scene: _base.Scene, method: str) -> _reactive.Nativ
     try:
         handle = getattr(context, method)()
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error, operation=f"Scene.{method}")
     return _reactive.NativeVectorSignal._from_canonical(scene, context, handle)
 
 
@@ -2071,7 +2071,7 @@ def _canonical_tracker_signal(
     try:
         handle = getattr(context, method)(*args)
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error, operation=f"Scene.{method}")
     return _reactive.ValueTracker._from_canonical(scene, context, handle)
 
 
@@ -2097,7 +2097,7 @@ def _canonical_key_state_signal(
     try:
         handle = context.keyStateSignal(code, initial)
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error, operation="Scene.key_state_signal")
     return _reactive.NativeBoolSignal._from_canonical(self, context, handle)
 
 
@@ -2173,7 +2173,7 @@ def _canonical_bind_signal(
     try:
         getattr(context, method)(handle, signal_handle)
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error, operation=f"Scene.{operation}")
     return self
 
 
@@ -2301,14 +2301,16 @@ def _canonical_bind_position(
     context, tracker_handle = canonical
     if context is not _context(self):
         raise ValueError("ValueTracker belongs to another canonical Scene context")
-    position = context.trackerPosition(
+    position = engine_call(
+        context.trackerPosition,
         tracker_handle,
         float(direction_ir["x"]),
         float(direction_ir["y"]),
         float(offset_ir["x"]),
         float(offset_ir["y"]),
+        operation="Scene.bind_position",
     )
-    context.bindTrackerPosition(handle, position)
+    engine_call(context.bindTrackerPosition, handle, position, operation="Scene.bind_position")
     return self
 
 
