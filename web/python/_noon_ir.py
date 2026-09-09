@@ -1,18 +1,16 @@
-"""Minimal Noon authoring API for the browser Pyodide worker.
+"""Inert Python values, argument coercions, and detached geometry fallback.
 
-The module only builds versioned IR documents. It does not schedule frames,
-touch the canvas, or own runtime state.
+No Scene, timeline, or execution lives here. The remaining detached geometry
+snapshot adapter is deletion-owned by #61.
 """
 
 from __future__ import annotations
 
 import copy
-import json
 import math
 from dataclasses import dataclass
 from typing import Any
 
-FORMAT_VERSION = 1
 
 
 def _finite_number(name: str, value: Any) -> float:
@@ -24,12 +22,6 @@ def _finite_number(name: str, value: Any) -> float:
     return result
 
 
-def _identifier(name: str, value: Any) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{name} must be an integer")
-    if value < 0:
-        raise ValueError(f"{name} must be non-negative")
-    return value
 
 
 def _vec2(name: str, value: tuple[float, float]) -> dict[str, float]:
@@ -81,45 +73,10 @@ def _authoring_key(name: str, value: str | None, fallback: str) -> str:
     return value
 
 
-def _track_progress(timing: dict[str, Any], time: float) -> float:
-    raw = max(
-        0.0,
-        min(1.0, (time - timing["start_time"]) / timing["duration"]),
-    )
-    easing = timing["easing"]
-    if easing == "linear":
-        return raw
-    if easing == "ease_in_out_cubic":
-        if raw < 0.5:
-            return 4.0 * raw * raw * raw
-        return 1.0 - ((-2.0 * raw + 2.0) ** 3) / 2.0
-    raise ValueError(f"unsupported easing: {easing}")
 
 
-def _lerp(from_: float, to: float, progress: float) -> float:
-    return from_ + (to - from_) * progress
 
 
-def _matching_shape_signature(geometry: dict[str, Any]) -> tuple[Any, ...]:
-    if "circle" in geometry:
-        return ("circle",)
-    if "line" in geometry:
-        return ("line",)
-    if "rectangle" in geometry:
-        size = geometry["rectangle"]["size"]
-        width = float(size["x"])
-        height = float(size["y"])
-        ratio = min(width, height) / max(width, height)
-        return ("rectangle", round(ratio, 12))
-    if "vector_path" in geometry:
-        canonical = json.dumps(
-            geometry["vector_path"],
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
-        return ("vector_path", canonical)
-    raise ValueError("matching shapes does not support this geometry")
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,57 +265,3 @@ def Path(path: VectorPath, **kwargs: Any) -> Mobject:
         raise TypeError("path must be a VectorPath")
     kwargs.setdefault("stroke_width", 0.1)
     return _make_mobject({"vector_path": path.to_ir()}, **kwargs)
-
-
-@dataclass(frozen=True, slots=True)
-class Transform:
-    """Atomically transform one scene object toward a detached target snapshot."""
-
-    source: Object
-    target: Mobject | VectorPath
-    key: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class ReplacementTransform:
-    """Transform a source into another stable scene object, then swap presence."""
-
-    source: Object
-    target: Object
-    key: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class TransformFromCopy:
-    """Transform a transient copy of source into target while source remains."""
-
-    source: Object
-    target: Object
-    key: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class TransformMatchingShapes:
-    """Pair scene objects by deterministic shape signature, then replace them."""
-
-    sources: tuple[Object, ...] | list[Object]
-    targets: tuple[Object, ...] | list[Object]
-    key: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class FadeIn:
-    """Make an object present and animate renderer appearance toward fully visible."""
-
-    target: Object
-    key: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class FadeOut:
-    """Animate renderer appearance to zero, then remove the object from the scene."""
-
-    target: Object
-    key: str | None = None
-
-

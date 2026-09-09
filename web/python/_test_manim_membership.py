@@ -28,7 +28,13 @@ def install_test_membership(compat: Any) -> None:
                 raise ValueError("an explicit key can only be used when adding one Mobject")
             for index, member in enumerate(leaves):
                 if member._scene is None:
-                    member._bind_to_scene(scene, key=key if index == 0 else None)
+                    # Adapter-only fixture identity, without a scene/timeline engine.
+                    object_id = scene._next_object_id
+                    scene._next_object_id += 1
+                    obj = compat._ir.Object(object_id, scene._owner)
+                    scene._object_positions[object_id] = len(scene._objects)
+                    scene._objects.append({"id": object_id})
+                    member._bind(scene, obj)
                 elif member._scene is not scene:
                     raise ValueError("Mobject already belongs to another Scene")
             for value in values:
@@ -55,6 +61,4 @@ def install_test_membership(compat: Any) -> None:
         raise ValueError(f"unknown test membership operation {kind!r}")
 
     compat._STANDARD_MEMBERSHIP_EDIT = edit
-    compat._STANDARD_MEMBERSHIP_VIEW = lambda scene: [
-        value for value in scene._compat_top_level if scene._is_present(value)
-    ]
+    compat._STANDARD_MEMBERSHIP_VIEW = lambda scene: list(scene._compat_top_level)

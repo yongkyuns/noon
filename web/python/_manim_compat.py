@@ -568,7 +568,7 @@ class VGroup(Group):
 
 
 class Scene(_BaseScene):
-    """Manim-style Scene facade while retaining Noon's compiled scene document."""
+    """Manim-style lifecycle and membership ergonomics over the shared Rust host."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -594,12 +594,6 @@ class Scene(_BaseScene):
             return
         if not any(existing is value for existing in self._compat_top_level):
             self._compat_top_level.append(value)
-
-    def _is_present(self, value: object) -> bool:
-        leaves = _leaf_mobjects(value)
-        if not leaves:
-            return False
-        return any(member._is_present_in_scene(self, self._cursor) for member in leaves)
 
     @property
     def mobjects(self) -> list[object]:
@@ -636,98 +630,6 @@ class Scene(_BaseScene):
             raise RuntimeError("typed Scene membership is not installed")
         _STANDARD_MEMBERSHIP_EDIT(self, "replace", (old_mobject, new_mobject))
         return self
-
-    def _bind_introducer_target(self, target: object) -> None:
-        if isinstance(target, Group):
-            for member in _leaf_mobjects(target):
-                if member._scene is None:
-                    member._bind_to_scene(self)
-                elif member._scene is not self:
-                    raise ValueError("Mobject already belongs to another Scene")
-            self._register_top_level(target)
-            return
-        if isinstance(target, _BaseMobject):
-            if target._scene is None:
-                target._bind_to_scene(self)
-            elif target._scene is not self:
-                raise ValueError("Mobject already belongs to another Scene")
-            self._register_top_level(target)
-
-    def _expand_animation(self, animation: object) -> list[object]:
-        if isinstance(animation, _GroupAnimationBuilder):
-            sources = _leaf_mobjects(animation.source)
-            targets = _leaf_mobjects(animation.target)
-            if len(sources) != len(targets):
-                raise ValueError("group animation must preserve leaf membership")
-            return [
-                _base.Transform(source, target)
-                for source, target in zip(sources, targets)
-            ]
-
-        if isinstance(animation, _base.Uncreate) and isinstance(animation.target, Group):
-            leaves = _leaf_mobjects(animation.target)
-            return [
-                type(animation)(
-                    member,
-                    None if animation.key is None else f"{animation.key}.{index}",
-                    reverse_rate_function=animation.reverse_rate_function,
-                    remover=animation.remover,
-                )
-                for index, member in enumerate(leaves)
-            ]
-
-        if isinstance(animation, (_base.Create, _base.FadeIn, _base.FadeOut)) and isinstance(
-            animation.target, Group
-        ):
-            leaves = _leaf_mobjects(animation.target)
-            return [
-                type(animation)(
-                    member,
-                    None if animation.key is None else f"{animation.key}.{index}",
-                )
-                for index, member in enumerate(leaves)
-            ]
-        return [animation]
-
-    def play(
-        self,
-        *animations: Any,
-        duration: float | None = None,
-        run_time: float | None = None,
-        start_time: float | None = None,
-        easing: str | None = None,
-        rate_func: object | None = None,
-        **kwargs: Any,
-    ) -> Scene:
-        if kwargs:
-            unsupported = ", ".join(sorted(kwargs))
-            raise NotImplementedError(
-                f"unsupported Manim Scene.play option(s): {unsupported}"
-            )
-        if rate_func is not None and easing is not None:
-            raise ValueError("use either rate_func or the low-level easing alias, not both")
-        actual_easing = easing or (
-            _easing_from_rate_func(rate_func) if rate_func is not None else "smooth"
-        )
-
-        # Manim introducing animations own the lifecycle transition; users do not
-        # need to call add() first. Preserve existing pre-bound Noon objects too.
-        for animation in animations:
-            if isinstance(animation, (_base.Create, _base.FadeIn)):
-                self._bind_introducer_target(animation.target)
-
-        expanded = [
-            lowered
-            for animation in animations
-            for lowered in self._expand_animation(animation)
-        ]
-        return super().play(
-            *expanded,
-            duration=duration,
-            run_time=run_time,
-            start_time=start_time,
-            easing=actual_easing,
-        )
 
 
 

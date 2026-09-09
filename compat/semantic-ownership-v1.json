@@ -9,6 +9,13 @@
     "shared-rust"
   ],
   "duplicate_debt_budgets": [
+    {"path": "web/python/_noon_ir.py", "token": "class Scene", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_noon_ir.py", "token": "_tracks", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/noon.py", "token": "_tracks", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/noon.py", "token": "_cursor", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/noon.py", "token": "_next_painter_order", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_semantic_handles.py", "token": "_tracks", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_canonical_scene.py", "token": "_tracks", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_reactive.py", "token": "_reactive_signals", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_reactive.py", "token": "_reactive_signal_tracks", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_reactive.py", "token": "_signal_id", "maximum": 0, "migration_issue": "#61"},
@@ -42,11 +49,11 @@
     {"path": "web/python/_manim_semantic_handles.py", "token": "_ir.Mobject(", "maximum": 1, "migration_issue": "#61"},
     {"path": "web/python/_manim_updaters.py", "token": "copy.deepcopy", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_updaters.py", "token": "_ir.Mobject(", "maximum": 0, "migration_issue": "#61"},
-    {"path": "web/python/_noon_ir.py", "token": "copy.deepcopy", "maximum": 11, "migration_issue": "#61"},
-    {"path": "web/python/_noon_ir.py", "token": "_snapshot_for_object_at", "maximum": 6, "migration_issue": "#61"},
-    {"path": "web/python/noon.py", "token": "copy.deepcopy", "maximum": 6, "migration_issue": "#61"},
-    {"path": "web/python/noon.py", "token": "_snapshot_for_object_at", "maximum": 3, "migration_issue": "#61"},
-    {"path": "web/python/noon.py", "token": "_ir.Mobject(", "maximum": 2, "migration_issue": "#61"}
+    {"path": "web/python/_noon_ir.py", "token": "copy.deepcopy", "maximum": 4, "migration_issue": "#61"},
+    {"path": "web/python/_noon_ir.py", "token": "_snapshot_for_object_at", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/noon.py", "token": "copy.deepcopy", "maximum": 3, "migration_issue": "#61"},
+    {"path": "web/python/noon.py", "token": "_snapshot_for_object_at", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/noon.py", "token": "_ir.Mobject(", "maximum": 1, "migration_issue": "#61"}
   ],
   "operations": [
     {
@@ -349,17 +356,17 @@
       "surface": "Deterministic scene-bound Mobject transform/style/layout state and animate source seed",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_mutation_handle_for/_set_color"}, {"language": "python", "path": "web/python/_manim_animate.py", "symbol": "_store_animation_args"}],
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_handle_for/_set_color"}, {"language": "python", "path": "web/python/_manim_animate.py", "symbol": "_store_animation_args"}],
       "reason": "The same store-owned semantic node survives initial scene binding and owns deterministic transform/style/layout state. Target editors allocate independent nodes in that store. The canonical path lowers directly to ExecutionSession; the obsolete Python animation completion synchronizer is deleted."
     },
     {
       "id": "scene-bound-dynamic-state",
-      "surface": "Scene-bound arbitrary raw geometry mutation, low-level scalar tracks, and host-updater evaluated state",
+      "surface": "Detached raw geometry fallback",
       "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/noon.py", "symbol": "Mobject._current_raw/_apply and Scene._snapshot_for_object_at"},
+      "owner": {"language": "python", "path": "web/python/noon.py", "symbol": "Mobject._current_raw/_apply"},
       "shared_owner": {"language": "rust", "path": "crates/noon-core/src/semantic_store.rs", "symbol": "SemanticStore/SemanticNode"},
-      "reason": "Raw geometry replacement, low-level position/rotation/opacity tracks, and arbitrary host updater frames do not yet update the persistent authoring handle, so the adapter deliberately marks or treats that handle as stale and falls back to the evaluated scene snapshot.",
-      "replacement": "Move evaluated scene slots and geometry mutations behind stable shared scene handles; keep host callback bodies in Python but commit their transaction through shared semantic state.",
+      "reason": "Detached raw geometry fallback remains until all standalone constructors and getters require shared Rust handles. The Python Scene and timeline engine has been deleted.",
+      "replacement": "Require shared Rust handles for all detached geometry construction, queries and edits; retain only inert language arguments in Python.",
       "migration_issue": "#61"
     },
     {
@@ -399,12 +406,10 @@
     {
       "id": "scene-play-lifecycle",
       "surface": "Scene.add/play/wait cursor and lifecycle authoring",
-      "classification": "python-semantic-duplicate",
-      "owner": {"language": "python", "path": "web/python/noon.py", "symbol": "Scene.add/play/wait"},
-      "shared_owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::add/declare_and_activate_composition/wait_segment"},
-      "reason": "Ordinary playback uses shared Rust continuations. The remaining export fallback still owns a Python scene cursor and binding decisions; deletion remains under #61.",
-      "replacement": "Make the Rust authoring scene authoritative and keep Python Scene as a thin call-shape adapter.",
-      "migration_issue": "#61"
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::add/declare_and_activate_composition/wait_segment"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_play/_canonical_wait/_canonical_scene_time"}],
+      "reason": "All valid scene operations use shared Rust continuations; the Python Scene/document engine, cursor, tracks, snapshots and scheduling have been deleted. Derived wrapper identities remain Python metadata."
     },
     {
       "id": "scene-membership-lifecycle",

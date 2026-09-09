@@ -14,7 +14,6 @@ from typing import Any, Iterable, Iterator
 
 import _noon_ir as _ir
 
-FORMAT_VERSION = _ir.FORMAT_VERSION
 VectorPath = _ir.VectorPath
 Color = _ir.Color
 
@@ -332,47 +331,18 @@ class Mobject:
         self._object = obj
 
     def _bind_to_scene(self, scene: Scene, *, key: str | None = None) -> _ir.Object:
-        obj = _ir.Scene.add(scene, self._current_raw(), key=key)
-        self._bind(scene, obj)
-        return obj
-
-    def _scene_lifecycle_state(
-        self, scene: Scene, time: float
-    ) -> tuple[bool, bool, bool]:
-        if self._scene is not scene or self._object is None:
-            raise ValueError("Mobject must belong to this Scene")
-        tracks = scene._presence_tracks(self._object)
-        has_future = any(float(track["timing"]["start_time"]) > time for track in tracks)
-        return bool(tracks), scene._presence_at(self._object, time), has_future
-
-    def _record_scene_presence(
-        self,
-        scene: Scene,
-        from_: bool,
-        to: bool,
-        time: float,
-        *,
-        key: str | None = None,
-    ) -> None:
-        if self._scene is not scene or self._object is None:
-            raise ValueError("Mobject must belong to this Scene")
-        scene._add_presence_track(self._object, from_, to, time, key=key)
-
-    def _is_present_in_scene(self, scene: Scene, time: float) -> bool:
-        if self._scene is not scene or self._object is None:
-            return False
-        return self._scene_lifecycle_state(scene, time)[1]
+        raise RuntimeError("Scene membership requires the shared Rust authoring host")
 
     def _current_raw(self) -> _ir.Mobject:
         if self._scene is None or self._object is None:
             return self._raw
-        return self._scene._raw_snapshot(self._object)
+        raise RuntimeError("bound Mobject queries require the shared Rust authoring host")
 
     def _apply(self, raw: _ir.Mobject) -> Mobject:
         if self._scene is None or self._object is None:
             self._raw = _raw_mobject(raw)
         else:
-            self._scene._replace_static_snapshot(self._object, raw)
+            raise RuntimeError("bound Mobject edits require the shared Rust authoring host")
         return self
 
     def get_center(self) -> Vec2:

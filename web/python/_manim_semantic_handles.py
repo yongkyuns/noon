@@ -225,23 +225,6 @@ def _is_bound(value: object) -> bool:
     )
 
 
-def _has_unmirrored_tracks(value: _base.Mobject) -> bool:
-    if not _is_bound(value):
-        return False
-    scene = value._scene
-    obj = value._object
-    assert scene is not None and obj is not None
-    # Generic Transform tracks authored through the aligned scheduler are committed
-    # back to this handle after successful play. Low-level scalar position/rotation/
-    # opacity tracks still live only in the legacy scene timeline, so fall back to an
-    # evaluated snapshot if any of those have touched this object.
-    return any(
-        track["object"] == obj.id
-        and track["property"] in {"position", "rotation", "opacity"}
-        for track in scene._tracks
-    )
-
-
 def _handle_for(value: object):
     if not isinstance(value, _base.Mobject):
         return None
@@ -252,8 +235,6 @@ def _handle_for(value: object):
     # authoring handle. Detached objects still need the handle to materialize their
     # initial scene snapshot before the runtime callback path exists.
     if _is_bound(value) and hasattr(value, "_noon_updaters"):
-        return None
-    if _has_unmirrored_tracks(value):
         return None
     return getattr(value, "_semantic_handle", None)
 
@@ -366,8 +347,6 @@ def _canonical_target_editor_source(value: object):
         return None
     handle = getattr(value, "_semantic_handle", None)
     if handle is None or not bool(getattr(value, "_semantic_handle_fresh", False)):
-        return None
-    if _has_unmirrored_tracks(value):
         return None
     context = getattr(value, "_canonical_live_target_context", None)
     if context is None:
@@ -952,29 +931,8 @@ def _set_height_property(self: _base.Mobject, height: float) -> None:
     self.scale_to_fit_height(float(height))
 
 
-def _ensure_bound_static_mutation_available(value: _base.Mobject) -> None:
-    if not _is_bound(value):
-        return
-    scene = value._scene
-    obj = value._object
-    assert scene is not None and obj is not None
-    if any(track["object"] == obj.id for track in scene._tracks):
-        raise ValueError(
-            "direct Mobject mutation after animation authoring is ambiguous; use mobject.animate"
-        )
-
-
-def _mutation_handle_for(value: _base.Mobject):
-    handle = _handle_for(value)
-    if handle is None:
-        return None
-    if _is_bound(value):
-        _ensure_bound_static_mutation_available(value)
-    return handle
-
-
 def _shift(self: _base.Mobject, direction: object) -> _base.Mobject:
-    handle = _mutation_handle_for(self)
+    handle = _handle_for(self)
     if handle is None:
         return _ORIGINAL_SHIFT(self, direction)
     offset = _base._as_vec2(direction)
@@ -995,7 +953,7 @@ def _move_to(
     aligned_edge: object = _base.ORIGIN,
     coor_mask: object = (1.0, 1.0, 1.0),
 ) -> _base.Mobject:
-    handle = _mutation_handle_for(self)
+    handle = _handle_for(self)
     if handle is None:
         return _ORIGINAL_MOVE_TO(
             self,
@@ -1048,7 +1006,7 @@ def _move_to(
 
 
 def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
-    handle = _mutation_handle_for(self)
+    handle = _handle_for(self)
     if handle is None:
         return _ORIGINAL_SCALE(self, factor)
     if isinstance(factor, (tuple, list, _base.Vec2)):
@@ -1092,7 +1050,7 @@ def _rotate(
             **kwargs,
         )
 
-    handle = _mutation_handle_for(self)
+    handle = _handle_for(self)
     if handle is None:
         return _ORIGINAL_ROTATE(
             self,
@@ -1132,7 +1090,7 @@ def _rotate(
 
 
 def _set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobject:
-    handle = _mutation_handle_for(self)
+    handle = _handle_for(self)
     if handle is None:
         return _ORIGINAL_SET_COLOR(self, color)
     if not isinstance(color, _base.Color):
@@ -1156,7 +1114,7 @@ def _set_vmobject_color(
     color: object,
     family: bool = True,
 ) -> _compat.VMobject:
-    handle = _mutation_handle_for(self)
+    handle = _handle_for(self)
     if handle is None:
         return _ORIGINAL_VMOBJECT_SET_COLOR(self, color, family=family)
     del family
@@ -1263,12 +1221,7 @@ def _layout_reference_handle(value):
     handle = getattr(value, "_semantic_handle", None)
     if handle is None or not hasattr(handle, "layoutAnchor"):
         return None
-    scene = getattr(value, "_scene", None)
     if not bool(getattr(value, "_semantic_handle_fresh", False)):
-        return None
-    # Only legacy/fixture scenes can have geometry tracks outside the Rust store.
-    if (getattr(scene, "_canonical_authoring_context", None) is None
-            and _has_unmirrored_tracks(value)):
         return None
     from _manim_updaters import _canonical_phase_context
     if _canonical_phase_context(value) is not None:
@@ -1354,7 +1307,7 @@ def _align_to(
     mobject_or_point: object,
     direction: object = _base.ORIGIN,
 ) -> _base.Mobject:
-    handle = _mutation_handle_for(self)
+    handle = _handle_for(self)
     if handle is None:
         return _ORIGINAL_ALIGN_TO(self, mobject_or_point, direction)
     if _live_mutation_context(self) is not None:
@@ -1380,7 +1333,7 @@ def _align_on_frame(
     direction: _base.Vec2,
     buff: float,
 ) -> _base.Mobject:
-    handle = _mutation_handle_for(self)
+    handle = _handle_for(self)
     if handle is None or not hasattr(handle, "alignOnFrame"):
         return _ORIGINAL_ALIGN_ON_FRAME(self, direction, buff)
     if _live_mutation_context(self) is not None:
@@ -1397,7 +1350,7 @@ def _set_fill(
     opacity: float | None = None,
     family: bool = True,
 ) -> _compat.VMobject:
-    handle = _mutation_handle_for(self)
+    handle = _handle_for(self)
     if handle is None:
         return _ORIGINAL_SET_FILL(self, color=color, opacity=opacity, family=family)
     live_context = _live_mutation_context(self)
@@ -1452,7 +1405,7 @@ def _set_stroke(
     opacity: float | None = None,
     family: bool = True,
 ) -> _compat.VMobject:
-    handle = _mutation_handle_for(self)
+    handle = _handle_for(self)
     if handle is None:
         return _ORIGINAL_SET_STROKE(
             self, color=color, width=width, opacity=opacity, family=family
@@ -1504,7 +1457,7 @@ def _set_opacity(
     opacity: float,
     family: bool = True,
 ) -> _compat.VMobject:
-    handle = _mutation_handle_for(self)
+    handle = _handle_for(self)
     if handle is None:
         return _ORIGINAL_SET_OPACITY(self, opacity, family=family)
     live_context = _live_mutation_context(self)
@@ -1524,7 +1477,7 @@ def _set_object_opacity(
 ) -> _base.Mobject:
     """Set the object-composite multiplier, distinct from Manim paint opacity."""
 
-    handle = _mutation_handle_for(self)
+    handle = _handle_for(self)
     if handle is None:
         return _ORIGINAL_SET_OBJECT_OPACITY(self, opacity)
     alpha = _phase_b._opacity("object opacity", opacity)
@@ -1564,8 +1517,7 @@ def _get_stroke_opacity(self: _compat.VMobject) -> float:
 
 
 def _family_layout_leaf_adapter(value: object, *, mutation: bool = False):
-    resolver = _mutation_handle_for if mutation else _handle_for
-    return resolver(value)
+    return _handle_for(value)
 
 
 def _shared_family_layout(value: object, *, mutation: bool = False):

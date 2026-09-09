@@ -253,7 +253,7 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             assert handle.calls == [("shift", 1.0, 0.0)], handle.calls
             assert handle.snapshot_requests == 0
             stored = scene._objects[square.id]
-            assert stored["transform"]["translation"] == {"x": 0.0, "y": 0.0}
+            assert stored == {"id": square.id}, "binding must retain identity metadata only"
             assert square.get_center().x == 1.0
 
             class EffectiveLayout:

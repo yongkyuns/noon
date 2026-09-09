@@ -63,29 +63,7 @@ class PublicAuthoringTests(unittest.TestCase):
         square = Square(1.0).to_corner(UR)
         self.assertAlmostEqual(square.get_center().y + 0.5, 4.0 - DEFAULT_MOBJECT_TO_EDGE_BUFFER)
 
-    def test_scene_cursor_and_animate_lower_to_existing_transform_track(self) -> None:
-        scene = Scene()
-        circle = Circle(0.5, color=BLUE)
-        scene.add(circle, key="circle")
 
-        scene.play(circle.animate.shift(RIGHT), run_time=1.25)
-        scene.wait(0.5)
-
-        track = scene.to_document()["tracks"][0]
-        self.assertEqual(track["property"], "transform")
-        self.assertEqual(track["timing"]["start_time"], 0.0)
-        self.assertEqual(track["timing"]["duration"], 1.25)
-        self.assertEqual(scene.time, 1.75)
-        self.assertEqual(
-            track["values"]["object"]["to"]["transform"]["translation"],
-            {"x": 1.0, "y": 0.0},
-        )
-
-    def test_low_level_position_api_remains_an_escape_hatch(self) -> None:
-        scene = Scene()
-        circle = scene.circle(0.5)
-        scene.animate_position(circle, Vec2(0.0, 0.0), Vec2(1.0, 2.0), duration=1.0)
-        self.assertEqual(scene.to_document()["tracks"][0]["property"], "position")
 
 
 if __name__ == "__main__":
