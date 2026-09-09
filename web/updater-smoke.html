@@ -32,10 +32,11 @@
               authoringClient: authoring,
               loopDurationSeconds: 1,
               transportMode: "transferable",
+              initiallyPaused: true,
             });
-            const paused = await execution.pause();
-            if (paused.time > times[0]) {
-              throw new Error(`updater smoke advanced past ${times[0]} before pause`);
+            const paused = await execution.state();
+            if (paused.time !== 0 || paused.playing !== false) {
+              throw new Error("updater smoke must start paused at time zero");
             }
 
             const phases = [];

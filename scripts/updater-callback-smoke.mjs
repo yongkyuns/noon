@@ -75,7 +75,7 @@ try {
   assert.ok(output.result.semanticExecution);
   assert.equal(output.ready.render.backend, "WebGL2");
   assert.equal(output.paused.playing, false);
-  assert.ok(output.paused.time <= 0.25);
+  assert.equal(output.paused.time, 0);
   assert.equal(output.phases.length, 2);
 
   const [first, second] = output.phases;
