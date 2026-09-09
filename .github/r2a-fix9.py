@@ -26,7 +26,7 @@ after='''let copied = copy.mobject(&left)?;
     // Preserve the established copy semantics and the public/integration
     // boundary: inspect painter metadata through its existing getters.
     assert_ne!(copied_state.insertion_order(), source_state.insertion_order());
-    assert_eq!(copied_state.content(), source_state.content());
+    assert_eq!(copied_state.content, source_state.content);
     assert_eq!(copied_state.transform, source_state.transform);
     assert_eq!(copied_state.style, source_state.style);
     assert_eq!(copied_state.z_index(), source_state.z_index());
