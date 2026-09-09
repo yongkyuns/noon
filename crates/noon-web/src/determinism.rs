@@ -229,7 +229,10 @@ fn create_morph_fade_session() -> Result<ExecutionSession, String> {
     Ok(session)
 }
 
-#[cfg(all(target_arch = "wasm32", debug_assertions))]
+#[cfg(all(
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "replay-smoke")
+))]
 mod wasm {
     use wasm_bindgen::prelude::*;
 
