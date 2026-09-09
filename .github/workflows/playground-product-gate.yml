@@ -41,7 +41,7 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       RUSTC_WRAPPER: sccache
-      # Reuse dependency compilations between these two isolated source builds.
+      # Reuse dependency compilations between two fresh builds at one stable path.
       # The cache lives only in this job; no executable or cross-PR seed is restored.
       SCCACHE_GHA_ENABLED: "false"
       SCCACHE_DIR: ${{ github.workspace }}/.product-sccache
@@ -94,27 +94,33 @@ jobs:
           fallback: none
 
       - name: Build baseline production package
-        working-directory: baseline
         env:
-          CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target/baseline
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target
         run: |
+          # Rust cache keys include cwd and CARGO_TARGET_DIR. Keep both stable,
+          # but discard all Cargo fingerprints/artifacts before each source build.
+          mv baseline .product-source
+          trap 'mv .product-source baseline' EXIT
+          rm -rf .product-target
           sccache --zero-stats
           noon_build_started=$SECONDS
-          bash scripts/build-web-demo.sh
+          (cd .product-source && bash scripts/build-web-demo.sh)
           printf 'Baseline release build: %s seconds.\n' "$((SECONDS - noon_build_started))" >> "$GITHUB_STEP_SUMMARY"
           sccache --show-stats
 
       - name: Build candidate production package
-        working-directory: candidate
         env:
-          # Separate checkout mtimes must not reuse baseline workspace artifacts.
-          CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target/candidate
+          # Compiler results are content-keyed; Cargo outputs are never reused.
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.product-target
           # Exercise release code with only the typed recovery fixture exported.
           NOON_RENDERER_SMOKE: "1"
         run: |
+          mv candidate .product-source
+          trap 'mv .product-source candidate' EXIT
+          rm -rf .product-target
           sccache --zero-stats
           noon_build_started=$SECONDS
-          bash scripts/build-web-demo.sh
+          (cd .product-source && bash scripts/build-web-demo.sh)
           printf 'Candidate release build: %s seconds.\n' "$((SECONDS - noon_build_started))" >> "$GITHUB_STEP_SUMMARY"
           sccache --show-stats
 
