@@ -107,7 +107,7 @@ class ManimSharedGeometryTests(unittest.TestCase):
             _manim_compat.install()
             import _manim_geometry
             import _manim_semantic_handles as handles
-            handles.install()
+
 
             _manim_compat._ir.Circle = lambda *args, **kwargs: (_ for _ in ()).throw(
                 AssertionError("Python Circle geometry constructor was called")

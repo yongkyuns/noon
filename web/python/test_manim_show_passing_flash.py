@@ -56,7 +56,7 @@ class ManimShowPassingFlashTests(unittest.TestCase):
             _manim_composition.install()
             assert _manim_compat.Scene.play is play_before_composition
             import _manim_semantic_handles as handles
-            handles.install()
+
             import _manim_indication
 
             play_before = _manim_compat.Scene.play

@@ -16,7 +16,6 @@ from typing import Any, Callable
 
 import noon as _base
 
-_INSTALLED = False
 _NEXT_SESSION_ID = 0
 _TRACKED_MOBJECTS: list[_base.Mobject] = []
 _CANONICAL_SESSIONS: dict[int, "_CanonicalCallbackSession"] = {}
@@ -25,23 +24,11 @@ _ACTIVE_CANONICAL_CONTEXT: ContextVar["_CanonicalCallbackContext | None"] = Cont
     "noon_active_canonical_callback", default=None
 )
 
-_ORIGINAL_CURRENT_RAW = _base.Mobject._current_raw
-_ORIGINAL_APPLY = _base.Mobject._apply
-_ORIGINAL_GET_CENTER = _base.Mobject.get_center
-_ORIGINAL_SHIFT = _base.Mobject.shift
-_ORIGINAL_MOVE_TO = _base.Mobject.move_to
-_ORIGINAL_SET_X = _base.Mobject.set_x
-_ORIGINAL_SET_Y = _base.Mobject.set_y
-_ORIGINAL_SCALE = _base.Mobject.scale
-_ORIGINAL_ROTATE = _base.Mobject.rotate
-_ORIGINAL_SET_COLOR = _base.Mobject.set_color
-_ORIGINAL_SET_FILL = _base.Mobject.set_fill
-_ORIGINAL_SET_STROKE = _base.Mobject.set_stroke
-_ORIGINAL_SET_OPACITY = _base.Mobject.set_opacity
-_ORIGINAL_VMOBJECT_SET_COLOR: Callable[..., _base.Mobject] | None = None
-_ORIGINAL_VMOBJECT_SET_FILL: Callable[..., _base.Mobject] | None = None
-_ORIGINAL_VMOBJECT_SET_STROKE: Callable[..., _base.Mobject] | None = None
-_ORIGINAL_VMOBJECT_SET_OPACITY: Callable[..., _base.Mobject] | None = None
+
+
+def _coordinate_operations():
+    import _manim_shared_geometry
+    return _manim_shared_geometry
 
 
 def _track(mobject: _base.Mobject) -> None:
@@ -953,7 +940,7 @@ def _canonical_current_raw(self: _base.Mobject):
         raise NotImplementedError(
             "canonical callback raw geometry access is not supported; use property operations"
         )
-    return _ORIGINAL_CURRENT_RAW(self)
+    return _base._semantic_operations()._current_raw(self)
 
 
 def _canonical_apply(self: _base.Mobject, raw: object) -> _base.Mobject:
@@ -961,13 +948,13 @@ def _canonical_apply(self: _base.Mobject, raw: object) -> _base.Mobject:
         raise NotImplementedError(
             "canonical callbacks support property operations only; raw replacement is unsupported"
         )
-    return _ORIGINAL_APPLY(self, raw)
+    return _base._semantic_operations()._apply(self, raw)
 
 
 def _canonical_get_center(self: _base.Mobject) -> _base.Vec2:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_GET_CENTER(self)
+        return _base._semantic_operations()._get_center(self)
     _, _, row = value
     return row.center()
 
@@ -975,7 +962,7 @@ def _canonical_get_center(self: _base.Mobject) -> _base.Vec2:
 def _canonical_shift(self: _base.Mobject, direction: object) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_SHIFT(self, direction)
+        return _base._semantic_operations()._shift(self, direction)
     context, key, row = value
     before = row.transform
     row.shift(_base._as_vec2(direction))
@@ -986,25 +973,29 @@ def _canonical_shift(self: _base.Mobject, direction: object) -> _base.Mobject:
 def _canonical_move_to(self: _base.Mobject, point: object, *args: object, **kwargs: object) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_MOVE_TO(self, point, *args, **kwargs)
+        return _base._semantic_operations()._move_to(self, point, *args, **kwargs)
     if args or kwargs:
         raise NotImplementedError("callback move_to currently supports center point placement only")
     _, _, row = value
     return _canonical_shift(self, _base._as_vec2(point) - row.center())
 
 
-def _canonical_set_x(self: _base.Mobject, x: float) -> _base.Mobject:
+def _canonical_set_x(self: _base.Mobject, x: float, direction: object = _base.ORIGIN) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_SET_X(self, x)
+        return _coordinate_operations()._set_x(self, x, direction)
+    if _base._as_vec2(direction) != _base.ORIGIN:
+        raise NotImplementedError("callback coordinate placement supports center coordinates only")
     _, _, row = value
     return _canonical_shift(self, _base.Vec2(float(x) - row.center().x, 0.0))
 
 
-def _canonical_set_y(self: _base.Mobject, y: float) -> _base.Mobject:
+def _canonical_set_y(self: _base.Mobject, y: float, direction: object = _base.ORIGIN) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_SET_Y(self, y)
+        return _coordinate_operations()._set_y(self, y, direction)
+    if _base._as_vec2(direction) != _base.ORIGIN:
+        raise NotImplementedError("callback coordinate placement supports center coordinates only")
     _, _, row = value
     return _canonical_shift(self, _base.Vec2(0.0, float(y) - row.center().y))
 
@@ -1014,13 +1005,13 @@ def _canonical_scale(self: _base.Mobject, *args: object, **kwargs: object) -> _b
         raise NotImplementedError(
             "canonical callback scale is not supported; use shared semantic operations"
         )
-    return _ORIGINAL_SCALE(self, *args, **kwargs)
+    return _base._semantic_operations()._scale(self, *args, **kwargs)
 
 
 def _canonical_rotate(self: _base.Mobject, *args: object, **kwargs: object) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_ROTATE(self, *args, **kwargs)
+        return _base._semantic_operations()._rotate(self, *args, **kwargs)
     context, key, row = value
     if not args or len(args) > 2:
         raise TypeError("canonical callback rotate expects angle and optional axis")
@@ -1052,7 +1043,7 @@ def _canonical_rotate(self: _base.Mobject, *args: object, **kwargs: object) -> _
 def _canonical_set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_SET_COLOR(self, color)
+        return _base._semantic_operations()._set_color(self, color)
     context, key, row = value
     color_value = _phase_color("set_color", color.to_ir())
     assert color_value is not None
@@ -1068,7 +1059,7 @@ def _canonical_set_fill(
 ) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_SET_FILL(self, color, opacity)
+        return _base._semantic_operations()._set_fill(self, color, opacity)
     context, key, row = value
     before = row.style
     fill = None if color is None else _phase_color("set_fill", color.to_ir())
@@ -1085,7 +1076,7 @@ def _canonical_set_stroke(
 ) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_SET_STROKE(self, color, width)
+        return _base._semantic_operations()._set_stroke(self, color, width)
     context, key, row = value
     if width is not None:
         raise NotImplementedError(
@@ -1109,7 +1100,7 @@ def _canonical_set_stroke(
 def _canonical_set_opacity(self: _base.Mobject, opacity: float) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_SET_OPACITY(self, opacity)
+        return _base._semantic_operations()._set_object_opacity(self, opacity)
     context, key, row = value
     before = row.style
     row.style = replace(row.style, opacity=float(opacity))
@@ -1127,8 +1118,7 @@ def _canonical_vmobject_set_color(
         from _manim_compat import _as_color
 
         return _canonical_set_color(self, _as_color("color", color))
-    assert _ORIGINAL_VMOBJECT_SET_COLOR is not None
-    return _ORIGINAL_VMOBJECT_SET_COLOR(self, color, family=family)
+    return _base._semantic_operations()._set_vmobject_color(self, color, family=family)
 
 
 def _canonical_vmobject_set_fill(
@@ -1144,8 +1134,7 @@ def _canonical_vmobject_set_fill(
 
             color = _as_color("fill color", color)
         return _canonical_set_fill(self, color, opacity)
-    assert _ORIGINAL_VMOBJECT_SET_FILL is not None
-    return _ORIGINAL_VMOBJECT_SET_FILL(self, color=color, opacity=opacity, family=family)
+    return _base._semantic_operations()._set_fill(self, color=color, opacity=opacity, family=family)
 
 
 def _canonical_vmobject_set_stroke(
@@ -1166,8 +1155,7 @@ def _canonical_vmobject_set_stroke(
 
             color = _as_color("stroke color", color)
         return _canonical_set_stroke(self, color, width)
-    assert _ORIGINAL_VMOBJECT_SET_STROKE is not None
-    return _ORIGINAL_VMOBJECT_SET_STROKE(
+    return _base._semantic_operations()._set_stroke(
         self, color=color, width=width, opacity=opacity, family=family
     )
 
@@ -1182,8 +1170,7 @@ def _canonical_vmobject_set_opacity(
         from _manim_compat import _opacity
 
         return _canonical_set_opacity(self, _opacity("opacity", opacity))
-    assert _ORIGINAL_VMOBJECT_SET_OPACITY is not None
-    return _ORIGINAL_VMOBJECT_SET_OPACITY(self, opacity, family=family)
+    return _base._semantic_operations()._set_opacity(self, opacity, family=family)
 
 
 async def prepare_canonical_callback_phase(session_id: int, frame: dict[str, Any]):
@@ -1268,51 +1255,3 @@ def _json_phase(value: object) -> str:
 
 def release_session(session_id: int) -> None:
     _CANONICAL_SESSIONS.pop(int(session_id), None)
-
-
-def install() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _base.Mobject.add_updater = add_updater
-    _base.Mobject.remove_updater = remove_updater
-    _base.Mobject.clear_updaters = clear_updaters
-    _base.Mobject.get_updaters = get_updaters
-    _base.Mobject.has_updaters = has_updaters
-    _base.Mobject._current_raw = _canonical_current_raw
-    _base.Mobject._apply = _canonical_apply
-    _base.Mobject.get_center = _canonical_get_center
-    _base.Mobject.shift = _canonical_shift
-    _base.Mobject.move_to = _canonical_move_to
-    _base.Mobject.set_x = _canonical_set_x
-    _base.Mobject.set_y = _canonical_set_y
-    _base.Mobject.scale = _canonical_scale
-    _base.Mobject.rotate = _canonical_rotate
-    _base.Mobject.set_color = _canonical_set_color
-    _base.Mobject.set_fill = _canonical_set_fill
-    _base.Mobject.set_stroke = _canonical_set_stroke
-    _base.Mobject.set_opacity = _canonical_set_opacity
-    # Semantic-handle installation gives VMobject its own final public style
-    # methods. Reinstall the phase dispatch at that public boundary so it cannot
-    # fall through to raw snapshot mutation while a canonical callback is active.
-    import _manim_compat as _compat
-
-    global _ORIGINAL_VMOBJECT_SET_COLOR
-    global _ORIGINAL_VMOBJECT_SET_FILL
-    global _ORIGINAL_VMOBJECT_SET_STROKE
-    global _ORIGINAL_VMOBJECT_SET_OPACITY
-    # Inherited methods already use the Mobject phase dispatcher above. Wrap
-    # only VMobject's own overrides, preserving the inherited base signatures.
-    if "set_color" in _compat.VMobject.__dict__:
-        _ORIGINAL_VMOBJECT_SET_COLOR = _compat.VMobject.set_color
-        _compat.VMobject.set_color = _canonical_vmobject_set_color
-    if "set_fill" in _compat.VMobject.__dict__:
-        _ORIGINAL_VMOBJECT_SET_FILL = _compat.VMobject.set_fill
-        _compat.VMobject.set_fill = _canonical_vmobject_set_fill
-    if "set_stroke" in _compat.VMobject.__dict__:
-        _ORIGINAL_VMOBJECT_SET_STROKE = _compat.VMobject.set_stroke
-        _compat.VMobject.set_stroke = _canonical_vmobject_set_stroke
-    if "set_opacity" in _compat.VMobject.__dict__:
-        _ORIGINAL_VMOBJECT_SET_OPACITY = _compat.VMobject.set_opacity
-        _compat.VMobject.set_opacity = _canonical_vmobject_set_opacity
-    _INSTALLED = True

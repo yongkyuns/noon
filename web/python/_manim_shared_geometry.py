@@ -556,8 +556,6 @@ def install() -> None:
         return
     _INSTALLED = True
     _base.Mobject.set_coord = _set_coord
-    _base.Mobject.set_x = _set_x
-    _base.Mobject.set_y = _set_y
     _base.Mobject.match_coord = _match_coord
     _base.Mobject.match_x = _match_x
     _base.Mobject.match_y = _match_y

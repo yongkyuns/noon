@@ -250,10 +250,6 @@ class ApplyMethod:
         return builder
 
 
-def _bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
-    raise RuntimeError("family layout requires the shared Rust authoring host")
-
-
 def match_points(self: _base.Mobject, mobject: object) -> _base.Mobject:
     if not isinstance(self, _compat.Line) or not isinstance(mobject, _compat.Line):
         raise NotImplementedError(
@@ -316,9 +312,6 @@ def install() -> None:
     _base.Mobject.get_color = _mobject_get_color
     _compat.Group.get_color = _group_get_color
 
-    # Existing compatibility layout methods resolve this module global at call time,
-    # so the hook affects only Manim-facing authoring/layout and never renderer bounds.
-    _compat._bounds_for = _bounds_for
     _base.Mobject.match_points = match_points
 
     exports = list(_base.__all__)

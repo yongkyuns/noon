@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from typing import Any, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 import _noon_ir as _ir
 
@@ -195,11 +195,22 @@ GRAY_E = GREY_E = _hex_color(0x222222)
 GRAY = GREY = GRAY_C
 
 
+def _semantic_operations():
+    import _manim_semantic_handles
+    return _manim_semantic_handles
+
+
+def _callback_operations():
+    # The adapter selects a staged callback view or the normal semantic handle.
+    import _manim_updaters
+    return _manim_updaters
+
+
 class Mobject:
     """Python identity wrapper; shared Rust handles own all semantic state."""
 
     def __init__(self, raw: _ir.Mobject) -> None:
-        raise RuntimeError("Mobject construction requires the shared Rust authoring host")
+        return _semantic_operations()._init(self, raw)
 
     @property
     def geometry(self) -> dict[str, Any]:
@@ -223,7 +234,7 @@ class Mobject:
         return self._current_raw().to_ir()
 
     def copy(self) -> Mobject:
-        raise RuntimeError("Mobject copy requires the shared Rust authoring host")
+        return _semantic_operations()._copy_mobject(self)
 
     def _bind(self, scene: Scene, obj: _ir.Object) -> None:
         if self._scene is not None and self._scene is not scene:
@@ -234,86 +245,82 @@ class Mobject:
     def _bind_to_scene(self, scene: Scene, *, key: str | None = None) -> _ir.Object:
         return _scene_operations()._bind_mobject(self, scene, key=key)
 
-    def _current_raw(self) -> _ir.Mobject:
-        raise RuntimeError("Mobject queries require the shared Rust authoring host")
+    def _current_raw(self):
+        return _callback_operations()._canonical_current_raw(self)
 
-    def _apply(self, raw: _ir.Mobject) -> Mobject:
-        raise NotImplementedError("raw replacement is unsupported; use a shared semantic operation")
+    def _apply(self, raw: object) -> Mobject:
+        return _callback_operations()._canonical_apply(self, raw)
 
     def get_center(self) -> Vec2:
-        raise RuntimeError("Mobject layout requires the shared Rust authoring host")
+        return _callback_operations()._canonical_get_center(self)
 
     @property
     def width(self) -> float:
-        raise RuntimeError("Mobject layout requires the shared Rust authoring host")
+        return _semantic_operations()._width(self)
+
+    @width.setter
+    def width(self, value: float) -> None:
+        _semantic_operations()._set_width_property(self, value)
 
     @property
     def height(self) -> float:
-        raise RuntimeError("Mobject layout requires the shared Rust authoring host")
+        return _semantic_operations()._height(self)
 
-    def shift(self, direction: Vec2 | tuple[float, float]) -> Mobject:
-        raise RuntimeError("Mobject edits require the shared Rust authoring host")
+    @height.setter
+    def height(self, value: float) -> None:
+        _semantic_operations()._set_height_property(self, value)
 
-    def move_to(self, point: Vec2 | tuple[float, float]) -> Mobject:
-        return self.shift(_as_vec2(point) - self.get_center())
+    def shift(self, direction: object) -> Mobject:
+        return _callback_operations()._canonical_shift(self, direction)
+
+    def move_to(self, point: object, *args: object, **kwargs: object) -> Mobject:
+        return _callback_operations()._canonical_move_to(self, point, *args, **kwargs)
 
     def center(self) -> Mobject:
         return self.move_to(ORIGIN)
 
-    def set_x(self, x: float) -> Mobject:
-        center = self.get_center()
-        return self.shift(Vec2(float(x) - center.x, 0.0))
+    def set_x(self, x: float, direction: object = ORIGIN) -> Mobject:
+        return _callback_operations()._canonical_set_x(self, x, direction)
 
-    def set_y(self, y: float) -> Mobject:
-        center = self.get_center()
-        return self.shift(Vec2(0.0, float(y) - center.y))
+    def set_y(self, y: float, direction: object = ORIGIN) -> Mobject:
+        return _callback_operations()._canonical_set_y(self, y, direction)
 
-    def scale(self, factor: float | tuple[float, float]) -> Mobject:
-        raise RuntimeError("Mobject edits require the shared Rust authoring host")
+    def scale(self, *args: object, **kwargs: object) -> Mobject:
+        return _callback_operations()._canonical_scale(self, *args, **kwargs)
 
-    def rotate(self, angle: float) -> Mobject:
-        raise RuntimeError("Mobject edits require the shared Rust authoring host")
+    def rotate(self, *args: object, **kwargs: object) -> Mobject:
+        return _callback_operations()._canonical_rotate(self, *args, **kwargs)
 
     def set_color(self, color: Color) -> Mobject:
-        raise RuntimeError("Mobject edits require the shared Rust authoring host")
+        return _callback_operations()._canonical_set_color(self, color)
 
     def set_fill(self, color: Color | None = None, opacity: float | None = None) -> Mobject:
-        raise RuntimeError("Mobject edits require the shared Rust authoring host")
+        return _callback_operations()._canonical_set_fill(self, color, opacity)
 
-    def set_stroke(
-        self, color: Color | None = None, width: float | None = None
-    ) -> Mobject:
-        raise RuntimeError("Mobject edits require the shared Rust authoring host")
+    def set_stroke(self, color: Color | None = None, width: float | None = None) -> Mobject:
+        return _callback_operations()._canonical_set_stroke(self, color, width)
 
     def set_opacity(self, opacity: float) -> Mobject:
-        raise RuntimeError("Mobject edits require the shared Rust authoring host")
+        return _callback_operations()._canonical_set_opacity(self, opacity)
 
     def set_object_opacity(self, opacity: float) -> Mobject:
-        """Set Noon's object-composite opacity independently of paint opacity.
-
-        Manim ``VMobject.set_opacity`` controls the enabled fill and stroke paint
-        alpha channels. This explicit Noon operation controls the separate opacity
-        multiplier applied to the complete object through the shared semantic handle.
-        """
-        del opacity
-        raise NotImplementedError(
-            "set_object_opacity requires Noon's shared semantic authoring handle"
-        )
+        """Set whole-object opacity independently of fill/stroke paint alpha."""
+        return _semantic_operations()._set_object_opacity(self, opacity)
 
     def next_to(
         self,
-        other: Mobject | Vec2 | tuple[float, float],
-        direction: Vec2 | tuple[float, float] = RIGHT,
+        mobject_or_point: object,
+        direction: object = RIGHT,
         buff: float = DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
-    ) -> Mobject:
-        raise RuntimeError("Mobject layout requires the shared Rust authoring host")
+        aligned_edge: object = ORIGIN,
+        submobject_to_align: object | None = None,
+        index_of_submobject_to_align: int | None = None,
+        coor_mask: object = (1.0, 1.0, 1.0),
+    ) -> Mobject | Group:
+        return _semantic_operations()._next_to(self, mobject_or_point, direction, buff, aligned_edge, submobject_to_align, index_of_submobject_to_align, coor_mask)
 
-    def align_to(
-        self,
-        other: Mobject,
-        direction: Vec2 | tuple[float, float] = ORIGIN,
-    ) -> Mobject:
-        raise RuntimeError("Mobject layout requires the shared Rust authoring host")
+    def align_to(self, mobject_or_point: object, direction: object = ORIGIN) -> Mobject:
+        return _semantic_operations()._align_to(self, mobject_or_point, direction)
 
     def to_edge(
         self,
@@ -330,11 +337,56 @@ class Mobject:
         return self._align_on_frame(_as_vec2(corner), float(buff))
 
     def _align_on_frame(self, direction: Vec2, buff: float) -> Mobject:
-        raise RuntimeError("Mobject layout requires the shared Rust authoring host")
+        return _semantic_operations()._align_on_frame(self, direction, buff)
 
     @property
     def animate(self) -> _AnimationBuilder:
         return _AnimationBuilder(self)
+
+
+    def add_updater(
+        self,
+        update_function: Callable[..., Any],
+        index: int | None = None,
+        call_updater: bool = False,
+    ) -> Mobject:
+        return _callback_operations().add_updater(self, update_function, index, call_updater)
+
+    def remove_updater(self, update_function: Callable[..., Any]) -> Mobject:
+        return _callback_operations().remove_updater(self, update_function)
+
+    def clear_updaters(self, recursive: bool = True) -> Mobject:
+        return _callback_operations().clear_updaters(self, recursive)
+
+    def get_updaters(self) -> list[Callable[..., Any]]:
+        return _callback_operations().get_updaters(self)
+
+    def has_updaters(self) -> bool:
+        return _callback_operations().has_updaters(self)
+
+    def _copy_for_animate_target(self) -> Mobject:
+        return _semantic_operations()._target_mobject(self)
+
+    def get_critical_point(self, direction: object) -> Vec2:
+        return _semantic_operations()._get_critical_point(self, direction)
+
+    def become(
+        self,
+        mobject: Mobject,
+        match_height: bool = False,
+        match_width: bool = False,
+        match_depth: bool = False,
+        match_center: bool = False,
+        stretch: bool = False,
+    ) -> Mobject:
+        return _semantic_operations()._become(self, mobject, match_height, match_width, match_depth, match_center, stretch)
+
+    def replace(self, mobject: Mobject, dim_to_match: int = 0, stretch: bool = False) -> Mobject:
+        return _semantic_operations()._replace(self, mobject, dim_to_match, stretch)
+
+    def __deepcopy__(self, memo):
+        from _manim_compat import deepcopy_semantic_wrapper
+        return deepcopy_semantic_wrapper(self, memo)
 
 
 class Group:

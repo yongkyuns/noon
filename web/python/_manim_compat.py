@@ -14,7 +14,6 @@ import noon as _base
 
 _BaseMobject = _base.Mobject
 _BaseScene = _base.Scene
-_NATIVE_MOBJECT_ROTATE = _BaseMobject.rotate
 _ir = _base._ir
 
 OUT = (0.0, 0.0, 1.0)
@@ -124,20 +123,26 @@ class VMobject(_BaseMobject):
         return _copy_mobject(self)
 
     def set_color(self, color: object, family: bool = True) -> VMobject:
-        from _manim_semantic_handles import _set_vmobject_color
-        return _set_vmobject_color(self, color, family=family)
+        from _manim_updaters import _canonical_vmobject_set_color
+        return _canonical_vmobject_set_color(self, color, family=family)
 
     def set_fill(self, color: object = None, opacity: float | None = None, family: bool = True) -> VMobject:
-        from _manim_semantic_handles import _set_fill
-        return _set_fill(self, color=color, opacity=opacity, family=family)
+        from _manim_updaters import _canonical_vmobject_set_fill
+        return _canonical_vmobject_set_fill(self, color=color, opacity=opacity, family=family)
 
-    def set_stroke(self, color: object = None, width: float | None = None, opacity: float | None = None, family: bool = True) -> VMobject:
-        from _manim_semantic_handles import _set_stroke
-        return _set_stroke(self, color=color, width=width, opacity=opacity, family=family)
+    def set_stroke(
+        self,
+        color: object = None,
+        width: float | None = None,
+        opacity: float | None = None,
+        family: bool = True,
+    ) -> VMobject:
+        from _manim_updaters import _canonical_vmobject_set_stroke
+        return _canonical_vmobject_set_stroke(self, color=color, width=width, opacity=opacity, family=family)
 
     def set_opacity(self, opacity: float, family: bool = True) -> VMobject:
-        from _manim_semantic_handles import _set_opacity
-        return _set_opacity(self, opacity, family=family)
+        from _manim_updaters import _canonical_vmobject_set_opacity
+        return _canonical_vmobject_set_opacity(self, opacity, family=family)
 
     def get_fill_opacity(self) -> float:
         from _manim_semantic_handles import _get_fill_opacity
@@ -222,7 +227,7 @@ def _leaf_mobjects(value: object) -> list[_BaseMobject]:
 
 
 def _bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
-    raise RuntimeError("family layout requires the shared Rust authoring host")
+    return _base._semantic_operations()._compat_bounds_for(value)
 
 
 def _critical_for(value: object, direction: _base.Vec2) -> _base.Vec2:
@@ -258,34 +263,6 @@ def _rotation_angle_2d(angle: float, axis: object = OUT) -> float:
     return -value if z < 0.0 else value
 
 
-def _mobject_rotate(
-    self: _BaseMobject,
-    angle: float,
-    axis: object = OUT,
-    *,
-    about_point: object | None = None,
-    about_edge: object | None = None,
-    **kwargs: Any,
-) -> _BaseMobject:
-    if kwargs:
-        unsupported = ", ".join(sorted(kwargs))
-        raise NotImplementedError(f"unsupported Manim rotate option(s): {unsupported}")
-    signed_angle = _rotation_angle_2d(angle, axis)
-    if about_point is not None:
-        pivot = _as_vec2(about_point)
-    else:
-        edge = _base.ORIGIN if about_edge is None else _as_vec2(about_edge)
-        pivot = self.get_critical_point(edge)
-    center = self.get_center()
-    relative = center - pivot
-    cosine = math.cos(signed_angle)
-    sine = math.sin(signed_angle)
-    target_center = pivot + _base.Vec2(
-        relative.x * cosine - relative.y * sine,
-        relative.x * sine + relative.y * cosine,
-    )
-    _NATIVE_MOBJECT_ROTATE(self, signed_angle)
-    return self.move_to(target_center)
 
 
 class _GroupAnimationBuilder:
@@ -375,13 +352,15 @@ class Group(_base.Group, _BaseMobject):
         return 0.0 if bounds is None else bounds[1].y - bounds[0].y
 
     def shift(self, direction: object) -> Group:
-        offset = _as_vec2(direction)
-        for member in self.submobjects:
-            member.shift(offset)
-        return self
+        return _base._semantic_operations()._group_shift(self, direction)
 
-    def move_to(self, point: object) -> Group:
-        return self.shift(_as_vec2(point) - self.get_center())
+    def move_to(
+        self,
+        point_or_mobject: object,
+        aligned_edge: object = _base.ORIGIN,
+        coor_mask: object = (1.0, 1.0, 1.0),
+    ) -> Group:
+        return _base._semantic_operations()._group_move_to(self, point_or_mobject, aligned_edge, coor_mask)
 
     def center(self) -> Group:
         return self.move_to(_base.ORIGIN)
@@ -429,21 +408,18 @@ class Group(_base.Group, _BaseMobject):
 
     def next_to(
         self,
-        other: object,
-        direction: object = None,
+        mobject_or_point: object,
+        direction: object = _base.RIGHT,
         buff: float = _base.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
-    ) -> Group:
-        axis = _as_vec2(_base.RIGHT if direction is None else direction).normalized()
-        self_point = _critical_for(self, -axis)
-        target_point = _critical_for(other, axis) if isinstance(other, (_BaseMobject, Group)) else _as_vec2(other)
-        return self.shift(target_point - self_point + axis * float(buff))
+        aligned_edge: object = _base.ORIGIN,
+        submobject_to_align: object | None = None,
+        index_of_submobject_to_align: int | None = None,
+        coor_mask: object = (1.0, 1.0, 1.0),
+    ) -> _base.Mobject | Group:
+        return _base._semantic_operations()._next_to(self, mobject_or_point, direction, buff, aligned_edge, submobject_to_align, index_of_submobject_to_align, coor_mask)
 
-    def align_to(self, other: object, direction: object = None) -> Group:
-        axis = _as_vec2(_base.ORIGIN if direction is None else direction)
-        delta = _critical_for(other, axis) - _critical_for(self, axis)
-        return self.shift(
-            _base.Vec2(delta.x if axis.x else 0.0, delta.y if axis.y else 0.0)
-        )
+    def align_to(self, mobject_or_point: object, direction: object = _base.ORIGIN) -> Group:
+        return _base._semantic_operations()._group_align_to(self, mobject_or_point, direction)
 
     def to_edge(
         self,
@@ -478,18 +454,12 @@ class Group(_base.Group, _BaseMobject):
 
     def arrange(
         self,
-        direction: object = None,
+        direction: object = _base.RIGHT,
         buff: float = _base.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
         center: bool = True,
+        **kwargs: Any,
     ) -> Group:
-        if not self.submobjects:
-            return self
-        axis = _as_vec2(_base.RIGHT if direction is None else direction)
-        for previous, current in zip(self.submobjects, self.submobjects[1:]):
-            current.next_to(previous, axis, buff)
-        if center:
-            self.shift(-self.get_center())
-        return self
+        return _base._semantic_operations()._group_arrange(self, direction, buff, center, **kwargs)
 
     def arrange_in_grid(
         self,
@@ -503,6 +473,12 @@ class Group(_base.Group, _BaseMobject):
     @property
     def animate(self) -> _GroupAnimationBuilder:
         return _GroupAnimationBuilder(self)
+
+    def _copy_for_animate_target(self) -> Group:
+        return _base._semantic_operations()._group_copy(self)
+
+    def __deepcopy__(self, memo):
+        return deepcopy_semantic_wrapper(self, memo)
 
 
 class VGroup(Group):
@@ -568,10 +544,6 @@ class Scene(_BaseScene):
 
 
 
-def _mobject_get_critical_point(
-    self: _BaseMobject, direction: object
-) -> _base.Vec2:
-    return _critical_for(self, _as_vec2(direction))
 
 
 def _mobject_get_edge_center(self: _BaseMobject, direction: object) -> _base.Vec2:
@@ -739,15 +711,20 @@ def _mobject_rotate_about_origin(
     )
 
 
-def _set_width_property(self: _BaseMobject, width: float) -> None:
-    self.scale_to_fit_width(float(width))
 
 
-def _set_height_property(self: _BaseMobject, height: float) -> None:
-    self.scale_to_fit_height(float(height))
 
 
-def _state_target(self: _BaseMobject, mobject: _BaseMobject, *, match_height: bool, match_width: bool, match_depth: bool, match_center: bool, stretch: bool) -> _BaseMobject:
+def _state_target(
+    self: _BaseMobject,
+    mobject: _BaseMobject,
+    *,
+    match_height: bool,
+    match_width: bool,
+    match_depth: bool,
+    match_center: bool,
+    stretch: bool,
+) -> _BaseMobject:
     if not isinstance(mobject, _BaseMobject):
         raise TypeError("state target must be a Mobject")
     if match_depth:
@@ -886,7 +863,6 @@ def install() -> None:
     # so replacing that helper makes inherited transforms/layout accept z=0 vectors.
     _base._as_vec2 = _as_vec2
     _BaseMobject.animate = property(lambda self: _CompatAnimationBuilder(self))
-    _BaseMobject.get_critical_point = _mobject_get_critical_point
     _BaseMobject.get_edge_center = _mobject_get_edge_center
     _BaseMobject.get_corner = _mobject_get_corner
     _BaseMobject.get_left = _mobject_get_left
@@ -897,8 +873,6 @@ def install() -> None:
     _BaseMobject.get_x = _mobject_get_x
     _BaseMobject.get_y = _mobject_get_y
     _BaseMobject.set_coord = _mobject_set_coord
-    _BaseMobject.set_x = _mobject_set_x
-    _BaseMobject.set_y = _mobject_set_y
     _BaseMobject.rescale_to_fit = _mobject_rescale_to_fit
     _BaseMobject.scale_to_fit_width = _mobject_scale_to_fit_width
     _BaseMobject.scale_to_fit_height = _mobject_scale_to_fit_height
@@ -910,15 +884,10 @@ def install() -> None:
     _BaseMobject.match_coord = _mobject_match_coord
     _BaseMobject.match_x = _mobject_match_x
     _BaseMobject.match_y = _mobject_match_y
-    _BaseMobject.rotate = _mobject_rotate
     _BaseMobject.rotate_about_origin = _mobject_rotate_about_origin
-    _BaseMobject.width = property(_BaseMobject.width.fget, _set_width_property)
-    _BaseMobject.height = property(_BaseMobject.height.fget, _set_height_property)
     _BaseMobject.generate_target = _mobject_generate_target
     _BaseMobject.save_state = _mobject_save_state
     _BaseMobject.restore = _mobject_restore
-    _BaseMobject.become = _mobject_become
-    _BaseMobject.replace = _mobject_replace
 
     public = {
         "VMobject": VMobject,
@@ -995,3 +964,12 @@ def copy_wrapper_attributes(source, target, memo=None, excluded=()):
     for name, value in source.__dict__.items():
         if name not in excluded:
             setattr(target, name, copy.deepcopy(value, memo))
+
+
+def _shift_group_members(self: Group, direction: object) -> Group:
+    # Existing per-member callback fallback; shared callback family operations
+    # in #955 own its retirement. Ordinary typed family shifts stay in Rust.
+    offset = _as_vec2(direction)
+    for member in self.submobjects:
+        member.shift(offset)
+    return self
