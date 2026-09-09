@@ -1,94 +1,91 @@
-name: R3 callback master preservation (development only)
+name: R3 final paired browser qualification (development only)
 on:
   push:
     branches: [codex/1292-r3-callback-errors-prep]
 permissions:
-  contents: write
+  contents: read
+  actions: read
 jobs:
-  reconcile-source-only:
+  paired-browser-only:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
-    env:
-      OLD_BASE: 5b56124312657c0959e1ca3936930cad0fe7e240
-      BASE: 35658f4a9468ca44cc5dcfb97e7aae8b62e38e08
-      CANDIDATE: 047f4b669583376f3c7a698763a57eb45c43dad3
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0
-      - name: Preserve both already-qualified changes without running Cargo or a full gate
+          ref: 332254948a0f85a07fb2c15d7471f9dc5969b5ca
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: 10120446295
+          run-id: 34392333111
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/product
+          merge-multiple: true
+      - name: Verify exact source, configuration and every immutable package file
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/r3-preservation"
-          export EVIDENCE="$RUNNER_TEMP/r3-preservation"
+          export EVIDENCE="$RUNNER_TEMP/r3-paired-evidence"
+          mkdir -p "$EVIDENCE"
           echo "EVIDENCE=$EVIDENCE" >> "$GITHUB_ENV"
-          git config user.name 'Noon qualification bot'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout --detach "$CANDIDATE"
           python3 - <<'PY'
           from pathlib import Path
-          import ast, json, os, subprocess
-          old, base, candidate = (os.environ[key] for key in ('OLD_BASE', 'BASE', 'CANDIDATE'))
-          def git(*args):
-              return subprocess.check_output(['git', *args], text=True)
-          path = 'crates/noon-web/src/semantic_execution_player.rs'
-          before = git('show', f'{old}:{path}')
-          incoming = git('show', f'{base}:{path}')
-          ours = git('show', f'{candidate}:{path}')
-          prefix = '    #[cfg(target_arch = "wasm32")]\n    pub(crate) fn live_align_family_on_frame('
-          start = incoming.index(prefix)
-          end = incoming.index('\n    }\n\n', start) + len('\n    }\n\n')
-          addition = incoming[start:end]
-          anchor = '    #[cfg(any(target_arch = "wasm32", test))]\n    pub(crate) fn live_align_family_to('
-          assert before.count(anchor) == ours.count(anchor) == 1
-          assert incoming == before.replace(anchor, addition + anchor, 1)
-          result = subprocess.run(['git', 'merge', '--no-commit', '--no-ff', base])
-          assert result.returncode in (0, 1)
-          conflicts = set(git('diff', '--name-only', '--diff-filter=U').splitlines())
-          assert conflicts <= {path}, conflicts
-          # Copy exactly the independently landed method; retain every callback
-          # and advancement statement rather than choosing a whole-file side.
-          Path(path).write_text(ours.replace(anchor, addition + anchor, 1))
-          subprocess.run(['git', 'add', '--', path], check=True)
-          assert not git('diff', '--name-only', '--diff-filter=U')
-          assert not git('diff', '--name-only')
-          expected = {
-              path, 'crates/noon-web/src/authoring_error.rs',
-              'crates/noon-web/src/semantic_execution_player/callback_error_tests.rs',
-              'scripts/typed-authoring-errors-smoke.mjs', 'web/python/_manim_updaters.py',
-              'web/python/test_updater_snapshot.py', 'web/python/test_noon_callback_errors_wasm.py',
-              'web/python/examples/ordinary_callback_sparse_reads.py',
-          }
-          assert set(git('diff', '--cached', '--name-only', base).splitlines()) == expected
-          for name in expected - {path}:
-              assert Path(name).read_text() == git('show', f'{candidate}:{name}'), name
-          tests = {}
-          for name, count in [('web/python/test_noon_errors_wasm.py', 11), ('web/python/test_noon_callback_errors_wasm.py', 7)]:
-              names = [node.name for node in ast.walk(ast.parse(Path(name).read_text())) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test_')]
-              assert len(names) == len(set(names)) == count
-              tests[name] = sorted(names)
-          report = {'old_base': old, 'base': base, 'candidate_parent': candidate,
-                    'source_only': True, 'rust_rebuilt': False, 'full_gate_repeated': False,
-                    'incoming_player_method_lines': len(addition.splitlines()),
-                    'original_conflicts': sorted(conflicts), 'scoped_paths': sorted(expected),
-                    'seven_owned_files_byte_identical': True, 'python_test_methods': tests}
-          Path(os.environ['RUNNER_TEMP'], 'r3-preservation', 'preservation.json').write_text(json.dumps(report, indent=2))
+          import hashlib, json, os, shutil, subprocess
+          saved = Path(os.environ['RUNNER_TEMP']) / 'product'
+          manifest = json.loads((saved / 'ci-artifact.json').read_text())
+          head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip()
+          assert head == manifest['source'] == '332254948a0f85a07fb2c15d7471f9dc5969b5ca'
+          assert tree == '7d28544070a08f8ef92b0890280e968b75bb0f51'
+          assert manifest['schema'] == 1
+          build = manifest['build']
+          assert build['target'] == 'wasm32-unknown-unknown'
+          assert build['profile'] == 'release' and build['features'] == 'default,renderer-smoke'
+          assert build['wasmPack'] == '0.15.0' and build['toolchain'] == '1.98.0'
+          for name, expected in build['inputs'].items():
+              assert hashlib.sha256(Path(name).read_bytes()).hexdigest() == expected, name
+          for name, expected in manifest['files'].items():
+              relative = Path(name)
+              assert relative.parts[0] == 'web' and '..' not in relative.parts, name
+              actual = saved.joinpath(*relative.parts[1:])
+              assert hashlib.sha256(actual.read_bytes()).hexdigest() == expected, name
+          assert manifest['dependencyLock'] == '9fc77831ae25df351229c9902c073657062501a8e5faf8ea313dd9c8284062dd'
+          assert manifest['files']['web/ci-Cargo.lock'] == manifest['dependencyLock']
+          assert manifest['files']['web/pkg/noon_web_bg.wasm'] == 'abf418f1840cb177502a24412fd66cd424ccca4ec317c8ad5ea4dbcfcf05a903'
+          for name in manifest['files']:
+              destination = Path(name)
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(saved.joinpath(*destination.parts[1:]), destination)
+          shutil.copy2(saved / 'ci-Cargo.lock', 'Cargo.lock')
+          report = {'source': head, 'tree': tree, 'pr_head': 'bba54552cd0c6649d7f7d160eafabb6ec11a8b62',
+                    'artifact': 10120446295, 'producer_run': 34392333111,
+                    'rust_rebuilt': False, 'full_gate_repeated': False,
+                    'manifest': manifest}
+          Path(os.environ['EVIDENCE'], 'input-verification.json').write_text(json.dumps(report, indent=2))
+          print(json.dumps(report, indent=2))
           PY
-          git diff --cached --check
-          node --check scripts/typed-authoring-errors-smoke.mjs
-          git commit -m 'Merge landed family frame and observation work without altering callback mapping'
-          test "$(git rev-parse HEAD^)" = "$CANDIDATE"
-          test "$(git rev-parse HEAD^2)" = "$BASE"
-          git rev-parse HEAD HEAD^{tree} HEAD^ HEAD^2 > "$EVIDENCE/revisions.txt"
-          git diff "$BASE" HEAD > "$EVIDENCE/product.patch"
-          git archive --format=tar.gz HEAD > "$EVIDENCE/source.tar.gz"
+      - name: Install the existing pinned browser without an apt-index retry
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Existing paired authoring and actual production-worker family recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/shared-authoring-smoke.mjs 2>&1 | tee "$EVIDENCE/shared-authoring.log"
+          node scripts/manim-compat-smoke.mjs 2>&1 | tee "$EVIDENCE/manim.log"
+      - name: Retain exact identity and results
+        if: always()
+        shell: bash
+        run: |
+          git diff --exit-code HEAD
           git status --short > "$EVIDENCE/status.txt"
-          git push origin HEAD:refs/heads/codex/1350-final-candidate
+          git rev-parse HEAD HEAD^{tree} > "$EVIDENCE/revisions.txt"
+          node --version > "$EVIDENCE/node.txt"
+          sha256sum web/pkg/noon_web_bg.wasm > "$EVIDENCE/wasm-sha256.txt"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r3-callback-final-master-source
+          name: r3-final-paired-browser
           path: ${{ env.EVIDENCE }}
           retention-days: 3
           if-no-files-found: error
