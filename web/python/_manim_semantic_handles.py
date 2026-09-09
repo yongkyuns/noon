@@ -269,9 +269,7 @@ def _manim_color_observation(value: object):
 def _require_typed_manim_line(value: object) -> bool:
     """Validate exact Line content through the current Rust observation owner."""
     semantic_handle = getattr(value, "_semantic_handle", None)
-    if semantic_handle is None:
-        return False
-    if not bool(getattr(value, "_semantic_handle_fresh", False)):
+    if semantic_handle is None or not bool(getattr(value, "_semantic_handle_fresh", False)):
         raise NotImplementedError("exact Line admission requires a valid semantic handle")
     try:
         _manim_line_endpoints_observation(value)
@@ -490,60 +488,6 @@ def _vector_path_options(path: dict[str, Any]):
     return _geometry_options.path(candidate)
 
 
-def _geometry_options_from_raw(raw: _ir.Mobject):
-    geometry = raw.geometry
-    if len(geometry) != 1:
-        raise ValueError("shared geometry must contain exactly one geometry variant")
-    if "circle" in geometry:
-        options = _geometry_options.circle(float(geometry["circle"]["radius"]))
-    elif "rectangle" in geometry:
-        size = geometry["rectangle"]["size"]
-        options = _geometry_options.rectangle(float(size["x"]), float(size["y"]))
-    elif "line" in geometry:
-        line = geometry["line"]
-        start, end = line["start"], line["end"]
-        options = _geometry_options.line(
-            float(start["x"]), float(start["y"]),
-            float(end["x"]), float(end["y"]),
-        )
-    elif "vector_path" in geometry:
-        options = _vector_path_options(geometry["vector_path"])
-    else:
-        raise ValueError("shared geometry supports circle, rectangle, line, or vector path")
-
-    transform = raw.transform
-    translation, scale = transform["translation"], transform["scale"]
-    options.setTranslation(float(translation["x"]), float(translation["y"]))
-    options.setRotation(float(transform["rotation"]))
-    options.setScale(float(scale["x"]), float(scale["y"]))
-
-    style = raw.style
-    # Width editing intentionally materializes a default stroke in shared Rust.
-    # Apply it before the authored paints so an explicit absent stroke stays absent.
-    options.setStrokeWidth(float(style["stroke_width"]))
-    options.setStrokeWidthMode(style["stroke_width_mode"])
-    options.setStrokeJoin(style["stroke_join"])
-    options.setStrokeCap(style["stroke_cap"])
-    fill = style["fill"]
-    if fill is None:
-        options.disableFill()
-    else:
-        options.setFill(
-            float(fill["red"]), float(fill["green"]),
-            float(fill["blue"]), float(fill["alpha"]),
-        )
-    stroke = style["stroke"]
-    if stroke is None:
-        options.disableStroke()
-    else:
-        options.setStroke(
-            float(stroke["red"]), float(stroke["green"]),
-            float(stroke["blue"]), float(stroke["alpha"]),
-        )
-    options.setObjectOpacity(float(style["opacity"]))
-    return options
-
-
 def _consume_geometry_options(options: object, kind: str = "geometry"):
     context = _live_constructor_context(kind)
     if context is None:
@@ -679,15 +623,6 @@ def _line_init(
     _attach_geometry_options(self, options, "Line")
     self.start = start_value
     self.end = end_value
-
-
-def _init(self: _base.Mobject, raw: _ir.Mobject) -> None:
-    if _create_geometry_handle is None:
-        raise RuntimeError("Mobject construction requires the shared Rust authoring host")
-    handle, context = _consume_geometry_options(_geometry_options_from_raw(raw))
-    _attach_shared_handle(self, handle)
-    if context is not None:
-        self._canonical_live_target_context = context
 
 
 def _current_raw(self: _base.Mobject) -> _ir.Mobject:

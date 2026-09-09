@@ -18,13 +18,22 @@ class SceneBoundaryTests(unittest.TestCase):
                 operation()
 
     def test_detached_geometry_requires_shared_rust(self):
-        from noon import Mobject, Path, Line, Rectangle
-        for construct in (Circle, Line, Rectangle, lambda: Path(VectorPath()),
-                          lambda: Mobject(object())):
+        from noon import Path, Line, Rectangle
+        for construct in (Circle, Line, Rectangle, lambda: Path(VectorPath())):
             with self.subTest(construct=construct):
                 with self.assertRaisesRegex(RuntimeError, "shared Rust"):
                     construct()
         self.assertFalse(hasattr(__import__("noon"), "_bounds"))
+
+    def test_raw_snapshots_are_inspection_only(self):
+        from noon import Mobject, VMobject
+        for constructor in (Mobject, VMobject):
+            with self.assertRaises(TypeError):
+                constructor(object())
+            with self.assertRaisesRegex(TypeError, "base type"):
+                constructor()
+        for name in ("_make_mobject", "Circle", "Rectangle", "Line", "Path"):
+            self.assertFalse(hasattr(_noon_ir, name), name)
 
     def test_non_finite_color_is_rejected(self):
         with self.assertRaises(ValueError):

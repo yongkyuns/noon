@@ -94,26 +94,21 @@ class ManimSemanticHandleColorTests(unittest.TestCase):
             _geometry_test.install_js_bridge(fake_js, create_handle)
             sys.modules["js"] = fake_js
 
-            # Match the relevant python-worker bootstrap order exactly: the rate-function
-            # adapter installs first, then semantic handles take ownership of detached
-            # authoring objects.
+            # Exercise the public facade over the typed geometry bridge.
             import _manim_compat
 
             import _manim_rate_functions
             import _manim_semantic_handles
 
 
-            import _noon_ir as _ir
             import noon as _base
 
-            raw = _ir.Rectangle(
-                1.0,
-                1.0,
-                fill=_ir.Color(0.0, 0.0, 1.0, 0.35),
-                stroke=_ir.Color(0.0, 0.0, 1.0, 0.0),
+            mobject = _base.Rectangle(
+                width=1.0, height=1.0,
+                fill=_base.Color(0.0, 0.0, 1.0, 0.35),
+                stroke=_base.Color(0.0, 0.0, 1.0, 0.0),
                 stroke_width=4.0,
             )
-            mobject = _base.Mobject(raw)
             handle = mobject._semantic_handle
             mobject.set_color(_base.GREEN)
 
@@ -128,11 +123,8 @@ class ManimSemanticHandleColorTests(unittest.TestCase):
             assert abs(style["stroke"]["blue"] - _base.GREEN.blue) < 1e-12
             assert abs(style["stroke"]["alpha"] - 0.0) < 1e-12
 
-            # Preserve the base Mobject fallback: if neither channel exists, set_color
-            # creates a fill using the requested color alpha.
-            empty = _base.Mobject(
-                _ir.Rectangle(1.0, 1.0, fill=None, stroke=None, stroke_width=0.0)
-            )
+            # Shared recoloring enables fill when neither paint channel exists.
+            empty = _base.Rectangle(width=1.0, height=1.0, fill=None, stroke=None, stroke_width=0.0)
             empty.set_color(_base.GREEN)
             empty_style = empty.style
             assert empty_style["fill"] is not None

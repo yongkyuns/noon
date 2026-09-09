@@ -26,13 +26,7 @@ class ShowPassingFlash:
             )
         if not isinstance(mobject, _compat.VMobject):
             raise TypeError("ShowPassingFlash only works for VMobjects")
-        if not _semantic_handles._require_typed_manim_line(mobject):
-            raw = mobject._current_raw()
-            if "line" not in raw.geometry:
-                raise NotImplementedError(
-                    "ShowPassingFlash currently qualifies the exact Line subset; "
-                    "general VMobject path windows remain partial"
-                )
+        _semantic_handles._require_typed_manim_line(mobject)
         width = float(time_width)
         if not math.isfinite(width) or width <= 0.0:
             raise NotImplementedError(
