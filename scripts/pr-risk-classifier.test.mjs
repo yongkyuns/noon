@@ -43,7 +43,7 @@ const rendererCriticalChanges = [
   "web/execution-render-worker.js",
   "web/render-gpu-diagnostics.js",
   "crates/noon-render-wgpu/src/lib.rs",
-  "crates/noon-text-render-wgpu/src/glyph.rs",
+  "crates/noon-render-wgpu/src/text/glyph.wgsl",
   "crates/noon-web/src/lib.rs",
 ];
 

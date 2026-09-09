@@ -2,9 +2,9 @@ use noon_core::{
     FontResourceArena, GeometryRef, GeometryResourceArena, ObjectContentRef, ObjectId, Style,
     TextResourceArena, Transform2D, Vec2, VectorPath,
 };
+use noon_render_wgpu::text::TextDeviceMetrics;
 use noon_render_wgpu::{RenderPrimitive, RetainedFramePreparer};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
-use noon_text_render_wgpu::TextDeviceMetrics;
 
 fn retained_geometry_frame(
     semantic_geometry: GeometryRef,
