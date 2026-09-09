@@ -31,7 +31,7 @@ class LiveAffineCallbacks(Scene):
 
         def style_after_lift(mobject, _dt):
             assert mobject.get_center().y == 1.0
-            mobject.set_opacity(0.5)
+            mobject.set_object_opacity(0.5)
 
         def accumulate_drift(mobject, dt):
             mobject.shift((0.0, dt, 0.0))

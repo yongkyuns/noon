@@ -14,7 +14,7 @@ class HostUpdaterPerfScene(Scene):
             # style work. The unrelated anchor must never enter the sparse phase.
             center = mobject.get_center()
             mobject.move_to((center.x, dt, 0.0))
-            mobject.set_opacity(0.5 + dt)
+            mobject.set_object_opacity(0.5 + dt)
 
         follower.add_updater(removed)
         follower.remove_updater(removed)
