@@ -88,11 +88,9 @@ def _reserve_typed_binding(
     # the semantic handle and this wrapper's derived ObjectId. Re-adding that
     # exact handle must use liveAdd, not allocate a second export identity.
     prior = getattr(mobject, "_object", None)
-    if prior is not None and prior.id in scene._object_positions:
+    if prior is not None and prior.id in scene._binding_handles:
         prior_key = scene._object_keys.get(prior.id)
-        geometry_handles = getattr(scene, "_semantic_geometry_handles", {})
-        text_handles = getattr(scene, "_semantic_text_handles", {})
-        prior_handle = geometry_handles.get(prior.id, text_handles.get(prior.id))
+        prior_handle = scene._binding_handles[prior.id]
         if prior_key is not None and prior_handle is handle:
             if key is not None and _ir._authoring_key("key", key, prior_key) != prior_key:
                 raise ValueError("a re-added canonical Mobject keeps its existing key")
@@ -381,18 +379,7 @@ def _record_mobject_binding(
     obj: _ir.Object,
     handle: object,
 ) -> None:
-    scene._object_positions[obj.id] = len(scene._objects)
-    # The compatibility table retains identity only on the shared path.
-    scene._objects.append({"id": obj.id})
-    if isinstance(mobject, _typst._RetainedTextMobject):
-        handles = getattr(scene, "_semantic_text_handles", None)
-        if handles is None:
-            handles = scene._semantic_text_handles = {}
-    else:
-        handles = getattr(scene, "_semantic_geometry_handles", None)
-        if handles is None:
-            handles = scene._semantic_geometry_handles = {}
-    handles[obj.id] = handle
+    scene._binding_handles[obj.id] = handle
     mobject._bind(scene, obj)
 
 
@@ -2328,10 +2315,6 @@ def _canonical_bind_position(
 def execution_context(scene, callbacks=None):
     """Select typed geometry/native-Text execution; unsupported contracts stay explicit."""
     del callbacks  # Callback declarations now lower through the canonical context.
-    handles = getattr(scene, "_semantic_geometry_handles", {})
-    text_handles = getattr(scene, "_semantic_text_handles", {})
-    if len(handles) + len(text_handles) != len(scene._object_positions):
-        return None
     context = _context(scene)
     # Python keeps callable identity only. This bootstrap writes the authored
     # occurrence intervals into the one shared Rust semantic store before the

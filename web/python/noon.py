@@ -588,12 +588,11 @@ class Scene:
         # Derived wrapper/export identities only. These rows never carry scene
         # content, painter order, animation tracks, or runtime state.
         self._owner = object()
-        self._objects: list[dict[str, Any]] = []
+        # Derived host binding IDs map to the authoritative Rust handles.
+        self._binding_handles: dict[int, object] = {}
         self._object_keys: dict[int, str] = {}
         self._object_key_ids: dict[str, int] = {}
-        self._object_positions: dict[int, int] = {}
         self._next_object_id = 0
-        self._compat_top_level: list[object] = []
 
     def setup(self) -> None:
         pass
@@ -605,14 +604,7 @@ class Scene:
         pass
 
     def _register_top_level(self, value: object) -> None:
-        if (
-            getattr(value, "_semantic_handle", None) is not None
-            or getattr(value, "_semantic_family_handle", None) is not None
-        ):
-            _scene_operations()._register_membership_wrappers(self, value)
-            return
-        if not any(existing is value for existing in self._compat_top_level):
-            self._compat_top_level.append(value)
+        _scene_operations()._register_membership_wrappers(self, value)
 
     @property
     def mobjects(self) -> list[object]:
