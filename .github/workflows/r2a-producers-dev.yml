@@ -1,0 +1,99 @@
+name: R2a producer development
+on:
+  push:
+    branches: [codex/1292-r2a-producers-prep]
+permissions:
+  contents: read
+concurrency:
+  group: r2a-producers-development
+  cancel-in-progress: true
+env:
+  CARGO_BUILD_JOBS: '2'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: tooling
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: fe833fc640cb267bbf213cab7ff266269ae6c5a5
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Apply hash-guarded source edits
+        working-directory: source
+        run: |
+          python3 - <<'PY'
+          import base64,bz2,hashlib,json,pathlib
+          encoded=pathlib.Path('../tooling/.github/r2a-edits.bz2.b64').read_text().strip()
+          encoded=encoded.replace('ns9TQ4743','ns9T4743')
+          raw=bz2.decompress(base64.b64decode(encoded))
+          assert hashlib.sha256(raw).hexdigest()=='1ac62851c307143348b400875c09ef5bd1c34c79a484050297faf03b9a8d6688'
+          updates=[]
+          for name,(before,after,edits) in json.loads(raw).items():
+              path=pathlib.Path(name)
+              assert str(path).startswith('crates/') and '..' not in path.parts
+              original=path.read_bytes()
+              assert hashlib.sha256(original).hexdigest()==before,name
+              lines=original.decode().splitlines(keepends=True)
+              for start,end,replacement in reversed(edits):
+                  lines[start:end]=[replacement]
+              result=''.join(lines).encode()
+              assert hashlib.sha256(result).hexdigest()==after,name
+              updates.append((path,result))
+          for path,result in updates:
+              path.write_bytes(result)
+          print('Applied',len(updates),'verified source changes')
+          PY
+          cargo fmt --all
+          cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
+          git add .
+          git diff --cached --check
+          git diff --cached --stat
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: r2-sources-${{ runner.os }}-${{ hashFiles('source/Cargo.toml', 'source/crates/**/Cargo.toml') }}
+          restore-keys: |
+            Linux-cargo-sources-
+            provider-sources-Linux-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Compile minimal producer and all native callers
+        working-directory: source
+        run: |
+          cargo check -p noon --no-default-features --all-targets > ../compile.log 2>&1 || { tail -250 ../compile.log; exit 1; }
+          cargo check --workspace --all-targets --all-features >> ../compile.log 2>&1 || { tail -250 ../compile.log; exit 1; }
+          tail -30 ../compile.log
+      - name: Preserve staged candidate for inspection
+        if: always()
+        working-directory: source
+        run: |
+          git add .
+          git diff --cached --binary > ../candidate.patch
+          git archive "$(git write-tree)" | gzip > ../candidate.tar.gz
+      - name: Retain evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: r2a-producer-compile
+          path: |
+            compile.log
+            candidate.patch
+            candidate.tar.gz
+            tooling/.github/r2a-edits.bz2.b64
+          retention-days: 3
+          if-no-files-found: error
