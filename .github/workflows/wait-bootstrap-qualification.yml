@@ -1,0 +1,121 @@
+name: First-wait atomicity qualification
+on:
+  push:
+    branches: [codex/1272-r2-wait-bootstrap-prep]
+permissions:
+  contents: write
+concurrency:
+  group: noon-first-wait-qualification
+  cancel-in-progress: true
+env:
+  CARGO_BUILD_JOBS: '2'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: tooling
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: b4ecbc2e69a4668e5422cf5a7b22b0cbdf070c12
+          path: source
+          fetch-depth: 0
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: wait-sources-${{ runner.os }}-${{ hashFiles('source/Cargo.toml', 'source/crates/**/Cargo.toml') }}
+          restore-keys: |
+            Linux-cargo-sources-
+            provider-sources-Linux-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Prove the first-wait regression against unchanged production
+        working-directory: source
+        run: |
+          python3 ../tooling/.github/wait-bootstrap-qualification.py tests-only
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon-web/src/canonical_authoring_scene/wait_bootstrap_tests.rs')
+          s = p.read_text().replace('assert!(scene.player_ownership.is_transferred());', 'assert_eq!(scene.live_execution_ownership(), "transferred");').replace('assert!(scene.player_ownership.is_returned());', 'assert_eq!(scene.live_execution_ownership(), "returned");')
+          p.write_text(s)
+          PY
+          set +e
+          cargo test -p noon-web --lib wait_bootstrap_tests -- --nocapture > ../red.log 2>&1
+          status=$?
+          set -e
+          tail -60 ../red.log
+          test "$status" = 101
+          grep -F 'invalid_first_wait_is_atomic_and_recoverable ... FAILED' ../red.log
+          grep -F '2 passed; 1 failed' ../red.log
+          git restore crates/noon-web/src/canonical_authoring_scene.rs
+          rm crates/noon-web/src/canonical_authoring_scene/wait_bootstrap_tests.rs
+      - name: Apply the publication-order correction and preserve the source diff
+        working-directory: source
+        run: |
+          python3 ../tooling/.github/wait-bootstrap-qualification.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon-web/src/canonical_authoring_scene/wait_bootstrap_tests.rs')
+          p.write_text(p.read_text().replace('assert!(scene.player_ownership.is_transferred());', 'assert_eq!(scene.live_execution_ownership(), "transferred");').replace('assert!(scene.player_ownership.is_returned());', 'assert_eq!(scene.live_execution_ownership(), "returned");'))
+          PY
+          cargo fmt --all
+          git add crates/noon-web/src/canonical_authoring_scene.rs crates/noon-web/src/canonical_authoring_scene/wait_bootstrap_tests.rs web/python/test_noon_errors_wasm.py scripts/typed-authoring-errors-smoke.mjs
+          git diff --cached --check
+          git diff --cached --binary > ../candidate.patch
+          cargo test -p noon-web --lib wait_bootstrap_tests > ../green.log 2>&1 || { tail -100 ../green.log; exit 1; }
+          cat ../green.log
+      - name: Install the pinned WASM packager
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+      - name: Run the full gate with the diagnostic WASM profile
+        working-directory: source
+        run: |
+          NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/check.sh full b4ecbc2e69a4668e5422cf5a7b22b0cbdf070c12 > ../full.log 2>&1 || { tail -100 ../full.log; exit 1; }
+          tail -20 ../full.log
+      - name: Exercise actual WASM and pinned Pyodide through the existing runner
+        working-directory: source
+        run: |
+          npm install --no-save --no-package-lock playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+          node scripts/typed-authoring-errors-smoke.mjs > ../browser.log 2>&1 || { tail -100 ../browser.log; exit 1; }
+          node scripts/manim-compat-smoke.mjs > ../manim.log 2>&1 || { tail -100 ../manim.log; exit 1; }
+          tail -40 ../browser.log
+      - name: Publish only the qualified production patch
+        working-directory: source
+        run: |
+          git diff --exit-code
+          test "$(git diff --cached --name-only | wc -l)" = 4
+          git config user.name 'Noon development tooling'
+          git config user.email 'development@noon.invalid'
+          git -c commit.gpgSign=false -c core.hooksPath=/dev/null commit -m 'fix: publish first live wait only after successful admission (#1272 R2)'
+          git rev-parse HEAD > ../candidate-sha.txt
+          git rev-parse HEAD^{tree} > ../candidate-tree.txt
+          git archive HEAD | gzip > ../candidate.tar.gz
+          git push origin HEAD:refs/heads/codex/1272-r2-wait-bootstrap
+          cat ../candidate-sha.txt
+      - name: Preserve exact red and green evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: first-wait-qualification
+          path: |
+            *.log
+            candidate.*
+            candidate-*.txt
+            source/Cargo.lock
+            source/browser-smoke-artifacts/typed-authoring-errors/
+          retention-days: 3
+          if-no-files-found: error
