@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import playwright from 'playwright';
 import { playgroundLaunchOptions } from './playground-browser-support.mjs';
+import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -18,7 +19,8 @@ const artifacts = path.resolve(root, process.env.NOON_PLAYGROUND_MATRIX_ARTIFACT
 const stringify = value => JSON.stringify(value, (_, v) => typeof v === 'bigint' ? String(v) : v, 2);
 const affected = ['manim-lagged-start-map', 'parity-moving-dots', 'parity-rotation-updater', 'compatible-indicate-square'];
 await mkdir(artifacts, { recursive: true });
-let server, browser;
+let server, browser, runtimeCache;
+const startedAt = performance.now();
 const results = [];
 async function json(relative) {
   const response = await fetch(new URL(relative, base), { signal: AbortSignal.timeout(20000), headers: { 'Cache-Control': 'no-cache' } });
@@ -36,6 +38,9 @@ try {
     }
     assert.ok(ready, 'gallery HTTP server did not start');
   }
+  const workerResponse = await fetch(new URL('python-worker.js', base), { signal: AbortSignal.timeout(20000) });
+  assert.ok(workerResponse.ok, 'gallery worker source is unavailable');
+  runtimeCache = createPyodideResourceCache(await workerResponse.text());
   const revision = external ? await json(`build-info.json?t=${Date.now()}`) : null;
   if (process.env.NOON_GALLERY_REVISION) assert.equal(revision?.commit, process.env.NOON_GALLERY_REVISION);
   const entries = [];
@@ -56,7 +61,9 @@ try {
   if (browserName !== 'firefox') for (const id of affected) queue.push({ entry: entries.find(e => e.id === id), noJspi: true });
   let next = 0;
   async function check({ entry, noJspi }) {
+    const caseStartedAt = performance.now();
     const context = await browser.newContext({ ...options });
+    await runtimeCache.install(context);
     // Observe the existing result envelope without guessing its payload shape.
     // The production parser below validates the semantic descriptor and duration;
     // semantic_execution is an object, not the boolean true.
@@ -141,6 +148,7 @@ try {
     } finally {
       await page.screenshot({ path: path.join(artifacts, `${name}.png`), timeout: 5000 }).catch(() => {});
       await context.close();
+      result.elapsedMs = performance.now() - caseStartedAt;
       results.push(result);
       await writeFile(path.join(artifacts, `${name}.json`), stringify(result));
       console.log(`${result.outcome}: ${name}${result.failure ? `: ${result.failure}` : ''}`);
@@ -153,5 +161,8 @@ try {
   console.log(`All ${entries.length} selectable examples and ${queue.length - entries.length} no-JSPI controls passed.`);
 } finally {
   await writeFile(path.join(artifacts, 'results.json'), stringify(results));
+  const runtimeResources = { elapsedMs: performance.now() - startedAt, ...runtimeCache?.stats() };
+  await writeFile(path.join(artifacts, 'runtime-resources.json'), stringify(runtimeResources));
+  console.log('Gallery runtime resources:', stringify(runtimeResources));
   await browser?.close(); server?.kill('SIGTERM');
 }
