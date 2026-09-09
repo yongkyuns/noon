@@ -1,0 +1,96 @@
+name: Phase A accepted error closeout
+on:
+  push:
+    branches: [codex/61-accepted-errors-prep]
+permissions:
+  contents: write
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Assemble and retain the exact scoped source
+        run: |
+          mkdir -p /tmp/phase-a-errors
+          python3 - <<'PY'
+          import base64, hashlib, lzma, pathlib
+          chunks=sorted(pathlib.Path('.github/phase-a-closeout').glob('*.b64'))
+          assert len(chunks)==4
+          patch=lzma.decompress(base64.b64decode(''.join(p.read_text().strip() for p in chunks),validate=True))
+          assert hashlib.sha256(patch).hexdigest()=='7da548e92e31bb5a73486ee16910b3e6190cfb75aeb2c26b084e4793a5147673'
+          pathlib.Path('/tmp/phase-a-errors/input.patch').write_bytes(patch)
+          PY
+          base=cf7d000b773d47fd62bd5b56f636e689d5585f28
+          git checkout --detach "$base"
+          git apply --index /tmp/phase-a-errors/input.patch
+          cargo fmt --all
+          git add -u
+          git diff --cached --check
+          git config user.name 'Yongkyun Shin'
+          git config user.email '4311628+yongkyuns@users.noreply.github.com'
+          candidate=$(git commit-tree "$(git write-tree)" -p "$base" -m 'fix: preserve settled public authoring errors at the language boundary')
+          git reset --hard "$candidate"
+          git rev-parse HEAD HEAD^{tree} > /tmp/phase-a-errors/source-identity.txt
+          echo "$base" > /tmp/phase-a-errors/base.txt
+          git diff "$base" HEAD > /tmp/phase-a-errors/formatted.patch
+          git archive --format=tar.gz HEAD > /tmp/phase-a-errors/source.tar.gz
+          git push origin HEAD:refs/heads/codex/61-accepted-errors-stage
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Focused native projection tests and independent WASM type check
+        run: |
+          rustup target add wasm32-unknown-unknown
+          set +e
+          set -o pipefail
+          cargo test -p noon-web --lib authoring_error::tests -- --nocapture 2>&1 | tee /tmp/phase-a-errors/native.log
+          native=${PIPESTATUS[0]}
+          cargo check -p noon-web --target wasm32-unknown-unknown --all-features 2>&1 | tee /tmp/phase-a-errors/wasm-check.log
+          wasm=${PIPESTATUS[0]}
+          printf 'native=%s\nwasm=%s\n' "$native" "$wasm" > /tmp/phase-a-errors/check-status.txt
+          test "$native" -eq 0 && test "$wasm" -eq 0
+      - name: Independent provider-free public Rust consumer
+        run: |
+          set -o pipefail
+          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests 2>&1 | tee /tmp/phase-a-errors/consumer.log
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build one diagnostic WASM package for boundary qualification
+        run: |
+          set -o pipefail
+          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/phase-a-errors/wasm-build.log
+      - name: Preserve compiled artifacts and exact tracked state
+        if: always()
+        run: |
+          if test -f Cargo.lock; then cp Cargo.lock /tmp/phase-a-errors/Cargo.lock; fi
+          if test -f web/pkg/noon_web_bg.wasm; then
+            tar -czf /tmp/phase-a-errors/dev-package.tar.gz web/pkg web/python-worker.js web/compat-bundle.*.json
+            sha256sum web/pkg/noon_web_bg.wasm > /tmp/phase-a-errors/wasm-sha256.txt
+          fi
+          git status --short > /tmp/phase-a-errors/status.txt
+          git diff > /tmp/phase-a-errors/final-tracked.diff
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: phase-a-accepted-errors-focused
+          path: /tmp/phase-a-errors
+          retention-days: 7
