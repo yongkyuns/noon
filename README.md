@@ -192,14 +192,14 @@ Every scene exposed by the playground picker is executed by Python and compiled 
 The active implementation lives under `crates/`. The target ownership is:
 
 - `noon` — public Rust API, authoritative Semantic Scene, and shared authoring semantics;
-- `noon-core` — normalized renderer-independent execution-plan data;
+- `noon-core` — shared semantic identity/store, declarations, resources, and renderer-independent data contracts;
 - `noon-compile` — semantic analysis, specialization, lowering, and geometry preparation;
 - `noon-runtime` — deterministic mutable execution, reactive evaluation, scheduling, and incremental updates;
 - `noon-render-wgpu` — retained WebGPU renderer;
 - `noon-web` — WASM/browser integration;
 - supporting geometry/text crates only where a real dependency or compilation boundary justifies them.
 
-The current `noon-ir` and migration-era scene/transport models are transitional and are scheduled for removal by the architecture-consolidation phase. Serialization/transport is a codec concern, not a permanent scene layer.
+`noon-ir` and the obsolete browser scene/execution mirrors have been deleted. Remaining core legacy scene/codec and frontend migration surfaces are tracked by #959 and #61. Serialization is reserved for explicit codecs and genuine cross-context transport; it is not an in-process engine boundary.
 
 Crates should correspond to real dependency or compilation boundaries. Prefer modules over crates until an independent build/dependency/reuse boundary exists.
 
