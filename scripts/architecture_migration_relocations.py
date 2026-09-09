@@ -140,26 +140,12 @@ def main() -> int:
             errors.append(f'{path}: retired runtime wrapper returned; use ExecutionSession and shared runtime slots')
         if re.search(r'\bFrontendMobjectHandle\b', source):
             errors.append(f'{path}: deleted FrontendMobjectHandle authority returned')
-        if path.startswith(('crates/noon-render-wgpu/', 'crates/noon-runtime/', 'crates/noon-compile/')):
-            code = re.sub(r'/\*.*?\*/|//[^\n]*', '', source, flags=re.S)
-            if re.search(r'\b(?:SceneDefinition|ObjectDefinition|ObjectSnapshot|ScenePatch|MutationTransaction)\b', code):
-                errors.append(f'{path}: compiler/runtime/renderer code and fixtures must use typed execution data')
+        code = re.sub(r'/\*.*?\*/|//[^\n]*', '', source, flags=re.S)
+        if re.search(r'\b(?:SceneDefinition|ObjectDefinition|ObjectSnapshot|ScenePatch|MutationTransaction|PatchError|MutationImpact)\b', code):
+            errors.append(f'{path}: retired scene/patch model returned; use shared semantic operations and typed execution data')
         if path in {'crates/noon/src/scene.rs', 'crates/noon/src/semantic_mobject.rs'} or path.startswith(('crates/noon/src/scene/', 'crates/noon/src/semantic_mobject/')):
             if FORBIDDEN_CANONICAL.search(source) or any('legacy' in leaf.split(' as ', 1)[0].split('::') for _, leaf in imports(source)):
                 errors.append(f'{path}: canonical authoring regained a migration dependency')
-        canonical_execution = path in {
-            'crates/noon-compile/src/semantic_lowering.rs',
-            'crates/noon/src/execution_session.rs',
-            'crates/noon/src/live_session.rs',
-        } or path.startswith((
-            'crates/noon-compile/',
-            'crates/noon/src/execution_session/',
-            'crates/noon-runtime/src/',
-        ))
-        if canonical_execution:
-            code = re.sub(r'/\*.*?\*/|//[^\n]*', '', source, flags=re.S)
-            if re.search(r'\b(?:ScenePatch|MutationTransaction|ObjectDefinition)\b', code):
-                errors.append(f'{path}: canonical execution depends on the external scene patch codec')
     root = sources.get('crates/noon/src/lib.rs', '')
     if re.search(r'\blegacy\s*::|\bmod\s+legacy\b', root) or any('legacy' in leaf.split(' as ', 1)[0].split('::') for _, leaf in imports(root)):
         errors.append('crates/noon/src/lib.rs: legacy public reexport bypasses the canonical namespace')

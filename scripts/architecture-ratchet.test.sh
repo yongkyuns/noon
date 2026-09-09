@@ -493,11 +493,11 @@ for symbol in SlottedSceneInstance FrameSlotId RetiredSlotCompactionPolicy Execu
 done
 git rm -q src/runtime_wrapper_probe.rs
 git commit -qm 'remove retired runtime wrapper probe'
-# Compiler, renderer and runtime fixtures must not preserve a second scene API, even when committed
+# No Rust crate or fixture may preserve the deleted scene API, even when committed
 # before the comparison base.
-for canonical in crates/noon-render-wgpu/src/probe.rs crates/noon-render-wgpu/tests/probe.rs crates/noon-runtime/src/scene_probe.rs crates/noon-runtime/tests/scene_probe.rs crates/noon-compile/src/scene_probe.rs crates/noon-compile/tests/scene_probe.rs; do
+for canonical in crates/noon-render-wgpu/src/probe.rs crates/noon-render-wgpu/tests/probe.rs crates/noon-runtime/src/scene_probe.rs crates/noon-runtime/tests/scene_probe.rs crates/noon-compile/src/scene_probe.rs crates/noon-compile/tests/scene_probe.rs crates/noon-core/src/scene_probe.rs crates/noon-core/tests/scene_probe.rs src/scene_probe.rs; do
   mkdir -p "$(dirname "$canonical")"
-  for symbol in SceneDefinition ObjectDefinition ObjectSnapshot ScenePatch MutationTransaction; do
+  for symbol in SceneDefinition ObjectDefinition ObjectSnapshot ScenePatch MutationTransaction PatchError MutationImpact; do
     printf 'use noon_core::%s;\n' "$symbol" > "$canonical"
     git add "$canonical"
     git commit -qm 'poison renderer execution boundary'

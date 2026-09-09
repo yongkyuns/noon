@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    patch::{validate_geometry, validate_style, validate_transform},
-    CompositionTimeMap, CompositionTimeMapError, ObjectId, ObjectSnapshot, ObjectStateField,
-    PatchError, SceneDefinition, TrackId, Vec2,
+    object_state::{validate_geometry, validate_style, validate_transform},
+    CompositionTimeMap, CompositionTimeMapError, ObjectId, ObjectStateError, ObjectStateField,
+    TrackId, Vec2,
 };
 use crate::{GeometryRef, Style, Transform2D};
 
@@ -310,11 +310,9 @@ fn validate_object_track_value(
 fn invalid_object_track_value(
     property: Property,
     endpoint: TrackValueEndpoint,
-    error: PatchError,
+    error: ObjectStateError,
 ) -> TimelineError {
-    let PatchError::InvalidObjectState { field, .. } = error else {
-        unreachable!("object-state validator returned a non-object validation error")
-    };
+    let ObjectStateError { field, .. } = error;
     TimelineError::InvalidObjectValue {
         property,
         endpoint,
@@ -360,7 +358,6 @@ pub struct TrackDefinition {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TimelineError {
-    UnknownObject(ObjectId),
     InvalidStartTime(f64),
     InvalidDuration(f64),
     InvalidInstantDuration {
@@ -398,13 +395,11 @@ pub enum TimelineError {
     },
     InvalidCompositionTimeMap(CompositionTimeMapError),
     InstantTrackCannotUseTimeMap(Property),
-    TrackIdExhausted,
 }
 
 impl std::fmt::Display for TimelineError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnknownObject(id) => write!(formatter, "unknown object id {}", id.get()),
             Self::InvalidStartTime(value) => write!(formatter, "invalid start time {value}"),
             Self::InvalidDuration(value) => write!(formatter, "invalid duration {value}"),
             Self::InvalidInstantDuration { property, duration } => write!(
@@ -453,7 +448,6 @@ impl std::fmt::Display for TimelineError {
                 formatter,
                 "instant {property:?} tracks cannot carry a composition time map"
             ),
-            Self::TrackIdExhausted => formatter.write_str("Noon track ID space exhausted"),
         }
     }
 }
@@ -554,168 +548,6 @@ pub fn resolve_track_timing(track: &TrackDefinition) -> Result<TrackTiming, Time
     ))
 }
 
-impl SceneDefinition {
-    pub fn add_track(
-        &mut self,
-        object: ObjectId,
-        property: Property,
-        values: TrackValues,
-        timing: TrackTiming,
-    ) -> Result<TrackId, TimelineError> {
-        self.add_track_with_time_map(
-            object,
-            property,
-            values,
-            timing,
-            CompositionTimeMap::identity(),
-        )
-    }
-
-    pub fn add_track_with_time_map(
-        &mut self,
-        object: ObjectId,
-        property: Property,
-        values: TrackValues,
-        timing: TrackTiming,
-        time_map: CompositionTimeMap,
-    ) -> Result<TrackId, TimelineError> {
-        if self.object(object).is_none() {
-            return Err(TimelineError::UnknownObject(object));
-        }
-        let id = TrackId::new(self.next_track_id);
-        let track = TrackDefinition {
-            id,
-            object,
-            property,
-            values,
-            timing,
-            time_map,
-        };
-        validate_track_definition(&track)?;
-        self.next_track_id = self
-            .next_track_id
-            .checked_add(1)
-            .ok_or(TimelineError::TrackIdExhausted)?;
-        self.tracks.push(track);
-        Ok(id)
-    }
-
-    pub fn set_presence_at(
-        &mut self,
-        object: ObjectId,
-        from: bool,
-        to: bool,
-        time: f64,
-    ) -> Result<TrackId, TimelineError> {
-        self.add_track(
-            object,
-            Property::Presence,
-            TrackValues::Bool { from, to },
-            TrackTiming::instant(time),
-        )
-    }
-
-    pub fn animate_transform(
-        &mut self,
-        object: ObjectId,
-        from: ObjectSnapshot,
-        to: ObjectSnapshot,
-        timing: TrackTiming,
-    ) -> Result<TrackId, TimelineError> {
-        let from = TransformTrackEndpoint {
-            geometry: from.geometry,
-            transform: from.transform,
-            style: from.style,
-        };
-        let to = TransformTrackEndpoint {
-            geometry: to.geometry,
-            transform: to.transform,
-            style: to.style,
-        };
-        self.add_track(
-            object,
-            Property::Transform,
-            TrackValues::Object { from, to },
-            timing,
-        )
-    }
-
-    pub fn animate_position(
-        &mut self,
-        object: ObjectId,
-        from: Vec2,
-        to: Vec2,
-        timing: TrackTiming,
-    ) -> Result<TrackId, TimelineError> {
-        self.add_track(
-            object,
-            Property::Position,
-            TrackValues::Vec2 { from, to },
-            timing,
-        )
-    }
-
-    pub fn animate_scale(
-        &mut self,
-        object: ObjectId,
-        from: Vec2,
-        to: Vec2,
-        timing: TrackTiming,
-    ) -> Result<TrackId, TimelineError> {
-        self.add_track(
-            object,
-            Property::Scale,
-            TrackValues::Vec2 { from, to },
-            timing,
-        )
-    }
-
-    pub fn animate_scalar(
-        &mut self,
-        object: ObjectId,
-        property: Property,
-        from: f32,
-        to: f32,
-        timing: TrackTiming,
-    ) -> Result<TrackId, TimelineError> {
-        self.add_track(object, property, TrackValues::Scalar { from, to }, timing)
-    }
-
-    pub fn animate_appearance(
-        &mut self,
-        object: ObjectId,
-        from: f32,
-        to: f32,
-        timing: TrackTiming,
-    ) -> Result<TrackId, TimelineError> {
-        self.animate_scalar(object, Property::Appearance, from, to, timing)
-    }
-
-    pub fn animate_reveal(
-        &mut self,
-        object: ObjectId,
-        from: f32,
-        to: f32,
-        timing: TrackTiming,
-    ) -> Result<TrackId, TimelineError> {
-        self.animate_scalar(object, Property::Reveal, from, to, timing)
-    }
-
-    pub fn animate_morph(
-        &mut self,
-        object: ObjectId,
-        from: f32,
-        to: f32,
-        timing: TrackTiming,
-    ) -> Result<TrackId, TimelineError> {
-        self.animate_scalar(object, Property::Morph, from, to, timing)
-    }
-
-    pub fn tracks(&self) -> &[TrackDefinition] {
-        &self.tracks
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -775,106 +607,6 @@ mod tests {
     }
 
     #[test]
-    fn track_ids_and_order_are_deterministic() {
-        let mut first = SceneDefinition::new();
-        let mut second = SceneDefinition::new();
-        let first_object = first.add(GeometryRef::circle(1.0));
-        let second_object = second.add(GeometryRef::circle(1.0));
-        let first_position = first
-            .animate_position(first_object, Vec2::ZERO, Vec2::ONE, timing())
-            .expect("valid track");
-        let first_opacity = first
-            .animate_scalar(first_object, Property::Opacity, 1.0, 0.0, timing())
-            .expect("valid track");
-        let second_position = second
-            .animate_position(second_object, Vec2::ZERO, Vec2::ONE, timing())
-            .expect("valid track");
-        let second_opacity = second
-            .animate_scalar(second_object, Property::Opacity, 1.0, 0.0, timing())
-            .expect("valid track");
-        assert_eq!(first_position, TrackId::new(0));
-        assert_eq!(first_opacity, TrackId::new(1));
-        assert_eq!(first_position, second_position);
-        assert_eq!(first_opacity, second_opacity);
-        assert_eq!(first.tracks(), second.tracks());
-    }
-
-    #[test]
-    fn composed_track_carries_validated_time_map() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
-            0.25,
-            0.5,
-            RateFunction::Smooth,
-        )]);
-        scene
-            .add_track_with_time_map(
-                object,
-                Property::Position,
-                TrackValues::Vec2 {
-                    from: Vec2::ZERO,
-                    to: Vec2::ONE,
-                },
-                TrackTiming::new(0.0, 2.0, RateFunction::Linear),
-                map.clone(),
-            )
-            .unwrap();
-        assert_eq!(scene.tracks()[0].time_map, map);
-    }
-
-    #[test]
-    fn presence_is_a_zero_duration_bool_event() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let track = scene
-            .set_presence_at(object, false, true, 1.25)
-            .expect("valid presence event");
-        assert_eq!(track, TrackId::new(0));
-        assert_eq!(scene.tracks()[0].property, Property::Presence);
-        assert_eq!(
-            scene.tracks()[0].values,
-            TrackValues::Bool {
-                from: false,
-                to: true
-            }
-        );
-        assert_eq!(scene.tracks()[0].timing, TrackTiming::instant(1.25));
-        assert!(scene.tracks()[0].time_map.is_identity());
-    }
-
-    #[test]
-    fn presence_requires_zero_duration_and_other_tracks_allow_instant_assignments() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        assert!(matches!(
-            scene.add_track(
-                object,
-                Property::Presence,
-                TrackValues::Bool {
-                    from: true,
-                    to: false
-                },
-                TrackTiming::new(1.0, 0.5, RateFunction::Linear),
-            ),
-            Err(TimelineError::InvalidInstantDuration {
-                property: Property::Presence,
-                ..
-            })
-        ));
-        let track = scene
-            .animate_scalar(
-                object,
-                Property::Opacity,
-                1.0,
-                0.0,
-                TrackTiming::instant(1.0),
-            )
-            .expect("ordinary properties may be assigned at an exact timestamp");
-        assert_eq!(track, TrackId::new(0));
-    }
-
-    #[test]
     fn mapped_presence_resolves_to_its_nested_monotone_boundary() {
         let track = TrackDefinition {
             id: TrackId::new(0),
@@ -928,39 +660,6 @@ mod tests {
     }
 
     #[test]
-    fn scale_is_a_vec2_timeline_property() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let track = scene
-            .animate_scale(object, Vec2::ONE, Vec2::new(2.0, 0.5), timing())
-            .expect("valid scale track");
-        assert_eq!(track, TrackId::new(0));
-        assert_eq!(scene.tracks()[0].property, Property::Scale);
-        assert_eq!(
-            scene.tracks()[0].values,
-            TrackValues::Vec2 {
-                from: Vec2::ONE,
-                to: Vec2::new(2.0, 0.5)
-            }
-        );
-    }
-
-    #[test]
-    fn appearance_is_a_distinct_scalar_timeline_property() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let track = scene
-            .animate_appearance(object, 0.0, 1.0, timing())
-            .expect("valid appearance track");
-        assert_eq!(track, TrackId::new(0));
-        assert_eq!(scene.tracks()[0].property, Property::Appearance);
-        assert_eq!(
-            scene.tracks()[0].values,
-            TrackValues::Scalar { from: 0.0, to: 1.0 }
-        );
-    }
-
-    #[test]
     fn stroke_width_is_a_non_negative_scalar_timeline_property() {
         let valid = TrackDefinition {
             id: TrackId::new(0),
@@ -987,105 +686,6 @@ mod tests {
             }
         );
         validate_track_definition(&valid).expect("rejection does not mutate the typed track");
-    }
-
-    #[test]
-    fn reveal_is_a_scalar_timeline_property() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::path(
-            crate::VectorPath::new()
-                .move_to(Vec2::ZERO)
-                .line_to(Vec2::ONE),
-        ));
-        let track = scene
-            .animate_reveal(object, 0.0, 1.0, timing())
-            .expect("valid reveal track");
-        assert_eq!(track, TrackId::new(0));
-        assert_eq!(scene.tracks()[0].property, Property::Reveal);
-        assert_eq!(
-            scene.tracks()[0].values,
-            TrackValues::Scalar { from: 0.0, to: 1.0 }
-        );
-    }
-
-    #[test]
-    fn morph_is_a_distinct_scalar_timeline_property() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::path(
-            crate::VectorPath::new()
-                .move_to(Vec2::ZERO)
-                .line_to(Vec2::ONE),
-        ));
-        scene
-            .animate_morph(object, 0.0, 1.0, timing())
-            .expect("valid morph track");
-        assert_eq!(scene.tracks()[0].property, Property::Morph);
-        assert_eq!(
-            scene.tracks()[0].values,
-            TrackValues::Scalar { from: 0.0, to: 1.0 }
-        );
-    }
-
-    #[test]
-    fn unknown_objects_are_rejected() {
-        let mut scene = SceneDefinition::new();
-        let error = scene
-            .animate_position(ObjectId::new(99), Vec2::ZERO, Vec2::ONE, timing())
-            .expect_err("unknown object must fail");
-        assert_eq!(error, TimelineError::UnknownObject(ObjectId::new(99)));
-    }
-
-    #[test]
-    fn invalid_timing_is_rejected() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        for duration in [-1.0, f64::NAN, f64::INFINITY] {
-            let error = scene
-                .animate_position(
-                    object,
-                    Vec2::ZERO,
-                    Vec2::ONE,
-                    TrackTiming::new(0.0, duration, RateFunction::Linear),
-                )
-                .expect_err("invalid duration must fail");
-            assert!(matches!(error, TimelineError::InvalidDuration(_)));
-        }
-        let error = scene
-            .animate_position(
-                object,
-                Vec2::ZERO,
-                Vec2::ONE,
-                TrackTiming::new(f64::NAN, 1.0, RateFunction::Linear),
-            )
-            .expect_err("invalid start time must fail");
-        assert!(matches!(error, TimelineError::InvalidStartTime(_)));
-    }
-
-    #[test]
-    fn non_finite_scalar_values_are_rejected_without_consuming_track_ids() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-
-        for (from, to) in [
-            (f32::NAN, 1.0),
-            (0.0, f32::INFINITY),
-            (f32::NEG_INFINITY, 1.0),
-        ] {
-            assert!(matches!(
-                scene.animate_scalar(object, Property::Opacity, from, to, timing()),
-                Err(TimelineError::InvalidScalarValues {
-                    property: Property::Opacity,
-                    ..
-                })
-            ));
-        }
-        assert!(scene.tracks().is_empty());
-        assert_eq!(
-            scene
-                .animate_scalar(object, Property::Opacity, 1.0, 0.0, timing())
-                .unwrap(),
-            TrackId::new(0)
-        );
     }
 
     #[test]
@@ -1123,99 +723,220 @@ mod tests {
         assert!(validate_track_definition(&valid_track).is_ok());
     }
 
-    #[test]
-    fn non_finite_position_values_are_rejected_without_consuming_track_ids() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-
-        for (from, to) in [
-            (Vec2::new(f32::NAN, 0.0), Vec2::ONE),
-            (Vec2::ZERO, Vec2::new(1.0, f32::INFINITY)),
-            (Vec2::new(0.0, f32::NEG_INFINITY), Vec2::ONE),
-        ] {
-            assert!(matches!(
-                scene.animate_position(object, from, to, timing()),
-                Err(TimelineError::InvalidVec2Values {
-                    property: Property::Position,
-                    ..
-                })
-            ));
+    fn track(property: Property, values: TrackValues, timing: TrackTiming) -> TrackDefinition {
+        TrackDefinition {
+            id: TrackId::new(7),
+            object: ObjectId::new(3),
+            property,
+            values,
+            timing,
+            time_map: CompositionTimeMap::identity(),
         }
-        assert!(scene.tracks().is_empty());
+    }
+
+    #[test]
+    fn typed_properties_accept_matching_values_and_reject_wrong_kinds() {
+        for property in [Property::Position, Property::Scale] {
+            let values = TrackValues::Vec2 {
+                from: Vec2::ONE,
+                to: Vec2::new(2.0, 0.5),
+            };
+            validate_track_definition(&track(property, values, timing())).unwrap();
+            assert_eq!(
+                validate_track_definition(&track(
+                    property,
+                    TrackValues::Scalar { from: 0.0, to: 1.0 },
+                    timing()
+                )),
+                Err(TimelineError::ValueTypeMismatch {
+                    property,
+                    expected: ValueKind::Vec2,
+                    actual: ValueKind::Scalar
+                })
+            );
+        }
+        for property in [
+            Property::Opacity,
+            Property::Rotation,
+            Property::Appearance,
+            Property::Reveal,
+            Property::Morph,
+            Property::StrokeWidth,
+        ] {
+            let values = TrackValues::Scalar { from: 0.0, to: 1.0 };
+            validate_track_definition(&track(property, values.clone(), timing())).unwrap();
+            validate_track_definition(&track(property, values, TrackTiming::instant(1.0))).unwrap();
+            assert_eq!(
+                validate_track_definition(&track(
+                    property,
+                    TrackValues::Vec2 {
+                        from: Vec2::ZERO,
+                        to: Vec2::ONE
+                    },
+                    timing()
+                )),
+                Err(TimelineError::ValueTypeMismatch {
+                    property,
+                    expected: ValueKind::Scalar,
+                    actual: ValueKind::Vec2
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn presence_requires_an_instant_event_without_a_composition_map() {
+        let mut event = track(
+            Property::Presence,
+            TrackValues::Bool {
+                from: false,
+                to: true,
+            },
+            TrackTiming::instant(1.25),
+        );
+        assert_eq!(resolve_track_timing(&event), Ok(TrackTiming::instant(1.25)));
+        event.timing.duration = 0.5;
         assert_eq!(
-            scene
-                .animate_position(object, Vec2::ZERO, Vec2::ONE, timing())
-                .unwrap(),
-            TrackId::new(0)
+            validate_track_definition(&event),
+            Err(TimelineError::InvalidInstantDuration {
+                property: Property::Presence,
+                duration: 0.5,
+            })
         );
     }
 
     #[test]
-    fn non_finite_transform_snapshots_are_rejected_without_consuming_track_ids() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let valid = ObjectSnapshot::new(GeometryRef::circle(1.0));
+    fn continuous_composition_map_is_validated_without_changing_track_identity() {
+        let mut value = track(
+            Property::Position,
+            TrackValues::Vec2 {
+                from: Vec2::ZERO,
+                to: Vec2::ONE,
+            },
+            timing(),
+        );
+        value.time_map = CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            0.25,
+            0.5,
+            RateFunction::Smooth,
+        )]);
+        let before = value.clone();
+        assert_eq!(resolve_track_timing(&value), Ok(timing()));
+        assert_eq!(value, before);
+        value.timing = TrackTiming::instant(1.0);
+        assert_eq!(
+            validate_track_definition(&value),
+            Err(TimelineError::InstantTrackCannotUseTimeMap(
+                Property::Position
+            ))
+        );
+    }
 
-        let mut invalid_geometry = valid.clone();
-        invalid_geometry.geometry = GeometryRef::circle(f32::NAN);
-        let mut invalid_transform = valid.clone();
-        invalid_transform.transform.rotation = f32::INFINITY;
-        let mut invalid_style = valid.clone();
-        invalid_style.style = Style {
-            opacity: f32::NAN,
-            ..Style::default()
+    #[test]
+    fn invalid_timing_is_rejected() {
+        let mut value = track(
+            Property::Position,
+            TrackValues::Vec2 {
+                from: Vec2::ZERO,
+                to: Vec2::ONE,
+            },
+            timing(),
+        );
+        for duration in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            value.timing.duration = duration;
+            assert!(matches!(
+                validate_track_definition(&value),
+                Err(TimelineError::InvalidDuration(_))
+            ));
+        }
+        value.timing.duration = 1.0;
+        for start in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            value.timing.start_time = start;
+            assert!(matches!(
+                validate_track_definition(&value),
+                Err(TimelineError::InvalidStartTime(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn non_finite_scalar_and_vector_endpoints_are_rejected() {
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            for (from, to) in [(invalid, 1.0), (0.0, invalid)] {
+                assert!(matches!(
+                    validate_track_definition(&track(
+                        Property::Opacity,
+                        TrackValues::Scalar { from, to },
+                        timing()
+                    )),
+                    Err(TimelineError::InvalidScalarValues {
+                        property: Property::Opacity,
+                        ..
+                    })
+                ));
+            }
+            for invalid in [Vec2::new(invalid, 0.0), Vec2::new(0.0, invalid)] {
+                for (from, to) in [(invalid, Vec2::ONE), (Vec2::ZERO, invalid)] {
+                    assert!(matches!(
+                        validate_track_definition(&track(
+                            Property::Position,
+                            TrackValues::Vec2 { from, to },
+                            timing()
+                        )),
+                        Err(TimelineError::InvalidVec2Values {
+                            property: Property::Position,
+                            ..
+                        })
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn transform_endpoints_validate_geometry_transform_and_style_on_both_sides() {
+        let valid = TransformTrackEndpoint {
+            geometry: GeometryRef::circle(1.0),
+            transform: Transform2D::IDENTITY,
+            style: Style::default(),
         };
-
+        let mut bad_geometry = valid.clone();
+        bad_geometry.geometry = GeometryRef::circle(f32::NAN);
+        let mut bad_transform = valid.clone();
+        bad_transform.transform.rotation = f32::INFINITY;
+        let mut bad_style = valid.clone();
+        bad_style.style.opacity = f32::NAN;
         for (field, invalid) in [
-            (ObjectStateField::Geometry, invalid_geometry),
-            (ObjectStateField::Transform, invalid_transform),
-            (ObjectStateField::Style, invalid_style),
+            (ObjectStateField::Geometry, bad_geometry),
+            (ObjectStateField::Transform, bad_transform),
+            (ObjectStateField::Style, bad_style),
         ] {
             for (endpoint, from, to) in [
                 (TrackValueEndpoint::From, invalid.clone(), valid.clone()),
-                (TrackValueEndpoint::To, valid.clone(), invalid.clone()),
+                (TrackValueEndpoint::To, valid.clone(), invalid),
             ] {
                 assert_eq!(
-                    scene
-                        .animate_transform(object, from, to, timing())
-                        .expect_err("non-finite transform endpoint must fail"),
-                    TimelineError::InvalidObjectValue {
+                    validate_track_definition(&track(
+                        Property::Transform,
+                        TrackValues::Object { from, to },
+                        timing()
+                    )),
+                    Err(TimelineError::InvalidObjectValue {
                         property: Property::Transform,
                         endpoint,
-                        field,
-                    }
+                        field
+                    })
                 );
             }
         }
-
-        assert!(scene.tracks().is_empty());
-        assert_eq!(
-            scene
-                .animate_transform(object, valid.clone(), valid, timing())
-                .expect("finite transform track must remain valid"),
-            TrackId::new(0)
-        );
-    }
-
-    #[test]
-    fn value_type_mismatches_are_rejected() {
-        let mut scene = SceneDefinition::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let error = scene
-            .add_track(
-                object,
-                Property::Position,
-                TrackValues::Scalar { from: 0.0, to: 1.0 },
-                timing(),
-            )
-            .expect_err("position requires Vec2 values");
-        assert_eq!(
-            error,
-            TimelineError::ValueTypeMismatch {
-                property: Property::Position,
-                expected: ValueKind::Vec2,
-                actual: ValueKind::Scalar,
-            }
-        );
+        validate_track_definition(&track(
+            Property::Transform,
+            TrackValues::Object {
+                from: valid.clone(),
+                to: valid,
+            },
+            timing(),
+        ))
+        .unwrap();
     }
 }

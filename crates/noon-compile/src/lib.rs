@@ -1507,12 +1507,10 @@ fn compile_patch_error(id: TrackId, error: TransformCompileFailure) -> CompilePa
     }
 }
 
-fn map_object_state_error(error: noon_core::PatchError) -> CompilePatchError {
-    match error {
-        noon_core::PatchError::InvalidObjectState { object, field } => {
-            CompilePatchError::InvalidObjectState { object, field }
-        }
-        other => unreachable!("object-state validator returned unexpected error: {other}"),
+fn map_object_state_error(error: noon_core::ObjectStateError) -> CompilePatchError {
+    CompilePatchError::InvalidObjectState {
+        object: error.object,
+        field: error.field,
     }
 }
 
