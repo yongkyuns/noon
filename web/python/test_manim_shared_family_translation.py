@@ -137,7 +137,7 @@ class ManimSharedFamilyTranslationTests(unittest.TestCase):
             _geometry_test.install_module_bridge(handles, store.createMobject)
             import _typed_family_test_support as _family_test
             _family_test.install_bridge(handles, store.createFamily, FakeFamilyHandle, FakeObjectHandle)
-            handles.install()
+
 
             from noon import Circle, RIGHT, Square, VGroup
 

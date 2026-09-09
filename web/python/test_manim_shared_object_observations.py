@@ -56,7 +56,7 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
             rate_functions.install()
             import _manim_geometry
             import _manim_semantic_handles as handles
-            handles.install()
+
 
             from noon import BLUE, Line, Square
 
@@ -172,7 +172,7 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
             original_set_color = handles._set_color
             handles._set_color = lambda target, color: calls.append((target, color)) or target
             try:
-                assert rate_functions._set_color_preserving_opacity(line, BLUE) is line
+                assert line.set_color(BLUE) is line
             finally:
                 handles._set_color = original_set_color
             assert calls == [(line, BLUE)]

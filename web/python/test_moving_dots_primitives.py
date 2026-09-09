@@ -34,7 +34,6 @@ class MovingDotsPrimitiveTests(unittest.TestCase):
             import _manim_updaters as updaters
             import noon as api
 
-            updaters.install()
 
             # Read the pinned callback view during the ordered phase and the
             # shared published value afterwards; Python owns neither value.

@@ -102,7 +102,7 @@ class ManimSemanticHandleColorTests(unittest.TestCase):
             import _manim_rate_functions
             _manim_rate_functions.install()
             import _manim_semantic_handles
-            _manim_semantic_handles.install()
+
 
             import _noon_ir as _ir
             import noon as _base

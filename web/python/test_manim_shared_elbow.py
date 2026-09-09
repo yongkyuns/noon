@@ -112,7 +112,7 @@ class ManimSharedElbowTests(unittest.TestCase):
             _manim_compat.install()
             import _manim_geometry
             import _manim_semantic_handles as handles
-            handles.install()
+
 
             _manim_compat._ir.Path = lambda *args, **kwargs: (_ for _ in ()).throw(
                 AssertionError("Python Path geometry constructor was called")

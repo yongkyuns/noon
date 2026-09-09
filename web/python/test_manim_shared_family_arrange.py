@@ -102,7 +102,7 @@ class ManimSharedFamilyArrangeTests(unittest.TestCase):
             _geometry_test.install_module_bridge(handles, store.createMobject)
             import _typed_family_test_support as _family_test
             _family_test.install_bridge(handles, store.createFamily, FakeFamilyHandle, FakeObjectHandle)
-            handles.install()
+
 
             def forbidden_fallback(*args, **kwargs):
                 raise AssertionError(\"Python arrange fallback must not run on shared path\")

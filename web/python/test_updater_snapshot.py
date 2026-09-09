@@ -30,6 +30,27 @@ def _object(index: int) -> dict:
 
 
 class CanonicalCallbackPropertyRowTests(unittest.TestCase):
+    def test_geometry_adapter_keeps_coordinate_writes_in_callback_phase(self) -> None:
+        import _manim_shared_geometry as geometry
+
+        scene, mobject, context = self._mobject_and_context()
+        public_set_x = updaters._base.Mobject.set_x
+        public_set_y = updaters._base.Mobject.set_y
+        public_set_color = updaters._base.Mobject.set_color
+        import _manim_rate_functions as rates
+        rates.install()
+        geometry.install()
+        self.assertIs(updaters._base.Mobject.set_color, public_set_color)
+        self.assertIs(updaters._base.Mobject.set_x, public_set_x)
+        self.assertIs(updaters._base.Mobject.set_y, public_set_y)
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            self.assertIs(mobject.set_x(5.0).set_y(4.0), mobject)
+            self.assertEqual(mobject.get_center(), updaters._base.Vec2(5.0, 4.0))
+            self.assertTrue(context.effective_batch()["writes"])
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
     def test_style_wire_uses_rust_default_and_preserves_explicit_mode(self) -> None:
         omitted_default = _object(0)["style"]
         self.assertNotIn("stroke_width_mode", omitted_default)
@@ -52,14 +73,10 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
     def _mobject_and_context() -> tuple[object, object, object]:
         compat.install()
         install_test_membership(compat)
-        import _manim_semantic_handles as semantic_handles
+        # Public paint methods always enter the phase dispatcher; no final
+        # installer is needed to reclaim VMobject's overrides.
+        assert not hasattr(updaters, "install")
 
-        if not updaters._INSTALLED:
-            # Mirror the production final method that otherwise bypasses the
-            # base Mobject patch. Updater installation must reclaim it.
-
-            compat.VMobject.set_opacity = semantic_handles._set_opacity
-            updaters.install()
         scene = updaters._base.Scene()
         mobject = identity_only_wrapper(compat.Circle)
         scene.add(mobject)
@@ -287,7 +304,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             updaters._canonical_callback_time(mobject)
 
-        self.assertIs(compat.VMobject.set_opacity, updaters._canonical_vmobject_set_opacity)
+        self.assertEqual(compat.VMobject.set_opacity.__module__, "_manim_compat")
         self.assertEqual(
             [write["kind"] for write in writes],
             ["transform", "style", "style", "transform"],

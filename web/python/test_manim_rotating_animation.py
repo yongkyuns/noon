@@ -50,7 +50,7 @@ class ManimRotatingAnimationTests(unittest.TestCase):
             assert edge.about_point is None and edge.about_edge is RIGHT
             assert edge.anim_args["run_time"] == 2.0
             import _manim_updaters
-            _manim_updaters.install()
+
             import noon
             assert noon.Rotating is Rotating
             from noon import Group, Rotate
