@@ -1,0 +1,95 @@
+name: R3 exact-head landing validation
+on:
+  push:
+    branches: [codex/1343-landing-validation]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: r3-exact-head-landing-validation
+  cancel-in-progress: false
+env:
+  CARGO_BUILD_JOBS: '2'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout independently published production candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ef2e4a894a7795471795e62351c8241db59af4ce
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify source identity and report prerequisites
+        run: |
+          test "$(git rev-parse HEAD)" = ef2e4a894a7795471795e62351c8241db59af4ce
+          test "$(git rev-parse HEAD^{tree})" = 0b07e2b0ba0fb471c6e4069ce01cd1e0dce6ba2d
+          mkdir -p "$RUNNER_TEMP/r3-landing-evidence"
+          { git rev-parse HEAD HEAD^{tree}; rustup show; node --version; python3 --version; } | tee "$RUNNER_TEMP/r3-landing-evidence/environment.txt"
+      - name: Reuse the qualified dependency lockfile
+        uses: actions/download-artifact@v8
+        with:
+          name: r3-boundary-qualification
+          run-id: 34357373370
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/r3-input
+      - name: Verify input revision and preserve dependency evidence
+        run: |
+          test "$(cat "$RUNNER_TEMP/r3-input/final-head.txt")" = ef2e4a894a7795471795e62351c8241db59af4ce
+          cp "$RUNNER_TEMP/r3-input/Cargo.lock" Cargo.lock
+          sha256sum Cargo.lock | tee "$RUNNER_TEMP/r3-landing-evidence/lock-before.txt"
+      - name: Restore Cargo sources
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            Linux-cargo-sources-
+            provider-sources-Linux-
+      - name: Use repository-pinned compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Install repository-pinned wasm-pack
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Run the exact full gate with the default release WASM profile
+        run: |
+          bash scripts/check.sh full 100228bd97fee5d7e44aab3a0cf9736808c04858 > "$RUNNER_TEMP/r3-landing-evidence/full.log" 2>&1 || { tail -150 "$RUNNER_TEMP/r3-landing-evidence/full.log"; exit 1; }
+          git diff --exit-code
+          sha256sum Cargo.lock > "$RUNNER_TEMP/r3-landing-evidence/lock-after.txt"
+          diff "$RUNNER_TEMP/r3-landing-evidence/lock-before.txt" "$RUNNER_TEMP/r3-landing-evidence/lock-after.txt"
+          sha256sum web/pkg/noon_web_bg.wasm web/pkg/noon_web.js | tee "$RUNNER_TEMP/r3-landing-evidence/release-package.txt"
+          tail -30 "$RUNNER_TEMP/r3-landing-evidence/full.log"
+      - name: Install the existing browser-test dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Exercise the real typed boundary with the release package
+        run: |
+          node scripts/typed-authoring-errors-smoke.mjs > "$RUNNER_TEMP/r3-landing-evidence/release-boundary.log" 2>&1 || { tail -150 "$RUNNER_TEMP/r3-landing-evidence/release-boundary.log"; exit 1; }
+          node scripts/manim-compat-smoke.mjs > "$RUNNER_TEMP/r3-landing-evidence/release-manim.log" 2>&1 || { tail -100 "$RUNNER_TEMP/r3-landing-evidence/release-manim.log"; exit 1; }
+          git diff --exit-code
+      - name: Retain full qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: r3-exact-head-full-release
+          path: |
+            ${{ runner.temp }}/r3-landing-evidence
+            browser-artifacts/typed-authoring-errors
+            browser-artifacts/manim-compat
+            Cargo.lock
+          retention-days: 3
+          if-no-files-found: error
