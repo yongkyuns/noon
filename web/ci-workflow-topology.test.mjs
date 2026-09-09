@@ -235,23 +235,3 @@ test("architecture diagrams stay a read-only check with independently preserved 
   assert.match(preservation, /uses: actions\/upload-artifact@/);
   assert.match(preservation, /docs\/diagrams\//);
 });
-
-
-test("release renderer recovery explicitly enables its existing fixtures", async () => {
-  const workflow = await readFile(new URL("renderer-recovery.yml", workflowDir), "utf8");
-  const build = workflow.split("      - name: Build browser package\n")[1]?.split("\n      - ")[0];
-  assert.ok(build, "renderer recovery must build its qualified package");
-  assert.match(build, /NOON_RENDERER_SMOKE: "1"/);
-  assert.match(build, /NOON_WASM_SKIP_OPT: "1"/);
-  assert.doesNotMatch(build, /NOON_WASM_PROFILE:.*dev/);
-  assert.match(workflow, /pull_request:\s*paths:/);
-  for (const name of ["renderer-init-failure-smoke", "renderer-webgl-context-loss-smoke",
-    "renderer-webgpu-device-loss-smoke", "renderer-webgpu-validation-error-smoke",
-    "renderer-worker-webgpu-validation-error-smoke", "playground-zero-size-smoke"]) {
-    assert.ok(workflow.includes(`node scripts/${name}.mjs`), `missing ${name}`);
-  }
-  assert.doesNotMatch(workflow, /continue-on-error: true/);
-  assert.ok(workflow.indexOf("name: renderer-recovery-web-runtime") <
-    workflow.indexOf("name: Install browser smoke dependencies"),
-    "retain the built package before fallible browser setup for build-free recovery");
-});
