@@ -44,11 +44,10 @@ class CanonicalLineMatchTests(unittest.TestCase):
 
             import _manim_compat as manim
             manim.install()
-            import _manim_phase_b  # installs the complete compatibility Mobject surface
             import _manim_semantic_handles as handles
             handles.install()
             assert handles._create_geometry_handle is not None
-            assert manim.Line.__init__ is handles._line_init
+            assert manim.Line.__init__.__module__ == "_manim_compat"
             import _manim_geometry  # installs match_points
             import _manim_updaters as updaters
             updaters.install()

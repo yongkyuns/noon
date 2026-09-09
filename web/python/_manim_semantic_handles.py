@@ -14,7 +14,6 @@ from typing import Any
 
 import noon as _base
 import _manim_compat as _compat
-import _manim_phase_b as _phase_b
 
 
 def _alignment_mask2(value: object) -> _base.Vec2:
@@ -185,16 +184,6 @@ _ORIGINAL_ALIGN_ON_FRAME = _base.Mobject._align_on_frame
 _ORIGINAL_BECOME = _base.Mobject.become
 _ORIGINAL_REPLACE = _base.Mobject.replace
 
-_ORIGINAL_SET_FILL = _compat.VMobject.set_fill
-_ORIGINAL_VMOBJECT_SET_COLOR = _compat.VMobject.set_color
-_ORIGINAL_SET_STROKE = _compat.VMobject.set_stroke
-_ORIGINAL_SET_OPACITY = _compat.VMobject.set_opacity
-_ORIGINAL_GET_FILL_OPACITY = _compat.VMobject.get_fill_opacity
-_ORIGINAL_GET_STROKE_OPACITY = _compat.VMobject.get_stroke_opacity
-_ORIGINAL_CIRCLE_INIT = _compat.Circle.__init__
-_ORIGINAL_SQUARE_INIT = _compat.Square.__init__
-_ORIGINAL_RECTANGLE_INIT = _compat.Rectangle.__init__
-_ORIGINAL_LINE_INIT = _compat.Line.__init__
 _ORIGINAL_GROUP_ADD = _compat.Group.add
 _ORIGINAL_GROUP_REMOVE = _compat.Group.remove
 _ORIGINAL_GROUP_SHIFT = _compat.Group.shift
@@ -450,7 +439,7 @@ def _apply_shared_constructor_options(handle: object, kwargs: dict[str, Any]) ->
         value = _ir._vec2("scale", options["scale"])
         handle.setScale(value["x"], value["y"])
     if "stroke_width" in options:
-        handle.setStrokeWidth(_phase_b._manim_stroke_width(options["stroke_width"]))
+        handle.setStrokeWidth(_compat._manim_stroke_width(options["stroke_width"]))
     if "stroke_width_mode" in options:
         handle.setStrokeWidthMode(_ir._stroke_width_mode(options["stroke_width_mode"]))
     if "stroke_join" in options:
@@ -463,7 +452,7 @@ def _apply_shared_constructor_options(handle: object, kwargs: dict[str, Any]) ->
     fill = options.get("fill", _CONSTRUCTOR_MISSING)
     fill_color = options.get("fill_color", _CONSTRUCTOR_MISSING)
     if fill_color is not _CONSTRUCTOR_MISSING and fill_color is not None:
-        fill = _phase_b._as_color("fill_color", fill_color)
+        fill = _compat._as_color("fill_color", fill_color)
     if fill is not _CONSTRUCTOR_MISSING:
         if fill is None:
             handle.disableFill()
@@ -474,7 +463,7 @@ def _apply_shared_constructor_options(handle: object, kwargs: dict[str, Any]) ->
     stroke = options.get("stroke", _CONSTRUCTOR_MISSING)
     stroke_color = options.get("stroke_color", _CONSTRUCTOR_MISSING)
     if stroke_color is not _CONSTRUCTOR_MISSING and stroke_color is not None:
-        stroke = _phase_b._as_color("stroke_color", stroke_color)
+        stroke = _compat._as_color("stroke_color", stroke_color)
     if stroke is not _CONSTRUCTOR_MISSING:
         if stroke is None:
             handle.disableStroke()
@@ -484,9 +473,9 @@ def _apply_shared_constructor_options(handle: object, kwargs: dict[str, Any]) ->
             handle.setStrokeOpacity(parsed.alpha)
 
     if options.get("fill_opacity") is not None:
-        handle.setFillOpacity(_phase_b._opacity("fill_opacity", options["fill_opacity"]))
+        handle.setFillOpacity(_compat._opacity("fill_opacity", options["fill_opacity"]))
     if options.get("stroke_opacity") is not None:
-        handle.setStrokeOpacity(_phase_b._opacity("stroke_opacity", options["stroke_opacity"]))
+        handle.setStrokeOpacity(_compat._opacity("stroke_opacity", options["stroke_opacity"]))
 
 
 def _apply_shared_constructor_kwargs(self: _base.Mobject, kwargs: dict[str, Any]) -> None:
@@ -637,8 +626,7 @@ def _circle_init(
     **kwargs: Any,
 ) -> None:
     if _create_geometry_handle is None:
-        _ORIGINAL_CIRCLE_INIT(self, radius, color=color, **kwargs)
-        return
+        raise RuntimeError("Mobject construction requires the shared Rust authoring host")
     value = _ir._positive_number("radius", radius)
     options = _geometry_options.circle(value)
     _apply_shared_constructor_options(options, kwargs)
@@ -656,8 +644,7 @@ def _rectangle_init(
     **kwargs: Any,
 ) -> None:
     if _create_geometry_handle is None:
-        _ORIGINAL_RECTANGLE_INIT(self, width, height, color=color, **kwargs)
-        return
+        raise RuntimeError("Mobject construction requires the shared Rust authoring host")
     width_value = _ir._positive_number("width", width)
     height_value = _ir._positive_number("height", height)
     options = _geometry_options.rectangle(width_value, height_value)
@@ -676,8 +663,7 @@ def _square_init(
     **kwargs: Any,
 ) -> None:
     if _create_geometry_handle is None:
-        _ORIGINAL_SQUARE_INIT(self, side_length, color=color, **kwargs)
-        return
+        raise RuntimeError("Mobject construction requires the shared Rust authoring host")
     value = _ir._positive_number("side_length", side_length)
     options = _geometry_options.square(value)
     _apply_shared_constructor_options(options, kwargs)
@@ -695,6 +681,8 @@ def _path_init(
     color: _base.Color | None = None,
     **kwargs: Any,
 ) -> None:
+    if _create_geometry_handle is None:
+        raise RuntimeError("Mobject construction requires the shared Rust authoring host")
     if not isinstance(path, _base.VectorPath):
         raise TypeError("path must be a VectorPath")
     options = _vector_path_options(path.to_ir())
@@ -740,8 +728,7 @@ def _line_init(
         self.end = end_value
         return
     if _create_geometry_handle is None:
-        _ORIGINAL_LINE_INIT(self, start, end, color=color, **kwargs)
-        return
+        raise RuntimeError("Mobject construction requires the shared Rust authoring host")
     options = _geometry_options.line(
         start_value.x, start_value.y, end_value.x, end_value.y
     )
@@ -1081,9 +1068,9 @@ def _set_vmobject_color(
 ) -> _compat.VMobject:
     handle = _handle_for(self)
     if handle is None:
-        return _ORIGINAL_VMOBJECT_SET_COLOR(self, color, family=family)
+        raise RuntimeError("Mobject paint requires the shared Rust authoring host")
     del family
-    return _set_color(self, _phase_b._as_color("color", color))
+    return _set_color(self, _compat._as_color("color", color))
 
 
 def _become(
@@ -1317,21 +1304,21 @@ def _set_fill(
 ) -> _compat.VMobject:
     handle = _handle_for(self)
     if handle is None:
-        return _ORIGINAL_SET_FILL(self, color=color, opacity=opacity, family=family)
+        raise RuntimeError("Mobject paint requires the shared Rust authoring host")
     live_context = _live_mutation_context(self)
     if live_context is not None:
         try:
             if color is not None and opacity is not None:
-                parsed = _phase_b._as_color("fill color", color)
+                parsed = _compat._as_color("fill color", color)
                 live_context.liveSetFill(
                     handle,
                     parsed.red,
                     parsed.green,
                     parsed.blue,
-                    _phase_b._opacity("fill opacity", opacity),
+                    _compat._opacity("fill opacity", opacity),
                 )
             elif color is not None:
-                parsed = _phase_b._as_color("fill color", color)
+                parsed = _compat._as_color("fill color", color)
                 live_context.liveSetFillColor(
                     handle, parsed.red, parsed.green, parsed.blue, parsed.alpha
                 )
@@ -1339,27 +1326,27 @@ def _set_fill(
                 live_context.liveDisableFill(handle)
             if opacity is not None and color is None:
                 live_context.liveSetFillOpacity(
-                    handle, _phase_b._opacity("fill opacity", opacity)
+                    handle, _compat._opacity("fill opacity", opacity)
                 )
         except Exception as error:
             raise ValueError(str(error)) from None
         return self
     if color is not None and opacity is not None:
-        parsed = _phase_b._as_color("fill color", color)
+        parsed = _compat._as_color("fill color", color)
         handle.setFill(
             parsed.red,
             parsed.green,
             parsed.blue,
-            _phase_b._opacity("fill opacity", opacity),
+            _compat._opacity("fill opacity", opacity),
         )
         return self
     if color is not None:
-        parsed = _phase_b._as_color("fill color", color)
+        parsed = _compat._as_color("fill color", color)
         handle.setFillColor(parsed.red, parsed.green, parsed.blue, parsed.alpha)
     elif opacity is None:
         handle.disableFill()
     if opacity is not None:
-        handle.setFillOpacity(_phase_b._opacity("fill opacity", opacity))
+        handle.setFillOpacity(_compat._opacity("fill opacity", opacity))
     return self
 
 
@@ -1372,9 +1359,7 @@ def _set_stroke(
 ) -> _compat.VMobject:
     handle = _handle_for(self)
     if handle is None:
-        return _ORIGINAL_SET_STROKE(
-            self, color=color, width=width, opacity=opacity, family=family
-        )
+        raise RuntimeError("Mobject paint requires the shared Rust authoring host")
     live_context = _live_mutation_context(self)
     if live_context is not None:
         if width is not None:
@@ -1383,16 +1368,16 @@ def _set_stroke(
             )
         try:
             if color is not None and opacity is not None:
-                parsed = _phase_b._as_color("stroke color", color)
+                parsed = _compat._as_color("stroke color", color)
                 live_context.liveSetStroke(
                     handle,
                     parsed.red,
                     parsed.green,
                     parsed.blue,
-                    _phase_b._opacity("stroke opacity", opacity),
+                    _compat._opacity("stroke opacity", opacity),
                 )
             elif color is not None:
-                parsed = _phase_b._as_color("stroke color", color)
+                parsed = _compat._as_color("stroke color", color)
                 live_context.liveSetStrokeColor(
                     handle, parsed.red, parsed.green, parsed.blue, parsed.alpha
                 )
@@ -1400,20 +1385,20 @@ def _set_stroke(
                 live_context.liveDisableStroke(handle)
             else:
                 live_context.liveSetStrokeOpacity(
-                    handle, _phase_b._opacity("stroke opacity", opacity)
+                    handle, _compat._opacity("stroke opacity", opacity)
                 )
         except Exception as error:
             raise ValueError(str(error)) from None
         return self
     if color is not None:
-        parsed = _phase_b._as_color("stroke color", color)
+        parsed = _compat._as_color("stroke color", color)
         handle.setStrokeColor(parsed.red, parsed.green, parsed.blue, parsed.alpha)
     elif width is None and opacity is None:
         handle.disableStroke()
     if width is not None:
-        handle.setStrokeWidth(_phase_b._manim_stroke_width(width))
+        handle.setStrokeWidth(_compat._manim_stroke_width(width))
     if opacity is not None:
-        handle.setStrokeOpacity(_phase_b._opacity("stroke opacity", opacity))
+        handle.setStrokeOpacity(_compat._opacity("stroke opacity", opacity))
     return self
 
 
@@ -1424,15 +1409,15 @@ def _set_opacity(
 ) -> _compat.VMobject:
     handle = _handle_for(self)
     if handle is None:
-        return _ORIGINAL_SET_OPACITY(self, opacity, family=family)
+        raise RuntimeError("Mobject paint requires the shared Rust authoring host")
     live_context = _live_mutation_context(self)
     if live_context is not None:
         try:
-            live_context.liveSetOpacity(handle, _phase_b._opacity("opacity", opacity))
+            live_context.liveSetOpacity(handle, _compat._opacity("opacity", opacity))
         except Exception as error:
             raise ValueError(str(error)) from None
         return self
-    handle.setOpacity(_phase_b._opacity("opacity", opacity))
+    handle.setOpacity(_compat._opacity("opacity", opacity))
     return self
 
 
@@ -1445,7 +1430,7 @@ def _set_object_opacity(
     handle = _handle_for(self)
     if handle is None:
         return _ORIGINAL_SET_OBJECT_OPACITY(self, opacity)
-    alpha = _phase_b._opacity("object opacity", opacity)
+    alpha = _compat._opacity("object opacity", opacity)
     live_context = _live_mutation_context(self)
     try:
         if live_context is not None:
@@ -1473,12 +1458,16 @@ def _paint_opacity_observation(value: object, layer: str):
 
 def _get_fill_opacity(self: _compat.VMobject) -> float:
     observed = _paint_opacity_observation(self, "fill")
-    return _ORIGINAL_GET_FILL_OPACITY(self) if observed is None else float(observed)
+    if observed is None:
+        raise RuntimeError("Mobject paint requires the shared Rust authoring host")
+    return float(observed)
 
 
 def _get_stroke_opacity(self: _compat.VMobject) -> float:
     observed = _paint_opacity_observation(self, "stroke")
-    return _ORIGINAL_GET_STROKE_OPACITY(self) if observed is None else float(observed)
+    if observed is None:
+        raise RuntimeError("Mobject paint requires the shared Rust authoring host")
+    return float(observed)
 
 
 def _family_layout_leaf_adapter(value: object, *, mutation: bool = False):
@@ -1911,24 +1900,9 @@ def install() -> None:
     _base.Mobject.align_to = _align_to
     _base.Mobject._align_on_frame = _align_on_frame
 
-    # VMobject historically had its own deep-copy implementation; route it through
-    # the same Rust-owned handle so `.animate` does not recreate Python snapshots.
-
-    _compat.VMobject.copy = _copy_mobject
     _compat.VMobject._copy_for_animate_target = _target_mobject
-    _compat.VMobject.set_color = _set_vmobject_color
-    _compat.VMobject.set_fill = _set_fill
-    _compat.VMobject.set_stroke = _set_stroke
-    _compat.VMobject.set_opacity = _set_opacity
-    _compat.VMobject.get_fill_opacity = _get_fill_opacity
-    _compat.VMobject.get_stroke_opacity = _get_stroke_opacity
     _compat._bounds_for = _compat_bounds_for
 
-    _compat.Circle.__init__ = _circle_init
-    _compat.Square.__init__ = _square_init
-    _compat.Rectangle.__init__ = _rectangle_init
-    _compat.Line.__init__ = _line_init
-    _compat.Path.__init__ = _path_init
 
     if _create_family_handle is not None:
         _compat.Group.__init__ = _group_init

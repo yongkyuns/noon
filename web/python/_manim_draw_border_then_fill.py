@@ -7,7 +7,6 @@ from typing import Any
 
 import noon as _base
 import _manim_compat as _compat
-import _manim_phase_b as _phase_b
 
 
 _INSTALLED = False
@@ -47,7 +46,7 @@ class DrawBorderThenFill:
         self.mobject = vmobject
         self.target = vmobject
         self.stroke_width = width
-        self.stroke_color = None if stroke_color is None else _phase_b._as_color(
+        self.stroke_color = None if stroke_color is None else _compat._as_color(
             "stroke_color", stroke_color
         )
         self.introducer = bool(introducer)

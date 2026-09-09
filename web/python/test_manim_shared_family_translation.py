@@ -25,7 +25,6 @@ class ManimSharedFamilyTranslationTests(unittest.TestCase):
 
             import _manim_compat
             _manim_compat.install()
-            import _manim_phase_b  # noqa: F401
             import _manim_semantic_handles as handles
 
 

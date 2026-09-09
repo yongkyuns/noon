@@ -7,7 +7,6 @@ from typing import Any
 
 import noon as _base
 import _manim_compat as _compat
-import _manim_phase_b as _phase_b
 import _manim_rate_functions as _rate_functions
 import _manim_typst as _typst
 
@@ -61,7 +60,7 @@ class Write:
         self.stroke_color = (
             None
             if stroke_color is None
-            else _phase_b._as_color("stroke_color", stroke_color)
+            else _compat._as_color("stroke_color", stroke_color)
         )
         animation_kwargs["rate_func"] = rate_func
         self.anim_args = animation_kwargs

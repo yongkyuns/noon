@@ -105,7 +105,6 @@ class ManimSharedGeometryTests(unittest.TestCase):
 
             import _manim_compat
             _manim_compat.install()
-            import _manim_phase_b
             import _manim_geometry
             import _manim_semantic_handles as handles
             handles.install()

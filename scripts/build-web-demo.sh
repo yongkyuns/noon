@@ -94,7 +94,6 @@ if [[ "$skip_web_preflight" != "1" ]]; then
     web/python/_manim_compat.py \
     web/python/_manim_typst.py \
     web/python/_manim_rate_functions.py \
-    web/python/_manim_phase_b.py \
     web/python/_manim_shared_geometry.py \
     web/python/_manim_animation_options.py \
     web/python/_manim_animate.py \
