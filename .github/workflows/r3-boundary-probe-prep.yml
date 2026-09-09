@@ -1,0 +1,36 @@
+name: R3 baseline boundary probe (development only)
+on:
+  push:
+    branches: [codex/1292-r3-regressions-prep]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download the pinned existing browser artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: web-pkg
+          run-id: 34347774147
+          github-token: ${{ github.token }}
+          path: web
+      - name: Install the product browser test dependency
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1
+          npx playwright install --with-deps chromium
+      - name: Execute real WASM and pinned Pyodide baseline
+        run: node scripts/r3-baseline-probe-prep.mjs
+      - name: Retain exact baseline evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: r3-baseline-boundary
+          path: |
+            r3-baseline-evidence
+            web/ci-artifact.json
+          retention-days: 3
+          if-no-files-found: error
