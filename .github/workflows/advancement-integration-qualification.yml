@@ -69,7 +69,7 @@ jobs:
               'crates/noon-web/src/canonical_authoring_scene.rs',
               'crates/noon-web/src/semantic_execution_player.rs',
               'scripts/typed-authoring-errors-smoke.mjs',
-              'web/python/_manim_live.py',
+              'web/python/_manim_scene.py',
               'web/python/test_noon_errors_wasm.py',
           }
           actual = set(git('diff', '--cached', '--name-only', base).splitlines())
