@@ -85,8 +85,13 @@ impl LiveSession<'_> {
         self.session.require_published_store(&self.store.borrow())?;
         // Persistent placement-compatible edits may not overwrite an active affine
         // or content driver. Detached target editors follow the same validation path.
-        self.placement_authored_transform(mobject)?;
-        let bounds = self.family_member_bounds(mobject)?;
+        let transform = self.placement_authored_transform(mobject)?;
+        let bounds = self.family_member_bounds(mobject)?.or_else(|| {
+            Some(Bounds2D64::point(
+                f64::from(transform.translation.x),
+                f64::from(transform.translation.y),
+            ))
+        });
         let transaction = crate::family_affine::FamilyAffine::Scale(x, y)
             .transaction(&self.store.borrow(), &[mobject.node_id()], bounds)
             .map_err(LiveSessionError::from)?;
