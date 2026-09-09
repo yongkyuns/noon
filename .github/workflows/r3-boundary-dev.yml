@@ -29,34 +29,31 @@ jobs:
           assert hashlib.sha256(patch).hexdigest() == 'bbcfab342b0681978749db8bde71913c49a2b87d55069e218e9992b0cea8c919'
           pathlib.Path('/tmp/r3-evidence/input.patch').write_bytes(patch)
           encoded = pathlib.Path('.github/r3-fixups.b64').read_text()
-          # Repair three transport transcription insertions; the exact source
-          # checksum below is mandatory before anything is applied.
           encoded = encoded.replace('cpixdKZZ0lKO', 'cpixdKZ0lKO').replace('Skr4n7frI2hLA', 'Skr4n7frIhLA').replace('XU9NS4NS4GQi', 'XU9NS4GQi')
           fixes = gzip.decompress(base64.b64decode(encoded, validate=True))
           assert hashlib.sha256(fixes).hexdigest() == 'c0adef92ad7413b8ceaf78c60f02126d9ad67e315dda08f63ff50a2ad67fa3d4'
           pathlib.Path('/tmp/r3-evidence/fixups.patch').write_bytes(fixes)
+          final = pathlib.Path('.github/r3-v3.patch').read_bytes()
+          assert hashlib.sha256(final).hexdigest() == 'fc3f37980ae9c7441986500ca5ba36313b319d487538d349834563b56146a074'
+          pathlib.Path('/tmp/r3-evidence/final.patch').write_bytes(final)
           PY
           git checkout --detach fe833fc640cb267bbf213cab7ff266269ae6c5a5
           git apply --index /tmp/r3-evidence/input.patch
           git apply --index /tmp/r3-evidence/fixups.patch
+          git apply --index /tmp/r3-evidence/final.patch
           cargo fmt --all
           git add -u
           git diff --cached --check
           git diff --cached > /tmp/r3-evidence/formatted-r3.patch
-          base=cd1e8aa85c9f50875072be74ec3cf7eb3d65e598
+          base=a98c6837c960bd5620d6a03c79560cc44b0015b6
           git reset --hard "$base"
           git apply --3way --index /tmp/r3-evidence/formatted-r3.patch
           git diff --cached --check
           git config user.name 'Yongkyun Shin'
           git config user.email '4311628+yongkyuns@users.noreply.github.com'
           tree=$(git write-tree)
-          parent="$base"
-          extra=()
-          if git show-ref --verify --quiet refs/remotes/origin/codex/1292-r3-typed-boundary; then
-            parent=$(git rev-parse refs/remotes/origin/codex/1292-r3-typed-boundary)
-            if ! git merge-base --is-ancestor "$base" "$parent"; then extra=(-p "$base"); fi
-          fi
-          candidate=$(git commit-tree "$tree" -p "$parent" "${extra[@]}" -m 'feat: project typed authoring failures through WASM and Python (#1292 R3)')
+          parent=$(git rev-parse refs/remotes/origin/codex/1292-r3-typed-boundary)
+          candidate=$(git commit-tree "$tree" -p "$parent" -p "$base" -m 'fix: retain callback-drive categories and qualify integrated R3 boundary')
           git reset --hard "$candidate"
           git rev-parse HEAD HEAD^{tree} > /tmp/r3-evidence/revisions.txt
           echo "$base" > /tmp/r3-evidence/base.txt
@@ -79,7 +76,7 @@ jobs:
       - name: Native architecture, format, workspace check, strict Clippy and library tests
         run: |
           set -o pipefail
-          bash scripts/check.sh fast cd1e8aa85c9f50875072be74ec3cf7eb3d65e598 2>&1 | tee /tmp/r3-evidence/native.log
+          bash scripts/check.sh fast a98c6837c960bd5620d6a03c79560cc44b0015b6 2>&1 | tee /tmp/r3-evidence/native.log
       - name: Web static and Python tests
         run: |
           set -o pipefail
@@ -105,8 +102,14 @@ jobs:
         run: |
           set -o pipefail
           node scripts/manim-compat-smoke.mjs 2>&1 | tee /tmp/r3-evidence/manim-browser.log
-      - name: Publish only the verified scoped candidate to its own branch
-        run: git push origin HEAD:refs/heads/codex/1292-r3-typed-boundary
+      - name: Publish verified candidate or retain it for authorized connector publication
+        run: |
+          if git push origin HEAD:refs/heads/codex/1292-r3-typed-boundary 2>&1 | tee /tmp/r3-evidence/publication.log; then
+            echo pushed > /tmp/r3-evidence/publication-status.txt
+          else
+            echo 'Connector publication required; product qualification passed but this job cannot modify workflow refs.' > /tmp/r3-evidence/publication-status.txt
+            cat /tmp/r3-evidence/publication-status.txt
+          fi
       - name: Retain exact dependency resolution and final working-tree status
         if: always()
         run: |

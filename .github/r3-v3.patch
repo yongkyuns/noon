@@ -1,0 +1,309 @@
+diff --git a/crates/noon-web/src/semantic_execution_player.rs b/crates/noon-web/src/semantic_execution_player.rs
+index c531aee..2fb60db 100644
+--- a/crates/noon-web/src/semantic_execution_player.rs
++++ b/crates/noon-web/src/semantic_execution_player.rs
+@@ -1395,8 +1395,8 @@ impl SemanticExecutionPlayer {
+     pub(crate) fn live_segment_wake(
+         &mut self,
+         wall_time_ms: f64,
+-    ) -> Result<WasmExecutionWake, String> {
+-        self.require_callback_progression_available().map_err(|error| error.to_string())?;
++    ) -> Result<WasmExecutionWake, AuthoringFailure> {
++        self.require_callback_progression_available()?;
+         let segment = self.live_segment()?;
+         let plan = BrowserExecutionWakePlan::from_pending_segment(&self.session, segment);
+         let directive = self
+@@ -1463,8 +1463,8 @@ impl SemanticExecutionPlayer {
+     pub(crate) fn reanchor_live_segment_wake(
+         &mut self,
+         wall_time_ms: f64,
+-    ) -> Result<WasmExecutionWake, String> {
+-        self.require_callback_progression_available().map_err(|error| error.to_string())?;
++    ) -> Result<WasmExecutionWake, AuthoringFailure> {
++        self.require_callback_progression_available()?;
+         self.live_segment()?;
+         self.live_wake_clock
+             .reanchor(wall_time_ms, self.session.frame().time)
+@@ -1481,14 +1481,14 @@ impl SemanticExecutionPlayer {
+     pub(crate) fn live_drive_segment_from_wall_time(
+         &mut self,
+         wall_time_ms: f64,
+-    ) -> Result<WasmLiveSegmentDrive, String> {
+-        self.require_callback_progression_available().map_err(|error| error.to_string())?;
++    ) -> Result<WasmLiveSegmentDrive, AuthoringFailure> {
++        self.require_callback_progression_available()?;
+         let segment = self.live_segment()?;
+         let requested_time = self
+             .live_wake_clock
+             .scene_time_at(wall_time_ms)
+             .ok_or("observe the live segment wake before driving it from wall time")?;
+-        self.live_drive_segment_to(segment, requested_time)
++        self.live_drive_segment_to(segment, requested_time).map_err(AuthoringFailure::from)
+     }
+ 
+     /// Drive the active continuation segment toward one externally supplied
+@@ -1502,16 +1502,16 @@ impl SemanticExecutionPlayer {
+     pub(crate) fn live_drive_segment_to_authored_time(
+         &mut self,
+         requested_time: f64,
+-    ) -> Result<WasmLiveSegmentDrive, String> {
+-        self.require_callback_progression_available().map_err(|error| error.to_string())?;
++    ) -> Result<WasmLiveSegmentDrive, AuthoringFailure> {
++        self.require_callback_progression_available()?;
+         let current = self.session.frame().time;
+         if !requested_time.is_finite() || requested_time < current {
+             return Err(format!(
+                 "external continuation sample requires time at or after {current}, got {requested_time}"
+-            ));
++            ).into());
+         }
+         let segment = self.live_segment()?;
+-        self.live_drive_segment_to(segment, requested_time)
++        self.live_drive_segment_to(segment, requested_time).map_err(AuthoringFailure::from)
+     }
+ 
+     #[cfg(any(target_arch = "wasm32", test))]
+@@ -2150,13 +2150,13 @@ impl SemanticExecutionPlayer {
+     /// Derive one browser wake directive for the active ordinary continuation segment.
+     ///
+     /// This is deliberately a typed WASM value rather than a host-authored duration.
+-    #[cfg(any(target_arch = "wasm32", test))]
++    #[cfg(target_arch = "wasm32")]
+     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = liveSegmentWake))]
+     pub fn live_segment_wake_wasm(
+         &mut self,
+         wall_time_ms: f64,
+-    ) -> Result<WasmExecutionWake, String> {
+-        self.live_segment_wake(wall_time_ms)
++    ) -> Result<WasmExecutionWake, wasm_bindgen::JsValue> {
++        self.live_segment_wake(wall_time_ms).map_err(crate::authoring_error::js_error)
+     }
+ 
+     /// Derive the next generic browser wake from the canonical runtime/session.
+@@ -2167,13 +2167,13 @@ impl SemanticExecutionPlayer {
+     }
+ 
+     /// Reanchor the next browser interval after a required callback completes.
+-    #[cfg(any(target_arch = "wasm32", test))]
++    #[cfg(target_arch = "wasm32")]
+     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = reanchorLiveSegmentWake))]
+     pub fn reanchor_live_segment_wake_wasm(
+         &mut self,
+         wall_time_ms: f64,
+-    ) -> Result<WasmExecutionWake, String> {
+-        self.reanchor_live_segment_wake(wall_time_ms)
++    ) -> Result<WasmExecutionWake, wasm_bindgen::JsValue> {
++        self.reanchor_live_segment_wake(wall_time_ms).map_err(crate::authoring_error::js_error)
+     }
+ 
+     /// Advance one active ordinary continuation segment from an anchored browser timestamp.
+@@ -2181,24 +2181,24 @@ impl SemanticExecutionPlayer {
+     /// A callback phase must be committed before this is retried with the same wall
+     /// timestamp. `reachedEndpoint` means shared completion is now permitted but
+     /// remains a separate operation so authored reconciliation cannot be skipped.
+-    #[cfg(any(target_arch = "wasm32", test))]
++    #[cfg(target_arch = "wasm32")]
+     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = driveLiveSegmentFromWallTime))]
+     pub fn drive_live_segment_from_wall_time_wasm(
+         &mut self,
+         wall_time_ms: f64,
+-    ) -> Result<WasmLiveSegmentDrive, String> {
+-        self.live_drive_segment_from_wall_time(wall_time_ms)
++    ) -> Result<WasmLiveSegmentDrive, wasm_bindgen::JsValue> {
++        self.live_drive_segment_from_wall_time(wall_time_ms).map_err(crate::authoring_error::js_error)
+     }
+ 
+     /// Advance one active continuation segment toward an absolute authored-time
+     /// sample without involving a browser clock.
+-    #[cfg(any(target_arch = "wasm32", test))]
++    #[cfg(target_arch = "wasm32")]
+     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = driveLiveSegmentToAuthoredTime))]
+     pub fn drive_live_segment_to_authored_time_wasm(
+         &mut self,
+         requested_time: f64,
+-    ) -> Result<WasmLiveSegmentDrive, String> {
+-        self.live_drive_segment_to_authored_time(requested_time)
++    ) -> Result<WasmLiveSegmentDrive, wasm_bindgen::JsValue> {
++        self.live_drive_segment_to_authored_time(requested_time).map_err(crate::authoring_error::js_error)
+     }
+ 
+     #[cfg(target_arch = "wasm32")]
+diff --git a/scripts/typed-authoring-errors-smoke.mjs b/scripts/typed-authoring-errors-smoke.mjs
+index 92ab76d..ebc4038 100644
+--- a/scripts/typed-authoring-errors-smoke.mjs
++++ b/scripts/typed-authoring-errors-smoke.mjs
+@@ -46,9 +46,9 @@ try {
+       }
+       return value;
+     };
+-    const family = (store, handle) => {
++    const family = (store, ...handles) => {
+       const members = new wasm.WasmSceneMembershipBatch("add");
+-      members.appendMobject("", handle);
++      for (const handle of handles) members.appendMobject("", handle);
+       return store.createFamily(members);
+     };
+     const snapshot = (context, live) => ({
+@@ -76,10 +76,12 @@ try {
+       const next = store.createManimSquare(0.5);
+       const recovery = [store.createManimCircle(0.2), store.createManimSquare(0.2)];
+       const families = [];
+-      if (kind === "ambiguous") {
+-        families.push(family(store, first), family(store, first));
++      if (kind === "ambiguous" || kind === "cross_root") {
++        const leaves = kind === "cross_root" ? [first, next] : [first];
++        families.push(family(store, ...leaves), family(store, ...leaves));
+         const initial = new wasm.WasmSceneMembershipBatch("add");
+         initial.reserveMobjectBinding("0", first);
++        if (kind === "cross_root") initial.reserveMobjectBinding("1", next);
+         for (const value of families) initial.appendFamily(value);
+         context.editMembership(initial);
+       }
+@@ -88,6 +90,7 @@ try {
+       const before = snapshot(context, live);
+       return {
+         reject: () => {
++          if (kind === "cross_root") return context.editMembership(batch("remove", [[0, first]]));
+           const replacing = kind === "missing" || kind === "ambiguous";
+           context.editMembership(batch(replacing ? "replace" : "add", [[0, first], [1, kind === "foreign" ? foreign : next]]));
+         },
+@@ -99,7 +102,11 @@ try {
+             check(drive.reachedEndpoint, "continuation did not reach its endpoint");
+             drive.free(); player.completeLiveSegment(); context.returnExecutionPlayer(player);
+           }
+-          if (kind === "ambiguous") {
++          if (kind === "cross_root") {
++            context.editMembership(new wasm.WasmSceneMembershipBatch("clear"));
++            context.editMembership(batch("add", [[1, next]]));
++            equal(Array.from(context.rootMembershipKeys()), [key(next)], "cross-root recovery failed");
++          } else if (kind === "ambiguous") {
+             context.editMembership(new wasm.WasmSceneMembershipBatch("clear"));
+             // 0 was already bound; only rejected reservation 1 must be reusable.
+             context.editMembership(batch("add", [[0, first], [1, recovery[1]]]));
+@@ -151,6 +158,7 @@ try {
+       ["foreign", false, "foreign_handle"], ["missing", false, "invalid_input"],
+       ["ambiguous", false, "invalid_input"], ["foreign", true, "foreign_handle"],
+       ["missing", true, "invalid_input"], ["pending", true, "pending_work"],
++      ["cross_root", false, "unsupported_operation"], ["cross_root", true, "unsupported_operation"],
+     ]) {
+       const fixture = membershipFixture(kind, live);
+       try {
+@@ -170,8 +178,8 @@ try {
+     }
+     return results;
+   });
+-  assert.equal(report.javascript.length, 8);
+-  for (const row of report.javascript.filter(row => row.kind === "missing" || row.kind === "ambiguous")) {
++  assert.equal(report.javascript.length, 10);
++  for (const row of report.javascript.filter(row => row.kind === "missing" || row.kind === "ambiguous" || row.kind === "cross_root")) {
+     assert.ok(row.error.cause, `${row.kind}: semantic cause was flattened`);
+   }
+   report.python = await page.evaluate(async ({modules, tests, pyodideUrl}) => {
+@@ -218,6 +226,8 @@ for kind, live, category, exception_type in [
+     ("foreign", True, "foreign_handle", ValueError),
+     ("missing", True, "invalid_input", ValueError),
+     ("pending", True, "pending_work", RuntimeError),
++    ("cross_root", False, "unsupported_operation", NotImplementedError),
++    ("cross_root", True, "unsupported_operation", NotImplementedError),
+ ]:
+     fixture = fixtures.membershipFixture(kind, live)
+     try:
+@@ -227,8 +237,13 @@ for kind, live, category, exception_type in [
+             assert error.category == category, (kind, error.category)
+             assert error.code and error.operation == kind and str(error)
+             assert error.__cause__ is not None
+-            if kind in ("missing", "ambiguous"):
++            if kind in ("missing", "ambiguous", "cross_root"):
+                 assert error.rust_cause is not None and error.rust_cause.code
++            if kind == "cross_root":
++                cause = error.rust_cause
++                while cause.cause is not None:
++                    cause = cause.cause
++                assert cause.code == "membership.cross_root_alias"
+             fixture.assertAtomic()
+             fixture.recover()
+             results.append({"kind": kind, "live": live, "category": error.category, "code": error.code})
+@@ -265,8 +280,8 @@ await tests.check_real_promise_rejection()
+ json.dumps({"matrix": results, "additionalTests": result.testsRun, "promiseRejectionAndRecovery": True, "skipped": len(result.skipped)})
+ `));
+   }, {modules, tests, pyodideUrl});
+-  assert.equal(report.python.matrix.length, 8);
+-  assert.equal(report.python.additionalTests, 7);
++  assert.equal(report.python.matrix.length, 10);
++  assert.equal(report.python.additionalTests, 8);
+   assert.equal(report.python.skipped, 0);
+   assert.equal(report.python.promiseRejectionAndRecovery, true);
+   // Exercise actual deployed Python callsites and a rerun in the same worker.
+diff --git a/web/python/test_noon_errors_wasm.py b/web/python/test_noon_errors_wasm.py
+index 01f3b19..cac781c 100644
+--- a/web/python/test_noon_errors_wasm.py
++++ b/web/python/test_noon_errors_wasm.py
+@@ -1,4 +1,4 @@
+-"""Actual Rust/WASM -> JS -> Pyodide tests, run by authoring-errors-smoke.mjs.
++"""Actual Rust/WASM -> JS -> Pyodide tests, run by typed-authoring-errors-smoke.mjs.
+ 
+ The native discovery suite skips this module; it is not mocked WASM coverage.
+ Snapshots below use the existing explicit debug boundary only as test evidence.
+@@ -13,7 +13,7 @@ except ImportError:
+     wasm = None
+ 
+ from _noon_errors import (
+-    NoonForeignHandleError, NoonOwnershipError, NoonPendingError,
++    NoonForeignHandleError, NoonOwnershipError, NoonPendingError, NoonCallbackError,
+     NoonStaleHandleError, NoonStalePublicationError, NoonValueError,
+     engine_await, engine_call,
+ )
+@@ -178,6 +178,53 @@ class WasmErrorProjectionTests(unittest.TestCase):
+             context.returnExecutionPlayer(player)
+         self.assertEqual([c.liveExecutionOwnership() for c in contexts], ["returned"] * 3)
+ 
++    def test_actual_continuation_drive_retains_pending_and_terminal_callback_categories(self):
++        store = wasm.WasmAuthoringStore.new()
++        context = store.createSceneContext()
++        target = circle(store)
++        context.bindMobject("0", target)
++        context.addUpdater(target, "1", 0)
++        context.beginOrdinaryWait(0.25)
++        player = context.createExecutionPlayer(0.25, 41)
++        phase = player.initialCallbackPhaseJson()
++        self.assertIsNotNone(phase)
++
++        def state():
++            return (player.debugFrameJson(), bytes(player.resourceBundleBytes()),
++                    player.callbackTerminationJson(), context.liveExecutionOwnership())
++
++        # All four actual worker-drive entrypoints retain the very same guard.
++        calls = [(player.driveLiveSegmentToAuthoredTime, 0.25),
++                 (player.driveLiveSegmentFromWallTime, 1000),
++                 (player.reanchorLiveSegmentWake, 1000),
++                 (player.liveSegmentWake, 1000)]
++        before = state()
++        for function, value in calls:
++            with self.assertRaises(NoonPendingError) as caught:
++                engine_call(function, value, operation="continuation.drive")
++            self.assert_diagnostic(caught.exception, "pending_work")
++            self.assertEqual(caught.exception.code, "publication.callback_pending")
++            self.assertEqual(state(), before)
++        player.failCallbackPhaseJson(phase)
++        terminal = state()
++        for function, value in calls:
++            with self.assertRaises(NoonCallbackError) as caught:
++                engine_call(function, value, operation="continuation.drive")
++            self.assert_diagnostic(caught.exception, "callback_failure")
++            self.assertEqual(caught.exception.code, "completion.callback_terminated")
++            self.assertEqual(state(), terminal)
++        # Endpoint-before-termination completion precedence is shared Rust policy.
++        with self.assertRaises(NoonPendingError) as caught:
++            engine_call(player.completeLiveSegment)
++        self.assertEqual(codes(caught.exception)[-1], "completion.not_at_boundary")
++        self.assertEqual(state(), terminal)
++        context.returnExecutionPlayer(player)
++        returned = snapshot(context)
++        with self.assertRaises(NoonCallbackError) as caught:
++            engine_call(context.liveWait, 0.1)
++        self.assertEqual(caught.exception.category, "callback_failure")
++        self.assertEqual(snapshot(context), returned)
++
+     def test_public_python_scene_batch_failure_is_atomic_and_recovers(self):
+         host.resetStore()
+         from noon import Circle, Scene, NoonForeignHandleError as PublicError
