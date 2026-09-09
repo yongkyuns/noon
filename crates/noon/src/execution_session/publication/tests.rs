@@ -864,9 +864,6 @@ fn semantic_replacement_churn_reuses_durable_slots_and_publishes_atomically() {
             };
             let before = session.publication_context();
             let mut transaction = SemanticMutationTransaction::new();
-            for &(node, _) in &stale {
-                transaction.remove_node(node);
-            }
             let pending: Vec<_> = (0..batch_size)
                 .map(|_| {
                     let node = transaction.create_node(SemanticNodeCreation::object(
@@ -876,6 +873,11 @@ fn semantic_replacement_churn_reuses_durable_slots_and_publishes_atomically() {
                     node
                 })
                 .collect();
+            // Semantic node removals form the transaction's terminal suffix;
+            // execution membership still retires exits before allocating entries.
+            for &(node, _) in &stale {
+                transaction.remove_node(node);
+            }
             let result = session
                 .apply_semantic_transaction(&mut store, transaction)
                 .unwrap();
@@ -939,7 +941,7 @@ fn semantic_temporary_scene_releases_membership_and_spatial_leaves() {
     const TEMPORARY_OBJECTS: usize = 4_096;
     const SURVIVORS: usize = 8;
     let (mut store, mut session, root, nodes) = rooted_slot_fixture(TEMPORARY_OBJECTS);
-    let viewport = Rect::new(
+    let viewport = noon_core::Rect::new(
         noon_core::Vec2::new(-2.0, -2.0),
         noon_core::Vec2::new(2.0, 2.0),
     );
@@ -1008,12 +1010,12 @@ fn rejected_semantic_replacement_does_not_consume_slots_or_publication() {
     let slot = session.slots.slot_for_object(object).unwrap();
     let before = session.publication_context();
     let mut invalid = SemanticMutationTransaction::new();
-    invalid.remove_node(node);
     let replacement = invalid.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
         StoredGeometry::Circle { radius: 1.0 },
     )));
     invalid.add_member(root, replacement);
     invalid.set_property(replacement, SemanticObjectProperty::Translation, f64::NAN);
+    invalid.remove_node(node);
     assert!(session
         .apply_semantic_transaction(&mut store, invalid)
         .is_err());
@@ -1025,11 +1027,11 @@ fn rejected_semantic_replacement_does_not_consume_slots_or_publication() {
     assert!(session.effective_semantic_object(&store, node).is_ok());
 
     let mut valid = SemanticMutationTransaction::new();
-    valid.remove_node(node);
     let replacement = valid.create_node(SemanticNodeCreation::object(SemanticObjectState::new(
         StoredGeometry::Circle { radius: 2.0 },
     )));
     valid.add_member(root, replacement);
+    valid.remove_node(node);
     let result = session
         .apply_semantic_transaction(&mut store, valid)
         .unwrap();
