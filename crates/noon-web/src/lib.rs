@@ -39,7 +39,6 @@ mod retained_family_transport;
 mod retained_resource_mutation_encoder;
 mod retained_resource_mutation_transport;
 mod retained_resource_transport;
-mod retained_text_family_transport;
 #[cfg(feature = "renderer")]
 mod retained_typst_canvas;
 mod semantic_execution_player;
@@ -74,7 +73,6 @@ pub use retained_family_transport::*;
 pub use retained_resource_mutation_encoder::*;
 pub use retained_resource_mutation_transport::*;
 pub use retained_resource_transport::*;
-pub use retained_text_family_transport::*;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 pub use retained_typst_canvas::*;
 pub use semantic_execution_player::*;

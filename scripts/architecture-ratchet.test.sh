@@ -497,7 +497,14 @@ git commit -qm 'remove retired runtime wrapper probe'
 # before the comparison base.
 for canonical in crates/noon-render-wgpu/src/probe.rs crates/noon-render-wgpu/tests/probe.rs crates/noon-runtime/src/scene_probe.rs crates/noon-runtime/tests/scene_probe.rs crates/noon-compile/src/scene_probe.rs crates/noon-compile/tests/scene_probe.rs crates/noon-core/src/scene_probe.rs crates/noon-core/tests/scene_probe.rs src/scene_probe.rs; do
   mkdir -p "$(dirname "$canonical")"
-  for symbol in SceneDefinition ObjectDefinition ObjectSnapshot ScenePatch MutationTransaction PatchError MutationImpact RetainedObjectDefinition Easing; do
+  # Symbol matching and path coverage are independent: qualify every spelling in
+  # one location, then one spelling in each other location instead of multiplying
+  # identical Git-repository probes across the full cross product.
+  retired_symbols=(SceneDefinition)
+  if [[ "$canonical" == crates/noon-render-wgpu/src/probe.rs ]]; then
+    retired_symbols=(SceneDefinition ObjectDefinition ObjectSnapshot ScenePatch MutationTransaction PatchError MutationImpact RetainedObjectDefinition Easing TextFamilyAnimationMode TextFamilyAnimationDefinition TextFamilyAnimationState TextFamilyAnimationError RetainedTextFamilyTransportState RetainedTextFamilyTransportError RetainedGraphTopology MathLayoutArtifact)
+  fi
+  for symbol in "${retired_symbols[@]}"; do
     printf 'use noon_core::%s;\n' "$symbol" > "$canonical"
     git add "$canonical"
     git commit -qm 'poison renderer execution boundary'

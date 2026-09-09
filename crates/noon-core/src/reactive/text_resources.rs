@@ -105,9 +105,6 @@ pub struct TextLayoutArtifact {
     pub backend_payload_key: Option<Arc<str>>,
 }
 
-/// Compatibility alias retained while #65 migrates callers from the older name.
-pub type MathLayoutArtifact = TextLayoutArtifact;
-
 /// Renderer-independent font face identity emitted by a shaping backend.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FontFaceIdentity {
