@@ -41,7 +41,7 @@ async function enhancePythonEditors() {
     return;
   }
 
-  const [{ EditorView, basicSetup }, { python }, { linter, lintGutter, forceLinting }, { oneDark }] =
+  const [{ EditorView, basicSetup }, { python }, { linter, lintGutter }, { oneDark }] =
     await Promise.all([
       import(CODEMIRROR_URL),
       import(PYTHON_URL),
@@ -85,6 +85,7 @@ async function enhancePythonEditors() {
     host.className = "python-code-editor";
     textarea.before(host);
 
+    let projectingSource = false;
     const view = new EditorView({
       doc: textarea.value,
       parent: host,
@@ -96,6 +97,14 @@ async function enhancePythonEditors() {
         lintGutter(),
         linter(runRuff, { delay: 300 }),
         EditorView.lineWrapping,
+        EditorView.updateListener.of((update) => {
+          if (!update.docChanged || projectingSource) return;
+          // DOM input fires before CodeMirror commits its document. Publish
+          // only committed edits, including undo/redo, so draft and live-run
+          // consumers read the source that actually triggered the notification.
+          ruffEnabledViews.add(update.view);
+          textarea.dispatchEvent(new Event("input", { bubbles: true }));
+        }),
       ],
     });
 
@@ -113,12 +122,6 @@ async function enhancePythonEditors() {
     // draft/reset state and any other existing consumers. Ruff is intentionally
     // activated by the first real editor input so merely inspecting source does
     // not allocate its additional WASM runtime.
-    view.contentDOM.addEventListener("input", () => {
-      ruffEnabledViews.add(view);
-      forceLinting(view);
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-
     Object.defineProperty(textarea, "value", {
       configurable: true,
       get() {
@@ -130,9 +133,14 @@ async function enhancePythonEditors() {
         if (next === current) {
           return;
         }
-        view.dispatch({
-          changes: { from: 0, to: view.state.doc.length, insert: next },
-        });
+        projectingSource = true;
+        try {
+          view.dispatch({
+            changes: { from: 0, to: view.state.doc.length, insert: next },
+          });
+        } finally {
+          projectingSource = false;
+        }
       },
     });
 
