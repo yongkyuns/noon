@@ -121,36 +121,47 @@ impl LiveContinuation for OrdinaryDifferentRotations {
 pub fn ordinary_different_rotations_program(
 ) -> Result<LiveProgram<OrdinaryDifferentRotations>, String> {
     let scene = Scene::new();
-    let mut left = scene.square(2.0)?;
-    left.set_translation(-2.0, 0.0)?;
+    let mut left = scene.square(2.0).map_err(|error| error.to_string())?;
+    left.set_translation(-2.0, 0.0)
+        .map_err(|error| error.to_string())?;
     left.set_color(
         f64::from(Color::BLUE.red),
         f64::from(Color::BLUE.green),
         f64::from(Color::BLUE.blue),
         1.0,
-    )?;
+    )
+    .map_err(|error| error.to_string())?;
     left.set_fill(
         f64::from(Color::BLUE.red),
         f64::from(Color::BLUE.green),
         f64::from(Color::BLUE.blue),
         0.7,
-    )?;
-    let mut left_target = left.target_editor()?;
-    left_target.rotate(std::f64::consts::PI)?;
-    let mut right = scene.square(2.0)?;
-    right.set_translation(2.0, 0.0)?;
-    right.set_color(
-        f64::from(Color::GREEN.red),
-        f64::from(Color::GREEN.green),
-        f64::from(Color::GREEN.blue),
-        1.0,
-    )?;
-    right.set_fill(
-        f64::from(Color::GREEN.red),
-        f64::from(Color::GREEN.green),
-        f64::from(Color::GREEN.blue),
-        0.7,
-    )?;
+    )
+    .map_err(|error| error.to_string())?;
+    let mut left_target = left.target_editor().map_err(|error| error.to_string())?;
+    left_target
+        .rotate(std::f64::consts::PI)
+        .map_err(|error| error.to_string())?;
+    let mut right = scene.square(2.0).map_err(|error| error.to_string())?;
+    right
+        .set_translation(2.0, 0.0)
+        .map_err(|error| error.to_string())?;
+    right
+        .set_color(
+            f64::from(Color::GREEN.red),
+            f64::from(Color::GREEN.green),
+            f64::from(Color::GREEN.blue),
+            1.0,
+        )
+        .map_err(|error| error.to_string())?;
+    right
+        .set_fill(
+            f64::from(Color::GREEN.red),
+            f64::from(Color::GREEN.green),
+            f64::from(Color::GREEN.blue),
+            0.7,
+        )
+        .map_err(|error| error.to_string())?;
     scene
         .into_live_program(OrdinaryDifferentRotations {
             left,
@@ -895,7 +906,8 @@ pub fn ordinary_value_tracker_continuation_program(
     // Model a host-language tracker constructed before its eventual Scene body:
     // the shared store owns its identity/value while it is detached. The first
     // continuation step enrolls this same handle through LiveSession.
-    let tracker = ValueTracker::detached(Rc::clone(scene.integration_store()), 0.0)?;
+    let tracker = ValueTracker::detached(Rc::clone(scene.integration_store()), 0.0)
+        .map_err(|error| error.to_string())?;
     let position = scene
         .position_from_tracker(
             &tracker,
@@ -1144,18 +1156,40 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                     .map_err(|error| error.to_string())?;
                 live.set_color(&copied, 1.0, 0.0, 0.0, 1.0)
                     .map_err(|error| error.to_string())?;
-                assert_eq!(copied.fill_opacity()?, 0.75);
+                assert_eq!(
+                    copied.fill_opacity().map_err(|error| error.to_string())?,
+                    0.75
+                );
                 live.set_fill_opacity(&copied, 0.5)
                     .map_err(|error| error.to_string())?;
-                assert_eq!(copied.fill_opacity()?, 0.5);
+                assert_eq!(
+                    copied.fill_opacity().map_err(|error| error.to_string())?,
+                    0.5
+                );
                 live.set_stroke_opacity(&copied, 0.25)
                     .map_err(|error| error.to_string())?;
-                assert_eq!(copied.stroke_opacity()?, 0.25);
+                assert_eq!(
+                    copied.stroke_opacity().map_err(|error| error.to_string())?,
+                    0.25
+                );
                 live.set_opacity(&copied, 0.4)
                     .map_err(|error| error.to_string())?;
-                assert_eq!(copied.fill_opacity()?, 0.4);
-                assert_eq!(copied.stroke_opacity()?, 0.4);
-                assert_eq!(copied.state()?.style.object_opacity, 0.5);
+                assert_eq!(
+                    copied.fill_opacity().map_err(|error| error.to_string())?,
+                    0.4
+                );
+                assert_eq!(
+                    copied.stroke_opacity().map_err(|error| error.to_string())?,
+                    0.4
+                );
+                assert_eq!(
+                    copied
+                        .state()
+                        .map_err(|error| error.to_string())?
+                        .style
+                        .object_opacity,
+                    0.5
+                );
                 let layout = live
                     .effective_family_layout(&self.family)
                     .map_err(|error| error.to_string())?;
@@ -1164,7 +1198,10 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                 assert!((layout.width - 0.8).abs() < 1e-6);
                 assert!((layout.height - 0.8).abs() < 1e-6);
                 let probe = live
-                    .create_manim_geometry(crate::ManimGeometryOptions::square(0.2)?)
+                    .create_manim_geometry(
+                        crate::ManimGeometryOptions::square(0.2)
+                            .map_err(|error| error.to_string())?,
+                    )
                     .map_err(|error| error.to_string())?;
                 let source = crate::LayoutAnchor::from(&probe);
                 let args = crate::semantic_mobject::ManimNextToArgs {
@@ -1180,7 +1217,7 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                     args,
                 )
                 .map_err(|error| error.to_string())?;
-                let center = probe.center()?;
+                let center = probe.center().map_err(|error| error.to_string())?;
                 assert!((center.0 - 2.6).abs() < 1e-6);
                 assert!((center.1 - 1.0).abs() < 1e-6);
                 let before = live
@@ -1195,7 +1232,12 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                         args,
                     )
                     .unwrap_err();
-                assert!(error.to_string().contains("active effective affine driver"));
+                assert!(matches!(
+                    error,
+                    crate::LiveSessionError::Authoring(crate::AuthoringError::Unsupported(
+                        crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver
+                    ))
+                ));
                 assert_eq!(
                     live.effective(&self.circle)
                         .map_err(|error| error.to_string())?,
@@ -1352,10 +1394,16 @@ pub fn ordinary_callback_sparse_reads_program() -> Result<
         .value_tracker(0.0)
         .map_err(|error| error.to_string())?;
 
-    let nested = scene.family(&[(&circle).into(), (&anchor).into()])?;
-    let family = scene.family(&[(&nested).into(), (&circle).into()])?;
-    let missing = scene.circle(0.1)?;
-    let invalid_family = scene.family(&[(&circle).into(), (&missing).into()])?;
+    let nested = scene
+        .family(&[(&circle).into(), (&anchor).into()])
+        .map_err(|error| error.to_string())?;
+    let family = scene
+        .family(&[(&nested).into(), (&circle).into()])
+        .map_err(|error| error.to_string())?;
+    let missing = scene.circle(0.1).map_err(|error| error.to_string())?;
+    let invalid_family = scene
+        .family(&[(&circle).into(), (&missing).into()])
+        .map_err(|error| error.to_string())?;
     let tracker_id = tracker.node_id();
     let anchor_id = anchor.node_id();
     let mut observed_phase_times = Vec::new();
@@ -1740,15 +1788,18 @@ impl LiveContinuation for OrdinaryAffineLifecycleContinuation {
 pub fn ordinary_affine_lifecycle_program(
 ) -> Result<LiveProgram<OrdinaryAffineLifecycleContinuation>, String> {
     let scene = Scene::new();
-    let mut square = Mobject::manim_square(Rc::clone(scene.integration_store()), 1.0)?;
-    square.set_fill(
-        f64::from(Color::BLUE.red),
-        f64::from(Color::BLUE.green),
-        f64::from(Color::BLUE.blue),
-        0.7,
-    )?;
+    let mut square = Mobject::manim_square(Rc::clone(scene.integration_store()), 1.0)
+        .map_err(|error| error.to_string())?;
+    square
+        .set_fill(
+            f64::from(Color::BLUE.red),
+            f64::from(Color::BLUE.green),
+            f64::from(Color::BLUE.blue),
+            0.7,
+        )
+        .map_err(|error| error.to_string())?;
     let semantic_id = square.node_id();
-    let authored_style = square.state()?.style;
+    let authored_style = square.state().map_err(|error| error.to_string())?.style;
     scene
         .into_live_program(OrdinaryAffineLifecycleContinuation {
             square,
@@ -2116,27 +2167,37 @@ impl LiveContinuation for OrdinaryMovingCameraCenter {
 pub fn ordinary_moving_camera_center_program(
 ) -> Result<LiveProgram<OrdinaryMovingCameraCenter>, String> {
     let mut scene = Scene::new();
-    let frame = scene.camera_frame()?;
-    let mut left_target = frame.target_editor()?;
-    left_target.set_translation(-2.0, 0.0)?;
-    let mut right_target = frame.target_editor()?;
-    right_target.set_translation(2.0, 0.0)?;
+    let frame = scene.camera_frame().map_err(|error| error.to_string())?;
+    let mut left_target = frame.target_editor().map_err(|error| error.to_string())?;
+    left_target
+        .set_translation(-2.0, 0.0)
+        .map_err(|error| error.to_string())?;
+    let mut right_target = frame.target_editor().map_err(|error| error.to_string())?;
+    right_target
+        .set_translation(2.0, 0.0)
+        .map_err(|error| error.to_string())?;
 
-    let mut square = scene.square(2.0)?;
+    let mut square = scene.square(2.0).map_err(|error| error.to_string())?;
     let red = Color::RED;
-    square.set_color(
-        f64::from(red.red),
-        f64::from(red.green),
-        f64::from(red.blue),
-        1.0,
-    )?;
-    square.set_fill(
-        f64::from(red.red),
-        f64::from(red.green),
-        f64::from(red.blue),
-        0.5,
-    )?;
-    square.set_translation(-2.0, 0.0)?;
+    square
+        .set_color(
+            f64::from(red.red),
+            f64::from(red.green),
+            f64::from(red.blue),
+            1.0,
+        )
+        .map_err(|error| error.to_string())?;
+    square
+        .set_fill(
+            f64::from(red.red),
+            f64::from(red.green),
+            f64::from(red.blue),
+            0.5,
+        )
+        .map_err(|error| error.to_string())?;
+    square
+        .set_translation(-2.0, 0.0)
+        .map_err(|error| error.to_string())?;
     let triangle_path = VectorPath::new()
         .move_to(Vec2::new(0.0, 1.0))
         .line_to(Vec2::new(-0.866_025_4, -0.5))
@@ -2153,8 +2214,12 @@ pub fn ordinary_moving_camera_center_program(
         stroke_cap: StrokeCap::Butt,
         object_opacity: 1.0,
     };
-    let mut triangle = scene.path(triangle_path, triangle_style)?;
-    triangle.move_to(2.0, 0.0)?;
+    let mut triangle = scene
+        .path(triangle_path, triangle_style)
+        .map_err(|error| error.to_string())?;
+    triangle
+        .move_to(2.0, 0.0)
+        .map_err(|error| error.to_string())?;
 
     scene
         .into_live_program(OrdinaryMovingCameraCenter {

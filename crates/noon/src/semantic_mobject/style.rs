@@ -2,7 +2,7 @@
 use super::*;
 use noon_core::Style;
 
-pub(super) fn manim_color_from_semantic(style: &SemanticStyle) -> Result<Color, String> {
+pub(super) fn manim_color_from_semantic(style: &SemanticStyle) -> Result<Color, AuthoringError> {
     let selected = style.stroke.as_ref().or(style.fill.as_ref());
     let opacity = if style.stroke.is_some() {
         style.stroke_opacity
@@ -12,9 +12,9 @@ pub(super) fn manim_color_from_semantic(style: &SemanticStyle) -> Result<Color, 
     match selected {
         Some(SemanticPaint::Solid(_)) => Ok(solid_color_with_opacity(selected, opacity)
             .expect("selected solid paint produces one color")),
-        Some(SemanticPaint::Resource(_)) => {
-            Err("Manim color queries do not support resource paints".into())
-        }
+        Some(SemanticPaint::Resource(_)) => Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
+        )),
         None => Ok(Color::WHITE),
     }
 }
@@ -22,12 +22,12 @@ pub(super) fn manim_color_from_semantic(style: &SemanticStyle) -> Result<Color, 
 /// Observable paint alpha is the solid color alpha times its authored multiplier.
 /// Object-composite opacity is a separate domain. A resource paint has no single
 /// scalar color alpha and cannot be represented by a Manim opacity getter.
-fn manim_paint_opacity(paint: Option<&SemanticPaint>, opacity: f64) -> Result<f64, String> {
+fn manim_paint_opacity(paint: Option<&SemanticPaint>, opacity: f64) -> Result<f64, AuthoringError> {
     match paint {
         Some(SemanticPaint::Solid(color)) => Ok(f64::from(color.alpha) * opacity),
-        Some(SemanticPaint::Resource(_)) => {
-            Err("Manim opacity queries do not support resource paints".into())
-        }
+        Some(SemanticPaint::Resource(_)) => Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::ResourcePaintOpacityQuery,
+        )),
         None => Ok(0.0),
     }
 }
@@ -162,7 +162,10 @@ impl PaintStyleEdit for Style {
     }
 }
 
-pub(crate) fn edit_object_opacity(style: &mut SemanticStyle, opacity: f64) -> Result<(), String> {
+pub(crate) fn edit_object_opacity(
+    style: &mut SemanticStyle,
+    opacity: f64,
+) -> Result<(), AuthoringError> {
     style.object_opacity = unit_opacity("opacity", opacity)?;
     Ok(())
 }
@@ -173,7 +176,7 @@ pub(crate) fn edit_color<S: PaintStyleEdit>(
     green: f64,
     blue: f64,
     alpha: f64,
-) -> Result<(), String> {
+) -> Result<(), AuthoringError> {
     let color = opaque_color("color", red, green, blue)?;
     let requested_opacity = unit_opacity("color.alpha", alpha)?;
     let had_fill = style.has_fill();
@@ -200,7 +203,7 @@ pub(crate) fn edit_fill_color<S: PaintStyleEdit>(
     green: f64,
     blue: f64,
     alpha: f64,
-) -> Result<(), String> {
+) -> Result<(), AuthoringError> {
     let color = opaque_color("fill", red, green, blue)?;
     let requested_opacity = unit_opacity("fill.alpha", alpha)?;
     style.set_fill_color(color, requested_opacity);
@@ -210,7 +213,7 @@ pub(crate) fn edit_fill_color<S: PaintStyleEdit>(
 pub(crate) fn edit_fill_opacity<S: PaintStyleEdit>(
     style: &mut S,
     opacity: f64,
-) -> Result<(), String> {
+) -> Result<(), AuthoringError> {
     let opacity = unit_opacity("fill opacity", opacity)?;
     style.set_fill_opacity(opacity);
     Ok(())
@@ -222,7 +225,7 @@ pub(crate) fn edit_fill<S: PaintStyleEdit>(
     green: f64,
     blue: f64,
     opacity: f64,
-) -> Result<(), String> {
+) -> Result<(), AuthoringError> {
     let color = opaque_color("fill", red, green, blue)?;
     let opacity = unit_opacity("fill opacity", opacity)?;
     style.set_fill_color(color, opacity);
@@ -233,7 +236,7 @@ pub(crate) fn edit_fill<S: PaintStyleEdit>(
 pub(crate) fn edit_manim_opacity<S: PaintStyleEdit>(
     style: &mut S,
     opacity: f64,
-) -> Result<(), String> {
+) -> Result<(), AuthoringError> {
     let opacity = unit_opacity("opacity", opacity)?;
     if style.has_fill() {
         style.set_fill_opacity(opacity);
@@ -254,7 +257,7 @@ pub(crate) fn edit_stroke_color<S: PaintStyleEdit>(
     green: f64,
     blue: f64,
     alpha: f64,
-) -> Result<(), String> {
+) -> Result<(), AuthoringError> {
     let color = opaque_color("stroke", red, green, blue)?;
     let requested_opacity = unit_opacity("stroke.alpha", alpha)?;
     style.set_stroke_color(color, requested_opacity);
@@ -264,7 +267,7 @@ pub(crate) fn edit_stroke_color<S: PaintStyleEdit>(
 pub(crate) fn edit_stroke_opacity<S: PaintStyleEdit>(
     style: &mut S,
     opacity: f64,
-) -> Result<(), String> {
+) -> Result<(), AuthoringError> {
     let opacity = unit_opacity("stroke opacity", opacity)?;
     style.set_stroke_opacity(opacity);
     Ok(())
@@ -276,7 +279,7 @@ pub(crate) fn edit_stroke(
     green: f64,
     blue: f64,
     opacity: f64,
-) -> Result<(), String> {
+) -> Result<(), AuthoringError> {
     let color = opaque_color("stroke", red, green, blue)?;
     let opacity = unit_opacity("stroke opacity", opacity)?;
     style.stroke = Some(SemanticPaint::Solid(color));
@@ -287,10 +290,10 @@ pub(crate) fn edit_stroke(
 pub(crate) fn edit_stroke_width<S: PaintStyleEdit>(
     style: &mut S,
     width: f64,
-) -> Result<(), String> {
+) -> Result<(), AuthoringError> {
     let width = authoring_render_f64("stroke width", width)?;
     if width < 0.0 {
-        return Err("stroke width must be non-negative".to_owned());
+        return Err(AuthoringError::NegativeStrokeWidth(width));
     }
     style.set_stroke_width(width);
     if !style.has_stroke() {
@@ -299,61 +302,67 @@ pub(crate) fn edit_stroke_width<S: PaintStyleEdit>(
     Ok(())
 }
 
-pub(super) fn parse_stroke_width_mode(mode: &str) -> Result<StrokeWidthMode, String> {
+pub(super) fn parse_stroke_width_mode(mode: &str) -> Result<StrokeWidthMode, AuthoringError> {
     match mode {
         "scale_with_object" => Ok(StrokeWidthMode::ScaleWithObject),
         "screen_space" => Ok(StrokeWidthMode::ScreenSpace),
-        _ => Err("stroke_width_mode must be scale_with_object or screen_space".into()),
+        _ => Err(AuthoringError::InvalidStrokeWidthMode(mode.to_owned())),
     }
 }
 
-pub(super) fn parse_stroke_join(join: &str) -> Result<StrokeJoin, String> {
+pub(super) fn parse_stroke_join(join: &str) -> Result<StrokeJoin, AuthoringError> {
     match join {
         "round" => Ok(StrokeJoin::Round),
         "miter" => Ok(StrokeJoin::Miter),
         "bevel" => Ok(StrokeJoin::Bevel),
-        _ => Err("stroke_join must be round, miter, or bevel".into()),
+        _ => Err(AuthoringError::InvalidStrokeJoin(join.to_owned())),
     }
 }
 
-pub(super) fn parse_stroke_cap(cap: &str) -> Result<StrokeCap, String> {
+pub(super) fn parse_stroke_cap(cap: &str) -> Result<StrokeCap, AuthoringError> {
     match cap {
         "round" => Ok(StrokeCap::Round),
         "butt" => Ok(StrokeCap::Butt),
         "square" => Ok(StrokeCap::Square),
-        _ => Err("stroke_cap must be round, butt, or square".into()),
+        _ => Err(AuthoringError::InvalidStrokeCap(cap.to_owned())),
     }
 }
 
 impl Mobject {
-    pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), String> {
+    pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), AuthoringError> {
         let mut state = self.state()?;
         state.style.stroke_width_mode = parse_stroke_width_mode(mode)?;
         self.commit_state(state)
     }
-    pub fn set_stroke_join(&mut self, join: &str) -> Result<(), String> {
+    pub fn set_stroke_join(&mut self, join: &str) -> Result<(), AuthoringError> {
         let mut state = self.state()?;
         state.style.stroke_join = parse_stroke_join(join)?;
         self.commit_state(state)
     }
-    pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), String> {
+    pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), AuthoringError> {
         let mut state = self.state()?;
         state.style.stroke_cap = parse_stroke_cap(cap)?;
         self.commit_state(state)
     }
-    pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), String> {
+    pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), AuthoringError> {
         let mut state = self.state()?;
         edit_object_opacity(&mut state.style, opacity)?;
         self.commit_state(state)
     }
-    pub fn set_color(&mut self, red: f64, green: f64, blue: f64, alpha: f64) -> Result<(), String> {
-        self.validate().map_err(|error| error.to_string())?;
+    pub fn set_color(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
         let mut state = self.state()?;
         edit_color(&mut state.style, red, green, blue, alpha)?;
         self.commit_state(state)
     }
-    pub fn disable_fill(&mut self) -> Result<(), String> {
-        self.validate().map_err(|error| error.to_string())?;
+    pub fn disable_fill(&mut self) -> Result<(), AuthoringError> {
+        self.validate()?;
         let mut state = self.state()?;
         edit_disable_fill(&mut state.style);
         self.commit_state(state)
@@ -364,14 +373,14 @@ impl Mobject {
         green: f64,
         blue: f64,
         alpha: f64,
-    ) -> Result<(), String> {
-        self.validate().map_err(|error| error.to_string())?;
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
         let mut state = self.state()?;
         edit_fill_color(&mut state.style, red, green, blue, alpha)?;
         self.commit_state(state)
     }
-    pub fn set_fill_opacity(&mut self, opacity: f64) -> Result<(), String> {
-        self.validate().map_err(|error| error.to_string())?;
+    pub fn set_fill_opacity(&mut self, opacity: f64) -> Result<(), AuthoringError> {
+        self.validate()?;
         let mut state = self.state()?;
         edit_fill_opacity(&mut state.style, opacity)?;
         self.commit_state(state)
@@ -382,18 +391,18 @@ impl Mobject {
         green: f64,
         blue: f64,
         opacity: f64,
-    ) -> Result<(), String> {
-        self.validate().map_err(|error| error.to_string())?;
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
         let mut state = self.state()?;
         edit_fill(&mut state.style, red, green, blue, opacity)?;
         self.commit_state(state)
     }
-    pub fn fill_opacity(&self) -> Result<f64, String> {
+    pub fn fill_opacity(&self) -> Result<f64, AuthoringError> {
         let state = self.state()?;
         manim_paint_opacity(state.style.fill.as_ref(), state.style.fill_opacity)
     }
-    pub fn disable_stroke(&mut self) -> Result<(), String> {
-        self.validate().map_err(|error| error.to_string())?;
+    pub fn disable_stroke(&mut self) -> Result<(), AuthoringError> {
+        self.validate()?;
         let mut state = self.state()?;
         edit_disable_stroke(&mut state.style);
         self.commit_state(state)
@@ -404,30 +413,30 @@ impl Mobject {
         green: f64,
         blue: f64,
         alpha: f64,
-    ) -> Result<(), String> {
-        self.validate().map_err(|error| error.to_string())?;
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
         let mut state = self.state()?;
         edit_stroke_color(&mut state.style, red, green, blue, alpha)?;
         self.commit_state(state)
     }
-    pub fn set_stroke_width(&mut self, width: f64) -> Result<(), String> {
-        self.validate().map_err(|error| error.to_string())?;
+    pub fn set_stroke_width(&mut self, width: f64) -> Result<(), AuthoringError> {
+        self.validate()?;
         let mut state = self.state()?;
         edit_stroke_width(&mut state.style, width)?;
         self.commit_state(state)
     }
-    pub fn set_stroke_opacity(&mut self, opacity: f64) -> Result<(), String> {
-        self.validate().map_err(|error| error.to_string())?;
+    pub fn set_stroke_opacity(&mut self, opacity: f64) -> Result<(), AuthoringError> {
+        self.validate()?;
         let mut state = self.state()?;
         edit_stroke_opacity(&mut state.style, opacity)?;
         self.commit_state(state)
     }
-    pub fn stroke_opacity(&self) -> Result<f64, String> {
+    pub fn stroke_opacity(&self) -> Result<f64, AuthoringError> {
         let state = self.state()?;
         manim_paint_opacity(state.style.stroke.as_ref(), state.style.stroke_opacity)
     }
-    pub fn set_opacity(&mut self, opacity: f64) -> Result<(), String> {
-        self.validate().map_err(|error| error.to_string())?;
+    pub fn set_opacity(&mut self, opacity: f64) -> Result<(), AuthoringError> {
+        self.validate()?;
         let mut state = self.state()?;
         edit_manim_opacity(&mut state.style, opacity)?;
         self.commit_state(state)
@@ -527,8 +536,11 @@ mod opacity_tests {
         assert_eq!(manim_paint_opacity(Some(&solid), 0.25).unwrap(), 0.125);
         assert_eq!(manim_paint_opacity(Some(&solid), 1.0).unwrap(), 0.5);
         assert_eq!(manim_paint_opacity(None, 1.0).unwrap(), 0.0);
-        assert!(manim_paint_opacity(Some(&SemanticPaint::Resource(7)), 0.5)
-            .unwrap_err()
-            .contains("resource paints"));
+        assert_eq!(
+            manim_paint_opacity(Some(&SemanticPaint::Resource(7)), 0.5).unwrap_err(),
+            AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::ResourcePaintOpacityQuery
+            )
+        );
     }
 }

@@ -21,7 +21,7 @@ pub enum FamilyPaint {
 }
 
 impl FamilyPaint {
-    fn apply(self, style: &mut Style) -> Result<(), String> {
+    fn apply(self, style: &mut Style) -> Result<(), AuthoringError> {
         match self {
             Self::Color(c) => crate::semantic_mobject::edit_color(
                 style,
@@ -50,7 +50,7 @@ pub enum FamilyCallbackPaintError {
         expected: SceneRevision,
         actual: SceneRevision,
     },
-    InvalidPaint(String),
+    InvalidPaint(AuthoringError),
 }
 
 impl std::fmt::Display for FamilyCallbackPaintError {
@@ -65,14 +65,14 @@ impl std::fmt::Display for FamilyCallbackPaintError {
                 expected.get(),
                 actual.get()
             ),
-            Self::InvalidPaint(e) => f.write_str(e),
+            Self::InvalidPaint(e) => e.fmt(f),
         }
     }
 }
 impl std::error::Error for FamilyCallbackPaintError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Authoring(e) => Some(e),
+            Self::Authoring(e) | Self::InvalidPaint(e) => Some(e),
             Self::Store(e) => Some(e),
             Self::Callback(e) => Some(e),
             _ => None,

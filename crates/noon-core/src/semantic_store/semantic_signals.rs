@@ -163,7 +163,14 @@ impl std::fmt::Display for SemanticScalarSignalQueryError {
     }
 }
 
-impl std::error::Error for SemanticScalarSignalQueryError {}
+impl std::error::Error for SemanticScalarSignalQueryError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Signal(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl From<SemanticSignalError> for SemanticScalarSignalQueryError {
     fn from(value: SemanticSignalError) -> Self {

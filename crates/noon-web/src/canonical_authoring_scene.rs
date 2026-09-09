@@ -51,13 +51,18 @@ impl SceneMembershipBatch {
             return Err("family creation requires an add batch".into());
         }
         noon::MobjectFamily::create(store, &self.family_members()?)
+            .map_err(|error| error.to_string())
     }
 
     fn edit_family(&self, family: &noon::MobjectFamily) -> Result<Vec<bool>, String> {
         let members = self.family_members()?;
         match self.kind {
-            SceneMembershipBatchKind::Add => family.add_many(&members),
-            SceneMembershipBatchKind::Remove => family.remove_many(&members),
+            SceneMembershipBatchKind::Add => {
+                family.add_many(&members).map_err(|error| error.to_string())
+            }
+            SceneMembershipBatchKind::Remove => family
+                .remove_many(&members)
+                .map_err(|error| error.to_string()),
             _ => Err("family membership requires add or remove".into()),
         }
     }
@@ -272,7 +277,10 @@ impl CanonicalAuthoringScene {
         if self.bindings.contains_key(&id) {
             return Err(format!("canonical object {} is already bound", id.get()));
         }
-        let frame = self.scene.camera_frame()?;
+        let frame = self
+            .scene
+            .camera_frame()
+            .map_err(|error| error.to_string())?;
         let node = frame.node_id();
         debug_assert!(!self.identities.contains_key(&node));
         self.bindings.insert(id, node);
@@ -462,10 +470,10 @@ impl CanonicalAuthoringScene {
     /// Route bound observations through the single owner of current execution.
     /// Detached handles are queried directly by their language wrapper.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn mobject_observation<T>(
+    fn mobject_observation<T, E: std::fmt::Display>(
         &mut self,
         handle: &noon::Mobject,
-        authored: impl FnOnce(&noon::Mobject) -> Result<T, String>,
+        authored: impl FnOnce(&noon::Mobject) -> Result<T, E>,
         effective: impl FnOnce(&mut crate::SemanticExecutionPlayer, &noon::Mobject) -> Result<T, String>,
     ) -> Result<T, String> {
         if self.player_ownership.is_transferred() {
@@ -483,7 +491,7 @@ impl CanonicalAuthoringScene {
                 return effective(player, handle);
             }
         }
-        authored(handle)
+        authored(handle).map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -524,7 +532,7 @@ impl CanonicalAuthoringScene {
     fn mobject_fill_opacity(&mut self, handle: &noon::Mobject) -> Result<f64, String> {
         self.mobject_observation(handle, noon::Mobject::fill_opacity, |player, handle| {
             // Reject resource paints before reading their lowered scalar projection.
-            handle.fill_opacity()?;
+            handle.fill_opacity().map_err(|error| error.to_string())?;
             Ok(player
                 .live_effective(handle)
                 .map_err(|error| error.to_string())?
@@ -536,7 +544,7 @@ impl CanonicalAuthoringScene {
     fn mobject_stroke_opacity(&mut self, handle: &noon::Mobject) -> Result<f64, String> {
         self.mobject_observation(handle, noon::Mobject::stroke_opacity, |player, handle| {
             // Reject resource paints before reading their lowered scalar projection.
-            handle.stroke_opacity()?;
+            handle.stroke_opacity().map_err(|error| error.to_string())?;
             Ok(player
                 .live_effective(handle)
                 .map_err(|error| error.to_string())?
@@ -560,7 +568,8 @@ impl CanonicalAuthoringScene {
         }
         handle.validate().map_err(|error| error.to_string())?;
         let mut bounds = handle
-            .layout_bounds()?
+            .layout_bounds()
+            .map_err(|error| error.to_string())?
             .ok_or("Underline target has no layout bounds")?;
         if self.identities.contains_key(&handle.node_id()) {
             let (x, y, width, height) = self.mobject_layout(handle)?;
@@ -571,7 +580,7 @@ impl CanonicalAuthoringScene {
                 max_y: y + height * 0.5,
             };
         }
-        noon::ManimGeometryOptions::underline(bounds, buff)
+        noon::ManimGeometryOptions::underline(bounds, buff).map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -593,7 +602,10 @@ impl CanonicalAuthoringScene {
         }
         match self.player_ownership.local_mut() {
             Some(player) => player.live_value_tracker(initial),
-            None => self.scene.value_tracker(initial),
+            None => self
+                .scene
+                .value_tracker(initial)
+                .map_err(|error| error.to_string()),
         }
     }
 
@@ -605,26 +617,35 @@ impl CanonicalAuthoringScene {
         }
         match self.player_ownership.local_mut() {
             Some(player) => player.live_associate_value_tracker(tracker),
-            None => self.scene.associate_value_tracker(tracker),
+            None => self
+                .scene
+                .associate_value_tracker(tracker)
+                .map_err(|error| error.to_string()),
         }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn pointer_position_signal(&self) -> Result<noon::NativeVectorSignal, String> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.pointer_position_signal()
+        self.scene
+            .pointer_position_signal()
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn viewport_size_signal(&self) -> Result<noon::NativeVectorSignal, String> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.viewport_size_signal()
+        self.scene
+            .viewport_size_signal()
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn wheel_delta_signal(&self) -> Result<noon::NativeVectorSignal, String> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.wheel_delta_signal()
+        self.scene
+            .wheel_delta_signal()
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -634,31 +655,39 @@ impl CanonicalAuthoringScene {
         initial: bool,
     ) -> Result<noon::NativeBoolSignal, String> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.key_state_signal(code, initial)
+        self.scene
+            .key_state_signal(code, initial)
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn control_signal(&self, name: String, initial: f64) -> Result<noon::ValueTracker, String> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.control_signal(name, initial)
+        self.scene
+            .control_signal(name, initial)
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn pointer_down_events(&self, button: u8) -> Result<noon::ValueTracker, String> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.pointer_down_events(button)
+        self.scene
+            .pointer_down_events(button)
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn wheel_events(&self) -> Result<noon::ValueTracker, String> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.wheel_events()
+        self.scene.wheel_events().map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn control_commit_events(&self, name: String) -> Result<noon::ValueTracker, String> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.control_commit_events(name)
+        self.scene
+            .control_commit_events(name)
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -668,7 +697,9 @@ impl CanonicalAuthoringScene {
         signal: &noon::NativeVectorSignal,
     ) -> Result<(), String> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.bind_native_translation(object, signal)
+        self.scene
+            .bind_native_translation(object, signal)
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -678,7 +709,9 @@ impl CanonicalAuthoringScene {
         signal: &noon::ValueTracker,
     ) -> Result<(), String> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.bind_rotation(object, signal)
+        self.scene
+            .bind_rotation(object, signal)
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -688,7 +721,9 @@ impl CanonicalAuthoringScene {
         signal: &noon::ValueTracker,
     ) -> Result<(), String> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.bind_opacity(object, signal)
+        self.scene
+            .bind_opacity(object, signal)
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -698,7 +733,9 @@ impl CanonicalAuthoringScene {
         signal: &noon::NativeBoolSignal,
     ) -> Result<(), String> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.bind_presence(object, signal)
+        self.scene
+            .bind_presence(object, signal)
+            .map_err(|error| error.to_string())
     }
 
     /// Build only the common `offset + tracker * direction` semantic expression.
@@ -710,7 +747,9 @@ impl CanonicalAuthoringScene {
         offset: SemanticVec3,
     ) -> Result<noon::TrackerPosition, String> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.position_from_tracker(tracker, direction, offset)
+        self.scene
+            .position_from_tracker(tracker, direction, offset)
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -720,7 +759,9 @@ impl CanonicalAuthoringScene {
         position: &noon::TrackerPosition,
     ) -> Result<(), String> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.bind_position(object, position)
+        self.scene
+            .bind_position(object, position)
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -730,7 +771,10 @@ impl CanonicalAuthoringScene {
         }
         match self.player_ownership.local_mut() {
             Some(player) => player.live_effective_signal(tracker),
-            None => self.scene.value_tracker_value(tracker),
+            None => self
+                .scene
+                .value_tracker_value(tracker)
+                .map_err(|error| error.to_string()),
         }
     }
 
@@ -745,7 +789,10 @@ impl CanonicalAuthoringScene {
         }
         match self.player_ownership.local_mut() {
             Some(player) => player.live_set_signal(tracker, value),
-            None => self.scene.set_value(tracker, value),
+            None => self
+                .scene
+                .set_value(tracker, value)
+                .map_err(|error| error.to_string()),
         }
     }
 
@@ -1846,7 +1893,7 @@ impl CanonicalAuthoringScene {
         }
         source.validate().map_err(|error| error.to_string())?;
         match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => source.target_editor(),
+            PlayerOwnership::Unstarted => source.target_editor().map_err(|error| error.to_string()),
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
                 self.active_live_player()?.live_target_editor(source)
             }
@@ -2331,7 +2378,9 @@ impl CanonicalAuthoringScene {
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
-fn authored_mobject_layout(handle: &noon::Mobject) -> Result<(f64, f64, f64, f64), String> {
+fn authored_mobject_layout(
+    handle: &noon::Mobject,
+) -> Result<(f64, f64, f64, f64), noon::AuthoringError> {
     let Some(bounds) = handle.layout_bounds()? else {
         let (center_x, center_y) = handle.center()?;
         return Ok((center_x, center_y, 0.0, 0.0));

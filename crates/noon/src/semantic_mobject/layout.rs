@@ -8,9 +8,9 @@ impl Mobject {
         aligned_edge_y: f64,
         mask_x: f64,
         mask_y: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         self.require_same_store(other)?;
-        self.validate().map_err(|error| error.to_string())?;
+        self.validate()?;
         let edge = authoring_xy_f64(aligned_edge_x, aligned_edge_y)?;
         let mask = authoring_xy_f64(mask_x, mask_y)?;
         let source = self.critical_point(edge.x, edge.y)?;
@@ -28,8 +28,8 @@ impl Mobject {
         aligned_edge_y: f64,
         mask_x: f64,
         mask_y: f64,
-    ) -> Result<(), String> {
-        self.validate().map_err(|error| error.to_string())?;
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
         let point = authoring_xy_f64(point_x, point_y)?;
         let edge = authoring_xy_f64(aligned_edge_x, aligned_edge_y)?;
         let mask = authoring_xy_f64(mask_x, mask_y)?;
@@ -40,9 +40,9 @@ impl Mobject {
         &mut self,
         other: &Self,
         args: ManimNextToArgs,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         self.require_same_store(other)?;
-        self.validate().map_err(|error| error.to_string())?;
+        self.validate()?;
         let direction = authoring_xy_f64(args.direction.0, args.direction.1)?;
         let edge = authoring_xy_f64(args.aligned_edge.0, args.aligned_edge.1)?;
         let mask = authoring_xy_f64(args.mask.0, args.mask.1)?;
@@ -59,8 +59,8 @@ impl Mobject {
         point_x: f64,
         point_y: f64,
         args: ManimNextToArgs,
-    ) -> Result<(), String> {
-        self.validate().map_err(|error| error.to_string())?;
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
         let point = authoring_xy_f64(point_x, point_y)?;
         let direction = authoring_xy_f64(args.direction.0, args.direction.1)?;
         let edge = authoring_xy_f64(args.aligned_edge.0, args.aligned_edge.1)?;
@@ -78,9 +78,9 @@ impl Mobject {
         direction_x: f64,
         direction_y: f64,
         buff: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         self.require_same_store(other)?;
-        self.validate().map_err(|error| error.to_string())?;
+        self.validate()?;
         let (axis_x, axis_y) = normalized_direction(direction_x, direction_y)?;
         let source = self.critical_point(-axis_x, -axis_y)?;
         let target = other.critical_point(axis_x, axis_y)?;
@@ -96,8 +96,8 @@ impl Mobject {
         direction_x: f64,
         direction_y: f64,
         buff: f64,
-    ) -> Result<(), String> {
-        self.validate().map_err(|error| error.to_string())?;
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
         semantic_xy(point_x, point_y)?;
         let (axis_x, axis_y) = normalized_direction(direction_x, direction_y)?;
         let source = self.critical_point(-axis_x, -axis_y)?;
@@ -111,9 +111,9 @@ impl Mobject {
         other: &Self,
         direction_x: f64,
         direction_y: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         self.require_same_store(other)?;
-        self.validate().map_err(|error| error.to_string())?;
+        self.validate()?;
         finite_f32("direction.x", direction_x)?;
         finite_f32("direction.y", direction_y)?;
         let source = self.critical_point(direction_x, direction_y)?;
@@ -137,8 +137,8 @@ impl Mobject {
         point_y: f64,
         direction_x: f64,
         direction_y: f64,
-    ) -> Result<(), String> {
-        self.validate().map_err(|error| error.to_string())?;
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
         semantic_xy(point_x, point_y)?;
         let source = self.critical_point(direction_x, direction_y)?;
         self.shift(
@@ -159,8 +159,8 @@ impl Mobject {
         direction_x: f64,
         direction_y: f64,
         buff: f64,
-    ) -> Result<(), String> {
-        self.validate().map_err(|error| error.to_string())?;
+    ) -> Result<(), AuthoringError> {
+        self.validate()?;
         let target =
             crate::family_layout::frame_alignment_target((direction_x, direction_y), buff)?;
         self.align_to_point(target.0, target.1, direction_x, direction_y)

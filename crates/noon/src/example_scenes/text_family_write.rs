@@ -164,17 +164,28 @@ impl LiveContinuation for TextFamilyWrite {
 pub fn program() -> Result<LiveProgram<TextFamilyWrite>, String> {
     let mut scene = Scene::new();
     let mut left = scene.text("I").map_err(|error| error.to_string())?;
-    left.set_translation(-3.0, 0.75)?;
+    left.set_translation(-3.0, 0.75)
+        .map_err(|error| error.to_string())?;
     let mut right = scene.text("LONG").map_err(|error| error.to_string())?;
-    right.set_translation(0.0, 0.75)?;
-    let family = scene.family(&[(&left).into(), (&right).into()])?;
-    let mut moving = scene.square(0.6)?;
-    moving.set_translation(0.0, -1.25)?;
+    right
+        .set_translation(0.0, 0.75)
+        .map_err(|error| error.to_string())?;
+    let family = scene
+        .family(&[(&left).into(), (&right).into()])
+        .map_err(|error| error.to_string())?;
+    let mut moving = scene.square(0.6).map_err(|error| error.to_string())?;
+    moving
+        .set_translation(0.0, -1.25)
+        .map_err(|error| error.to_string())?;
     scene.add(&moving).map_err(|error| error.to_string())?;
-    let mut moving_target = moving.target_editor()?;
-    moving_target.shift(2.0, 0.0)?;
-    let mut left_target = left.target_editor()?;
-    left_target.shift(0.0, 1.0)?;
+    let mut moving_target = moving.target_editor().map_err(|error| error.to_string())?;
+    moving_target
+        .shift(2.0, 0.0)
+        .map_err(|error| error.to_string())?;
+    let mut left_target = left.target_editor().map_err(|error| error.to_string())?;
+    left_target
+        .shift(0.0, 1.0)
+        .map_err(|error| error.to_string())?;
     scene
         .into_live_program(TextFamilyWrite {
             left,

@@ -1,5 +1,6 @@
 //! Typed compact-value import at explicit external authoring boundaries.
 
+use crate::AuthoringError;
 use noon_core::{
     GeometryRef, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle,
     SemanticTransform2_5D, SemanticVec3, Style, Transform2D,
@@ -15,9 +16,9 @@ pub fn semantic_object_state_from_compact(
     geometry: GeometryRef,
     transform: Transform2D,
     style: Style,
-) -> Result<SemanticObjectState, String> {
+) -> Result<SemanticObjectState, AuthoringError> {
     if !geometry.is_finite() {
-        return Err("compact geometry must be finite".into());
+        return Err(AuthoringError::NonFiniteGeometry);
     }
     let transform = semantic_transform_from_compact(transform)?;
     let style = semantic_style_from_compact(style)?;
@@ -30,7 +31,7 @@ pub fn semantic_object_state_from_compact(
 
 pub(crate) fn semantic_transform_from_compact(
     transform: Transform2D,
-) -> Result<SemanticTransform2_5D, String> {
+) -> Result<SemanticTransform2_5D, AuthoringError> {
     let semantic = SemanticTransform2_5D {
         translation: SemanticVec3::from_vec2(transform.translation),
         scale: SemanticVec3::new(
@@ -44,12 +45,12 @@ pub(crate) fn semantic_transform_from_compact(
         || !semantic.scale.is_finite()
         || !semantic.rotation_z.is_finite()
     {
-        return Err("compact transform must be finite".into());
+        return Err(AuthoringError::NonFiniteTransform);
     }
     Ok(semantic)
 }
 
-pub(crate) fn semantic_style_from_compact(style: Style) -> Result<SemanticStyle, String> {
+pub(crate) fn semantic_style_from_compact(style: Style) -> Result<SemanticStyle, AuthoringError> {
     let mut semantic = SemanticStyle::from_compact(style);
     if let Some(SemanticPaint::Solid(color)) = &mut semantic.fill {
         semantic.fill_opacity = f64::from(color.alpha);
@@ -60,7 +61,7 @@ pub(crate) fn semantic_style_from_compact(style: Style) -> Result<SemanticStyle,
         color.alpha = 1.0;
     }
     if !semantic.is_finite() {
-        return Err("compact style must be finite".into());
+        return Err(AuthoringError::NonFiniteStyle);
     }
     Ok(semantic)
 }

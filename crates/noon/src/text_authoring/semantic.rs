@@ -150,7 +150,7 @@ fn text_artifact_state(
         || !semantic_transform.rotation_z.is_finite()
     {
         return Err(TextAuthoringError::Semantic(
-            "text transform is not finite".into(),
+            crate::AuthoringError::NonFiniteTransform,
         ));
     }
     let style = noon_core::SemanticStyle {
@@ -163,13 +163,13 @@ fn text_artifact_state(
     };
     if !style.is_finite() {
         return Err(TextAuthoringError::Semantic(
-            "text style is not finite".into(),
+            crate::AuthoringError::NonFiniteStyle,
         ));
     }
     let handle = store
         .borrow_mut()
         .import_text_resource(resource, &fonts, &geometries)
-        .map_err(TextAuthoringError::Semantic)?;
+        .map_err(TextAuthoringError::Import)?;
     let mut state = noon_core::SemanticObjectState::new(handle);
     state.transform = semantic_transform;
     state.style = style;

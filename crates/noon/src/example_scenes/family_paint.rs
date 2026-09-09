@@ -3,14 +3,22 @@ use crate::{Color, ExecutionSession, Scene};
 
 pub fn session() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
-    let mut a = scene.square(0.6)?;
-    let mut b = scene.square(0.6)?;
-    a.shift(-1.0, 0.0)?;
-    b.shift(1.0, 0.0)?;
-    let nested = scene.family(&[(&a).into(), (&b).into()])?;
-    let family = scene.family(&[(&nested).into(), (&a).into()])?;
-    family.set_fill(Some(Color::rgba(1.0, 0.0, 0.0, 1.0)), Some(0.8))?;
-    family.set_stroke(Some(Color::rgba(0.0, 0.0, 1.0, 1.0)), Some(0.04), Some(1.0))?;
+    let mut a = scene.square(0.6).map_err(|error| error.to_string())?;
+    let mut b = scene.square(0.6).map_err(|error| error.to_string())?;
+    a.shift(-1.0, 0.0).map_err(|error| error.to_string())?;
+    b.shift(1.0, 0.0).map_err(|error| error.to_string())?;
+    let nested = scene
+        .family(&[(&a).into(), (&b).into()])
+        .map_err(|error| error.to_string())?;
+    let family = scene
+        .family(&[(&nested).into(), (&a).into()])
+        .map_err(|error| error.to_string())?;
+    family
+        .set_fill(Some(Color::rgba(1.0, 0.0, 0.0, 1.0)), Some(0.8))
+        .map_err(|error| error.to_string())?;
+    family
+        .set_stroke(Some(Color::rgba(0.0, 0.0, 1.0, 1.0)), Some(0.04), Some(1.0))
+        .map_err(|error| error.to_string())?;
     scene
         .add_many(&[(&family).into()])
         .map_err(|error| error.to_string())?;

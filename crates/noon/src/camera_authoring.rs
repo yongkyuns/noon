@@ -4,7 +4,7 @@ use noon_core::{
     DEFAULT_FRAME_WIDTH,
 };
 
-use crate::{Mobject, Scene};
+use crate::{AuthoringError, Mobject, Scene};
 
 impl Scene {
     /// Create and attach the one ordinary semantic object that defines this scene's 2D camera.
@@ -13,16 +13,20 @@ impl Scene {
     /// membership then commit in one semantic transaction. The frame remains an ordinary
     /// transformable Mobject; its role only tells lowering which effective transform supplies the
     /// renderer viewport.
-    pub fn camera_frame(&mut self) -> Result<Mobject, String> {
+    pub fn camera_frame(&mut self) -> Result<Mobject, AuthoringError> {
         let store = self.integration_store().borrow();
         let root_is_empty = store
             .node(self.root())
-            .ok_or("scene root is unavailable")?
+            .ok_or_else(|| {
+                AuthoringError::from(noon_core::SemanticSceneOperationError::UnknownNode(
+                    self.root(),
+                ))
+            })?
             .members()
             .is_empty();
         drop(store);
         if !root_is_empty {
-            return Err("2D camera frame must be created before scene content".into());
+            return Err(AuthoringError::CameraRequiresEmptyScene(self.root()));
         }
 
         let mut state = SemanticObjectState::new(StoredGeometry::Rectangle {
@@ -39,10 +43,10 @@ impl Scene {
         transaction.add_member(self.root(), frame);
         let result = transaction
             .apply(&mut self.integration_store().borrow_mut())
-            .map_err(|error| error.to_string())?;
+            .map_err(AuthoringError::from)?;
         let id = result
             .resolve(frame)
-            .ok_or("camera-frame transaction returned no semantic identity")?;
+            .ok_or(AuthoringError::UnresolvedCreatedNode(frame))?;
         debug_assert!(matches!(
             result.impacts(),
             [
@@ -88,7 +92,7 @@ mod tests {
         let before = scene.integration_store().borrow().scene_revision();
         assert_eq!(
             scene.camera_frame().unwrap_err(),
-            "2D camera frame must be created before scene content"
+            AuthoringError::CameraRequiresEmptyScene(scene.root())
         );
         assert_eq!(scene.integration_store().borrow().scene_revision(), before);
     }
@@ -102,7 +106,7 @@ mod tests {
 
         assert_eq!(
             scene.camera_frame().unwrap_err(),
-            "2D camera frame must be created before scene content"
+            AuthoringError::CameraRequiresEmptyScene(scene.root())
         );
         assert_eq!(scene.integration_store().borrow().scene_revision(), before);
         assert_eq!(

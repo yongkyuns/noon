@@ -7,8 +7,8 @@ use wasm_bindgen::prelude::*;
 
 use crate::{WasmAuthoringFamilyLayout, WasmAuthoringMobjectHandle, WasmManimGeometryOptions};
 
-fn js_error(error: String) -> JsValue {
-    JsValue::from_str(&error)
+fn js_error(error: impl std::fmt::Display) -> JsValue {
+    JsValue::from_str(&error.to_string())
 }
 
 fn mobject_bounds(handle: &WasmAuthoringMobjectHandle) -> Result<Bounds2D64, JsValue> {
@@ -30,7 +30,7 @@ impl WasmAuthoringMobjectHandle {
             .semantic_mobject()
             .layout_bounds()
             .map_err(js_error)?
-            .ok_or_else(|| js_error("Underline target has no layout bounds".into()))?;
+            .ok_or_else(|| js_error("Underline target has no layout bounds"))?;
         ManimGeometryOptions::underline(bounds, buff)
             .map(WasmManimGeometryOptions::from_options)
             .map_err(js_error)

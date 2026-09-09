@@ -3,7 +3,7 @@ use crate::{AnimationOptions, ExecutionSession, RateFunction, Scene};
 
 pub fn circle() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
-    let circle = scene.circle(0.75)?;
+    let circle = scene.circle(0.75).map_err(|error| error.to_string())?;
     scene.add(&circle).map_err(|error| error.to_string())?;
     scene.wait(4.0)?;
     scene.execution_session().map_err(|e| e.to_string())
@@ -11,14 +11,20 @@ pub fn circle() -> Result<ExecutionSession, String> {
 
 pub fn four_animated() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
-    let mut circle = scene.circle(0.65)?;
-    circle.shift(-2.0, 0.6)?;
-    let mut rectangle = scene.rectangle(1.5, 0.9)?;
-    rectangle.shift(2.0, 0.6)?;
-    let mut line = scene.line((-1.2, 0.0), (1.2, 0.0))?;
-    line.shift(-1.5, -1.4)?;
-    let mut square = scene.square(0.8)?;
-    square.shift(1.5, -1.4)?;
+    let mut circle = scene.circle(0.65).map_err(|error| error.to_string())?;
+    circle.shift(-2.0, 0.6).map_err(|error| error.to_string())?;
+    let mut rectangle = scene
+        .rectangle(1.5, 0.9)
+        .map_err(|error| error.to_string())?;
+    rectangle
+        .shift(2.0, 0.6)
+        .map_err(|error| error.to_string())?;
+    let mut line = scene
+        .line((-1.2, 0.0), (1.2, 0.0))
+        .map_err(|error| error.to_string())?;
+    line.shift(-1.5, -1.4).map_err(|error| error.to_string())?;
+    let mut square = scene.square(0.8).map_err(|error| error.to_string())?;
+    square.shift(1.5, -1.4).map_err(|error| error.to_string())?;
     scene
         .add_many(&[
             (&circle).into(),
@@ -27,8 +33,8 @@ pub fn four_animated() -> Result<ExecutionSession, String> {
             (&square).into(),
         ])
         .map_err(|error| error.to_string())?;
-    let mut target = circle.target_editor()?;
-    target.shift(1.6, 0.0)?;
+    let mut target = circle.target_editor().map_err(|error| error.to_string())?;
+    target.shift(1.6, 0.0).map_err(|error| error.to_string())?;
     let animation = scene.declare_transform_to(
         &circle,
         &target,
@@ -46,11 +52,21 @@ pub fn four_animated() -> Result<ExecutionSession, String> {
 
 pub fn camera_density() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
-    let mut rectangle = scene.rectangle(2.0, 1.0)?;
-    rectangle.shift(1.25, -0.75)?;
-    rectangle.rotate(std::f64::consts::PI / 6.0)?;
-    rectangle.set_fill(1.0, 1.0, 1.0, 1.0)?;
-    rectangle.disable_stroke()?;
+    let mut rectangle = scene
+        .rectangle(2.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    rectangle
+        .shift(1.25, -0.75)
+        .map_err(|error| error.to_string())?;
+    rectangle
+        .rotate(std::f64::consts::PI / 6.0)
+        .map_err(|error| error.to_string())?;
+    rectangle
+        .set_fill(1.0, 1.0, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    rectangle
+        .disable_stroke()
+        .map_err(|error| error.to_string())?;
     scene.add(&rectangle).map_err(|error| error.to_string())?;
     scene.wait(4.0)?;
     scene.execution_session().map_err(|e| e.to_string())
