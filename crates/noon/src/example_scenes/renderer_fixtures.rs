@@ -23,9 +23,11 @@ fn paint(
     stroke: Color,
     width: f64,
 ) -> Result<(), String> {
-    let mut state = object.state()?;
+    let mut state = object.state().map_err(|error| error.to_string())?;
     state.style = style(fill, stroke, width);
-    object.commit_state(state)
+    object
+        .commit_state(state)
+        .map_err(|error| error.to_string())
 }
 
 fn options() -> AnimationOptions {
@@ -79,8 +81,12 @@ fn star(outer: f32, inner: f32, phase: f32) -> VectorPath {
 /// Pair: `web/python/examples/ordinary_filled_path_transform.py`.
 pub fn filled_path_transform() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
-    let shape = scene.path(rounded_loop(1.35), style(Some(BLUE), WHITE, 0.08))?;
-    let target = scene.path(star(1.7, 0.7, 0.0), style(Some(PURPLE), WHITE, 0.08))?;
+    let shape = scene
+        .path(rounded_loop(1.35), style(Some(BLUE), WHITE, 0.08))
+        .map_err(|error| error.to_string())?;
+    let target = scene
+        .path(star(1.7, 0.7, 0.0), style(Some(PURPLE), WHITE, 0.08))
+        .map_err(|error| error.to_string())?;
     scene.add(&shape).map_err(|error| error.to_string())?;
     let mut session = scene
         .execution_session()
@@ -102,20 +108,28 @@ pub fn filled_path_transform() -> Result<ExecutionSession, String> {
 /// Pair: `web/python/examples/ordinary_create_shapes.py`.
 pub fn create_shapes() -> Result<ExecutionSession, String> {
     let scene = Scene::new();
-    let mut circle = scene.circle(0.9)?;
-    circle.set_translation(-3.0, 1.0)?;
+    let mut circle = scene.circle(0.9).map_err(|error| error.to_string())?;
+    circle
+        .set_translation(-3.0, 1.0)
+        .map_err(|error| error.to_string())?;
     paint(&mut circle, Some(BLUE), WHITE, 0.055)?;
-    let mut square = scene.square(1.7)?;
-    square.set_translation(0.0, 1.0)?;
+    let mut square = scene.square(1.7).map_err(|error| error.to_string())?;
+    square
+        .set_translation(0.0, 1.0)
+        .map_err(|error| error.to_string())?;
     paint(&mut square, Some(PINK), WHITE, 0.055)?;
-    let mut line = scene.line((1.75, 1.0), (4.25, 1.0))?;
+    let mut line = scene
+        .line((1.75, 1.0), (4.25, 1.0))
+        .map_err(|error| error.to_string())?;
     paint(&mut line, None, BLUE, 0.055)?;
     let wave = VectorPath::new().move_to(Vec2::new(-2.4, -1.6)).cubic_to(
         Vec2::new(-1.2, -2.6),
         Vec2::new(1.2, -0.6),
         Vec2::new(2.4, -1.6),
     );
-    let wave = scene.path(wave, style(None, PINK, 0.05))?;
+    let wave = scene
+        .path(wave, style(None, PINK, 0.05))
+        .map_err(|error| error.to_string())?;
     let mut session = scene
         .execution_session()
         .map_err(|error| error.to_string())?;
@@ -173,12 +187,20 @@ pub fn morph_stress(count: usize) -> Result<ExecutionSession, String> {
     let mut pairs = Vec::with_capacity(count);
     for index in 0..count {
         let paint = style(None, colors[index % colors.len()], width);
-        let mut shape = scene.path(source.clone(), paint.clone())?;
-        let mut target = scene.path(targets[index % targets.len()].clone(), paint)?;
+        let mut shape = scene
+            .path(source.clone(), paint.clone())
+            .map_err(|error| error.to_string())?;
+        let mut target = scene
+            .path(targets[index % targets.len()].clone(), paint)
+            .map_err(|error| error.to_string())?;
         let x = -2.9 + (index % columns) as f64 * dx;
         let y = 1.9 - (index / columns) as f64 * dy;
-        shape.set_translation(x, y)?;
-        target.set_translation(x, y)?;
+        shape
+            .set_translation(x, y)
+            .map_err(|error| error.to_string())?;
+        target
+            .set_translation(x, y)
+            .map_err(|error| error.to_string())?;
         scene.add(&shape).map_err(|error| error.to_string())?;
         pairs.push((shape, target));
     }

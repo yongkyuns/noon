@@ -30,40 +30,66 @@ impl LiveContinuation for LiveGeometryConstruction {
                     .map_err(|e| e.to_string())
             }
             1 => {
-                let mut rectangle = ManimGeometryOptions::rectangle(1.2, 0.8)?;
-                rectangle.set_translation(2.0, 0.0)?;
-                rectangle.set_fill(0.0, 1.0, 0.0, 1.0)?;
+                let mut rectangle =
+                    ManimGeometryOptions::rectangle(1.2, 0.8).map_err(|error| error.to_string())?;
+                rectangle
+                    .set_translation(2.0, 0.0)
+                    .map_err(|error| error.to_string())?;
+                rectangle
+                    .set_fill(0.0, 1.0, 0.0, 1.0)
+                    .map_err(|error| error.to_string())?;
                 rectangle.disable_stroke();
                 let rectangle = live
                     .create_manim_geometry(rectangle)
                     .map_err(|e| e.to_string())?;
-                let mut line = ManimGeometryOptions::line(-1.0, -0.5, 1.0, 0.5)?;
-                line.set_scale(1.5, 0.75)?;
-                line.set_rotation(std::f64::consts::PI / 6.0)?;
-                line.set_translation(0.0, -2.0)?;
-                line.set_fill_color(1.0, 1.0, 0.0, 0.7)?;
+                let mut line = ManimGeometryOptions::line(-1.0, -0.5, 1.0, 0.5)
+                    .map_err(|error| error.to_string())?;
+                line.set_scale(1.5, 0.75)
+                    .map_err(|error| error.to_string())?;
+                line.set_rotation(std::f64::consts::PI / 6.0)
+                    .map_err(|error| error.to_string())?;
+                line.set_translation(0.0, -2.0)
+                    .map_err(|error| error.to_string())?;
+                line.set_fill_color(1.0, 1.0, 0.0, 0.7)
+                    .map_err(|error| error.to_string())?;
                 line.set_stroke_color(
                     f64::from(LINE_COLOR.red),
                     f64::from(LINE_COLOR.green),
                     f64::from(LINE_COLOR.blue),
                     1.0,
-                )?;
-                line.set_stroke_opacity(f64::from(LINE_COLOR.alpha))?;
-                line.set_stroke_width(0.04)?;
+                )
+                .map_err(|error| error.to_string())?;
+                line.set_stroke_opacity(f64::from(LINE_COLOR.alpha))
+                    .map_err(|error| error.to_string())?;
+                line.set_stroke_width(0.04)
+                    .map_err(|error| error.to_string())?;
                 let line = live
                     .create_manim_geometry(line)
                     .map_err(|e| e.to_string())?;
-                assert_endpoints(line.manim_line_endpoints()?, LINE_START, LINE_END)?;
-                assert_color(line.manim_color()?, LINE_COLOR)?;
+                assert_endpoints(
+                    line.manim_line_endpoints()
+                        .map_err(|error| error.to_string())?,
+                    LINE_START,
+                    LINE_END,
+                )?;
+                assert_color(
+                    line.manim_color().map_err(|error| error.to_string())?,
+                    LINE_COLOR,
+                )?;
                 let mut late_path = ManimGeometryOptions::path(
                     VectorPath::new()
                         .move_to(Vec2::new(-0.3, -0.3))
                         .line_to(Vec2::new(0.3, -0.3))
                         .line_to(Vec2::new(0.0, 0.3))
                         .close(),
-                )?;
-                late_path.set_translation(0.0, 2.0)?;
-                late_path.set_fill(0.0, 1.0, 1.0, 1.0)?;
+                )
+                .map_err(|error| error.to_string())?;
+                late_path
+                    .set_translation(0.0, 2.0)
+                    .map_err(|error| error.to_string())?;
+                late_path
+                    .set_fill(0.0, 1.0, 1.0, 1.0)
+                    .map_err(|error| error.to_string())?;
                 late_path.disable_stroke();
                 let late_path = live
                     .create_manim_geometry(late_path)
@@ -117,11 +143,16 @@ impl LiveContinuation for LiveGeometryConstruction {
                         .map_err(|error| error.to_string())?,
                     LINE_COLOR,
                 )?;
-                let mut dot = ManimGeometryOptions::dot(-4.0, -1.5, 0.25)?;
-                dot.set_color(1.0, 0.0, 0.0, 1.0)?;
+                let mut dot = ManimGeometryOptions::dot(-4.0, -1.5, 0.25)
+                    .map_err(|error| error.to_string())?;
+                dot.set_color(1.0, 0.0, 0.0, 1.0)
+                    .map_err(|error| error.to_string())?;
                 let dot = live.create_manim_geometry(dot).map_err(|e| e.to_string())?;
-                let mut annulus = ManimGeometryOptions::annulus(0.25, 0.5, 9, 4.0, -1.5)?;
-                annulus.set_color(1.0, 1.0, 0.0, 1.0)?;
+                let mut annulus = ManimGeometryOptions::annulus(0.25, 0.5, 9, 4.0, -1.5)
+                    .map_err(|error| error.to_string())?;
+                annulus
+                    .set_color(1.0, 1.0, 0.0, 1.0)
+                    .map_err(|error| error.to_string())?;
                 let annulus = live
                     .create_manim_geometry(annulus)
                     .map_err(|e| e.to_string())?;
@@ -134,9 +165,12 @@ impl LiveContinuation for LiveGeometryConstruction {
                     min_y: layout.center.1 - layout.height * 0.5,
                     max_y: layout.center.1 + layout.height * 0.5,
                 };
-                let mut underline = ManimGeometryOptions::underline(bounds, 0.15)?;
+                let mut underline = ManimGeometryOptions::underline(bounds, 0.15)
+                    .map_err(|error| error.to_string())?;
                 // Rust widths use scene units; Python's Manim width 8 maps to 0.08.
-                underline.set_stroke_width(0.08)?;
+                underline
+                    .set_stroke_width(0.08)
+                    .map_err(|error| error.to_string())?;
                 let underline = live
                     .create_manim_geometry(underline)
                     .map_err(|e| e.to_string())?;
@@ -201,24 +235,38 @@ pub fn program() -> Result<LiveProgram<LiveGeometryConstruction>, String> {
             Vec2::new(-0.6, 0.5),
         )
         .close();
-    let mut options = ManimGeometryOptions::path(path)?;
-    options.set_translation(-2.0, 0.0)?;
-    options.set_fill(0.0, 0.0, 1.0, 1.0)?;
+    let mut options = ManimGeometryOptions::path(path).map_err(|error| error.to_string())?;
+    options
+        .set_translation(-2.0, 0.0)
+        .map_err(|error| error.to_string())?;
+    options
+        .set_fill(0.0, 0.0, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
     options.disable_stroke();
-    let path = Mobject::from_manim_geometry(Rc::clone(scene.integration_store()), options)?;
-    let bounds = path.layout_bounds()?.ok_or("path has no bounds")?;
+    let path = Mobject::from_manim_geometry(Rc::clone(scene.integration_store()), options)
+        .map_err(|error| error.to_string())?;
+    let bounds = path
+        .layout_bounds()
+        .map_err(|error| error.to_string())?
+        .ok_or("path has no bounds")?;
     let family_bounds = scene
-        .family(&[(&path).into()])?
-        .layout_bounds()?
+        .family(&[(&path).into()])
+        .map_err(|error| error.to_string())?
+        .layout_bounds()
+        .map_err(|error| error.to_string())?
         .ok_or("path family has no bounds")?;
     let outline = Mobject::from_manim_geometry(
         Rc::clone(scene.integration_store()),
-        ManimGeometryOptions::surrounding_rectangle(bounds, 0.15, 0.15, 0.1)?,
-    )?;
+        ManimGeometryOptions::surrounding_rectangle(bounds, 0.15, 0.15, 0.1)
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
     let background = Mobject::from_manim_geometry(
         Rc::clone(scene.integration_store()),
-        ManimGeometryOptions::background_rectangle(family_bounds, 0.25, 0.25, 0.1, 0.5)?,
-    )?;
+        ManimGeometryOptions::background_rectangle(family_bounds, 0.25, 0.25, 0.1, 0.5)
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
     scene
         .add_many(&[
             MobjectFamilyMember::Mobject(&background),

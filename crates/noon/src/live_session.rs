@@ -186,9 +186,9 @@ pub(crate) fn target_style_from_effective(
         authored.stroke.as_ref(),
         Some(noon_core::SemanticPaint::Resource(_))
     ) {
-        return Err(LiveSessionError::Mobject(
-            "target editor cannot capture a runtime style backed by a paint resource".into(),
-        ));
+        return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::CaptureResourcePaint,
+        )));
     }
     let (fill, fill_opacity) =
         if lowered_solid_color(authored.fill.as_ref(), authored.fill_opacity) == effective.fill {
@@ -415,10 +415,14 @@ impl<'a> TransformToRequest<'a> {
 /// Errors while a semantic handle is used through a live execution session.
 #[derive(Debug)]
 pub enum LiveSessionError {
-    /// Handle or membership preflight failed before publication.
+    /// Shared authoring preflight failed before publication.
     Authoring(crate::AuthoringError),
     ForeignMobjectStore,
+    // The remaining animation-specific shape checks are migrated in R2b.
     Mobject(String),
+    Callback(crate::ExecutionSessionCallbackError),
+    #[cfg(any(feature = "native-text", feature = "typst"))]
+    Text(crate::TextAuthoringError),
     Animation(String),
     Activation(ExecutionSessionAnimationError),
     Segment(ExecutionSegmentError),
@@ -435,6 +439,9 @@ impl std::fmt::Display for LiveSessionError {
             }
             Self::Authoring(error) => error.fmt(formatter),
             Self::Mobject(error) => error.fmt(formatter),
+            Self::Callback(error) => error.fmt(formatter),
+            #[cfg(any(feature = "native-text", feature = "typst"))]
+            Self::Text(error) => error.fmt(formatter),
             Self::Animation(error) => error.fmt(formatter),
             Self::Activation(error) => error.fmt(formatter),
             Self::Segment(error) => error.fmt(formatter),
@@ -449,6 +456,9 @@ impl std::error::Error for LiveSessionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Authoring(error) => Some(error),
+            Self::Callback(error) => Some(error),
+            #[cfg(any(feature = "native-text", feature = "typst"))]
+            Self::Text(error) => Some(error),
             Self::Activation(error) => Some(error),
             Self::Segment(error) => Some(error),
             Self::Advance(error) => Some(error),
@@ -531,7 +541,7 @@ impl<'a> LiveSession<'a> {
     ) -> Result<(), LiveSessionError> {
         tracker
             .require_store(self.store)
-            .map_err(LiveSessionError::Animation)?;
+            .map_err(LiveSessionError::from)?;
         let mut store = self.store.borrow_mut();
         self.session
             .associate_value_tracker(&mut store, self.root, tracker.node_id())
@@ -641,7 +651,7 @@ impl<'a> LiveSession<'a> {
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_mobject(target)?;
         self.require_mobject(source)?;
-        let content = source.state().map_err(LiveSessionError::Mobject)?.content;
+        let content = source.state().map_err(LiveSessionError::from)?.content;
         let mut transaction = SemanticMutationTransaction::new();
         transaction.replace_content(target.node_id(), content);
         self.apply(transaction)
@@ -650,7 +660,7 @@ impl<'a> LiveSession<'a> {
     /// Inspect authored/base state explicitly, separate from [`Self::effective`].
     pub fn authored(&self, mobject: &Mobject) -> Result<SemanticObjectState, LiveSessionError> {
         self.require_mobject(mobject)?;
-        mobject.state().map_err(LiveSessionError::Mobject)
+        mobject.state().map_err(LiveSessionError::from)
     }
 
     /// Create a detached, session-coherent target copy for subsequent live authoring.
@@ -670,19 +680,19 @@ impl<'a> LiveSession<'a> {
         let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
             unreachable!("one prepared target copy has one exact semantic impact")
         };
-        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::Mobject)
+        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
     }
 
     fn require_target_capture(&self) -> Result<(), LiveSessionError> {
         self.session.require_published_store(&self.store.borrow())?;
-        if self.session.pending_callback_token().is_some() {
-            return Err(LiveSessionError::Mobject(
-                "cannot create a target while a required callback phase is pending".into(),
+        if let Some(token) = self.session.pending_callback_token() {
+            return Err(LiveSessionError::Callback(
+                crate::ExecutionSessionCallbackError::Pending(token),
             ));
         }
-        if self.session.callback_termination().is_some() {
-            return Err(LiveSessionError::Mobject(
-                "cannot create a target from a terminated callback session".into(),
+        if let Some(termination) = self.session.callback_termination() {
+            return Err(LiveSessionError::Callback(
+                crate::ExecutionSessionCallbackError::Terminated(termination),
             ));
         }
 
@@ -708,11 +718,9 @@ impl<'a> LiveSession<'a> {
         let (transaction, pending) =
             crate::family_copy::prepare_family_copy(source, references, |mobject| {
                 self.capture_mobject_state(mobject)
-                    .map_err(|e| e.to_string())
-            })
-            .map_err(LiveSessionError::Mobject)?;
+            })?;
         let result = self.apply(transaction)?;
-        pending.resolve(&result).map_err(LiveSessionError::Mobject)
+        pending.resolve(&result).map_err(LiveSessionError::from)
     }
 
     /// Replace one object's presentation with another object's effective state while
@@ -725,11 +733,11 @@ impl<'a> LiveSession<'a> {
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_mobject(target)?;
         self.require_mobject(other)?;
-        let authored = target.state().map_err(LiveSessionError::Mobject)?;
+        let authored = target.state().map_err(LiveSessionError::from)?;
         let source = self.capture_mobject_state(target)?;
         let candidate = self.capture_mobject_state(other)?;
         let next = prepare_become_state(&self.store.borrow(), &source, candidate, options)
-            .map_err(LiveSessionError::Mobject)?;
+            .map_err(LiveSessionError::from)?;
         let mut transaction = SemanticMutationTransaction::new();
         stage_state_changes(&mut transaction, target.node_id(), &authored, &next);
         self.apply(transaction)
@@ -743,11 +751,11 @@ impl<'a> LiveSession<'a> {
         // an authored base superseded by a driver. A detached object has no row,
         // so its authored state is the exact capture. Immutable content remains
         // authored because effective render-content overrides are rejected.
-        let mut state = source.state().map_err(LiveSessionError::Mobject)?;
+        let mut state = source.state().map_err(LiveSessionError::from)?;
         if !state.signal_bindings().is_empty() {
-            return Err(LiveSessionError::Mobject(
-                "cannot capture a reactive binding into object state".into(),
-            ));
+            return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::CaptureReactiveBinding,
+            )));
         }
         if self.session.semantic_object_is_reachable(source.node_id()) {
             let store = self.store.borrow();
@@ -755,15 +763,14 @@ impl<'a> LiveSession<'a> {
                 .session
                 .effective_semantic_object(&store, source.node_id())?;
             if !observed.authored_content_layout_applicable() {
-                return Err(LiveSessionError::Mobject(
-                    "object state capture requires effective authored content without reveal or morph overrides"
-                        .into(),
-                ));
+                return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::CaptureRenderOverride,
+                )));
             }
             if observed.object.appearance != 1.0 {
-                return Err(LiveSessionError::Mobject(
-                    "object state capture cannot represent a non-unit effective appearance".into(),
-                ));
+                return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::CaptureNonUnitAppearance,
+                )));
             }
             preserve_or_capture_f32(
                 &mut state.transform.translation.x,
@@ -797,12 +804,12 @@ impl<'a> LiveSession<'a> {
     ) -> Result<MobjectFamily, LiveSessionError> {
         let (transaction, family) =
             crate::family_authoring::family_creation_transaction(self.store, members)
-                .map_err(LiveSessionError::Mobject)?;
+                .map_err(LiveSessionError::from)?;
         let result = self.apply(transaction)?;
         let node = result
             .resolve(family)
             .expect("committed family token resolves to one semantic identity");
-        MobjectFamily::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::Mobject)
+        MobjectFamily::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::from)
     }
 
     /// Publish one atomic batch of direct family additions.
@@ -831,7 +838,7 @@ impl<'a> LiveSession<'a> {
         self.require_family(family)?;
         let (transaction, changed) =
             crate::family_authoring::family_membership_transaction(family, members, adding)
-                .map_err(LiveSessionError::Mobject)?;
+                .map_err(LiveSessionError::from)?;
         self.apply(transaction)?;
         Ok(changed)
     }
@@ -848,7 +855,7 @@ impl<'a> LiveSession<'a> {
             .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
         let state = options
             .into_state(&mut self.store.borrow_mut())
-            .map_err(LiveSessionError::Mobject)?;
+            .map_err(LiveSessionError::from)?;
         self.create_detached_mobject(state)
     }
 
@@ -861,7 +868,7 @@ impl<'a> LiveSession<'a> {
         self.session
             .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
         let state = crate::text_authoring::native_text_state(self.store, text)
-            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?;
+            .map_err(LiveSessionError::Text)?;
         self.create_detached_mobject(state)
     }
 
@@ -870,8 +877,8 @@ impl<'a> LiveSession<'a> {
     pub fn create_typst(&mut self, text: crate::Typst) -> Result<Mobject, LiveSessionError> {
         self.session
             .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let state = crate::text_authoring::typst_state(self.store, text)
-            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?;
+        let state =
+            crate::text_authoring::typst_state(self.store, text).map_err(LiveSessionError::Text)?;
         self.create_detached_mobject(state)
     }
 
@@ -884,7 +891,7 @@ impl<'a> LiveSession<'a> {
         self.session
             .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
         let state = crate::text_authoring::math_typst_state(self.store, text)
-            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?;
+            .map_err(LiveSessionError::Text)?;
         self.create_detached_mobject(state)
     }
 
@@ -898,7 +905,7 @@ impl<'a> LiveSession<'a> {
         let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
             unreachable!("one detached primitive creation has one exact semantic impact")
         };
-        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::Mobject)
+        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
     }
 
     /// Read the current effective runtime value at the session's publication.
@@ -932,9 +939,9 @@ impl<'a> LiveSession<'a> {
             .session
             .effective_semantic_object(&store, mobject.node_id())?;
         if !observed.authored_content_layout_applicable() {
-            return Err(LiveSessionError::Mobject(
-                "effective layout queries currently support affine and style drivers only".into(),
-            ));
+            return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::EffectiveLayoutRenderOverride,
+            )));
         }
         let transform = observed.object.transform;
         let publication = observed.publication;
@@ -965,14 +972,14 @@ impl<'a> LiveSession<'a> {
                 ),
             )
         } else {
-            let state = target.state().map_err(LiveSessionError::Mobject)?;
+            let state = target.state().map_err(LiveSessionError::from)?;
             (
                 target.layout_bounds(),
                 (state.transform.translation.x, state.transform.translation.y),
             )
         };
         pivot
-            .validate(bounds.map_err(LiveSessionError::Mobject)?, origin)
+            .validate(bounds.map_err(LiveSessionError::from)?, origin)
             .map_err(LiveSessionError::Mobject)
     }
 
@@ -987,23 +994,22 @@ impl<'a> LiveSession<'a> {
             .session
             .effective_semantic_object(&store, mobject.node_id())?;
         if !observed.authored_content_layout_applicable() {
-            return Err(LiveSessionError::Mobject(
-                "effective Line endpoint queries currently support affine and style drivers only"
-                    .into(),
-            ));
+            return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::EffectiveLineRenderOverride,
+            )));
         }
         let transform = observed.object.transform;
         drop(store);
         mobject
             .manim_line_endpoints_at(transform)
-            .map_err(LiveSessionError::Mobject)
+            .map_err(LiveSessionError::from)
     }
 
     /// Read Manim's stroke-first color at the current publication.
     pub fn effective_manim_color(&self, mobject: &Mobject) -> Result<Color, LiveSessionError> {
         // Resource paints do not have a scalar Manim color representation. Check
         // the selected authored channel before observing its lowered runtime style.
-        mobject.manim_color().map_err(LiveSessionError::Mobject)?;
+        mobject.manim_color().map_err(LiveSessionError::from)?;
         let effective = self.effective(mobject)?;
         Ok(crate::semantic_mobject::manim_color_from_effective(
             &effective.style,
@@ -1018,7 +1024,7 @@ impl<'a> LiveSession<'a> {
     ) -> Result<EffectiveMobjectLayout, LiveSessionError> {
         let bounds = mobject
             .layout_bounds_at(transform)
-            .map_err(LiveSessionError::Mobject)?;
+            .map_err(LiveSessionError::from)?;
         let (center, width, height) = if let Some(Bounds2D64 {
             min_x,
             min_y,
@@ -1337,7 +1343,7 @@ impl<'a> LiveSession<'a> {
     ) -> Result<(), LiveSessionError> {
         tracker
             .require_store(self.store)
-            .map_err(LiveSessionError::Animation)?;
+            .map_err(LiveSessionError::from)?;
         let mut store = self.store.borrow_mut();
         self.session
             .set_scalar_signal_value(&mut store, tracker.node_id(), value)
@@ -1536,7 +1542,7 @@ impl<'a> LiveSession<'a> {
                 let center = if self.contains(target)? {
                     self.effective_layout(target)?.center
                 } else {
-                    target.center().map_err(LiveSessionError::Mobject)?
+                    target.center().map_err(LiveSessionError::from)?
                 };
                 Ok(SemanticAffineLifecycleEndpoint {
                     point: SemanticVec3::new(center.0, center.1, 0.0),
@@ -1752,7 +1758,7 @@ impl<'a> LiveSession<'a> {
             } => {
                 tracker
                     .require_store(self.store)
-                    .map_err(LiveSessionError::Animation)?;
+                    .map_err(LiveSessionError::from)?;
                 Request::ValueTracker {
                     signal: tracker.node_id(),
                     target: *target,
@@ -1838,7 +1844,7 @@ impl<'a> LiveSession<'a> {
             Some(if self.contains(target)? {
                 self.effective_layout(target)?.center
             } else {
-                target.center().map_err(LiveSessionError::Mobject)?
+                target.center().map_err(LiveSessionError::from)?
             })
         } else {
             None
@@ -1872,14 +1878,14 @@ impl<'a> LiveSession<'a> {
             .store
             .borrow()
             .ordered_family_leaf_pairs(family.node_id(), family.node_id())
-            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?
+            .map_err(crate::AuthoringError::from)?
             .into_iter()
             .map(|(leaf, _)| leaf)
             .collect::<Vec<_>>();
         let mut bounds: Option<Bounds2D64> = None;
         for leaf in leaves {
-            let leaf = Mobject::from_node(Rc::clone(self.store), leaf)
-                .map_err(LiveSessionError::Mobject)?;
+            let leaf =
+                Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
             let layout = self.effective_layout(&leaf)?;
             let leaf_bounds = Bounds2D64 {
                 min_x: layout.center.0 - layout.width * 0.5,
@@ -1994,14 +2000,14 @@ impl<'a> LiveSession<'a> {
             .store
             .borrow()
             .ordered_family_leaf_pairs(family.node_id(), family.node_id())
-            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?
+            .map_err(crate::AuthoringError::from)?
             .into_iter()
             .map(|(leaf, _)| leaf)
             .collect::<Vec<_>>();
         let mut transaction = SemanticMutationTransaction::new();
         for leaf in leaves {
-            let mobject = Mobject::from_node(Rc::clone(self.store), leaf)
-                .map_err(LiveSessionError::Mobject)?;
+            let mobject =
+                Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
             let mut translation = self.authored(&mobject)?.transform.translation;
             translation.x += x;
             translation.y += y;
@@ -2034,7 +2040,7 @@ impl<'a> LiveSession<'a> {
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_family(family)?;
         self.session.require_published_store(&self.store.borrow())?;
-        let plan = FamilyArrangePlan::begin(family, options).map_err(LiveSessionError::Mobject)?;
+        let plan = FamilyArrangePlan::begin(family, options).map_err(LiveSessionError::from)?;
         self.publish_family_arrangement(plan)
     }
 
@@ -2050,7 +2056,7 @@ impl<'a> LiveSession<'a> {
         self.require_family(family)?;
         self.session.require_published_store(&self.store.borrow())?;
         let plan = FamilyArrangePlan::grid(family, rows, columns, gap_x, gap_y)
-            .map_err(LiveSessionError::Mobject)?;
+            .map_err(LiveSessionError::from)?;
         self.publish_family_arrangement(plan)
     }
 
@@ -2061,19 +2067,12 @@ impl<'a> LiveSession<'a> {
         plan.observe_leaf_bounds(|leaf| {
             let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
             self.family_member_bounds(&mobject)
-                .map_err(|e| e.to_string())
-        })
-        .map_err(LiveSessionError::Mobject)?;
-        let transaction = plan
-            .transaction(|leaf| {
-                let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
-                self.placement_authored_transform(&mobject)
-                    .map_err(|e| e.to_string())?;
-                self.authored(&mobject)
-                    .map(|s| s.transform.translation)
-                    .map_err(|e| e.to_string())
-            })
-            .map_err(LiveSessionError::Mobject)?;
+        })?;
+        let transaction = plan.transaction(|leaf| {
+            let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
+            self.placement_authored_transform(&mobject)?;
+            self.authored(&mobject).map(|s| s.transform.translation)
+        })?;
         self.apply(transaction)
     }
 
@@ -2104,17 +2103,17 @@ impl<'a> LiveSession<'a> {
                 .transform
                 .translation
                 .lower_xy_f32()
-                .map_err(|error| LiveSessionError::Mobject(error.to_string()))?,
+                .map_err(crate::AuthoringError::from)?,
             rotation: authoring_render_f64(
                 "move_to authored rotation",
                 authored.transform.rotation_z,
             )
-            .map_err(LiveSessionError::Mobject)? as f32,
+            .map_err(LiveSessionError::from)? as f32,
             scale: authored
                 .transform
                 .scale
                 .lower_xy_f32()
-                .map_err(|error| LiveSessionError::Mobject(error.to_string()))?,
+                .map_err(crate::AuthoringError::from)?,
         };
         let store = self.store.borrow();
         match self
@@ -2122,14 +2121,14 @@ impl<'a> LiveSession<'a> {
             .effective_semantic_object(&store, mobject.node_id())
         {
             Ok(observed) if !observed.authored_content_layout_applicable() => {
-                return Err(LiveSessionError::Mobject(
-                    "move_to cannot use an effective layout with render-content overrides".into(),
-                ));
+                return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::PlacementRenderOverride,
+                )));
             }
             Ok(observed) if observed.object.transform != authored_transform => {
-                return Err(LiveSessionError::Mobject(
-                    "move_to cannot compose with an active effective affine driver".into(),
-                ));
+                return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver,
+                )));
             }
             Ok(_) | Err(ExecutionSessionPublicationError::UnknownObject(_)) => {}
             Err(error) => return Err(error.into()),
@@ -2147,14 +2146,12 @@ impl<'a> LiveSession<'a> {
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let x = authoring_render_f64("scale.x", x).map_err(LiveSessionError::Mobject)?;
-        let y = authoring_render_f64("scale.y", y).map_err(LiveSessionError::Mobject)?;
+        let x = authoring_render_f64("scale.x", x).map_err(LiveSessionError::from)?;
+        let y = authoring_render_f64("scale.y", y).map_err(LiveSessionError::from)?;
         let mut scale = self.authored(mobject)?.transform.scale;
         scale.x *= x;
         scale.y *= y;
-        scale
-            .lower_xy_f32()
-            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?;
+        scale.lower_xy_f32().map_err(crate::AuthoringError::from)?;
         self.set_property(mobject, SemanticObjectProperty::Scale, scale)
     }
 
@@ -2166,10 +2163,10 @@ impl<'a> LiveSession<'a> {
         mobject: &Mobject,
         angle: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let angle = authoring_render_f64("rotation", angle).map_err(LiveSessionError::Mobject)?;
+        let angle = authoring_render_f64("rotation", angle).map_err(LiveSessionError::from)?;
         let rotation = self.authored(mobject)?.transform.rotation_z + angle;
         let rotation =
-            authoring_render_f64("rotation result", rotation).map_err(LiveSessionError::Mobject)?;
+            authoring_render_f64("rotation result", rotation).map_err(LiveSessionError::from)?;
         self.set_property(mobject, SemanticObjectProperty::RotationZ, rotation)
     }
 
@@ -2368,24 +2365,24 @@ impl<'a> LiveSession<'a> {
     fn edit_family_style(
         &mut self,
         family: &MobjectFamily,
-        edit: impl Fn(&mut SemanticStyle) -> Result<(), String>,
+        edit: impl Fn(&mut SemanticStyle) -> Result<(), crate::AuthoringError>,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_family(family)?;
         self.session.require_published_store(&self.store.borrow())?;
         let transaction = family
             .style_transaction(edit)
-            .map_err(LiveSessionError::Mobject)?;
+            .map_err(LiveSessionError::from)?;
         self.apply(transaction)
     }
 
     fn edit_style(
         &mut self,
         mobject: &Mobject,
-        edit: impl FnOnce(&mut SemanticStyle) -> Result<(), String>,
+        edit: impl FnOnce(&mut SemanticStyle) -> Result<(), crate::AuthoringError>,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_mobject(mobject)?;
-        let mut style = mobject.state().map_err(LiveSessionError::Mobject)?.style;
-        edit(&mut style).map_err(LiveSessionError::Mobject)?;
+        let mut style = mobject.state().map_err(LiveSessionError::from)?.style;
+        edit(&mut style).map_err(LiveSessionError::from)?;
         self.replace_style(mobject, style)
     }
 
@@ -2522,7 +2519,9 @@ mod tests {
         };
         assert!(matches!(
             live.target_editor(&circle),
-            Err(LiveSessionError::Mobject(_))
+            Err(LiveSessionError::Callback(
+                crate::ExecutionSessionCallbackError::Pending(_)
+            ))
         ));
         assert_eq!(
             live.session.publication_context().scene_revision(),
@@ -2925,7 +2924,11 @@ mod tests {
 
         assert!(matches!(
             live.move_to_point(&circle, 3.0, 0.0),
-            Err(LiveSessionError::Mobject(_))
+            Err(LiveSessionError::Authoring(
+                crate::AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver
+                )
+            ))
         ));
         assert_eq!(live.session.publication_context(), before);
         assert_eq!(

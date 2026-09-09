@@ -455,7 +455,8 @@ pub enum TextAuthoringError {
     Font(FontResourceError),
     Text(TextResourceValidationError),
     Compile(CompileError),
-    Semantic(String),
+    Semantic(crate::AuthoringError),
+    Import(noon_core::SemanticTextImportError),
 }
 
 impl std::fmt::Display for TextAuthoringError {
@@ -489,11 +490,27 @@ impl std::fmt::Display for TextAuthoringError {
             Self::Text(error) => error.fmt(formatter),
             Self::Compile(error) => error.fmt(formatter),
             Self::Semantic(error) => error.fmt(formatter),
+            Self::Import(error) => error.fmt(formatter),
         }
     }
 }
 
-impl std::error::Error for TextAuthoringError {}
+impl std::error::Error for TextAuthoringError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            #[cfg(feature = "native-text")]
+            Self::NativeText(error) => Some(error),
+            #[cfg(feature = "typst")]
+            Self::Typst(error) => Some(error),
+            Self::Font(error) => Some(error),
+            Self::Text(error) => Some(error),
+            Self::Compile(error) => Some(error),
+            Self::Semantic(error) => Some(error),
+            Self::Import(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 #[cfg(feature = "native-text")]
 impl From<NativeTextError> for TextAuthoringError {

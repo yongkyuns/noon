@@ -88,8 +88,11 @@ mod semantic_mobject;
 mod text_authoring;
 
 pub use animation_authoring::DeclaredAnimation;
-pub use authoring_error::AuthoringError;
+pub use arc_authoring::ArcAuthoringError;
+pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
+pub use dashed_line_authoring::DashedLineAuthoringError;
 pub use dimension_fit::LayoutDimension;
+pub use elbow_authoring::ElbowAuthoringError;
 pub use execution_segment::{
     ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentError, ExecutionSegmentState,
 };
@@ -133,6 +136,7 @@ pub use noon_core::{
 };
 pub use noon_runtime::EvaluationError;
 pub use rotation_authoring::ManimRotationPivot;
+pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
 pub use scene::Scene;
 pub use scene_membership::SceneMembershipRequest;

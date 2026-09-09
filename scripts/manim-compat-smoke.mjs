@@ -413,21 +413,40 @@ try {
     const copy = circle.cloneHandle();
     const target = circle.targetEditor();
     const identity = (handle) => `${handle.semanticSlot}:${handle.semanticGeneration}`;
-    const rejectsForeign = (operation) => {
+    // These three forwarding sites are still diagnostic-only R3 inventory.
+    // This fixture proves rejection/atomicity/lifetime; typed categories are
+    // checked by the independent Rust consumer and the typed-boundary runner.
+    // Do not classify human wording or accept an unrelated JS TypeError.
+    const rejectsUnmappedAuthoring = (operation) => {
       try { operation(); } catch (error) {
-        return /different authoring stores/.test(String(error));
+        if (typeof error !== "string" || error.length === 0) throw error;
+        return true;
       }
       return false;
     };
     const sameNumericId = identity(circle) === identity(foreign);
-    const foreignAddRejected = rejectsForeign(() => family.editMembership(batch(circle, foreign)));
+    const foreignAddRejected = rejectsUnmappedAuthoring(() => family.editMembership(batch(circle, foreign)));
     if (family.memberCount !== 0) throw new Error("failed authored batch partially committed");
     family.editMembership(batch(circle, copy, target));
     const layout = family.layout();
     const foreignFamily = otherStore.createFamily(batch(foreign));
     const foreignLayout = foreignFamily.layout();
-    const foreignObjectPlacementRejected = rejectsForeign(() => layout.moveToMobject(foreign, 0, 0, 1, 1));
-    const foreignFamilyPlacementRejected = rejectsForeign(() => layout.moveToFamily(foreignLayout, 0, 0, 1, 1));
+    const layoutBefore = [circle.centerX, copy.centerX, target.centerX, family.memberCount];
+    const requireUnchangedLayout = () => {
+      const after = [circle.centerX, copy.centerX, target.centerX, family.memberCount];
+      if (!after.every((value, index) => Object.is(value, layoutBefore[index]))) {
+        throw new Error("rejected foreign placement changed local state");
+      }
+    };
+    const foreignObjectPlacementRejected = rejectsUnmappedAuthoring(() => layout.moveToMobject(foreign, 0, 0, 1, 1));
+    requireUnchangedLayout();
+    const foreignFamilyPlacementRejected = rejectsUnmappedAuthoring(() => layout.moveToFamily(foreignLayout, 0, 0, 1, 1));
+    requireUnchangedLayout();
+    // Retry both exact placement entrypoints with valid local targets. The
+    // copies start at the same center, so these controls preserve the layout.
+    layout.moveToMobject(copy, 0, 0, 1, 1);
+    layout.moveToFamily(layout, 0, 0, 1, 1);
+    requireUnchangedLayout();
     store.free();
     otherStore.free();
     // Observations retain their semantic store; one operation applies all members.

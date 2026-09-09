@@ -1,4 +1,5 @@
 //! Atomic affine edits over the authoritative family's unique semantic leaves.
+use crate::AuthoringError;
 use crate::{
     family_layout::bounds_critical_point,
     semantic_mobject::{
@@ -21,7 +22,7 @@ impl FamilyAffine {
         store: &SemanticStore,
         leaves: &[SemanticNodeId],
         bounds: Option<Bounds2D64>,
-    ) -> Result<SemanticMutationTransaction, String> {
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
         let center = bounds_critical_point(bounds, 0.0, 0.0);
         let pivot = match self {
             Self::Scale(x, y) => {
@@ -49,7 +50,7 @@ impl FamilyAffine {
         for &leaf in leaves {
             let previous = store
                 .semantic_object_state_checked(leaf)
-                .map_err(|e| e.to_string())?;
+                .map_err(AuthoringError::from)?;
             let mut next = previous.clone();
             match self {
                 Self::Scale(x, y) => {
@@ -83,27 +84,27 @@ impl FamilyAffine {
 
 impl MobjectFamily {
     /// Scale each unique semantic leaf about the family center in one transaction.
-    pub fn scale(&self, x: f64, y: f64) -> Result<(), String> {
+    pub fn scale(&self, x: f64, y: f64) -> Result<(), AuthoringError> {
         self.apply_affine(FamilyAffine::Scale(x, y))
     }
 
     /// Rotate each unique leaf about a shared center, edge or explicit point.
-    pub fn rotate(&self, angle: f64, pivot: ManimRotationPivot) -> Result<(), String> {
+    pub fn rotate(&self, angle: f64, pivot: ManimRotationPivot) -> Result<(), AuthoringError> {
         self.apply_affine(FamilyAffine::Rotate(angle, pivot))
     }
 
-    fn apply_affine(&self, operation: FamilyAffine) -> Result<(), String> {
+    fn apply_affine(&self, operation: FamilyAffine) -> Result<(), AuthoringError> {
         let layout = self.layout()?;
         let transaction = {
             let store = self.integration_store().borrow();
             let leaves = store
                 .ordered_leaf_nodes(self.node_id())
-                .map_err(|e| e.to_string())?;
+                .map_err(AuthoringError::from)?;
             operation.transaction(&store, &leaves, layout.bounds())?
         };
         transaction
             .apply(&mut self.integration_store().borrow_mut())
             .map(|_| ())
-            .map_err(|e| e.to_string())
+            .map_err(AuthoringError::from)
     }
 }
