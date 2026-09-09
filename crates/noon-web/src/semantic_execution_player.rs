@@ -3705,7 +3705,7 @@ mod tests {
     }
 
     fn assert_late_text_resource_admission(
-        create: impl FnOnce(&mut SemanticExecutionPlayer) -> Result<noon::Mobject, String>,
+        create: impl FnOnce(&mut SemanticExecutionPlayer) -> Result<noon::Mobject, AuthoringFailure>,
     ) {
         let scene = noon::Scene::new();
         let mut player = SemanticExecutionPlayer::from_live_session(

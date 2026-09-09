@@ -2477,6 +2477,12 @@ mod wasm {
 
     use crate::authoring_error::js_error;
 
+    // The callback overlay is an explicit codec boundary. Preserve codec causes
+    // without assigning them an authoring category based on their diagnostics.
+    fn callback_codec_error(error: impl std::error::Error + 'static) -> JsValue {
+        typed_js_error(AuthoringFailure::unclassified("callback.codec", &error))
+    }
+
     fn parse_object_id(label: &str, value: &str) -> Result<ObjectId, JsValue> {
         value
             .parse::<u64>()
@@ -2630,14 +2636,14 @@ mod wasm {
         pub(crate) fn create_family(
             &self,
             store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
-        ) -> Result<noon::MobjectFamily, String> {
+        ) -> Result<noon::MobjectFamily, AuthoringFailure> {
             self.inner.create_family(store)
         }
 
         pub(crate) fn edit_family(
             &self,
             family: &noon::MobjectFamily,
-        ) -> Result<Vec<bool>, String> {
+        ) -> Result<Vec<bool>, AuthoringFailure> {
             self.inner.edit_family(family)
         }
     }
@@ -4183,8 +4189,9 @@ mod wasm {
             ) {
                 return Err(typed_js_error(noon::AuthoringError::ForeignStore));
             }
-            let revision =
-                noon_core::SceneRevision::new(revision.parse::<u64>().map_err(js_error)?);
+            let revision = noon_core::SceneRevision::new(
+                revision.parse::<u64>().map_err(callback_codec_error)?,
+            );
             family
                 .callback_leaf_nodes(revision)
                 .map(|nodes| {
@@ -4233,12 +4240,13 @@ mod wasm {
                 ),
                 _ => return Err(js_error("unknown family paint operation")),
             };
-            let revision =
-                noon_core::SceneRevision::new(revision.parse::<u64>().map_err(js_error)?);
+            let revision = noon_core::SceneRevision::new(
+                revision.parse::<u64>().map_err(callback_codec_error)?,
+            );
             // This is the existing Python callback view/overlay codec boundary,
             // never an authored scene or a native/direct-WASM engine boundary.
             let rows: Vec<(u32, u32, Style)> =
-                serde_json::from_str(styles_json).map_err(js_error)?;
+                serde_json::from_str(styles_json).map_err(callback_codec_error)?;
             let styles: BTreeMap<_, _> = rows
                 .into_iter()
                 .map(|(slot, generation, style)| {
@@ -4257,7 +4265,7 @@ mod wasm {
                 .into_iter()
                 .map(|(node, style)| (node.slot(), node.generation(), style))
                 .collect();
-            serde_json::to_string(&rows).map_err(js_error)
+            serde_json::to_string(&rows).map_err(callback_codec_error)
         }
 
         /// Prepare a family translation over the existing callback read/overlay
@@ -4274,10 +4282,11 @@ mod wasm {
         ) -> Result<String, JsValue> {
             self.callback_family_keys(handle, revision)?;
             let family = handle.semantic_family()?;
-            let revision =
-                noon_core::SceneRevision::new(revision.parse::<u64>().map_err(js_error)?);
+            let revision = noon_core::SceneRevision::new(
+                revision.parse::<u64>().map_err(callback_codec_error)?,
+            );
             let rows: Vec<(u32, u32, Transform2D, Option<noon_core::Rect>)> =
-                serde_json::from_str(rows_json).map_err(js_error)?;
+                serde_json::from_str(rows_json).map_err(callback_codec_error)?;
             let rows: BTreeMap<_, _> = rows
                 .into_iter()
                 .map(|(slot, generation, transform, bounds)| {
@@ -4316,7 +4325,7 @@ mod wasm {
                     )
                 })
                 .collect();
-            serde_json::to_string(&rows).map_err(js_error)
+            serde_json::to_string(&rows).map_err(callback_codec_error)
         }
 
         /// Apply shared Manim `set_color` semantics to callback-local paint.
@@ -7169,10 +7178,13 @@ mod tests {
         let handed_off = context.take_execution_player(1.0, 41).unwrap();
         let revision = context.scene.integration_store().borrow().scene_revision();
         let before = source.state().unwrap();
-        assert!(context
+        let error = context
             .live_become_mobject(&source, &target, Default::default())
-            .unwrap_err()
-            .contains("semantic engine"));
+            .unwrap_err();
+        assert_eq!(
+            (error.category, error.code),
+            ("unclassified", "unclassified")
+        );
         assert_eq!(
             context.scene.integration_store().borrow().scene_revision(),
             revision

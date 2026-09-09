@@ -53,7 +53,7 @@ impl AuthoringFailure {
 
     /// Preserve diagnostics/sources for a producer outside this slice, without
     /// pretending that wording proves an input, capability or lifecycle category.
-    fn unclassified(code: &'static str, error: &(dyn Error + 'static)) -> Self {
+    pub(crate) fn unclassified(code: &'static str, error: &(dyn Error + 'static)) -> Self {
         Self {
             category: "unclassified",
             code,

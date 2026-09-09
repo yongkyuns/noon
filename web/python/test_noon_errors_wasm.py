@@ -597,6 +597,15 @@ class WasmErrorProjectionTests(unittest.TestCase):
         def state():
             return (first._semantic_handle.snapshotJson(), second._semantic_handle.snapshotJson())
         before = state()
+        for reject in (
+            lambda: group.next_to((0, 0), index_of_submobject_to_align=99),
+            lambda: group.arrange(index_of_submobject_to_align=99),
+        ):
+            with self.assertRaises(NoonValueError) as caught:
+                reject()
+            self.assert_diagnostic(caught.exception, "invalid_input")
+            self.assertEqual(caught.exception.code, "authoring.invalid_submobject_index")
+            self.assertEqual(state(), before)
         with self.assertRaises(NoonValueError) as caught:
             group.arrange_in_grid(rows=1, cols=1)
         self.assertEqual(caught.exception.code, "authoring.insufficient_grid_capacity")
@@ -605,6 +614,8 @@ class WasmErrorProjectionTests(unittest.TestCase):
             first.shift((1e40, 0))
         self.assertEqual(caught.exception.code, "authoring.invalid_render_number")
         self.assertEqual(state(), before)
+        group.next_to((1, 0), index_of_submobject_to_align=0)
+        group.arrange()
         group.arrange_in_grid(rows=1, cols=2)
         first.shift((0.5, 0))
         self.assertNotEqual(state(), before)

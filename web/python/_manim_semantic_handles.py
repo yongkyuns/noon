@@ -998,8 +998,6 @@ def _shared_next_to(self, target, direction, buff, aligned_edge,
             else:
                 engine_call(context.liveNextLayoutToPoint, source, point.x, point.y, aligner, *arguments)
     except Exception as error:
-        if "alignment submobject index" in str(error):
-            raise IndexError(str(error)) from None
         raise_engine_error(error)
 
 
@@ -1551,8 +1549,6 @@ def _group_arrange(
             raise RuntimeError("arrange requires current shared Rust semantic handles")
         engine_call(family_handle.arrange, options)
     except Exception as error:
-        if "alignment submobject index" in str(error):
-            raise IndexError(str(error)) from None
         raise_engine_error(error)
     return self
 
