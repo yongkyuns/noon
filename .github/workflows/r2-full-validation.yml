@@ -1,0 +1,50 @@
+name: R2 full repository validation
+on:
+  push:
+    branches: [codex/1272-r2-bootstrap]
+    paths: ['.github/workflows/r2-full-validation.yml']
+permissions:
+  contents: read
+jobs:
+  full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 882bf3063938338551a992cf6dc20f9d58df5af2
+          fetch-depth: 0
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: r2-full-sources-${{ runner.os }}-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Run the documented full gate against an explicit available base
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          rustup show
+          bash scripts/check.sh full fc5afc251fa2b18cf81929244717fca1facd3738 2>&1 | tee "$RUNNER_TEMP/r2-full-validation.txt"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: r2-full-validation-log
+          path: ${{ runner.temp }}/r2-full-validation.txt
+          retention-days: 7
