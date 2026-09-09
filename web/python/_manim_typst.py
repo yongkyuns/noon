@@ -119,6 +119,11 @@ def _in_canonical_callback_phase(mobject: _base.Mobject) -> bool:
 class _RetainedTextMobject(_base.Mobject):
     """Python wrapper for one shared semantic resource-backed text object."""
 
+    def _bind_to_scene(self, scene: _base.Scene, *, key: str | None = None) -> object:
+        if self._scene is scene and self._object is not None:
+            return self._object
+        return super()._bind_to_scene(scene, key=key)
+
     def _initialize_text(
         self,
         source: str,

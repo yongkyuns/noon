@@ -5,9 +5,6 @@
     "crates/noon-core/src/patch.rs": {
       "ObjectDefinition": 12,
       "SceneDefinition": 17
-    },
-    "web/python-worker.source.js": {
-      "_manim_canonical_scene": 5
     }
   },
   "regression_fixtures": {
