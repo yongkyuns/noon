@@ -936,31 +936,6 @@ def _set_height_property(self: _base.Mobject, height: float) -> None:
     self.scale_to_fit_height(float(height))
 
 
-def _has_wire_projection(handle: object) -> bool:
-    return handle is not None and all(
-        hasattr(handle, name)
-        for name in (
-            "wireTranslationX",
-            "wireTranslationY",
-            "wireScaleX",
-            "wireScaleY",
-            "wireRotation",
-            "wireHasFill",
-            "wireFillRed",
-            "wireFillGreen",
-            "wireFillBlue",
-            "wireFillAlpha",
-            "wireHasStroke",
-            "wireStrokeRed",
-            "wireStrokeGreen",
-            "wireStrokeBlue",
-            "wireStrokeAlpha",
-            "wireStrokeWidth",
-            "wireObjectOpacity",
-        )
-    )
-
-
 def _ensure_bound_static_mutation_available(value: _base.Mobject) -> None:
     if not _is_bound(value):
         return
@@ -978,50 +953,8 @@ def _mutation_handle_for(value: _base.Mobject):
     if handle is None:
         return None
     if _is_bound(value):
-        if not _has_wire_projection(handle):
-            return None
         _ensure_bound_static_mutation_available(value)
     return handle
-
-
-def _sync_bound_transform(value: _base.Mobject, handle: object) -> None:
-    if (not _is_bound(value) or
-            hasattr(value._scene, "_semantic_geometry_handles")):
-        return
-    scene = value._scene
-    obj = value._object
-    assert scene is not None and obj is not None
-    transform = scene._objects[obj.id]["transform"]
-    transform["translation"]["x"] = float(handle.wireTranslationX)
-    transform["translation"]["y"] = float(handle.wireTranslationY)
-    transform["scale"]["x"] = float(handle.wireScaleX)
-    transform["scale"]["y"] = float(handle.wireScaleY)
-    transform["rotation"] = float(handle.wireRotation)
-
-
-def _wire_color(handle: object, prefix: str) -> dict[str, float] | None:
-    if not bool(getattr(handle, f"wireHas{prefix}")):
-        return None
-    return {
-        "red": float(getattr(handle, f"wire{prefix}Red")),
-        "green": float(getattr(handle, f"wire{prefix}Green")),
-        "blue": float(getattr(handle, f"wire{prefix}Blue")),
-        "alpha": float(getattr(handle, f"wire{prefix}Alpha")),
-    }
-
-
-def _sync_bound_style(value: _base.Mobject, handle: object) -> None:
-    if (not _is_bound(value) or
-            hasattr(value._scene, "_semantic_geometry_handles")):
-        return
-    scene = value._scene
-    obj = value._object
-    assert scene is not None and obj is not None
-    style = scene._objects[obj.id]["style"]
-    style["fill"] = _wire_color(handle, "Fill")
-    style["stroke"] = _wire_color(handle, "Stroke")
-    style["stroke_width"] = float(handle.wireStrokeWidth)
-    style["opacity"] = float(handle.wireObjectOpacity)
 
 
 def invalidate_semantic_handle(value: object) -> None:
@@ -1056,7 +989,6 @@ def _shift(self: _base.Mobject, direction: object) -> _base.Mobject:
             raise ValueError(str(error)) from None
         return self
     handle.shift(offset.x, offset.y)
-    _sync_bound_transform(self, handle)
     return self
 
 
@@ -1115,7 +1047,6 @@ def _move_to(
         point = _base._as_vec2(point_or_mobject)
         mask = _alignment_mask2(coor_mask)
         handle.manimMoveToPoint(point.x, point.y, edge.x, edge.y, mask.x, mask.y)
-    _sync_bound_transform(self, handle)
     return self
 
 
@@ -1136,7 +1067,6 @@ def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
             raise ValueError(str(error)) from None
         return self
     handle.scale(value.x, value.y)
-    _sync_bound_transform(self, handle)
     return self
 
 
@@ -1201,7 +1131,6 @@ def _rotate(
             float(handle.criticalY(edge.x, edge.y)),
         )
     handle.rotateAboutPoint(signed_angle, pivot.x, pivot.y)
-    _sync_bound_transform(self, handle)
     return self
 
 
@@ -1219,26 +1148,9 @@ def _set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobject:
             )
         except Exception as error:
             raise ValueError(str(error)) from None
-        _sync_bound_style(self, handle)
         return self
 
-    # Manim changes fill/stroke RGB independently of the channels' existing opacity.
-    # The shared wire projection lets both detached and bound objects choose channels
-    # without materializing a JSON snapshot.
-    if _has_wire_projection(handle):
-        had_fill = bool(handle.wireHasFill)
-        had_stroke = bool(handle.wireHasStroke)
-    else:
-        style = self._current_raw().style
-        had_fill = style.get("fill") is not None
-        had_stroke = style.get("stroke") is not None
-    if had_fill:
-        handle.setFillColor(color.red, color.green, color.blue, color.alpha)
-    if had_stroke:
-        handle.setStrokeColor(color.red, color.green, color.blue, color.alpha)
-    if not had_fill and not had_stroke:
-        handle.setFillColor(color.red, color.green, color.blue, color.alpha)
-    _sync_bound_style(self, handle)
+    handle.setColor(color.red, color.green, color.blue, color.alpha)
     return self
 
 
@@ -1463,7 +1375,6 @@ def _align_to(
             return _ORIGINAL_ALIGN_TO(self, mobject_or_point, direction)
         point = _base._as_vec2(mobject_or_point)
         handle.alignToPoint(point.x, point.y, axis.x, axis.y)
-    _sync_bound_transform(self, handle)
     return self
 
 
@@ -1480,7 +1391,6 @@ def _align_on_frame(
             "canonical live affine targets do not support frame alignment"
         )
     handle.alignOnFrame(direction.x, direction.y, float(buff))
-    _sync_bound_transform(self, handle)
     return self
 
 
@@ -1518,7 +1428,6 @@ def _set_fill(
                 )
         except Exception as error:
             raise ValueError(str(error)) from None
-        _sync_bound_style(self, handle)
         return self
     if color is not None and opacity is not None:
         parsed = _phase_b._as_color("fill color", color)
@@ -1528,7 +1437,6 @@ def _set_fill(
             parsed.blue,
             _phase_b._opacity("fill opacity", opacity),
         )
-        _sync_bound_style(self, handle)
         return self
     if color is not None:
         parsed = _phase_b._as_color("fill color", color)
@@ -1537,7 +1445,6 @@ def _set_fill(
         handle.disableFill()
     if opacity is not None:
         handle.setFillOpacity(_phase_b._opacity("fill opacity", opacity))
-    _sync_bound_style(self, handle)
     return self
 
 
@@ -1582,7 +1489,6 @@ def _set_stroke(
                 )
         except Exception as error:
             raise ValueError(str(error)) from None
-        _sync_bound_style(self, handle)
         return self
     if color is not None:
         parsed = _phase_b._as_color("stroke color", color)
@@ -1593,7 +1499,6 @@ def _set_stroke(
         handle.setStrokeWidth(_phase_b._manim_stroke_width(width))
     if opacity is not None:
         handle.setStrokeOpacity(_phase_b._opacity("stroke opacity", opacity))
-    _sync_bound_style(self, handle)
     return self
 
 
@@ -1611,10 +1516,8 @@ def _set_opacity(
             live_context.liveSetOpacity(handle, _phase_b._opacity("opacity", opacity))
         except Exception as error:
             raise ValueError(str(error)) from None
-        _sync_bound_style(self, handle)
         return self
     handle.setOpacity(_phase_b._opacity("opacity", opacity))
-    _sync_bound_style(self, handle)
     return self
 
 
@@ -1636,7 +1539,6 @@ def _set_object_opacity(
             handle.setObjectOpacity(alpha)
     except Exception as error:
         raise ValueError(str(error)) from None
-    _sync_bound_style(self, handle)
     return self
 
 
@@ -1681,17 +1583,7 @@ def _shared_family_layout(value: object, *, mutation: bool = False):
     ]
     if not all(handle is not None for handle in leaf_handles):
         return None
-    return family_handle.layout(), leaves, leaf_handles
-
-
-def _sync_family_transforms(
-    self: _compat.Group,
-    leaves: list[_base.Mobject],
-    leaf_handles: list[object],
-) -> _compat.Group:
-    for member, handle in zip(leaves, leaf_handles):
-        _sync_bound_transform(member, handle)
-    return self
+    return family_handle.layout()
 
 
 def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
@@ -1706,12 +1598,12 @@ def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
     shared = _shared_family_layout(self, mutation=True)
     if shared is None:
         return _ORIGINAL_GROUP_SHIFT(self, direction)
-    session, leaves, leaf_handles = shared
+    session = shared
     if not hasattr(session, "shiftBy"):
         return _ORIGINAL_GROUP_SHIFT(self, direction)
     offset = _base._as_vec2(direction)
     session.shiftBy(offset.x, offset.y)
-    return _sync_family_transforms(self, leaves, leaf_handles)
+    return self
 
 
 def _group_live_layout_context(value: _compat.Group):
@@ -1762,7 +1654,7 @@ def _group_move_to(
     shared = _shared_family_layout(self, mutation=True)
     if shared is None:
         return _ORIGINAL_GROUP_MOVE_TO(self, point_or_mobject, aligned_edge, coor_mask)
-    session, leaves, leaf_handles = shared
+    session = shared
     edge = _base._as_vec2(aligned_edge)
     mask = _alignment_mask2(coor_mask)
 
@@ -1770,7 +1662,7 @@ def _group_move_to(
     if isinstance(point_or_mobject, _compat.Group):
         target_shared = _shared_family_layout(point_or_mobject)
         if target_shared is not None and hasattr(session, "moveToFamily"):
-            target_session = target_shared[0]
+            target_session = target_shared
             session.moveToFamily(
                 target_session, edge.x, edge.y, mask.x, mask.y
             )
@@ -1791,7 +1683,7 @@ def _group_move_to(
 
     if not applied:
         return _ORIGINAL_GROUP_MOVE_TO(self, point_or_mobject, aligned_edge, coor_mask)
-    return _sync_family_transforms(self, leaves, leaf_handles)
+    return self
 
 
 
@@ -1809,14 +1701,14 @@ def _group_align_to(
     shared = _shared_family_layout(self, mutation=True)
     if shared is None:
         return _ORIGINAL_GROUP_ALIGN_TO(self, mobject_or_point, direction)
-    session, leaves, leaf_handles = shared
+    session = shared
     axis = _base._as_vec2(direction)
 
     applied = False
     if isinstance(mobject_or_point, _compat.Group):
         target_shared = _shared_family_layout(mobject_or_point)
         if target_shared is not None and hasattr(session, "alignToFamily"):
-            session.alignToFamily(target_shared[0], axis.x, axis.y)
+            session.alignToFamily(target_shared, axis.x, axis.y)
             applied = True
     elif _alignment_is_mobject(mobject_or_point):
         target_adapter = _family_layout_leaf_adapter(mobject_or_point)
@@ -1830,7 +1722,7 @@ def _group_align_to(
 
     if not applied:
         return _ORIGINAL_GROUP_ALIGN_TO(self, mobject_or_point, direction)
-    return _sync_family_transforms(self, leaves, leaf_handles)
+    return self
 
 
 
@@ -1875,9 +1767,6 @@ def _group_arrange(
         if "alignment submobject index" in str(error):
             raise IndexError(str(error)) from None
         raise ValueError(str(error)) from None
-    # Only the explicit #959 export path still needs projected values.
-    for member, handle in zip(leaves, leaf_handles):
-        _sync_bound_transform(member, handle)
     return self
 
 
@@ -1897,7 +1786,7 @@ def _compat_bounds_for(value: object) -> tuple[_base.Vec2, _base.Vec2] | None:
     if isinstance(value, _compat.Group):
         shared = _shared_family_layout(value)
         if shared is not None:
-            session = shared[0]
+            session = shared
             return (
                 _base.Vec2(
                     float(session.criticalX(-1.0, 0.0)),

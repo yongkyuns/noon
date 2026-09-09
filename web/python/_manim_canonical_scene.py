@@ -2128,12 +2128,8 @@ def _canonical_value_tracker(self: _base.Scene, value: float = 0.0) -> _reactive
     )
 
 
-def _canonical_native_context(scene: _base.Scene) -> object:
-    return _context(scene)
-
-
 def _canonical_vector_signal(scene: _base.Scene, method: str) -> _reactive.NativeVectorSignal:
-    context = _canonical_native_context(scene)
+    context = _context(scene)
     try:
         handle = getattr(context, method)()
     except Exception as error:
@@ -2144,7 +2140,7 @@ def _canonical_vector_signal(scene: _base.Scene, method: str) -> _reactive.Nativ
 def _canonical_tracker_signal(
     scene: _base.Scene, method: str, *args: object
 ) -> _reactive.ValueTracker:
-    context = _canonical_native_context(scene)
+    context = _context(scene)
     try:
         handle = getattr(context, method)(*args)
     except Exception as error:
@@ -2170,7 +2166,7 @@ def _canonical_key_state_signal(
     code = _reactive._nonempty_string("code", code)
     if not isinstance(initial, bool):
         raise TypeError("initial must be a bool")
-    context = _canonical_native_context(self)
+    context = _context(self)
     try:
         handle = context.keyStateSignal(code, initial)
     except Exception as error:

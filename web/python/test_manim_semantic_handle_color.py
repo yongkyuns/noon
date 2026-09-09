@@ -28,7 +28,7 @@ class ManimSemanticHandleColorTests(unittest.TestCase):
             class FakeSemanticHandle:
                 def __init__(self, snapshot_json):
                     self.snapshot = json.loads(snapshot_json)
-                    self.broad_set_color_calls = 0
+                    self.set_color_calls = 0
 
                 def snapshotJson(self):
                     return json.dumps(self.snapshot, separators=(",", ":"))
@@ -56,17 +56,15 @@ class ManimSemanticHandleColorTests(unittest.TestCase):
                         self.snapshot["style"]["stroke"]["alpha"] = float(opacity)
 
                 def setColor(self, red, green, blue, alpha):
-                    # Mirrors the broad Rust handle operation that exposed the regression:
-                    # one alpha is applied to both channels.
-                    self.broad_set_color_calls += 1
-                    for channel in ("fill", "stroke"):
-                        if self.snapshot["style"][channel] is not None:
-                            self.snapshot["style"][channel] = {
-                                "red": float(red),
-                                "green": float(green),
-                                "blue": float(blue),
-                                "alpha": float(alpha),
-                            }
+                    # Model the current shared Rust paint operation: existing
+                    # channels retain their independent opacities.
+                    self.set_color_calls += 1
+                    had_fill = self.snapshot["style"]["fill"] is not None
+                    had_stroke = self.snapshot["style"]["stroke"] is not None
+                    if had_fill or not had_stroke:
+                        self.setFillColor(red, green, blue, alpha)
+                    if had_stroke:
+                        self.setStrokeColor(red, green, blue, alpha)
 
                 def setFillColor(self, red, green, blue, alpha):
                     current = self.snapshot["style"]["fill"]
@@ -122,7 +120,7 @@ class ManimSemanticHandleColorTests(unittest.TestCase):
             mobject.set_color(_base.GREEN)
 
             style = mobject.style
-            assert handle.broad_set_color_calls == 0
+            assert handle.set_color_calls == 1
             assert abs(style["fill"]["red"] - _base.GREEN.red) < 1e-12
             assert abs(style["fill"]["green"] - _base.GREEN.green) < 1e-12
             assert abs(style["fill"]["blue"] - _base.GREEN.blue) < 1e-12

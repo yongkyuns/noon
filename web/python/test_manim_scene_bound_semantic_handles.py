@@ -249,12 +249,12 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             handle.calls.clear()
 
             # Binding does not discard the stable semantic identity. A direct static
-            # mutation executes in the shared handle and mirrors only typed wire fields.
+            # mutation executes in the shared handle without refreshing a Python mirror.
             square.shift(RIGHT)
             assert handle.calls == [("shift", 1.0, 0.0)], handle.calls
             assert handle.snapshot_requests == 0
             stored = scene._objects[square.id]
-            assert stored["transform"]["translation"] == {"x": 1.0, "y": 0.0}
+            assert stored["transform"]["translation"] == {"x": 0.0, "y": 0.0}
             assert square.get_center().x == 1.0
 
             class EffectiveLayout:
@@ -396,13 +396,16 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             else:
                 raise AssertionError("half-typed become fell back through raw geometry")
 
+            stored_before = copy.deepcopy(stored)
             square.set_fill(GREEN, opacity=0.25)
             assert handle.snapshot_requests == 0
-            assert abs(stored["style"]["fill"]["alpha"] - 0.25) < 1e-12
+            assert abs(handle.snapshot["style"]["fill"]["alpha"] - 0.25) < 1e-12
             square.set_object_opacity(0.4)
             assert handle.calls[-1] == ("setObjectOpacity", 0.4)
             assert handle.snapshot_requests == 0
-            assert abs(stored["style"]["opacity"] - 0.4) < 1e-12
+            assert abs(handle.snapshot["style"]["opacity"] - 0.4) < 1e-12
+
+            assert stored == stored_before
 
             first = animate._AlignedAnimationBuilder(square)
             first_target = first.target
