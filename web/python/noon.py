@@ -232,8 +232,8 @@ def _callback_operations():
 class Mobject:
     """Python identity wrapper; shared Rust handles own all semantic state."""
 
-    def __init__(self, raw: _ir.Mobject) -> None:
-        return _semantic_operations()._init(self, raw)
+    def __init__(self) -> None:
+        raise TypeError("Mobject is a base type; construct a Circle, Rectangle, Line, or Path")
 
     @property
     def geometry(self) -> dict[str, Any]:

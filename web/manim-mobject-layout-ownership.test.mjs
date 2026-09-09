@@ -13,28 +13,28 @@ const rustHandleSource = readFileSync(
   "utf8",
 );
 
-function functionBody(source, name, nextName) {
+function functionBody(source, name) {
   const start = source.indexOf(`def ${name}(`);
   assert.notEqual(start, -1, `missing Python function ${name}`);
-  const end = source.indexOf(`\ndef ${nextName}(`, start);
+  const end = source.indexOf("\ndef ", start);
   assert.notEqual(end, -1, `missing Python function boundary after ${name}`);
   return source.slice(start, end);
 }
 
 test("detached Mobject layout queries stay owned by the shared semantic handle", () => {
-  const layoutCenter = functionBody(semanticHandlesSource, "_layout_center", "_init");
+  const layoutCenter = functionBody(semanticHandlesSource, "_layout_center");
   assert.match(layoutCenter, /_handle_for\(value\)/);
   assert.match(layoutCenter, /handle\.centerX/);
   assert.match(layoutCenter, /handle\.centerY/);
 
-  const getCenter = functionBody(semanticHandlesSource, "_get_center", "_width");
+  const getCenter = functionBody(semanticHandlesSource, "_get_center");
   assert.match(getCenter, /_handle_for\(self\)/);
   assert.match(getCenter, /return _layout_center\(self\)/);
 
-  const width = functionBody(semanticHandlesSource, "_width", "_height");
+  const width = functionBody(semanticHandlesSource, "_width");
   assert.match(width, /handle\.width/);
 
-  const height = functionBody(semanticHandlesSource, "_height", "_set_width_property");
+  const height = functionBody(semanticHandlesSource, "_height");
   assert.match(height, /handle\.height/);
 
   assert.match(facadeSource, /return _callback_operations\(\)\._canonical_get_center\(self\)/);

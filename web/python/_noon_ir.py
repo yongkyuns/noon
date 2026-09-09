@@ -1,7 +1,7 @@
-"""Inert Python values and legacy constructor/export argument shapes.
+"""Inert Python value coercion, path input and explicit inspection/export shapes.
 
-No Scene, timeline, detached semantic state, or execution lives here. The remaining
-constructor/export shape adapter is deletion-owned by #61.
+No Scene, timeline, detached semantic state, or execution lives here. Snapshots
+cannot be passed back into authoring constructors. Remaining export cleanup is #61.
 """
 
 from __future__ import annotations
@@ -105,7 +105,7 @@ class Color:
 
 @dataclass(frozen=True, slots=True)
 class Mobject:
-    """Detached semantic object snapshot usable as a Transform target."""
+    """Inert shared-handle inspection snapshot; never an authoring or Transform target."""
 
     geometry: dict[str, Any]
     transform: dict[str, Any]
@@ -183,85 +183,3 @@ def _stroke_width_mode(value: object) -> str:
     if value not in {"scale_with_object", "screen_space"}:
         raise ValueError("stroke_width_mode must be scale_with_object or screen_space")
     return str(value)
-
-
-def _make_mobject(
-    geometry: dict[str, Any],
-    *,
-    position: tuple[float, float] = (0.0, 0.0),
-    rotation: float = 0.0,
-    scale: tuple[float, float] = (1.0, 1.0),
-    fill: Color | None = Color(1.0, 1.0, 1.0),
-    stroke: Color | None = None,
-    stroke_width: float = 1.0,
-    stroke_width_mode: str = "scale_with_object",
-    stroke_join: str = "round",
-    stroke_cap: str = "round",
-    opacity: float = 1.0,
-) -> Mobject:
-    if fill is not None and not isinstance(fill, Color):
-        raise TypeError("fill must be a Color or None")
-    if stroke is not None and not isinstance(stroke, Color):
-        raise TypeError("stroke must be a Color or None")
-    width = _finite_number("stroke_width", stroke_width)
-    if width < 0.0:
-        raise ValueError("stroke_width must be non-negative")
-    return Mobject(
-        geometry=copy.deepcopy(geometry),
-        transform={
-            "translation": _vec2("position", position),
-            "rotation": _finite_number("rotation", rotation),
-            "scale": _vec2("scale", scale),
-        },
-        style={
-            "fill": None if fill is None else fill.to_ir(),
-            "stroke": None if stroke is None else stroke.to_ir(),
-            "stroke_width": width,
-            "stroke_width_mode": _stroke_width_mode(stroke_width_mode),
-            "stroke_join": _stroke_join(stroke_join),
-            "stroke_cap": _stroke_cap(stroke_cap),
-            "opacity": _finite_number("opacity", opacity),
-        },
-    )
-
-
-def Circle(radius: float, **kwargs: Any) -> Mobject:
-    return _make_mobject(
-        {"circle": {"radius": _positive_number("radius", radius)}},
-        **kwargs,
-    )
-
-
-def Rectangle(width: float, height: float, **kwargs: Any) -> Mobject:
-    return _make_mobject(
-        {
-            "rectangle": {
-                "size": {
-                    "x": _positive_number("width", width),
-                    "y": _positive_number("height", height),
-                }
-            }
-        },
-        **kwargs,
-    )
-
-
-def Line(
-    start: tuple[float, float],
-    end: tuple[float, float],
-    **kwargs: Any,
-) -> Mobject:
-    kwargs.setdefault("fill", None)
-    kwargs.setdefault("stroke", Color(1.0, 1.0, 1.0))
-    kwargs.setdefault("stroke_width", 0.1)
-    return _make_mobject(
-        {"line": {"start": _vec2("start", start), "end": _vec2("end", end)}},
-        **kwargs,
-    )
-
-
-def Path(path: VectorPath, **kwargs: Any) -> Mobject:
-    if not isinstance(path, VectorPath):
-        raise TypeError("path must be a VectorPath")
-    kwargs.setdefault("stroke_width", 0.1)
-    return _make_mobject({"vector_path": path.to_ir()}, **kwargs)
