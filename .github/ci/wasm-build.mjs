@@ -54,7 +54,7 @@ export async function fileDigest(root, name) {
   return hash.digest("hex");
 }
 
-export async function configuration(root) {
+export async function configuration(root, buildConfig = config) {
   const inputs = {};
   // Hash tracked build inputs without requiring Cargo in artifact consumers.
   const names = git(root, "ls-files", "-z", "Cargo.toml", "rust-toolchain.toml",
@@ -68,7 +68,7 @@ export async function configuration(root) {
   const toolchain = await readFile(path.join(root, "rust-toolchain.toml"), "utf8");
   const channel = toolchain.match(/^channel\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"\s*$/m)?.[1];
   assert.ok(channel, "expected an exact Rust version in rust-toolchain.toml");
-  return { ...config, toolchain: channel, inputs };
+  return { ...buildConfig, toolchain: channel, inputs };
 }
 
 export function trustedWriter(env) {
@@ -96,16 +96,22 @@ export function validateEnvironment(env) {
   if (env.RUSTC_WRAPPER) assert.equal(env.RUSTC_WRAPPER, "sccache");
 }
 
-export async function prepare(root, env, compiler) {
-  validateEnvironment(env);
+// Shared artifact identity for dev consumers and the two release product builds.
+export async function prepareArtifact(root, env, compiler, buildConfig = config) {
   assertClean(root);
-  const build = await configuration(root);
+  const build = await configuration(root, buildConfig);
   assert.match(compiler, new RegExp(`^release: ${build.toolchain.replaceAll(".", "\\.")}$`, "m"),
     "compiler does not match the repository pin");
-  const source = sourceSha(root, env);
+  return { schema: 1, source: sourceSha(root, env), build, compiler,
+    dependencyLock: await fileDigest(root, "Cargo.lock") };
+}
+
+export async function prepare(root, env, compiler) {
+  validateEnvironment(env);
+  const identity = await prepareArtifact(root, env, compiler);
+  const { source, build, dependencyLock } = identity;
   const cacheRef = env.NOON_CI_CACHE_REF || source;
   assert.match(cacheRef, /^[0-9a-f]{40}$/, "invalid cache revision");
-  const dependencyLock = await fileDigest(root, "Cargo.lock");
   const namespace = `${env.RUNNER_OS}-${env.RUNNER_ARCH}-wasm-build-v2-${digest(json({ build, compiler }))}-`;
   return { schema: 1, source, build, compiler, dependencyLock,
     key: `${namespace}${dependencyLock}-${cacheRef}`,
@@ -144,9 +150,9 @@ async function packageFiles(root) {
   return [...files, "web/python-worker.js", `web/python/${references[0]}`, lockPath].sort();
 }
 
-export async function stamp(root, prepared, env = process.env) {
+export async function stamp(root, prepared, env = process.env, buildConfig = config) {
   assert.equal(prepared.source, sourceSha(root, env), "source changed during build");
-  assert.deepEqual(prepared.build, await configuration(root), "configuration changed during build");
+  assert.deepEqual(prepared.build, await configuration(root, buildConfig), "configuration changed during build");
   assert.equal(prepared.dependencyLock, await fileDigest(root, "Cargo.lock"), "dependency resolution changed during build");
   assertClean(root);
   await copyFile(path.join(root, "Cargo.lock"), path.join(root, lockPath));
@@ -158,11 +164,11 @@ export async function stamp(root, prepared, env = process.env) {
   return manifest;
 }
 
-export async function verify(root, env = process.env) {
+export async function verify(root, env = process.env, buildConfig = config) {
   const manifest = JSON.parse(await readFile(path.join(root, manifestPath), "utf8"));
   assert.equal(manifest.schema, 1, "unsupported artifact schema");
   assert.equal(manifest.source, sourceSha(root, env), "artifact is not from this checkout");
-  assert.deepEqual(manifest.build, await configuration(root), "artifact configuration mismatch");
+  assert.deepEqual(manifest.build, await configuration(root, buildConfig), "artifact configuration mismatch");
   assert.match(manifest.compiler, new RegExp(`^release: ${manifest.build.toolchain.replaceAll(".", "\\.")}$`, "m"),
     "artifact compiler does not match the repository pin");
   // Inventory is derived locally, never traversed from untrusted manifest paths.
