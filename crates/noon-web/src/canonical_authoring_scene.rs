@@ -4107,6 +4107,97 @@ mod wasm {
             Ok(WasmCallbackTransform { transform })
         }
 
+        /// Resolve a typed family only in this authoring store before a pinned read.
+        #[wasm_bindgen(js_name = callbackFamilyKeys)]
+        pub fn callback_family_keys(
+            &self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            revision: &str,
+        ) -> Result<Vec<String>, JsValue> {
+            let family = handle.semantic_family()?;
+            if !std::rc::Rc::ptr_eq(
+                self.inner.scene.integration_store(),
+                family.integration_store(),
+            ) {
+                return Err(typed_js_error(noon::AuthoringError::ForeignStore));
+            }
+            let revision =
+                noon_core::SceneRevision::new(revision.parse::<u64>().map_err(js_error)?);
+            family
+                .callback_leaf_nodes(revision)
+                .map(|nodes| {
+                    nodes
+                        .into_iter()
+                        .map(|node| format!("{}:{}", node.slot(), node.generation()))
+                        .collect()
+                })
+                .map_err(typed_js_error)
+        }
+
+        /// One callback-boundary projection of an already prepared effective operation.
+        /// Input rows are the pinned read cache plus preceding ordered overlay writes.
+        #[wasm_bindgen(js_name = callbackFamilyPaint)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn callback_family_paint(
+            &self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            revision: &str,
+            operation: &str,
+            styles_json: &str,
+            has_color: bool,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            width: Option<f64>,
+            opacity: Option<f64>,
+        ) -> Result<String, JsValue> {
+            self.callback_family_keys(handle, revision)?;
+            let family = handle.semantic_family()?;
+            let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
+                .map_err(js_error)?;
+            let operation = match operation {
+                "Color" => noon::FamilyPaint::Color(
+                    color.ok_or_else(|| js_error("family color is required"))?,
+                ),
+                "Fill" => noon::FamilyPaint::Fill { color, opacity },
+                "Stroke" => noon::FamilyPaint::Stroke {
+                    color,
+                    width,
+                    opacity,
+                },
+                "Opacity" => noon::FamilyPaint::Opacity(
+                    opacity.ok_or_else(|| js_error("family opacity is required"))?,
+                ),
+                _ => return Err(js_error("unknown family paint operation")),
+            };
+            let revision =
+                noon_core::SceneRevision::new(revision.parse::<u64>().map_err(js_error)?);
+            // This is the existing Python callback view/overlay codec boundary,
+            // never an authored scene or a native/direct-WASM engine boundary.
+            let rows: Vec<(u32, u32, Style)> =
+                serde_json::from_str(styles_json).map_err(js_error)?;
+            let styles: BTreeMap<_, _> = rows
+                .into_iter()
+                .map(|(slot, generation, style)| {
+                    (noon_core::SemanticNodeId::new(slot, generation), style)
+                })
+                .collect();
+            let changes = family
+                .prepare_callback_paint(revision, operation, |node| {
+                    styles
+                        .get(&node)
+                        .copied()
+                        .ok_or(noon::ExecutionSessionCallbackError::UnknownObject(node))
+                })
+                .map_err(typed_js_error)?;
+            let rows: Vec<_> = changes
+                .into_iter()
+                .map(|(node, style)| (node.slot(), node.generation(), style))
+                .collect();
+            serde_json::to_string(&rows).map_err(js_error)
+        }
+
         /// Apply shared Manim `set_color` semantics to callback-local paint.
         #[wasm_bindgen(js_name = callbackPaintSetColor)]
         #[allow(clippy::too_many_arguments)]
