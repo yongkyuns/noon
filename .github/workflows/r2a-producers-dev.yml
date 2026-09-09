@@ -15,6 +15,7 @@ env:
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: 'true'
   SCCACHE_GHA_RW_MODE: READ_ONLY
+  CURRENT_BASE: a98c6837c960bd5620d6a03c79560cc44b0015b6
 jobs:
   qualify:
     runs-on: ubuntu-latest
@@ -64,11 +65,22 @@ jobs:
           for test in ../tooling/.github/r2a-tests/*.rs; do
             test ! -f "$test" || cp "$test" fixtures/provider-consumer/tests/
           done
+          # #1336 now owns this already-landed source implementation. Consume it
+          # through the master merge, not a second version of the same work.
+          git restore --source=HEAD -- crates/noon-core/src/semantic_store/semantic_transaction.rs
           cargo fmt --all
           cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
           git add .
           git diff --cached --check
-          git diff --cached --stat
+          git config user.name 'Noon development tooling'
+          git config user.email 'development@noon.invalid'
+          git -c commit.gpgSign=false -c core.hooksPath=/dev/null commit -m 'Stage existing R2a producer candidate for current-master qualification'
+          git merge --no-commit --no-ff "$CURRENT_BASE"
+          git add .
+          git diff --cached --check
+          git diff "$CURRENT_BASE" --stat
+          printf '%s\n' "$CURRENT_BASE" > ../base-sha.txt
+          git archive "$CURRENT_BASE" | gzip > ../base.tar.gz
       - uses: actions/cache@v6
         with:
           path: |
@@ -93,12 +105,21 @@ jobs:
           cargo test -p noon --no-default-features --lib > ../tests.log 2>&1 || { tail -200 ../tests.log; exit 1; }
           cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests >> ../tests.log 2>&1 || { tail -200 ../tests.log; exit 1; }
           tail -50 ../tests.log
+      - name: Qualify native and direct-WASM boundary
+        working-directory: source
+        run: |
+          bash scripts/check.sh fast "$CURRENT_BASE" > ../fast.log 2>&1 || { tail -200 ../fast.log; exit 1; }
+          cargo test -p noon --no-default-features --doc > ../docs.log 2>&1 || { tail -120 ../docs.log; exit 1; }
+          cargo run -p noon --no-default-features --example shared_authoring >> ../docs.log 2>&1 || { tail -120 ../docs.log; exit 1; }
+          cargo check -p noon-web --all-features --target wasm32-unknown-unknown > ../wasm.log 2>&1 || { tail -200 ../wasm.log; exit 1; }
+          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests --target wasm32-unknown-unknown --no-run >> ../wasm.log 2>&1 || { tail -200 ../wasm.log; exit 1; }
       - name: Preserve staged candidate for inspection
         if: always()
         working-directory: source
         run: |
           git add .
-          git diff --cached --binary > ../candidate.patch
+          git diff --cached "$CURRENT_BASE" --binary > ../candidate.patch
+          git write-tree > ../candidate-tree.txt
           git archive "$(git write-tree)" | gzip > ../candidate.tar.gz
       - name: Retain evidence
         if: always()
@@ -108,6 +129,12 @@ jobs:
           path: |
             compile.log
             tests.log
+            fast.log
+            docs.log
+            wasm.log
+            base-sha.txt
+            base.tar.gz
+            candidate-tree.txt
             candidate.patch
             candidate.tar.gz
           retention-days: 3
