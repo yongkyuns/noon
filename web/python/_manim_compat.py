@@ -318,15 +318,11 @@ class _GroupAnimationBuilder:
 
 
 class Group(_base.Group, _BaseMobject):
-    """Authoring-time Mobject-family group lowered to operations on member objects.
-
-    Noon intentionally keeps runtime hierarchy flat. The group therefore has no single
-    serialized object ID; its transforms and animations lower to its leaf members.
-    """
+    """Python identities and ergonomics over a shared Rust semantic family."""
 
     def __init__(self, *mobjects: object) -> None:
-        self.submobjects: list[object] = []
-        self.add(*mobjects)
+        from _manim_semantic_handles import _group_init
+        _group_init(self, *mobjects)
 
     @property
     def id(self) -> int:
@@ -354,23 +350,16 @@ class Group(_base.Group, _BaseMobject):
         return self.submobjects[index]
 
     def add(self, *mobjects: object) -> Group:
-        for mobject in mobjects:
-            if not isinstance(mobject, (_BaseMobject, Group)):
-                raise TypeError("Group members must be Mobjects or Groups")
-            if mobject is self:
-                raise ValueError("Group cannot contain itself")
-            self.submobjects.append(mobject)
-        return self
+        from _manim_semantic_handles import _group_add
+        return _group_add(self, *mobjects)
 
     def remove(self, *mobjects: object) -> Group:
-        identities = {id(mobject) for mobject in mobjects}
-        self.submobjects = [
-            mobject for mobject in self.submobjects if id(mobject) not in identities
-        ]
-        return self
+        from _manim_semantic_handles import _group_remove
+        return _group_remove(self, *mobjects)
 
     def copy(self) -> Group:
-        return type(self)(*(mobject.copy() for mobject in self.submobjects))
+        from _manim_semantic_handles import _group_copy
+        return _group_copy(self)
 
     def get_center(self) -> _base.Vec2:
         bounds = _bounds_for(self)
