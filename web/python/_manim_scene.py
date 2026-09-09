@@ -36,7 +36,6 @@ try:
 except ImportError:  # pragma: no cover - native import smoke only
     _create_context = None
 
-_INSTALLED = False
 _ASYNC_CONTINUATION_MODE = "_noon_async_continuation_mode"
 _ASYNC_CONTINUATION_PENDING = "_noon_async_continuation_pending"
 _SYNCHRONOUS_CONTINUATION_MODE = "_noon_synchronous_continuation_mode"
@@ -513,7 +512,7 @@ async def execute_construct(
                 # Inspect the instance after setup(), without executing getters.
                 # Overrides and dynamic lookup retain the original call path.
                 if has_portable_scene_methods(
-                    scene, play=_play, wait=_canonical_wait,
+                    scene, play=_base.Scene.play, wait=_base.Scene.wait,
                     add=_base.Scene.add, remove=_base.Scene.remove, clear=_base.Scene.clear,
                 ):
                     portable_construct = bind_portable_construct(
@@ -565,7 +564,7 @@ async def await_source_barrier(method, /, *args, **kwargs):
     scene = getattr(method, "__self__", None)
     if (not isinstance(scene, _base.Scene)
             or not getattr(scene, _PORTABLE_CONSTRUCT_MODE, False)
-            or getattr(method, "__func__", None) not in (_play, _canonical_wait)):
+            or getattr(method, "__func__", None) not in (_base.Scene.play, _base.Scene.wait)):
         raise RuntimeError("portable barrier must be the current Scene's canonical play/wait")
     setattr(scene, _PORTABLE_BARRIER_CALL, True)
     try:
@@ -588,9 +587,9 @@ async def await_module_source_barrier(method, /, *args, **kwargs):
 
     if (invocation is None
             or not isinstance(scene, _base.Scene)
-            or getattr(method, "__func__", None) not in (_play, _canonical_wait)
+            or getattr(method, "__func__", None) not in (_base.Scene.play, _base.Scene.wait)
             or not has_portable_scene_methods(
-                scene, play=_play, wait=_canonical_wait,
+                scene, play=_base.Scene.play, wait=_base.Scene.wait,
                 add=_base.Scene.add, remove=_base.Scene.remove, clear=_base.Scene.clear,
             )
             or (_create_context is None
@@ -2507,58 +2506,3 @@ def _live_execution(
 ) -> LiveExecution:
     """Create an explicit typed live session for the currently supported subset."""
     return LiveExecution(self, duration)
-
-
-def _bind_text(
-    self: _typst._RetainedTextMobject,
-    scene: _base.Scene,
-    *,
-    key: str | None = None,
-) -> object:
-    if self._scene is scene and self._object is not None:
-        return self._object
-    return _bind_mobject(self, scene, key=key)
-
-
-def install() -> None:
-    """Install the canonical per-scene Rust authoring context as the production path."""
-
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-    _compat._STANDARD_MEMBERSHIP_EDIT = _canonical_edit_membership
-    _compat._STANDARD_MEMBERSHIP_VIEW = _canonical_scene_mobjects
-    _compat._STANDARD_MEMBERSHIP_REGISTER = _register_membership_wrappers
-
-    _typst._RetainedTextMobject._bind_to_scene = _bind_text
-    _base.Mobject._bind_to_scene = _bind_mobject
-    _base.Scene._bind_camera_frame = _bind_camera_frame
-    _base.Scene.play = _play
-    _base.Scene.wait = _canonical_wait
-    _base.Scene.declare_wait = _declare_wait
-    _base.Scene.time = property(_canonical_scene_time)
-    _base.Scene.value_tracker = _canonical_value_tracker
-    _base.Scene.bind_position = _canonical_bind_position
-    _base.Scene.pointer_position_signal = _canonical_pointer_position_signal
-    _base.Scene.pointer_button_signal = _canonical_pointer_button_signal
-    _base.Scene.key_state_signal = _canonical_key_state_signal
-    _base.Scene.viewport_size_signal = _canonical_viewport_size_signal
-    _base.Scene.wheel_delta_signal = _canonical_wheel_delta_signal
-    _base.Scene.gesture_delta_signal = _canonical_gesture_delta_signal
-    _base.Scene.control_signal = _canonical_control_signal
-    _base.Scene.pointer_down_events = _canonical_pointer_down_events
-    _base.Scene.pointer_up_events = _canonical_pointer_up_events
-    _base.Scene.key_press_events = _canonical_key_press_events
-    _base.Scene.key_release_events = _canonical_key_release_events
-    _base.Scene.wheel_events = _canonical_wheel_events
-    _base.Scene.gesture_events = _canonical_gesture_events
-    _base.Scene.control_commit_events = _canonical_control_commit_events
-    _base.Scene.bind_rotation = _canonical_bind_rotation_dispatch
-    _base.Scene.bind_opacity = _canonical_bind_opacity_dispatch
-    _base.Scene.bind_presence = _canonical_bind_presence_dispatch
-    _base.Scene.bind_appearance = _canonical_bind_appearance_dispatch
-    _base.Scene.bind_reveal = _canonical_bind_reveal_dispatch
-    _base.Scene.bind_morph = _canonical_bind_morph_dispatch
-    _base.Scene.live_execution = _live_execution
-    _base.Scene.declare_live_transform_to = _declare_live_transform_to

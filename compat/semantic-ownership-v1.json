@@ -19,23 +19,23 @@
     {"path": "web/python/noon.py", "token": "_cursor", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/noon.py", "token": "_next_painter_order", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_semantic_handles.py", "token": "_tracks", "maximum": 0, "migration_issue": "#61"},
-    {"path": "web/python/_manim_canonical_scene.py", "token": "_tracks", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_scene.py", "token": "_tracks", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_reactive.py", "token": "_reactive_signals", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_reactive.py", "token": "_reactive_signal_tracks", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_reactive.py", "token": "_signal_id", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_reactive.py", "token": "self._value", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_reactive.py", "token": "_ORIGINAL_SCENE_PLAY", "maximum": 0, "migration_issue": "#61"},
-    {"path": "web/python/_manim_canonical_scene.py", "token": "_ORIGINAL_AUTHORING_CHECKPOINT", "maximum": 0, "migration_issue": "#61"},
-    {"path": "web/python/_manim_canonical_scene.py", "token": "_ORIGINAL_RESTORE_AUTHORING_CHECKPOINT", "maximum": 0, "migration_issue": "#61"},
-    {"path": "web/python/_manim_canonical_scene.py", "token": "_CHECKPOINT_TAG", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_scene.py", "token": "_ORIGINAL_AUTHORING_CHECKPOINT", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_scene.py", "token": "_ORIGINAL_RESTORE_AUTHORING_CHECKPOINT", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_scene.py", "token": "_CHECKPOINT_TAG", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_composition.py", "token": "_schedule_composition", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_composition.py", "token": "_tracks", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_composition.py", "token": "_cursor", "maximum": 0, "migration_issue": "#61"},
-    {"path": "web/python/_manim_canonical_scene.py", "token": "_timing_authority", "maximum": 0, "migration_issue": "#61"},
-    {"path": "web/python/_manim_canonical_scene.py", "token": "_legacy_authored_time", "maximum": 0, "migration_issue": "#61"},
-    {"path": "web/python/_manim_canonical_scene.py", "token": "_ORIGINAL_WAIT", "maximum": 0, "migration_issue": "#61"},
-    {"path": "web/python/_manim_canonical_scene.py", "token": "_ORIGINAL_TIME", "maximum": 0, "migration_issue": "#61"},
-    {"path": "web/python/_manim_canonical_scene.py", "token": "_ORIGINAL_BIND_", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_scene.py", "token": "_timing_authority", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_scene.py", "token": "_legacy_authored_time", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_scene.py", "token": "_ORIGINAL_WAIT", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_scene.py", "token": "_ORIGINAL_TIME", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_scene.py", "token": "_ORIGINAL_BIND_", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_animate.py", "token": "_tracks", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_animate.py", "token": "_cursor", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_animate.py", "token": "_aligned_scene_play", "maximum": 0, "migration_issue": "#61"},
@@ -219,7 +219,7 @@
       "surface": "Canonical Group.animate/ApplyMethod/ScaleInPlace over ordinary semantic leaves",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/execution_session.rs", "symbol": "SemanticCompositionRequest::FamilyTransformTo"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_family_transform_animation"}],
+      "adapters": [{"language": "python", "path": "web/python/_manim_scene.py", "symbol": "_canonical_family_transform_animation"}],
       "reason": "Rust validates authoritative family topology/order and lowers one shared composition. Live target families publish through the existing session; Python retains wrapper identity and call coercion."
     },
     {
@@ -253,7 +253,7 @@
       "surface": "Typed leaf FadeIn/FadeOut with scale, shift, or target_position",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::declare_and_activate_fade_with_endpoint"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_fade_endpoint/_build_canonical_composition_candidate"}],
+      "adapters": [{"language": "python", "path": "web/python/_manim_scene.py", "symbol": "_canonical_fade_endpoint/_build_canonical_composition_candidate"}],
       "reason": "Python coerces the Manim call into scale plus a shift or point value. Rust resolves effective endpoint layout, authors the affine and appearance tracks, owns lifecycle membership, and schedules composition timing."
     },
     {
@@ -261,7 +261,7 @@
       "surface": "Typed Group/VGroup FadeIn/FadeOut opacity and lifecycle, including compositions with Text Write",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/execution_session.rs", "symbol": "SemanticCompositionRequest::FamilyFade"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_family_fade_animation"}],
+      "adapters": [{"language": "python", "path": "web/python/_manim_scene.py", "symbol": "_canonical_family_fade_animation"}],
       "reason": "Rust traverses authoritative family leaves, applies shared composition timing, validates conflicts atomically and owns family root introduction/removal. Python passes handles and coerced options; affine family fade endpoints remain unsupported."
     },
     {
@@ -269,7 +269,7 @@
       "surface": "Typed leaf DrawBorderThenFill and forward ordinary-vector Write families",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::declare_and_activate_draw_border_then_fill/declare_and_activate_family_draw_border_then_fill"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_draw_border_then_fill_animation"}],
+      "adapters": [{"language": "python", "path": "web/python/_manim_scene.py", "symbol": "_canonical_draw_border_then_fill_animation"}],
       "reason": "Python coerces Manim outline options and wrapper identity. Rust derives the activation-effective outline and final style, owns both phases and family lag scheduling, and publishes detached families atomically."
     },
     {
@@ -277,7 +277,7 @@
       "surface": "Plain Text and Group/VGroup Text Write/Unwrite, including mixed ordinary compositions",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::declare_and_activate_text_write/declare_and_activate_family_text_write"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_text_write_animation/_canonical_text_family_write_animation"}],
+      "adapters": [{"language": "python", "path": "web/python/_manim_scene.py", "symbol": "_canonical_text_write_animation/_canonical_text_family_write_animation"}],
       "reason": "Python passes typed Text/family handles and explicit options. Rust derives global glyph order and count-dependent defaults, validates composition conflicts and membership atomically, and publishes compact per-leaf global spans with immutable glyph plans to the common renderer."
     },
     {
@@ -285,7 +285,7 @@
       "surface": "Plain Text and Text/geometry Group/VGroup Create/Uncreate, including mixed ordinary compositions",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::declare_and_activate_text_reveal/declare_and_activate_family_reveal"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_text_reveal_animation/_canonical_family_reveal_animation"}],
+      "adapters": [{"language": "python", "path": "web/python/_manim_scene.py", "symbol": "_canonical_text_reveal_animation/_canonical_family_reveal_animation"}],
       "reason": "Python passes typed handles and explicit options. Rust owns global glyph ordering, Reveal defaults, local rate reversal, atomic family membership and conflicting-driver validation. The existing compact glyph plans and common retained renderer realize both Create/Uncreate and Write/Unwrite."
     },
     {
@@ -334,7 +334,7 @@
       "surface": "Single-leaf GrowFromPoint/Center/Edge, SpinInFromNothing and ShrinkToCenter",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "declare_and_activate_affine_lifecycle"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_affine_lifecycle_animation"}]
+      "adapters": [{"language": "python", "path": "web/python/_manim_scene.py", "symbol": "_canonical_affine_lifecycle_animation"}]
     },
     {
       "id": "animate.target-state",
@@ -404,7 +404,7 @@
       "surface": "Scene.add/play/wait cursor and lifecycle authoring",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/live_session.rs", "symbol": "LiveSession::add/declare_and_activate_composition/wait_segment"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_play/_canonical_wait/_canonical_scene_time"}],
+      "adapters": [{"language": "python", "path": "web/python/_manim_scene.py", "symbol": "_play/_canonical_wait/_canonical_scene_time"}],
       "reason": "All valid scene operations use shared Rust continuations; the Python Scene/document engine, cursor, tracks, snapshots and scheduling have been deleted. Derived wrapper identities remain Python metadata."
     },
     {
@@ -412,7 +412,7 @@
       "surface": "Scene.remove/replace/clear and top-level ordering",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon-core/src/reactive/semantic_scene_restructure.rs", "symbol": "plan_semantic_scene_membership"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_edit_membership/_canonical_scene_mobjects"}],
+      "adapters": [{"language": "python", "path": "web/python/_manim_scene.py", "symbol": "_canonical_edit_membership/_canonical_scene_mobjects"}],
       "reason": "One shared Rust planner validates and atomically applies family-aware add/remove/clear/replace requests and owns authoritative root painter order. Python reserves derived wrapper identities, submits one typed request, and maps the ordered Rust projection back to public wrappers after success."
     },
     {
@@ -452,7 +452,7 @@
       "surface": "Reactive graph validation, evaluation, invalidation, and native input dispatch",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon-core/src/reactive/native_reactive.rs", "symbol": "ReactiveProgram/ReactiveState"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_canonical_scene.py", "symbol": "_canonical_value_tracker/_canonical_bind_position"}]
+      "adapters": [{"language": "python", "path": "web/python/_manim_scene.py", "symbol": "_canonical_value_tracker/_canonical_bind_position"}]
     },
     {
       "id": "group-authored-paint-mutation",

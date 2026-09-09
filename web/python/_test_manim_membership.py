@@ -1,6 +1,6 @@
 """Minimal membership hooks for isolated Python adapter tests.
 
-Production installs the shared Rust membership implementation. Tests that load
+Production calls the shared Rust membership implementation directly. Tests that load
 only the Python ergonomics modules use this stand-in to bind wrappers without
 installing another production membership path.
 """
@@ -60,5 +60,10 @@ def install_test_membership(compat: Any) -> None:
             return
         raise ValueError(f"unknown test membership operation {kind!r}")
 
-    compat._STANDARD_MEMBERSHIP_EDIT = edit
-    compat._STANDARD_MEMBERSHIP_VIEW = lambda scene: list(scene._compat_top_level)
+    def register(scene, value):
+        if not any(existing is value for existing in scene._compat_top_level):
+            scene._compat_top_level.append(value)
+
+    compat.Scene._edit_membership = edit
+    compat.Scene._register_top_level = register
+    compat.Scene.mobjects = property(lambda scene: list(scene._compat_top_level))

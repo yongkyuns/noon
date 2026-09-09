@@ -21,9 +21,6 @@ OUT = (0.0, 0.0, 1.0)
 IN = (0.0, 0.0, -1.0)
 
 _INSTALLED = False
-_STANDARD_MEMBERSHIP_EDIT = None
-_STANDARD_MEMBERSHIP_VIEW = None
-_STANDARD_MEMBERSHIP_REGISTER = None
 
 
 # Pinned ManimCE v0.21.0 Cairo presentation contract. Cairo converts
@@ -531,27 +528,26 @@ class Scene(_BaseScene):
         pass
 
     def _register_top_level(self, value: object) -> None:
-        if _STANDARD_MEMBERSHIP_REGISTER is not None and (
+        if (
             getattr(value, "_semantic_handle", None) is not None
             or getattr(value, "_semantic_family_handle", None) is not None
         ):
-            _STANDARD_MEMBERSHIP_REGISTER(self, value)
+            _base._scene_operations()._register_membership_wrappers(self, value)
             return
         if not any(existing is value for existing in self._compat_top_level):
             self._compat_top_level.append(value)
 
     @property
     def mobjects(self) -> list[object]:
-        if _STANDARD_MEMBERSHIP_VIEW is None:
-            raise RuntimeError("typed Scene membership is not installed")
-        return _STANDARD_MEMBERSHIP_VIEW(self)
+        return _base._scene_operations()._canonical_scene_mobjects(self)
+
+    def _edit_membership(self, kind: str, values: tuple[object, ...] = (), *, key=None) -> None:
+        _base._scene_operations()._canonical_edit_membership(self, kind, values, key=key)
 
     def add(self, *mobjects: object, key: str | None = None) -> _BaseMobject | Scene:
         if not mobjects:
             return self
-        if _STANDARD_MEMBERSHIP_EDIT is None:
-            raise RuntimeError("typed Scene membership is not installed")
-        _STANDARD_MEMBERSHIP_EDIT(self, "add", mobjects, key=key)
+        self._edit_membership("add", mobjects, key=key)
 
         # Preserve Noon's established one-object return as a backwards-compatible
         # extension. Typical Manim source ignores Scene.add's return value.
@@ -559,21 +555,15 @@ class Scene(_BaseScene):
         return leaves[0] if len(leaves) == 1 else self
 
     def remove(self, *mobjects: object) -> Scene:
-        if _STANDARD_MEMBERSHIP_EDIT is None:
-            raise RuntimeError("typed Scene membership is not installed")
-        _STANDARD_MEMBERSHIP_EDIT(self, "remove", mobjects)
+        self._edit_membership("remove", mobjects)
         return self
 
     def clear(self) -> Scene:
-        if _STANDARD_MEMBERSHIP_EDIT is None:
-            raise RuntimeError("typed Scene membership is not installed")
-        _STANDARD_MEMBERSHIP_EDIT(self, "clear")
+        self._edit_membership("clear")
         return self
 
     def replace(self, old_mobject: object, new_mobject: object) -> Scene:
-        if _STANDARD_MEMBERSHIP_EDIT is None:
-            raise RuntimeError("typed Scene membership is not installed")
-        _STANDARD_MEMBERSHIP_EDIT(self, "replace", (old_mobject, new_mobject))
+        self._edit_membership("replace", (old_mobject, new_mobject))
         return self
 
 

@@ -232,7 +232,7 @@ class Mobject:
         self._object = obj
 
     def _bind_to_scene(self, scene: Scene, *, key: str | None = None) -> _ir.Object:
-        raise RuntimeError("Scene membership requires the shared Rust authoring host")
+        return _scene_operations()._bind_mobject(self, scene, key=key)
 
     def _current_raw(self) -> _ir.Mobject:
         raise RuntimeError("Mobject queries require the shared Rust authoring host")
@@ -531,6 +531,17 @@ class _AnimationBuilder:
         return self
 
 
+def _scene_operations():
+    """Load the shared host adapter lazily, after public wrapper classes exist."""
+    try:
+        import _manim_scene
+    except ModuleNotFoundError as error:
+        if error.name != "js":
+            raise
+        raise RuntimeError("Scene operations require the shared Rust authoring host") from None
+    return _manim_scene
+
+
 class Scene:
     """Python authoring facade; semantic operations require the shared Rust host."""
 
@@ -544,19 +555,104 @@ class Scene:
         self._object_positions: dict[int, int] = {}
         self._next_object_id = 0
 
-    @property
-    def time(self) -> float:
-        raise RuntimeError("Scene time requires the shared Rust authoring host")
-
     def add(self, *mobjects: Mobject, **kwargs: Any) -> Scene:
         raise RuntimeError("Scene membership requires the shared Rust authoring host")
 
-    def play(self, *animations: Any, **kwargs: Any) -> Scene:
-        raise RuntimeError("Scene playback requires the shared Rust authoring host")
+    def _bind_camera_frame(self, mobject: Mobject) -> Any:
+        return _scene_operations()._bind_camera_frame(self, mobject)
 
-    def wait(self, duration: float = 1.0) -> Scene:
-        raise RuntimeError("Scene playback requires the shared Rust authoring host")
+    def play(self, *args, **kwargs) -> Any:
+        return _scene_operations()._play(self, *args, **kwargs)
 
+    def wait(self, duration: float = 1.0) -> Any:
+        return _scene_operations()._canonical_wait(self, duration)
+
+    def declare_wait(self, duration: float = 1.0) -> Scene:
+        return _scene_operations()._declare_wait(self, duration)
+
+    @property
+    def time(self) -> float:
+        return _scene_operations()._canonical_scene_time(self)
+
+    def value_tracker(self, value: float = 0.0) -> Any:
+        return _scene_operations()._canonical_value_tracker(self, value)
+
+    def bind_position(
+        self, mobject: object, tracker: object,
+        direction: object = None, offset: object = None,
+    ) -> Scene:
+        return _scene_operations()._canonical_bind_position(self, mobject, tracker, direction, offset)
+
+    def pointer_position_signal(self) -> Any:
+        return _scene_operations()._canonical_pointer_position_signal(self)
+
+    def pointer_button_signal(self, button: int = 0, initial: bool = False) -> Any:
+        return _scene_operations()._canonical_pointer_button_signal(self, button, initial)
+
+    def key_state_signal(self, code: str, initial: bool = False) -> Any:
+        return _scene_operations()._canonical_key_state_signal(self, code, initial)
+
+    def viewport_size_signal(self) -> Any:
+        return _scene_operations()._canonical_viewport_size_signal(self)
+
+    def wheel_delta_signal(self) -> Any:
+        return _scene_operations()._canonical_wheel_delta_signal(self)
+
+    def gesture_delta_signal(self, name: str) -> Any:
+        return _scene_operations()._canonical_gesture_delta_signal(self, name)
+
+    def control_signal(self, name: str, value: float = 0.0) -> Any:
+        return _scene_operations()._canonical_control_signal(self, name, value)
+
+    def pointer_down_events(self, button: int = 0) -> Any:
+        return _scene_operations()._canonical_pointer_down_events(self, button)
+
+    def pointer_up_events(self, button: int = 0) -> Any:
+        return _scene_operations()._canonical_pointer_up_events(self, button)
+
+    def key_press_events(self, code: str) -> Any:
+        return _scene_operations()._canonical_key_press_events(self, code)
+
+    def key_release_events(self, code: str) -> Any:
+        return _scene_operations()._canonical_key_release_events(self, code)
+
+    def wheel_events(self) -> Any:
+        return _scene_operations()._canonical_wheel_events(self)
+
+    def gesture_events(self, name: str) -> Any:
+        return _scene_operations()._canonical_gesture_events(self, name)
+
+    def control_commit_events(self, name: str) -> Any:
+        return _scene_operations()._canonical_control_commit_events(self, name)
+
+    def bind_rotation(self, mobject: object, tracker: object) -> Any:
+        return _scene_operations()._canonical_bind_rotation_dispatch(self, mobject, tracker)
+
+    def bind_opacity(self, mobject: object, tracker: object) -> Any:
+        return _scene_operations()._canonical_bind_opacity_dispatch(self, mobject, tracker)
+
+    def bind_presence(self, mobject: object, signal: object) -> Any:
+        return _scene_operations()._canonical_bind_presence_dispatch(self, mobject, signal)
+
+    def bind_appearance(self, mobject: object, tracker: object) -> Any:
+        return _scene_operations()._canonical_bind_appearance_dispatch(self, mobject, tracker)
+
+    def bind_reveal(self, mobject: object, tracker: object) -> Any:
+        return _scene_operations()._canonical_bind_reveal_dispatch(self, mobject, tracker)
+
+    def bind_morph(self, mobject: object, tracker: object) -> Any:
+        return _scene_operations()._canonical_bind_morph_dispatch(self, mobject, tracker)
+
+    def live_execution(self, duration: float | None = None) -> Any:
+        return _scene_operations()._live_execution(self, duration)
+
+    def declare_live_transform_to(
+        self, source: Mobject, target: Mobject, *,
+        run_time: float = 1.0, rate_func: object = "smooth",
+    ) -> Any:
+        return _scene_operations()._declare_live_transform_to(
+            self, source, target, run_time=run_time, rate_func=rate_func,
+        )
 
 
 Object = Mobject

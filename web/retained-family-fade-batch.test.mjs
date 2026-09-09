@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 const cameraSource = readFileSync("web/python/_manim_camera.py", "utf8");
-const canonicalSource = readFileSync("web/python/_manim_canonical_scene.py", "utf8");
+const canonicalSource = readFileSync("web/python/_manim_scene.py", "utf8");
 const manifestSource = readFileSync("web/python-compat-modules.js", "utf8");
 
 test("obsolete retained family fade coordinator stays deleted", () => {

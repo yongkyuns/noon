@@ -243,6 +243,7 @@ deleted_legacy_validation_paths=(
   'scripts/explicit-transport-scene-fixture.js'
   'web/fixtures/execution-transport.json'
   'crates/noon-ir'
+  'web/python/_manim_canonical_scene.py'
   'crates/noon-web/src/legacy.rs'
   'crates/noon/src/legacy.rs'
   'crates/noon/src/legacy/semantic_snapshot.rs'

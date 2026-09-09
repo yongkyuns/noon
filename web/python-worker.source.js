@@ -173,10 +173,6 @@ import _manim_updaters
 _manim_updaters.install()
 import _manim_camera
 _manim_camera.install()
-# Final production SceneSpec ownership: after all content/lifecycle adapters have
-# installed, bind their events into one per-scene Rust canonical authoring context.
-import _manim_canonical_scene
-_manim_canonical_scene.install()
 `);
   const importsReadyAt = performance.now();
   self.__noonAuthoringStartupMetrics = Object.freeze({
@@ -686,7 +682,7 @@ async function runAuthoringSource(pyodide, source, context) {
       `
 import json
 import _manim_updaters
-from _manim_canonical_scene import (
+from _manim_scene import (
     execute_construct,
     await_source_barrier,
     await_module_source_barrier,
