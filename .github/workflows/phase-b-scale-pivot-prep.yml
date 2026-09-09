@@ -17,10 +17,13 @@ jobs:
           ref: 7edd6b41feee02355943868d48754bf0e23a706b
           fetch-depth: 0
       - name: Apply bounded scale-pivot slice
-        run: python .github/phase-b-scale-pivot-prep.py
+        run: |
+          git show origin/codex/74-scale-pivot-prep:.github/phase-b-scale-pivot-prep.py > /tmp/phase-b-scale-pivot-prep.py
+          python /tmp/phase-b-scale-pivot-prep.py
       - name: Format and focused validation
         run: |
           rustup target add wasm32-unknown-unknown
+          cargo fmt --all
           cargo fmt --all -- --check
           cargo test -p noon manim_scale_preserves_center_and_resolves_explicit_point_and_edge_pivots
           cargo check -p noon-web --target wasm32-unknown-unknown
