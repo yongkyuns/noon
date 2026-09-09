@@ -41,15 +41,6 @@ _INSTALLED = False
 _CHECKPOINT_TAG = object()
 _ORIGINAL_AUTHORING_CHECKPOINT = _ir.Scene._authoring_checkpoint
 _ORIGINAL_RESTORE_AUTHORING_CHECKPOINT = _ir.Scene._restore_authoring_checkpoint
-_ORIGINAL_BIND_POSITION = _base.Scene.bind_position
-_ORIGINAL_BIND_ROTATION = _base.Scene.bind_rotation
-_ORIGINAL_BIND_OPACITY = _base.Scene.bind_opacity
-_ORIGINAL_BIND_APPEARANCE = _base.Scene.bind_appearance
-_ORIGINAL_BIND_REVEAL = _base.Scene.bind_reveal
-_ORIGINAL_BIND_MORPH = _base.Scene.bind_morph
-_ORIGINAL_BIND_PRESENCE = _base.Scene.bind_presence
-_ORIGINAL_WAIT = _base.Scene.wait
-_ORIGINAL_TIME = _base.Scene.time
 _ORIGINAL_TO_DOCUMENT = _ir.Scene.to_document
 _ORIGINAL_IDENTITY_DOCUMENT = _ir.Scene.identity_document
 _ASYNC_CONTINUATION_MODE = "_noon_async_continuation_mode"
@@ -432,39 +423,9 @@ def _associate_tracker(scene: _base.Scene, tracker: _reactive.ValueTracker) -> N
     tracker._associate_canonical(scene, _context(scene))
 
 
-def _rust_authored_time(scene: _base.Scene) -> float | None:
-    """Read only the canonical Rust authoring cursor when a context exists."""
-    context = getattr(scene, "_canonical_authoring_context", None)
-    if context is None:
-        return None
-    return float(context.authoredDuration())
-
-
-def _legacy_authored_time(scene: _base.Scene) -> float:
-    return float(_ORIGINAL_TIME.__get__(scene, type(scene)))
-
-
-def _timing_authority(scene: _base.Scene) -> tuple[str, float]:
-    """Choose one authored cursor during the #959 timing migration.
-
-    Rust owns the scalar path once it has advanced. The retained legacy cursor
-    remains available only for scenes that have not entered that path. A scene
-    must never merge, synchronize, or select a maximum across both cursors.
-    Remove the legacy branch with the #959 timeline adapter.
-    """
-    rust_time = _rust_authored_time(scene)
-    legacy_time = _legacy_authored_time(scene)
-    if rust_time is None or rust_time == 0.0:
-        return "legacy", legacy_time
-    if legacy_time == 0.0:
-        return "canonical", rust_time
-    raise NotImplementedError(
-        "mixed legacy and canonical Scene timing is unsupported during #959 migration"
-    )
-
-
 def _canonical_scene_time(scene: _base.Scene) -> float:
-    return _timing_authority(scene)[1]
+    """Observe the shared Rust cursor, including an empty scene at time zero."""
+    return float(_context(scene).authoredDuration())
 
 
 def _begin_async_continuation_construct(scene: _base.Scene) -> None:
@@ -840,21 +801,16 @@ def _canonical_wait(
         if _async_continuation_active(scene):
             return _continuation_awaitable(scene)
         return _synchronous_continuation_wait(scene)
-    authority, _ = _timing_authority(scene)
-    if authority == "canonical":
-        context = _context(scene)
-        try:
-            context.ordinaryWait(float(duration))
-        except Exception as error:
-            raise ValueError(str(error)) from None
-        return scene
-    return _ORIGINAL_WAIT(scene, duration)
+    context = _context(scene)
+    try:
+        context.ordinaryWait(float(duration))
+    except Exception as error:
+        raise ValueError(str(error)) from None
+    return scene
 
 
 def _declare_wait(scene: _base.Scene, duration: float = 1.0) -> _base.Scene:
     """Declare a pre-execution interval on the shared Rust authoring cursor."""
-    if _legacy_authored_time(scene) != 0.0:
-        raise NotImplementedError("canonical wait declaration cannot follow legacy timing")
     _context(scene).authoredWait(float(duration))
     return scene
 
@@ -2069,10 +2025,6 @@ def _play_canonical_composition(
     removals: list[_base.Mobject],
     tracker_associations: list[_reactive.ValueTracker],
 ) -> _base.Scene | _SemanticContinuationAwaitable:
-    if _legacy_authored_time(self) != 0.0:
-        raise NotImplementedError(
-            "canonical ordinary composition cannot follow legacy Scene timing"
-        )
     _start_default_synchronous_continuation(self)
     context = _context(self)
     try:
@@ -2250,15 +2202,6 @@ def _canonical_bind_signal(
     return self
 
 
-def _unsupported_canonical_native(scene: _base.Scene, operation: str) -> None:
-    # #959 owns the remaining legacy source adapter. Once a canonical context
-    # exists, no raw declaration may be appended alongside the shared store.
-    if _is_canonical_scene(scene):
-        raise NotImplementedError(
-            f"{operation} is not supported by canonical native input authoring"
-        )
-
-
 def _unsupported_native_source(operation: str) -> None:
     raise NotImplementedError(
         f"{operation} is not supported by canonical native input authoring"
@@ -2303,8 +2246,7 @@ def _canonical_bind_rotation_dispatch(
         return _canonical_bind_signal(
             self, mobject, tracker, _reactive.ValueTracker, "bind_rotation", "bindRotation"
         )
-    _unsupported_canonical_native(self, "bind_rotation")
-    return _ORIGINAL_BIND_ROTATION(self, mobject, tracker)
+    _unsupported_native_source("bind_rotation")
 
 
 def _canonical_bind_opacity_dispatch(
@@ -2317,8 +2259,7 @@ def _canonical_bind_opacity_dispatch(
         return _canonical_bind_signal(
             self, mobject, tracker, _reactive.ValueTracker, "bind_opacity", "bindOpacity"
         )
-    _unsupported_canonical_native(self, "bind_opacity")
-    return _ORIGINAL_BIND_OPACITY(self, mobject, tracker)
+    _unsupported_native_source("bind_opacity")
 
 
 def _canonical_bind_presence_dispatch(
@@ -2328,39 +2269,25 @@ def _canonical_bind_presence_dispatch(
         return _canonical_bind_signal(
             self, mobject, signal, _reactive.NativeBoolSignal, "bind_presence", "bindPresence"
         )
-    _unsupported_canonical_native(self, "bind_presence")
-    return _ORIGINAL_BIND_PRESENCE(self, mobject, signal)
-
-
-def _canonical_unsupported_binding(
-    self: _base.Scene, operation: str, original: object, *args: object
-) -> _base.Scene:
-    _unsupported_canonical_native(self, operation)
-    return original(self, *args)
+    _unsupported_native_source("bind_presence")
 
 
 def _canonical_bind_appearance_dispatch(
     self: _base.Scene, mobject: object, tracker: object
 ) -> _base.Scene:
-    return _canonical_unsupported_binding(
-        self, "bind_appearance", _ORIGINAL_BIND_APPEARANCE, mobject, tracker
-    )
+    _unsupported_native_source("bind_appearance")
 
 
 def _canonical_bind_reveal_dispatch(
     self: _base.Scene, mobject: object, tracker: object
 ) -> _base.Scene:
-    return _canonical_unsupported_binding(
-        self, "bind_reveal", _ORIGINAL_BIND_REVEAL, mobject, tracker
-    )
+    _unsupported_native_source("bind_reveal")
 
 
 def _canonical_bind_morph_dispatch(
     self: _base.Scene, mobject: object, tracker: object
 ) -> _base.Scene:
-    return _canonical_unsupported_binding(
-        self, "bind_morph", _ORIGINAL_BIND_MORPH, mobject, tracker
-    )
+    _unsupported_native_source("bind_morph")
 
 
 def _canonical_bind_position(
@@ -2382,11 +2309,9 @@ def _canonical_bind_position(
                 "bind_position",
                 "bindNativeTranslation",
             )
-        _unsupported_canonical_native(self, "bind_position")
-        return _ORIGINAL_BIND_POSITION(self, mobject, tracker, direction, offset)
+        _unsupported_native_source("bind_position")
     if not isinstance(tracker, _reactive.ValueTracker):
-        _unsupported_canonical_native(self, "bind_position")
-        return _ORIGINAL_BIND_POSITION(self, mobject, tracker, direction, offset)
+        _unsupported_native_source("bind_position")
     if not isinstance(mobject, _base.Mobject) or mobject._scene is not self:
         raise ValueError("bind_position target must belong to this Scene")
     handle = getattr(mobject, "_semantic_handle", None)
@@ -2397,8 +2322,7 @@ def _canonical_bind_position(
     _associate_tracker(self, tracker)
     canonical = tracker._canonical_context_handle()
     if canonical is None:
-        _unsupported_canonical_native(self, "bind_position")
-        return _ORIGINAL_BIND_POSITION(self, mobject, tracker, direction, offset)
+        _unsupported_native_source("bind_position")
     context, tracker_handle = canonical
     if context is not _context(self):
         raise ValueError("ValueTracker belongs to another canonical Scene context")

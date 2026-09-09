@@ -9,6 +9,11 @@
     "shared-rust"
   ],
   "duplicate_debt_budgets": [
+    {"path": "web/python/_manim_canonical_scene.py", "token": "_timing_authority", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_canonical_scene.py", "token": "_legacy_authored_time", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_canonical_scene.py", "token": "_ORIGINAL_WAIT", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_canonical_scene.py", "token": "_ORIGINAL_TIME", "maximum": 0, "migration_issue": "#61"},
+    {"path": "web/python/_manim_canonical_scene.py", "token": "_ORIGINAL_BIND_", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_animate.py", "token": "copy.deepcopy", "maximum": 6, "migration_issue": "#61"},
     {"path": "web/python/_manim_animate.py", "token": "_snapshot_for_object_at", "maximum": 2, "migration_issue": "#61"},
     {"path": "web/python/_manim_animate.py", "token": "_ir.Mobject(", "maximum": 1, "migration_issue": "#61"},
