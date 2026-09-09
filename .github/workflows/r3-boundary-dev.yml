@@ -41,11 +41,28 @@ jobs:
           git apply --index /tmp/r3-evidence/input.patch
           git apply --index /tmp/r3-evidence/fixups.patch
           git apply --index /tmp/r3-evidence/final.patch
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon-web/src/semantic_execution_player.rs')
+          text = p.read_text()
+          old = '''        assert!(player
+              .live_drive_segment_to_authored_time(1.0)
+              .unwrap_err()
+              .contains("time at or after 1.25"));'''
+          new = '''        let error = player.live_drive_segment_to_authored_time(1.0).unwrap_err();
+                  // This legacy guard is not a settled R2 producer yet.
+                  assert_eq!(error.category, "unclassified");
+                  assert_eq!(error.code, "unclassified");
+                  assert_eq!(error.message,
+                      "external continuation sample requires time at or after 1.25, got 1");'''
+          assert text.count(old) == 1
+          p.write_text(text.replace(old, new))
+          PY
           cargo fmt --all
           git add -u
           git diff --cached --check
           git diff --cached > /tmp/r3-evidence/formatted-r3.patch
-          base=a98c6837c960bd5620d6a03c79560cc44b0015b6
+          base=100228bd97fee5d7e44aab3a0cf9736808c04858
           git reset --hard "$base"
           git apply --3way --index /tmp/r3-evidence/formatted-r3.patch
           git diff --cached --check
@@ -76,7 +93,7 @@ jobs:
       - name: Native architecture, format, workspace check, strict Clippy and library tests
         run: |
           set -o pipefail
-          bash scripts/check.sh fast a98c6837c960bd5620d6a03c79560cc44b0015b6 2>&1 | tee /tmp/r3-evidence/native.log
+          bash scripts/check.sh fast 100228bd97fee5d7e44aab3a0cf9736808c04858 2>&1 | tee /tmp/r3-evidence/native.log
       - name: Web static and Python tests
         run: |
           set -o pipefail
@@ -104,6 +121,7 @@ jobs:
           node scripts/manim-compat-smoke.mjs 2>&1 | tee /tmp/r3-evidence/manim-browser.log
       - name: Publish verified candidate or retain it for authorized connector publication
         run: |
+          set -o pipefail
           if git push origin HEAD:refs/heads/codex/1292-r3-typed-boundary 2>&1 | tee /tmp/r3-evidence/publication.log; then
             echo pushed > /tmp/r3-evidence/publication-status.txt
           else
