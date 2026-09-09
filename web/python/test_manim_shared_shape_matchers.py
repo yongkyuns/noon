@@ -275,7 +275,6 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
             )
 
             import _manim_shared_geometry
-            _manim_shared_geometry.install()
             from noon import BackgroundRectangle, BLUE, Rectangle, SurroundingRectangle, VGroup
 
             leaf = Rectangle(width=4.0, height=2.0)

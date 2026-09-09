@@ -124,7 +124,6 @@ class ManimSharedRoundedRectangleTests(unittest.TestCase):
             )
 
             import _manim_shared_geometry
-            _manim_shared_geometry.install()
             from noon import BLUE, Rectangle, RoundedRectangle
 
             rect = RoundedRectangle(

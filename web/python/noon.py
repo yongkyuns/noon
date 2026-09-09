@@ -687,6 +687,25 @@ class Scene:
 
 Object = Mobject
 
+# Public geometry classes resolve from their defining module. Lazy imports avoid
+# cycles with the Mobject foundation without startup mutation of this namespace.
+_GEOMETRY_EXPORTS = (
+    "Elbow", "RoundedRectangle", "SurroundingRectangle", "BackgroundRectangle",
+    "Underline", "AnnularSector", "Sector", "Annulus",
+)
+
+
+def __getattr__(name: str):
+    if name in _GEOMETRY_EXPORTS:
+        import _manim_shared_geometry
+        return getattr(_manim_shared_geometry, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
+
+
 __all__ = [
     "BLACK",
     "BLUE",
@@ -781,4 +800,5 @@ __all__ = [
     "YELLOW_D",
     "YELLOW_E",
     "color_from_hex",
+    *_GEOMETRY_EXPORTS,
 ]

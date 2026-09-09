@@ -150,7 +150,6 @@ import _manim_geometry
 import _manim_semantic_handles
 
 import _manim_shared_geometry
-_manim_shared_geometry.install()
 import _manim_dashed_line
 _manim_dashed_line.install()
 import _manim_animate

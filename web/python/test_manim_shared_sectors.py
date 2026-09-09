@@ -121,7 +121,6 @@ class ManimSharedSectorTests(unittest.TestCase):
             )
 
             import _manim_shared_geometry
-            _manim_shared_geometry.install()
             from noon import AnnularSector, Annulus, BLUE, Sector
 
             annular = AnnularSector(

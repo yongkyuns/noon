@@ -25,6 +25,13 @@ class ManimConstantExportTests(unittest.TestCase):
 
             namespace = {}
             exec("from noon import *", namespace)
+            import noon
+            import _manim_shared_geometry
+            for name in noon._GEOMETRY_EXPORTS:
+                assert namespace[name] is getattr(_manim_shared_geometry, name)
+                assert getattr(noon, name) is namespace[name]
+                assert name in dir(noon)
+            assert not hasattr(_manim_shared_geometry, "install")
             assert namespace["SMALL_BUFF"] == 0.1
             assert namespace["MED_SMALL_BUFF"] == 0.25
             assert namespace["MED_LARGE_BUFF"] == 0.5

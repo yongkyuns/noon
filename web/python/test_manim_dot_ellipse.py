@@ -91,7 +91,6 @@ class ManimDotEllipseTests(unittest.TestCase):
             import _manim_semantic_handles as handles
 
             import _manim_shared_geometry
-            _manim_shared_geometry.install()
 
             from noon import BLUE, Ellipse
 
