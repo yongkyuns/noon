@@ -764,6 +764,12 @@ mod wasm {
             crate::geometry_export::mobject_json(&self.handle).map_err(js_error)
         }
 
+        /// Read authored rotation directly, without lowering to a wire value.
+        #[wasm_bindgen(getter)]
+        pub fn rotation(&self) -> Result<f64, JsValue> {
+            Ok(self.handle.state().map_err(js_error)?.transform.rotation_z)
+        }
+
         #[wasm_bindgen(getter, js_name = centerX)]
         pub fn center_x(&self) -> Result<f64, JsValue> {
             Ok(self.handle.center().map_err(js_error)?.0)

@@ -1992,8 +1992,8 @@ def _build_canonical_composition_candidate(
                 not isinstance(source, _typst._RetainedTextMobject)
                 and type(leaf) in (_base._AnimationBuilder, _compat._CompatAnimationBuilder)
                 and not math.isclose(
-                    float(source_handle.wireRotation),
-                    float(target_handle.wireRotation),
+                    float(source_handle.rotation),
+                    float(target_handle.rotation),
                     abs_tol=1e-12,
                 )
             )

@@ -119,6 +119,11 @@ assert abs(color_probe.get_fill_opacity() - 0.35) < 1e-6
 assert abs(color_probe.get_stroke_opacity() - 0.2) < 1e-6
 assert not hasattr(circle._semantic_handle, "wireTranslationX")
 assert not hasattr(circle._semantic_handle, "wireFillRed")
+assert not hasattr(circle._semantic_handle, "wireRotation")
+rotation_probe = Circle()
+angle = 0.123456789012345
+rotation_probe._semantic_handle.setRotation(angle)
+assert float(rotation_probe._semantic_handle.rotation) == angle
 objects_before = [dict(row) for row in scene._objects]
 next_id = scene._next_object_id
 untyped = Circle(radius=0.2)
