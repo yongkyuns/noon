@@ -1,17 +1,15 @@
 #![cfg(test)]
 
-// The fixture scene is authored in SemanticStore and lowered through the canonical
-// compiler handoff. Explicit CreateObject payloads below exercise the existing
-// execution patch validator; #959 owns removal of that remaining patch vocabulary.
+// Fixtures originate in shared semantic lowering. Preflight and the sequential
+// compiler oracle both consume the typed execution mutation vocabulary.
 use noon_core::{
-    Easing, GeometryRef, MutationTransaction, ObjectDefinition, ObjectId, ScenePatch,
-    SemanticObjectState, SemanticStore, StoredGeometry, Style, TrackDefinition, TrackId,
-    TrackTiming, TrackValues,
+    Easing, GeometryRef, ObjectId, SemanticObjectState, SemanticStore, StoredGeometry, Style,
+    TrackDefinition, TrackId, TrackTiming, TrackValues,
 };
 
 use crate::{
-    lower_semantic_execution, CompilePatchError, CompiledScene, ExecutionMutationTransaction,
-    ExecutionPatch, SemanticExecutionIndex,
+    lower_semantic_execution, CompilePatchError, CompiledObject, CompiledScene,
+    ExecutionMutationTransaction, ExecutionPatch, SemanticExecutionIndex,
 };
 
 fn compiled_circles(radii: impl IntoIterator<Item = f32>) -> (CompiledScene, Vec<ObjectId>) {
@@ -41,7 +39,7 @@ fn compiled_circles(radii: impl IntoIterator<Item = f32>) -> (CompiledScene, Vec
 fn add_position(compiled: &mut CompiledScene, object: ObjectId, id: u64) -> TrackId {
     let id = TrackId::new(id);
     compiled
-        .apply_patch(&ScenePatch::AddTrack(TrackDefinition {
+        .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
             id,
             object,
             property: noon_core::Property::Position,
@@ -66,7 +64,7 @@ fn add_presence(
 ) -> TrackId {
     let id = TrackId::new(id);
     compiled
-        .apply_patch(&ScenePatch::AddTrack(TrackDefinition {
+        .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
             id,
             object,
             property: noon_core::Property::Presence,
@@ -88,8 +86,8 @@ fn property_batch_ignores_one_hundred_thousand_unrelated_objects_and_tracks() {
     let track = add_position(&mut compiled, target, 1_000);
 
     let stats = compiled
-        .preflight_transaction(&MutationTransaction::from_mutations([
-            ScenePatch::SetStyle {
+        .preflight_execution_transaction(&ExecutionMutationTransaction::from_mutations([
+            ExecutionPatch::SetStyle {
                 object: target,
                 style: Style::default(),
             },
@@ -114,12 +112,12 @@ fn late_presence_replacement_rejects_without_touching_unrelated_tracks() {
     let before = compiled.track(second).unwrap().clone();
 
     let error = compiled
-        .preflight_transaction(&MutationTransaction::from_mutations([
-            ScenePatch::SetStyle {
+        .preflight_execution_transaction(&ExecutionMutationTransaction::from_mutations([
+            ExecutionPatch::SetStyle {
                 object: unrelated,
                 style: Style::default(),
             },
-            ScenePatch::ReplaceTrack(TrackDefinition {
+            ExecutionPatch::ReplaceTrack(TrackDefinition {
                 id: second,
                 object: target,
                 property: noon_core::Property::Presence,
@@ -236,11 +234,16 @@ fn remove_recreate_and_track_replacement_use_only_transaction_overlay() {
         time_map: noon_core::CompositionTimeMap::identity(),
     };
     let stats = compiled
-        .preflight_transaction(&MutationTransaction::from_mutations([
-            ScenePatch::RemoveObject(object),
-            ScenePatch::CreateObject(ObjectDefinition::new(object, GeometryRef::circle(2.0))),
-            ScenePatch::AddTrack(replacement.clone()),
-            ScenePatch::ReplaceTrack(replacement),
+        .preflight_execution_transaction(&ExecutionMutationTransaction::from_mutations([
+            ExecutionPatch::RemoveObject(object),
+            ExecutionPatch::CreateObject(CompiledObject::new(
+                object,
+                GeometryRef::circle(2.0),
+                noon_core::Transform2D::IDENTITY,
+                Style::default(),
+            )),
+            ExecutionPatch::AddTrack(replacement.clone()),
+            ExecutionPatch::ReplaceTrack(replacement),
         ]))
         .unwrap();
 
@@ -266,25 +269,27 @@ fn removing_original_owner_preserves_a_track_moved_earlier_in_the_batch() {
         time_map: noon_core::CompositionTimeMap::identity(),
     };
     let prefix = [
-        ScenePatch::ReplaceTrack(moved.clone()),
-        ScenePatch::RemoveObject(first),
+        ExecutionPatch::ReplaceTrack(moved.clone()),
+        ExecutionPatch::RemoveObject(first),
     ];
     for last in [
-        ScenePatch::RemoveTrack(track),
-        ScenePatch::ReplaceTrack(moved.clone()),
+        ExecutionPatch::RemoveTrack(track),
+        ExecutionPatch::ReplaceTrack(moved.clone()),
     ] {
         let mutations = prefix.clone().into_iter().chain([last]).collect::<Vec<_>>();
         compiled
-            .preflight_transaction(&MutationTransaction::from_mutations(mutations.clone()))
+            .preflight_execution_transaction(&ExecutionMutationTransaction::from_mutations(
+                mutations.clone(),
+            ))
             .unwrap();
         let mut applied = compiled.clone();
         for patch in mutations {
-            applied.apply_patch(&patch).unwrap();
+            applied.apply_execution_patch(&patch).unwrap();
         }
     }
     assert_eq!(
-        compiled.preflight_transaction(&MutationTransaction::from_mutations(
-            prefix.into_iter().chain([ScenePatch::AddTrack(moved)])
+        compiled.preflight_execution_transaction(&ExecutionMutationTransaction::from_mutations(
+            prefix.into_iter().chain([ExecutionPatch::AddTrack(moved)])
         )),
         Err(CompilePatchError::DuplicateTrack(track))
     );
@@ -307,7 +312,7 @@ fn presence_validation_counts_only_the_affected_base_channel() {
         );
     }
     let transaction =
-        MutationTransaction::from_mutations([ScenePatch::AddTrack(TrackDefinition {
+        ExecutionMutationTransaction::from_mutations([ExecutionPatch::AddTrack(TrackDefinition {
             id: noon_core::TrackId::new(10_000),
             object: target,
             property: noon_core::Property::Presence,
@@ -318,7 +323,9 @@ fn presence_validation_counts_only_the_affected_base_channel() {
             timing: TrackTiming::instant(3.0),
             time_map: noon_core::CompositionTimeMap::identity(),
         })]);
-    let stats = compiled.preflight_transaction(&transaction).unwrap();
+    let stats = compiled
+        .preflight_execution_transaction(&transaction)
+        .unwrap();
     assert_eq!(stats.tracks_indexed, 2);
     assert_eq!(stats.objects_indexed, 1);
 }
@@ -364,15 +371,17 @@ fn sparse_preflight_agrees_with_sequential_compiler_validation() {
                 time_map: noon_core::CompositionTimeMap::identity(),
             };
             patches.push(match (random >> 24) % 6 {
-                0 => ScenePatch::CreateObject(ObjectDefinition::new(
+                0 => ExecutionPatch::CreateObject(CompiledObject::new(
                     object,
                     GeometryRef::circle(3.0),
+                    noon_core::Transform2D::IDENTITY,
+                    Style::default(),
                 )),
-                1 => ScenePatch::RemoveObject(object),
-                2 => ScenePatch::AddTrack(track),
-                3 => ScenePatch::ReplaceTrack(track),
-                4 => ScenePatch::RemoveTrack(id),
-                _ => ScenePatch::SetStyle {
+                1 => ExecutionPatch::RemoveObject(object),
+                2 => ExecutionPatch::AddTrack(track),
+                3 => ExecutionPatch::ReplaceTrack(track),
+                4 => ExecutionPatch::RemoveTrack(id),
+                _ => ExecutionPatch::SetStyle {
                     object,
                     style: Style::default(),
                 },
@@ -381,9 +390,11 @@ fn sparse_preflight_agrees_with_sequential_compiler_validation() {
         let mut reference = compiled.clone();
         let expected = patches
             .iter()
-            .try_for_each(|patch| reference.apply_patch(patch));
-        let transaction = MutationTransaction::from_mutations(patches);
-        let actual = compiled.preflight_transaction(&transaction).map(|_| ());
+            .try_for_each(|patch| reference.apply_execution_patch(patch));
+        let transaction = ExecutionMutationTransaction::from_mutations(patches);
+        let actual = compiled
+            .preflight_execution_transaction(&transaction)
+            .map(|_| ());
         assert_eq!(actual, expected, "transaction: {transaction:?}");
     }
 }
@@ -395,10 +406,13 @@ fn independent_presence_edits_visit_linear_metadata_in_a_large_batch() {
         add_presence(&mut compiled, *object, id as u64, false, true, 1.0);
     }
     for size in [16, 1_000] {
-        let transaction =
-            MutationTransaction::from_mutations(objects.iter().take(size).enumerate().map(
-                |(index, object)| {
-                    ScenePatch::AddTrack(TrackDefinition {
+        let transaction = ExecutionMutationTransaction::from_mutations(
+            objects
+                .iter()
+                .take(size)
+                .enumerate()
+                .map(|(index, object)| {
+                    ExecutionPatch::AddTrack(TrackDefinition {
                         id: noon_core::TrackId::new(10_000 + index as u64),
                         object: *object,
                         property: noon_core::Property::Presence,
@@ -409,9 +423,11 @@ fn independent_presence_edits_visit_linear_metadata_in_a_large_batch() {
                         timing: TrackTiming::instant(2.0),
                         time_map: noon_core::CompositionTimeMap::identity(),
                     })
-                },
-            ));
-        let stats = compiled.preflight_transaction(&transaction).unwrap();
+                }),
+        );
+        let stats = compiled
+            .preflight_execution_transaction(&transaction)
+            .unwrap();
         assert_eq!(stats.objects_indexed, size);
         assert_eq!(stats.tracks_indexed, size);
         assert_eq!(stats.track_metadata_visits, size * 3);
