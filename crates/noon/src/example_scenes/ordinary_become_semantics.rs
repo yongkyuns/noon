@@ -203,11 +203,13 @@ pub fn program() -> Result<LiveProgram<OrdinaryBecomeSemantics>, String> {
             ));
         }
     }
-    scene.add_many(&[
-        MobjectFamilyMember::Mobject(&fitted),
-        MobjectFamilyMember::Mobject(&stretched),
-        MobjectFamilyMember::Mobject(&ellipse),
-    ])?;
+    scene
+        .add_many(&[
+            MobjectFamilyMember::Mobject(&fitted),
+            MobjectFamilyMember::Mobject(&stretched),
+            MobjectFamilyMember::Mobject(&ellipse),
+        ])
+        .map_err(|error| error.to_string())?;
     scene
         .into_live_program(OrdinaryBecomeSemantics {
             fitted,
