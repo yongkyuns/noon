@@ -7,19 +7,21 @@
 
 #![forbid(unsafe_code)]
 
+mod animation;
 mod graph_topology;
 mod object_state;
+mod publication;
 mod reactive;
 mod resources;
 mod semantic_store;
-mod timeline;
 
+pub use animation::*;
 pub use graph_topology::*;
 pub use object_state::*;
+pub use publication::*;
 pub use reactive::*;
 pub use resources::*;
 pub use semantic_store::*;
-pub use timeline::*;
 
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
