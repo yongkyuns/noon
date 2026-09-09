@@ -398,7 +398,7 @@ impl SemanticExecutionPlayer {
         mobject: &noon::Mobject,
         x: f64,
         y: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -411,7 +411,7 @@ impl SemanticExecutionPlayer {
         )
         .set_translation(mobject, x, y)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -726,7 +726,7 @@ impl SemanticExecutionPlayer {
         mobject: &noon::Mobject,
         x: f64,
         y: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -739,7 +739,7 @@ impl SemanticExecutionPlayer {
         )
         .shift(mobject, x, y)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -874,13 +874,13 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_set_scale(
         &mut self,
         mobject: &noon::Mobject,
         x: f64,
         y: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -893,7 +893,7 @@ impl SemanticExecutionPlayer {
         )
         .set_scale(mobject, x, y)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -918,12 +918,12 @@ impl SemanticExecutionPlayer {
         .map_err(|error| error.to_string())
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_set_rotation(
         &mut self,
         mobject: &noon::Mobject,
         angle: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -936,7 +936,7 @@ impl SemanticExecutionPlayer {
         )
         .set_rotation(mobject, angle)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -2475,7 +2475,8 @@ mod tests {
     use crate::{RetainedExecutionFrameMirror, TransportObjectContent};
     use noon_core::{
         AnimationOptions, HostCallbackId, RateFunction, SemanticMutationTransaction,
-        SemanticObjectProperty, SemanticObjectState, SemanticStore, StoredGeometry,
+        SemanticMutationTransactionError, SemanticObjectProperty, SemanticObjectState,
+        SemanticStore, StoredGeometry,
     };
 
     fn callback_batch_with_y_and_opacity(phase: &serde_json::Value) -> String {
@@ -2500,6 +2501,80 @@ mod tests {
             ],
         })
         .to_string()
+    }
+
+    #[test]
+    fn live_transform_projection_preserves_atomic_rejection_and_local_retry() {
+        type Edit =
+            fn(&mut SemanticExecutionPlayer, &noon::Mobject, f64) -> Result<(), AuthoringFailure>;
+        let edits: [(Edit, SemanticObjectProperty); 4] = [
+            (
+                |player, object, value| player.live_set_translation(object, value, -1.0),
+                SemanticObjectProperty::Translation,
+            ),
+            (
+                |player, object, value| player.live_shift(object, value, -1.0),
+                SemanticObjectProperty::Translation,
+            ),
+            (
+                |player, object, value| player.live_set_scale(object, value, 0.5),
+                SemanticObjectProperty::Scale,
+            ),
+            (
+                |player, object, value| player.live_set_rotation(object, value),
+                SemanticObjectProperty::RotationZ,
+            ),
+        ];
+        for (edit, property) in edits {
+            let mut scene = noon::Scene::new();
+            let object = scene.circle(0.5).unwrap();
+            scene.add(&object).unwrap();
+            let session = scene.execution_session().unwrap();
+            let mut player = SemanticExecutionPlayer::from_live_session(
+                session,
+                std::rc::Rc::clone(scene.integration_store()),
+                scene.root(),
+                1.0,
+                41,
+            )
+            .unwrap();
+            player.delta(true).unwrap().unwrap();
+            let authored = object.state().unwrap();
+            let publication = player.session.publication_context();
+            let frame = player.debug_frame_json();
+            let resources = player.resource_bundle_bytes();
+            for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                let error = edit(&mut player, &object, value).unwrap_err();
+                assert_eq!(error.category, "invalid_input");
+                assert_eq!(error.code, "live.publication");
+                let cause = error.cause.as_ref().unwrap();
+                assert_eq!(cause.category, "invalid_input");
+                assert_eq!(cause.code, "publication.semantic");
+                let leaf = cause.cause.as_ref().unwrap();
+                assert_eq!(leaf.code, "transaction.non_finite_property_value");
+                assert!(leaf.cause.is_none());
+                let expected = SemanticMutationTransactionError::NonFinitePropertyValue {
+                    index: 0,
+                    object: object.node_id(),
+                    property,
+                };
+                assert_eq!(leaf.message, expected.to_string());
+                assert_eq!(object.state().unwrap(), authored);
+                assert_eq!(player.session.publication_context(), publication);
+                assert_eq!(player.debug_frame_json(), frame);
+                assert_eq!(player.resource_bundle_bytes(), resources);
+                assert!(player.delta(false).unwrap().is_none());
+            }
+            edit(&mut player, &object, 2.0).unwrap();
+            let delta = player.delta(false).unwrap().unwrap();
+            assert!(!delta.retained.snapshot);
+            assert_eq!(delta.retained.objects.len(), 1);
+            assert!(delta.retained.removed_slots.is_empty());
+            assert!(player.delta(false).unwrap().is_none());
+            assert_eq!(player.resource_bundle_bytes(), resources);
+            assert_ne!(object.state().unwrap(), authored);
+            assert_ne!(player.session.publication_context(), publication);
+        }
     }
 
     #[test]

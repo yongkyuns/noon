@@ -161,6 +161,11 @@ impl From<SemanticMutationTransactionError> for AuthoringFailure {
                 Self::caused_by("transaction.animation_target", message, error.into())
             }
             E::Node { error, .. } => Self::caused_by("transaction.node", message, error.into()),
+            E::NonFinitePropertyValue { .. } => Self::new(
+                "invalid_input",
+                "transaction.non_finite_property_value",
+                message,
+            ),
             E::UnsupportedPropertyWrite { .. } => Self::new(
                 "unsupported_operation",
                 "transaction.unsupported_property_write",

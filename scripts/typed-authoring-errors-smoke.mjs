@@ -149,7 +149,70 @@ try {
         dispose: () => { for (const context of contexts) context.free(); store.free(); foreignStore.free(); },
       };
     };
-    window.noonTypedErrorFixtures = {membershipFixture, ownershipFixture, describe, requireFailure};
+    // The same real Rust operations run directly in JS and through Pyodide below.
+    const livePropertyMethods = [
+      {method: "liveSetTranslation", args: [2, -1], property: "Translation", field: "translation", expected: {x: 2, y: -1}},
+      {method: "liveShift", args: [2, -1], property: "Translation", field: "translation", expected: {x: 2, y: -1}},
+      {method: "liveSetScale", args: [2, 0.5], property: "Scale", field: "scale", expected: {x: 2, y: 0.5}},
+      {method: "liveSetRotation", args: [0.5], property: "RotationZ", field: "rotation", expected: 0.5},
+    ];
+    const livePropertyCases = livePropertyMethods.flatMap(spec => [
+      ...spec.args.flatMap((_, axis) => ["nan", "positive_infinity", "negative_infinity"].map(kind => ({...spec, kind, axis}))),
+      ...["foreign", "stale"].map(kind => ({...spec, kind, axis: 0})),
+    ]);
+    const livePropertyFixture = spec => {
+      const store = new wasm.WasmAuthoringStore(), otherStore = new wasm.WasmAuthoringStore();
+      const context = store.createSceneContext();
+      const object = store.createManimCircle(0.5), foreign = otherStore.createManimCircle(0.5);
+      const stale = spec.kind === "stale" ? wasm.authoringErrorStaleMobjectSmoke(store) : null;
+      context.bindMobject("0", object);
+      context.beginLiveExecution(1);
+      // Ordinary waits permit these property writes. Do not add a Python or
+      // binding-side blanket "pending segment" rejection to make errors uniform.
+      context.liveWait(0.25);
+      const state = () => ({...snapshot(context, true), authored: object.snapshotJson()});
+      const before = state();
+      const args = [...spec.args];
+      const invalid = {nan: NaN, positive_infinity: Infinity, negative_infinity: -Infinity};
+      if (Object.hasOwn(invalid, spec.kind)) args[spec.axis] = invalid[spec.kind];
+      const target = spec.kind === "foreign" ? foreign : spec.kind === "stale" ? stale : object;
+      return {
+        category: spec.kind === "foreign" ? "foreign_handle" : spec.kind === "stale" ? "stale_handle" : "invalid_input",
+        reject: () => context[spec.method](target, ...args),
+        assertDiagnostic: error => {
+          if (Object.hasOwn(invalid, spec.kind)) {
+            equal([error.code, error.cause?.code, error.cause?.cause?.code],
+              ["live.publication", "publication.semantic", "transaction.non_finite_property_value"], "property cause chain was flattened");
+            const leaf = error.cause.cause;
+            check(leaf.cause === undefined, "leaf must not invent a source");
+            equal(leaf.message, `semantic transaction mutation 0 cannot set property ${spec.property} on object ${key(object)} to a non-finite value`, "property diagnostic lost identity/context");
+          } else if (spec.kind === "foreign") {
+            check(error.code === "authoring.foreign_store", "foreign property handle misclassified");
+          } else {
+            equal([error.code, error.cause?.code], ["authoring.semantic", "semantic.unknown_node"], "stale property handle cause lost");
+          }
+        },
+        assertAtomic: () => equal(state(), before, "rejected property changed authored/effective state, publication, roots or ownership"),
+        recover: () => {
+          context[spec.method](object, ...spec.args);
+          const authored = JSON.parse(object.snapshotJson());
+          const effective = JSON.parse(context.liveDebugFrameJson());
+          equal(authored.transform[spec.field], spec.expected, "retry changed the wrong authored coordinate");
+          equal(effective.objects[0].transform[spec.field], spec.expected, "retry was not coherently published");
+          equal(effective.time, 0, "property write advanced the wait clock");
+          const old = JSON.parse(before.frame).publication;
+          equal(effective.publication.scene_revision, old.scene_revision + 1, "retry must commit one semantic revision");
+          equal(effective.publication.execution_revision, old.execution_revision + 1, "retry must commit one execution revision");
+          equal(effective.publication.frame_epoch, old.frame_epoch + 1, "retry must publish one frame epoch");
+          context.liveAdvanceSegmentTo(0.25);
+          context.liveCompleteSegment();
+          equal(JSON.parse(context.liveDebugFrameJson()).time, 0.25, "retry lost the original continuation");
+          return {atomic: true, propertyRetry: true, continuationCompleted: true};
+        },
+        dispose: () => { context.free(); object.free(); foreign.free(); stale?.free(); store.free(); otherStore.free(); },
+      };
+    };
+    window.noonTypedErrorFixtures = {membershipFixture, ownershipFixture, livePropertyFixture, livePropertyCases, describe, requireFailure};
   });
   report.javascript = await page.evaluate(() => {
     const {membershipFixture, ownershipFixture, describe, requireFailure} = window.noonTypedErrorFixtures;
@@ -182,6 +245,19 @@ try {
   for (const row of report.javascript.filter(row => row.kind === "missing" || row.kind === "ambiguous" || row.kind === "cross_root")) {
     assert.ok(row.error.cause, `${row.kind}: semantic cause was flattened`);
   }
+  report.liveProperties = await page.evaluate(() => {
+    const {livePropertyFixture, livePropertyCases, describe, requireFailure} = window.noonTypedErrorFixtures;
+    return livePropertyCases.map(spec => {
+      const fixture = livePropertyFixture(spec);
+      try {
+        const error = requireFailure(fixture.reject, fixture.category);
+        fixture.assertDiagnostic(error);
+        fixture.assertAtomic();
+        return {method: spec.method, kind: spec.kind, axis: spec.axis, error: describe(error), recovered: fixture.recover()};
+      } finally { fixture.dispose(); }
+    });
+  });
+  assert.equal(report.liveProperties.length, 29);
   report.python = await page.evaluate(async ({modules, tests, pyodideUrl}) => {
     const wasm = await import("/web/pkg/noon_web.js");
     const {loadPyodide} = await import(pyodideUrl);
@@ -272,16 +348,39 @@ except JsException as error:
     assert not hasattr(error, "category"), "mapper guessed a category from words"
 else:
     raise AssertionError("unmarked JS error was swallowed")
+property_results = []
+for spec in fixtures.livePropertyCases:
+    fixture = fixtures.livePropertyFixture(spec)
+    try:
+        try:
+            engine_call(fixture.reject, operation=spec.method)
+        except (ValueError, ReferenceError) as error:
+            assert error.category == fixture.category and error.operation == spec.method
+            fixture.assertDiagnostic(error.js_error)
+            assert error.__cause__ is not None and str(error) == error.js_error.message
+            if error.category == "invalid_input":
+                assert error.rust_cause.code == "publication.semantic"
+                assert error.rust_cause.cause.code == "transaction.non_finite_property_value"
+                assert error.rust_cause.cause.cause is None
+            fixture.assertAtomic()
+            fixture.recover()
+            property_results.append({"method": spec.method, "kind": spec.kind, "axis": spec.axis,
+                                     "category": error.category, "code": error.code, "recovered": True})
+        else:
+            raise AssertionError("invalid live property request succeeded")
+    finally:
+        fixture.dispose()
 import test_noon_errors_wasm as tests
 result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromModule(tests))
 assert not result.skipped, result.skipped
 assert result.wasSuccessful(), "real WASM/Python tests failed"
 await tests.check_real_promise_rejection()
-json.dumps({"matrix": results, "additionalTests": result.testsRun, "promiseRejectionAndRecovery": True, "skipped": len(result.skipped)})
+json.dumps({"matrix": results, "liveProperties": property_results, "additionalTests": result.testsRun, "promiseRejectionAndRecovery": True, "skipped": len(result.skipped)})
 `));
   }, {modules, tests, pyodideUrl});
   assert.equal(report.python.matrix.length, 10);
-  assert.equal(report.python.additionalTests, 9);
+  assert.equal(report.python.liveProperties.length, 29);
+  assert.equal(report.python.additionalTests, 10);
   assert.equal(report.python.skipped, 0);
   assert.equal(report.python.promiseRejectionAndRecovery, true);
   // Exercise actual deployed Python callsites and a rerun in the same worker.

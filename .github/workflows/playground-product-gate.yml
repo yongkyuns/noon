@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/playground-product-gate.yml"
+      - ".github/ci/**"
       - "skills/noon-authoring/**"
       - "scripts/noon-capabilities.py"
       - "Cargo.toml"
@@ -33,11 +34,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  compare:
-    name: Runtime, visual, latency, and FPS regression
+  build:
+    name: Build product comparison packages
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    outputs:
+      baseline-artifact: ${{ steps.baseline-artifact.outputs.artifact-id }}
+      candidate-artifact: ${{ steps.candidate-artifact.outputs.artifact-id }}
     env:
+      NOON_PRODUCT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       RUSTC_WRAPPER: sccache
@@ -61,6 +66,10 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: baseline
+
+      - name: Test CI artifact contracts
+        working-directory: candidate
+        run: node --test .github/ci/*.test.mjs
 
       - name: Use each checkout's pinned Rust and WASM target
         run: |
@@ -99,6 +108,8 @@ jobs:
         run: |
           # Rust cache keys include cwd and CARGO_TARGET_DIR. Keep both stable,
           # but discard all Cargo fingerprints/artifacts before each source build.
+          (cd baseline && cargo generate-lockfile)
+          node candidate/.github/ci/product-artifact.mjs prepare baseline baseline
           mv baseline .product-source
           trap 'mv .product-source baseline' EXIT
           rm -rf .product-target
@@ -107,6 +118,7 @@ jobs:
           (cd .product-source && bash scripts/build-web-demo.sh)
           printf 'Baseline release build: %s seconds.\n' "$((SECONDS - noon_build_started))" >> "$GITHUB_STEP_SUMMARY"
           sccache --show-stats
+          node candidate/.github/ci/product-artifact.mjs stamp baseline .product-source
 
       - name: Build candidate production package
         env:
@@ -115,6 +127,8 @@ jobs:
           # Exercise release code with only the typed recovery fixture exported.
           NOON_RENDERER_SMOKE: "1"
         run: |
+          (cd candidate && cargo generate-lockfile)
+          node candidate/.github/ci/product-artifact.mjs prepare candidate candidate
           mv candidate .product-source
           trap 'mv .product-source candidate' EXIT
           rm -rf .product-target
@@ -123,6 +137,81 @@ jobs:
           (cd .product-source && bash scripts/build-web-demo.sh)
           printf 'Candidate release build: %s seconds.\n' "$((SECONDS - noon_build_started))" >> "$GITHUB_STEP_SUMMARY"
           sccache --show-stats
+
+      - name: Stamp candidate production package
+        run: node candidate/.github/ci/product-artifact.mjs stamp candidate candidate
+
+      - name: Upload baseline production package
+        id: baseline-artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: product-baseline-${{ github.run_attempt }}
+          path: |
+            baseline/web/pkg
+            baseline/web/python-worker.js
+            baseline/web/python/compat-bundle.*.json
+            baseline/web/ci-artifact.json
+            baseline/web/ci-Cargo.lock
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload candidate production package
+        id: candidate-artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: product-candidate-${{ github.run_attempt }}
+          path: |
+            candidate/web/pkg
+            candidate/web/python-worker.js
+            candidate/web/python/compat-bundle.*.json
+            candidate/web/ci-artifact.json
+            candidate/web/ci-Cargo.lock
+          if-no-files-found: error
+          retention-days: 14
+
+  compare:
+    # Preserve the required check name. Retrying this job reuses the successful
+    # producer's exact artifact IDs, including when its run attempt is older.
+    name: Runtime, visual, latency, and FPS regression
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NOON_PRODUCT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - name: Require successful production builds
+        env:
+          NOON_PRODUCT_BUILD_RESULT: ${{ needs.build.result }}
+        run: test "$NOON_PRODUCT_BUILD_RESULT" = success
+
+      - name: Checkout candidate
+        uses: actions/checkout@v7
+        with:
+          path: candidate
+
+      - name: Checkout PR base
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: baseline
+
+      - name: Download baseline production package
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.baseline-artifact }}
+          path: baseline/web
+
+      - name: Download candidate production package
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.candidate-artifact }}
+          path: candidate/web
+
+      - name: Verify source, configuration and package contents
+        run: |
+          node candidate/.github/ci/product-artifact.mjs verify baseline baseline
+          node candidate/.github/ci/product-artifact.mjs verify candidate candidate
 
       - name: Cache Playwright Chromium
         uses: actions/cache@v6
@@ -196,7 +285,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: playground-product-${{ github.event.pull_request.number }}
+          name: playground-product-${{ github.event.pull_request.number }}-${{ github.run_attempt }}
           path: candidate/browser-smoke-artifacts/product-gate
           if-no-files-found: error
           retention-days: 14

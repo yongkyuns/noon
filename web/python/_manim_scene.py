@@ -2376,16 +2376,28 @@ class LiveExecution:
         )
 
     def set_translation(self, mobject: _base.Mobject, x: float, y: float) -> None:
-        self._context.liveSetTranslation(self._handle(mobject), float(x), float(y))
+        engine_call(
+            self._context.liveSetTranslation, self._handle(mobject), float(x), float(y),
+            operation="LiveExecution.set_translation",
+        )
 
     def shift(self, mobject: _base.Mobject, x: float, y: float) -> None:
-        self._context.liveShift(self._handle(mobject), float(x), float(y))
+        engine_call(
+            self._context.liveShift, self._handle(mobject), float(x), float(y),
+            operation="LiveExecution.shift",
+        )
 
     def set_scale(self, mobject: _base.Mobject, x: float, y: float) -> None:
-        self._context.liveSetScale(self._handle(mobject), float(x), float(y))
+        engine_call(
+            self._context.liveSetScale, self._handle(mobject), float(x), float(y),
+            operation="LiveExecution.set_scale",
+        )
 
     def set_rotation(self, mobject: _base.Mobject, angle: float) -> None:
-        self._context.liveSetRotation(self._handle(mobject), float(angle))
+        engine_call(
+            self._context.liveSetRotation, self._handle(mobject), float(angle),
+            operation="LiveExecution.set_rotation",
+        )
 
     def effective_center(self, mobject: _base.Mobject) -> _base.Vec2:
         observed = self._context.liveEffectiveMobject(self._handle(mobject))
