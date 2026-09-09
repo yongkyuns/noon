@@ -61,7 +61,8 @@ try {
   assert.equal(state.source, "draftx");
   assert.equal(state.observed.at(-1), "draftx", "keyboard edits must not publish the previous value");
 
-  for (const key of ["ControlOrMeta+z", "ControlOrMeta+Shift+z"]) {
+  const redo = process.platform === "darwin" ? "Meta+Shift+z" : "Control+y";
+  for (const key of ["ControlOrMeta+z", redo]) {
     const previous = state;
     await content.press(key);
     state = await snapshot();
