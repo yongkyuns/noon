@@ -41,26 +41,27 @@ s,count=re.subn(r'(validate_content\([^;\n]*\))\.map_err\(AuthoringError::from\)
 assert count==4,count
 path.write_text(s)
 
-# These generic observations already preserve the caller's LiveSessionError.
-# Do not map it through the identity From implementation a second time.
-changes={
-    'crates/noon/src/live_session.rs':[
-        ('self.capture_mobject_state(mobject)\n            })\n            .map_err(LiveSessionError::from)?',
-         'self.capture_mobject_state(mobject)\n            })?'),
-        ('self.family_member_bounds(&mobject)\n        })\n        .map_err(LiveSessionError::from)?',
-         'self.family_member_bounds(&mobject)\n        })?'),
-        ('self.authored(&mobject).map(|s| s.transform.translation)\n            })\n            .map_err(LiveSessionError::from)?',
-         'self.authored(&mobject).map(|s| s.transform.translation)\n            })?'),
-    ],
-    'crates/noon/src/live_session/family_layout.rs':[
-        ('.family_layout_members(family)\n                    .map(|(_, bounds)| bounds_critical_point(bounds, x, y)),\n            })\n            .map_err(LiveSessionError::from)?',
-         '.family_layout_members(family)\n                    .map(|(_, bounds)| bounds_critical_point(bounds, x, y)),\n            })?'),
-    ],
-}
-for name, replacements in changes.items():
-    path=Path(name)
-    s=path.read_text()
-    for before,after in replacements:
-        assert s.count(before)==1,(name,before,s.count(before))
-        s=s.replace(before,after)
-    path.write_text(s)
+# These generic observations already return LiveSessionError. Remove only the
+# four identity conversions reported by strict Clippy, not actual cause wraps.
+path=Path('crates/noon/src/live_session.rs')
+s=path.read_text()
+for before,after in [
+    ('self.capture_mobject_state(mobject)\n            })\n            .map_err(LiveSessionError::from)?',
+     'self.capture_mobject_state(mobject)\n            })?'),
+    ('self.family_member_bounds(&mobject)\n        })\n        .map_err(LiveSessionError::from)?',
+     'self.family_member_bounds(&mobject)\n        })?'),
+    ('self.authored(&mobject).map(|s| s.transform.translation)\n            })\n            .map_err(LiveSessionError::from)?',
+     'self.authored(&mobject).map(|s| s.transform.translation)\n            })?'),
+]:
+    assert s.count(before)==1,(before,s.count(before))
+    s=s.replace(before,after)
+path.write_text(s)
+
+path=Path('crates/noon/src/live_session/family_layout.rs')
+s=path.read_text()
+pattern=(r'(\.family_layout_members\(family\)\s*'
+         r'\.map\(\|\(_, bounds\)\| bounds_critical_point\(bounds, x, y\)\)'
+         r'\s*,\s*\}\))\s*\.map_err\(LiveSessionError::from\)\?')
+s,count=re.subn(pattern,r'\1?',s)
+assert count==1,('family layout identity conversion',count)
+path.write_text(s)
