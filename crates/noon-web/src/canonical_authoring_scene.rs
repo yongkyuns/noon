@@ -876,7 +876,9 @@ impl CanonicalAuthoringScene {
         }
         let end = self.begin_ordinary_affine_lifecycle(id, target, direction, endpoint, options)?;
         let player = self.active_live_player()?;
-        player.live_advance_segment_to(end)?;
+        player
+            .live_advance_segment_to(end)
+            .map_err(|error| error.to_string())?;
         player
             .live_complete_segment()
             .map_err(|error| error.to_string())?;
@@ -939,7 +941,9 @@ impl CanonicalAuthoringScene {
             false,
         )?;
         let player = self.active_live_player()?;
-        player.live_advance_segment_to(end)?;
+        player
+            .live_advance_segment_to(end)
+            .map_err(|error| error.to_string())?;
         player
             .live_complete_segment()
             .map_err(|error| error.to_string())?;
@@ -5509,9 +5513,9 @@ mod wasm {
         pub fn live_advance_segment_to(&mut self, time: f64) -> Result<bool, JsValue> {
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_advance_segment_to(time)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveCompleteSegment)]
@@ -5527,9 +5531,9 @@ mod wasm {
         pub fn live_evaluate(&mut self, time: f64) -> Result<(), JsValue> {
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_evaluate(time)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = prepareExecutionRun)]

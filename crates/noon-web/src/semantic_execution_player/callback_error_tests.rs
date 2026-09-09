@@ -296,3 +296,55 @@ fn family_read_rejection_preserves_nested_cause_and_the_same_pending_phase() {
     assert_eq!(player.drain_delta_json().unwrap(), None);
     finish(&mut player, Some(&phase));
 }
+
+#[test]
+fn callback_and_advancement_share_settled_nested_error_projection() {
+    let (mut player, _) = player();
+    let before = state(&player);
+    for time in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let error = player
+            .session
+            .advance_to_callback_barrier(time)
+            .err()
+            .expect("the shared callback operation rejects non-finite time");
+        // Exercise the existing shared wrapper conversion as well as the
+        // actual callback producer. Segment admission rejects NaN earlier.
+        let failure = AuthoringFailure::from(noon::ExecutionSegmentAdvanceError::from(error));
+        assert_eq!(failure.category, "invalid_input");
+        assert_eq!(failure.code, "advance.callback");
+        let callback = failure.cause.as_ref().unwrap();
+        assert_eq!(callback.category, "invalid_input");
+        assert_eq!(callback.code, "callback.evaluation");
+        let cause = callback.cause.as_ref().unwrap();
+        assert_eq!(cause.category, "invalid_input");
+        assert_eq!(cause.code, "evaluation.invalid_time");
+        assert!(cause.cause.is_none());
+        assert!(failure.source().is_some());
+        assert_eq!(state(&player), before);
+    }
+
+    let segment = player.session.wait_segment(0.25).unwrap();
+    let phase = phase(&mut player);
+    player.initial_delta_json().unwrap();
+    let before = state(&player);
+    let publication = player.session.publication_context();
+    let error = player
+        .session
+        .advance_segment_to_callback_barrier(segment, 0.125)
+        .err()
+        .expect("the shared segment operation rejects a pending callback");
+    let failure = AuthoringFailure::from(error);
+    // Pending advancement remains outside the settled transaction categories;
+    // preserve that explicit inventory instead of guessing from its message.
+    assert_eq!(failure.category, "unclassified");
+    assert_eq!(failure.code, "advance.callback");
+    let cause = failure.cause.as_ref().unwrap();
+    assert_eq!(cause.category, "unclassified");
+    assert_eq!(cause.code, "callback.unclassified");
+    assert!(cause.cause.is_none());
+    assert!(failure.source().is_some());
+    assert_eq!(state(&player), before);
+    assert_eq!(player.session.publication_context(), publication);
+    assert_eq!(player.drain_delta_json().unwrap(), None);
+    finish(&mut player, Some(&phase));
+}
