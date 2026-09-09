@@ -39,11 +39,11 @@
     {
       "id": "compatible-timed-composition",
       "title": "TimedComposition",
-      "summary": "Nested Succession with timed Add/Wait steps, then a LaggedStart of FadeOut animations.",
+      "summary": "Nested Succession with timed Add/Wait steps, then LaggedStartMap applies FadeOut to each square.",
       "status": "ready",
       "path": "python/examples/ordinary_timed_composition.py",
       "category": "manim-compatible/composition",
-      "features": ["Succession", "Add", "Wait", "LaggedStart", "FadeOut", "Manim-compatible"],
+      "features": ["Succession", "Add", "Wait", "LaggedStartMap", "FadeOut", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/compatible-timed-composition.svg",
