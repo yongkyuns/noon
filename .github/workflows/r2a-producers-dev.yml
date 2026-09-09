@@ -8,139 +8,100 @@ concurrency:
   group: r2a-producers-development
   cancel-in-progress: true
 env:
-  CURRENT_BASE: 406944f8a58218629c14ff247894b3fd2e8c471a
-  PRODUCT_HEAD: 461fb1743fe9ee4037089ccd65d5573195d62b61
+  PRODUCT_HEAD: a6155ac6f96788d257102b956cbbd4d7fd469e66
   CARGO_BUILD_JOBS: '2'
   CARGO_INCREMENTAL: '0'
   CARGO_PROFILE_DEV_DEBUG: '0'
   CARGO_PROFILE_TEST_DEBUG: '0'
-  CARGO_TARGET_DIR: ${{ github.workspace }}/source/target
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: 'true'
   SCCACHE_GHA_RW_MODE: READ_ONLY
 jobs:
-  qualify-integration:
+  typed-example-assertion:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
-          path: tooling
-          persist-credentials: false
-      - uses: actions/checkout@v7
-        with:
-          ref: 461fb1743fe9ee4037089ccd65d5573195d62b61
-          path: source
+          ref: a6155ac6f96788d257102b956cbbd4d7fd469e66
           fetch-depth: 0
-      - name: Integrate the exact existing source without erasing current master
-        id: apply
-        working-directory: source
+      - name: Use the published typed failure in the existing paired example
         run: |
           set -euo pipefail
-          mkdir -p ../evidence
+          mkdir -p /tmp/r2a-assertion
           test "$(git rev-parse HEAD)" = "$PRODUCT_HEAD"
           git diff --exit-code
-          git config user.name 'Noon development tooling'
-          git config user.email 'development@noon.invalid'
-          git show -s --format='%H %T %P' "$PRODUCT_HEAD" "$CURRENT_BASE" > ../evidence/inputs.txt
-          git archive "$CURRENT_BASE" | gzip > ../evidence/base.tar.gz
-          set +e
-          git merge --no-commit --no-ff "$CURRENT_BASE" > ../evidence/merge.log 2>&1
-          merged=$?
-          set -e
-          test "$merged" = 1
-          test "$(git diff --name-only --diff-filter=U)" = crates/noon/src/semantic_mobject/style.rs
-          python3 ../tooling/.github/r2a-current-integration.py
-          cargo fmt --all
-          cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
-          git add -u
-          test -z "$(git diff --name-only --diff-filter=U)"
-          git diff --cached --check
-          git diff --cached "$CURRENT_BASE" --name-only > ../evidence/changed-files.txt
           python3 - <<'PY'
           from pathlib import Path
-          names = Path('../evidence/changed-files.txt').read_text().splitlines()
-          assert names
-          for name in names:
-              path = Path(name)
-              assert path.suffix == '.rs' and 'target' not in path.parts, name
-              assert name.startswith('crates/') or name.startswith('fixtures/provider-consumer/tests/'), name
-          print('Product-only Rust delta:', len(names), 'files')
+          path = Path('crates/noon/src/example_scenes.rs')
+          text = path.read_text()
+          old = 'assert!(error.to_string().contains("active effective affine driver"));'
+          assert text.count(old) == 1
+          new = '''assert!(matches!(
+              error,
+              crate::LiveSessionError::Authoring(crate::AuthoringError::Unsupported(
+                  crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver
+              ))
+          ));'''
+          path.write_text(text.replace(old, new))
           PY
-          git write-tree > ../evidence/candidate-tree.txt
-          git diff --cached "$CURRENT_BASE" --binary > ../evidence/candidate.patch
-          git diff --cached "$CURRENT_BASE" --stat
-          rustc --version > ../evidence/toolchain.txt
-          cargo --version >> ../evidence/toolchain.txt
+          cargo fmt --all
+          git diff --check
+          test "$(git diff --name-only)" = crates/noon/src/example_scenes.rs
+          git diff > /tmp/r2a-assertion/candidate.patch
+          git config user.name 'Noon development tooling'
+          git config user.email 'development@noon.invalid'
       - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: r2-sources-${{ runner.os }}-${{ hashFiles('source/Cargo.toml', 'source/crates/**/Cargo.toml') }}
+          key: r2-sources-${{ runner.os }}-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
           restore-keys: |
             Linux-cargo-sources-
             provider-sources-Linux-
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
-      - name: Run independent typed-error consumers and family callback recovery
-        id: focused
-        working-directory: source
+      - name: Execute the actual example continuation and its typed recovery regression
         run: |
-          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests > ../evidence/focused.log 2>&1 || { tail -200 ../evidence/focused.log; exit 1; }
-          cargo test -p noon --no-default-features --test family_callback_paint >> ../evidence/focused.log 2>&1 || { tail -200 ../evidence/focused.log; exit 1; }
-          tail -70 ../evidence/focused.log
-      - name: Run the complete native Rust gate and minimal public contract
-        id: native
-        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
-        working-directory: source
+          set -o pipefail
+          cargo test -p noon --no-default-features --lib ordinary_callback_continuation_uses_ordered_shared_barriers -- --exact 2>&1 | tee /tmp/r2a-assertion/example.log
+          # Use the module-qualified exact test and assert it executed, not a zero-match filter.
+          cargo test -p noon --no-default-features --lib example_scenes::tests::ordinary_callback_continuation_uses_ordered_shared_barriers -- --exact 2>&1 | tee /tmp/r2a-assertion/exact-example.log
+          grep -q '1 passed; 0 failed; 0 ignored' /tmp/r2a-assertion/exact-example.log
+          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --test object_authoring_errors 2>&1 | tee /tmp/r2a-assertion/object-errors.log
+          cargo fmt --all -- --check
+          bash scripts/check.sh architecture "$PRODUCT_HEAD" > /tmp/r2a-assertion/architecture.log 2>&1
+      - name: Compile existing native and direct-WASM callers
         run: |
-          bash scripts/check.sh rust "$CURRENT_BASE" > ../evidence/rust-gate.log 2>&1 || { tail -220 ../evidence/rust-gate.log; exit 1; }
-          cargo test -p noon --no-default-features --doc > ../evidence/public-contract.log 2>&1 || { tail -150 ../evidence/public-contract.log; exit 1; }
-          cargo run -p noon --no-default-features --example shared_authoring >> ../evidence/public-contract.log 2>&1 || { tail -150 ../evidence/public-contract.log; exit 1; }
-          tail -50 ../evidence/rust-gate.log
-      - name: Compile all direct-WASM callers and independent test executables
-        id: wasm
-        if: ${{ !cancelled() && steps.apply.outcome == 'success' }}
-        working-directory: source
-        run: |
-          cargo check -p noon-web --all-features --target wasm32-unknown-unknown > ../evidence/wasm.log 2>&1 || { tail -220 ../evidence/wasm.log; exit 1; }
-          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests --target wasm32-unknown-unknown --no-run >> ../evidence/wasm.log 2>&1 || { tail -200 ../evidence/wasm.log; exit 1; }
-          tail -45 ../evidence/wasm.log
-      - name: Publish the qualified product merge without force-pushing
-        if: ${{ !cancelled() && steps.focused.outcome == 'success' && steps.native.outcome == 'success' && steps.wasm.outcome == 'success' }}
-        working-directory: source
+          cargo clippy -p noon --no-default-features --all-targets -- -D warnings > /tmp/r2a-assertion/native.log 2>&1 || { tail -180 /tmp/r2a-assertion/native.log; exit 1; }
+          cargo check -p noon-web --all-features --target wasm32-unknown-unknown > /tmp/r2a-assertion/wasm.log 2>&1 || { tail -180 /tmp/r2a-assertion/wasm.log; exit 1; }
+      - name: Publish the single assertion change after focused qualification
         run: |
           set -euo pipefail
-          git diff --exit-code
+          git add crates/noon/src/example_scenes.rs
           git diff --cached --check
-          test "$(git write-tree)" = "$(cat ../evidence/candidate-tree.txt)"
-          test "$(git rev-parse HEAD)" = "$PRODUCT_HEAD"
-          test "$(git rev-parse MERGE_HEAD)" = "$CURRENT_BASE"
-          git -c commit.gpgSign=false commit -m 'fix: reconcile typed R2a producers with current family paint and boundary (#1354)'
-          test "$(git rev-parse HEAD^1)" = "$PRODUCT_HEAD"
-          test "$(git rev-parse HEAD^2)" = "$CURRENT_BASE"
+          test "$(git diff --cached --name-only)" = crates/noon/src/example_scenes.rs
+          git -c commit.gpgSign=false commit -m 'test: match typed placement rejection in the paired callback example (#1354)'
+          test "$(git rev-parse HEAD^)" = "$PRODUCT_HEAD"
           git diff --exit-code
           git push origin HEAD:refs/heads/codex/1292-r2a-typed-producers
-          git rev-parse HEAD > ../evidence/candidate-sha.txt
-          git show -s --format='%H %T %P' HEAD > ../evidence/published.txt
-          cat ../evidence/published.txt
-      - name: Preserve the actual candidate even when a gate rejects it
+          git show -s --format='%H %T %P' HEAD > /tmp/r2a-assertion/published.txt
+          cat /tmp/r2a-assertion/published.txt
+      - name: Preserve source and qualification evidence
         if: always()
-        working-directory: source
         run: |
-          mkdir -p ../evidence
-          git status --short > ../evidence/final-status.txt
-          if test -z "$(git diff --name-only --diff-filter=U)"; then
-            git write-tree > ../evidence/final-tree.txt
-            git archive "$(git write-tree)" | gzip > ../evidence/candidate.tar.gz
-            git diff --cached "$CURRENT_BASE" --binary > ../evidence/final-candidate.patch
-          fi
+          mkdir -p /tmp/r2a-assertion
+          git add crates/noon/src/example_scenes.rs
+          git write-tree > /tmp/r2a-assertion/tree.txt
+          git archive "$(git write-tree)" | gzip > /tmp/r2a-assertion/source.tar.gz
+          git diff --cached "$PRODUCT_HEAD" > /tmp/r2a-assertion/final.patch
+          rustc --version > /tmp/r2a-assertion/toolchain.txt
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r2a-integrated-qualification
-          path: evidence
+          name: r2a-typed-example-qualification
+          path: /tmp/r2a-assertion
           retention-days: 3
           if-no-files-found: error
