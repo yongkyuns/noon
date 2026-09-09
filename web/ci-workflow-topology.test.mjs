@@ -14,6 +14,7 @@ const exactFamilies = new Map([
   ["ci.yml", "main"],
   ["ci-measurements.yml", "ci-diagnostics"],
   ["architecture-ratchets.yml", "architecture"],
+  ["architecture-diagrams.yml", "architecture"],
   ["provider-features.yml", "provider-isolation"],
   ["layer-dependency-ratchet.yml", "architecture"],
   ["compiler-cache-seed.yml", "cache-seed"],
@@ -216,4 +217,21 @@ test("provider workflow retains cached five-by-two qualification and example reg
   assert.match(probe, /if: matrix\.config == 'minimal' && matrix\.target == 'x86_64-unknown-linux-gnu'/);
   assert.match(probe, /NOON_PROVIDER_COMPILE_TESTS: '1'/);
   assert.match(probe, /python3 scripts\/provider_features_test\.py ProviderExampleTests/);
+});
+
+
+test("architecture diagrams stay a read-only check with independently preserved artifacts", async () => {
+  const workflow = await readFile(new URL("architecture-diagrams.yml", workflowDir), "utf8");
+  assert.match(workflow, /permissions:\n  contents: read/);
+  assert.doesNotMatch(workflow, /^\s*(contents|actions|pull-requests):\s*write\b/m);
+  assert.match(workflow, /persist-credentials: false/);
+  assert.doesNotMatch(workflow, /\bgit\s+(push|commit)\b/);
+  assert.match(workflow, /python3 scripts\/test_architecture_diagrams\.py/);
+  assert.match(workflow, /python3 scripts\/architecture_diagrams\.py --check/);
+  assert.match(workflow, /sha256sum -c -/);
+  const preservation = workflow.split("      - name: Preserve diagram sources and checked-in SVGs\n")[1];
+  assert.ok(preservation, "diagram artifacts must remain available when checks fail");
+  assert.match(preservation, /^        if: always\(\)$/m);
+  assert.match(preservation, /uses: actions\/upload-artifact@/);
+  assert.match(preservation, /docs\/diagrams\//);
 });
