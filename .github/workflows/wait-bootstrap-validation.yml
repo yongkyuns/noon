@@ -68,20 +68,21 @@ jobs:
           test "$status" = 101
           grep -F '2 passed; 4 failed' "$RUNNER_TEMP/wait-evidence/red.log"
           grep -F 'scene.player_ownership.is_unstarted()' "$RUNNER_TEMP/wait-evidence/red.log"
-      - name: Apply only deferred first-player publication and regressions
+      - name: Apply deferred first-player publication and additive regressions
         working-directory: source
         run: |
           python3 ../tooling/.github/wait-bootstrap-fix.py
           cargo fmt --all
           git diff --check
-          git add crates/noon-web/src/canonical_authoring_scene.rs crates/noon-web/src/canonical_authoring_scene/wait_bootstrap_tests.rs web/python/test_noon_errors_wasm.py
-          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git add crates/noon-web/src/canonical_authoring_scene.rs crates/noon-web/src/canonical_authoring_scene/wait_bootstrap_tests.rs web/python/test_noon_errors_wasm.py scripts/typed-authoring-errors-smoke.mjs
+          test "$(git diff --cached --name-only | wc -l)" -eq 4
           git diff --cached --binary > "$RUNNER_TEMP/wait-evidence/candidate.patch"
           git config user.name 'Noon development tooling'
           git config user.email 'development@noon.invalid'
           git -c commit.gpgSign=false -c core.hooksPath=/dev/null commit -m 'fix: publish initial wait ownership only after shared admission'
           git rev-parse HEAD > "$RUNNER_TEMP/wait-evidence/candidate-head.txt"
           git rev-parse HEAD^{tree} > "$RUNNER_TEMP/wait-evidence/candidate-tree.txt"
+          git archive HEAD | gzip > "$RUNNER_TEMP/wait-evidence/source.tar.gz"
       - name: Prove corrected ownership and complete fast qualification
         working-directory: source
         run: |
@@ -103,8 +104,7 @@ jobs:
           node scripts/typed-authoring-errors-smoke.mjs > "$RUNNER_TEMP/wait-evidence/browser.log" 2>&1 || { tail -150 "$RUNNER_TEMP/wait-evidence/browser.log"; exit 1; }
           git diff --exit-code
           cp Cargo.lock "$RUNNER_TEMP/wait-evidence/Cargo.lock"
-          git archive HEAD | gzip > "$RUNNER_TEMP/wait-evidence/source.tar.gz"
-      - name: Publish only the validated three-file product candidate
+      - name: Publish only the validated four-file product candidate
         working-directory: source
         run: |
           git push origin HEAD:refs/heads/codex/1343-wait-bootstrap-atomicity

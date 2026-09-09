@@ -46,3 +46,9 @@ cls = next(n for n in module.body if isinstance(n, ast.ClassDef) and n.name == '
 tests = [n.name for n in cls.body if isinstance(n, ast.FunctionDef) and n.name.startswith('test_')]
 assert len(tests) == 9 and 'test_invalid_first_wait_does_not_publish_a_player_and_retries' in tests
 p.write_text(s)
+# The same runner keeps an exact discovered-case assertion; add the new case.
+p = Path('scripts/typed-authoring-errors-smoke.mjs')
+s = p.read_text()
+old = 'assert.equal(report.python.additionalTests, 8);'
+assert s.count(old) == 1
+p.write_text(s.replace(old, 'assert.equal(report.python.additionalTests, 9);', 1))
