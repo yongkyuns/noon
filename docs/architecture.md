@@ -1005,7 +1005,7 @@ The roadmap is deliberately short. Detailed implementation checklists belong in 
 
 ## Phase A — architecture consolidation
 
-**Status: the architecture foundations are implemented; Phase A remains open only for finite acceptance/qualification closeout tracked in [#953](https://github.com/yongkyuns/noon/issues/953).** Correctness fixes may proceed at any time; broad feature expansion does not become the default priority until the umbrella exit gate closes.
+**Status: Phase A architecture consolidation is complete.** [#953](https://github.com/yongkyuns/noon/issues/953) records the completed exit checklist and qualification evidence. Phase B is the default priority for common 2D feature breadth; correctness fixes continue under their owning issues.
 
 The permanent Phase A result is already reflected in the normative sections above:
 
@@ -1018,7 +1018,7 @@ The permanent Phase A result is already reflected in the normative sections abov
 - settled module/crate ownership and structural architecture ratchets;
 - paired Rust/Python and deterministic execution evidence for representative supported semantics.
 
-Completed migration/module-normalization tracks are historical evidence, not unfinished target architecture: A4 (#959), A5 (#960), and the A6 ratchet framework (#961) are closed. The mutable finite closeout list—currently centered on the remaining thin Python-facade acceptance and final architecture-gate/browser evidence—belongs in #953 and its linked work, not in this permanent document. Do not infer a need to replay or reopen completed migration tracks from the existence of Phase A.
+Completed implementation tracks and their qualification evidence are recorded in #953 and its linked issues. Those records describe the completed consolidation; they are not unfinished target architecture. Current implementation work belongs in the owning roadmap issues rather than a second checklist in this document. Do not replay or reopen completed migration tracks.
 
 **Phase A exit:** the #953 checklist is completely green with no unresolved correctness failure; then Phase B breadth becomes the default priority.
 
