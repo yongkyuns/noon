@@ -1,7 +1,7 @@
 use noon_compile::{CompiledObject, CompiledScene, TransformGeometryPlan};
 use noon_core::{
-    CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId,
-    TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
+    CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, Style, TrackDefinition,
+    TrackId, TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
 };
 
 #[test]
@@ -35,7 +35,7 @@ fn compiler_selects_analytic_geometry_plans() {
                 from: TransformTrackEndpoint::new(from),
                 to: TransformTrackEndpoint::new(to),
             },
-            timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
     }

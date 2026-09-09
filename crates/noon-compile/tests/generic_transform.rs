@@ -1,7 +1,7 @@
 use noon_compile::CompiledObject;
 use noon_compile::{CompileError, CompiledScene, TransformGeometryPlan};
 use noon_core::{
-    Color, Easing, GeometryRef, Property, Style, TrackTiming, TrackValues, Transform2D,
+    Color, GeometryRef, Property, RateFunction, Style, TrackTiming, TrackValues, Transform2D,
     TransformTrackEndpoint, Vec2, VectorPath,
 };
 use noon_core::{CompositionTimeMap, ObjectId, TrackDefinition, TrackId};
@@ -60,7 +60,7 @@ fn path_transform_compiles_to_one_prepared_geometry_pair() {
             from: snapshot(GeometryRef::path(source_path()), style),
             to: snapshot(GeometryRef::path(target_path()), style),
         },
-        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 
@@ -111,7 +111,7 @@ fn identical_geometry_transform_needs_no_render_geometry_override() {
         object,
         property: Property::Transform,
         values: TrackValues::Object { from, to },
-        timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 
@@ -152,7 +152,7 @@ fn circle_to_rectangle_transform_uses_renderer_only_path_pair() {
             from: from.clone(),
             to: to.clone(),
         },
-        timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 
@@ -235,7 +235,7 @@ fn unsupported_open_closed_cross_geometry_transform_is_rejected_before_runtime()
         object,
         property: Property::Transform,
         values: TrackValues::Object { from, to },
-        timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 
@@ -266,7 +266,7 @@ fn path_stroke_width_change_is_rejected_even_when_geometry_is_identical() {
         object,
         property: Property::Transform,
         values: TrackValues::Object { from, to },
-        timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 
@@ -317,7 +317,7 @@ fn certified_closed_filled_path_transform_compiles() {
             from: snapshot(GeometryRef::path(source), style),
             to: snapshot(GeometryRef::path(target), style),
         },
-        timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 
@@ -370,7 +370,7 @@ fn unsafe_filled_path_transform_is_rejected_before_runtime() {
             from: snapshot(GeometryRef::path(source), style),
             to: snapshot(GeometryRef::path(bow_tie), style),
         },
-        timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 
@@ -421,7 +421,7 @@ fn path_transform_rejects_join_or_cap_topology_changes() {
             object,
             property: Property::Transform,
             values: TrackValues::Object { from, to },
-            timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
             time_map: CompositionTimeMap::identity(),
         });
         assert!(matches!(

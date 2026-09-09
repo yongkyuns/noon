@@ -80,8 +80,6 @@ fn sigmoid(value: f32) -> f32 {
     1.0 / (1.0 + (-value).exp())
 }
 
-pub type Easing = RateFunction;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Property {
@@ -598,12 +596,6 @@ mod tests {
         assert_eq!(RateFunction::Linear.evaluate(2.0), 1.0);
         assert_eq!(RateFunction::Smooth.evaluate(-1.0), 0.0);
         assert_eq!(RateFunction::Smooth.evaluate(2.0), 1.0);
-    }
-
-    #[test]
-    fn legacy_easing_name_is_a_source_compatible_alias() {
-        assert_eq!(Easing::Linear, RateFunction::Linear);
-        assert_eq!(Easing::EaseInOutCubic, RateFunction::EaseInOutCubic);
     }
 
     #[test]

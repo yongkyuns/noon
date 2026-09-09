@@ -1,7 +1,8 @@
 use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    Color, CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition,
-    TrackId, TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2, VectorPath,
+    Color, CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, Style,
+    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
+    VectorPath,
 };
 use noon_runtime::SceneInstance;
 
@@ -66,7 +67,7 @@ fn filled_transform_seek_forward_parity_and_exact_semantic_endpoints() {
             from: from.clone(),
             to: to.clone(),
         },
-        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 

@@ -1,6 +1,6 @@
 use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    Color, CompositionTimeMap, Easing, GeometryRef, ObjectId, PathCommand, Property,
+    Color, CompositionTimeMap, GeometryRef, ObjectId, PathCommand, Property, RateFunction,
     StrokeWidthMode, Style, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
     TransformTrackEndpoint, Vec2, VectorPath,
 };
@@ -65,7 +65,7 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
             from: from.clone(),
             to: to.clone(),
         },
-        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
 
@@ -152,7 +152,7 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
             from: to.transform.translation,
             to: to.transform.translation + delta,
         },
-        timing: TrackTiming::new(2.0, 1.0, Easing::Linear),
+        timing: TrackTiming::new(2.0, 1.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
     let compiled = CompiledScene::compile_objects(objects.clone(), &tracks).unwrap();
@@ -193,7 +193,7 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
             from: Vec2::new(2.0, 0.5),
             to: Vec2::new(4.0, 0.5),
         },
-        timing: TrackTiming::new(0.5, 1.0, Easing::Linear),
+        timing: TrackTiming::new(0.5, 1.0, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
     let mut concurrent =
@@ -244,7 +244,7 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
             from: Vec2::ONE,
             to: Vec2::ONE,
         },
-        timing: TrackTiming::new(0.25, 0.25, Easing::Linear),
+        timing: TrackTiming::new(0.25, 0.25, RateFunction::Linear),
         time_map: CompositionTimeMap::identity(),
     });
     let mut identity_native = SceneInstance::new(
