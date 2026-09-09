@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 import noon as _base
+from _noon_errors import engine_await, raise_engine_error
 
 _NEXT_SESSION_ID = 0
 _TRACKED_MOBJECTS: list[_base.Mobject] = []
@@ -575,7 +576,7 @@ class _CanonicalCallbackContext:
             )
             result = json.loads(str(result_json))
         except Exception as error:
-            raise RuntimeError(f"canonical callback sparse read failed: {error}") from None
+            raise_engine_error(error, operation="callback.read")
         expected_kind = "scalar" if kind == "scalar_signal" else "object"
         if not isinstance(result, dict) or result.get("kind") != expected_kind:
             raise RuntimeError("canonical callback sparse read returned the wrong typed value")
@@ -588,11 +589,11 @@ class _CanonicalCallbackContext:
         request_id = self._next_read_request_id
         self._next_read_request_id += 1
         request = {"request_id": request_id, "kind": "scalar_signal", "node": _phase_node_json(key)}
-        raw = await noonReadSemanticContinuationCallback(
+        raw = await engine_await(noonReadSemanticContinuationCallback(
             self._authoring_context,
             json.dumps(self.token, separators=(",", ":")),
             json.dumps(request, separators=(",", ":")),
-        )
+        ), operation="callback.read")
         result = json.loads(str(raw))
         if not isinstance(result, dict) or result.get("kind") != "scalar":
             raise RuntimeError("canonical callback scalar prefetch returned the wrong typed value")
@@ -656,7 +657,7 @@ class _CanonicalCallbackContext:
         if cached is not None:
             return cached
         if key in self._prefetch_errors:
-            raise RuntimeError(f"canonical callback sparse read failed: {self._prefetch_errors[key]}") from None
+            raise_engine_error(self._prefetch_errors[key], operation="callback.read")
         result = self._read("scalar_signal", key)
         value = _phase_number("scalar callback read", result.get("value"))
         self._signals[key] = value

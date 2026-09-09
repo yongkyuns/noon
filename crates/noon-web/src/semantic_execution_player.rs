@@ -1,5 +1,4 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
-#[cfg(any(target_arch = "wasm32", test))]
 use crate::authoring_error::AuthoringFailure;
 #[cfg(any(target_arch = "wasm32", test))]
 use noon::integration::TimelineWakeState;
@@ -2054,6 +2053,85 @@ fn decode_callback_batch(json: &str) -> Result<EffectivePropertyBatch, String> {
     Ok(EffectivePropertyBatch::new(token, writes))
 }
 
+// Keep the shared callback failures typed until the actual JS boundary. The
+// decoding and preflight/commit order below are the existing worker protocol.
+impl SemanticExecutionPlayer {
+    pub fn required_callback_read_json(
+        &mut self,
+        token_json: &str,
+        request_json: &str,
+    ) -> Result<String, AuthoringFailure> {
+        let token = Self::callback_token_from_json(token_json)?;
+        self.pending_callback_phase
+            .filter(|(pending, _)| *pending == token)
+            .ok_or("callback read does not match the player pending phase")?;
+        let request_wire: CallbackReadRequestWire = serde_json::from_str(request_json)
+            .map_err(|error| format!("invalid callback read request JSON: {error}"))?;
+        let requested_object = match &request_wire {
+            CallbackReadRequestWire::Object { node } => Some(node.clone()),
+            CallbackReadRequestWire::ScalarSignal { .. } => None,
+        };
+        let value = self
+            .session
+            .required_callback_read(token, request_wire.into())
+            .map_err(AuthoringFailure::from)?;
+        let wire = match value {
+            CallbackReadValue::Scalar(value) => CallbackReadValueWire::Scalar { value },
+            CallbackReadValue::Object(properties) => CallbackReadValueWire::Object {
+                object: CallbackPhaseObjectWire {
+                    node: requested_object.ok_or("scalar callback read returned an object")?,
+                    transform: properties.transform,
+                    style: properties.style,
+                    appearance: properties.appearance,
+                    presence: properties.presence,
+                    reveal: properties.reveal,
+                    morph: properties.morph,
+                    bounds: properties.bounds,
+                },
+            },
+        };
+        serde_json::to_string(&wire).map_err(|error| AuthoringFailure::from(error.to_string()))
+    }
+
+    pub fn commit_callback_phase_json(&mut self, batch_json: &str) -> Result<(), AuthoringFailure> {
+        let batch = decode_callback_batch(batch_json)?;
+        let token = batch.token();
+        let (_, time) = self
+            .pending_callback_phase
+            .filter(|(pending, _)| *pending == token)
+            .ok_or("callback batch does not match the player pending phase")?;
+        self.session
+            .commit_required_callback_phase(batch)
+            .map_err(AuthoringFailure::from)?;
+        // The callback phase time is session-owned. Re-anchoring presentation
+        // only after its commit avoids a host-side progression cursor.
+        self.clock.seek(time).map_err(|error| error.to_string())?;
+        self.pending_callback_phase = None;
+        Ok(())
+    }
+
+    pub fn fail_callback_phase_json(&mut self, phase_json: &str) -> Result<(), AuthoringFailure> {
+        let token = Self::phase_token_from_json(phase_json)?;
+        self.session
+            .fail_required_callback_phase(token)
+            .map_err(AuthoringFailure::from)?;
+        self.pending_callback_phase = None;
+        Ok(())
+    }
+
+    pub fn interrupt_callback_phase_json(
+        &mut self,
+        phase_json: &str,
+    ) -> Result<(), AuthoringFailure> {
+        let token = Self::phase_token_from_json(phase_json)?;
+        self.session
+            .interrupt_required_callback_phase(token)
+            .map_err(AuthoringFailure::from)?;
+        self.pending_callback_phase = None;
+        Ok(())
+    }
+}
+
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 impl SemanticExecutionPlayer {
     fn callback_phase_json(
@@ -2238,80 +2316,45 @@ impl SemanticExecutionPlayer {
     /// Read one typed value from the exact pending callback phase without
     /// committing it. This is the real Python-worker boundary; direct Rust
     /// callbacks call the session API without JSON.
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = requiredCallbackReadJson))]
-    pub fn required_callback_read_json(
+    pub fn required_callback_read_json_wasm(
         &mut self,
         token_json: &str,
         request_json: &str,
-    ) -> Result<String, String> {
-        let token = Self::callback_token_from_json(token_json)?;
-        self.pending_callback_phase
-            .filter(|(pending, _)| *pending == token)
-            .ok_or("callback read does not match the player pending phase")?;
-        let request_wire: CallbackReadRequestWire = serde_json::from_str(request_json)
-            .map_err(|error| format!("invalid callback read request JSON: {error}"))?;
-        let requested_object = match &request_wire {
-            CallbackReadRequestWire::Object { node } => Some(node.clone()),
-            CallbackReadRequestWire::ScalarSignal { .. } => None,
-        };
-        let value = self
-            .session
-            .required_callback_read(token, request_wire.into())
-            .map_err(|error| error.to_string())?;
-        let wire = match value {
-            CallbackReadValue::Scalar(value) => CallbackReadValueWire::Scalar { value },
-            CallbackReadValue::Object(properties) => CallbackReadValueWire::Object {
-                object: CallbackPhaseObjectWire {
-                    node: requested_object.ok_or("scalar callback read returned an object")?,
-                    transform: properties.transform,
-                    style: properties.style,
-                    appearance: properties.appearance,
-                    presence: properties.presence,
-                    reveal: properties.reveal,
-                    morph: properties.morph,
-                    bounds: properties.bounds,
-                },
-            },
-        };
-        serde_json::to_string(&wire).map_err(|error| error.to_string())
+    ) -> Result<String, wasm_bindgen::JsValue> {
+        self.required_callback_read_json(token_json, request_json)
+            .map_err(crate::authoring_error::js_error)
     }
 
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = commitCallbackPhaseJson))]
-    pub fn commit_callback_phase_json(&mut self, batch_json: &str) -> Result<(), String> {
-        let batch = decode_callback_batch(batch_json)?;
-        let token = batch.token();
-        let (_, time) = self
-            .pending_callback_phase
-            .filter(|(pending, _)| *pending == token)
-            .ok_or("callback batch does not match the player pending phase")?;
-        self.session
-            .commit_required_callback_phase(batch)
-            .map_err(|error| error.to_string())?;
-        // The callback phase time is session-owned. Re-anchoring presentation
-        // only after its commit avoids a host-side progression cursor.
-        self.clock.seek(time).map_err(|error| error.to_string())?;
-        self.pending_callback_phase = None;
-        Ok(())
+    pub fn commit_callback_phase_json_wasm(
+        &mut self,
+        batch_json: &str,
+    ) -> Result<(), wasm_bindgen::JsValue> {
+        self.commit_callback_phase_json(batch_json)
+            .map_err(crate::authoring_error::js_error)
     }
 
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = failCallbackPhaseJson))]
-    pub fn fail_callback_phase_json(&mut self, phase_json: &str) -> Result<(), String> {
-        let token = Self::phase_token_from_json(phase_json)?;
-        self.session
-            .fail_required_callback_phase(token)
-            .map_err(|error| error.to_string())?;
-        self.pending_callback_phase = None;
-        Ok(())
+    pub fn fail_callback_phase_json_wasm(
+        &mut self,
+        phase_json: &str,
+    ) -> Result<(), wasm_bindgen::JsValue> {
+        self.fail_callback_phase_json(phase_json)
+            .map_err(crate::authoring_error::js_error)
     }
 
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = interruptCallbackPhaseJson))]
-    pub fn interrupt_callback_phase_json(&mut self, phase_json: &str) -> Result<(), String> {
-        let token = Self::phase_token_from_json(phase_json)?;
-        self.session
-            .interrupt_required_callback_phase(token)
-            .map_err(|error| error.to_string())?;
-        self.pending_callback_phase = None;
-        Ok(())
+    pub fn interrupt_callback_phase_json_wasm(
+        &mut self,
+        phase_json: &str,
+    ) -> Result<(), wasm_bindgen::JsValue> {
+        self.interrupt_callback_phase_json(phase_json)
+            .map_err(crate::authoring_error::js_error)
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = callbackTerminationJson))]
@@ -3501,3 +3544,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod callback_error_tests;

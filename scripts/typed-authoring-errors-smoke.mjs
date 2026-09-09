@@ -20,6 +20,7 @@ const modules = await Promise.all(PYTHON_COMPAT_MODULES.map(async ({sourcePath, 
   runtimePath, source: await readFile(path.join(root, "web", sourcePath), "utf8"),
 })));
 const tests = await readFile(path.join(root, "web/python/test_noon_errors_wasm.py"), "utf8");
+const callbackTests = await readFile(path.join(root, "web/python/test_noon_callback_errors_wasm.py"), "utf8");
 await mkdir(artifacts, {recursive: true});
 const server = await serveRepository(root, Number(process.env.NOON_ERROR_TEST_PORT ?? 8798));
 let browser;
@@ -258,7 +259,7 @@ try {
     });
   });
   assert.equal(report.liveProperties.length, 29);
-  report.python = await page.evaluate(async ({modules, tests, pyodideUrl}) => {
+  report.python = await page.evaluate(async ({modules, tests, callbackTests, pyodideUrl}) => {
     const wasm = await import("/web/pkg/noon_web.js");
     const {loadPyodide} = await import(pyodideUrl);
     const pyodide = await loadPyodide();
@@ -282,11 +283,21 @@ try {
     globalThis.noonUnmarkedError = () => { throw new Error("foreign handle invalid membership unsupported stale pending"); };
     for (const {runtimePath, source} of modules) pyodide.FS.writeFile(runtimePath, source);
     pyodide.FS.writeFile("/tmp/test_noon_errors_wasm.py", tests);
+    pyodide.FS.writeFile("/tmp/test_noon_callback_errors_wasm.py", callbackTests);
     pyodide.registerJsModule("_noon_wasm_for_error_tests", wasm);
     pyodide.registerJsModule("_noon_error_test_host", {
       same: (left, right) => left === right, isError: error => error instanceof Error,
       resetStore: () => { store = new wasm.WasmAuthoringStore(); },
       completeAsPromise: async context => context.liveCompleteSegment(),
+      installCallbackReader: player => {
+        const previous = globalThis.noonReadSemanticContinuationCallback;
+        globalThis.noonReadSemanticContinuationCallback = async (_context, token, request) =>
+          player.requiredCallbackReadJson(token, request);
+        return () => {
+          if (previous === undefined) delete globalThis.noonReadSemanticContinuationCallback;
+          else globalThis.noonReadSemanticContinuationCallback = previous;
+        };
+      },
     });
     return JSON.parse(await pyodide.runPythonAsync(`
 import sys, json, unittest
@@ -374,13 +385,20 @@ import test_noon_errors_wasm as tests
 result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromModule(tests))
 assert not result.skipped, result.skipped
 assert result.wasSuccessful(), "real WASM/Python tests failed"
+import test_noon_callback_errors_wasm as callback_tests
+callback_result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromModule(callback_tests))
+assert not callback_result.skipped, callback_result.skipped
+assert callback_result.wasSuccessful(), "real callback transaction boundary tests failed"
+await callback_tests.check_sparse_callback_read_callsite()
 await tests.check_real_promise_rejection()
-json.dumps({"matrix": results, "liveProperties": property_results, "additionalTests": result.testsRun, "promiseRejectionAndRecovery": True, "skipped": len(result.skipped)})
+json.dumps({"matrix": results, "liveProperties": property_results, "additionalTests": result.testsRun, "callbackTests": callback_result.testsRun, "sparseCallbackRead": True, "promiseRejectionAndRecovery": True, "skipped": len(result.skipped)})
 `));
-  }, {modules, tests, pyodideUrl});
+  }, {modules, tests, callbackTests, pyodideUrl});
   assert.equal(report.python.matrix.length, 10);
   assert.equal(report.python.liveProperties.length, 29);
   assert.equal(report.python.additionalTests, 9);
+  assert.equal(report.python.callbackTests, 6);
+  assert.equal(report.python.sparseCallbackRead, true);
   assert.equal(report.python.skipped, 0);
   assert.equal(report.python.promiseRejectionAndRecovery, true);
   // Exercise actual deployed Python callsites and a rerun in the same worker.
