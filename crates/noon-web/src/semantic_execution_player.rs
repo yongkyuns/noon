@@ -343,9 +343,6 @@ impl SemanticExecutionPlayer {
                 .set_loop_duration(duration)
                 .map_err(|error| error.to_string())?;
         }
-        // Live publication may have installed sparse text/font dependencies after
-        // this player was bootstrapped. Refresh only at the explicit cross-worker
-        // handoff boundary so ordinary typed in-process property edits stay local.
         let resource_bundle = Self::resource_bundle_for(&self.session)?;
         let encoder = RetainedFamilyExecutionDeltaEncoder::new_with_resources(
             transport_session,
@@ -358,17 +355,10 @@ impl SemanticExecutionPlayer {
         self.resource_bundle = resource_bundle;
         self.encoder = encoder;
         self.snapshot_sent = false;
-        // A transport recovery reuses this runtime but begins a new host lease.
-        // Re-anchor the derived wall conversion at its next wake so elapsed wall
-        // time while no endpoint owned the player cannot advance authored time.
         self.live_wake_clock = BrowserExecutionWakeClock::default();
         Ok(())
     }
 
-    /// The authored duration needed to hand this live session to presentation.
-    ///
-    /// Retain the latest continuation endpoint across presentation scrubbing.
-    /// An active continuation must keep that endpoint addressable before completion.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_handoff_duration(&self) -> Option<f64> {
         self.semantics.as_ref()?;
@@ -385,7 +375,6 @@ impl SemanticExecutionPlayer {
         self.session.has_required_callbacks()
     }
 
-    /// The authored scene revision represented by this runtime.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn scene_revision(&self) -> noon_core::SceneRevision {
         self.session.publication_context().scene_revision()
@@ -935,7 +924,7 @@ impl SemanticExecutionPlayer {
                 .expect("live semantic store has one scene root"),
             &mut self.session,
         )
-        .scale(mobject, x, y)
+        .manim_scale(mobject, x, y)
         .map(|_| ())
         .map_err(AuthoringFailure::from)
     }
@@ -1058,8 +1047,6 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
-    /// Publish one already validated scene-membership batch through the active
-    /// semantic session. The player retains no membership or painter-order mirror.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_edit_membership(
         &mut self,
@@ -1081,8 +1068,6 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
-    /// Route callback declarations through the same shared semantic publication
-    /// as native authoring. The browser host owns no callback schedule mirror.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_edit_updaters(
         &mut self,
@@ -1165,7 +1150,6 @@ impl SemanticExecutionPlayer {
         Ok(end_time)
     }
 
-    /// Atomically declare and activate one shared affine appearance lifecycle.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_declare_and_activate_affine_lifecycle(
         &mut self,
@@ -1197,8 +1181,6 @@ impl SemanticExecutionPlayer {
         Ok(end_time)
     }
 
-    /// Query root membership from the exact shared live session. This is a
-    /// derived wrapper observation, never a frontend lifecycle authority.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_contains(
         &mut self,
@@ -1218,9 +1200,6 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
-    /// Atomically admit and activate one recursive composition request through the shared
-    /// session. The request remains inert until this call; schedule, admission, and runtime
-    /// publication stay owned by Rust.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_declare_and_activate_composition(
         &mut self,
@@ -1250,7 +1229,6 @@ impl SemanticExecutionPlayer {
         Ok(end_time)
     }
 
-    /// Create and sparsely enroll one scalar tracker in this retained session.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_value_tracker(
         &mut self,
@@ -1271,7 +1249,6 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
-    /// Associate and sparsely enroll one pre-existing tracker in this live root.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_associate_value_tracker(
         &mut self,
@@ -1292,9 +1269,6 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
-    /// Create a detached target through the retained session so its semantic
-    /// publication remains coherent with this runtime. Detached target rows do
-    /// not create execution objects or frame work.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_target_editor(
         &mut self,
@@ -1338,8 +1312,6 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
-    /// Create one detached family through the retained session so its node and
-    /// ordered edges share the current semantic/runtime publication.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_family(
         &mut self,
@@ -1359,8 +1331,6 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
-    /// Apply subset-display constructor preparation through the active retained
-    /// session so semantic and runtime publication remain one transaction.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn prepare_family_subset_display(
         &mut self,
@@ -1431,7 +1401,6 @@ impl SemanticExecutionPlayer {
         Ok(())
     }
 
-    /// Observe browser wake mechanics for the active shared continuation segment.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_segment_wake(
         &mut self,
@@ -1451,14 +1420,6 @@ impl SemanticExecutionPlayer {
         Ok(WasmExecutionWake::from_plan(plan, timer_after_milliseconds))
     }
 
-    /// Project the generic player's runtime-owned wake state through its one
-    /// browser playback clock.
-    ///
-    /// `wall_time_ms` comes from this authoring/engine context. Renderer-worker
-    /// timestamps are admission signals only and may use a different time origin.
-    /// Required callbacks pin the clock until their exact batch commits. A looping
-    /// player adds the loop boundary only when the execution session retains actual
-    /// timeline history, allowing a clean static scene to settle at O(0).
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn execution_wake(
         &mut self,
@@ -1495,11 +1456,6 @@ impl SemanticExecutionPlayer {
         Ok(WasmExecutionWake::from_plan(plan, timer_after_milliseconds))
     }
 
-    /// Begin the next browser wall-time interval after required host work.
-    ///
-    /// The endpoint calls this only after retrying the callback-bearing drive
-    /// with its captured timestamp. The session's published time is therefore
-    /// unchanged while this resets the derived wall-time conversion.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn reanchor_live_segment_wake(
         &mut self,
@@ -1513,11 +1469,6 @@ impl SemanticExecutionPlayer {
         self.live_segment_wake(wall_time_ms)
     }
 
-    /// Drive the current segment from one Rust-derived browser wall-time mapping.
-    ///
-    /// The session clamps this target to the segment boundary and owns all timeline work.
-    /// If it reaches a required callback boundary, the returned phase must be committed
-    /// before the host retries this operation with the same wall timestamp.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_drive_segment_from_wall_time(
         &mut self,
@@ -1532,13 +1483,6 @@ impl SemanticExecutionPlayer {
         self.live_drive_segment_to(segment, requested_time)
     }
 
-    /// Drive the active continuation segment toward one externally supplied
-    /// authored-time sample.
-    ///
-    /// The caller supplies an absolute sample from an external reference grid.
-    /// Segment clamping, callback barriers, and runtime advancement remain owned
-    /// by the execution session. Rejecting a backward sample before constructing
-    /// the presentation clock or entering the session keeps the frame unchanged.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_drive_segment_to_authored_time(
         &mut self,
@@ -1600,10 +1544,6 @@ impl SemanticExecutionPlayer {
         let segment = self.live_segment()?;
         let drive = self.live_drive_segment_to(segment, requested_time)?;
         debug_assert!(drive.callback_phase_json.is_none());
-        // Preserve the established wrapper contract: this reports completion
-        // reconciliation, not merely reaching an animation endpoint. The async
-        // wall-time drive above deliberately exposes the latter so its owner can
-        // call `completeLiveSegment` exactly once.
         Ok(self.session.segment_state(segment).is_complete())
     }
 
@@ -1629,8 +1569,6 @@ impl SemanticExecutionPlayer {
         Ok(())
     }
 
-    /// Evaluate scalar tracks through the one execution session, then align the
-    /// hold presentation at that same absolute time for a later handoff.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_evaluate(&mut self, time: f64) -> Result<(), AuthoringFailure> {
         let mut clock = self.clock.clone();
@@ -2076,8 +2014,6 @@ fn decode_callback_batch(json: &str) -> Result<EffectivePropertyBatch, String> {
     Ok(EffectivePropertyBatch::new(token, writes))
 }
 
-// Keep the shared callback failures typed until the actual JS boundary. The
-// decoding and preflight/commit order below are the existing worker protocol.
 impl SemanticExecutionPlayer {
     #[cfg(any(target_arch = "wasm32", test))]
     pub fn required_callback_read_json(
@@ -2159,8 +2095,6 @@ impl SemanticExecutionPlayer {
         self.session
             .commit_required_callback_phase(batch)
             .map_err(AuthoringFailure::from)?;
-        // The callback phase time is session-owned. Re-anchoring presentation
-        // only after its commit avoids a host-side progression cursor.
         self.clock.seek(time).map_err(|error| error.to_string())?;
         self.pending_callback_phase = None;
         Ok(())
@@ -2275,13 +2209,6 @@ impl SemanticExecutionPlayer {
         Ok(phase)
     }
 
-    /// Advance the canonical session to one exact forward authored-time barrier.
-    ///
-    /// Unlike browser-frame ticking, this takes the authored time directly. The
-    /// execution session remains responsible for stopping at an intervening
-    /// required callback activation; callers commit that one phase and may then
-    /// request the remaining authored time again. No host playback cursor or
-    /// timestamp conversion participates in this operation.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = advanceForwardToCallbackPhaseJson))]
     pub fn advance_forward_to_callback_phase_json(
         &mut self,
@@ -2293,9 +2220,6 @@ impl SemanticExecutionPlayer {
                 "forward callback advance requires time at or after {current}, got {time}"
             ));
         }
-        // Validate presentation anchoring before any fallible session advance.
-        // Required-callback sessions use the non-looping clock, so this cannot
-        // turn a forward diagnostic control into an implicit replay.
         let mut clock = self.clock.clone();
         clock.seek(time).map_err(|error| error.to_string())?;
         let phase = self.advance_to_callback_phase(time)?;
@@ -2305,9 +2229,6 @@ impl SemanticExecutionPlayer {
         Ok(phase)
     }
 
-    /// Derive one browser wake directive for the active ordinary continuation segment.
-    ///
-    /// This is deliberately a typed WASM value rather than a host-authored duration.
     #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = liveSegmentWake))]
     pub fn live_segment_wake_wasm(
@@ -2318,14 +2239,12 @@ impl SemanticExecutionPlayer {
             .map_err(crate::authoring_error::js_error)
     }
 
-    /// Derive the next generic browser wake from the canonical runtime/session.
     #[cfg(any(target_arch = "wasm32", test))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = executionWake))]
     pub fn execution_wake_wasm(&mut self, wall_time_ms: f64) -> Result<WasmExecutionWake, String> {
         self.execution_wake(wall_time_ms)
     }
 
-    /// Reanchor the next browser interval after a required callback completes.
     #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = reanchorLiveSegmentWake))]
     pub fn reanchor_live_segment_wake_wasm(
@@ -2336,11 +2255,6 @@ impl SemanticExecutionPlayer {
             .map_err(crate::authoring_error::js_error)
     }
 
-    /// Advance one active ordinary continuation segment from an anchored browser timestamp.
-    ///
-    /// A callback phase must be committed before this is retried with the same wall
-    /// timestamp. `reachedEndpoint` means shared completion is now permitted but
-    /// remains a separate operation so authored reconciliation cannot be skipped.
     #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = driveLiveSegmentFromWallTime))]
     pub fn drive_live_segment_from_wall_time_wasm(
@@ -2351,8 +2265,6 @@ impl SemanticExecutionPlayer {
             .map_err(crate::authoring_error::js_error)
     }
 
-    /// Advance one active continuation segment toward an absolute authored-time
-    /// sample without involving a browser clock.
     #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = driveLiveSegmentToAuthoredTime))]
     pub fn drive_live_segment_to_authored_time_wasm(
@@ -2370,9 +2282,6 @@ impl SemanticExecutionPlayer {
             .map_err(crate::authoring_error::js_error)
     }
 
-    /// Read one typed value from the exact pending callback phase without
-    /// committing it. This is the real Python-worker boundary; direct Rust
-    /// callbacks call the session API without JSON.
     #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = requiredCallbackReadJson))]
     pub fn required_callback_read_json_wasm(
@@ -2432,7 +2341,6 @@ impl SemanticExecutionPlayer {
             .transpose()
     }
 
-    /// Decode one sampled native state update at the genuine worker control-port boundary.
     #[cfg(any(target_arch = "wasm32", test))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setNativeStateInputJson))]
     pub fn set_native_state_input_json(&mut self, json: &str) -> Result<(), String> {
@@ -2441,7 +2349,6 @@ impl SemanticExecutionPlayer {
         self.set_native_state_input(input.source, input.value.into())
     }
 
-    /// Decode one ordered native event at the genuine worker control-port boundary.
     #[cfg(any(target_arch = "wasm32", test))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = emitNativeEventJson))]
     pub fn emit_native_event_json(&mut self, json: &str) -> Result<(), String> {
@@ -2455,12 +2362,6 @@ impl SemanticExecutionPlayer {
         self.encoded_delta(false)
     }
 
-    /// Drain one callback-published retained delta together with an exact,
-    /// single-target renderer observation request for the same transport sequence.
-    ///
-    /// This opt-in method is the genuine execution-worker to render-worker boundary.
-    /// It consumes the same canonical delta as `drainDeltaJson`; callers forward the
-    /// two fields without deriving slot identity or runtime state in JavaScript.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = drainRendererObservationPublicationJson))]
     pub fn drain_renderer_observation_publication_json(
         &mut self,
@@ -2505,7 +2406,6 @@ impl SemanticExecutionPlayer {
             .ok_or_else(|| "initial snapshot missing".into())
     }
 
-    /// Explicit read-only diagnostics; never used to drive or reconstruct execution.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = debugFrameJson))]
     pub fn debug_frame_json(&self) -> String {
         noon::diagnostics::execution_frame_value(&self.session).to_string()
@@ -2656,7 +2556,6 @@ mod tests {
             assert_eq!(player.session.publication_context(), publication);
             assert!(player.delta(false).unwrap().is_none());
         }
-        // Segment advancement clamps, deterministic evaluation can seek backward.
         player.live_advance_segment_to(-1.0).unwrap();
         assert_eq!(player.time(), 0.0);
         player.live_advance_segment_to(0.125).unwrap();
@@ -2703,7 +2602,6 @@ mod tests {
         let error = player.live_evaluate(0.125).unwrap_err();
         assert_eq!(error.category, "pending_work");
         assert_eq!(error.code, "evaluation.callback_pending");
-        // Clock admission still precedes the runtime callback guard.
         assert_eq!(
             player.live_evaluate(f64::NAN).unwrap_err().code,
             "clock.invalid_scene_time"
@@ -2847,7 +2745,6 @@ mod tests {
             assert_eq!(player.resource_bundle_bytes(), resources);
             assert!(player.delta(false).unwrap().is_none());
         }
-        // A valid detached semantic object is not an effective execution row.
         let error = player.live_effective(&source).unwrap_err();
         assert_eq!(error.category, "stale_handle");
         assert_eq!(error.code, "live.publication");
@@ -3064,11 +2961,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(endpoint, 2.0);
-        assert_eq!(
-            player.time(),
-            0.0,
-            "begin must not fast-forward the segment"
-        );
+        assert_eq!(player.time(), 0.0);
 
         let wake = player.live_segment_wake(1_000.0).unwrap();
         assert_eq!(wake.cadence(), "animation_frame");
@@ -3102,7 +2995,7 @@ mod tests {
         );
 
         assert_eq!(player.live_wait(1.0).unwrap(), 3.0);
-        assert_eq!(player.time(), 2.0, "beginning a wait must not advance it");
+        assert_eq!(player.time(), 2.0);
         let wait_wake = player.live_segment_wake(5_000.0).unwrap();
         assert_eq!(wait_wake.cadence(), "timer");
         assert_eq!(wait_wake.timer_after_milliseconds(), Some(1_000.0));
@@ -3150,7 +3043,6 @@ mod tests {
 
         let frame = player.session.frame().clone();
         let error = player.live_drive_segment_to_authored_time(1.0).unwrap_err();
-        // This legacy guard is not a settled R2 producer yet.
         assert_eq!(error.category, "unclassified");
         assert_eq!(error.code, "unclassified");
         assert_eq!(
@@ -3163,11 +3055,7 @@ mod tests {
             .live_drive_segment_to_authored_time(3.0)
             .unwrap()
             .reached_endpoint());
-        assert_eq!(
-            player.time(),
-            2.0,
-            "Rust clamps the external sample at the segment boundary"
-        );
+        assert_eq!(player.time(), 2.0);
         player.live_complete_segment().unwrap();
         assert!(player.live_drive_segment_to_authored_time(3.0).is_err());
 
@@ -3243,9 +3131,6 @@ mod tests {
         assert!(!ready.reached_endpoint());
         assert_eq!(player.time(), 0.0);
 
-        // A mid-segment sample stays pinned while its host callback is
-        // outstanding. Retrying the same sample reaches exactly 0.5 rather
-        // than charging callback latency into authored time.
         let midpoint = player.live_drive_segment_from_wall_time(1_500.0).unwrap();
         let midpoint_phase: serde_json::Value =
             serde_json::from_str(&midpoint.callback_phase_json().unwrap()).unwrap();
@@ -3259,9 +3144,6 @@ mod tests {
         assert!(!ready.reached_endpoint());
         assert_eq!(player.time(), 0.5);
 
-        // Simulate an opaque callback host taking 7.5 seconds after the
-        // midpoint commit. Reanchoring at actual completion keeps the next
-        // 16 ms wake to exactly 16 ms of authored progress.
         let wake = player.reanchor_live_segment_wake(9_000.0).unwrap();
         assert_eq!(wake.cadence(), "animation_frame");
         let after_slow_callback = player.live_drive_segment_from_wall_time(9_016.0).unwrap();
@@ -3280,8 +3162,6 @@ mod tests {
         assert!((player.time() - 0.516).abs() < 1.0e-9);
         player.reanchor_live_segment_wake(12_000.0).unwrap();
 
-        // The endpoint follows the same phase/commit protocol before reporting
-        // readiness for completion and source resumption.
         let endpoint = player.live_drive_segment_from_wall_time(12_484.0).unwrap();
         let endpoint_phase: serde_json::Value =
             serde_json::from_str(&endpoint.callback_phase_json().unwrap()).unwrap();
