@@ -134,3 +134,44 @@ fn empty_foreign_stale_and_unpublished_families_obey_query_and_mutation_validati
     let _unpublished = scene.family(&[]).unwrap();
     assert!(live.effective_family_layout(&empty).is_err());
 }
+
+#[test]
+fn object_move_to_family_anchor_reads_effective_bounds_and_stays_local() {
+    let mut scene = Scene::new();
+    let source = scene.square(1.0).unwrap();
+    let reference = scene.square(2.0).unwrap();
+    let family = scene.family(&[(&reference).into()]).unwrap();
+    let target = noon::LayoutAnchor::from(&family);
+    let mut editor = reference.target_editor().unwrap();
+    editor.shift(6.0, 4.0).unwrap();
+    scene.add(&source).unwrap();
+    scene.add(&reference).unwrap();
+    let animation = scene
+        .declare_transform_to(
+            &reference,
+            &editor,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    let mut execution = scene.execution_session().unwrap();
+    {
+        let mut live = scene.live(&mut execution);
+        let segment = live.play_animation(&animation).unwrap();
+        live.advance_segment_to(segment, 2.0).unwrap();
+        live.complete_segment(segment).unwrap();
+    }
+    execution.take_frame_changes();
+    {
+        let mut live = scene.live(&mut execution);
+        let result = live
+            .move_to(&source, Target::Anchor(&target), (0.0, 1.0), (1.0, 0.5))
+            .unwrap();
+        assert_eq!(result.impacts().len(), 1);
+        let center = live.effective_layout(&source).unwrap().center;
+        close(center.0, 6.0);
+        close(center.1, 2.25);
+    }
+    assert_eq!(execution.take_frame_changes().object_indices(), &[0]);
+}

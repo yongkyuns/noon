@@ -111,6 +111,14 @@
       "reason": "Python coerces Manim vector arguments; Rust chooses aligned critical points, applies coordinate masks, and performs the translation."
     },
     {
+      "id": "mobject.family-target-placement",
+      "surface": "Object move_to/align_to with family targets; live object move_to with family targets",
+      "classification": "shared-rust",
+      "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "LayoutAnchor::layout; FamilyLayout::move_to/align_to"},
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_move_to/_align_to"}],
+      "reason": "Python forwards typed anchors. Rust observes authored or live effective bounds and commits one local translation. Invalid handles cannot fall back to Python critical-point arithmetic; live align_to remains unsupported."
+    },
+    {
       "id": "mobject.scale",
       "surface": "Detached and animate-target Mobject.scale",
       "classification": "shared-rust",
