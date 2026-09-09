@@ -35,7 +35,7 @@ class OrdinaryAffineCallbackContinuation(Scene):
         def dim_after_lift(mobject, _dt):
             assert mobject.get_center().y == 1.0
             mobject.set_fill(opacity=0.75)
-            mobject.set_opacity(0.5)
+            mobject.set_object_opacity(0.5)
 
         circle.add_updater(lift)
         circle.add_updater(dim_after_lift)

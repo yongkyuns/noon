@@ -174,6 +174,16 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
                 stroke = (*color[:3], stroke[3] if has_stroke else color[3])
                 return self._paint_result(fill, stroke, has_fill, True)
 
+            def callbackPaintSetOpacity(self, *values: object):
+                self.paint_edits.append(("opacity", values))
+                fill, stroke, opacity = values[:4], values[4:8], values[8]
+                has_fill, has_stroke = fill[0] is not None, stroke[0] is not None
+                if has_fill:
+                    fill = (*fill[:3], opacity)
+                if has_stroke:
+                    stroke = (*stroke[:3], opacity)
+                return self._paint_result(fill, stroke, has_fill, has_stroke)
+
             @staticmethod
             def _paint_result(fill, stroke, has_fill: bool, has_stroke: bool):
                 return SimpleNamespace(
@@ -210,7 +220,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             self.assertEqual(row.style.fill, (0.8, 0.4, 0.2, 0.4))
             self.assertEqual(row.style.stroke, (0.8, 0.4, 0.2, 0.75))
             self.assertEqual(row.style.opacity, 1.0)
-            mobject.set_opacity(0.5)
+            mobject.set_object_opacity(0.5)
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
 
@@ -222,6 +232,31 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             [kind for kind, _ in context._operations.paint_edits],
             ["color", "fill"],
         )
+
+    def test_vmobject_callback_opacity_uses_shared_paint_and_preserves_composite(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            mobject.set_fill(opacity=0.25)
+            mobject.set_object_opacity(0.6)
+            mobject.set_opacity(0.4)
+            _, row = context.row(mobject)
+            self.assertEqual(row.style.fill[3], 0.4)
+            self.assertEqual(row.style.stroke[3], 0.4)
+            self.assertEqual(row.style.opacity, 0.6)
+            self.assertEqual(context._operations.paint_edits[-1][0], "opacity")
+            before, writes = row.style, list(context.effective_batch()["writes"])
+            failure = RuntimeError("shared paint rejected")
+            def reject(*_args):
+                raise failure
+            context._operations.callbackPaintSetOpacity = reject
+            with self.assertRaises(RuntimeError) as caught:
+                mobject.set_opacity(0.2)
+            self.assertIs(caught.exception, failure)
+            self.assertEqual(row.style, before)
+            self.assertEqual(context.effective_batch()["writes"], writes)
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
 
     def test_unsupported_callback_stroke_opacity_fails_before_row_mutation(self) -> None:
         scene, mobject, context = self._mobject_and_context()
@@ -291,7 +326,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             self.assertEqual(updaters._canonical_callback_time(mobject), 0.5)
             self.assertEqual(mobject.get_center(), updaters._base.Vec2(2.0, -1.0))
             mobject.move_to((4.0, 3.0))
-            mobject.set_opacity(0.5)
+            mobject.set_object_opacity(0.5)
             mobject.set_color(updaters._base.BLUE)
             self.assertEqual(mobject.get_center(), updaters._base.Vec2(4.0, 3.0))
             mobject.shift((1.0, 0.0))
