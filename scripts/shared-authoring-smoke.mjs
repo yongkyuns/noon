@@ -111,6 +111,23 @@ import builtins
 scene = Scene()
 circle = Circle(radius=1.0)
 scene.add(circle)
+# A handle-less wrapper must fail before binding can project existing geometry
+# into Python state. The same scene must remain usable afterward.
+objects_before = [dict(row) for row in scene._objects]
+next_id = scene._next_object_id
+untyped = Circle(radius=0.2)
+untyped._semantic_handle = None
+try:
+    untyped._bind_to_scene(scene)
+except NotImplementedError as error:
+    assert "requires a typed semantic Mobject" in str(error)
+else:
+    raise AssertionError("shared binding admitted a handle-less wrapper")
+assert untyped._scene is None
+assert scene._objects == objects_before
+assert scene._next_object_id == next_id
+assert len(scene._semantic_geometry_handles) == 1
+assert circle.get_center() == (0.0, 0.0)
 builtins.__noon_persisted_scene = scene
 builtins.__noon_persisted_circle = circle
 result = scene
@@ -971,11 +988,9 @@ try {
   const rejectedFinalizations = await page.evaluate(async () => {
     const failures = [];
     const corruptions = [
-      'scene._legacy_geometry_materialized = True',
       'scene._reactive_signals.append({"legacy": True})',
       'scene._semantic_geometry_handles.clear()',
       'scene._tracks.append({"property": "position"})',
-      'scene = Scene()\nassert getattr(scene, "_canonical_authoring_context", None) is None\nscene._legacy_geometry_materialized = True',
       'scene = Scene()\nassert getattr(scene, "_canonical_authoring_context", None) is None\nscene._reactive_signals.append({"legacy": True})',
     ];
     for (const corruption of corruptions) {
@@ -3309,7 +3324,6 @@ class RejectedAdmission(Scene):
         except NotImplementedError:
             pass
         assert entering not in self.mobjects
-        assert not getattr(self, "_legacy_geometry_materialized", False)
         self.play(Create(entering), run_time=0.1)
         self.play(Uncreate(entering), run_time=0.1)
         assert entering not in self.mobjects

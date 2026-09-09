@@ -293,12 +293,9 @@ def _typed_manim_observation(
     """Read one narrow Manim observation from its current Rust authority.
 
     Bound live objects use the execution publication; detached objects use their
-    authored semantic handle. Explicit legacy materialization remains the only
-    typed-wrapper case allowed to fall through to a raw projection.
+    authored semantic handle. A typed wrapper never falls through to a Python
+    scene projection.
     """
-    scene = getattr(value, "_scene", None)
-    if bool(getattr(scene, "_legacy_geometry_materialized", False)):
-        return None
     semantic_handle = getattr(value, "_semantic_handle", None)
     if semantic_handle is None:
         return None
@@ -336,9 +333,6 @@ def _manim_color_observation(value: object):
 
 def _require_typed_manim_line(value: object) -> bool:
     """Validate exact Line content through the current Rust observation owner."""
-    scene = getattr(value, "_scene", None)
-    if bool(getattr(scene, "_legacy_geometry_materialized", False)):
-        return False
     semantic_handle = getattr(value, "_semantic_handle", None)
     if semantic_handle is None:
         return False
@@ -433,7 +427,6 @@ def _bound_layout_observation(value: _base.Mobject):
 
     if (
         not _is_bound(value)
-        or getattr(value._scene, "_legacy_geometry_materialized", False)
         or not bool(getattr(value, "_semantic_handle_fresh", False))
     ):
         return None
@@ -800,16 +793,14 @@ def _current_raw(self: _base.Mobject) -> _ir.Mobject:
         raise RuntimeError(
             "callback-local Line operands cannot escape into scene, layout, or animation APIs"
         )
-    handle = (_handle_for(self) if not getattr(self._scene, "_legacy_geometry_materialized", False)
-              else _detached_handle_for(self))
+    handle = _handle_for(self)
     if handle is not None:
         return _raw_from_json(str(handle.snapshotJson()))
     return _ORIGINAL_CURRENT_RAW(self)
 
 
 def _apply(self: _base.Mobject, raw: _ir.Mobject) -> _base.Mobject:
-    handle = (_handle_for(self) if not getattr(self._scene, "_legacy_geometry_materialized", False)
-              else _detached_handle_for(self))
+    handle = _handle_for(self)
     if handle is not None:
         del raw
         raise NotImplementedError(
@@ -995,8 +986,7 @@ def _mutation_handle_for(value: _base.Mobject):
 
 def _sync_bound_transform(value: _base.Mobject, handle: object) -> None:
     if (not _is_bound(value) or
-            hasattr(value._scene, "_semantic_geometry_handles") and
-            not getattr(value._scene, "_legacy_geometry_materialized", False)):
+            hasattr(value._scene, "_semantic_geometry_handles")):
         return
     scene = value._scene
     obj = value._object
@@ -1022,8 +1012,7 @@ def _wire_color(handle: object, prefix: str) -> dict[str, float] | None:
 
 def _sync_bound_style(value: _base.Mobject, handle: object) -> None:
     if (not _is_bound(value) or
-            hasattr(value._scene, "_semantic_geometry_handles") and
-            not getattr(value._scene, "_legacy_geometry_materialized", False)):
+            hasattr(value._scene, "_semantic_geometry_handles")):
         return
     scene = value._scene
     obj = value._object
@@ -1307,11 +1296,7 @@ def _become(
         getattr(value, "_semantic_handle", None) is not None
         for value in (self, mobject)
     )
-    legacy_materialized = any(
-        bool(getattr(getattr(value, "_scene", None), "_legacy_geometry_materialized", False))
-        for value in (self, mobject)
-    )
-    if has_typed_operand and not legacy_materialized:
+    if has_typed_operand:
         raise NotImplementedError(
             "become requires valid shared semantic handles for both Mobjects"
         )
@@ -1370,8 +1355,7 @@ def _layout_reference_handle(value):
     if handle is None or not hasattr(handle, "layoutAnchor"):
         return None
     scene = getattr(value, "_scene", None)
-    if (not bool(getattr(value, "_semantic_handle_fresh", False))
-            or getattr(scene, "_legacy_geometry_materialized", False)):
+    if not bool(getattr(value, "_semantic_handle_fresh", False)):
         return None
     # Only legacy/fixture scenes can have geometry tracks outside the Rust store.
     if (getattr(scene, "_canonical_authoring_context", None) is None
@@ -1400,8 +1384,6 @@ def _layout_anchor(value, index=None):
 def _shared_next_to(self, target, direction, buff, aligned_edge,
                       submobject_to_align, index, coor_mask):
     """Pass selection intent; Rust resolves members, observes bounds and places."""
-    if getattr(getattr(self, "_scene", None), "_legacy_geometry_materialized", False):
-        return False
     source = _layout_anchor(self)
     aligner = (_layout_anchor(submobject_to_align) if submobject_to_align is not None
                else _layout_anchor(self, index))
@@ -1746,8 +1728,7 @@ def _group_live_layout_context(value: _compat.Group):
         return None
     for leaf in leaves:
         if (not bool(getattr(leaf, "_semantic_handle_fresh", False))
-                or getattr(leaf, "_semantic_handle", None) is None
-                or getattr(getattr(leaf, "_scene", None), "_legacy_geometry_materialized", False)):
+                or getattr(leaf, "_semantic_handle", None) is None):
             return None
     return context
 

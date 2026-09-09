@@ -106,7 +106,7 @@ def _registration_end_time(
 
 def _canonical_context(mobject: _base.Mobject) -> object | None:
     scene = getattr(mobject, "_scene", None)
-    if scene is None or getattr(scene, "_legacy_geometry_materialized", False):
+    if scene is None:
         return None
     return getattr(scene, "_canonical_authoring_context", None)
 

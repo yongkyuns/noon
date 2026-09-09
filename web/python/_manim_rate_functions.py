@@ -178,12 +178,7 @@ def _set_color_preserving_opacity(
         handle = shared._handle_for(self)
         if handle is not None:
             return shared._set_color(self, color)
-        if (
-            getattr(self, "_semantic_handle", None) is not None
-            and not bool(
-                getattr(getattr(self, "_scene", None), "_legacy_geometry_materialized", False)
-            )
-        ):
+        if getattr(self, "_semantic_handle", None) is not None:
             raise NotImplementedError(
                 "typed set_color requires the shared semantic mutation path"
             )
