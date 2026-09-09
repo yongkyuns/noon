@@ -329,7 +329,12 @@ impl InstalledRetainedFamilyExecutionState {
         let added_plan_objects = delta
             .family_plans
             .iter()
-            .map(|plan| plan.objects.iter().copied().collect::<HashSet<_>>())
+            .map(|plan| {
+                plan.bindings
+                    .iter()
+                    .map(|binding| binding.object)
+                    .collect::<HashSet<_>>()
+            })
             .collect::<Vec<_>>();
 
         if delta.retained.snapshot {
@@ -976,7 +981,8 @@ mod tests {
             retained: retained(false, 1),
             family_states: Vec::new(),
             family_plans: vec![RetainedFamilyPlanTransport {
-                objects: Vec::new(),
+                target: noon_core::SemanticNodeId::new(1, 0),
+                bindings: Vec::new(),
                 global_span: None,
             }],
             resource_additions: None,

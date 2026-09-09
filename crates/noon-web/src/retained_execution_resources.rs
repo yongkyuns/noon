@@ -230,7 +230,7 @@ impl InstalledRetainedExecutionMirror {
         let added_plan_objects = delta
             .family_plans
             .iter()
-            .flat_map(|plan| plan.objects.iter().copied())
+            .flat_map(|plan| plan.bindings.iter().map(|binding| binding.object))
             .collect::<std::collections::HashSet<_>>();
         let mut next_row = if delta.retained.snapshot {
             0
@@ -493,7 +493,14 @@ mod tests {
                 Some(family_state(0.5)),
             )
             .unwrap()],
-            family_plans: vec![RetainedFamilyPlanTransport::new(vec![first_object]).unwrap()],
+            family_plans: vec![RetainedFamilyPlanTransport::new(
+                noon_core::SemanticNodeId::new(7, 2),
+                vec![noon_core::FamilyAnimationLeafBinding::new(
+                    noon_core::SemanticNodeId::new(7, 2),
+                    first_object,
+                )],
+            )
+            .unwrap()],
             resource_additions: None,
         }
     }
@@ -644,9 +651,14 @@ mod tests {
         let invalid = RetainedFamilyExecutionDeltaEnvelope {
             retained: replacement,
             family_states: Vec::new(),
-            family_plans: vec![
-                RetainedFamilyPlanTransport::new(vec![ObjectId::new(u64::MAX)]).unwrap(),
-            ],
+            family_plans: vec![RetainedFamilyPlanTransport::new(
+                noon_core::SemanticNodeId::new(7, 2),
+                vec![noon_core::FamilyAnimationLeafBinding::new(
+                    noon_core::SemanticNodeId::new(7, 2),
+                    ObjectId::new(u64::MAX),
+                )],
+            )
+            .unwrap()],
             resource_additions: None,
         };
         assert!(mirror.apply_family(invalid).is_err());

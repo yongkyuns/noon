@@ -482,7 +482,7 @@ for canonical in crates/noon/src/semantic_mobject.rs crates/noon/src/scene.rs cr
 done
 # The unconsumed slotted runtime wrapper must stay deleted even if a regression
 # already exists at the comparison base.
-for symbol in SlottedSceneInstance FrameSlotId RetiredSlotCompactionPolicy ExecutionCompactionStats ExecutionCompactionError TimedSceneInstance TimedSceneRuntimeError TimedSemanticScene SignalTimelineDefinition SignalTrackDefinition SignalTimelineError SemanticScene SceneBuildError RetainedFamilySceneInstance RetainedTextFamilySceneInstance RetainedFamilyPlanSceneInstance RetainedFamilyRuntimeError RetainedTextFamilyRuntimeError RetainedFamilyPlanRuntimeError RetainedTextFamilyFrame; do
+for symbol in SlottedSceneInstance FrameSlotId RetiredSlotCompactionPolicy ExecutionCompactionStats ExecutionCompactionError TimedSceneInstance TimedSceneRuntimeError TimedSemanticScene SignalTimelineDefinition SignalTrackDefinition SignalTimelineError SemanticScene SceneBuildError RetainedFamilySceneInstance RetainedTextFamilySceneInstance RetainedFamilyPlanSceneInstance RetainedFamilyRuntimeError RetainedTextFamilyRuntimeError RetainedFamilyPlanRuntimeError RetainedTextFamilyFrame FamilyAnimationRequest FamilyAnimationRequestError RetainedFamilyAnimationRequestPlanError; do
   printf 'pub struct %s;\n' "$symbol" > src/runtime_wrapper_probe.rs
   git add src/runtime_wrapper_probe.rs
   git commit -qm 'restore retired runtime wrapper'
@@ -509,6 +509,17 @@ for canonical in crates/noon-render-wgpu/src/probe.rs crates/noon-render-wgpu/te
   git rm -q "$canonical"
   git commit -qm 'remove renderer boundary poison'
 done
+# A receiver must not fabricate semantic identities to decode a family plan.
+mkdir -p crates/noon-web/src
+printf 'use noon_core::SemanticStore;\n' > crates/noon-web/src/retained_family_transport.rs
+git add crates/noon-web/src/retained_family_transport.rs
+git commit -qm 'restore receiver semantic allocation'
+if bash scripts/architecture-ratchet.sh HEAD >/dev/null 2>&1; then
+  echo "architecture ratchet test failed: accepted receiver semantic store" >&2
+  exit 1
+fi
+git rm -q crates/noon-web/src/retained_family_transport.rs
+git commit -qm 'remove receiver semantic allocation'
 # Lowering and live publication must stay typed even when an old patch-codec
 # dependency already exists at the comparison base.
 for canonical in crates/noon-compile/src/semantic_lowering.rs crates/noon-compile/src/semantic_lowering/publication.rs crates/noon/src/execution_session.rs crates/noon/src/execution_session/publication.rs crates/noon/src/live_session.rs crates/noon-runtime/src/execution_slots/probe.rs crates/noon-runtime/src/probe/tests.rs; do
