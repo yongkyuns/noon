@@ -390,7 +390,6 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectFamilyTransformIndicateSmokeRenderer(",
     "export function createDirectFamilyArrangementSmokeRenderer(",
     "export function createDirectFamilyAffineSmokeRenderer(",
-    "export function createDirectRecoverySmokeRenderer(",
     "export function createDirectFamilyPaintSmokeRenderer(",
     "export function createDirectFamilyGridSmokeRenderer(",
     "export function createDirectFamilyPlacementSmokeRenderer(",
@@ -439,7 +438,6 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectFamilyTransformIndicateSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyArrangementSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyAffineSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
-    "export function createDirectRecoverySmokeRenderer(canvas: OffscreenCanvas, fixture: string): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyPaintSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyGridSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyPlacementSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
@@ -465,6 +463,17 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectCreateShapesRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectMorphStressRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
 
+  );
+}
+
+// Recovery qualification also runs with release optimizations. Its explicit
+// fixture feature does not enable the rest of the debug example surface.
+if (process.env.NOON_RENDERER_SMOKE === "1"
+    || javascript.includes("export function createDirectRecoverySmokeRenderer(")) {
+  expectedJavascriptSurface.push("export function createDirectRecoverySmokeRenderer(");
+  expectedTypeSurface.push(
+    "export function createDirectRecoverySmokeRenderer(canvas: OffscreenCanvas, fixture: string): Promise<ExecutionCanvasRenderer>",
+    "directSceneRevision(): bigint",
   );
 }
 

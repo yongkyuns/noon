@@ -11,22 +11,6 @@ use web_sys::OffscreenCanvas;
 
 use crate::WasmExecutionCanvasRenderer;
 
-/// Named platform-test fixtures stay entirely within the typed Rust engine.
-#[wasm_bindgen(js_name = createDirectRecoverySmokeRenderer)]
-pub async fn create_direct_recovery_smoke_renderer(
-    canvas: OffscreenCanvas,
-    fixture: &str,
-) -> Result<WasmExecutionCanvasRenderer, JsValue> {
-    let session = match fixture {
-        "circle" => noon::example_scenes::renderer_recovery::circle(),
-        "four-animated" => noon::example_scenes::renderer_recovery::four_animated(),
-        "camera-density" => noon::example_scenes::renderer_recovery::camera_density(),
-        _ => Err(format!("unknown recovery fixture: {fixture}")),
-    }
-    .map_err(js_error)?;
-    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
-}
-
 /// Direct analytic profiling uses the same typed workload as the native Rust example.
 #[wasm_bindgen(js_name = createDirectAnalyticProfileRenderer)]
 pub async fn create_direct_analytic_profile_renderer(
