@@ -247,9 +247,8 @@ fi
 deleted_legacy_validation_paths=(
   'scripts/explicit-transport-scene-fixture.js'
   'web/fixtures/execution-transport.json'
-  'crates/noon-ir/src/mixed.rs'
-  'crates/noon-ir/src/semantic'
-  'crates/noon-ir/tests/reactive_runtime.rs'
+  'crates/noon-ir'
+  'crates/noon-web/src/legacy.rs'
   'crates/noon/src/legacy.rs'
   'crates/noon/src/legacy/semantic_snapshot.rs'
   'crates/noon/src/analytic_geometry_authoring.rs'

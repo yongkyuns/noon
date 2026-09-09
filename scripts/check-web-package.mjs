@@ -476,7 +476,7 @@ for (const fragment of expectedTypeSurface) {
     throw new Error(`Generated declarations are missing: ${fragment}`);
   }
 }
-for (const retired of ["ReactiveScenePlayer", "ReactiveCanvasPlayer",
+for (const retired of ["EngineScenePlayer", "ReactiveScenePlayer", "ReactiveCanvasPlayer",
   "AuthoringSceneCore", "DetachedMobjectCore", "AnimateCore", "PlayBatchCore"]) {
   if (javascript.includes(`export class ${retired}`) || declarations.includes(`export class ${retired}`)) {
     throw new Error(`Deleted browser API returned to the package: ${retired}`);

@@ -11,7 +11,6 @@ on:
       - "crates/noon/**"
       - "crates/noon-core/**"
       - "crates/noon-compile/**"
-      - "crates/noon-ir/**"
       - "crates/noon-runtime/**"
       - "crates/noon-web/**"
       - "crates/noon-render-wgpu/**"

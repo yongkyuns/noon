@@ -16,8 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - scene_decode
-          - patch_transaction
+          - semantic_transaction
           - tessellation
           - morph
     steps:
