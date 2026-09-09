@@ -64,7 +64,15 @@ impl std::fmt::Display for SemanticTransformToPayloadError {
     }
 }
 
-impl std::error::Error for SemanticTransformToPayloadError {}
+impl std::error::Error for SemanticTransformToPayloadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Options(error) => Some(error),
+            Self::Target { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl SemanticTransformToPayloadError {
     /// Whether the source and target are valid semantic objects but request a

@@ -133,7 +133,20 @@ impl std::fmt::Display for SemanticInitialAnimationError {
     }
 }
 
-impl std::error::Error for SemanticInitialAnimationError {}
+impl std::error::Error for SemanticInitialAnimationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Schedule(error) => Some(error),
+            Self::Family(error) => Some(error),
+            Self::Animation(error) => Some(error),
+            Self::Endpoint { error, .. } => Some(error),
+            Self::EndpointValue { error, .. } => Some(error),
+            Self::EndpointGeometry { error, .. } => Some(error),
+            Self::Compiled(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 pub(super) fn install_initial_animation_root(
     store: &SemanticStore,

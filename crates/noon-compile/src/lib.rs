@@ -479,7 +479,14 @@ impl std::fmt::Display for CompileError {
     }
 }
 
-impl std::error::Error for CompileError {}
+impl std::error::Error for CompileError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidTrack(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompilePatchError {
@@ -620,7 +627,15 @@ impl std::fmt::Display for CompilePatchError {
     }
 }
 
-impl std::error::Error for CompilePatchError {}
+impl std::error::Error for CompilePatchError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidTrack(error) => Some(error),
+            Self::Resource(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl CompiledScene {
     /// Validate the bounded affine completion policy for newly activated tracks.

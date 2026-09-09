@@ -134,7 +134,17 @@ impl std::fmt::Display for SemanticExecutionLoweringError {
     }
 }
 
-impl std::error::Error for SemanticExecutionLoweringError {}
+impl std::error::Error for SemanticExecutionLoweringError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Object(error) => Some(error),
+            Self::Reactive(error) => Some(error),
+            Self::Compiled(error) => Some(error),
+            Self::InitialAnimation(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 /// Canonical A1.6 initial-scene lowering entry point.
 ///

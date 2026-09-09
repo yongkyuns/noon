@@ -110,7 +110,18 @@ impl std::fmt::Display for SemanticPublicationLoweringError {
         }
     }
 }
-impl std::error::Error for SemanticPublicationLoweringError {}
+impl std::error::Error for SemanticPublicationLoweringError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::PreparedValue { error, .. } => Some(error),
+            Self::PreparedGeometry { error, .. } => Some(error),
+            Self::PreparedContent { error, .. } => Some(error),
+            Self::Read(error) => Some(error),
+            Self::Value(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 impl From<SemanticLoweringError> for SemanticPublicationLoweringError {
     fn from(error: SemanticLoweringError) -> Self {
         Self::Value(error)
