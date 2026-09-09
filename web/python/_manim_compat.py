@@ -51,7 +51,6 @@ def _as_color(name: str, value: object) -> _base.Color:
     raise TypeError(f"{name} must be a Color or #RRGGBB value")
 
 
-
 def _as_vec2(value: object) -> _base.Vec2:
     """Accept Noon's Vec2 plus common Manim 2D/3D vector inputs.
 
@@ -269,8 +268,6 @@ def _rotation_angle_2d(angle: float, axis: object = OUT) -> float:
     if not math.isfinite(value):
         raise ValueError("rotation angle must be finite")
     return -value if z < 0.0 else value
-
-
 
 
 class _GroupAnimationBuilder:
@@ -555,9 +552,6 @@ class Scene(_BaseScene):
         return self
 
 
-
-
-
 def _mobject_get_edge_center(self: _BaseMobject, direction: object) -> _base.Vec2:
     return self.get_critical_point(direction)
 
@@ -597,30 +591,6 @@ def _mobject_get_x(self: _BaseMobject, direction: object = _base.ORIGIN) -> floa
 
 def _mobject_get_y(self: _BaseMobject, direction: object = _base.ORIGIN) -> float:
     return self.get_coord(1, direction)
-
-
-def _mobject_set_coord(
-    self: _BaseMobject,
-    value: float,
-    dim: int,
-    direction: object = _base.ORIGIN,
-) -> _BaseMobject:
-    if dim not in (0, 1):
-        raise NotImplementedError("Noon currently exposes x/y authoring coordinates only")
-    delta = float(value) - self.get_coord(dim, direction)
-    return self.shift(_base.Vec2(delta, 0.0) if dim == 0 else _base.Vec2(0.0, delta))
-
-
-def _mobject_set_x(
-    self: _BaseMobject, x: float, direction: object = _base.ORIGIN
-) -> _BaseMobject:
-    return self.set_coord(x, 0, direction)
-
-
-def _mobject_set_y(
-    self: _BaseMobject, y: float, direction: object = _base.ORIGIN
-) -> _BaseMobject:
-    return self.set_coord(y, 1, direction)
 
 
 def _mobject_rescale_to_fit(
@@ -686,45 +656,6 @@ def _mobject_match_height(
     self: _BaseMobject, mobject: _BaseMobject, **kwargs: Any
 ) -> _BaseMobject:
     return self.match_dim_size(mobject, 1, **kwargs)
-
-
-def _mobject_match_coord(
-    self: _BaseMobject,
-    mobject: _BaseMobject,
-    dim: int,
-    direction: object = _base.ORIGIN,
-) -> _BaseMobject:
-    if not isinstance(mobject, _BaseMobject):
-        raise TypeError("coordinate match target must be a Mobject")
-    return self.set_coord(mobject.get_coord(dim, direction), dim, direction)
-
-
-def _mobject_match_x(
-    self: _BaseMobject,
-    mobject: _BaseMobject,
-    direction: object = _base.ORIGIN,
-) -> _BaseMobject:
-    return self.match_coord(mobject, 0, direction)
-
-
-def _mobject_match_y(
-    self: _BaseMobject,
-    mobject: _BaseMobject,
-    direction: object = _base.ORIGIN,
-) -> _BaseMobject:
-    return self.match_coord(mobject, 1, direction)
-
-
-def _mobject_rotate_about_origin(
-    self: _BaseMobject, angle: float, axis: object = None
-) -> _BaseMobject:
-    return self.rotate(
-        angle, OUT if axis is None else axis, about_point=_base.ORIGIN
-    )
-
-
-
-
 
 
 def _state_target(
@@ -884,7 +815,6 @@ def install() -> None:
     _BaseMobject.get_coord = _mobject_get_coord
     _BaseMobject.get_x = _mobject_get_x
     _BaseMobject.get_y = _mobject_get_y
-    _BaseMobject.set_coord = _mobject_set_coord
     _BaseMobject.rescale_to_fit = _mobject_rescale_to_fit
     _BaseMobject.scale_to_fit_width = _mobject_scale_to_fit_width
     _BaseMobject.scale_to_fit_height = _mobject_scale_to_fit_height
@@ -893,10 +823,6 @@ def install() -> None:
     _BaseMobject.match_dim_size = _mobject_match_dim_size
     _BaseMobject.match_width = _mobject_match_width
     _BaseMobject.match_height = _mobject_match_height
-    _BaseMobject.match_coord = _mobject_match_coord
-    _BaseMobject.match_x = _mobject_match_x
-    _BaseMobject.match_y = _mobject_match_y
-    _BaseMobject.rotate_about_origin = _mobject_rotate_about_origin
     _BaseMobject.generate_target = _mobject_generate_target
     _BaseMobject.save_state = _mobject_save_state
     _BaseMobject.restore = _mobject_restore
