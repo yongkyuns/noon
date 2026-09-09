@@ -53,12 +53,8 @@ class Demo(Scene):
         assert abs(there_and_back(0.25) - smooth(0.5)) < 1e-12
 
         import _manim_compat as _compat_impl
-        original_circle_ir = _compat_impl._ir.Circle
-        _compat_impl._ir.Circle = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("shared Circle constructor must bypass Python IR"))
-        try:
-            shared_constructed = Circle(radius=0.33)
-        finally:
-            _compat_impl._ir.Circle = original_circle_ir
+        assert not hasattr(_compat_impl._ir, "Circle")
+        shared_constructed = Circle(radius=0.33)
         assert abs(shared_constructed.radius - 0.33) < 1e-12
 
         circle = Circle(radius=0.6, color=BLUE)
