@@ -10,12 +10,14 @@
 mod graph_topology;
 mod object_state;
 mod reactive;
+mod resources;
 mod semantic_store;
 mod timeline;
 
 pub use graph_topology::*;
 pub use object_state::*;
 pub use reactive::*;
+pub use resources::*;
 pub use semantic_store::*;
 pub use timeline::*;
 

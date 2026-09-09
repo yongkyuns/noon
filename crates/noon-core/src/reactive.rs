@@ -52,18 +52,6 @@ pub use animation_member_plan::*;
 mod semantic_model;
 pub use semantic_model::*;
 
-mod resource_arena;
-pub use resource_arena::*;
-
-mod resource_lookup;
-pub use resource_lookup::*;
-
-mod font_resources;
-pub use font_resources::*;
-
-mod text_resources;
-pub use text_resources::*;
-
 mod text_animation_members;
 pub use text_animation_members::*;
 
@@ -75,12 +63,6 @@ pub use retained_family_animation_plan::*;
 
 mod family_animation;
 pub use family_animation::*;
-
-mod resource_mutation;
-pub use resource_mutation::*;
-
-mod resource_transaction;
-pub use resource_transaction::*;
 
 mod object_content;
 pub use object_content::*;
