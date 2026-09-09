@@ -380,7 +380,7 @@ json.dumps({"matrix": results, "liveProperties": property_results, "additionalTe
   }, {modules, tests, pyodideUrl});
   assert.equal(report.python.matrix.length, 10);
   assert.equal(report.python.liveProperties.length, 29);
-  assert.equal(report.python.additionalTests, 9);
+  assert.equal(report.python.additionalTests, 10);
   assert.equal(report.python.skipped, 0);
   assert.equal(report.python.promiseRejectionAndRecovery, true);
   // Exercise actual deployed Python callsites and a rerun in the same worker.
