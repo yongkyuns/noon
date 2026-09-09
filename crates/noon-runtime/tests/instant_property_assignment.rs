@@ -1,8 +1,8 @@
 use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    CompositionTimeMap, CompositionTimeMapStep, GeometryRef, ObjectId, Property, RateFunction,
-    RetainedObjectDefinition, SceneDefinition, TextResourceHandle, TextResourceId, TimelineError,
-    TrackDefinition, TrackId, TrackTiming, TrackValues, Vec2,
+    validate_track_definition, CompositionTimeMap, CompositionTimeMapStep, GeometryRef, ObjectId,
+    Property, RateFunction, Style, TextResourceHandle, TextResourceId, TimelineError,
+    TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
 };
 use noon_runtime::SceneInstance;
 
@@ -34,66 +34,68 @@ fn track(
 
 #[test]
 fn ordinary_properties_accept_exact_instant_assignments() {
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(GeometryRef::circle(1.0));
+    let object = ObjectId::new(0);
 
-    scene
-        .add_track(
-            object,
-            Property::Position,
-            TrackValues::Vec2 {
-                from: Vec2::new(4.0, -2.0),
-                to: Vec2::ZERO,
-            },
-            TrackTiming::instant(1.0),
-        )
-        .expect("ordinary property assignments must support an exact timestamp");
+    validate_track_definition(&TrackDefinition {
+        id: TrackId::new(0),
+        object,
+        property: Property::Position,
+        values: TrackValues::Vec2 {
+            from: Vec2::new(4.0, -2.0),
+            to: Vec2::ZERO,
+        },
+        timing: TrackTiming::instant(1.0),
+        time_map: CompositionTimeMap::identity(),
+    })
+    .expect("ordinary property assignments must support an exact timestamp");
 
-    let negative = scene
-        .add_track(
-            object,
-            Property::Scale,
-            TrackValues::Vec2 {
-                from: Vec2::ONE,
-                to: Vec2::ONE,
-            },
-            TrackTiming::new(2.0, -1.0, RateFunction::Linear),
-        )
-        .expect_err("negative-duration assignments must remain invalid");
+    let negative = validate_track_definition(&TrackDefinition {
+        id: TrackId::new(0),
+        object,
+        property: Property::Scale,
+        values: TrackValues::Vec2 {
+            from: Vec2::ONE,
+            to: Vec2::ONE,
+        },
+        timing: TrackTiming::new(2.0, -1.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    })
+    .expect_err("negative-duration assignments must remain invalid");
     assert!(matches!(negative, TimelineError::InvalidDuration(value) if value == -1.0));
 
-    let mapped_instant = scene
-        .add_track_with_time_map(
-            object,
-            Property::Scale,
-            TrackValues::Vec2 {
-                from: Vec2::new(0.5, 0.5),
-                to: Vec2::ONE,
-            },
-            TrackTiming::instant(2.0),
-            CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
-                0.0,
-                1.0,
-                RateFunction::Linear,
-            )]),
-        )
-        .expect_err("instant assignments cannot carry a composition time map");
+    let mapped_instant = validate_track_definition(&TrackDefinition {
+        id: TrackId::new(0),
+        object,
+        property: Property::Scale,
+        values: TrackValues::Vec2 {
+            from: Vec2::new(0.5, 0.5),
+            to: Vec2::ONE,
+        },
+        timing: TrackTiming::instant(2.0),
+        time_map: CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            0.0,
+            1.0,
+            RateFunction::Linear,
+        )]),
+    })
+    .expect_err("instant assignments cannot carry a composition time map");
     assert!(matches!(
         mapped_instant,
         TimelineError::InstantTrackCannotUseTimeMap(Property::Scale)
     ));
 
-    let positive_presence = scene
-        .add_track(
-            object,
-            Property::Presence,
-            TrackValues::Bool {
-                from: true,
-                to: false,
-            },
-            TrackTiming::new(3.0, 0.5, RateFunction::Linear),
-        )
-        .expect_err("Presence remains a discrete zero-duration channel");
+    let positive_presence = validate_track_definition(&TrackDefinition {
+        id: TrackId::new(0),
+        object,
+        property: Property::Presence,
+        values: TrackValues::Bool {
+            from: true,
+            to: false,
+        },
+        timing: TrackTiming::new(3.0, 0.5, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    })
+    .expect_err("Presence remains a discrete zero-duration channel");
     assert!(matches!(
         positive_presence,
         TimelineError::InvalidInstantDuration {
@@ -104,71 +106,103 @@ fn ordinary_properties_accept_exact_instant_assignments() {
 }
 
 #[test]
-fn legacy_cleanup_assignments_restore_canonical_state_at_the_hide_boundary() {
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(GeometryRef::circle(1.0));
+fn cleanup_assignments_restore_canonical_state_at_the_hide_boundary() {
+    let object = ObjectId::new(0);
+    let objects = vec![CompiledObject::new(
+        object,
+        GeometryRef::circle(1.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    )];
+    let mut tracks = Vec::new();
     let faded_position = Vec2::new(2.0, -1.0);
     let faded_scale = Vec2::new(0.5, 0.5);
 
-    scene
-        .animate_position(
-            object,
-            Vec2::ZERO,
-            faded_position,
-            TrackTiming::new(0.0, 1.0, RateFunction::Linear),
-        )
-        .unwrap();
-    scene
-        .animate_scale(
-            object,
-            Vec2::ONE,
-            faded_scale,
-            TrackTiming::new(0.0, 1.0, RateFunction::Linear),
-        )
-        .unwrap();
-    scene
-        .animate_appearance(
-            object,
-            1.0,
-            0.0,
-            TrackTiming::new(0.0, 1.0, RateFunction::Linear),
-        )
-        .unwrap();
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Position,
+        values: TrackValues::Vec2 {
+            from: Vec2::ZERO,
+            to: faded_position,
+        },
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Scale,
+        values: TrackValues::Vec2 {
+            from: Vec2::ONE,
+            to: faded_scale,
+        },
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Appearance,
+        values: TrackValues::Scalar { from: 1.0, to: 0.0 },
+        timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    scene
-        .add_track(
-            object,
-            Property::Position,
-            TrackValues::Vec2 {
-                from: faded_position,
-                to: Vec2::ZERO,
-            },
-            TrackTiming::instant(1.0),
-        )
-        .unwrap();
-    scene
-        .add_track(
-            object,
-            Property::Scale,
-            TrackValues::Vec2 {
-                from: faded_scale,
-                to: Vec2::ONE,
-            },
-            TrackTiming::instant(1.0),
-        )
-        .unwrap();
-    scene
-        .add_track(
-            object,
-            Property::Appearance,
-            TrackValues::Scalar { from: 0.0, to: 1.0 },
-            TrackTiming::instant(1.0),
-        )
-        .unwrap();
-    scene.set_presence_at(object, true, false, 1.0).unwrap();
-    scene.set_presence_at(object, false, true, 2.0).unwrap();
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Position,
+        values: TrackValues::Vec2 {
+            from: faded_position,
+            to: Vec2::ZERO,
+        },
+        timing: TrackTiming::instant(1.0),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Scale,
+        values: TrackValues::Vec2 {
+            from: faded_scale,
+            to: Vec2::ONE,
+        },
+        timing: TrackTiming::instant(1.0),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Appearance,
+        values: TrackValues::Scalar { from: 0.0, to: 1.0 },
+        timing: TrackTiming::instant(1.0),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Presence,
+        values: TrackValues::Bool {
+            from: true,
+            to: false,
+        },
+        timing: TrackTiming::instant(1.0),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Presence,
+        values: TrackValues::Bool {
+            from: false,
+            to: true,
+        },
+        timing: TrackTiming::instant(2.0),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    let compiled = CompiledScene::compile(&scene).unwrap();
+    let compiled = CompiledScene::compile_objects(objects, &tracks).unwrap();
     let mut direct = SceneInstance::new(compiled.clone());
     let mut sequential = SceneInstance::new(compiled);
 
@@ -200,7 +234,12 @@ fn legacy_cleanup_assignments_restore_canonical_state_at_the_hide_boundary() {
 fn retained_text_cleanup_assignments_are_seekable_and_preserve_resource_identity() {
     let object = ObjectId::new(3);
     let handle = text_handle();
-    let objects = [RetainedObjectDefinition::text(object, handle)];
+    let objects = vec![CompiledObject::new(
+        object,
+        handle,
+        Transform2D::IDENTITY,
+        Style::default(),
+    )];
     let faded_position = Vec2::new(-3.0, 1.5);
     let faded_scale = Vec2::new(0.25, 0.25);
     let tracks = [
@@ -288,17 +327,6 @@ fn retained_text_cleanup_assignments_are_seekable_and_preserve_resource_identity
         ),
     ];
 
-    let objects = objects
-        .iter()
-        .map(|object| {
-            CompiledObject::new(
-                object.id,
-                object.content.clone(),
-                object.transform,
-                object.style,
-            )
-        })
-        .collect();
     let compiled = CompiledScene::compile_objects(objects, &tracks).unwrap();
     let mut direct = SceneInstance::new(compiled.clone());
     let mut sequential = SceneInstance::new(compiled);
@@ -326,38 +354,43 @@ fn retained_text_cleanup_assignments_are_seekable_and_preserve_resource_identity
 
 #[test]
 fn instant_assignment_wins_in_a_channel_that_also_has_a_composition_map() {
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(GeometryRef::circle(1.0));
-
-    scene
-        .add_track_with_time_map(
+    let object = ObjectId::new(0);
+    let objects = vec![CompiledObject::new(
+        object,
+        GeometryRef::circle(1.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    )];
+    let tracks = [
+        TrackDefinition {
+            id: TrackId::new(0),
             object,
-            Property::Position,
-            TrackValues::Vec2 {
+            property: Property::Position,
+            values: TrackValues::Vec2 {
                 from: Vec2::ZERO,
                 to: Vec2::new(4.0, 0.0),
             },
-            TrackTiming::new(0.0, 2.0, RateFunction::Linear),
-            CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
                 0.0,
                 1.0,
                 RateFunction::Smooth,
             )]),
-        )
-        .unwrap();
-    scene
-        .add_track(
+        },
+        TrackDefinition {
+            id: TrackId::new(1),
             object,
-            Property::Position,
-            TrackValues::Vec2 {
+            property: Property::Position,
+            values: TrackValues::Vec2 {
                 from: Vec2::new(4.0, 0.0),
                 to: Vec2::ZERO,
             },
-            TrackTiming::instant(2.0),
-        )
-        .unwrap();
+            timing: TrackTiming::instant(2.0),
+            time_map: CompositionTimeMap::identity(),
+        },
+    ];
 
-    let compiled = CompiledScene::compile(&scene).unwrap();
+    let compiled = CompiledScene::compile_objects(objects, &tracks).unwrap();
     let mut direct = SceneInstance::new(compiled.clone());
     let mut sequential = SceneInstance::new(compiled);
 

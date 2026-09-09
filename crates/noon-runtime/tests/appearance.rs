@@ -1,25 +1,30 @@
-use noon_compile::CompiledScene;
-use noon_core::{Easing, GeometryRef, Property, SceneDefinition, TrackTiming};
+use noon_compile::{CompiledObject, CompiledScene};
+use noon_core::{
+    CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId,
+    TrackTiming, TrackValues, Transform2D,
+};
 use noon_runtime::SceneInstance;
 
 fn appearance_scene() -> CompiledScene {
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(GeometryRef::circle(1.0));
-    scene
-        .object_mut(object)
-        .expect("object exists")
-        .style
-        .opacity = 0.4;
-    scene
-        .animate_scalar(
-            object,
-            Property::Appearance,
-            1.0,
-            0.0,
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
-        .expect("appearance track is valid");
-    CompiledScene::compile(&scene).expect("appearance scene compiles")
+    let mut objects = Vec::new();
+    let mut tracks = Vec::new();
+    let object = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        object,
+        GeometryRef::circle(1.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    objects[object.get() as usize].base_style.opacity = 0.4;
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Appearance,
+        values: TrackValues::Scalar { from: 1.0, to: 0.0 },
+        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    CompiledScene::compile_objects(objects, &tracks).expect("appearance scene compiles")
 }
 
 #[test]
@@ -51,18 +56,27 @@ fn appearance_seek_and_rewind_are_deterministic() {
 
 #[test]
 fn appearance_values_are_clamped_to_normalized_visibility() {
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(GeometryRef::circle(1.0));
-    scene
-        .animate_scalar(
-            object,
-            Property::Appearance,
-            2.0,
-            -1.0,
-            TrackTiming::new(0.0, 1.0, Easing::Linear),
-        )
-        .expect("scalar track is structurally valid");
-    let compiled = CompiledScene::compile(&scene).expect("scene compiles");
+    let mut objects = Vec::new();
+    let mut tracks = Vec::new();
+    let object = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        object,
+        GeometryRef::circle(1.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Appearance,
+        values: TrackValues::Scalar {
+            from: 2.0,
+            to: -1.0,
+        },
+        timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    let compiled = CompiledScene::compile_objects(objects, &tracks).expect("scene compiles");
     let mut instance = SceneInstance::new(compiled);
 
     assert_eq!(instance.seek(0.0).unwrap().objects[0].appearance, 1.0);

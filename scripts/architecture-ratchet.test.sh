@@ -482,7 +482,7 @@ for canonical in crates/noon/src/semantic_mobject.rs crates/noon/src/scene.rs cr
 done
 # The unconsumed slotted runtime wrapper must stay deleted even if a regression
 # already exists at the comparison base.
-for symbol in SlottedSceneInstance FrameSlotId RetiredSlotCompactionPolicy ExecutionCompactionStats ExecutionCompactionError TimedSceneInstance TimedSceneRuntimeError TimedSemanticScene SignalTimelineDefinition SignalTrackDefinition SignalTimelineError SemanticScene SceneBuildError; do
+for symbol in SlottedSceneInstance FrameSlotId RetiredSlotCompactionPolicy ExecutionCompactionStats ExecutionCompactionError TimedSceneInstance TimedSceneRuntimeError TimedSemanticScene SignalTimelineDefinition SignalTrackDefinition SignalTimelineError SemanticScene SceneBuildError RetainedFamilySceneInstance RetainedTextFamilySceneInstance RetainedFamilyPlanSceneInstance RetainedFamilyRuntimeError RetainedTextFamilyRuntimeError RetainedFamilyPlanRuntimeError RetainedTextFamilyFrame; do
   printf 'pub struct %s;\n' "$symbol" > src/runtime_wrapper_probe.rs
   git add src/runtime_wrapper_probe.rs
   git commit -qm 'restore retired runtime wrapper'
@@ -493,9 +493,9 @@ for symbol in SlottedSceneInstance FrameSlotId RetiredSlotCompactionPolicy Execu
 done
 git rm -q src/runtime_wrapper_probe.rs
 git commit -qm 'remove retired runtime wrapper probe'
-# Renderer fixtures must not preserve a second scene API, even when committed
+# Renderer and runtime fixtures must not preserve a second scene API, even when committed
 # before the comparison base.
-for canonical in crates/noon-render-wgpu/src/probe.rs crates/noon-render-wgpu/tests/probe.rs; do
+for canonical in crates/noon-render-wgpu/src/probe.rs crates/noon-render-wgpu/tests/probe.rs crates/noon-runtime/src/scene_probe.rs crates/noon-runtime/tests/scene_probe.rs; do
   mkdir -p "$(dirname "$canonical")"
   for symbol in SceneDefinition ObjectDefinition ObjectSnapshot ScenePatch MutationTransaction; do
     printf 'use noon_core::%s;\n' "$symbol" > "$canonical"

@@ -1,71 +1,151 @@
-use noon_compile::CompiledScene;
-use noon_core::{Easing, GeometryRef, ObjectSnapshot, SceneDefinition, TrackTiming, Vec2};
+use noon_compile::{CompiledObject, CompiledScene};
+use noon_core::{
+    CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId,
+    TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
+};
 use noon_runtime::SceneInstance;
 
 fn matching_scene() -> CompiledScene {
-    let mut scene = SceneDefinition::new();
-    let source_circle = scene.add(GeometryRef::circle(1.0));
-    let source_rectangle = scene.add(GeometryRef::rectangle(2.0, 1.0));
-    let target_circle = scene.add(GeometryRef::circle(2.0));
-    let target_rectangle = scene.add(GeometryRef::rectangle(4.0, 2.0));
+    let mut objects = Vec::new();
+    let mut tracks = Vec::new();
+    let source_circle = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        source_circle,
+        GeometryRef::circle(1.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    let source_rectangle = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        source_rectangle,
+        GeometryRef::rectangle(2.0, 1.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    let target_circle = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        target_circle,
+        GeometryRef::circle(2.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    let target_rectangle = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        target_rectangle,
+        GeometryRef::rectangle(4.0, 2.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
 
-    scene
-        .object_mut(target_circle)
-        .expect("target circle exists")
-        .transform
+    objects[target_circle.get() as usize]
+        .base_transform
         .translation = Vec2::new(3.0, 1.0);
-    scene
-        .object_mut(target_rectangle)
-        .expect("target rectangle exists")
-        .transform
+    objects[target_rectangle.get() as usize]
+        .base_transform
         .translation = Vec2::new(-2.0, -1.0);
 
-    let source_circle_snapshot =
-        ObjectSnapshot::from(scene.object(source_circle).expect("source circle exists"));
-    let source_rectangle_snapshot = ObjectSnapshot::from(
-        scene
-            .object(source_rectangle)
-            .expect("source rectangle exists"),
-    );
-    let target_circle_snapshot =
-        ObjectSnapshot::from(scene.object(target_circle).expect("target circle exists"));
-    let target_rectangle_snapshot = ObjectSnapshot::from(
-        scene
-            .object(target_rectangle)
-            .expect("target rectangle exists"),
-    );
+    let source_circle_snapshot = TransformTrackEndpoint {
+        geometry: objects[source_circle.get() as usize]
+            .geometry()
+            .unwrap()
+            .clone(),
+        transform: objects[source_circle.get() as usize].base_transform,
+        style: objects[source_circle.get() as usize].base_style,
+    };
+    let source_rectangle_snapshot = TransformTrackEndpoint {
+        geometry: objects[source_rectangle.get() as usize]
+            .geometry()
+            .unwrap()
+            .clone(),
+        transform: objects[source_rectangle.get() as usize].base_transform,
+        style: objects[source_rectangle.get() as usize].base_style,
+    };
+    let target_circle_snapshot = TransformTrackEndpoint {
+        geometry: objects[target_circle.get() as usize]
+            .geometry()
+            .unwrap()
+            .clone(),
+        transform: objects[target_circle.get() as usize].base_transform,
+        style: objects[target_circle.get() as usize].base_style,
+    };
+    let target_rectangle_snapshot = TransformTrackEndpoint {
+        geometry: objects[target_rectangle.get() as usize]
+            .geometry()
+            .unwrap()
+            .clone(),
+        transform: objects[target_rectangle.get() as usize].base_transform,
+        style: objects[target_rectangle.get() as usize].base_style,
+    };
 
-    scene
-        .animate_transform(
-            source_circle,
-            source_circle_snapshot,
-            target_circle_snapshot,
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
-        .expect("circle match transform is valid");
-    scene
-        .animate_transform(
-            source_rectangle,
-            source_rectangle_snapshot,
-            target_rectangle_snapshot,
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
-        .expect("rectangle match transform is valid");
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object: source_circle,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: source_circle_snapshot,
+            to: target_circle_snapshot,
+        },
+        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object: source_rectangle,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: source_rectangle_snapshot,
+            to: target_rectangle_snapshot,
+        },
+        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    scene
-        .set_presence_at(source_circle, true, false, 2.0)
-        .expect("source circle hide is valid");
-    scene
-        .set_presence_at(target_circle, false, true, 2.0)
-        .expect("target circle show is valid");
-    scene
-        .set_presence_at(source_rectangle, true, false, 2.0)
-        .expect("source rectangle hide is valid");
-    scene
-        .set_presence_at(target_rectangle, false, true, 2.0)
-        .expect("target rectangle show is valid");
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object: source_circle,
+        property: Property::Presence,
+        values: TrackValues::Bool {
+            from: true,
+            to: false,
+        },
+        timing: TrackTiming::instant(2.0),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object: target_circle,
+        property: Property::Presence,
+        values: TrackValues::Bool {
+            from: false,
+            to: true,
+        },
+        timing: TrackTiming::instant(2.0),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object: source_rectangle,
+        property: Property::Presence,
+        values: TrackValues::Bool {
+            from: true,
+            to: false,
+        },
+        timing: TrackTiming::instant(2.0),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object: target_rectangle,
+        property: Property::Presence,
+        values: TrackValues::Bool {
+            from: false,
+            to: true,
+        },
+        timing: TrackTiming::instant(2.0),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    CompiledScene::compile(&scene).expect("matching-shape lowering must compile")
+    CompiledScene::compile_objects(objects, &tracks).expect("matching-shape lowering must compile")
 }
 
 #[test]
