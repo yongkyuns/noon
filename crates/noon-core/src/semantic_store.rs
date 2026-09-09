@@ -415,6 +415,11 @@ impl SemanticNode {
         self.members.head
     }
 
+    /// Return the last member without traversing or allocating sibling order.
+    pub fn last_member(&self) -> Option<SemanticNodeId> {
+        self.members.tail
+    }
+
     /// Direct successor of `member`, resolved without scanning siblings.
     pub fn next_member(&self, member: SemanticNodeId) -> Option<SemanticNodeId> {
         self.members.links.get(&member).and_then(|link| link.next)
