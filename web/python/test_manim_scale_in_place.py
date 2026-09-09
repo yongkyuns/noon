@@ -61,13 +61,7 @@ class ManimScaleInPlaceTests(unittest.TestCase):
                 result.reverseRateFunction = reverse_rate_function == 1
                 return result
 
-            def resolve_uniform_schedule(child_count, lag_ratio, run_time):
-                result = Result()
-                result.intervals = []
-                return result
-
             fake_js.noonResolveAnimationOptions = resolve_animation_options
-            fake_js.noonResolveUniformCompositionSchedule = resolve_uniform_schedule
             sys.modules["js"] = fake_js
 
             import _manim_compat
@@ -76,6 +70,7 @@ class ManimScaleInPlaceTests(unittest.TestCase):
             _manim_rate_functions.install()
             import _manim_phase_b  # noqa: F401
             import _manim_animate  # noqa: F401
+            import _manim_animation_options  # installs the public ScaleInPlace request
 
             from noon import (
                 BLUE,

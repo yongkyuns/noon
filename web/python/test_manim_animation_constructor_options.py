@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 class ManimAnimationConstructorOptionsTests(unittest.TestCase):
-    def test_constructor_runtime_and_rate_options_flow_into_scene_play(self) -> None:
+    def test_constructor_options_remain_inert_shared_requests(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()
         existing_pythonpath = env.get("PYTHONPATH")
@@ -61,13 +61,7 @@ class ManimAnimationConstructorOptionsTests(unittest.TestCase):
                 result.reverseRateFunction = reverse_rate_function == 1
                 return result
 
-            def resolve_uniform_schedule(child_count, lag_ratio, run_time):
-                result = Result()
-                result.intervals = []
-                return result
-
             fake_js.noonResolveAnimationOptions = resolve_animation_options
-            fake_js.noonResolveUniformCompositionSchedule = resolve_uniform_schedule
             sys.modules["js"] = fake_js
 
             import _manim_compat
@@ -75,7 +69,14 @@ class ManimAnimationConstructorOptionsTests(unittest.TestCase):
             import _manim_rate_functions
             _manim_rate_functions.install()
             import _manim_phase_b  # noqa: F401
-            import _manim_animate  # noqa: F401
+            from noon import Scene
+            play_before = Scene.play
+            import _manim_animate
+            import _manim_lifecycle
+            assert Scene.play is play_before
+            assert not hasattr(_manim_animate, "_aligned_scene_play")
+            assert not hasattr(_manim_animate, "_expanded_schedule")
+            assert not hasattr(_manim_lifecycle, "_compile_with_plan")
 
             from noon import Circle, Create, FadeIn, Scene, Square, Transform, linear, smooth
 
@@ -84,46 +85,15 @@ class ManimAnimationConstructorOptionsTests(unittest.TestCase):
             transform = Transform(Square(), Circle(), run_time=1.25, path_arc=0.3)
             assert transform.anim_args == {"run_time": 1.25, "path_arc": 0.3}
 
-            # Unequal intrinsic runtimes remain concurrent. Scene duration is the
-            # longest child, exactly as Manim's play compilation expects.
-            scene = Scene()
-            square = Square()
-            circle = Circle()
-            scene.play(
-                Create(square, run_time=2.0, rate_func=linear),
-                FadeIn(circle, run_time=0.5),
-            )
-            assert abs(scene.time - 2.0) < 1e-12
-
-            document = scene.to_document()
-            reveal = next(track for track in document["tracks"] if track["property"] == "reveal")
-            appearance = next(
-                track
-                for track in document["tracks"]
-                if track["object"] == circle.id and track["property"] == "appearance"
-            )
-            assert abs(reveal["timing"]["duration"] - 2.0) < 1e-12
-            assert reveal["timing"]["easing"] == "linear"
-            assert abs(appearance["timing"]["duration"] - 0.5) < 1e-12
-            assert appearance["timing"]["easing"] == "smooth"
-
-            # Scene.play options override constructor options through the same shared
-            # resolver rather than mutating the animation object or double-applying.
-            override_scene = Scene()
-            override_square = Square()
-            override_scene.play(
-                Create(override_square, run_time=3.0, rate_func=linear),
-                run_time=0.75,
-                rate_func=smooth,
-            )
-            override_track = next(
-                track
-                for track in override_scene.to_document()["tracks"]
-                if track["property"] == "reveal"
-            )
-            assert abs(override_scene.time - 0.75) < 1e-12
-            assert abs(override_track["timing"]["duration"] - 0.75) < 1e-12
-            assert override_track["timing"]["easing"] == "smooth"
+            square, circle = Square(), Circle()
+            create = Create(square, run_time=2.0, rate_func=linear)
+            fade = FadeIn(circle, run_time=0.5)
+            assert create.anim_args == {"run_time": 2.0, "rate_func": linear}
+            assert fade.anim_args == {"run_time": 0.5}
+            assert create.target is square and fade.target is circle
+            assert square._scene is None and circle._scene is None
+            # Execution is covered by paired timed-composition examples and shared
+            # Rust authoring/lowering tests for option precedence.
             """
         )
 

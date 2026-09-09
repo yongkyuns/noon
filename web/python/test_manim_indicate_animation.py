@@ -61,13 +61,7 @@ class ManimIndicateAnimationTests(unittest.TestCase):
                 result.reverseRateFunction = reverse_rate_function == 1
                 return result
 
-            def resolve_uniform_schedule(child_count, lag_ratio, run_time):
-                result = Result()
-                result.intervals = []
-                return result
-
             fake_js.noonResolveAnimationOptions = resolve_animation_options
-            fake_js.noonResolveUniformCompositionSchedule = resolve_uniform_schedule
             sys.modules["js"] = fake_js
 
             import _manim_compat
@@ -107,20 +101,8 @@ class ManimIndicateAnimationTests(unittest.TestCase):
             # Compatibility construction stays inert. Playback must be claimed by
             # the canonical shared semantic path rather than expanding snapshots
             # and two Python-authored intervals.
-            try:
-                import _manim_animate as animate
-                animate._expanded_schedule(
-                    scene,
-                    animation,
-                    start_time=0.0,
-                    run_time=1.0,
-                    easing="there_and_back",
-                    lag_ratio=0.0,
-                )
-            except NotImplementedError:
-                pass
-            else:
-                raise AssertionError("Indicate must not use Python schedule expansion")
+            import _manim_animate as animate
+            assert not hasattr(animate, "_expanded_schedule")
 
             family = Indicate(VGroup(Square(), Square()))
             assert abs(family.scale_factor - 1.2) < 1e-12

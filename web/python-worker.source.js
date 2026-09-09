@@ -4,9 +4,6 @@ import initNoonWeb, {
   WasmManimGeometryOptions,
   WasmSceneMembershipBatch,
   resolveAnimationOptions,
-  resolveLifecyclePlan,
-  resolveUniformCompositionSchedule,
-  validatePresenceTransition,
 } from "./pkg/noon_web.js";
 import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
 import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
@@ -133,9 +130,6 @@ async function initializePyodide() {
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
   self.noonCreateAuthoringFamilyHandle = (batch) => authoringStore.createFamily(batch);
   self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
-  self.noonResolveUniformCompositionSchedule = resolveUniformCompositionSchedulePlain;
-  self.noonResolveLifecyclePlan = resolveLifecyclePlanPlain;
-  self.noonValidatePresenceTransition = validatePresenceTransitionPlain;
   const bindingsReadyAt = performance.now();
 
   for (const [index, descriptor] of PYTHON_COMPAT_MODULES.entries()) {
@@ -166,8 +160,7 @@ _manim_rotate.install()
 import _manim_composition
 _manim_composition.install()
 import _manim_lifecycle
-# Text and Typst bind ordinary shared semantic Mobjects below the lifecycle-owned
-# Scene.add path; content binding does not replace scene membership semantics.
+# Text and Typst bind ordinary shared semantic Mobjects; membership stays in Rust.
 import _manim_typst
 _manim_typst.install()
 import _manim_growing
@@ -266,58 +259,6 @@ function resolveAnimationOptionsPlain(...args) {
   } finally {
     result.free();
   }
-}
-
-function compositionResultPlain(result) {
-  try {
-    const intervals = [];
-    for (let index = 0; index < result.length; index += 1) {
-      intervals.push({
-        startTime: result.startTime(index),
-        duration: result.duration(index),
-        endTime: result.endTime(index),
-      });
-    }
-    return {
-      ok: result.ok,
-      runTime: result.runTime,
-      intrinsicRunTime: result.intrinsicRunTime,
-      intervals,
-      errorKind: result.errorKind ?? "",
-      message: result.message ?? "",
-    };
-  } finally {
-    result.free();
-  }
-}
-
-function resolveUniformCompositionSchedulePlain(...args) {
-  return compositionResultPlain(resolveUniformCompositionSchedule(...args));
-}
-
-function lifecycleResultPlain(result) {
-  try {
-    return {
-      ok: result.ok,
-      bind: result.bind,
-      showNow: result.showNow,
-      hideNow: result.hideNow,
-      showAtStart: result.showAtStart,
-      hideAtEnd: result.hideAtEnd,
-      errorKind: result.errorKind ?? "",
-      message: result.message ?? "",
-    };
-  } finally {
-    result.free();
-  }
-}
-
-function resolveLifecyclePlanPlain(...args) {
-  return lifecycleResultPlain(resolveLifecyclePlan(...args));
-}
-
-function validatePresenceTransitionPlain(...args) {
-  return lifecycleResultPlain(validatePresenceTransition(...args));
 }
 
 function registerContinuationContext(context) {
