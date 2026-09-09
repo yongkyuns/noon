@@ -6,6 +6,8 @@ uses its explicit staged property view; this module installs no public methods.
 
 from __future__ import annotations
 
+from _noon_errors import engine_call, raise_engine_error
+
 import copy
 import json
 import sys
@@ -101,7 +103,7 @@ def _live_mutation_context(value: object):
         context = getattr(scene, "_canonical_authoring_context", None)
     if context is None:
         return None
-    ownership = str(context.liveExecutionOwnership())
+    ownership = str(engine_call(context.liveExecutionOwnership))
     # Returning the player keeps its runtime alive for the next source operation.
     # Mutations and target creation must publish through that same session too.
     # A transferred runtime retains this context so its typed call rejects before
@@ -137,12 +139,12 @@ def _typed_manim_observation(
             raise NotImplementedError(
                 "typed Mobject observation is unavailable in this authoring phase"
             )
-        return query(semantic_handle)
+        return engine_call(query, semantic_handle)
     handle = _handle_for(value)
     if handle is None:
         raise NotImplementedError("typed Mobject observation is unavailable in this authoring phase")
-    observation = getattr(handle, handle_method)
-    return observation if handle_property else observation()
+    observation = engine_call(getattr, handle, handle_method)
+    return observation if handle_property else engine_call(observation)
 
 
 def _manim_line_endpoints_observation(value: object):
@@ -162,19 +164,7 @@ def _require_typed_manim_line(value: object) -> bool:
     semantic_handle = getattr(value, "_semantic_handle", None)
     if semantic_handle is None or not bool(getattr(value, "_semantic_handle_fresh", False)):
         raise NotImplementedError("exact Line admission requires a valid semantic handle")
-    try:
-        _manim_line_endpoints_observation(value)
-    except Exception:
-        # Preserve ownership/effective-driver failures for an authored Line. A
-        # direct authored query is used only to classify wrong semantic content.
-        try:
-            semantic_handle.manimLineEndpoints()
-        except Exception as content_error:
-            raise NotImplementedError(
-                "ShowPassingFlash currently qualifies the exact Line subset; "
-                "general VMobject path windows remain partial"
-            ) from content_error
-        raise
+    engine_call(_manim_line_endpoints_observation, value, operation="ShowPassingFlash")
     return True
 
 
@@ -186,12 +176,12 @@ def _layout_bounds(value: _base.Mobject) -> tuple[_base.Vec2, _base.Vec2] | None
         raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
     return (
         _base.Vec2(
-            float(handle.criticalX(-1.0, 0.0)),
-            float(handle.criticalY(0.0, -1.0)),
+            float(engine_call(handle.criticalX, -1.0, 0.0)),
+            float(engine_call(handle.criticalY, 0.0, -1.0)),
         ),
         _base.Vec2(
-            float(handle.criticalX(1.0, 0.0)),
-            float(handle.criticalY(0.0, 1.0)),
+            float(engine_call(handle.criticalX, 1.0, 0.0)),
+            float(engine_call(handle.criticalY, 0.0, 1.0)),
         ),
     )
 
@@ -216,7 +206,7 @@ def _bound_layout_observation(value: _base.Mobject):
         return None
     context = getattr(value._scene, "_canonical_authoring_context", None)
     query = getattr(context, "queryMobjectLayout", None)
-    return None if query is None else query(handle)
+    return None if query is None else engine_call(query, handle)
 
 
 _CONSTRUCTOR_MISSING = object()
@@ -263,22 +253,22 @@ def _apply_shared_constructor_options(handle: object, kwargs: dict[str, Any]) ->
 
     if "position" in options:
         value = _ir._vec2("position", options["position"])
-        handle.setTranslation(value["x"], value["y"])
+        engine_call(handle.setTranslation, value["x"], value["y"])
     if "rotation" in options:
-        handle.setRotation(_ir._finite_number("rotation", options["rotation"]))
+        engine_call(handle.setRotation, _ir._finite_number("rotation", options["rotation"]))
     if "scale" in options:
         value = _ir._vec2("scale", options["scale"])
-        handle.setScale(value["x"], value["y"])
+        engine_call(handle.setScale, value["x"], value["y"])
     if "stroke_width" in options:
-        handle.setStrokeWidth(_compat._manim_stroke_width(options["stroke_width"]))
+        engine_call(handle.setStrokeWidth, _compat._manim_stroke_width(options["stroke_width"]))
     if "stroke_width_mode" in options:
-        handle.setStrokeWidthMode(_ir._stroke_width_mode(options["stroke_width_mode"]))
+        engine_call(handle.setStrokeWidthMode, _ir._stroke_width_mode(options["stroke_width_mode"]))
     if "stroke_join" in options:
-        handle.setStrokeJoin(_ir._stroke_join(options["stroke_join"]))
+        engine_call(handle.setStrokeJoin, _ir._stroke_join(options["stroke_join"]))
     if "stroke_cap" in options:
-        handle.setStrokeCap(_ir._stroke_cap(options["stroke_cap"]))
+        engine_call(handle.setStrokeCap, _ir._stroke_cap(options["stroke_cap"]))
     if "opacity" in options:
-        handle.setObjectOpacity(_ir._finite_number("opacity", options["opacity"]))
+        engine_call(handle.setObjectOpacity, _ir._finite_number("opacity", options["opacity"]))
 
     fill = options.get("fill", _CONSTRUCTOR_MISSING)
     fill_color = options.get("fill_color", _CONSTRUCTOR_MISSING)
@@ -286,10 +276,10 @@ def _apply_shared_constructor_options(handle: object, kwargs: dict[str, Any]) ->
         fill = _compat._as_color("fill_color", fill_color)
     if fill is not _CONSTRUCTOR_MISSING:
         if fill is None:
-            handle.disableFill()
+            engine_call(handle.disableFill)
         else:
             parsed = _constructor_color("fill", fill)
-            handle.setFill(parsed.red, parsed.green, parsed.blue, parsed.alpha)
+            engine_call(handle.setFill, parsed.red, parsed.green, parsed.blue, parsed.alpha)
 
     stroke = options.get("stroke", _CONSTRUCTOR_MISSING)
     stroke_color = options.get("stroke_color", _CONSTRUCTOR_MISSING)
@@ -297,16 +287,16 @@ def _apply_shared_constructor_options(handle: object, kwargs: dict[str, Any]) ->
         stroke = _compat._as_color("stroke_color", stroke_color)
     if stroke is not _CONSTRUCTOR_MISSING:
         if stroke is None:
-            handle.disableStroke()
+            engine_call(handle.disableStroke)
         else:
             parsed = _constructor_color("stroke", stroke)
-            handle.setStrokeColor(parsed.red, parsed.green, parsed.blue, parsed.alpha)
-            handle.setStrokeOpacity(parsed.alpha)
+            engine_call(handle.setStrokeColor, parsed.red, parsed.green, parsed.blue, parsed.alpha)
+            engine_call(handle.setStrokeOpacity, parsed.alpha)
 
     if options.get("fill_opacity") is not None:
-        handle.setFillOpacity(_compat._opacity("fill_opacity", options["fill_opacity"]))
+        engine_call(handle.setFillOpacity, _compat._opacity("fill_opacity", options["fill_opacity"]))
     if options.get("stroke_opacity") is not None:
-        handle.setStrokeOpacity(_compat._opacity("stroke_opacity", options["stroke_opacity"]))
+        engine_call(handle.setStrokeOpacity, _compat._opacity("stroke_opacity", options["stroke_opacity"]))
 
 
 def _apply_shared_constructor_kwargs(self: _base.Mobject, kwargs: dict[str, Any]) -> None:
@@ -316,7 +306,7 @@ def _apply_shared_constructor_kwargs(self: _base.Mobject, kwargs: dict[str, Any]
 def _apply_constructor_color(handle: object, color: _base.Color | None) -> None:
     if color is not None:
         parsed = _constructor_color("color", color)
-        handle.setColor(parsed.red, parsed.green, parsed.blue, parsed.alpha)
+        engine_call(handle.setColor, parsed.red, parsed.green, parsed.blue, parsed.alpha)
 
 
 def _live_constructor_context(kind: str = "primitive"):
@@ -336,7 +326,7 @@ def _live_constructor_context(kind: str = "primitive"):
     context = getattr(scene, "_canonical_authoring_context", None)
     if context is None:
         return None
-    ownership = str(context.liveExecutionOwnership())
+    ownership = str(engine_call(context.liveExecutionOwnership))
     if ownership in {"active", "returned"}:
         return context
     if ownership == "transferred":
@@ -349,41 +339,41 @@ def _live_constructor_context(kind: str = "primitive"):
 def _vector_path_options(path: dict[str, Any]):
     if set(path) != {"commands"}:
         raise ValueError("shared vector path supports commands only")
-    candidate = _authoring_vector_path()
+    candidate = engine_call(_authoring_vector_path)
     for command in path["commands"]:
         if command == "close":
-            candidate.close()
+            engine_call(candidate.close)
         elif isinstance(command, dict) and set(command) == {"move_to"}:
             point = command["move_to"]["to"]
-            candidate.moveTo(float(point["x"]), float(point["y"]))
+            engine_call(candidate.moveTo, float(point["x"]), float(point["y"]))
         elif isinstance(command, dict) and set(command) == {"line_to"}:
             point = command["line_to"]["to"]
-            candidate.lineTo(float(point["x"]), float(point["y"]))
+            engine_call(candidate.lineTo, float(point["x"]), float(point["y"]))
         elif isinstance(command, dict) and set(command) == {"quadratic_to"}:
             values = command["quadratic_to"]
             control, point = values["control"], values["to"]
-            candidate.quadraticTo(
+            engine_call(candidate.quadraticTo,
                 float(control["x"]), float(control["y"]),
                 float(point["x"]), float(point["y"]),
             )
         elif isinstance(command, dict) and set(command) == {"cubic_to"}:
             values = command["cubic_to"]
             first, second, point = values["control1"], values["control2"], values["to"]
-            candidate.cubicTo(
+            engine_call(candidate.cubicTo,
                 float(first["x"]), float(first["y"]),
                 float(second["x"]), float(second["y"]),
                 float(point["x"]), float(point["y"]),
             )
         else:
             raise ValueError("unsupported vector path command")
-    return _geometry_options.path(candidate)
+    return engine_call(_geometry_options.path, candidate)
 
 
 def _consume_geometry_options(options: object, kind: str = "geometry"):
     context = _live_constructor_context(kind)
     if context is None:
-        return _create_geometry_handle(options), None
-    return context.liveCreateManimGeometry(options), context
+        return engine_call(_create_geometry_handle, options), None
+    return engine_call(context.liveCreateManimGeometry, options), context
 
 
 def _attach_geometry_options(
@@ -405,7 +395,7 @@ def _circle_init(
     if _create_geometry_handle is None:
         raise RuntimeError("Mobject construction requires the shared Rust authoring host")
     value = _ir._positive_number("radius", radius)
-    options = _geometry_options.circle(value)
+    options = engine_call(_geometry_options.circle, value)
     _apply_shared_constructor_options(options, kwargs)
     _apply_constructor_color(options, color)
     _attach_geometry_options(self, options, "Circle")
@@ -424,7 +414,7 @@ def _rectangle_init(
         raise RuntimeError("Mobject construction requires the shared Rust authoring host")
     width_value = _ir._positive_number("width", width)
     height_value = _ir._positive_number("height", height)
-    options = _geometry_options.rectangle(width_value, height_value)
+    options = engine_call(_geometry_options.rectangle, width_value, height_value)
     _apply_shared_constructor_options(options, kwargs)
     _apply_constructor_color(options, color)
     _attach_geometry_options(self, options, "Rectangle")
@@ -442,7 +432,7 @@ def _square_init(
     if _create_geometry_handle is None:
         raise RuntimeError("Mobject construction requires the shared Rust authoring host")
     value = _ir._positive_number("side_length", side_length)
-    options = _geometry_options.square(value)
+    options = engine_call(_geometry_options.square, value)
     _apply_shared_constructor_options(options, kwargs)
     _apply_constructor_color(options, color)
     _attach_geometry_options(self, options, "Square")
@@ -506,7 +496,7 @@ def _line_init(
         return
     if _create_geometry_handle is None:
         raise RuntimeError("Mobject construction requires the shared Rust authoring host")
-    options = _geometry_options.line(
+    options = engine_call(_geometry_options.line,
         start_value.x, start_value.y, end_value.x, end_value.y
     )
     _apply_shared_constructor_options(options, kwargs)
@@ -523,7 +513,7 @@ def _current_raw(self: _base.Mobject) -> _ir.Mobject:
         )
     handle = _handle_for(self)
     if handle is not None:
-        return _raw_from_json(str(handle.snapshotJson()))
+        return _raw_from_json(str(engine_call(handle.snapshotJson)))
     raise RuntimeError("Mobject queries require a current shared Rust semantic handle")
 
 
@@ -552,9 +542,9 @@ def _clone_mobject(
     clone._scene = None
     clone._object = None
     clone._semantic_handle = (
-        context.liveTargetEditor(handle)
+        engine_call(context.liveTargetEditor, handle)
         if context is not None
-        else handle.targetEditor() if target_state else handle.cloneHandle()
+        else engine_call(handle.targetEditor) if target_state else engine_call(handle.cloneHandle)
     )
     clone._semantic_handle_fresh = True
     if context is not None:
@@ -615,13 +605,13 @@ def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
     axis = _base._as_vec2(direction)
     if isinstance(self, _compat.Group):
         layout = _group_layout_observation(self)
-        return _base.Vec2(float(layout.criticalX(axis.x, axis.y)),
-                          float(layout.criticalY(axis.x, axis.y)))
+        return _base.Vec2(float(engine_call(layout.criticalX, axis.x, axis.y)),
+                          float(engine_call(layout.criticalY, axis.x, axis.y)))
     observed = _bound_layout_observation(self)
     if observed is not None:
         return _base.Vec2(
-            float(observed.criticalX(axis.x, axis.y)),
-            float(observed.criticalY(axis.x, axis.y)),
+            float(engine_call(observed.criticalX, axis.x, axis.y)),
+            float(engine_call(observed.criticalY, axis.x, axis.y)),
         )
     return _critical(self, axis)
 
@@ -666,11 +656,11 @@ def _shift(self: _base.Mobject, direction: object) -> _base.Mobject:
     context = _live_mutation_context(self)
     if context is not None:
         try:
-            context.liveShift(handle, offset.x, offset.y)
+            engine_call(context.liveShift, handle, offset.x, offset.y)
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error)
         return self
-    handle.shift(offset.x, offset.y)
+    engine_call(handle.shift, offset.x, offset.y)
     return self
 
 
@@ -692,23 +682,23 @@ def _move_to(
         if target is None:
             raise RuntimeError("placement target requires a current shared Rust semantic handle")
         if context is None:
-            handle.layoutAnchor(None).moveTo(target, *args)
+            engine_call(engine_call(handle.layoutAnchor, None).moveTo, target, *args)
         else:
-            context.liveMoveToLayout(handle, target, *args)
+            engine_call(context.liveMoveToLayout, handle, target, *args)
     elif _alignment_is_mobject(point_or_mobject):
         target = _handle_for(point_or_mobject)
         if target is None:
             raise RuntimeError("placement target requires a current shared Rust semantic handle")
         if context is None:
-            handle.manimMoveToHandle(target, *args)
+            engine_call(handle.manimMoveToHandle, target, *args)
         else:
-            context.liveMoveToMobject(handle, target, *args)
+            engine_call(context.liveMoveToMobject, handle, target, *args)
     else:
         point = _base._as_vec2(point_or_mobject)
         if context is None:
-            handle.manimMoveToPoint(point.x, point.y, *args)
+            engine_call(handle.manimMoveToPoint, point.x, point.y, *args)
         else:
-            context.liveMoveToPoint(handle, point.x, point.y, *args)
+            engine_call(context.liveMoveToPoint, handle, point.x, point.y, *args)
     return self
 
 
@@ -731,11 +721,11 @@ def _rescale_to_fit(self, length, dim, stretch=False, **kwargs):
     length = float(length)
     try:
         if context is None:
-            anchor.rescaleToFit(length, dim, bool(stretch))
+            engine_call(anchor.rescaleToFit, length, dim, bool(stretch))
         else:
-            context.liveRescaleToFit(anchor, length, dim, bool(stretch))
+            engine_call(context.liveRescaleToFit, anchor, length, dim, bool(stretch))
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error)
     return self
 
 
@@ -748,11 +738,11 @@ def _match_dim_size(self, mobject, dim, stretch=False, **kwargs):
         raise RuntimeError("dimension matching requires a shared Rust target")
     try:
         if context is None:
-            anchor.matchDimSize(target, dim, bool(stretch))
+            engine_call(anchor.matchDimSize, target, dim, bool(stretch))
         else:
-            context.liveMatchDimSize(anchor, target, dim, bool(stretch))
+            engine_call(context.liveMatchDimSize, anchor, target, dim, bool(stretch))
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error)
     return self
 
 
@@ -768,11 +758,11 @@ def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
     context = _live_mutation_context(self)
     if context is not None:
         try:
-            context.liveScale(handle, value.x, value.y)
+            engine_call(context.liveScale, handle, value.x, value.y)
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error)
         return self
-    handle.scale(value.x, value.y)
+    engine_call(handle.scale, value.x, value.y)
     return self
 
 
@@ -811,9 +801,9 @@ def _rotate(
                 "canonical live affine rotation supports only rotation about the current center"
             )
         try:
-            context.liveRotate(handle, _compat._rotation_angle_2d(angle, axis))
+            engine_call(context.liveRotate, handle, _compat._rotation_angle_2d(angle, axis))
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error)
         return self
     if kwargs:
         unsupported = ", ".join(sorted(kwargs))
@@ -826,10 +816,10 @@ def _rotate(
     else:
         edge = _base._as_vec2(about_edge)
         pivot = _base.Vec2(
-            float(handle.criticalX(edge.x, edge.y)),
-            float(handle.criticalY(edge.x, edge.y)),
+            float(engine_call(handle.criticalX, edge.x, edge.y)),
+            float(engine_call(handle.criticalY, edge.x, edge.y)),
         )
-    handle.rotateAboutPoint(signed_angle, pivot.x, pivot.y)
+    engine_call(handle.rotateAboutPoint, signed_angle, pivot.x, pivot.y)
     return self
 
 
@@ -842,14 +832,14 @@ def _set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobject:
     live_context = _live_mutation_context(self)
     if live_context is not None:
         try:
-            live_context.liveSetColor(
+            engine_call(live_context.liveSetColor,
                 handle, color.red, color.green, color.blue, color.alpha
             )
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error)
         return self
 
-    handle.setColor(color.red, color.green, color.blue, color.alpha)
+    engine_call(handle.setColor, color.red, color.green, color.blue, color.alpha)
     return self
 
 
@@ -898,9 +888,9 @@ def _become(
             # Rust validates that both operands belong to the session's store.
             context = _live_constructor_context("become")
         if context is not None:
-            context.liveBecomeMobject(handle, other_handle, *flags)
+            engine_call(context.liveBecomeMobject, handle, other_handle, *flags)
         else:
-            handle.becomeHandle(other_handle, *flags)
+            engine_call(handle.becomeHandle, other_handle, *flags)
         return self
 
     raise NotImplementedError(
@@ -925,7 +915,7 @@ def _replace(
     other_handle = _handle_for(mobject)
     if handle is None or other_handle is None:
         raise NotImplementedError("replace requires valid shared semantic handles for both Mobjects")
-    handle.replaceHandle(other_handle, int(dim_to_match), bool(stretch))
+    engine_call(handle.replaceHandle, other_handle, int(dim_to_match), bool(stretch))
     return self
 
 
@@ -933,8 +923,8 @@ def _critical(value: _base.Mobject, direction: _base.Vec2) -> _base.Vec2:
     handle = _handle_for(value)
     if handle is not None:
         return _base.Vec2(
-            float(handle.criticalX(direction.x, direction.y)),
-            float(handle.criticalY(direction.x, direction.y)),
+            float(engine_call(handle.criticalX, direction.x, direction.y)),
+            float(engine_call(handle.criticalY, direction.x, direction.y)),
         )
     raise RuntimeError("Mobject layout requires a current shared Rust semantic handle")
 
@@ -973,7 +963,7 @@ def _layout_anchor(value, index=None):
         handle = _layout_reference_handle(value)
     if handle is None:
         return None
-    return handle.layoutAnchor(_semantic_member_index(index))
+    return engine_call(handle.layoutAnchor, _semantic_member_index(index))
 
 
 def _shared_next_to(self, target, direction, buff, aligned_edge,
@@ -998,19 +988,17 @@ def _shared_next_to(self, target, direction, buff, aligned_edge,
     try:
         if target_anchor is not None:
             if context is None:
-                source.nextTo(target_anchor, aligner, *arguments)
+                engine_call(source.nextTo, target_anchor, aligner, *arguments)
             else:
-                context.liveNextLayoutTo(source, target_anchor, aligner, *arguments)
+                engine_call(context.liveNextLayoutTo, source, target_anchor, aligner, *arguments)
         else:
             point = _base._as_vec2(target)
             if context is None:
-                source.nextToPoint(point.x, point.y, aligner, *arguments)
+                engine_call(source.nextToPoint, point.x, point.y, aligner, *arguments)
             else:
-                context.liveNextLayoutToPoint(source, point.x, point.y, aligner, *arguments)
+                engine_call(context.liveNextLayoutToPoint, source, point.x, point.y, aligner, *arguments)
     except Exception as error:
-        if "alignment submobject index" in str(error):
-            raise IndexError(str(error)) from None
-        raise ValueError(str(error)) from None
+        raise_engine_error(error)
 
 
 def _next_to(
@@ -1045,15 +1033,15 @@ def _align_to(
         target = _layout_anchor(mobject_or_point)
         if target is None:
             raise RuntimeError("alignment requires current shared Rust semantic handles")
-        handle.layoutAnchor(None).alignTo(target, axis.x, axis.y)
+        engine_call(engine_call(handle.layoutAnchor, None).alignTo, target, axis.x, axis.y)
     elif _alignment_is_mobject(mobject_or_point):
         target_handle = _handle_for(mobject_or_point)
         if target_handle is None:
             raise RuntimeError("alignment requires current shared Rust semantic handles")
-        handle.alignToHandle(target_handle, axis.x, axis.y)
+        engine_call(handle.alignToHandle, target_handle, axis.x, axis.y)
     else:
         point = _base._as_vec2(mobject_or_point)
-        handle.alignToPoint(point.x, point.y, axis.x, axis.y)
+        engine_call(handle.alignToPoint, point.x, point.y, axis.x, axis.y)
     return self
 
 
@@ -1069,7 +1057,7 @@ def _align_on_frame(
         raise NotImplementedError(
             "canonical live affine targets do not support frame alignment"
         )
-    handle.alignOnFrame(direction.x, direction.y, float(buff))
+    engine_call(handle.alignOnFrame, direction.x, direction.y, float(buff))
     return self
 
 
@@ -1087,7 +1075,7 @@ def _set_fill(
         try:
             if color is not None and opacity is not None:
                 parsed = _compat._as_color("fill color", color)
-                live_context.liveSetFill(
+                engine_call(live_context.liveSetFill,
                     handle,
                     parsed.red,
                     parsed.green,
@@ -1096,21 +1084,21 @@ def _set_fill(
                 )
             elif color is not None:
                 parsed = _compat._as_color("fill color", color)
-                live_context.liveSetFillColor(
+                engine_call(live_context.liveSetFillColor,
                     handle, parsed.red, parsed.green, parsed.blue, parsed.alpha
                 )
             elif opacity is None:
-                live_context.liveDisableFill(handle)
+                engine_call(live_context.liveDisableFill, handle)
             if opacity is not None and color is None:
-                live_context.liveSetFillOpacity(
+                engine_call(live_context.liveSetFillOpacity,
                     handle, _compat._opacity("fill opacity", opacity)
                 )
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error)
         return self
     if color is not None and opacity is not None:
         parsed = _compat._as_color("fill color", color)
-        handle.setFill(
+        engine_call(handle.setFill,
             parsed.red,
             parsed.green,
             parsed.blue,
@@ -1119,11 +1107,11 @@ def _set_fill(
         return self
     if color is not None:
         parsed = _compat._as_color("fill color", color)
-        handle.setFillColor(parsed.red, parsed.green, parsed.blue, parsed.alpha)
+        engine_call(handle.setFillColor, parsed.red, parsed.green, parsed.blue, parsed.alpha)
     elif opacity is None:
-        handle.disableFill()
+        engine_call(handle.disableFill)
     if opacity is not None:
-        handle.setFillOpacity(_compat._opacity("fill opacity", opacity))
+        engine_call(handle.setFillOpacity, _compat._opacity("fill opacity", opacity))
     return self
 
 
@@ -1146,7 +1134,7 @@ def _set_stroke(
         try:
             if color is not None and opacity is not None:
                 parsed = _compat._as_color("stroke color", color)
-                live_context.liveSetStroke(
+                engine_call(live_context.liveSetStroke,
                     handle,
                     parsed.red,
                     parsed.green,
@@ -1155,27 +1143,27 @@ def _set_stroke(
                 )
             elif color is not None:
                 parsed = _compat._as_color("stroke color", color)
-                live_context.liveSetStrokeColor(
+                engine_call(live_context.liveSetStrokeColor,
                     handle, parsed.red, parsed.green, parsed.blue, parsed.alpha
                 )
             elif opacity is None:
-                live_context.liveDisableStroke(handle)
+                engine_call(live_context.liveDisableStroke, handle)
             else:
-                live_context.liveSetStrokeOpacity(
+                engine_call(live_context.liveSetStrokeOpacity,
                     handle, _compat._opacity("stroke opacity", opacity)
                 )
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error)
         return self
     if color is not None:
         parsed = _compat._as_color("stroke color", color)
-        handle.setStrokeColor(parsed.red, parsed.green, parsed.blue, parsed.alpha)
+        engine_call(handle.setStrokeColor, parsed.red, parsed.green, parsed.blue, parsed.alpha)
     elif width is None and opacity is None:
-        handle.disableStroke()
+        engine_call(handle.disableStroke)
     if width is not None:
-        handle.setStrokeWidth(_compat._manim_stroke_width(width))
+        engine_call(handle.setStrokeWidth, _compat._manim_stroke_width(width))
     if opacity is not None:
-        handle.setStrokeOpacity(_compat._opacity("stroke opacity", opacity))
+        engine_call(handle.setStrokeOpacity, _compat._opacity("stroke opacity", opacity))
     return self
 
 
@@ -1190,11 +1178,11 @@ def _set_opacity(
     live_context = _live_mutation_context(self)
     if live_context is not None:
         try:
-            live_context.liveSetOpacity(handle, _compat._opacity("opacity", opacity))
+            engine_call(live_context.liveSetOpacity, handle, _compat._opacity("opacity", opacity))
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error)
         return self
-    handle.setOpacity(_compat._opacity("opacity", opacity))
+    engine_call(handle.setOpacity, _compat._opacity("opacity", opacity))
     return self
 
 
@@ -1211,11 +1199,11 @@ def _set_object_opacity(
     live_context = _live_mutation_context(self)
     try:
         if live_context is not None:
-            live_context.liveSetObjectOpacity(handle, alpha)
+            engine_call(live_context.liveSetObjectOpacity, handle, alpha)
         else:
-            handle.setObjectOpacity(alpha)
+            engine_call(handle.setObjectOpacity, alpha)
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error)
     return self
 
 
@@ -1263,7 +1251,7 @@ def _shared_family_layout(value: object, *, mutation: bool = False):
     ]
     if not all(handle is not None for handle in leaf_handles):
         return None
-    return family_handle.layout()
+    return engine_call(family_handle.layout)
 
 
 def _group_paint(self, operation, arguments):
@@ -1278,11 +1266,11 @@ def _group_paint(self, operation, arguments):
     context = _group_target_context(self)
     try:
         if context is None:
-            getattr(handle, f"set{operation}")(*arguments)
+            engine_call(getattr(handle, f"set{operation}"), *arguments)
         else:
-            getattr(context, f"liveSetFamily{operation}")(handle, *arguments)
+            engine_call(getattr(context, f"liveSetFamily{operation}"), handle, *arguments)
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error)
     return self
 
 
@@ -1326,7 +1314,7 @@ def _group_arrange_in_grid(self, rows=None, cols=None, buff=_base.MED_SMALL_BUFF
             raise ValueError("grid dimensions must be positive 32-bit integers")
         return value
 
-    rows, cols = dimension(rows), dimension(cols)
+    rows, cols = engine_call(dimension, rows), engine_call(dimension, cols)
     gap = (_base._as_vec2(buff) if isinstance(buff, (tuple, list, _base.Vec2))
            else _base.Vec2(float(buff), float(buff)))
     handle = getattr(self, "_semantic_family_handle", None)
@@ -1335,11 +1323,11 @@ def _group_arrange_in_grid(self, rows=None, cols=None, buff=_base.MED_SMALL_BUFF
     context = _group_live_layout_context(self)
     try:
         if context is None:
-            handle.arrangeInGrid(rows, cols, gap.x, gap.y)
+            engine_call(handle.arrangeInGrid, rows, cols, gap.x, gap.y)
         else:
-            context.liveArrangeFamilyInGrid(handle, rows, cols, gap.x, gap.y)
+            engine_call(context.liveArrangeFamilyInGrid, handle, rows, cols, gap.x, gap.y)
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error)
     return self
 
 
@@ -1352,11 +1340,11 @@ def _group_scale(self: _compat.Group, factor: object) -> _compat.Group:
     context = _group_live_layout_context(self)
     try:
         if context is not None:
-            context.liveScaleFamily(handle, scale.x, scale.y)
+            engine_call(context.liveScaleFamily, handle, scale.x, scale.y)
         else:
-            handle.scale(scale.x, scale.y)
+            engine_call(handle.scale, scale.x, scale.y)
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error)
     return self
 
 
@@ -1371,11 +1359,11 @@ def _group_rotate(self: _compat.Group, angle: float, axis: object = _compat.OUT,
     context = _group_live_layout_context(self)
     try:
         if context is not None:
-            context.liveRotateFamily(handle, signed_angle, point.x, point.y, about_point is not None)
+            engine_call(context.liveRotateFamily, handle, signed_angle, point.x, point.y, about_point is not None)
         else:
-            handle.rotate(signed_angle, point.x, point.y, about_point is not None)
+            engine_call(handle.rotate, signed_angle, point.x, point.y, about_point is not None)
     except Exception as error:
-        raise ValueError(str(error)) from None
+        raise_engine_error(error)
     return self
 
 
@@ -1392,16 +1380,16 @@ def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
     if context is not None:
         offset = _base._as_vec2(direction)
         try:
-            context.liveShiftFamily(self._semantic_family_handle, offset.x, offset.y)
+            engine_call(context.liveShiftFamily, self._semantic_family_handle, offset.x, offset.y)
         except Exception as error:
-            raise ValueError(str(error)) from None
+            raise_engine_error(error)
         return self
     shared = _shared_family_layout(self, mutation=True)
     if shared is None:
         raise RuntimeError("Group shift requires the shared Rust authoring host")
     session = shared
     offset = _base._as_vec2(direction)
-    session.shiftBy(offset.x, offset.y)
+    engine_call(session.shiftBy, offset.x, offset.y)
     return self
 
 
@@ -1427,14 +1415,14 @@ def _group_live_layout_context(value: _compat.Group):
 def _live_family_placement(context, family, target, operation, *arguments):
     if isinstance(target, _compat.Group):
         method = getattr(context, f"live{operation}FamilyToFamily")
-        method(family, target._semantic_family_handle, *arguments)
+        engine_call(method, family, target._semantic_family_handle, *arguments)
     elif isinstance(target, _base.Mobject):
         method = getattr(context, f"live{operation}FamilyToMobject")
-        method(family, target._semantic_handle, *arguments)
+        engine_call(method, family, target._semantic_handle, *arguments)
     else:
         point = _base._as_vec2(target)
         method = getattr(context, f"live{operation}FamilyToPoint")
-        method(family, point.x, point.y, *arguments)
+        engine_call(method, family, point.x, point.y, *arguments)
 
 
 def _group_move_to(
@@ -1461,15 +1449,15 @@ def _group_move_to(
         target = _shared_family_layout(point_or_mobject)
         if target is None:
             raise RuntimeError("placement target requires a current shared Rust semantic handle")
-        session.moveToFamily(target, edge.x, edge.y, mask.x, mask.y)
+        engine_call(session.moveToFamily, target, edge.x, edge.y, mask.x, mask.y)
     elif _alignment_is_mobject(point_or_mobject):
         target = _family_layout_leaf_adapter(point_or_mobject)
         if target is None:
             raise RuntimeError("placement target requires a current shared Rust semantic handle")
-        session.moveToMobject(target, edge.x, edge.y, mask.x, mask.y)
+        engine_call(session.moveToMobject, target, edge.x, edge.y, mask.x, mask.y)
     else:
         point = _base._as_vec2(point_or_mobject)
-        session.moveToPoint(point.x, point.y, edge.x, edge.y, mask.x, mask.y)
+        engine_call(session.moveToPoint, point.x, point.y, edge.x, edge.y, mask.x, mask.y)
 
     return self
 
@@ -1479,13 +1467,13 @@ def _group_move_to(
 def _group_align_on_frame(self: _compat.Group, direction: _base.Vec2, buff: float):
     context = _group_live_layout_context(self)
     if context is not None:
-        context.liveAlignFamilyOnFrame(self._semantic_family_handle,
+        engine_call(context.liveAlignFamilyOnFrame, self._semantic_family_handle,
                                        direction.x, direction.y, float(buff))
     else:
         layout = _shared_family_layout(self, mutation=True)
         if layout is None:
             raise RuntimeError("frame alignment requires current shared Rust semantic handles")
-        layout.alignOnFrame(direction.x, direction.y, float(buff))
+        engine_call(layout.alignOnFrame, direction.x, direction.y, float(buff))
     return self
 
 
@@ -1509,15 +1497,15 @@ def _group_align_to(
         target = _shared_family_layout(mobject_or_point)
         if target is None:
             raise RuntimeError("alignment target requires a current shared Rust semantic handle")
-        session.alignToFamily(target, axis.x, axis.y)
+        engine_call(session.alignToFamily, target, axis.x, axis.y)
     elif _alignment_is_mobject(mobject_or_point):
         target = _family_layout_leaf_adapter(mobject_or_point)
         if target is None:
             raise RuntimeError("alignment target requires a current shared Rust semantic handle")
-        session.alignToMobject(target, axis.x, axis.y)
+        engine_call(session.alignToMobject, target, axis.x, axis.y)
     else:
         point = _base._as_vec2(mobject_or_point)
-        session.alignToPoint(point.x, point.y, axis.x, axis.y)
+        engine_call(session.alignToPoint, point.x, point.y, axis.x, axis.y)
 
     return self
 
@@ -1542,7 +1530,7 @@ def _group_arrange(
     edge = _base._as_vec2(kwargs.get("aligned_edge", _base.ORIGIN))
     mask = _alignment_mask2(kwargs.get("coor_mask", (1, 1, 1)))
     index = _semantic_member_index(kwargs.get("index_of_submobject_to_align"))
-    options = family_handle.arrangeOptions(axis.x, axis.y, float(buff), bool(center),
+    options = engine_call(family_handle.arrangeOptions, axis.x, axis.y, float(buff), bool(center),
                                            edge.x, edge.y, mask.x, mask.y, index)
     aligner = kwargs.get("submobject_to_align")
     if aligner is not None:
@@ -1553,24 +1541,22 @@ def _group_arrange(
     context = _group_live_layout_context(self)
     try:
         if context is not None:
-            context.liveArrangeFamily(family_handle, options)
+            engine_call(context.liveArrangeFamily, family_handle, options)
             return self
         leaves = _compat._leaf_mobjects(self)
         leaf_handles = [_family_layout_leaf_adapter(member, mutation=True) for member in leaves]
         if any(handle is None for handle in leaf_handles):
             raise RuntimeError("arrange requires current shared Rust semantic handles")
-        family_handle.arrange(options)
+        engine_call(family_handle.arrange, options)
     except Exception as error:
-        if "alignment submobject index" in str(error):
-            raise IndexError(str(error)) from None
-        raise ValueError(str(error)) from None
+        raise_engine_error(error)
     return self
 
 
 def _group_layout_observation(value: _compat.Group):
     context = _group_live_layout_context(value)
     if context is not None:
-        return context.queryFamilyLayout(value._semantic_family_handle)
+        return engine_call(context.queryFamilyLayout, value._semantic_family_handle)
     layout = _shared_family_layout(value)
     if layout is None:
         raise RuntimeError("family layout requires a current shared Rust semantic handle")
@@ -1595,18 +1581,18 @@ def _validate_group_members(owner: _compat.Group, mobjects: tuple[object, ...]) 
 
 def _family_membership_batch(context: object, kind: str, mobjects: tuple[object, ...]):
     batch = (
-        context.beginMembershipBatch(kind)
+        engine_call(context.beginMembershipBatch, kind)
         if context is not None
-        else _new_membership_batch(kind)
+        else engine_call(_new_membership_batch, kind)
     )
     for value in mobjects:
         member_kind, handle = _family_member_handle(value)
         if handle is None:
             raise RuntimeError("family member has no shared semantic identity")
         if member_kind == "family":
-            batch.appendFamily(handle)
+            engine_call(batch.appendFamily, handle)
         else:
-            batch.appendMobject("", handle)
+            engine_call(batch.appendMobject, "", handle)
     return batch
 
 
@@ -1617,9 +1603,9 @@ def _group_init(self: _compat.Group, *mobjects: object) -> None:
     context = _live_constructor_context("family")
     batch = _family_membership_batch(context, "add", mobjects)
     family = (
-        context.liveCreateFamily(batch)
+        engine_call(context.liveCreateFamily, batch)
         if context is not None
-        else _create_family_handle(batch)
+        else engine_call(_create_family_handle, batch)
     )
     # Rust selects the authoritative ordered members; this map retains Python identity.
     wrappers = {}
@@ -1628,7 +1614,7 @@ def _group_init(self: _compat.Group, *mobjects: object) -> None:
         key = f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
         wrappers.setdefault(key, value)
     self._semantic_family_handle = family
-    self.submobjects = [wrappers[str(key)] for key in family.memberKeys()]
+    self.submobjects = [wrappers[str(key)] for key in engine_call(family.memberKeys)]
 
 
 def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
@@ -1639,9 +1625,9 @@ def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
     context = _live_constructor_context("family")
     batch = _family_membership_batch(context, "add", mobjects)
     changed = (
-        context.liveEditFamilyMembership(family_handle, batch)
+        engine_call(context.liveEditFamilyMembership, family_handle, batch)
         if context is not None
-        else family_handle.editMembership(batch)
+        else engine_call(family_handle.editMembership, batch)
     )
     accepted = tuple(value for value, changed in zip(mobjects, changed) if changed)
     if accepted:
@@ -1656,9 +1642,9 @@ def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
     context = _live_constructor_context("family")
     batch = _family_membership_batch(context, "remove", mobjects)
     changed = (
-        context.liveEditFamilyMembership(family_handle, batch)
+        engine_call(context.liveEditFamilyMembership, family_handle, batch)
         if context is not None
-        else family_handle.editMembership(batch)
+        else engine_call(family_handle.editMembership, batch)
     )
     accepted = tuple(value for value, changed in zip(mobjects, changed) if changed)
     if accepted:
@@ -1724,17 +1710,17 @@ def _group_copy(self: _compat.Group) -> _compat.Group:
                 if handle is None:
                     raise RuntimeError("family member has no shared semantic identity")
                 keys.append(f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}")
-            if keys != [str(key) for key in source._semantic_family_handle.memberKeys()]:
+            if keys != [str(key) for key in engine_call(source._semantic_family_handle.memberKeys)]:
                 raise RuntimeError("Group wrapper mirror diverged from shared family membership")
     references = _family_membership_batch(context, "add", tuple(source for source, _ in pairs))
-    copied = (context.liveCopyFamily(self._semantic_family_handle, references)
-              if context is not None else self._semantic_family_handle.copyFamily(references))
+    copied = (engine_call(context.liveCopyFamily, self._semantic_family_handle, references)
+              if context is not None else engine_call(self._semantic_family_handle.copyFamily, references))
     for source, target in pairs:
         if isinstance(source, _compat.Group):
-            target._semantic_family_handle = copied.familyFor(source._semantic_family_handle)
+            target._semantic_family_handle = engine_call(copied.familyFor, source._semantic_family_handle)
         else:
             _initialize_shared_wrapper(target)
-            target._semantic_handle = copied.mobjectFor(source._semantic_handle)
+            target._semantic_handle = engine_call(copied.mobjectFor, source._semantic_handle)
             target._semantic_handle_fresh = True
             if context is not None:
                 target._canonical_live_target_context = context

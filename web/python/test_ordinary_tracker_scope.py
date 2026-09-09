@@ -91,7 +91,7 @@ class OrdinaryTrackerScopeTests(unittest.TestCase):
                     self.assertEqual(tracker.get_value(), 2.0)
 
                     rejected = Scene(Context(reject=True))
-                    with self.assertRaisesRegex(ValueError, "association rejected"):
+                    with self.assertRaisesRegex(RuntimeError, "association rejected"):
                         tracker._associate_canonical(rejected, rejected.context)
                     self.assertIsNone(tracker._scene)
                     self.assertIsNone(tracker._canonical_context)

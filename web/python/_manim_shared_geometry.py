@@ -6,6 +6,8 @@ and argument conversion.
 
 from __future__ import annotations
 
+from _noon_errors import engine_call
+
 import operator
 from typing import Any
 
@@ -102,7 +104,7 @@ def _dot_init(
     options = dict(kwargs)
     options["stroke_width"] = stroke_width
     options["fill_opacity"] = fill_opacity
-    candidate = _shared._geometry_options.dot(
+    candidate = engine_call(_shared._geometry_options.dot,
         point_value.x, point_value.y, radius_value
     )
     _shared._apply_shared_constructor_options(candidate, options)
@@ -117,7 +119,7 @@ def _triangle_init(self: _geometry.Triangle, **kwargs: Any) -> None:
 
     options = dict(kwargs)
     color = options.pop("color", None)
-    candidate = _shared._geometry_options.triangle()
+    candidate = engine_call(_shared._geometry_options.triangle)
     _shared._apply_shared_constructor_options(candidate, options)
     _apply_candidate_color(candidate, color)
     _shared._attach_geometry_options(self, candidate, "Triangle")
@@ -137,11 +139,11 @@ def _ellipse_init(
     options = dict(kwargs)
     color = options.pop("color", None)
     scale = options.pop("scale", None)
-    candidate = _shared._geometry_options.ellipse(width_value, height_value)
+    candidate = engine_call(_shared._geometry_options.ellipse, width_value, height_value)
     _shared._apply_shared_constructor_options(candidate, options)
     if scale is not None:
         scale_value = _shared._ir._vec2("scale", scale)
-        candidate.scaleBy(scale_value["x"], scale_value["y"])
+        engine_call(candidate.scaleBy, scale_value["x"], scale_value["y"])
     _apply_candidate_color(candidate, color)
     _shared._attach_geometry_options(self, candidate, "Ellipse")
 
@@ -157,7 +159,7 @@ class Elbow(_compat.VMobject):
         angle_value = _shared._ir._finite_number("angle", angle)
         options = dict(kwargs)
         color = options.pop("color", None)
-        candidate = _shared._geometry_options.elbow(width_value, angle_value)
+        candidate = engine_call(_shared._geometry_options.elbow, width_value, angle_value)
         _shared._apply_shared_constructor_options(candidate, options)
         _apply_candidate_color(candidate, color)
         _shared._attach_geometry_options(self, candidate, "Elbow")
@@ -179,7 +181,7 @@ class RoundedRectangle(_compat.Rectangle):
         height = _shared._ir._positive_number("height", options.pop("height", 2.0))
         radius = _shared._ir._finite_number("corner_radius", corner_radius)
         color = options.pop("color", None)
-        candidate = _shared._geometry_options.roundedRectangle(width, height, radius)
+        candidate = engine_call(_shared._geometry_options.roundedRectangle, width, height, radius)
         _shared._apply_shared_constructor_options(candidate, options)
         _apply_candidate_color(candidate, color)
         _shared._attach_geometry_options(self, candidate, "RoundedRectangle")
@@ -226,7 +228,7 @@ def _shape_matcher_options(target: object, method: str, *args: float):
         raise NotImplementedError(
             "shape matcher target bridge does not expose shared matcher construction"
         )
-    return constructor(*args)
+    return engine_call(constructor, *args)
 
 
 class SurroundingRectangle(RoundedRectangle):
@@ -318,9 +320,9 @@ class Underline(_compat.Line):
         color = options.pop("color", None)
         context = _shared._live_constructor_context("Underline")
         candidate = (
-            target_handle.beginUnderline(buff_value)
+            engine_call(target_handle.beginUnderline, buff_value)
             if context is None
-            else context.beginUnderline(target_handle, buff_value)
+            else engine_call(context.beginUnderline, target_handle, buff_value)
         )
         _shared._apply_shared_constructor_options(candidate, options)
         _apply_candidate_color(candidate, color)
@@ -388,7 +390,7 @@ class AnnularSector(_compat.VMobject):
         outer = _shared._ir._finite_number("outer_radius", outer_radius)
         angle_value = _shared._ir._finite_number("angle", angle)
         start_value = _shared._ir._finite_number("start_angle", start_angle)
-        candidate = _shared._geometry_options.annularSector(
+        candidate = engine_call(_shared._geometry_options.annularSector,
                 inner,
                 outer,
                 angle_value,
@@ -430,7 +432,7 @@ class Sector(AnnularSector):
         radius_value = _shared._ir._finite_number("radius", radius)
         angle_value = _shared._ir._finite_number("angle", angle)
         start_value = _shared._ir._finite_number("start_angle", start_angle)
-        candidate = _shared._geometry_options.sector(
+        candidate = engine_call(_shared._geometry_options.sector,
                 radius_value,
                 angle_value,
                 start_value,
@@ -473,7 +475,7 @@ class Annulus(_compat.VMobject):
         options, component_count, center = _sector_options(kwargs)
         inner = _shared._ir._finite_number("inner_radius", inner_radius)
         outer = _shared._ir._finite_number("outer_radius", outer_radius)
-        candidate = _shared._geometry_options.annulus(
+        candidate = engine_call(_shared._geometry_options.annulus,
                 inner,
                 outer,
                 component_count,

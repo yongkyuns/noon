@@ -479,9 +479,8 @@ try {
     globalThis.noonResolveAnimationOptions = (...args) => {
       const result = wasm.resolveAnimationOptions(...args);
       try {
-        return {ok: result.ok, runTime: result.runTime, rateFunc: result.rateFunc,
-          lagRatio: result.lagRatio, pathArc: result.pathArc, reverseRateFunction: result.reverseRateFunction,
-          errorKind: result.errorKind ?? "", message: result.message ?? ""};
+        return {runTime: result.runTime, rateFunc: result.rateFunc,
+          lagRatio: result.lagRatio, pathArc: result.pathArc, reverseRateFunction: result.reverseRateFunction};
       } finally { result.free(); }
     };
     globalThis.noonUnmarkedError = () => { throw new Error("foreign handle invalid membership unsupported stale pending"); };
@@ -644,7 +643,7 @@ json.dumps({"matrix": results, "liveProperties": property_results, "advancement"
   assert.equal(report.python.liveProperties.length, 29);
   assert.equal(report.python.advancement.length, 9);
   assert.equal(report.python.contentObservations.length, 11);
-  assert.equal(report.python.additionalTests, 13);
+  assert.equal(report.python.additionalTests, 17);
 
 
   assert.equal(report.python.callbackTests, 8);

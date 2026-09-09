@@ -212,14 +212,11 @@ function resolveAnimationOptionsPlain(...args) {
   const result = resolveAnimationOptions(...args);
   try {
     return {
-      ok: result.ok,
       runTime: result.runTime,
       rateFunc: result.rateFunc,
       lagRatio: result.lagRatio,
       pathArc: result.pathArc,
       reverseRateFunction: result.reverseRateFunction,
-      errorKind: result.errorKind ?? "",
-      message: result.message ?? "",
     };
   } finally {
     result.free();

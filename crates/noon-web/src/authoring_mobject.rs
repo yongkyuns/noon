@@ -32,10 +32,13 @@ pub(crate) fn family_color(
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn text_authoring_f32(field: &str, value: f64) -> Result<f32, String> {
-    let value = render_f64(field, value).map_err(|error| error.to_string())? as f32;
+pub(crate) fn text_authoring_f32(
+    field: &str,
+    value: f64,
+) -> Result<f32, crate::authoring_error::AuthoringFailure> {
+    let value = render_f64(field, value)? as f32;
     if !value.is_finite() {
-        return Err(format!("{field} is outside the supported range"));
+        return Err(format!("{field} is outside the supported range").into());
     }
     Ok(value)
 }
@@ -46,11 +49,11 @@ pub(crate) fn manim_text(
     font_family: &str,
     font_size: f64,
     line_spacing: f64,
-) -> Result<noon::Text, String> {
+) -> Result<noon::Text, crate::authoring_error::AuthoringFailure> {
     let font_size = text_authoring_f32("font size", font_size)?;
     let line_spacing = text_authoring_f32("line spacing", line_spacing)?;
     if line_spacing != -1.0 && line_spacing <= -1.0 {
-        return Err("line spacing must be -1 or greater than -1".to_owned());
+        return Err("line spacing must be -1 or greater than -1".into());
     }
     Ok(noon::Text::new(source)
         .with_font(font_family)
@@ -69,9 +72,7 @@ mod wasm {
 
     use super::{Mobject, SemanticNodeId, SemanticStore};
 
-    fn js_error(error: impl std::fmt::Display) -> JsValue {
-        JsValue::from_str(&error.to_string())
-    }
+    use crate::authoring_error::js_error;
 
     type SharedSemanticStore = Rc<RefCell<SemanticStore>>;
 
@@ -174,7 +175,7 @@ mod wasm {
                 .map_err(js_error)?;
             Mobject::from_text(Rc::clone(&self.semantics), text)
                 .map(|handle| WasmAuthoringMobjectHandle { handle })
-                .map_err(|error| js_error(error.to_string()))
+                .map_err(js_error)
         }
 
         /// Compile Typst or MathTypst into the same semantic store as geometry handles.
@@ -199,7 +200,7 @@ mod wasm {
             };
             handle
                 .map(|handle| WasmAuthoringMobjectHandle { handle })
-                .map_err(|error| js_error(error.to_string()))
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = createFamily)]

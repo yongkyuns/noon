@@ -1603,8 +1603,9 @@ class ArrangedOptions(Scene):
         self.wait(0.1)
         try:
             invalid.arrange(center=False, index_of_submobject_to_align=0)
-        except IndexError:
-            pass
+        except NoonValueError as error:
+            assert error.category == "invalid_input"
+            assert (error.rust_cause or error).code == "authoring.invalid_submobject_index"
         else:
             raise AssertionError("late invalid arrangement index was accepted")
         assert abs(first.get_center().x + 1) < 1e-6
@@ -1651,8 +1652,9 @@ class SelectedAlignment(Scene):
         assert abs(second.get_center().x - 0.75) < 1e-6
         try:
             family.next_to(ORIGIN, index_of_submobject_to_align=-3)
-        except IndexError:
-            pass
+        except NoonValueError as error:
+            assert error.category == "invalid_input"
+            assert (error.rust_cause or error).code == "authoring.invalid_submobject_index"
         else:
             raise AssertionError("invalid family index was accepted")
         assert abs(first.get_center().x + 1.25) < 1e-6
