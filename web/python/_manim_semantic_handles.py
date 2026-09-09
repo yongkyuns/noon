@@ -727,6 +727,22 @@ def _square_init(
     self.height_value = value
 
 
+def _path_init(
+    self: _compat.Path,
+    path: _base.VectorPath,
+    *,
+    color: _base.Color | None = None,
+    **kwargs: Any,
+) -> None:
+    if not isinstance(path, _base.VectorPath):
+        raise TypeError("path must be a VectorPath")
+    options = _vector_path_options(path.to_ir())
+    _apply_shared_constructor_options(options, kwargs)
+    _apply_constructor_color(options, color)
+    _attach_geometry_options(self, options, "Path")
+    self.path = path
+
+
 def _line_init(
     self: _compat.Line,
     start: object = None,
@@ -2011,6 +2027,7 @@ def install() -> None:
     _compat.Square.__init__ = _square_init
     _compat.Rectangle.__init__ = _rectangle_init
     _compat.Line.__init__ = _line_init
+    _compat.Path.__init__ = _path_init
 
     if _create_family_handle is not None:
         _compat.Group.__init__ = _group_init

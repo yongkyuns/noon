@@ -117,7 +117,6 @@ jobs:
           "$binaryen_dir/bin/wasm-opt" --version
       - name: Build and validate optimized browser package
         env:
-          NOON_SKIP_PLAYGROUND_TEST: '1'
         run: bash scripts/build-web-demo.sh
       - name: Record optimized WASM size
         shell: bash

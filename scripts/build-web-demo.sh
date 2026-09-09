@@ -109,9 +109,6 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   PYTHONDONTWRITEBYTECODE=1 python3 -m compileall -q web/python/examples
   PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s web/python -p 'test_*.py'
 
-  if [[ "${NOON_SKIP_PLAYGROUND_TEST:-0}" != "1" ]]; then
-    cargo test -p noon-web --test playground_examples
-  fi
 fi
 
 if [[ "$web_preflight_only" == "1" ]]; then

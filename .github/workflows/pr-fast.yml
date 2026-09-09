@@ -87,7 +87,6 @@ jobs:
     name: Web static and unit checks
     runs-on: ubuntu-latest
     env:
-      NOON_SKIP_PLAYGROUND_TEST: "1"
       NOON_WEB_PREFLIGHT_ONLY: "1"
     steps:
       - name: Checkout

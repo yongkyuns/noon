@@ -48,7 +48,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: "0"
-      NOON_SKIP_PLAYGROUND_TEST: "1"
       NOON_WASM_SKIP_OPT: "1"
     steps:
       - name: Checkout
