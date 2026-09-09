@@ -160,3 +160,21 @@ fn rotated_uniform_fit_works_and_unrepresentable_stretch_rejects_atomically() {
 fn paired_dimension_fitting_example_builds_the_normal_execution_session() {
     noon::example_scenes::dimension_fitting::session().unwrap();
 }
+
+#[test]
+fn fitting_preserves_offset_geometry_center_in_authored_and_live_paths() {
+    let mut scene = Scene::new();
+    let line = scene.line((1.0, 2.0), (3.0, 2.0)).unwrap();
+    let anchor = LayoutAnchor::from(&line);
+    let center = line.center().unwrap();
+    anchor.rescale_to_fit(4.0, Width, false).unwrap();
+    assert_eq!(line.width().unwrap(), 4.0);
+    assert_eq!(line.center().unwrap(), center);
+    scene.add_many(&[(&line).into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut session);
+    live.rescale_to_fit(&anchor, 6.0, Width, true).unwrap();
+    let layout = live.effective_layout(&line).unwrap();
+    assert_eq!(layout.width, 6.0);
+    assert_eq!(layout.center, center);
+}

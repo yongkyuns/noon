@@ -1,9 +1,7 @@
 //! Dimension fitting uses shared bounds and the existing atomic affine edits.
 use std::rc::Rc;
 
-use crate::{
-    semantic_mobject::authoring_render_f64, Bounds2D64, LayoutAnchor, Mobject, MobjectFamily,
-};
+use crate::{semantic_mobject::authoring_render_f64, Bounds2D64, LayoutAnchor};
 
 /// The supported planar layout dimensions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,23 +72,24 @@ impl LayoutAnchor {
         let Some((x, y)) = dimension.scale(layout.bounds(), length, stretch)? else {
             return Ok(());
         };
-        for &leaf in layout.leaves() {
-            let object = Mobject::from_node(Rc::clone(self.integration_store()), leaf)?;
-            validate_fit_stretch(object.state()?.transform.rotation_z, stretch)?;
-        }
-        let node = self.resolve()?;
-        let is_family = matches!(
-            self.integration_store()
-                .borrow()
-                .node(node)
-                .map(|node| node.kind()),
-            Some(noon_core::SemanticNodeKind::Family)
-        );
-        if is_family {
-            MobjectFamily::from_node(Rc::clone(self.integration_store()), node)?.scale(x, y)
-        } else {
-            Mobject::from_node(Rc::clone(self.integration_store()), node)?.scale(x, y)
-        }
+        let transaction = {
+            let store = self.integration_store().borrow();
+            for &leaf in layout.leaves() {
+                let state = store
+                    .semantic_object_state_checked(leaf)
+                    .map_err(|e| e.to_string())?;
+                validate_fit_stretch(state.transform.rotation_z, stretch)?;
+            }
+            crate::family_affine::FamilyAffine::Scale(x, y).transaction(
+                &store,
+                layout.leaves(),
+                layout.bounds(),
+            )?
+        };
+        transaction
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     /// Match an object's or family's dimension using a fresh shared observation.

@@ -42,21 +42,10 @@ impl LiveSession<'_> {
         let Some((x, y)) = scale else {
             return Ok(());
         };
-        let node = source.resolve().map_err(LiveSessionError::Mobject)?;
-        let is_family = matches!(
-            self.store.borrow().node(node).map(|node| node.kind()),
-            Some(noon_core::SemanticNodeKind::Family)
-        );
-        if is_family {
-            let transaction = crate::family_affine::FamilyAffine::Scale(x, y)
-                .transaction(&self.store.borrow(), &leaves, bounds)
-                .map_err(LiveSessionError::Mobject)?;
-            self.apply(transaction).map(|_| ())
-        } else {
-            let object = Mobject::from_node(Rc::clone(self.store), node)
-                .map_err(LiveSessionError::Mobject)?;
-            self.scale(&object, x, y).map(|_| ())
-        }
+        let transaction = crate::family_affine::FamilyAffine::Scale(x, y)
+            .transaction(&self.store.borrow(), &leaves, bounds)
+            .map_err(LiveSessionError::Mobject)?;
+        self.apply(transaction).map(|_| ())
     }
 
     /// Match the effective target dimension; no wrapper computes layout ratios.
