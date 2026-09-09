@@ -1,0 +1,103 @@
+# Component/data view; interface details and rationale are in README.md and docs/architecture.md.
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    pad: 22
+  }
+}
+style.fill: "#FFFFFF"
+classes: {
+  component: {
+    width: 186
+    height: 86
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#8394AC"
+      stroke-width: 2
+      border-radius: 8
+      font-size: 19
+      font-color: "#172C47"
+      bold: false
+    }
+  }
+  hidden: {
+    width: 186
+    height: 86
+    label: ""
+    style: {fill: transparent; stroke: transparent}
+  }
+  flow: {
+    style: {
+      stroke: "#365E94"
+      stroke-width: 2
+      font-size: 14
+      font-color: "#43566E"
+      italic: false
+    }
+  }
+  host: {
+    style: {
+      stroke: "#718198"
+      stroke-width: 2
+      stroke-dash: 5
+      font-size: 14
+      font-color: "#43566E"
+      italic: false
+    }
+  }
+}
+
+# Fixed five-column grid: the first row is the data path. Empty cells in
+# row two keep the two host responsibilities directly below their consumers.
+grid-columns: 5
+horizontal-gap: 126
+vertical-gap: 114
+
+# D2 fills this five-column grid column-first. Each pair below is a
+# component on the first row, then its aligned cell on the host row.
+frontends: {
+  class: component
+  label: "Authoring\nRust API · Python"
+  style.fill: "#F2F5F9"
+}
+spacer1.class: hidden
+semantic: {
+  class: component
+  label: "Semantic scene\nObjects · families"
+  style.fill: "#EDF4FF"
+}
+spacer2.class: hidden
+compile: {
+  class: component
+  label: "Lowering\nTracks · reactive plan"
+  style.fill: "#FFF7E8"
+}
+spacer3.class: hidden
+runtime: {
+  class: component
+  label: "Runtime + session\nEffective state"
+  style.fill: "#F4F0FB"
+}
+host_loop: {
+  class: component
+  label: "Host loop\nNative / browser"
+  style.fill: "#F2F5F9"
+}
+renderer: {
+  class: component
+  label: "Renderer\nRetained GPU state"
+  style.fill: "#EAF7F4"
+}
+host_surface: {
+  class: component
+  label: "Surface adapter\nWindow / canvas"
+  style.fill: "#F2F5F9"
+}
+
+frontends -> semantic: "semantic ops" {class: flow}
+semantic -> compile: "declarations" {class: flow}
+compile -> runtime: "CompiledScene" {class: flow}
+runtime -> renderer: "FrameEpoch\n+ changes" {class: flow}
+host_loop -> runtime: "input / tick" {class: host}
+host_surface -> renderer: "device / present" {class: host}

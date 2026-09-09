@@ -14,27 +14,17 @@ import _manim_compat as _compat
 import _manim_rate_functions as _rate_functions
 
 
-_ORIGINAL_TRANSFORM = _base.Transform
-_ORIGINAL_REPLACEMENT_TRANSFORM = _base.ReplacementTransform
-_ORIGINAL_TRANSFORM_FROM_COPY = _base.TransformFromCopy
-_ORIGINAL_TRANSFORM_MATCHING_SHAPES = _base.TransformMatchingShapes
-_ORIGINAL_CREATE = _base.Create
-_ORIGINAL_UNCREATE = _base.Uncreate
-_ORIGINAL_FADE_IN = _base.FadeIn
-_ORIGINAL_FADE_OUT = _base.FadeOut
 _PURE_YELLOW = _base.color_from_hex("#FFFF00")
 
 
 def _store_animation_args(animation: object, kwargs: dict[str, Any]) -> None:
     """Attach Manim Animation kwargs for the shared option resolver.
 
-    Noon's original animation records are frozen/slotted dataclasses. Subclassing them
-    gives the compatibility facade a small Python ``__dict__`` for authoring metadata
-    while preserving the existing low-level fields and isinstance-based lowering.
-    Validation remains centralized in ``_manim_animation_options`` at play time.
+    These inert requests carry Python call-shape metadata only. Validation and
+    execution remain in the shared Rust option/animation operations.
     """
 
-    object.__setattr__(animation, "anim_args", dict(kwargs))
+    animation.anim_args = dict(kwargs)
 
 
 def _fade_authoring_options(
@@ -84,13 +74,13 @@ def _store_fade_options(
     point_target: bool,
     point: _base.Vec2 | None,
 ) -> None:
-    object.__setattr__(animation, "_fade_shift_vector", shift_vector)
-    object.__setattr__(animation, "_fade_scale_factor", scale_factor)
-    object.__setattr__(animation, "_fade_point_target", point_target)
-    object.__setattr__(animation, "_fade_point", point)
+    animation._fade_shift_vector = shift_vector
+    animation._fade_scale_factor = scale_factor
+    animation._fade_point_target = point_target
+    animation._fade_point = point
 
 
-class Transform(_ORIGINAL_TRANSFORM):
+class Transform:
     def __init__(
         self,
         source: object,
@@ -98,7 +88,9 @@ class Transform(_ORIGINAL_TRANSFORM):
         key: str | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(source, target, key)
+        self.source = source
+        self.target = target
+        self.key = key
         _store_animation_args(self, kwargs)
 
 
@@ -127,7 +119,7 @@ class Indicate:
         _store_animation_args(self, animation_kwargs)
 
 
-class ReplacementTransform(_ORIGINAL_REPLACEMENT_TRANSFORM):
+class ReplacementTransform:
     def __init__(
         self,
         source: object,
@@ -135,11 +127,13 @@ class ReplacementTransform(_ORIGINAL_REPLACEMENT_TRANSFORM):
         key: str | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(source, target, key)
+        self.source = source
+        self.target = target
+        self.key = key
         _store_animation_args(self, kwargs)
 
 
-class TransformFromCopy(_ORIGINAL_TRANSFORM_FROM_COPY):
+class TransformFromCopy:
     def __init__(
         self,
         source: object,
@@ -147,11 +141,13 @@ class TransformFromCopy(_ORIGINAL_TRANSFORM_FROM_COPY):
         key: str | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(source, target, key)
+        self.source = source
+        self.target = target
+        self.key = key
         _store_animation_args(self, kwargs)
 
 
-class TransformMatchingShapes(_ORIGINAL_TRANSFORM_MATCHING_SHAPES):
+class TransformMatchingShapes:
     def __init__(
         self,
         sources: object,
@@ -159,17 +155,20 @@ class TransformMatchingShapes(_ORIGINAL_TRANSFORM_MATCHING_SHAPES):
         key: str | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(sources, targets, key)
+        self.sources = sources
+        self.targets = targets
+        self.key = key
         _store_animation_args(self, kwargs)
 
 
-class Create(_ORIGINAL_CREATE):
+class Create:
     def __init__(self, target: object, key: str | None = None, **kwargs: Any) -> None:
-        super().__init__(target, key)
+        self.target = target
+        self.key = key
         _store_animation_args(self, kwargs)
 
 
-class Uncreate(_ORIGINAL_UNCREATE):
+class Uncreate(Create):
     def __init__(
         self,
         target: object,
@@ -178,16 +177,18 @@ class Uncreate(_ORIGINAL_UNCREATE):
         remover: bool = True,
         **kwargs: Any,
     ) -> None:
-        super().__init__(target, key, bool(reverse_rate_function), bool(remover))
-        _store_animation_args(self, kwargs)
+        super().__init__(target, key, **kwargs)
+        self.reverse_rate_function = bool(reverse_rate_function)
+        self.remover = bool(remover)
 
 
-class FadeIn(_ORIGINAL_FADE_IN):
+class FadeIn:
     def __init__(self, target: object, key: str | None = None, **kwargs: Any) -> None:
         animation_kwargs, shift_vector, scale_factor, point_target, point = (
             _fade_authoring_options(target, kwargs)
         )
-        super().__init__(target, key)
+        self.target = target
+        self.key = key
         _store_animation_args(self, animation_kwargs)
         _store_fade_options(
             self,
@@ -198,12 +199,13 @@ class FadeIn(_ORIGINAL_FADE_IN):
         )
 
 
-class FadeOut(_ORIGINAL_FADE_OUT):
+class FadeOut:
     def __init__(self, target: object, key: str | None = None, **kwargs: Any) -> None:
         animation_kwargs, shift_vector, scale_factor, point_target, point = (
             _fade_authoring_options(target, kwargs)
         )
-        super().__init__(target, key)
+        self.target = target
+        self.key = key
         _store_animation_args(self, animation_kwargs)
         _store_fade_options(
             self,
@@ -214,24 +216,34 @@ class FadeOut(_ORIGINAL_FADE_OUT):
         )
 
 
-# Replace only the public compatibility classes. Their frozen Noon bases remain the
-# low-level representation and existing code using isinstance(..., noon.Create/etc.)
-# continues to work because the module globals now point at these subclasses.
-for _name, _value in {
-    "Transform": Transform,
-    "Indicate": Indicate,
-    "ReplacementTransform": ReplacementTransform,
-    "TransformFromCopy": TransformFromCopy,
-    "TransformMatchingShapes": TransformMatchingShapes,
-    "Create": Create,
-    "Uncreate": Uncreate,
-    "FadeIn": FadeIn,
-    "FadeOut": FadeOut,
-}.items():
-    setattr(_base, _name, _value)
+class ScaleInPlace:
+    """Defer shared target construction until play begins, like Manim ApplyMethod."""
 
-if "Indicate" not in _base.__all__:
-    _base.__all__.append("Indicate")
+    def __init__(self, mobject: object, scale_factor: float, **kwargs: Any) -> None:
+        if not isinstance(mobject, (_base.Mobject, _compat.Group)):
+            raise TypeError("ScaleInPlace target must be a Mobject or Group")
+        factor = float(scale_factor)
+        if not math.isfinite(factor):
+            raise ValueError("scale factor must be finite")
+        self.source = mobject
+        self.mobject = mobject
+        self.scale_factor = factor
+        self.anim_args = dict(kwargs)
+
+
+class ShrinkToCenter:
+    """Inert request for the shared Rust scale-to-center removal lifecycle."""
+
+    _canonical_affine_lifecycle = "shrink"
+
+    def __init__(self, mobject: object, **kwargs: Any) -> None:
+        if isinstance(mobject, _compat.Group):
+            raise NotImplementedError("ShrinkToCenter currently supports one leaf Mobject")
+        if not isinstance(mobject, _base.Mobject):
+            raise TypeError("ShrinkToCenter target must be a Mobject")
+        self.mobject = mobject
+        self.anim_args = dict(kwargs)
+
 
 
 class _AnimateBuilderMixin:

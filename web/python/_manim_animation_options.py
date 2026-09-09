@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
 from typing import Any
 
 from js import noonResolveAnimationOptions as _resolve_shared_animation_options
 
-import noon as _base
-import _manim_compat as _compat
 import _manim_rate_functions as _rate_functions
 
 
@@ -103,43 +100,3 @@ def resolve(
         path_arc=float(result.pathArc),
         reverse_rate_function=bool(result.reverseRateFunction),
     )
-
-
-class ScaleInPlace:
-    """Defer shared target construction until play begins, like Manim ApplyMethod."""
-
-    def __init__(self, mobject: object, scale_factor: float, **kwargs: Any) -> None:
-        if not isinstance(mobject, (_base.Mobject, _compat.Group)):
-            raise TypeError("ScaleInPlace target must be a Mobject or Group")
-        factor = float(scale_factor)
-        if not math.isfinite(factor):
-            raise ValueError("scale factor must be finite")
-        self.source = mobject
-        self.mobject = mobject
-        self.scale_factor = factor
-        self.anim_args = dict(kwargs)
-
-
-class ShrinkToCenter:
-    """Inert request for the shared Rust scale-to-center removal lifecycle."""
-
-    _canonical_affine_lifecycle = "shrink"
-
-    def __init__(self, mobject: object, **kwargs: Any) -> None:
-        if isinstance(mobject, _compat.Group):
-            raise NotImplementedError("ShrinkToCenter currently supports one leaf Mobject")
-        if not isinstance(mobject, _base.Mobject):
-            raise TypeError("ShrinkToCenter target must be a Mobject")
-        self.mobject = mobject
-        self.anim_args = dict(kwargs)
-
-
-public = {
-    "ScaleInPlace": ScaleInPlace,
-    "ShrinkToCenter": ShrinkToCenter,
-}
-for _name, _value in public.items():
-    setattr(_base, _name, _value)
-    setattr(_compat, _name, _value)
-    if _name not in _base.__all__:
-        _base.__all__.append(_name)
