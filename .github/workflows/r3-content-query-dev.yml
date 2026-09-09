@@ -4,52 +4,56 @@ on:
     branches: [codex/1292-r3-content-query-prep]
 permissions:
   contents: read
+  actions: read
+  pull-requests: read
 jobs:
-  inspect-composition:
+  collect:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: 35658f4a9468ca44cc5dcfb97e7aae8b62e38e08
-          fetch-depth: 0
-      - name: Prove clean composition and unchanged content-query test bodies
+      - name: Archive existing completed results; no compiler or test invocation
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p /tmp/r3-composition
-          base=35658f4a9468ca44cc5dcfb97e7aae8b62e38e08
-          head=2ebf43857584e6fafdde8bd9955191400d642e1b
-          git config user.name 'Yongkyun Shin'
-          git config user.email '4311628+yongkyuns@users.noreply.github.com'
-          git merge --no-commit --no-ff "$head"
-          git diff --cached --check
-          git rev-parse HEAD > /tmp/r3-composition/base.txt
-          git write-tree > /tmp/r3-composition/combined-tree.txt
-          git diff --cached --stat > /tmp/r3-composition/combined-stat.txt
-          git diff --cached > /tmp/r3-composition/content-query.patch
-          git diff 5b56124312657c0959e1ca3936930cad0fe7e240 "$base" > /tmp/r3-composition/landed-family.patch
+          mkdir -p /tmp/r3-final-evidence
           python3 - <<'PY'
-          import ast, json, pathlib, subprocess
+          import hashlib, json, os, pathlib, re, urllib.parse, urllib.request
+          root='https://api.github.com/repos/yongkyuns/noon'
+          out=pathlib.Path('/tmp/r3-final-evidence')
           head='2ebf43857584e6fafdde8bd9955191400d642e1b'
-          paths=['scripts/typed-authoring-errors-smoke.mjs','web/python/test_noon_errors_wasm.py','web/python/_manim_scene.py']
-          for path in paths:
-              assert pathlib.Path(path).read_bytes()==subprocess.check_output(['git','show',head+':'+path]),path
-          def methods(text):
-              return {n.name:ast.dump(n,include_attributes=False) for n in ast.walk(ast.parse(text)) if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name.startswith('test_')}
-          main=methods(pathlib.Path(paths[1]).read_text())
-          assert len(main)==12
-          changed=subprocess.check_output(['git','diff','--cached','--name-only'],text=True).splitlines()
-          assert len(changed)==5,changed
-          pathlib.Path('/tmp/r3-composition/preservation.json').write_text(json.dumps({'head':head,'unchanged_files_from_tested_head':paths,'general_wasm_count':12,'content_query_diff_files':changed,'scope':'source/Python composition only; no new Rust or WASM execution'},indent=2))
+          class ScopedRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  if urllib.parse.urlparse(newurl).scheme != 'https':
+                      raise ValueError('refuse non-HTTPS redirect')
+                  redirected=super().redirect_request(req,fp,code,msg,headers,newurl)
+                  if redirected is not None and urllib.parse.urlparse(req.full_url).netloc != urllib.parse.urlparse(newurl).netloc:
+                      redirected.remove_header('Authorization')
+                  return redirected
+          opener=urllib.request.build_opener(ScopedRedirect())
+          def read(path):
+              request=urllib.request.Request(root+path,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+              with opener.open(request,timeout=45) as response: return response.read()
+          def clean(data):
+              text=re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]','',data.decode('utf-8-sig'))
+              return ''.join(c for c in text if c in '\n\r\t' or ord(c)>=32)
+          for path,name in [('/pulls/1355','pr.json'),('/issues/1355/comments?per_page=100','comments.json'),('/pulls/1355/reviews?per_page=100','reviews.json'),('/git/ref/heads/master','master.json'),('/git/commits/003a8fbc4a1503e2e59b7cce831582c14fbeb2f3','tested-merge.json'),('/actions/runs?event=pull_request&head_sha='+head+'&per_page=100','runs.json'),('/actions/runs/34390159552','full-run.json'),('/actions/runs/34390159552/jobs','full-jobs.json')]:
+              out.joinpath(name).write_bytes(read(path))
+          manifest=[]
+          for job_id,name in [(102594426796,'current-browser.log'),(102594426866,'current-native-unit.log'),(102594426765,'current-web-preflight.log'),(102596995590,'current-product.log')]:
+              job=json.loads(read('/actions/jobs/'+str(job_id)))
+              assert job['status']=='completed' and job['conclusion']=='success', (name,job['status'],job['conclusion'])
+              run=json.loads(read('/actions/runs/'+str(job['run_id'])))
+              assert run['head_sha']==head
+              data=read('/actions/jobs/'+str(job_id)+'/logs')
+              out.joinpath(name).write_text(clean(data))
+              manifest.append({'job_id':job_id,'file':name,'run_id':job['run_id'],'conclusion':job['conclusion'],'raw_sha256':hashlib.sha256(data).hexdigest(),'sanitized_sha256':hashlib.sha256(out.joinpath(name).read_bytes()).hexdigest()})
+          out.joinpath('log-manifest.json').write_text(json.dumps(manifest,indent=2))
+          assert '003a8fbc4a1503e2e59b7cce831582c14fbeb2f3' in out.joinpath('current-browser.log').read_text()
+          print('Archived existing successful exact-head logs and full-step status; no compilation or test rerun.')
           PY
-          node --check scripts/typed-authoring-errors-smoke.mjs
-          git archive --format=tar.gz "$(git write-tree)" > /tmp/r3-composition/source.tar.gz
-      - name: Complete Python discovery on the composition
-        run: |
-          set -o pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s web/python -p 'test_*.py' 2>&1 | tee /tmp/r3-composition/python.log
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r3-1355-family-source-composition
-          path: /tmp/r3-composition
+          name: r3-1355-completed-ci-evidence
+          path: /tmp/r3-final-evidence
           retention-days: 7
