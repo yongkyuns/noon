@@ -19,9 +19,10 @@ class OrdinaryTimedComposition(Scene):
             rate_func=smooth,
         ))
         self.wait(0.25)
+        # Map over the existing roots without adding another semantic family.
         self.play(LaggedStartMap(
             FadeOut,
-            VGroup(first, second, third),
+            (first, second, third),
             lag_ratio=0.5,
             run_time=1,
             rate_func=linear,
