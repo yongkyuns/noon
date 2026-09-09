@@ -1,4 +1,4 @@
-name: R3 callback source qualification (development only)
+name: R3 callback final landing qualification (development only)
 on:
   push:
     branches: [codex/1292-r3-callback-errors-prep]
@@ -7,79 +7,47 @@ permissions:
 jobs:
   qualify:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 50
     env:
-      BASE: 47bfd0b6b20ac4b828607dc32a655dca8060db71
-      PRODUCT_BRANCH: codex/1292-r3-callback-errors
+      BASE: b9d6c4cbd82a6333551663358946294538cc3842
+      CANDIDATE: 804c1d0147cc70f65df03e3f2c3d560b87c39bfe
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Assemble only the seven product files on the pinned master
+      - name: Assemble the existing Family candidate with the pinned landing base
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/callback-input" "$RUNNER_TEMP/callback-evidence"
-          cp scripts/r3-callback-errors-prep.py "$RUNNER_TEMP/callback-input/apply.py"
-          cp crates/noon-web/src/semantic_execution_player/callback_error_tests.rs "$RUNNER_TEMP/callback-input/"
-          cp web/python/test_noon_callback_errors_wasm.py "$RUNNER_TEMP/callback-input/"
-          git checkout --detach "$BASE"
-          test "$(git rev-parse HEAD)" = "$BASE"
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-          p = Path(os.environ['RUNNER_TEMP']) / 'callback-input/apply.py'
-          text = p.read_text()
-          # #1345 added its ninth real-WASM unittest. Preserve both that test and
-          # its exact count when adding the distinct callback suite.
-          assert text.count('report.python.additionalTests, 8') == 2
-          p.write_text(text.replace('report.python.additionalTests, 8', 'report.python.additionalTests, 9'))
-          PY
-          python3 "$RUNNER_TEMP/callback-input/apply.py"
-          mkdir -p crates/noon-web/src/semantic_execution_player
-          cp "$RUNNER_TEMP/callback-input/callback_error_tests.rs" crates/noon-web/src/semantic_execution_player/
-          cp "$RUNNER_TEMP/callback-input/test_noon_callback_errors_wasm.py" web/python/
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('web/python/test_updater_snapshot.py')
-          s = p.read_text()
-          old = '        async def read(key):\n            raise ValueError("stale phase scalar")'
-          new = '        failure = ValueError("stale phase scalar")\n        async def read(key):\n            raise failure'
-          assert s.count(old) == 1
-          s = s.replace(old, new)
-          old = '        with self.assertRaisesRegex(RuntimeError, "stale phase scalar"):\n            context.scalar((8, 3))'
-          new = '        with self.assertRaises(ValueError) as caught:\n            context.scalar((8, 3))\n        self.assertIs(caught.exception, failure)'
-          assert s.count(old) == 1
-          p.write_text(s.replace(old, new))
-          PY
-          cargo fmt --all
-          python3 - <<'PY'
-          import subprocess
-          expected = {
-              'crates/noon-web/src/authoring_error.rs',
-              'crates/noon-web/src/semantic_execution_player.rs',
-              'crates/noon-web/src/semantic_execution_player/callback_error_tests.rs',
-              'web/python/_manim_updaters.py',
-              'web/python/test_noon_callback_errors_wasm.py',
-              'web/python/test_updater_snapshot.py',
-              'scripts/typed-authoring-errors-smoke.mjs',
-          }
-          changed = set(subprocess.check_output(['git','diff','--name-only'], text=True).splitlines())
-          changed |= set(subprocess.check_output(['git','ls-files','--others','--exclude-standard'], text=True).splitlines())
-          assert changed == expected, (changed, expected)
-          subprocess.run(['git','add','--',*sorted(expected)], check=True)
-          PY
-          git diff --cached --check
+          mkdir -p "$RUNNER_TEMP/r3-landing-input" "$RUNNER_TEMP/r3-landing-evidence"
+          echo "EVIDENCE=$RUNNER_TEMP/r3-landing-evidence" >> "$GITHUB_ENV"
+          cp scripts/r3-callback-final-combine-prep.py "$RUNNER_TEMP/r3-landing-input/combine.py"
           git config user.name 'Noon qualification bot'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'fix: retain callback transaction failures through WASM and Python'
-          git rev-parse HEAD HEAD^{tree} HEAD^ > "$RUNNER_TEMP/callback-evidence/revisions.txt"
-          git diff "$BASE" HEAD > "$RUNNER_TEMP/callback-evidence/product.patch"
-          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/callback-evidence/source.tar.gz"
-      - name: Restore native Cargo sources
+          git checkout --detach "$CANDIDATE"
+          RUSTC_WRAPPER= python3 "$RUNNER_TEMP/r3-landing-input/combine.py"
+          git commit -m 'fix: integrate current master for callback error landing'
+          test "$(git rev-parse HEAD^)" = "$CANDIDATE"
+          test "$(git rev-parse HEAD^2)" = "$BASE"
+          git rev-parse HEAD HEAD^{tree} HEAD^ HEAD^2 > "$RUNNER_TEMP/r3-landing-evidence/revisions.txt"
+          git diff "$BASE" HEAD > "$RUNNER_TEMP/r3-landing-evidence/product.patch"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/r3-landing-evidence/source.tar.gz"
+      - name: Publish source-only candidate for exact-head review and PR CI
+        run: git push origin HEAD:refs/heads/codex/1350-final-candidate
+      - name: Retain the exact candidate source before full qualification
+        uses: actions/upload-artifact@v7
+        with:
+          name: r3-callback-final-source
+          path: ${{ env.EVIDENCE }}
+          retention-days: 3
+          if-no-files-found: error
+      - name: Restore Cargo sources
         uses: actions/cache/restore@v6
         with:
           path: |
@@ -88,44 +56,59 @@ jobs:
           key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-sources-
-      - name: Focused native callback rejection and recovery
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo test -p noon-web --all-features --lib callback_error_tests -- --nocapture 2>&1 | tee "$RUNNER_TEMP/callback-evidence/native-focused.log"
-      - name: Common native fast gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash scripts/check.sh fast "$BASE" 2>&1 | tee "$RUNNER_TEMP/callback-evidence/native-fast.log"
-      - name: Web and Python preflight
-        shell: bash
-        run: |
-          set -euo pipefail
-          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh 2>&1 | tee "$RUNNER_TEMP/callback-evidence/preflight.log"
-      - name: Retain exact source and native evidence
-        if: always()
-        shell: bash
-        run: |
-          mkdir -p "$RUNNER_TEMP/callback-evidence"
-          git status --short > "$RUNNER_TEMP/callback-evidence/status.txt"
-          rustc --version > "$RUNNER_TEMP/callback-evidence/toolchain.txt"
-          node --version >> "$RUNNER_TEMP/callback-evidence/toolchain.txt"
-          if test -f Cargo.lock; then cp Cargo.lock "$RUNNER_TEMP/callback-evidence/"; fi
-          printf '%s\n' 'No WASM/browser pass is claimed by source assembly. Normal PR CI must build/test its exact event checkout.' > "$RUNNER_TEMP/callback-evidence/qualification-limit.txt"
-      - name: Upload evidence before source publication
-        if: always()
-        uses: actions/upload-artifact@v7
+      - name: Use pinned compiler cache client
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
-          name: r3-callback-source-qualification
-          path: ${{ runner.temp }}/callback-evidence
-          if-no-files-found: error
-          retention-days: 3
-      - name: Publish native-qualified source for review and normal PR CI
+          version: v0.16.0
+      - name: Install repository-pinned package builder
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+      - name: Required full gate on the exact integrated candidate
         shell: bash
         run: |
           set -euo pipefail
-          test -z "$(git diff --name-only)"
-          test -z "$(git diff --cached --name-only)"
-          test "$(git rev-parse HEAD^)" = "$BASE"
-          git push origin "HEAD:refs/heads/$PRODUCT_BRANCH"
+          bash scripts/check.sh full "$BASE" 2>&1 | tee "$EVIDENCE/full.log"
+          sha256sum web/pkg/noon_web_bg.wasm > "$EVIDENCE/release-wasm-sha256.txt"
+      - name: Diagnostic-enabled WASM for the existing real error runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          NOON_SKIP_WEB_PREFLIGHT=1 NOON_WASM_PROFILE=dev NOON_WASM_SKIP_OPT=1 bash scripts/build-web-demo.sh 2>&1 | tee "$EVIDENCE/dev-build.log"
+      - name: Install existing browser test dependencies
+        shell: bash
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Existing real WASM and Pyodide error matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/typed-authoring-errors-smoke.mjs 2>&1 | tee "$EVIDENCE/boundary.log"
+      - name: Existing paired authoring and production-worker recovery suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/shared-authoring-smoke.mjs 2>&1 | tee "$EVIDENCE/shared-authoring.log"
+          node scripts/manim-compat-smoke.mjs 2>&1 | tee "$EVIDENCE/manim.log"
+      - name: Retain actual code, runtime and complete execution evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git status --short > "$EVIDENCE/status.txt"
+          git rev-parse HEAD HEAD^{tree} > "$EVIDENCE/final-revisions.txt"
+          rustc --version > "$EVIDENCE/toolchain.txt"
+          node --version >> "$EVIDENCE/toolchain.txt"
+          test ! -f Cargo.lock || cp Cargo.lock "$EVIDENCE/"
+          test ! -d web/pkg || cp -r web/pkg "$EVIDENCE/pkg"
+          test ! -f web/pkg/noon_web_bg.wasm || sha256sum web/pkg/noon_web_bg.wasm > "$EVIDENCE/dev-wasm-sha256.txt"
+          test ! -d browser-smoke-artifacts/typed-authoring-errors || cp -r browser-smoke-artifacts/typed-authoring-errors "$EVIDENCE/boundary-results"
+          git diff --exit-code HEAD
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: r3-callback-final-qualification
+          path: ${{ env.EVIDENCE }}
+          retention-days: 3
+          if-no-files-found: error
