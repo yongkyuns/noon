@@ -106,3 +106,20 @@ class FamilyCallbackBatchTests(unittest.TestCase):
         self.assertEqual(row.style, before)
         self.assertEqual(context.effective_batch()["writes"], [])
         self.assertNotIn((12, 3), context._rows)
+
+
+    def test_family_recolor_preserves_bounds_but_stroke_width_invalidates_them(self):
+        import json
+        context, row, second, family = self.fixture()
+        context._read = Mock(return_value={"kind": "family", "objects": [context._frame_items[(11, 3)], second]})
+        bounds = row.require_bounds()
+        recolored = row.style.to_wire()
+        recolored["stroke"] = {"red": 0.2, "green": 0.4, "blue": 1.0, "alpha": 0.6}
+        context._operations.callbackFamilyPaint.return_value = json.dumps([[11, 3, recolored]])
+        context.paint_family(family, "Color", (0.2, 0.4, 1.0, 0.6))
+        self.assertEqual(row.require_bounds(), bounds)
+        wider = {**recolored, "stroke_width": 3.0}
+        context._operations.callbackFamilyPaint.return_value = json.dumps([[11, 3, wider]])
+        context.paint_family(family, "Stroke", (False, 0, 0, 0, 1, 3.0, None))
+        with self.assertRaisesRegex(NotImplementedError, "spatial property change"):
+            row.require_bounds()
