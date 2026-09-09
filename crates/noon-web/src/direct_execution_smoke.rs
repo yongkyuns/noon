@@ -45,6 +45,15 @@ pub async fn create_direct_exact_property_tracks_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// The native painter-order scene reaches WebGPU without a scene document.
+#[wasm_bindgen(js_name = createDirectPainterOrderSmokeRenderer)]
+pub async fn create_direct_painter_order_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::painter_order_overlap::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Shared native family placement reaches the direct browser renderer unchanged.
 #[wasm_bindgen(js_name = createDirectFamilyPlacementSmokeRenderer)]
 pub async fn create_direct_family_placement_smoke_renderer(

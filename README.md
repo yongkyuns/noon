@@ -206,3 +206,45 @@ In order:
 7. explicit, measured deviations only where exact Manim behavior has a fundamental design or performance blocker.
 
 Compatibility is an API/semantic goal, not an implementation constraint: Noon does not copy Manim's renderer, internal point-cloud representation, Python-side scene engine, or Python-per-frame execution model.
+
+## Optional Rust text providers
+
+The `noon` crate keeps native text, Typst layout and bundled fonts enabled by
+convenience defaults. Geometry-only consumers can opt out explicitly:
+
+```toml
+[dependencies]
+noon = { path = "path/to/noon/crates/noon", default-features = false }
+```
+
+`native-text` enables `Text`, `Scene::text`, `Mobject::from_text` and live text
+construction. `typst` enables `Typst`/`MathTypst` and their corresponding
+constructors. `bundled-fonts` supplies the existing font assets, but does not
+activate either compiler by itself. Native shaping with supplied fonts needs
+only `features = ["native-text"]`; Typst with supplied fonts needs only
+`features = ["typst"]`. Add `bundled-fonts` for family-based convenience lookup.
+Typst still requires its upstream base assets (including PDF standard-font data);
+disabling bundles excludes its optional typography font families, not those base
+compiler resources. Geometry-only and native-text-only builds exclude Typst's
+assets package entirely.
+
+Supply native font bytes via `NativeFontFace::new(family, bytes, face_index)` and
+`Text::with_font_face(face)`. Supply Typst font buffers via
+`Typst::with_fonts` or `MathTypst::with_fonts` (an iterator of `Arc<[u8]>`). The
+`noon-typst` backend also exposes `compile_typst_resource_with_fonts` for direct
+resource integrations. These inputs normalize into the existing shared resource
+store; they do not introduce another registry or execution path. Selecting a
+native family with `with_font` clears an earlier explicit face. An empty or
+invalid explicit Typst font set is an error even when bundled fonts are enabled.
+
+Without bundles, family lookup fails with `TextAuthoringError::FontUnavailable`
+and the Typst convenience constructors report `TypstBackendError::FontsUnavailable`.
+There is no provider substitution. Provider-specific APIs are absent when their
+feature is disabled; bundled-font reference scenes additionally require the
+asset feature. Shared semantic text/resource types, lowering and runtime support
+remain available independently of those concrete compilers.
+
+Cargo features are additive: another dependency enabling `noon` defaults can
+re-enable providers. The [external consumer and qualification commands](fixtures/provider-consumer/README.md)
+inspect the resolved active graph independently of Noon's workspace and record
+native/WASM build and footprint evidence.

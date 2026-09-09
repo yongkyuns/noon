@@ -1,5 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(any(target_arch = "wasm32", test))]
+mod player_ownership;
+#[cfg(any(target_arch = "wasm32", test))]
+use player_ownership::{PlayerOwnership, PlayerReturnError, RejectedPlayerReturn};
+#[cfg(test)]
+mod ownership_tests;
+
 use noon_core::ObjectId;
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::{HostCallbackId, SemanticFadeDirection, SemanticMutationTransaction, SemanticVec3};
@@ -212,13 +219,7 @@ pub struct CanonicalAuthoringScene {
     bindings: BTreeMap<ObjectId, noon_core::SemanticNodeId>,
     identities: BTreeMap<noon_core::SemanticNodeId, ObjectId>,
     #[cfg(any(target_arch = "wasm32", test))]
-    live_player: Option<crate::SemanticExecutionPlayer>,
-    #[cfg(any(target_arch = "wasm32", test))]
-    live_player_transferred: bool,
-    /// Whether the locally held player was returned by a presentation lease.
-    /// Only that dormant runtime may be superseded by later direct authoring.
-    #[cfg(any(target_arch = "wasm32", test))]
-    live_player_returned: bool,
+    player_ownership: PlayerOwnership,
 }
 
 impl Default for CanonicalAuthoringScene {
@@ -239,11 +240,7 @@ impl CanonicalAuthoringScene {
             bindings: BTreeMap::new(),
             identities: BTreeMap::new(),
             #[cfg(any(target_arch = "wasm32", test))]
-            live_player: None,
-            #[cfg(any(target_arch = "wasm32", test))]
-            live_player_transferred: false,
-            #[cfg(any(target_arch = "wasm32", test))]
-            live_player_returned: false,
+            player_ownership: PlayerOwnership::Unstarted,
         }
     }
 
@@ -339,10 +336,10 @@ impl CanonicalAuthoringScene {
         &mut self,
         transaction: SemanticMutationTransaction,
     ) -> Result<(), String> {
-        if self.live_player_transferred {
+        if self.player_ownership.is_transferred() {
             return Err("return the active execution player before editing updaters".into());
         }
-        if let Some(player) = self.live_player.as_mut() {
+        if let Some(player) = self.player_ownership.local_mut() {
             return player.live_edit_updaters(transaction);
         }
         transaction
@@ -369,13 +366,15 @@ impl CanonicalAuthoringScene {
         duration: f64,
     ) -> Result<&mut crate::SemanticExecutionPlayer, String> {
         self.prepare_local_player_for_run()?;
-        if let Some(player) = self.live_player.as_mut() {
+        if let Some(player) = self.player_ownership.local_mut() {
             player.set_loop_duration(duration)?;
         } else {
-            self.live_player = Some(self.build_live_player(duration, 0)?);
-            self.live_player_returned = false;
+            self.player_ownership = PlayerOwnership::Active(self.build_live_player(duration, 0)?);
         }
-        Ok(self.live_player.as_mut().expect("live player initialized"))
+        Ok(self
+            .player_ownership
+            .local_mut()
+            .expect("live player initialized"))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -398,30 +397,14 @@ impl CanonicalAuthoringScene {
     /// error rather than silently replacing that session.
     #[cfg(any(target_arch = "wasm32", test))]
     fn prepare_local_player_for_run(&mut self) -> Result<(), String> {
-        if self.live_player_transferred {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        let authored_revision = self.scene.store().borrow().scene_revision();
-        let stale = self
-            .live_player
-            .as_ref()
-            .is_some_and(|player| player.scene_revision() != authored_revision);
-        if stale && !self.live_player_returned {
-            return Err("authored scene changed while live execution is active".into());
-        }
-        if stale {
-            self.live_player = None;
-            self.live_player_returned = false;
-        }
-        Ok(())
+        self.player_ownership
+            .prepare_for_run(self.scene.store().borrow().scene_revision())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn returned_player_is_stale(&self) -> bool {
-        self.live_player_returned
-            && self.live_player.as_ref().is_some_and(|player| {
-                player.scene_revision() != self.scene.store().borrow().scene_revision()
-            })
+        self.player_ownership
+            .returned_is_stale(self.scene.store().borrow().scene_revision())
     }
 
     /// Begin an explicit authoring-run publication boundary.
@@ -437,11 +420,11 @@ impl CanonicalAuthoringScene {
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn active_live_player(&mut self) -> Result<&mut crate::SemanticExecutionPlayer, String> {
-        if self.live_player_transferred {
+        if self.player_ownership.is_transferred() {
             return Err("live execution session is running in the semantic engine".into());
         }
-        self.live_player
-            .as_mut()
+        self.player_ownership
+            .local_mut()
             .ok_or_else(|| "begin live execution before reading or mutating it".into())
     }
 
@@ -453,7 +436,7 @@ impl CanonicalAuthoringScene {
         &mut self,
         duration: f64,
     ) -> Result<&mut crate::SemanticExecutionPlayer, String> {
-        if self.live_player.is_none() {
+        if self.player_ownership.is_unstarted() {
             self.live_player(duration)?;
         }
         self.active_live_player()
@@ -464,15 +447,7 @@ impl CanonicalAuthoringScene {
     /// never records or advances lifecycle state itself.
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_execution_ownership(&self) -> &'static str {
-        if self.live_player_transferred {
-            "transferred"
-        } else if self.live_player_returned {
-            "returned"
-        } else if self.live_player.is_some() {
-            "active"
-        } else {
-            "none"
-        }
+        self.player_ownership.browser_name()
     }
 
     /// Route bound observations through the single owner of current execution.
@@ -484,7 +459,7 @@ impl CanonicalAuthoringScene {
         authored: impl FnOnce(&noon::Mobject) -> Result<T, String>,
         effective: impl FnOnce(&mut crate::SemanticExecutionPlayer, &noon::Mobject) -> Result<T, String>,
     ) -> Result<T, String> {
-        if self.live_player_transferred {
+        if self.player_ownership.is_transferred() {
             return Err("live execution session is running in the semantic engine".into());
         }
         if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
@@ -495,7 +470,7 @@ impl CanonicalAuthoringScene {
             return Err("mobject is not bound to this canonical Scene".into());
         }
         if !self.returned_player_is_stale() {
-            if let Some(player) = self.live_player.as_mut() {
+            if let Some(player) = self.player_ownership.local_mut() {
                 return effective(player, handle);
             }
         }
@@ -562,7 +537,7 @@ impl CanonicalAuthoringScene {
         handle: &noon::Mobject,
         buff: f64,
     ) -> Result<noon::ManimGeometryOptions, String> {
-        if self.live_player_transferred {
+        if self.player_ownership.is_transferred() {
             return Err("live execution session is running in the semantic engine".into());
         }
         if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
@@ -586,7 +561,7 @@ impl CanonicalAuthoringScene {
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn require_pre_execution_signal_authoring(&self) -> Result<(), String> {
-        if self.live_player.is_some() || self.live_player_transferred {
+        if !self.player_ownership.is_unstarted() {
             return Err(
                 "signal declarations and bindings must be authored before canonical execution begins"
                     .into(),
@@ -598,10 +573,10 @@ impl CanonicalAuthoringScene {
     /// Create one scalar signal in this context's shared semantic store.
     #[cfg(any(target_arch = "wasm32", test))]
     fn create_value_tracker(&mut self, initial: f64) -> Result<noon::ValueTracker, String> {
-        if self.live_player_transferred {
+        if self.player_ownership.is_transferred() {
             return Err("live execution session is running in the semantic engine".into());
         }
-        match self.live_player.as_mut() {
+        match self.player_ownership.local_mut() {
             Some(player) => player.live_value_tracker(initial),
             None => self.scene.value_tracker(initial),
         }
@@ -610,10 +585,10 @@ impl CanonicalAuthoringScene {
     /// Associate one store-owned detached tracker with this Scene.
     #[cfg(any(target_arch = "wasm32", test))]
     fn associate_value_tracker(&mut self, tracker: &noon::ValueTracker) -> Result<(), String> {
-        if self.live_player_transferred {
+        if self.player_ownership.is_transferred() {
             return Err("live execution session is running in the semantic engine".into());
         }
-        match self.live_player.as_mut() {
+        match self.player_ownership.local_mut() {
             Some(player) => player.live_associate_value_tracker(tracker),
             None => self.scene.associate_value_tracker(tracker),
         }
@@ -735,10 +710,10 @@ impl CanonicalAuthoringScene {
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn tracker_value(&mut self, tracker: &noon::ValueTracker) -> Result<f64, String> {
-        if self.live_player_transferred {
+        if self.player_ownership.is_transferred() {
             return Err("semantic execution session is running in the semantic engine".into());
         }
-        match self.live_player.as_mut() {
+        match self.player_ownership.local_mut() {
             Some(player) => player.live_effective_signal(tracker),
             None => self.scene.value_tracker_value(tracker),
         }
@@ -750,10 +725,10 @@ impl CanonicalAuthoringScene {
         tracker: &noon::ValueTracker,
         value: f64,
     ) -> Result<(), String> {
-        if self.live_player_transferred {
+        if self.player_ownership.is_transferred() {
             return Err("semantic execution session is running in the semantic engine".into());
         }
-        match self.live_player.as_mut() {
+        match self.player_ownership.local_mut() {
             Some(player) => player.live_set_signal(tracker, value),
             None => self.scene.set_value(tracker, value),
         }
@@ -781,7 +756,9 @@ impl CanonicalAuthoringScene {
     /// keeps using the explicit `authored_wait` entry point.
     #[cfg(any(target_arch = "wasm32", test))]
     fn ordinary_wait(&mut self, duration: f64) -> Result<f64, String> {
-        if self.live_player.is_some() && self.active_live_player()?.has_required_callbacks() {
+        if self.player_ownership.local().is_some()
+            && self.active_live_player()?.has_required_callbacks()
+        {
             return Err(
                 "ordinary endpoint-only wait cannot execute required callbacks; use a continuation"
                     .into(),
@@ -802,7 +779,7 @@ impl CanonicalAuthoringScene {
     /// from the player-owned segment; no Python or JavaScript cursor is created.
     #[cfg(any(target_arch = "wasm32", test))]
     fn begin_ordinary_wait(&mut self, duration: f64) -> Result<f64, String> {
-        if self.live_player.is_none() {
+        if self.player_ownership.is_unstarted() {
             if self.scene.time() != 0.0 {
                 return Err(
                     "ordinary asynchronous wait cannot follow pre-execution canonical timing"
@@ -822,8 +799,8 @@ impl CanonicalAuthoringScene {
     /// Returns `None` until a live session exists.
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_handoff_duration(&self) -> Option<f64> {
-        self.live_player
-            .as_ref()
+        self.player_ownership
+            .local()
             .and_then(crate::SemanticExecutionPlayer::live_handoff_duration)
     }
 
@@ -835,7 +812,7 @@ impl CanonicalAuthoringScene {
         target: &noon::Mobject,
         options: noon_core::AnimationOptions,
     ) -> Result<noon::DeclaredAnimation, String> {
-        if self.live_player.is_some() || self.live_player_transferred {
+        if !self.player_ownership.is_unstarted() {
             return Err("declare live animations before beginning execution".into());
         }
         self.scene.declare_transform_to(source, target, options)
@@ -870,14 +847,13 @@ impl CanonicalAuthoringScene {
             .live_handoff_duration()
             .unwrap_or_else(|| self.scene.time())
             .max(options.run_time.unwrap_or(1.0));
-        let bootstrapped = self.live_player.is_none();
+        let bootstrapped = self.player_ownership.is_unstarted();
         if bootstrapped {
             self.live_player(bootstrap_duration)?;
         }
         if self.active_live_player()?.has_required_callbacks() {
             if bootstrapped {
-                self.live_player = None;
-                self.live_player_returned = false;
+                self.player_ownership = PlayerOwnership::Unstarted;
             }
             return Err(
                 "ordinary endpoint-only animation cannot execute required callbacks; use a continuation"
@@ -1224,15 +1200,14 @@ impl CanonicalAuthoringScene {
             children: requests,
             options: composition_options,
         };
-        let end = if self.live_player.is_none() {
+        let end = if self.player_ownership.is_unstarted() {
             self.prepare_local_player_for_run()?;
             let mut player = self.build_live_player(bootstrap_duration, 0)?;
             if !allow_required_callbacks && player.has_required_callbacks() {
                 return Err("ordinary composition with required callbacks needs an asynchronous continuation".into());
             }
             let end = player.live_declare_and_activate_composition(&composition, play_options)?;
-            self.live_player = Some(player);
-            self.live_player_returned = false;
+            self.player_ownership = PlayerOwnership::Active(player);
             end
         } else {
             let player = self.active_live_player()?;
@@ -1365,7 +1340,7 @@ impl CanonicalAuthoringScene {
     ) -> Result<(), String> {
         // A continuation cannot restart a pre-authored Rust timeline at zero.
         // This is the common admission guard for every request shape.
-        if self.live_player.is_none() && self.scene.time() != 0.0 {
+        if self.player_ownership.is_unstarted() && self.scene.time() != 0.0 {
             return Err("ordinary composition cannot follow pre-execution canonical timing".into());
         }
         if children.is_empty() {
@@ -1812,11 +1787,14 @@ impl CanonicalAuthoringScene {
             return Err("mobject belongs to another authoring store".into());
         }
         source.validate()?;
-        match self.live_execution_ownership() {
-            "none" => source.target_editor(),
-            "active" | "returned" => self.active_live_player()?.live_target_editor(source),
-            "transferred" => Err("live execution session is running in the semantic engine".into()),
-            _ => unreachable!("canonical live ownership has one closed set of states"),
+        match &mut self.player_ownership {
+            PlayerOwnership::Unstarted => source.target_editor(),
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.live_target_editor(source)
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
         }
     }
 
@@ -1825,11 +1803,16 @@ impl CanonicalAuthoringScene {
         &mut self,
         members: &[noon::MobjectFamilyMember<'_>],
     ) -> Result<noon::MobjectFamily, String> {
-        match self.live_execution_ownership() {
-            "active" | "returned" => self.active_live_player()?.live_family(members),
-            "none" => Err("live family creation requires an active canonical session".into()),
-            "transferred" => Err("live execution session is running in the semantic engine".into()),
-            _ => unreachable!("canonical live ownership has one closed set of states"),
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.live_family(members)
+            }
+            PlayerOwnership::Unstarted => {
+                Err("live family creation requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
         }
     }
 
@@ -1840,11 +1823,16 @@ impl CanonicalAuthoringScene {
         x: f64,
         y: f64,
     ) -> Result<(), String> {
-        match self.live_execution_ownership() {
-            "active" | "returned" => self.active_live_player()?.live_shift_family(family, x, y),
-            "none" => Err("live family shift requires an active canonical session".into()),
-            "transferred" => Err("live execution session is running in the semantic engine".into()),
-            _ => unreachable!("canonical live ownership has one closed set of states"),
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.live_shift_family(family, x, y)
+            }
+            PlayerOwnership::Unstarted => {
+                Err("live family shift requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
         }
     }
 
@@ -1867,13 +1855,14 @@ impl CanonicalAuthoringScene {
         if !std::rc::Rc::ptr_eq(self.scene.store(), family.store()) {
             return Err("subset-display family belongs to another authoring store".into());
         }
-        match self.live_execution_ownership() {
-            "none" => family.prepare_subset_display(),
-            "active" | "returned" => self
+        match &mut self.player_ownership {
+            PlayerOwnership::Unstarted => family.prepare_subset_display(),
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
                 .prepare_family_subset_display(family),
-            "transferred" => Err("live execution session is running in the semantic engine".into()),
-            _ => unreachable!("canonical live ownership has one closed set of states"),
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
         }
     }
 
@@ -1892,13 +1881,16 @@ impl CanonicalAuthoringScene {
                 );
             }
         }
-        match self.live_execution_ownership() {
-            "active" | "returned" => self
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
                 .live_become_mobject(target, other, options),
-            "none" => Err("live become requires an active canonical session".into()),
-            "transferred" => Err("live execution session is running in the semantic engine".into()),
-            _ => unreachable!("canonical live ownership has one closed set of states"),
+            PlayerOwnership::Unstarted => {
+                Err("live become requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
         }
     }
 
@@ -1907,47 +1899,61 @@ impl CanonicalAuthoringScene {
         &mut self,
         options: noon::ManimGeometryOptions,
     ) -> Result<noon::Mobject, String> {
-        match self.live_execution_ownership() {
-            "active" | "returned" => self
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
                 .live_create_manim_geometry(options),
-            "none" => {
+            PlayerOwnership::Unstarted => {
                 Err("live primitive construction requires an active canonical session".into())
             }
-            "transferred" => Err("live execution session is running in the semantic engine".into()),
-            _ => unreachable!("canonical live ownership has one closed set of states"),
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
         }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_create_text(&mut self, text: noon::Text) -> Result<noon::Mobject, String> {
-        match self.live_execution_ownership() {
-            "active" | "returned" => self.active_live_player()?.live_create_text(text),
-            "none" => Err("live Text construction requires an active canonical session".into()),
-            "transferred" => Err("live execution session is running in the semantic engine".into()),
-            _ => unreachable!("canonical live ownership has one closed set of states"),
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.live_create_text(text)
+            }
+            PlayerOwnership::Unstarted => {
+                Err("live Text construction requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
         }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_create_typst(&mut self, text: noon::Typst) -> Result<noon::Mobject, String> {
-        match self.live_execution_ownership() {
-            "active" | "returned" => self.active_live_player()?.live_create_typst(text),
-            "none" => Err("live Typst construction requires an active canonical session".into()),
-            "transferred" => Err("live execution session is running in the semantic engine".into()),
-            _ => unreachable!("canonical live ownership has one closed set of states"),
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.live_create_typst(text)
+            }
+            PlayerOwnership::Unstarted => {
+                Err("live Typst construction requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
         }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_create_math_typst(&mut self, text: noon::MathTypst) -> Result<noon::Mobject, String> {
-        match self.live_execution_ownership() {
-            "active" | "returned" => self.active_live_player()?.live_create_math_typst(text),
-            "none" => {
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.live_create_math_typst(text)
+            }
+            PlayerOwnership::Unstarted => {
                 Err("live MathTypst construction requires an active canonical session".into())
             }
-            "transferred" => Err("live execution session is running in the semantic engine".into()),
-            _ => unreachable!("canonical live ownership has one closed set of states"),
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
         }
     }
 
@@ -2057,20 +2063,19 @@ impl CanonicalAuthoringScene {
         #[cfg(not(any(target_arch = "wasm32", test)))]
         self.scene.edit_membership(request)?;
         #[cfg(any(target_arch = "wasm32", test))]
-        match self.live_execution_ownership() {
-            "none" if self.scene.time() == 0.0 => {
+        match &mut self.player_ownership {
+            PlayerOwnership::Unstarted if self.scene.time() == 0.0 => {
                 self.scene.edit_membership(request)?;
             }
-            "active" | "returned" => {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
                 self.active_live_player()?.live_edit_membership(request)?;
             }
-            "none" => {
+            PlayerOwnership::Unstarted => {
                 return Err("membership edit cannot follow pre-execution canonical timing".into());
             }
-            "transferred" => {
+            PlayerOwnership::Transferred(_) => {
                 return Err("live execution session is running in the semantic engine".into());
             }
-            _ => unreachable!("canonical live ownership has one closed set of states"),
         }
         for (id, node) in new_bindings {
             self.bindings.insert(id, node);
@@ -2150,17 +2155,13 @@ impl CanonicalAuthoringScene {
         transport_session: u32,
     ) -> Result<crate::SemanticExecutionPlayer, String> {
         self.prepare_local_player_for_run()?;
-        if let Some(player) = self.live_player.as_mut() {
+        if let Some(player) = self.player_ownership.local_mut() {
             player.rebind_transport(duration, transport_session)?;
-            let player = self.live_player.take().expect("live player initialized");
-            self.live_player_transferred = true;
-            self.live_player_returned = false;
-            return Ok(player);
+        } else {
+            let player = self.build_live_player(duration, transport_session)?;
+            self.player_ownership = PlayerOwnership::Active(player);
         }
-        let player = self.build_live_player(duration, transport_session)?;
-        self.live_player_transferred = true;
-        self.live_player_returned = false;
-        Ok(player)
+        self.player_ownership.transfer()
     }
 
     /// Return a player after endpoint setup or renderer recovery. This preserves
@@ -2169,14 +2170,26 @@ impl CanonicalAuthoringScene {
     fn return_execution_player(
         &mut self,
         player: crate::SemanticExecutionPlayer,
-    ) -> Result<(), String> {
-        if !self.live_player_transferred || self.live_player.is_some() {
-            return Err("semantic execution player is not leased by this context".into());
+    ) -> Result<(), RejectedPlayerReturn> {
+        if let Err(reason) = self.validate_execution_player_return(&player) {
+            return Err(RejectedPlayerReturn {
+                reason,
+                player: Box::new(player),
+            });
         }
-        self.live_player = Some(player);
-        self.live_player_transferred = false;
-        self.live_player_returned = true;
+        self.player_ownership = PlayerOwnership::Returned(player);
         Ok(())
+    }
+
+    /// Validate by reference before consuming a player; a rejected return cannot
+    /// replace the rightful lease or mutate its publication/continuation state.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn validate_execution_player_return(
+        &self,
+        player: &crate::SemanticExecutionPlayer,
+    ) -> Result<(), PlayerReturnError> {
+        self.player_ownership
+            .validate_return(player, self.scene.store(), self.scene.root())
     }
 
     /// Resume the exact returned player for a newly-authored continuation segment.
@@ -2186,37 +2199,23 @@ impl CanonicalAuthoringScene {
     /// may only resume a player after it has declared one supported pending segment.
     #[cfg(any(target_arch = "wasm32", test))]
     fn resume_execution_player(&mut self) -> Result<crate::SemanticExecutionPlayer, String> {
-        if self.live_player_transferred || !self.live_player_returned {
+        let PlayerOwnership::Returned(player) = &self.player_ownership else {
             return Err("semantic continuation player is not returned to this context".into());
-        }
-        let player = self
-            .live_player
-            .as_ref()
-            .ok_or("semantic continuation context has no returned player")?;
+        };
         if !player.has_pending_live_segment() {
             return Err("semantic continuation has no pending segment to resume".into());
         }
         player.require_callback_progression_available()?;
-        let player = self
-            .live_player
-            .take()
-            .expect("validated returned player must remain installed");
-        self.live_player_transferred = true;
-        self.live_player_returned = false;
-        Ok(player)
+        self.player_ownership.transfer()
     }
 
     /// Encode final authored changes through the returned player's existing worker
     /// transport. This neither leases nor advances the completed runtime.
     #[cfg(any(target_arch = "wasm32", test))]
     fn drain_returned_publication_json(&mut self) -> Result<Option<String>, String> {
-        if self.live_player_transferred || !self.live_player_returned {
+        let PlayerOwnership::Returned(player) = &mut self.player_ownership else {
             return Err("final publication requires a returned execution player".into());
-        }
-        let player = self
-            .live_player
-            .as_mut()
-            .ok_or("returned player is absent")?;
+        };
         player.require_callback_progression_available()?;
         if player.has_pending_live_segment() {
             return Err("final publication requires a completed continuation segment".into());
@@ -2254,6 +2253,33 @@ mod wasm {
     use wasm_bindgen::prelude::*;
 
     use super::*;
+
+    /// A rejected ownership return retains the consumed WASM player wrapper.
+    /// Catch this value and call `takePlayer()` to recover that exact player;
+    /// returning it to its rightful context requires no lowering or cloning.
+    #[wasm_bindgen]
+    pub struct WasmExecutionPlayerReturnError {
+        rejected: RejectedPlayerReturn,
+    }
+
+    #[wasm_bindgen]
+    impl WasmExecutionPlayerReturnError {
+        #[wasm_bindgen(getter)]
+        pub fn message(&self) -> String {
+            self.rejected.to_string()
+        }
+
+        #[wasm_bindgen(js_name = toString)]
+        pub fn to_js_string(&self) -> String {
+            self.message()
+        }
+
+        /// Consume this rejection and restore ownership of the original player.
+        #[wasm_bindgen(js_name = takePlayer)]
+        pub fn take_player(self) -> crate::SemanticExecutionPlayer {
+            *self.rejected.player
+        }
+    }
 
     fn js_error(error: impl ToString) -> JsValue {
         JsValue::from_str(&error.to_string())
@@ -5628,7 +5654,9 @@ mod wasm {
             &mut self,
             player: crate::SemanticExecutionPlayer,
         ) -> Result<(), JsValue> {
-            self.inner.return_execution_player(player).map_err(js_error)
+            self.inner
+                .return_execution_player(player)
+                .map_err(|rejected| WasmExecutionPlayerReturnError { rejected }.into())
         }
 
         #[wasm_bindgen(js_name = resumeExecutionPlayer)]
@@ -6352,7 +6380,7 @@ mod tests {
         let mut target = context.live_target_editor(&circle).unwrap();
         target.set_translation(2.0, -1.0).unwrap();
 
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert!(
             context.scene.store().borrow().scene_revision().get() > revision.get(),
             "the detached authored target must be published without bootstrapping a player"
@@ -6764,7 +6792,7 @@ mod tests {
         context
             .validate_ordinary_mixed_composition(&children, composition, play)
             .unwrap();
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
 
         let mut unsupported_target = right.target_editor().unwrap();
@@ -6779,7 +6807,7 @@ mod tests {
                 play,
             )
             .is_err());
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
 
         assert_eq!(
@@ -6984,7 +7012,7 @@ mod tests {
                 AnimationOptions::new(),
             )
             .is_err());
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert!(context.bindings.is_empty());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
 
@@ -7133,7 +7161,7 @@ mod tests {
                 options,
             )
             .is_err());
-        assert!(rejected.live_player.is_none());
+        assert!(rejected.player_ownership.is_unstarted());
         assert!(rejected.bindings.is_empty());
         assert_eq!(rejected.scene.store().borrow().scene_revision(), revision);
     }
@@ -7395,7 +7423,7 @@ mod tests {
                 AnimationOptions::new(),
             )
             .is_err());
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert!(context.bindings.is_empty());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
 
@@ -7603,7 +7631,7 @@ mod tests {
                 AnimationOptions::new(),
             )
             .is_err());
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
 
         let children = [
@@ -7631,7 +7659,7 @@ mod tests {
                 AnimationOptions::new(),
             )
             .is_err());
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
         // Completion barriers publish the preceding transform before Indicate
         // captures its effective source and shared family center.
@@ -7694,7 +7722,7 @@ mod tests {
                 play,
             )
             .is_err());
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
 
         let valid = [
@@ -7834,7 +7862,7 @@ mod tests {
             )
             .unwrap_err();
         assert!(endpoint_only_error.contains("needs an asynchronous continuation"));
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
 
         let end_time = context
@@ -7943,7 +7971,7 @@ mod tests {
             )
             .is_err());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert_eq!(context.live_execution_ownership(), "none");
 
         let mut valid_target = source.target_editor().unwrap();
@@ -7999,7 +8027,7 @@ mod tests {
         let play = AnimationOptions::new().rate_func(RateFunction::Linear);
         let revision = context.scene.store().borrow().scene_revision();
         let (publication, frame, handoff_duration) = {
-            let player = context.live_player.as_mut().unwrap();
+            let player = context.player_ownership.local_mut().unwrap();
             let handoff_duration = player.live_handoff_duration();
             let session = player.session_mut_for_test();
             (
@@ -8022,7 +8050,7 @@ mod tests {
             .is_err());
         assert_eq!(context.live_execution_ownership(), "returned");
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
-        let player = context.live_player.as_mut().unwrap();
+        let player = context.player_ownership.local_mut().unwrap();
         assert_eq!(player.live_handoff_duration(), handoff_duration);
         assert!(!player.has_pending_live_segment());
         let session = player.session_mut_for_test();
@@ -8150,7 +8178,7 @@ mod tests {
             )
             .unwrap_err()
             .contains("another authoring store"));
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
 
         let stale = source.target_editor().unwrap();
         let mut removal = SemanticMutationTransaction::new();
@@ -8168,7 +8196,7 @@ mod tests {
                 play,
             )
             .is_err());
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
     }
 
     #[test]
@@ -8445,11 +8473,11 @@ mod tests {
             context.mobject_layout(&circle).unwrap(),
             (3.0, -1.0, 4.0, 1.0)
         );
-        assert!(context.live_player.is_some());
+        assert!(context.player_ownership.local().is_some());
 
         // The next registration boundary lowers precisely one fresh runtime.
         context.prepare_execution_run().unwrap();
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
 
         let mut rerun = context.take_execution_player(1.0, 18).unwrap();
         let effective = rerun.live_effective(&circle).unwrap();
@@ -8738,8 +8766,8 @@ mod tests {
         );
         let run_error = context.prepare_execution_run().unwrap_err();
         assert!(run_error.contains("authored scene changed while live execution is active"));
-        assert!(context.live_player.is_some());
-        assert!(!context.live_player_returned);
+        assert!(context.player_ownership.local().is_some());
+        assert!(!context.player_ownership.is_returned());
     }
 
     #[test]
@@ -8958,7 +8986,7 @@ mod tests {
             }
         )
         .is_err());
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
 
         let end = begin_request(
@@ -9037,7 +9065,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("cannot follow pre-execution canonical timing"));
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert_eq!(context.authored_duration(), 2.0);
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
     }
@@ -9134,7 +9162,7 @@ mod tests {
             )
         )
         .is_err());
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert!(context.bindings.is_empty());
         assert!(context.identities.is_empty());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
@@ -9152,7 +9180,7 @@ mod tests {
             )
         )
         .is_err());
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
 
         let end = begin_request(
@@ -9303,7 +9331,7 @@ mod tests {
                 AnimationOptions::new().run_time(1.0)
             )
             .is_err());
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert!(context.bindings.is_empty());
         assert!(context.identities.is_empty());
         assert_eq!(context.scene.store().borrow().scene_revision(), revision);
@@ -9330,9 +9358,9 @@ mod tests {
             )
         )
         .is_err());
-        assert!(context.live_player.is_none());
-        assert!(!context.live_player_returned);
-        assert!(!context.live_player_transferred);
+        assert!(context.player_ownership.is_unstarted());
+        assert!(!context.player_ownership.is_returned());
+        assert!(!context.player_ownership.is_transferred());
         assert!(!context.bindings.contains_key(&id));
         assert!(!context.identities.contains_key(&circle.node_id()));
         assert_eq!(context.scene.store().borrow().scene_revision(), before);
@@ -9351,7 +9379,7 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(context.live_player.is_some());
+        assert!(context.player_ownership.local().is_some());
         assert_eq!(context.bindings.get(&id), Some(&circle.node_id()));
     }
 
@@ -9378,7 +9406,7 @@ mod tests {
             )
         )
         .is_err());
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert!(!context.bindings.contains_key(&id));
         assert!(!context.identities.contains_key(&text.node_id()));
         assert_eq!(context.scene.store().borrow().scene_revision(), before);

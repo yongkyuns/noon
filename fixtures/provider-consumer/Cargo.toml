@@ -1,0 +1,23 @@
+[package]
+name = "noon-provider-consumer"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Deliberately outside Noon's workspace: unrelated members must not enable providers.
+[workspace]
+
+[features]
+native-text = ["noon/native-text"]
+typst = ["noon/typst"]
+bundled-fonts = ["noon/bundled-fonts"]
+product = ["noon/default", "native-text", "typst", "bundled-fonts"]
+
+[dependencies]
+noon = { path = "../../crates/noon", default-features = false }
+
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0

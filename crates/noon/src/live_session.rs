@@ -830,6 +830,7 @@ impl<'a> LiveSession<'a> {
     ///
     /// The object receives semantic identity and immutable text resources, but no
     /// scene membership or execution row until a later Add, FadeIn, or Create.
+    #[cfg(feature = "native-text")]
     pub fn create_text(&mut self, text: crate::Text) -> Result<Mobject, LiveSessionError> {
         let state = crate::text_authoring::native_text_state(self.store, text)
             .map_err(|error| LiveSessionError::Mobject(error.to_string()))?;
@@ -837,6 +838,7 @@ impl<'a> LiveSession<'a> {
     }
 
     /// Compile and publish one detached Typst object through this live session.
+    #[cfg(feature = "typst")]
     pub fn create_typst(&mut self, text: crate::Typst) -> Result<Mobject, LiveSessionError> {
         let state = crate::text_authoring::typst_state(self.store, text)
             .map_err(|error| LiveSessionError::Mobject(error.to_string()))?;
@@ -844,6 +846,7 @@ impl<'a> LiveSession<'a> {
     }
 
     /// Compile and publish one detached MathTypst object through this live session.
+    #[cfg(feature = "typst")]
     pub fn create_math_typst(
         &mut self,
         text: crate::MathTypst,
@@ -4963,6 +4966,7 @@ mod recursive_composition_tests {
         }
     }
 
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn family_fade_preserves_family_membership_and_ordered_lifecycle() {
         let scene = Scene::new();
@@ -5026,6 +5030,7 @@ mod recursive_composition_tests {
         );
     }
 
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn family_fade_and_disjoint_text_write_share_one_atomic_composition() {
         let mut scene = Scene::new();
@@ -5070,6 +5075,7 @@ mod recursive_composition_tests {
         );
     }
 
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn family_fade_rejects_overlapping_text_write_before_publication() {
         let mut scene = Scene::new();
@@ -5671,6 +5677,7 @@ mod recursive_composition_tests {
             .is_empty());
     }
 
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn family_text_write_admits_and_unwrite_removes_one_family_root_atomically() {
         let scene = Scene::new();

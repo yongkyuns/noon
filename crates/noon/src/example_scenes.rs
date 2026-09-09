@@ -2,6 +2,7 @@
 
 pub mod affine_fade;
 pub mod analytic_profile;
+#[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
 pub mod automatic_wait_text;
 pub mod draw_border_then_fill;
 pub mod exact_property_tracks;
@@ -17,22 +18,29 @@ pub mod ordinary_become_semantics;
 pub mod ordinary_membership;
 pub mod ordinary_subset_display;
 pub mod ordinary_uncreate_options;
+pub mod painter_order_overlap;
 pub mod specialized_geometry;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_family_fade;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_family_reveal;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_family_write;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_write;
 pub mod timed_composition;
 
+#[cfg(all(feature = "typst", feature = "bundled-fonts"))]
+use crate::{MathTypst, Typst};
 use std::{error::Error, rc::Rc};
 
 use crate::{
     AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
     AnimationOptions, Color, ExecutionSession, HostCallbackId, LiveContinuation, LiveProgram,
-    LiveSession, MathTypst, Mobject, RateFunction, RustHostCallbackTable, Scene,
-    SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
-    SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3, StoredGeometry, StrokeCap,
-    StrokeJoin, StrokeWidthMode, TransformToRequest, Typst, ValueTracker, Vec2, VectorPath,
+    LiveSession, Mobject, RateFunction, RustHostCallbackTable, Scene,
+    SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticNodeId, SemanticPaint,
+    SemanticStyle, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode,
+    TransformToRequest, ValueTracker, Vec2, VectorPath,
 };
 
 /// Direct counterpart of Manim's DifferentRotations example.
@@ -148,9 +156,13 @@ pub fn ordinary_different_rotations_program(
 
 const SET_Y: HostCallbackId = HostCallbackId::new(1);
 const SET_OPACITY: HostCallbackId = HostCallbackId::new(2);
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 const ACCUMULATE_DT: HostCallbackId = HostCallbackId::new(3);
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 const ACCUMULATE_TEXT_DT: HostCallbackId = HostCallbackId::new(4);
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 const ROTATE_LINE_FORWARD: HostCallbackId = HostCallbackId::new(5);
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 const ROTATE_LINE_BACKWARD: HostCallbackId = HostCallbackId::new(6);
 const FOLLOW_SPARSE_READS: HostCallbackId = HostCallbackId::new(7);
 const RECOLOR_PAINT: HostCallbackId = HostCallbackId::new(8);
@@ -185,6 +197,7 @@ fn ordered_affine_callbacks(
 /// Both native and direct single-context Rust/WASM examples consume these typed
 /// values. The execution schedule remains owned by [`ExecutionSession`], while
 /// the callable table contains only host-owned Rust closures.
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub fn live_affine_callbacks() -> Result<(ExecutionSession, RustHostCallbackTable), Box<dyn Error>>
 {
     let mut scene = Scene::new();
@@ -312,6 +325,7 @@ pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable)
 /// The compiler owns the adjacent forward and reverse callback windows. Circle,
 /// reference-Line, and Text siblings stay resident while only the moving Line's
 /// one effective transform changes.
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub fn live_line_callback_rotation(
 ) -> Result<(ExecutionSession, RustHostCallbackTable), Box<dyn Error>> {
     let mut scene = Scene::new();
@@ -356,7 +370,7 @@ pub fn live_line_callback_rotation(
             2.0,
             None,
         )?;
-        let mut close_windows = SemanticMutationTransaction::new();
+        let mut close_windows = noon_core::SemanticMutationTransaction::new();
         close_windows.remove_updater(moving.node_id(), ROTATE_LINE_FORWARD, 2.0);
         close_windows.remove_updater(moving.node_id(), ROTATE_LINE_BACKWARD, 4.0);
         close_windows.apply(&mut store)?;
@@ -429,6 +443,7 @@ pub fn live_line_match_callback(
 }
 
 /// Build the static Typst reference scene through the shared semantic text resource path.
+#[cfg(all(feature = "typst", feature = "bundled-fonts"))]
 pub fn typst_text_reference() -> Result<ExecutionSession, Box<dyn Error>> {
     let mut scene = Scene::new();
     let label = scene.typst(
@@ -446,6 +461,7 @@ pub fn typst_text_reference() -> Result<ExecutionSession, Box<dyn Error>> {
 }
 
 /// Build the static MathTypst reference scene through the shared semantic text resource path.
+#[cfg(all(feature = "typst", feature = "bundled-fonts"))]
 pub fn math_typst_text_reference() -> Result<ExecutionSession, Box<dyn Error>> {
     let mut scene = Scene::new();
     let equation = scene
@@ -3050,6 +3066,7 @@ mod callback_paint_tests {
 mod line_callback_tests {
     use super::*;
 
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn line_callback_windows_reverse_one_local_effective_transform() {
         let (mut session, mut callbacks) = live_line_callback_rotation().unwrap();
