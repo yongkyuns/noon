@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use super::{
-    NativeEventSource, NativeStateSource, SemanticNodeId, SemanticNodeKind, SemanticStore,
-    SemanticVec3,
-};
 use crate::{
     continuous_time_map_interval, mapped_continuous_progress, validate_continuous_track_timing,
     CompositionTimeMap, TimelineError, TrackTiming,
+};
+use crate::{
+    NativeEventSource, NativeStateSource, SemanticNodeId, SemanticNodeKind, SemanticStore,
+    SemanticVec3,
 };
 
 /// One authored scalar timeline interval owned by a semantic input signal.

@@ -185,21 +185,23 @@ python3 -m http.server --directory web 8080
 
 Then open `http://localhost:8080`.
 
-Every scene exposed by the playground picker is executed by Python and compiled through the native Rust `ScenePlayer` in CI before deployment.
+Every scene exposed by the playground picker is authored through the shared Rust semantic operations and executed by the common runtime in CI before deployment.
 
 ## Workspace
 
-The active implementation lives under `crates/`. The target ownership is:
+The active implementation lives under `crates/`. Current responsibilities are:
 
-- `noon` — public Rust API, authoritative Semantic Scene, and shared authoring semantics;
-- `noon-core` — normalized renderer-independent execution-plan data;
+- `noon` — public Rust API, shared authoring operations, and execution-session orchestration;
+- `noon-core` — shared semantic identity/store, declarations, resources, and renderer-independent data contracts;
 - `noon-compile` — semantic analysis, specialization, lowering, and geometry preparation;
 - `noon-runtime` — deterministic mutable execution, reactive evaluation, scheduling, and incremental updates;
 - `noon-render-wgpu` — retained WebGPU renderer;
 - `noon-web` — WASM/browser integration;
 - supporting geometry/text crates only where a real dependency or compilation boundary justifies them.
 
-The current `noon-ir` and migration-era scene/transport models are transitional and are scheduled for removal by the architecture-consolidation phase. Serialization/transport is a codec concern, not a permanent scene layer.
+`noon-ir` and the obsolete browser scene/execution mirrors have been deleted. Remaining core legacy scene/codec and frontend migration surfaces are tracked by #959 and #61. Serialization is reserved for explicit codecs and genuine cross-context transport; it is not an in-process engine boundary.
+
+The target boundary remains defined by `docs/architecture.md`; #960 tracks the remaining separation of semantic and execution definitions currently housed in `noon-core`.
 
 Crates should correspond to real dependency or compilation boundaries. Prefer modules over crates until an independent build/dependency/reuse boundary exists.
 

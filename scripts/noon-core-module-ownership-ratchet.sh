@@ -4,11 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# `reactive.rs -> semantic_store.rs` is a temporary migration seam. This
-# guard protects ordinary module ownership without making that seam permanent:
-# a reviewed normalization may remove it, but no additional `#[path]` or
-# `include!` indirection is allowed.
-temporary_owner='crates/noon-core/src/reactive.rs'
+# Semantic store and reactive declarations use ordinary module ownership.
+# No organizational path/include indirection remains permitted.
 # Use the same baseline grep dependency as the other architecture guards.
 # Scan the working tree (including untracked Rust files), and distinguish an
 # empty match set from a tool/read failure so the guard cannot pass unchecked.
@@ -26,29 +23,9 @@ else
   fi
 fi
 
-unexpected=0
-while IFS= read -r reference; do
-  [[ -z "$reference" ]] && continue
-
-  reference_file="${reference%%:*}"
-  remainder="${reference#*:}"
-  reference_line="${remainder#*:}"
-  if [[ "$reference_file" != "$temporary_owner" ]] || \
-     ! printf '%s\n' "$reference_line" | grep -Eq \
-       '^[[:space:]]*#\[[[:space:]]*path[[:space:]]*=[[:space:]]*"semantic_store\.rs"[[:space:]]*\][[:space:]]*$'; then
-    printf 'noon-core module ownership ratchet: unexpected indirection: %s\n' "$reference" >&2
-    unexpected=1
-  fi
-done <<< "$module_indirections"
-
-if (( unexpected != 0 )); then
-  cat >&2 <<'EOF'
-
-noon-core module ownership must remain explicit. The current
-`reactive.rs -> semantic_store.rs` `#[path]` is a temporary migration seam;
-it may be removed by a reviewed ownership normalization, but it does not
-authorize another organizational `#[path]` or `include!` indirection.
-EOF
+if [[ -n "$module_indirections" ]]; then
+  printf 'noon-core module ownership ratchet: unexpected indirection:\n%s\n' "$module_indirections" >&2
+  echo 'noon-core ownership requires ordinary modules, without #[path] or include! indirection.' >&2
   exit 1
 fi
 

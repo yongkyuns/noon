@@ -5,8 +5,8 @@ use super::semantic_declarations::{
     close_all_updater_registrations, close_first_updater_registration, insert_updater_registration,
     UpdaterRegistrationEditError,
 };
-use super::semantic_store::SemanticRemoveNodeEffect;
-use super::{
+use crate::semantic_store::SemanticRemoveNodeEffect;
+use crate::{
     AnimationOptions, HostCallbackId, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationState,
     SemanticFadeDirection, SemanticFadeEndpoint, SemanticNodeId, SemanticNodeKind,

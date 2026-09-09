@@ -1,4 +1,4 @@
-//! Compiler from Noon's authoring-oriented scene definition to dense runtime data.
+//! Compiler from Noon's semantic scene to specialized execution data.
 
 #![forbid(unsafe_code)]
 

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use super::{
+use crate::{
     SemanticMutationTransaction, SemanticNode, SemanticNodeId, SemanticNodeKind,
     SemanticSceneOperationError, SemanticStore,
 };

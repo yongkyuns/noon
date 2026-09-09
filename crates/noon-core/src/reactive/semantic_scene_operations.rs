@@ -1,4 +1,4 @@
-use super::{
+use crate::{
     SemanticNode, SemanticNodeId, SemanticNodeKind, SemanticObjectState, SemanticStore,
     SemanticStoreError,
 };

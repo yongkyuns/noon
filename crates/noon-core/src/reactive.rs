@@ -21,10 +21,6 @@ pub use lifecycle::*;
 mod publication;
 pub use publication::*;
 
-#[path = "semantic_store.rs"]
-mod semantic_store;
-pub use semantic_store::*;
-
 mod semantic_scene_operations;
 pub use semantic_scene_operations::*;
 

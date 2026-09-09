@@ -1,4 +1,4 @@
-use super::{
+use crate::{
     SemanticNodeId, SemanticObjectProperty, SemanticSceneOperationError, SemanticSignalBinding,
     SemanticSignalError, SemanticSignalValueKind, SemanticStore,
 };

@@ -1,19 +1,22 @@
 //! Renderer-independent semantic data model for Noon.
 //!
 //! This crate intentionally contains no renderer, windowing, ECS, or Python
-//! dependencies. Frontends build a [`SceneDefinition`]; later compiler/runtime
-//! crates consume it without depending on the authoring language.
+//! dependencies. Shared authoring operations mutate the [`SemanticStore`];
+//! compiler/runtime crates consume typed semantic and execution contracts without
+//! depending on the authoring language.
 
 #![forbid(unsafe_code)]
 
 mod graph_topology;
 mod patch;
 mod reactive;
+mod semantic_store;
 mod timeline;
 
 pub use graph_topology::*;
 pub use patch::*;
 pub use reactive::*;
+pub use semantic_store::*;
 pub use timeline::*;
 
 use serde::{Deserialize, Serialize};
