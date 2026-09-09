@@ -78,7 +78,7 @@ done
 
 # A declaration in a comment, literal, macro body or nested module is not a
 # crate-root owner, even when the abandoned root file still exists.
-for phantom in block-comment nested-comment nested-module raw-string cooked-string macro conditional; do
+for phantom in block-comment nested-comment nested-module raw-string cooked-string macro conditional raw-conditional raw-cfg-attr raw-path; do
   python3 -I -S - "$phantom" <<'PY'
 from pathlib import Path
 import sys
@@ -91,6 +91,9 @@ fixtures = {
     'cooked-string': 'const NOTES: &str = "\nmod animation;\n";\npub mod animation {}\n',
     'macro': 'macro_rules! unused { () => {\nmod animation;\n}; }\npub mod animation {}\n',
     'conditional': '#[cfg(any())]\nmod animation;\n',
+    'raw-conditional': '#[r#cfg(any())]\nmod animation;\n',
+    'raw-cfg-attr': '#[r#cfg_attr(all(), cfg(any()))]\nmod animation;\n',
+    'raw-path': '#[r#path = \"hidden/animation.rs\"]\nmod animation;\n',
 }
 lib = core / 'lib.rs'
 lib.write_text(lib.read_text().replace('mod animation;\n', '') + fixtures[sys.argv[1]])
