@@ -99,6 +99,3 @@ pub use native_input_runtime::*;
 
 mod native_inputs;
 pub use native_inputs::*;
-
-mod signal_timeline;
-pub use signal_timeline::*;
