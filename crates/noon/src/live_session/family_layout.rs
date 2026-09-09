@@ -70,6 +70,29 @@ impl LiveSession<'_> {
         self.affine_family(family, crate::family_affine::FamilyAffine::Scale(x, y))
     }
 
+    /// Apply Manim's default center-pivot scale through one coherent live publication.
+    ///
+    /// Native [`LiveSession::scale`] remains the origin-space affine primitive. This
+    /// compatibility operation reuses the same atomic affine transaction used for
+    /// families so Python never reconstructs a pivot or publishes a follow-up move.
+    pub fn manim_scale(
+        &mut self,
+        mobject: &Mobject,
+        x: f64,
+        y: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(mobject)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        // Persistent placement-compatible edits may not overwrite an active affine
+        // or content driver. Detached target editors follow the same validation path.
+        self.placement_authored_transform(mobject)?;
+        let bounds = self.family_member_bounds(mobject)?;
+        let transaction = crate::family_affine::FamilyAffine::Scale(x, y)
+            .transaction(&self.store.borrow(), &[mobject.node_id()], bounds)
+            .map_err(LiveSessionError::from)?;
+        self.apply(transaction)
+    }
+
     /// Rotate a family through the same authored transaction and live publication lane.
     pub fn rotate_family(
         &mut self,
