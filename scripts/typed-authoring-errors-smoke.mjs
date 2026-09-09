@@ -291,7 +291,108 @@ try {
         dispose: () => { player?.free(); context.free(); object.free(); store.free(); },
       };
     };
-    window.noonTypedErrorFixtures = {membershipFixture, ownershipFixture, livePropertyFixture, livePropertyCases, advanceFixture, advanceCases, describe, requireFailure};
+    const contentObservationCases = [
+      ...["foreign_target", "foreign_source", "stale_target", "stale_source", "stale_publication", "leased"].map(kind => ({method: "liveReplaceContent", kind})),
+      ...["foreign_target", "stale_target", "not_lowered", "stale_publication", "leased"].map(kind => ({method: "liveEffectiveMobject", kind})),
+    ];
+    const contentObservationFixture = ({method, kind}) => {
+      const store = new wasm.WasmAuthoringStore(), otherStore = new wasm.WasmAuthoringStore();
+      const context = store.createSceneContext(), otherContext = otherStore.createSceneContext();
+      const target = store.createManimCircle(0.5), source = store.createManimSquare(0.75);
+      const foreign = otherStore.createManimCircle(0.5);
+      const stale = kind.startsWith("stale_") && kind !== "stale_publication"
+        ? wasm.authoringErrorStaleMobjectSmoke(store) : null;
+      check(key(target) === key(foreign), "foreign handles must collide numerically");
+      target.shift(2, -1);
+      context.bindMobject("0", target);
+      context.beginLiveExecution(1);
+      let leased = null;
+      if (kind === "stale_publication") {
+        context.returnExecutionPlayer(context.createExecutionPlayer(1, 41));
+        target.shift(1, 0); // Deliberate out-of-band authored edit, not a live write.
+      } else {
+        context.liveWait(0.25);
+        if (kind === "leased") leased = context.createExecutionPlayer(0.25, 41);
+      }
+      const state = () => ({
+        members: Array.from(context.rootMembershipKeys()),
+        duration: context.authoredDuration(), handoff: context.liveHandoffDuration() ?? null,
+        ownership: context.liveExecutionOwnership(),
+        frame: leased ? leased.debugFrameJson() : context.liveDebugFrameJson(),
+        target: target.snapshotJson(), source: source.snapshotJson(),
+      });
+      const before = state();
+      const selectedTarget = kind === "foreign_target" ? foreign : kind === "stale_target" ? stale
+        : kind === "not_lowered" ? source : target;
+      const selectedSource = kind === "foreign_source" ? foreign : kind === "stale_source" ? stale : source;
+      const category = kind.startsWith("foreign_") ? "foreign_handle"
+        : kind === "stale_publication" ? "stale_publication"
+        : kind === "leased" ? "unclassified" : "stale_handle";
+      const expectedCodes = kind.startsWith("foreign_") ? ["authoring.foreign_store"]
+        : kind === "stale_publication" ? ["live.publication", "publication.stale_scene_revision"]
+        : kind === "not_lowered" ? ["live.publication", "publication.unknown_object"]
+        : kind === "leased" ? ["unclassified"] : ["authoring.semantic", "semantic.unknown_node"];
+      return {
+        category,
+        reject: () => method === "liveReplaceContent"
+          ? context.liveReplaceContent(selectedTarget, selectedSource)
+          : context.liveEffectiveMobject(selectedTarget),
+        assertDiagnostic: error => {
+          const codes = [];
+          for (let cause = error; cause; cause = cause.cause) {
+            codes.push(cause.code);
+            check(cause.category === category && cause.message.length > 0, "incomplete cause diagnostic");
+          }
+          equal(codes, expectedCodes, "content/observation cause chain changed");
+        },
+        assertAtomic: () => equal(state(), before, "rejection changed authored/effective state or ownership"),
+        recover: () => {
+          if (leased) {
+            context.returnExecutionPlayer(leased);
+            leased = null;
+            equal(context.liveDebugFrameJson(), before.frame, "rightful return replaced the runtime");
+          }
+          if (kind === "stale_publication") {
+            // Only the existing explicit new-run boundary reconciles a stale
+            // returned presentation. Never silently repair it in the mapper.
+            context.prepareExecutionRun();
+            context.beginLiveExecution(1);
+          }
+          if (method === "liveReplaceContent") {
+            context.liveReplaceContent(target, source);
+            const after = JSON.parse(target.snapshotJson()), prior = JSON.parse(before.target);
+            check(Object.hasOwn(after, "geometry"), "snapshot geometry assertion must not be vacuous");
+            equal(after.geometry, JSON.parse(before.source).geometry, "replacement lost source content");
+            equal(after.transform, prior.transform, "replacement changed target transform");
+            equal(after.style, prior.style, "replacement changed target style");
+            equal(source.snapshotJson(), before.source, "replacement mutated source");
+            equal(Array.from(context.rootMembershipKeys()), before.members, "replacement changed membership");
+          } else {
+            if (kind === "not_lowered") {
+              context.liveAdvanceSegmentTo(0.25);
+              context.liveCompleteSegment();
+              context.liveAdd("1", source);
+            }
+            const observed = context.liveEffectiveMobject(kind === "not_lowered" ? source : target);
+            try {
+              const transform = JSON.parse((kind === "not_lowered" ? source : target).snapshotJson()).transform;
+              equal([observed.translationX, observed.translationY], [transform.translation.x, transform.translation.y], "query returned the wrong object");
+            } finally { observed.free(); }
+          }
+          if (kind !== "stale_publication" && kind !== "not_lowered") {
+            context.liveAdvanceSegmentTo(0.25);
+            context.liveCompleteSegment();
+            equal(JSON.parse(context.liveDebugFrameJson()).time, 0.25, "retry lost the original wait");
+          }
+          return {atomic: true, recovered: true, recovery: kind === "stale_publication" ? "explicit_new_run" : "same_wait"};
+        },
+        dispose: () => {
+          if (leased) context.returnExecutionPlayer(leased);
+          context.free(); otherContext.free(); target.free(); source.free(); foreign.free(); stale?.free(); store.free(); otherStore.free();
+        },
+      };
+    };
+    window.noonTypedErrorFixtures = {membershipFixture, ownershipFixture, livePropertyFixture, livePropertyCases, advanceFixture, advanceCases, contentObservationFixture, contentObservationCases, describe, requireFailure};
   });
   report.javascript = await page.evaluate(() => {
     const {membershipFixture, ownershipFixture, describe, requireFailure} = window.noonTypedErrorFixtures;
@@ -349,6 +450,19 @@ try {
     });
   });
   assert.equal(report.advancement.length, 9);
+  report.contentObservations = await page.evaluate(() => {
+    const {contentObservationFixture, contentObservationCases, describe, requireFailure} = window.noonTypedErrorFixtures;
+    return contentObservationCases.map(spec => {
+      const fixture = contentObservationFixture(spec);
+      try {
+        const error = requireFailure(fixture.reject, fixture.category);
+        fixture.assertDiagnostic(error);
+        fixture.assertAtomic();
+        return {...spec, error: describe(error), recovery: fixture.recover()};
+      } finally { fixture.dispose(); }
+    });
+  });
+  assert.equal(report.contentObservations.length, 11);
   report.python = await page.evaluate(async ({modules, tests, callbackTests, pyodideUrl}) => {
     const wasm = await import("/web/pkg/noon_web.js");
     const {loadPyodide} = await import(pyodideUrl);
@@ -493,6 +607,26 @@ for spec in fixtures.advanceCases:
             raise AssertionError("invalid advancement succeeded")
     finally:
         fixture.dispose()
+content_results = []
+from _noon_errors import NoonError
+for spec in fixtures.contentObservationCases:
+    fixture = fixtures.contentObservationFixture(spec)
+    try:
+        try:
+            engine_call(fixture.reject, operation=spec.method)
+        except NoonError as error:
+            assert error.category == fixture.category and error.operation == spec.method
+            assert error.__cause__ is not None and str(error) == error.js_error.message
+            fixture.assertDiagnostic(error.js_error)
+            fixture.assertAtomic()
+            recovery = fixture.recover()
+            content_results.append({"method": spec.method, "kind": spec.kind,
+                                    "category": error.category, "code": error.code,
+                                    "recovery": recovery.recovery})
+        else:
+            raise AssertionError("invalid content/observation request succeeded")
+    finally:
+        fixture.dispose()
 import test_noon_errors_wasm as tests
 result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromModule(tests))
 assert not result.skipped, result.skipped
@@ -503,13 +637,15 @@ assert not callback_result.skipped, callback_result.skipped
 assert callback_result.wasSuccessful(), "real callback transaction boundary tests failed"
 await callback_tests.check_sparse_callback_read_callsite()
 await tests.check_real_promise_rejection()
-json.dumps({"matrix": results, "liveProperties": property_results, "advancement": advancement_results, "additionalTests": result.testsRun, "callbackTests": callback_result.testsRun, "sparseCallbackRead": True, "promiseRejectionAndRecovery": True, "skipped": len(result.skipped)})
+json.dumps({"matrix": results, "liveProperties": property_results, "advancement": advancement_results, "contentObservations": content_results, "additionalTests": result.testsRun, "callbackTests": callback_result.testsRun, "sparseCallbackRead": True, "promiseRejectionAndRecovery": True, "skipped": len(result.skipped)})
 `));
   }, {modules, tests, callbackTests, pyodideUrl});
   assert.equal(report.python.matrix.length, 10);
   assert.equal(report.python.liveProperties.length, 29);
   assert.equal(report.python.advancement.length, 9);
-  assert.equal(report.python.additionalTests, 11);
+  assert.equal(report.python.contentObservations.length, 11);
+  assert.equal(report.python.additionalTests, 12);
+
 
   assert.equal(report.python.callbackTests, 7);
   assert.equal(report.python.sparseCallbackRead, true);
