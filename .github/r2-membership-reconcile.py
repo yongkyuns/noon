@@ -72,7 +72,8 @@ for relative, old in [('family_arrangement.rs', 'family.validate()?;'),
     s = p.read_text()
     assert old in s
     p.write_text(s.replace(old, old[:-2] + '.map_err(|error| error.to_string())?;'))
-for relative in ['family_affine.rs', 'renderer_recovery.rs', 'renderer_fixtures.rs']:
+for relative in ['family_affine.rs', 'renderer_recovery.rs', 'renderer_fixtures.rs',
+                 'dimension_fitting.rs', 'family_grid.rs', 'family_paint.rs']:
     p = Path('crates/noon/src/example_scenes') / relative
     s, count = re.subn(r'(scene\s*\.add(?:_many)?\([\s\S]*?\))\?;',
                        r'\1.map_err(|error| error.to_string())?;', p.read_text())
