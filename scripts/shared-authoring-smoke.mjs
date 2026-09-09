@@ -113,6 +113,17 @@ circle = Circle(radius=1.0)
 scene.add(circle)
 # A handle-less wrapper must fail before binding can project existing geometry
 # into Python state. The same scene must remain usable afterward.
+color_probe = Circle().set_fill(BLUE, opacity=0.35).set_stroke(BLUE, opacity=0.2)
+color_probe.set_color(GREEN)
+assert abs(color_probe.get_fill_opacity() - 0.35) < 1e-6
+assert abs(color_probe.get_stroke_opacity() - 0.2) < 1e-6
+assert not hasattr(circle._semantic_handle, "wireTranslationX")
+assert not hasattr(circle._semantic_handle, "wireFillRed")
+assert not hasattr(circle._semantic_handle, "wireRotation")
+rotation_probe = Circle()
+angle = 0.123456789012345
+rotation_probe._semantic_handle.setRotation(angle)
+assert float(rotation_probe._semantic_handle.rotation) == angle
 objects_before = [dict(row) for row in scene._objects]
 next_id = scene._next_object_id
 untyped = Circle(radius=0.2)

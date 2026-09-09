@@ -263,7 +263,7 @@ def _shape_matcher_target(target: object):
             raise NotImplementedError(
                 "shape matcher Group/VGroup targets require shared semantic family bounds"
             )
-        return shared[0]
+        return shared
     handle = _shared._handle_for(target)
     if handle is None:
         raise NotImplementedError(

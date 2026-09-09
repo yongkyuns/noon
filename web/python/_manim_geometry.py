@@ -370,14 +370,6 @@ def match_points(self: _base.Mobject, mobject: object) -> _base.Mobject:
         source_handle.matchLine(target_handle)
     except Exception as error:
         raise ValueError(str(error)) from None
-    # Legacy bound snapshots remain an explicit migration projection. Canonical
-    # scenes already observe the same handle and need no Python-side state copy.
-    try:
-        from _manim_semantic_handles import _sync_bound_transform
-
-        _sync_bound_transform(self, source_handle)
-    except ImportError:
-        pass
     return self
 
 

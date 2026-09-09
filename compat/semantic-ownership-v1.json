@@ -159,8 +159,8 @@
       "surface": "Deterministic Group/VGroup shift/move_to/center/set_x/set_y translation",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "FamilyLayout::shift/move_to"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_shift/_group_move_to/_sync_family_transforms"}],
-      "reason": "Rust computes the translation from shared bounds and commits every observed leaf through one alias-aware semantic transaction. Python only coerces arguments and synchronizes the existing legacy export projection."
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_shift/_group_move_to/_shared_family_layout"}],
+      "reason": "Rust computes the translation from shared bounds and commits every observed leaf through one alias-aware semantic transaction. Python only coerces arguments and checks wrapper eligibility; it does not refresh a scene-state mirror."
     },
     {
       "id": "group-relative-placement",
@@ -313,7 +313,7 @@
       "surface": "Deterministic scene-bound Mobject transform/style/layout state and animate source seed",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/semantic_mobject.rs", "symbol": "Mobject"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_mutation_handle_for/_sync_bound_transform/_sync_bound_style/commit_transform_target"}, {"language": "python", "path": "web/python/_manim_animate.py", "symbol": "_aligned_scene_play"}],
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_mutation_handle_for/_set_color/commit_transform_target"}, {"language": "python", "path": "web/python/_manim_animate.py", "symbol": "_aligned_scene_play"}],
       "reason": "The same store-owned semantic node survives initial scene binding and owns deterministic transform/style/layout state. Target editors allocate independent nodes in that store. The canonical path lowers directly to ExecutionSession; legacy animation synchronization remains a separate migration concern."
     },
     {
