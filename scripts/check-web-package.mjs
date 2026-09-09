@@ -177,7 +177,6 @@ const expectedJavascriptSurface = [
   "sceneJson(",
   "export function verifySceneReplay(",
   "export function resolveAnimationOptions(",
-  "export function resolveCompositionSchedule(",
   "export function resolveUniformCompositionSchedule(",
   "export function resolveLifecyclePlan(",
   "export function validatePresenceTransition(",
@@ -375,7 +374,6 @@ const expectedTypeSurface = [
   "manimMoveToPoint(",
   "export function verifySceneReplay(scene_json: string, targets_json: string, forward_sample_count: number): void",
   "export function resolveAnimationOptions(",
-  "export function resolveCompositionSchedule(",
   "export function resolveUniformCompositionSchedule(",
   "export function resolveLifecyclePlan(",
   "export function validatePresenceTransition(",
@@ -483,6 +481,7 @@ for (const retired of ["ReactiveScenePlayer", "ReactiveCanvasPlayer",
   }
 }
 for (const retired of [
+  "export function resolveCompositionSchedule(",
   "export function authoringCircle(", "export function authoringSquare(",
   "export function authoringRectangle(", "export function authoringLine(",
   "createManimDot(", "createManimTriangle(", "createManimElbow(",

@@ -1,5 +1,4 @@
 use noon_core::{
-    resolve_composition_schedule as resolve_core_composition_schedule,
     resolve_uniform_composition_schedule as resolve_core_uniform_composition_schedule,
     CompositionError, CompositionSchedule,
 };
@@ -58,17 +57,6 @@ fn failure(error: CompositionError) -> FrontendCompositionResolution {
     FrontendCompositionResolution::failure(kind, error.to_string())
 }
 
-pub fn resolve_frontend_composition_schedule(
-    child_run_times: &[f64],
-    lag_ratio: f64,
-    run_time: Option<f64>,
-) -> FrontendCompositionResolution {
-    match resolve_core_composition_schedule(child_run_times, lag_ratio, run_time) {
-        Ok(schedule) => FrontendCompositionResolution::success(schedule),
-        Err(error) => failure(error),
-    }
-}
-
 pub fn resolve_frontend_uniform_composition_schedule(
     child_count: usize,
     lag_ratio: f64,
@@ -84,10 +72,7 @@ pub fn resolve_frontend_uniform_composition_schedule(
 mod wasm {
     use wasm_bindgen::prelude::*;
 
-    use super::{
-        resolve_frontend_composition_schedule, resolve_frontend_uniform_composition_schedule,
-        FrontendCompositionResolution,
-    };
+    use super::{resolve_frontend_uniform_composition_schedule, FrontendCompositionResolution};
 
     #[wasm_bindgen]
     pub struct WasmCompositionResolution(FrontendCompositionResolution);
@@ -153,20 +138,6 @@ mod wasm {
         }
     }
 
-    #[wasm_bindgen(js_name = resolveCompositionSchedule)]
-    pub fn resolve_composition_schedule(
-        child_run_times: Box<[f64]>,
-        lag_ratio: f64,
-        run_time: f64,
-    ) -> WasmCompositionResolution {
-        let run_time = (!run_time.is_nan()).then_some(run_time);
-        WasmCompositionResolution(resolve_frontend_composition_schedule(
-            &child_run_times,
-            lag_ratio,
-            run_time,
-        ))
-    }
-
     #[wasm_bindgen(js_name = resolveUniformCompositionSchedule)]
     pub fn resolve_uniform_composition_schedule(
         child_count: usize,
@@ -189,17 +160,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn browser_bridge_preserves_unequal_child_timing() {
-        let resolved = resolve_frontend_composition_schedule(&[10.0, 1.0], 0.1, Some(5.0));
-        assert!(resolved.ok());
-        let schedule = resolved.schedule().unwrap();
-        assert_eq!(schedule.intrinsic_run_time, 10.0);
-        assert_eq!(schedule.intervals[0].duration, 5.0);
-        assert_eq!(schedule.intervals[1].start_time, 0.5);
-        assert_eq!(schedule.intervals[1].duration, 0.5);
-    }
-
-    #[test]
     fn browser_uniform_bridge_matches_family_lowering() {
         let resolved = resolve_frontend_uniform_composition_schedule(3, 0.5, 1.2);
         assert!(resolved.ok());
@@ -210,7 +170,7 @@ mod tests {
 
     #[test]
     fn browser_bridge_preserves_shared_validation_errors() {
-        let resolved = resolve_frontend_composition_schedule(&[1.0], -0.1, None);
+        let resolved = resolve_frontend_uniform_composition_schedule(1, -0.1, 1.0);
         assert!(!resolved.ok());
         assert_eq!(resolved.error_kind().as_deref(), Some("invalid_lag_ratio"));
     }
