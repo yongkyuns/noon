@@ -5,7 +5,7 @@ on:
     branches: [codex/1292-r4-root-order-prep]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: r4-root-order-qualification
@@ -54,6 +54,7 @@ jobs:
           if ! git cat-file -e "${BASE_SHA}^{commit}"; then
             git fetch --no-tags --depth=1 origin "$BASE_SHA"
           fi
+          python3 .github/ci/r4-qualification-source.py patch
           cargo fmt --all
       - name: Run root-order acceptance against real native runtime
         run: |
@@ -67,6 +68,10 @@ jobs:
         run: |
           set -o pipefail
           cargo check -p noon-web --all-features --target wasm32-unknown-unknown 2>&1 | tee evidence/wasm.log
+      - name: Retain qualified source blobs without changing any branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/ci/r4-qualification-source.py retain
       - name: Retain exact source and diagnostics
         if: always()
         run: |
