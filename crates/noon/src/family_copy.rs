@@ -113,7 +113,7 @@ pub(crate) fn prepare_family_copy(
                 .ok_or("family copy contains an unknown semantic node")?;
             match node.kind() {
                 SemanticNodeKind::Family => Some(node.members_iter().collect::<Vec<_>>()),
-                SemanticNodeKind::Object(_) | SemanticNodeKind::AuthoringObject => None,
+                SemanticNodeKind::AuthoringObject => None,
                 _ => return Err("family copy contains a non-mobject member".into()),
             }
         };

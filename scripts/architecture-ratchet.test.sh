@@ -540,4 +540,8 @@ if bash scripts/architecture-ratchet.sh unavailable-base-959 >/dev/null 2>&1; th
   exit 1
 fi
 
+reset_to_base
+printf '\nstruct RetiredMap { object_nodes: () }\n' >> crates/noon-core/src/semantic_store.rs
+expect_rejected 'retired semantic-store execution-ID map'
+
 echo "architecture ratchet self-test passed"

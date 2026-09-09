@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use noon_core::{SemanticObjectState, StoredGeometry};
+
 use noon_core::{
     CompositionTimeMap, CompositionTimeMapStep, GeometryRef, MutationTransaction, ObjectDefinition,
     ObjectId, RateFunction, SceneDefinition, ScenePatch, SemanticNodeId, SemanticStore,
@@ -43,8 +45,8 @@ struct ModelNode {
     source: Option<String>,
 }
 
-fn object(id: u64) -> ObjectDefinition {
-    ObjectDefinition::new(ObjectId::new(id), GeometryRef::circle(1.0))
+fn object() -> SemanticObjectState {
+    SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 })
 }
 
 fn model_index(nodes: &[ModelNode], id: SemanticNodeId) -> usize {
@@ -142,7 +144,6 @@ fn semantic_store_matches_reference_model_across_seeded_mutation_sequences() {
         let mut rng = Rng::new(seed);
         let mut store = SemanticStore::new();
         let mut nodes: Vec<ModelNode> = Vec::new();
-        let mut next_object = 0_u64;
 
         for step in 0..750 {
             let live_indices = nodes
@@ -162,9 +163,7 @@ fn semantic_store_matches_reference_model_across_seeded_mutation_sequences() {
                     let id = if family {
                         store.insert_family()
                     } else {
-                        let id = store.insert_object(object(next_object));
-                        next_object += 1;
-                        id
+                        store.insert_semantic_object(object())
                     };
                     nodes.push(ModelNode {
                         id,
@@ -441,13 +440,13 @@ fn source_identity_uniqueness_survives_reassignment_and_slot_reuse() {
         let mut live = Vec::new();
         let mut expected_owner: HashMap<String, SemanticNodeId> = HashMap::new();
 
-        for object_id in 0..40_u64 {
-            live.push(store.insert_object(object(object_id)));
+        for _ in 0..40_u64 {
+            live.push(store.insert_semantic_object(object()));
         }
 
         for step in 0..300 {
             if live.is_empty() {
-                live.push(store.insert_object(object(10_000 + step)));
+                live.push(store.insert_semantic_object(object()));
             }
             let index = rng.index(live.len());
             let id = live[index];
@@ -493,7 +492,7 @@ fn source_identity_uniqueness_survives_reassignment_and_slot_reuse() {
                 }
                 store.remove_node(removed).unwrap();
                 assert!(store.node(removed).is_none(), "seed={seed} step={step}");
-                let replacement = store.insert_object(object(20_000 + step));
+                let replacement = store.insert_semantic_object(object());
                 assert_eq!(
                     replacement.slot(),
                     removed.slot(),

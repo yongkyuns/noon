@@ -131,10 +131,8 @@ impl SemanticStore {
                 | (SemanticNodeKind::AuthoringObject, SemanticNodeKind::Family) => {
                     Err(SemanticFamilyPairingError::TopologyMismatch { source, target })
                 }
-                (SemanticNodeKind::Object(_), _)
-                | (SemanticNodeKind::Signal(_), _)
+                (SemanticNodeKind::Signal(_), _)
                 | (SemanticNodeKind::Animation(_), _)
-                | (_, SemanticNodeKind::Object(_))
                 | (_, SemanticNodeKind::Signal(_))
                 | (_, SemanticNodeKind::Animation(_)) => {
                     let unsupported = if !matches!(
@@ -188,7 +186,7 @@ impl SemanticStore {
                 return Ok(());
             }
             match node.kind() {
-                SemanticNodeKind::Object(_) | SemanticNodeKind::AuthoringObject => {
+                SemanticNodeKind::AuthoringObject => {
                     leaves.push(node_id);
                 }
                 SemanticNodeKind::Family => {
@@ -214,18 +212,17 @@ impl SemanticStore {
 
 #[cfg(test)]
 mod tests {
-    use crate::{GeometryRef, ObjectDefinition, ObjectId};
+    use crate::{SemanticObjectState, StoredGeometry};
 
     use super::*;
-
-    fn object(id: u64) -> ObjectDefinition {
-        ObjectDefinition::new(ObjectId::new(id), GeometryRef::circle(1.0))
-    }
 
     #[test]
     fn leaf_target_is_its_own_ordered_leaf_sequence() {
         let mut store = SemanticStore::new();
-        let object = store.insert_object(object(1));
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
         let authoring = store.insert_authoring_object();
 
         assert_eq!(store.ordered_leaf_nodes(object).unwrap(), vec![object]);
