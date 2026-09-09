@@ -182,48 +182,51 @@ pub fn verify_example_replay(
 
 fn create_morph_fade_session() -> Result<ExecutionSession, String> {
     use noon::{
-        AnimationOptions, RateFunction, Scene, SemanticAnimationCompositionKind,
-        SemanticAnimationIntent, SemanticFadeDirection, SemanticFadeEndpoint,
-        SemanticTransformInterpolation,
+        AnimationCompositionRequest as Request, AnimationOptions, FadeEndpoint, RateFunction,
+        Scene, SemanticAnimationCompositionKind, SemanticFadeDirection, TransformToRequest,
     };
     let mut scene = Scene::new();
-    let circle = scene.circle(0.75)?;
-    let mut square = scene.square(1.5)?;
-    square.set_translation(2.0, 0.0)?;
-    scene.add(&circle)?;
+    let mut entering = scene.circle(0.75)?;
+    entering.set_translation(-2.0, 0.0)?;
+    let source = scene.square(1.5)?;
+    let target = scene.circle(0.75)?;
+    let mut leaving = scene.circle(0.75)?;
+    leaving.set_translation(2.0, 0.0)?;
+    scene.add(&source)?;
+    scene.add(&leaving)?;
+    let mut session = scene
+        .execution_session()
+        .map_err(|error| error.to_string())?;
     let options = AnimationOptions::new()
-        .run_time(1.0)
+        .run_time(2.0)
         .rate_func(RateFunction::Linear);
-    let create = scene.declare_animation(
-        SemanticAnimationIntent::Create {
-            target: circle.node_id(),
-        },
-        options,
-    )?;
-    let morph = scene.declare_animation(
-        SemanticAnimationIntent::TransformTo {
-            target: circle.node_id(),
-            target_state: square.node_id(),
-            interpolation: SemanticTransformInterpolation::PointCorrespondence,
-        },
-        options,
-    )?;
-    let fade = scene.declare_animation(
-        SemanticAnimationIntent::Fade {
-            target: circle.node_id(),
-            direction: SemanticFadeDirection::Out,
-            endpoint: SemanticFadeEndpoint::identity(),
-        },
-        options,
-    )?;
-    let root = scene.declare_animation(
-        SemanticAnimationIntent::Composition {
-            kind: SemanticAnimationCompositionKind::Sequence,
-            children: vec![create.node_id(), morph.node_id(), fade.node_id()],
-        },
-        AnimationOptions::new(),
-    )?;
-    scene.execution_session_with_animation_root(&root)
+    let request = Request::Composition {
+        kind: SemanticAnimationCompositionKind::Parallel,
+        children: vec![
+            Request::Create {
+                target: &entering,
+                options,
+            },
+            Request::TransformTo(TransformToRequest::point_correspondence(
+                &source, &target, options,
+            )),
+            Request::Fade {
+                target: &leaving,
+                direction: SemanticFadeDirection::Out,
+                endpoint: FadeEndpoint::default(),
+                options,
+            },
+        ],
+        options: AnimationOptions::new(),
+    };
+    // Activate through the ordinary live API: initial exact-track lowering is
+    // intentionally narrower. Replay compares the activated execution channels;
+    // logical segment completion/publication has its own shared live tests.
+    scene
+        .live(&mut session)
+        .declare_and_activate_composition(&request, AnimationOptions::new())
+        .map_err(|error| error.to_string())?;
+    Ok(session)
 }
 
 #[cfg(all(target_arch = "wasm32", debug_assertions))]
