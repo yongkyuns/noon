@@ -5,78 +5,64 @@ on:
 permissions:
   contents: write
 jobs:
-  qualify:
+  reconcile:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-    env:
-      CARGO_INCREMENTAL: '0'
-      CARGO_PROFILE_DEV_DEBUG: '0'
-      CARGO_PROFILE_TEST_DEBUG: '0'
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: 'true'
-      SCCACHE_GHA_RW_MODE: READ_ONLY
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Assemble only the recovered content and observation patch
+      - name: Reconcile scoped native-qualified patch with newly landed master
         run: |
-          mkdir -p /tmp/r3-content-evidence
+          mkdir -p /tmp/r3-content-integration
           python3 - <<'PY'
           import base64, gzip, hashlib, pathlib
           patch = gzip.decompress(base64.b64decode(pathlib.Path('.github/r3-content.patch.b64').read_text(), validate=True))
           assert hashlib.sha256(patch).hexdigest() == 'df20d16e51f9bb181b76b32822456e43d4610b55967f5b7903f48f072f0793c3'
-          pathlib.Path('/tmp/r3-content-evidence/input.patch').write_bytes(patch)
+          old = b'-  assert.equal(report.python.additionalTests, 9);'
+          new = b'+  assert.equal(report.python.additionalTests, 10);'
+          assert patch.count(old) == patch.count(new) == 1
+          patch = patch.replace(old, b'-  assert.equal(report.python.additionalTests, 10);').replace(new, b'+  assert.equal(report.python.additionalTests, 11);')
+          pathlib.Path('/tmp/r3-content-integration/input.patch').write_bytes(patch)
           PY
-          base=bc9fa345c0feb9a503cfcfa03fff9057fb328cc4
+          base=b9d6c4cbd82a6333551663358946294538cc3842
+          parent=74afb348d23c378f9ee827f5015b9095d6c573dd
+          test "$(git rev-parse refs/remotes/origin/codex/1292-r3-content-query)" = "$parent"
           git checkout --detach "$base"
-          git archive --format=tar.gz HEAD > /tmp/r3-content-evidence/base-source.tar.gz
-          git apply --index /tmp/r3-content-evidence/input.patch
-          cargo fmt --all
-          git add -u
+          git archive --format=tar.gz HEAD > /tmp/r3-content-integration/base-source.tar.gz
+          git apply --index /tmp/r3-content-integration/input.patch
           git diff --cached --check
+          test "$(git diff --cached --name-only | wc -l)" -eq 5
+          node --check scripts/typed-authoring-errors-smoke.mjs
           git config user.name 'Yongkyun Shin'
           git config user.email '4311628+yongkyuns@users.noreply.github.com'
-          git commit -m 'fix: preserve typed live content and observation errors (#1292 R3)'
-          git rev-parse HEAD HEAD^{tree} > /tmp/r3-content-evidence/revisions.txt
-          echo "$base" > /tmp/r3-content-evidence/base.txt
-          git diff "$base" HEAD > /tmp/r3-content-evidence/product.patch
-          git archive --format=tar.gz HEAD > /tmp/r3-content-evidence/source.tar.gz
-      - uses: actions/cache/restore@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-sources-
-      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
-        with:
-          version: v0.16.0
-      - name: Native content and observation rejection and local retry
+          tree=$(git write-tree)
+          candidate=$(git commit-tree "$tree" -p "$parent" -p "$base" -m 'fix: reconcile content/query boundary tests with current master')
+          git reset --hard "$candidate"
+          git rev-parse HEAD HEAD^{tree} > /tmp/r3-content-integration/revisions.txt
+          echo "$base" > /tmp/r3-content-integration/base.txt
+          git diff "$base" HEAD > /tmp/r3-content-integration/product.patch
+          git archive --format=tar.gz HEAD > /tmp/r3-content-integration/source.tar.gz
+      - name: Complete Python suite on the actual combined source
         run: |
           set -o pipefail
-          cargo test -p noon-web --lib live_content_and_observation_errors_keep_atomicity_and_local_retry -- --nocapture 2>&1 | tee /tmp/r3-content-evidence/focused-native.log
-      - name: Native architecture, format, check, Clippy and library tests
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s web/python -p 'test_*.py' 2>&1 | tee /tmp/r3-content-integration/python.log
+      - name: Publish integrated draft for normal exact-event native and WASM checks
         run: |
           set -o pipefail
-          bash scripts/check.sh fast bc9fa345c0feb9a503cfcfa03fff9057fb328cc4 2>&1 | tee /tmp/r3-content-evidence/native.log
-      - name: Existing web static and complete Python suite
-        run: |
-          set -o pipefail
-          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh 2>&1 | tee /tmp/r3-content-evidence/preflight.log
-      - name: Publish native-qualified candidate for exact-event PR browser qualification
-        run: |
-          set -o pipefail
-          git push origin HEAD:refs/heads/codex/1292-r3-content-query 2>&1 | tee /tmp/r3-content-evidence/publication.log
-      - name: Retain exact dependencies and final state
+          if git push origin HEAD:refs/heads/codex/1292-r3-content-query 2>&1 | tee /tmp/r3-content-integration/publication.log; then
+            echo pushed > /tmp/r3-content-integration/publication-status.txt
+          else
+            echo 'Not published; connector publication of the recorded commit is required.' > /tmp/r3-content-integration/publication-status.txt
+          fi
+      - name: Retain final source state
         if: always()
         run: |
-          if test -f Cargo.lock; then cp Cargo.lock /tmp/r3-content-evidence/Cargo.lock; fi
-          git status --short > /tmp/r3-content-evidence/status.txt
-          git rev-parse HEAD > /tmp/r3-content-evidence/final-head.txt
+          git status --short > /tmp/r3-content-integration/status.txt
+          git rev-parse HEAD > /tmp/r3-content-integration/final-head.txt
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: r3-content-native-qualification
-          path: /tmp/r3-content-evidence
+          name: r3-content-current-master
+          path: /tmp/r3-content-integration
           retention-days: 7
