@@ -1018,6 +1018,8 @@ try {
 scene = Scene()
 scene.add(Circle(radius=0.4))
 assert scene._canonical_authoring_context is not None
+assert not hasattr(scene._canonical_authoring_context, "checkpoint")
+assert not hasattr(scene._canonical_authoring_context, "restore")
 ${corruption}
 def reject_export(*args, **kwargs):
     raise AssertionError("normal shared finalization invoked the document exporter")
