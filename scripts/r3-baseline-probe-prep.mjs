@@ -24,10 +24,12 @@ let browser;
 try {
  for(let i=0;;i++){try{if((await fetch('http://127.0.0.1:4198/')).ok)break;}catch{}if(i>=80)throw new Error('server startup failed');await new Promise(r=>setTimeout(r,100));}
  browser=await chromium.launch({channel:'chromium',headless:true});
+ report.browser=browser.version();report.node=process.version;
  const page=await browser.newPage();
  page.on('console',x=>logs=(logs+`\n${x.type()}: ${x.text()}`).slice(-64000));
  await page.goto('http://127.0.0.1:4198/');
- await page.evaluate(fixtures);
+ await page.evaluate(`(${fixtures})()`);
+ assert.equal(await page.evaluate(()=>typeof window.noonTypedErrorFixtures?.membershipFixture),'function');
  report.python=await page.evaluate(async pyodideUrl=>{
   const {loadPyodide}=await import(pyodideUrl);const py=await loadPyodide();
   window.baselineFixture=(kind,live)=>{
