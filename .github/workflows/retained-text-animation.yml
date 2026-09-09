@@ -64,7 +64,7 @@ jobs:
         with:
           version: v0.16.0
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6
         with:
           tool: wasm-pack@0.15.0
           fallback: none
