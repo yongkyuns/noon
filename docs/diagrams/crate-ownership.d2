@@ -28,6 +28,6 @@ api -> shared: "author / lower / coordinate"
 shared -> renderer: "typed runtime observations"
 renderer -> hosts: "same reusable renderer"
 
-note: "Ownership / data-flow view, not all Cargo edges.\nSemanticStore remains in noon-core; CompiledScene remains in noon-compile.\nThe target crate split below is not a completed module move." {class: note}
+note: "Ownership / data-flow view, not all Cargo edges.\nSemanticStore remains in noon-core; CompiledScene remains in noon-compile.\nThese are settled responsibility boundaries; conceptual engine layers do not require matching crate names." {class: note}
 hosts -> providers: {style.opacity: 0}
 providers -> note: {style.opacity: 0}

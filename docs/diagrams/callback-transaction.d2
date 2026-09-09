@@ -1,0 +1,16 @@
+# One ordered callback invocation with a coherent read view and staged overlay.
+shape: sequence_diagram
+runtime: "Runtime"
+view: "Callback read view"
+host: "Host callback"
+overlay: "Staged overlay"
+prepare: "Semantic / compiler preflight"
+
+runtime -> view: "pin SceneRevision / ExecutionRevision / FrameEpoch"
+view -> host: "invoke with required coherent reads"
+host -> overlay: "read overlay first; stage effective/authored writes"
+host -> view: "read miss: suspend/resume same invocation when supported"
+overlay -> prepare: "authored mutations / resource work"
+prepare -> runtime: "typed prepared effects or rejection"
+overlay -> runtime: "effective writes"
+runtime -> runtime: "atomic next FrameEpoch publication"

@@ -1,0 +1,24 @@
+# A local change stays local through validation, execution, rendering and GPU publication.
+...@_style
+
+direction: right
+sources: "CHANGE SOURCE" {
+  grid-columns: 1
+  vertical-gap: 34
+  authored: "Local authored edit\nproperty · structure · content" {class: node}
+  effective: "Effective driver write\ntimeline · reactive · callback" {class: node}
+}
+impact: "Impact + preparation\naffected closure only\ncompiler/resource work when required" {class: node}
+runtime: "Affected runtime state\nslots · domains · spatial entries" {class: authority}
+publish: "RendererPublication\nchanged ranges · order · resources" {class: node}
+renderer: "Retained renderer\nreuse clean resident state" {class: authority}
+gpu: "GPU work\nchanged uploads + visible draw work" {class: node}
+
+sources.authored -> impact: "validate / classify"
+impact -> runtime: "prepared local effects"
+sources.effective -> runtime: "no authored relowering"
+runtime -> publish: "coherent FrameEpoch"
+publish -> renderer: "dirty projection"
+renderer -> gpu: "upload / encode"
+note: "Unrelated NodeIds, execution slots, resources and GPU ranges remain untouched.\nWider materialization occurs only when observable semantics genuinely require it." {class: note}
+gpu -> note: {style.opacity: 0}
