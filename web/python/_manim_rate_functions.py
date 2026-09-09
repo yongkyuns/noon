@@ -111,27 +111,6 @@ def evaluate_rate_function(semantic_id: str, progress: float) -> float:
     return function(value)
 
 
-def _set_color_preserving_opacity(
-    self: _base.Mobject, color: _base.Color
-) -> _base.Mobject:
-    """Match Manim ``set_color`` without coupling RGB to fill/stroke opacity."""
-
-    try:
-        import _manim_semantic_handles as shared
-    except ImportError:
-        shared = None
-    if shared is not None:
-        handle = shared._handle_for(self)
-        if handle is not None:
-            return shared._set_color(self, color)
-        if getattr(self, "_semantic_handle", None) is not None:
-            raise NotImplementedError(
-                "typed set_color requires the shared semantic mutation path"
-            )
-
-    raise RuntimeError("Mobject paint requires the shared Rust authoring host")
-
-
 def install() -> None:
     """Install thin public adapters without creating a second playback engine."""
 
@@ -152,11 +131,6 @@ def install() -> None:
         setattr(_base, name, value)
 
     _compat._easing_from_rate_func = easing_from_rate_func
-
-    # Manim's set_color changes fill/stroke RGB while preserving each channel's
-    # independent opacity. This matters for Transform-style effects such as Indicate:
-    # a transparent stroke must not become visible while the color interpolates.
-    _base.Mobject.set_color = _set_color_preserving_opacity
 
     exports = list(_base.__all__)
     for name in public:

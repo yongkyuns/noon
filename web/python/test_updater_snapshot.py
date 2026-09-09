@@ -36,7 +36,11 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         scene, mobject, context = self._mobject_and_context()
         public_set_x = updaters._base.Mobject.set_x
         public_set_y = updaters._base.Mobject.set_y
+        public_set_color = updaters._base.Mobject.set_color
+        import _manim_rate_functions as rates
+        rates.install()
         geometry.install()
+        self.assertIs(updaters._base.Mobject.set_color, public_set_color)
         self.assertIs(updaters._base.Mobject.set_x, public_set_x)
         self.assertIs(updaters._base.Mobject.set_y, public_set_y)
         updaters._ACTIVE_CONTEXTS[id(scene)] = context
