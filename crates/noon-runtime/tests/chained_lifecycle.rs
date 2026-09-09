@@ -1,48 +1,120 @@
-use noon_compile::CompiledScene;
-use noon_core::{Easing, GeometryRef, ObjectSnapshot, SceneDefinition, TrackTiming};
+use noon_compile::{CompiledObject, CompiledScene};
+use noon_core::{
+    CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId,
+    TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint,
+};
 use noon_runtime::SceneInstance;
 
 fn chained_scene() -> CompiledScene {
-    let mut scene = SceneDefinition::new();
-    let first = scene.add(GeometryRef::circle(1.0));
-    let second = scene.add(GeometryRef::circle(2.0));
-    let third = scene.add(GeometryRef::circle(3.0));
+    let mut objects = Vec::new();
+    let mut tracks = Vec::new();
+    let first = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        first,
+        GeometryRef::circle(1.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    let second = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        second,
+        GeometryRef::circle(2.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    let third = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        third,
+        GeometryRef::circle(3.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
 
-    let first_snapshot = ObjectSnapshot::from(scene.object(first).expect("first exists"));
-    let second_snapshot = ObjectSnapshot::from(scene.object(second).expect("second exists"));
-    let third_snapshot = ObjectSnapshot::from(scene.object(third).expect("third exists"));
+    let first_snapshot = TransformTrackEndpoint {
+        geometry: objects[first.get() as usize].geometry().unwrap().clone(),
+        transform: objects[first.get() as usize].base_transform,
+        style: objects[first.get() as usize].base_style,
+    };
+    let second_snapshot = TransformTrackEndpoint {
+        geometry: objects[second.get() as usize].geometry().unwrap().clone(),
+        transform: objects[second.get() as usize].base_transform,
+        style: objects[second.get() as usize].base_style,
+    };
+    let third_snapshot = TransformTrackEndpoint {
+        geometry: objects[third.get() as usize].geometry().unwrap().clone(),
+        transform: objects[third.get() as usize].base_transform,
+        style: objects[third.get() as usize].base_style,
+    };
 
-    scene
-        .animate_transform(
-            first,
-            first_snapshot,
-            second_snapshot.clone(),
-            TrackTiming::new(0.0, 1.0, Easing::Linear),
-        )
-        .expect("first replacement transform is valid");
-    scene
-        .set_presence_at(first, true, false, 1.0)
-        .expect("first hide is valid");
-    scene
-        .set_presence_at(second, false, true, 1.0)
-        .expect("second show is valid");
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object: first,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: first_snapshot,
+            to: second_snapshot.clone(),
+        },
+        timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object: first,
+        property: Property::Presence,
+        values: TrackValues::Bool {
+            from: true,
+            to: false,
+        },
+        timing: TrackTiming::instant(1.0),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object: second,
+        property: Property::Presence,
+        values: TrackValues::Bool {
+            from: false,
+            to: true,
+        },
+        timing: TrackTiming::instant(1.0),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    scene
-        .animate_transform(
-            second,
-            second_snapshot,
-            third_snapshot,
-            TrackTiming::new(1.0, 1.0, Easing::Linear),
-        )
-        .expect("second replacement transform is valid");
-    scene
-        .set_presence_at(second, true, false, 2.0)
-        .expect("second hide is valid");
-    scene
-        .set_presence_at(third, false, true, 2.0)
-        .expect("third show is valid");
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object: second,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: second_snapshot,
+            to: third_snapshot,
+        },
+        timing: TrackTiming::new(1.0, 1.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object: second,
+        property: Property::Presence,
+        values: TrackValues::Bool {
+            from: true,
+            to: false,
+        },
+        timing: TrackTiming::instant(2.0),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object: third,
+        property: Property::Presence,
+        values: TrackValues::Bool {
+            from: false,
+            to: true,
+        },
+        timing: TrackTiming::instant(2.0),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    CompiledScene::compile(&scene).expect("chained lifecycle scene must compile")
+    CompiledScene::compile_objects(objects, &tracks).expect("chained lifecycle scene must compile")
 }
 
 #[test]

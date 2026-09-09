@@ -1,20 +1,21 @@
-use noon_compile::CompiledScene;
+use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    Color, Easing, GeometryRef, ObjectSnapshot, SceneDefinition, Style, TrackTiming, Transform2D,
-    Vec2,
+    Color, CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, Style, TrackDefinition,
+    TrackId, TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
 };
 use noon_runtime::SceneInstance;
 
-fn snapshot(geometry: GeometryRef, transform: Transform2D, style: Style) -> ObjectSnapshot {
-    ObjectSnapshot {
+fn snapshot(geometry: GeometryRef, transform: Transform2D, style: Style) -> TransformTrackEndpoint {
+    TransformTrackEndpoint {
         geometry,
         transform,
         style,
     }
 }
 
-fn build_scene() -> SceneDefinition {
-    let mut scene = SceneDefinition::new();
+fn build_scene() -> CompiledScene {
+    let mut objects = Vec::new();
+    let mut tracks = Vec::new();
     let style_a = Style {
         fill: Some(Color::rgb(0.2, 0.3, 0.4)),
         stroke: None,
@@ -38,58 +39,85 @@ fn build_scene() -> SceneDefinition {
         scale: Vec2::new(2.0, 0.5),
     };
 
-    let circle = scene.add(GeometryRef::circle(1.0));
-    scene.object_mut(circle).unwrap().style = style_a;
-    scene
-        .animate_transform(
-            circle,
-            snapshot(GeometryRef::circle(1.0), transform_a, style_a),
-            snapshot(GeometryRef::circle(3.0), transform_b, style_b),
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
-        .unwrap();
+    let circle = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        circle,
+        GeometryRef::circle(1.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    objects[circle.get() as usize].base_style = style_a;
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object: circle,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: snapshot(GeometryRef::circle(1.0), transform_a, style_a),
+            to: snapshot(GeometryRef::circle(3.0), transform_b, style_b),
+        },
+        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    let rectangle = scene.add(GeometryRef::rectangle(2.0, 4.0));
-    scene
-        .animate_transform(
-            rectangle,
-            snapshot(
+    let rectangle = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        rectangle,
+        GeometryRef::rectangle(2.0, 4.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object: rectangle,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: snapshot(
                 GeometryRef::rectangle(2.0, 4.0),
                 Transform2D::IDENTITY,
                 Style::default(),
             ),
-            snapshot(
+            to: snapshot(
                 GeometryRef::rectangle(6.0, 8.0),
                 Transform2D::IDENTITY,
                 Style::default(),
             ),
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
-        .unwrap();
+        },
+        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    let line = scene.add(GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)));
-    scene
-        .animate_transform(
-            line,
-            snapshot(
+    let line = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        line,
+        GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object: line,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: snapshot(
                 GeometryRef::line(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)),
                 Transform2D::IDENTITY,
                 Style::default(),
             ),
-            snapshot(
+            to: snapshot(
                 GeometryRef::line(Vec2::new(0.0, -2.0), Vec2::new(0.0, 2.0)),
                 Transform2D::IDENTITY,
                 Style::default(),
             ),
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
-        .unwrap();
-    scene
+        },
+        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    CompiledScene::compile_objects(objects, &tracks).unwrap()
 }
 
 #[test]
 fn analytic_transform_has_exact_endpoints_and_midpoints() {
-    let mut instance = SceneInstance::new(CompiledScene::compile(&build_scene()).unwrap());
+    let mut instance = SceneInstance::new(build_scene());
     let frame = instance.seek(1.0).unwrap();
 
     assert_eq!(frame.objects[0].geometry(), Some(&GeometryRef::circle(2.0)));
@@ -129,7 +157,7 @@ fn analytic_transform_has_exact_endpoints_and_midpoints() {
 
 #[test]
 fn direct_seek_and_forward_playback_match_for_analytic_transform() {
-    let compiled = CompiledScene::compile(&build_scene()).unwrap();
+    let compiled = build_scene();
     let mut sequential = SceneInstance::new(compiled.clone());
     let mut direct = SceneInstance::new(compiled);
     for step in 1..=13 {
@@ -141,27 +169,41 @@ fn direct_seek_and_forward_playback_match_for_analytic_transform() {
 
 #[test]
 fn sequential_circle_transforms_are_continuous_at_boundary() {
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(GeometryRef::circle(1.0));
+    let mut objects = Vec::new();
+    let mut tracks = Vec::new();
+    let object = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        object,
+        GeometryRef::circle(1.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
     let style = Style::default();
-    scene
-        .animate_transform(
-            object,
-            snapshot(GeometryRef::circle(1.0), Transform2D::IDENTITY, style),
-            snapshot(GeometryRef::circle(3.0), Transform2D::IDENTITY, style),
-            TrackTiming::new(0.0, 1.0, Easing::Linear),
-        )
-        .unwrap();
-    scene
-        .animate_transform(
-            object,
-            snapshot(GeometryRef::circle(3.0), Transform2D::IDENTITY, style),
-            snapshot(GeometryRef::circle(5.0), Transform2D::IDENTITY, style),
-            TrackTiming::new(1.0, 1.0, Easing::Linear),
-        )
-        .unwrap();
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: snapshot(GeometryRef::circle(1.0), Transform2D::IDENTITY, style),
+            to: snapshot(GeometryRef::circle(3.0), Transform2D::IDENTITY, style),
+        },
+        timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: snapshot(GeometryRef::circle(3.0), Transform2D::IDENTITY, style),
+            to: snapshot(GeometryRef::circle(5.0), Transform2D::IDENTITY, style),
+        },
+        timing: TrackTiming::new(1.0, 1.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    let mut instance = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+    let mut instance =
+        SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap());
     assert_eq!(
         instance.seek(1.0).unwrap().objects[0].geometry(),
         Some(&GeometryRef::circle(3.0))

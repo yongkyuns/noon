@@ -1,9 +1,9 @@
-use noon_compile::CompiledScene;
+use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    Color, Easing, GeometryRef, ObjectSnapshot, PathCommand, SceneDefinition, StrokeWidthMode,
-    Style, TrackTiming, Transform2D, Vec2, VectorPath,
+    Color, CompositionTimeMap, Easing, GeometryRef, ObjectId, PathCommand, Property,
+    StrokeWidthMode, Style, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
+    TransformTrackEndpoint, Vec2, VectorPath,
 };
-use noon_core::{ScenePatch, TrackValues};
 use noon_runtime::SceneInstance;
 use std::sync::Arc;
 
@@ -31,14 +31,14 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
         ..Style::default()
     };
 
-    let mut from = ObjectSnapshot::new(GeometryRef::path(source));
+    let mut from = TransformTrackEndpoint::new(GeometryRef::path(source));
     from.style = style;
     from.transform = Transform2D {
         translation: Vec2::new(1.0, 2.0),
         rotation: std::f32::consts::FRAC_PI_2,
         scale: Vec2::new(2.0, 1.5),
     };
-    let mut to = ObjectSnapshot::new(GeometryRef::path(target));
+    let mut to = TransformTrackEndpoint::new(GeometryRef::path(target));
     to.style = style;
     to.transform = Transform2D {
         translation: Vec2::new(-1.0, 0.5),
@@ -46,21 +46,33 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
         scale: Vec2::new(1.0, 2.0),
     };
 
-    let mut scene = SceneDefinition::new();
-    let object = scene.add(from.geometry.clone());
-    scene.object_mut(object).expect("object").style = style;
-    scene.object_mut(object).expect("object").transform = from.transform;
-    scene
-        .animate_transform(
-            object,
-            from.clone(),
-            to.clone(),
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
-        .expect("valid Transform");
+    let mut objects = Vec::new();
+    let mut tracks = Vec::new();
+    let object = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        object,
+        from.geometry.clone(),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    objects[object.get() as usize].base_style = style;
+    objects[object.get() as usize].base_transform = from.transform;
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: from.clone(),
+            to: to.clone(),
+        },
+        timing: TrackTiming::new(0.0, 2.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
 
-    let mut identity_scene = scene.clone();
-    let mut instance = SceneInstance::new(CompiledScene::compile(&scene).expect("compile"));
+    let mut identity_tracks = tracks.clone();
+    let mut instance = SceneInstance::new(
+        CompiledScene::compile_objects(objects.clone(), &tracks).expect("compile"),
+    );
     let frame = instance.seek(1.0).expect("seek");
     let current = frame.render_transform(0);
     assert_eq!(current, Transform2D::IDENTITY);
@@ -94,7 +106,8 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
         to.transform.transform_point(Vec2::new(0.0, 1.0)),
     );
     let stable = instance.frame().render_geometries[0].clone().unwrap();
-    let mut retained = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+    let mut retained =
+        SceneInstance::new(CompiledScene::compile_objects(objects.clone(), &tracks).unwrap());
     for time in [0.0, 0.2, 0.7, 1.3, 2.0, 1.0] {
         let frame = instance.seek(time).unwrap();
         if time > 0.0 && time < 2.0 {
@@ -131,18 +144,22 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
     // A later independent driver must move the already completed morph; it may
     // convert the stable world pair once into the previous semantic local frame.
     let delta = Vec2::new(3.0, -2.0);
-    scene
-        .animate_position(
-            object,
-            to.transform.translation,
-            to.transform.translation + delta,
-            TrackTiming::new(2.0, 1.0, Easing::Linear),
-        )
-        .unwrap();
-    let compiled = CompiledScene::compile(&scene).unwrap();
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Position,
+        values: TrackValues::Vec2 {
+            from: to.transform.translation,
+            to: to.transform.translation + delta,
+        },
+        timing: TrackTiming::new(2.0, 1.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    let compiled = CompiledScene::compile_objects(objects.clone(), &tracks).unwrap();
     let mut stepped = SceneInstance::new(compiled.clone());
     let mut direct = SceneInstance::new(compiled);
-    let mut retained = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+    let mut retained =
+        SceneInstance::new(CompiledScene::compile_objects(objects.clone(), &tracks).unwrap());
     for time in [1.0, 2.0, 2.25, 2.5, 3.0] {
         let frame = stepped.advance_to(time).unwrap();
         assert_eq!(frame, direct.seek(time).unwrap());
@@ -168,16 +185,21 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
     }
     // A concurrent nonuniform scale driver preserves the established channel
     // order: effective TRS acts on the morph pair in the interpolated local frame.
-    scene
-        .animate_scale(
-            object,
-            Vec2::new(2.0, 0.5),
-            Vec2::new(4.0, 0.5),
-            TrackTiming::new(0.5, 1.0, Easing::Linear),
-        )
-        .unwrap();
-    let mut concurrent = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
-    let mut retained = SceneInstance::new(CompiledScene::compile(&scene).unwrap());
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object,
+        property: Property::Scale,
+        values: TrackValues::Vec2 {
+            from: Vec2::new(2.0, 0.5),
+            to: Vec2::new(4.0, 0.5),
+        },
+        timing: TrackTiming::new(0.5, 1.0, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    let mut concurrent =
+        SceneInstance::new(CompiledScene::compile_objects(objects.clone(), &tracks).unwrap());
+    let mut retained =
+        SceneInstance::new(CompiledScene::compile_objects(objects.clone(), &tracks).unwrap());
     let frame = concurrent.seek(1.0).unwrap();
     let retained_frame = retained.seek(1.0).unwrap();
     assert_eq!(frame.render_geometry(0), retained_frame.render_geometry(0));
@@ -207,26 +229,30 @@ fn screen_space_path_pair_keeps_endpoint_world_points_during_transform() {
     // Equal point content must not hide a handoff back to the registered Arc.
     // An identity TRS and a short identity scale driver make the temporary local
     // pair exactly equal to the compiled world pair while giving it another owner.
-    let mut identity_track = identity_scene.tracks()[0].clone();
+    let mut identity_track = identity_tracks[0].clone();
     let TrackValues::Object { from, to } = &mut identity_track.values else {
         panic!("transform");
     };
     from.transform = Transform2D::IDENTITY;
     to.transform = Transform2D::IDENTITY;
-    identity_scene
-        .apply_patch(ScenePatch::ReplaceTrack(identity_track))
-        .unwrap();
-    identity_scene
-        .animate_scale(
-            object,
-            Vec2::ONE,
-            Vec2::ONE,
-            TrackTiming::new(0.25, 0.25, Easing::Linear),
-        )
-        .unwrap();
-    let mut identity_native = SceneInstance::new(CompiledScene::compile(&identity_scene).unwrap());
-    let mut identity_retained =
-        SceneInstance::new(CompiledScene::compile(&identity_scene).unwrap());
+    identity_tracks[0] = identity_track;
+    identity_tracks.push(TrackDefinition {
+        id: TrackId::new(identity_tracks.len() as u64),
+        object,
+        property: Property::Scale,
+        values: TrackValues::Vec2 {
+            from: Vec2::ONE,
+            to: Vec2::ONE,
+        },
+        timing: TrackTiming::new(0.25, 0.25, Easing::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    let mut identity_native = SceneInstance::new(
+        CompiledScene::compile_objects(objects.clone(), &identity_tracks).unwrap(),
+    );
+    let mut identity_retained = SceneInstance::new(
+        CompiledScene::compile_objects(objects.clone(), &identity_tracks).unwrap(),
+    );
     let native_resource = identity_native.seek(0.1).unwrap().render_geometries[0]
         .clone()
         .unwrap();

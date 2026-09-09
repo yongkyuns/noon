@@ -140,10 +140,10 @@ def main() -> int:
             errors.append(f'{path}: retired runtime wrapper returned; use ExecutionSession and shared runtime slots')
         if re.search(r'\bFrontendMobjectHandle\b', source):
             errors.append(f'{path}: deleted FrontendMobjectHandle authority returned')
-        if path.startswith('crates/noon-render-wgpu/'):
+        if path.startswith(('crates/noon-render-wgpu/', 'crates/noon-runtime/')):
             code = re.sub(r'/\*.*?\*/|//[^\n]*', '', source, flags=re.S)
             if re.search(r'\b(?:SceneDefinition|ObjectDefinition|ObjectSnapshot|ScenePatch|MutationTransaction)\b', code):
-                errors.append(f'{path}: renderer code and fixtures must use typed execution data')
+                errors.append(f'{path}: renderer/runtime code and fixtures must use typed execution data')
         if path in {'crates/noon/src/scene.rs', 'crates/noon/src/semantic_mobject.rs'} or path.startswith(('crates/noon/src/scene/', 'crates/noon/src/semantic_mobject/')):
             if FORBIDDEN_CANONICAL.search(source) or any('legacy' in leaf.split(' as ', 1)[0].split('::') for _, leaf in imports(source)):
                 errors.append(f'{path}: canonical authoring regained a migration dependency')
