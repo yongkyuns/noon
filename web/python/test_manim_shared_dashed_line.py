@@ -71,7 +71,6 @@ class ManimSharedDashedLineTests(unittest.TestCase):
             _manim_compat._ir.Path = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Python path reconstruction was called"))
 
             import _manim_dashed_line
-            _manim_dashed_line.install()
             from noon import DashedLine, Line
 
             line = DashedLine(start=(-2, 1), end=(3, -1), dash_length=0.2, dashed_ratio=0.25)

@@ -49,18 +49,15 @@ class ManimShowPassingFlashTests(unittest.TestCase):
             import _manim_compat
 
             import _manim_rate_functions
-            _manim_rate_functions.install()
             import _manim_animate  # noqa: F401
             import _manim_composition
             play_before_composition = _manim_compat.Scene.play
-            _manim_composition.install()
             assert _manim_compat.Scene.play is play_before_composition
             import _manim_semantic_handles as handles
 
             import _manim_indication
 
             play_before = _manim_compat.Scene.play
-            _manim_indication.install()
             assert _manim_compat.Scene.play is play_before
 
             from noon import Line, ShowPassingFlash, Square, linear

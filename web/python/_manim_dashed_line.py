@@ -8,7 +8,6 @@ import noon as _base
 import _manim_compat as _compat
 import _manim_semantic_handles as _shared
 
-_INSTALLED = False
 
 
 class DashedLine(_compat.Line):
@@ -49,17 +48,3 @@ class DashedLine(_compat.Line):
         _shared._attach_geometry_options(self, candidate, "DashedLine")
         self.dash_length = dash_length_value
         self.dashed_ratio = dashed_ratio_value
-
-
-def install() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-    _base.DashedLine = DashedLine
-    _compat.DashedLine = DashedLine
-    if "DashedLine" not in _base.__all__:
-        _base.__all__.append("DashedLine")
-
-
-install()

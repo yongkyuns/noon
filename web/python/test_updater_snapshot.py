@@ -38,7 +38,6 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         public_set_y = updaters._base.Mobject.set_y
         public_set_color = updaters._base.Mobject.set_color
         import _manim_rate_functions as rates
-        rates.install()
         self.assertFalse(hasattr(geometry, "install"))
         self.assertIs(updaters._base.Mobject.set_color, public_set_color)
         self.assertIs(updaters._base.Mobject.set_x, public_set_x)

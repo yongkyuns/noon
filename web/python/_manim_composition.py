@@ -11,6 +11,7 @@ from typing import Any, Callable, Iterable
 
 import noon as _base
 import _manim_compat as _compat
+import _manim_rate_functions as _rate_functions
 
 
 DEFAULT_LAGGED_START_LAG_RATIO = 0.05
@@ -41,7 +42,7 @@ class Wait:
         self.run_time = _nonnegative_run_time(run_time, "Wait")
         self.stop_condition = None
         self.frozen_frame = frozen_frame
-        self.rate_func = _compat.linear if rate_func is None else rate_func
+        self.rate_func = _rate_functions.linear if rate_func is None else rate_func
         self.anim_args = dict(kwargs)
         if rate_func is not None:
             self.anim_args["rate_func"] = rate_func
@@ -92,7 +93,7 @@ class AnimationGroup:
         self.animations = _flatten_animations(animations)
         self.group = group
         self.run_time = None if run_time is None else float(run_time)
-        self.rate_func = _compat.linear if rate_func is None else rate_func
+        self.rate_func = _rate_functions.linear if rate_func is None else rate_func
         self.lag_ratio = float(lag_ratio)
         if not math.isfinite(self.lag_ratio) or self.lag_ratio < 0.0:
             raise ValueError("lag_ratio must be finite and non-negative")
@@ -151,23 +152,3 @@ class LaggedStartMap(LaggedStart):
             animations.append(animation_class(*args, **animation_kwargs))
 
         super().__init__(*animations, run_time=run_time, lag_ratio=lag_ratio)
-
-
-def install() -> None:
-    public = {
-        "Add": Add,
-        "AnimationGroup": AnimationGroup,
-        "LaggedStart": LaggedStart,
-        "LaggedStartMap": LaggedStartMap,
-        "Succession": Succession,
-        "Wait": Wait,
-    }
-    for name, value in public.items():
-        setattr(_compat, name, value)
-        setattr(_base, name, value)
-
-    exports = list(_base.__all__)
-    for name in public:
-        if name not in exports:
-            exports.append(name)
-    _base.__all__ = exports

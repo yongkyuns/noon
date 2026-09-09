@@ -19,12 +19,10 @@ import math
 from typing import Any
 
 import noon as _base
-import _manim_animate as _animate
 import _manim_compat as _compat
 import _manim_rate_functions as _rate_functions
 
 
-_INSTALLED = False
 _UNSUPPORTED_PATH_OPTIONS = {
     "path_arc",
     "path_arc_axis",
@@ -194,22 +192,3 @@ def _axis_sign(axis: object) -> float:
 
 def _points_close(left: object, right: object) -> bool:
     return all(math.isclose(float(a), float(b), abs_tol=1e-9) for a, b in zip(left, right))
-
-
-def install() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-
-    public = {"Rotate": Rotate, "Rotating": Rotating, "FocusOn": FocusOn}
-    for name, value in public.items():
-        setattr(_base, name, value)
-        setattr(_compat, name, value)
-        setattr(_animate, name, value)
-
-    exports = list(_base.__all__)
-    for name in public:
-        if name not in exports:
-            exports.append(name)
-    _base.__all__ = exports

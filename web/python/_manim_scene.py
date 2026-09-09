@@ -1105,7 +1105,7 @@ def _canonical_composition_rate_id(kwargs: dict[str, object]) -> str | None:
     if easing is not None and rate_func is not None:
         raise ValueError("use either easing or rate_func, not both")
     return str(easing) if easing is not None else (
-        _compat._easing_from_rate_func(rate_func) if rate_func is not None else "linear"
+        _rate_functions.easing_from_rate_func(rate_func) if rate_func is not None else "linear"
     )
 
 
@@ -1205,7 +1205,7 @@ def _canonical_passing_flash_options(
         None if run_time is None else float(run_time),
         play_rate
         if play_rate is not None
-        else None if rate_func is None else _compat._easing_from_rate_func(rate_func),
+        else None if rate_func is None else _rate_functions.easing_from_rate_func(rate_func),
     )
 
 
@@ -1369,7 +1369,7 @@ def _canonical_text_write_options(animation: object):
     rate_func = args.get("rate_func")
     return (
         None if run_time is None else float(run_time),
-        None if rate_func is None else _compat._easing_from_rate_func(rate_func),
+        None if rate_func is None else _rate_functions.easing_from_rate_func(rate_func),
         None if lag_ratio is None else float(lag_ratio),
     )
 
@@ -1399,7 +1399,7 @@ def _canonical_text_reveal_options(animation: object):
     rate_func = args.get("rate_func")
     return (
         None if run_time is None else float(run_time),
-        None if rate_func is None else _compat._easing_from_rate_func(rate_func),
+        None if rate_func is None else _rate_functions.easing_from_rate_func(rate_func),
         None if lag_ratio is None else float(lag_ratio),
         None if introducer is None else bool(introducer),
         None if remover is None else bool(remover),
@@ -1449,7 +1449,7 @@ def _build_canonical_composition_candidate(
         kind, composition_run_time, composition_lag_ratio, play_run_time,
     )
     candidate.setCompositionRateFunction(
-        _compat._easing_from_rate_func(group.rate_func) if group is not None else "linear"
+        _rate_functions.easing_from_rate_func(group.rate_func) if group is not None else "linear"
     )
     # For flat Scene.play arguments, shared child option resolution already
     # applies the play rate. Only an explicit group gets a root rate override.
@@ -1981,7 +1981,7 @@ def _build_canonical_composition_candidate(
             None if root_group is not None else _canonical_play_options(dict(root_kwargs)),
         )
         nested.setCompositionRateFunction(
-            _compat._easing_from_rate_func(root_group.rate_func) if root_group is not None else "linear"
+            _rate_functions.easing_from_rate_func(root_group.rate_func) if root_group is not None else "linear"
         )
         play_rate = _canonical_composition_rate_id(root_kwargs)
         if play_rate is not None:

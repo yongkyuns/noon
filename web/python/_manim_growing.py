@@ -62,19 +62,3 @@ class SpinInFromNothing(GrowFromCenter):
             raise ValueError("SpinInFromNothing angle must be finite")
         self.angle = value
         super().__init__(mobject, point_color=point_color, **kwargs)
-
-
-def install() -> None:
-    public = {
-        "GrowFromPoint": GrowFromPoint,
-        "GrowFromCenter": GrowFromCenter,
-        "GrowFromEdge": GrowFromEdge,
-        "SpinInFromNothing": SpinInFromNothing,
-    }
-    for name, value in public.items():
-        setattr(_base, name, value)
-        if name not in _base.__all__:
-            _base.__all__.append(name)
-
-
-install()

@@ -6,10 +6,9 @@ owns authoring syntax, argument conversion, and wrapper identity.
 
 from __future__ import annotations
 
-import json
 import math
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any, Callable, Iterable
 
 import _noon_ir as _ir
 
@@ -745,6 +744,35 @@ Object = Mobject
 
 # Public wrappers resolve from their defining modules without startup mutation.
 _PUBLIC_EXPORTS = {
+    "linear": "_manim_rate_functions",
+    "smooth": "_manim_rate_functions",
+    "rush_into": "_manim_rate_functions",
+    "rush_from": "_manim_rate_functions",
+    "there_and_back": "_manim_rate_functions",
+    "Add": "_manim_composition",
+    "AnimationGroup": "_manim_composition",
+    "LaggedStart": "_manim_composition",
+    "LaggedStartMap": "_manim_composition",
+    "Succession": "_manim_composition",
+    "Wait": "_manim_composition",
+    "Rotate": "_manim_rotate",
+    "Rotating": "_manim_rotate",
+    "FocusOn": "_manim_rotate",
+    "ShowIncreasingSubsets": "_manim_lifecycle",
+    "ShowSubmobjectsOneByOne": "_manim_lifecycle",
+    "GrowFromPoint": "_manim_growing",
+    "GrowFromCenter": "_manim_growing",
+    "GrowFromEdge": "_manim_growing",
+    "SpinInFromNothing": "_manim_growing",
+    "DrawBorderThenFill": "_manim_draw_border_then_fill",
+    "ShowPassingFlash": "_manim_indication",
+    "ValueTracker": "_manim_reactive",
+    "NativeVectorSignal": "_manim_reactive",
+    "NativeBoolSignal": "_manim_reactive",
+    "DashedLine": "_manim_dashed_line",
+    "MovingCameraScene": "_manim_camera",
+    "Write": "_manim_family_creation",
+    "Unwrite": "_manim_family_creation",
     "VMobject": "_manim_compat",
     "Circle": "_manim_compat",
     "Rectangle": "_manim_compat",

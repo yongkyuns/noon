@@ -8,15 +8,11 @@ IDs passed to Rust. Python callables remain available for explicit user evaluati
 from __future__ import annotations
 
 import math
-from typing import Any, Callable
+from typing import Callable
 
-import noon as _base
-import _manim_compat as _compat
-import _noon_ir as _ir
 
 
 INFLECTION = 10.0
-_INSTALLED = False
 
 
 def linear(t: float) -> float:
@@ -55,11 +51,6 @@ def there_and_back(t: float, inflection: float = INFLECTION) -> float:
     return smooth(mirrored, inflection)
 
 
-def _ease_in_out_cubic(t: float) -> float:
-    value = min(max(float(t), 0.0), 1.0)
-    if value < 0.5:
-        return 4.0 * value * value * value
-    return 1.0 - ((-2.0 * value + 2.0) ** 3) / 2.0
 
 
 def _step_start(t: float) -> float:
@@ -97,43 +88,3 @@ def easing_from_rate_func(rate_func: object) -> str:
         "rush_from, and there_and_back; arbitrary Python per-frame rate functions "
         "are intentionally unsupported"
     )
-
-
-def evaluate_rate_function(semantic_id: str, progress: float) -> float:
-    """Mirror core RateFunction evaluation for authoring-time snapshots only."""
-
-    value = min(max(float(progress), 0.0), 1.0)
-    if semantic_id == "ease_in_out_cubic":
-        return _ease_in_out_cubic(value)
-    function = _KNOWN_RATE_FUNCTIONS.get(semantic_id)
-    if function is None:
-        raise ValueError(f"unsupported easing: {semantic_id}")
-    return function(value)
-
-
-def install() -> None:
-    """Install thin public adapters without creating a second playback engine."""
-
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-
-    public = {
-        "linear": linear,
-        "smooth": smooth,
-        "rush_into": rush_into,
-        "rush_from": rush_from,
-        "there_and_back": there_and_back,
-    }
-    for name, value in public.items():
-        setattr(_compat, name, value)
-        setattr(_base, name, value)
-
-    _compat._easing_from_rate_func = easing_from_rate_func
-
-    exports = list(_base.__all__)
-    for name in public:
-        if name not in exports:
-            exports.append(name)
-    _base.__all__ = exports
