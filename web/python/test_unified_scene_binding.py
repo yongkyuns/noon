@@ -18,7 +18,6 @@ class SharedBindingTests(unittest.TestCase):
                     family_type()
 
     def test_text_construction_requires_shared_rust(self):
-        compat.install()
 
         with self.assertRaisesRegex(RuntimeError, "Text requires Noon's shared Rust authoring runtime"):
             typst.Text("AB")

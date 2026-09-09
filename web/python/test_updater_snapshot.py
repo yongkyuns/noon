@@ -38,7 +38,6 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         public_set_y = updaters._base.Mobject.set_y
         public_set_color = updaters._base.Mobject.set_color
         import _manim_rate_functions as rates
-        rates.install()
         self.assertFalse(hasattr(geometry, "install"))
         self.assertIs(updaters._base.Mobject.set_color, public_set_color)
         self.assertIs(updaters._base.Mobject.set_x, public_set_x)
@@ -71,7 +70,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
 
     @staticmethod
     def _mobject_and_context() -> tuple[object, object, object]:
-        compat.install()
+
         install_test_membership(compat)
         # Public paint methods always enter the phase dispatcher; no final
         # installer is needed to reclaim VMobject's overrides.
@@ -319,7 +318,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
     def test_callback_bound_copy_uses_canonical_target_editor_without_copying_callbacks(
         self,
     ) -> None:
-        compat.install()
+
         import _manim_semantic_handles as semantic_handles
 
         scene = updaters._base.Scene()

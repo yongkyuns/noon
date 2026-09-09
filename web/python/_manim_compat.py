@@ -12,14 +12,11 @@ from typing import Any, Callable, Iterator
 
 import noon as _base
 
-_BaseMobject = _base.Mobject
-_BaseScene = _base.Scene
+from noon import Mobject, Scene
 _ir = _base._ir
 
 OUT = (0.0, 0.0, 1.0)
 IN = (0.0, 0.0, -1.0)
-
-_INSTALLED = False
 
 
 # Pinned ManimCE v0.21.0 Cairo presentation contract. Cairo converts
@@ -51,39 +48,7 @@ def _as_color(name: str, value: object) -> _base.Color:
     raise TypeError(f"{name} must be a Color or #RRGGBB value")
 
 
-def _as_vec2(value: object) -> _base.Vec2:
-    """Accept Noon's Vec2 plus common Manim 2D/3D vector inputs.
-
-    Manim commonly represents 2D directions as three-component NumPy vectors. Noon
-    remains 2D internally, so z=0 is accepted and non-zero z is rejected explicitly.
-    """
-
-    if isinstance(value, _base.Vec2):
-        return value
-
-    try:
-        length = len(value)  # type: ignore[arg-type]
-    except (TypeError, AttributeError):
-        length = None
-
-    if length in (2, 3):
-        try:
-            x = float(value[0])  # type: ignore[index]
-            y = float(value[1])  # type: ignore[index]
-            if length == 3:
-                z = float(value[2])  # type: ignore[index]
-                if not math.isclose(z, 0.0, abs_tol=1e-12):
-                    raise NotImplementedError(
-                        "Noon currently supports 2D Manim vectors only; z must be 0"
-                    )
-            return _base.Vec2(x, y)
-        except (TypeError, ValueError, IndexError) as error:
-            raise TypeError("expected a two- or three-component numeric vector") from error
-
-    raise TypeError("expected a two- or three-component vector")
-
-
-class VMobject(_BaseMobject):
+class VMobject(Mobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
 
     def copy(self) -> VMobject:
@@ -191,13 +156,13 @@ class Path(VMobject):
         _path_init(self, path, color=color, **kwargs)
 
 
-def _leaf_mobjects(value: object) -> list[_BaseMobject]:
+def _leaf_mobjects(value: object) -> list[Mobject]:
     if isinstance(value, Group):
-        leaves: list[_BaseMobject] = []
+        leaves: list[Mobject] = []
         for member in value.submobjects:
             leaves.extend(_leaf_mobjects(member))
         return leaves
-    if isinstance(value, _BaseMobject):
+    if isinstance(value, Mobject):
         return [value]
     raise TypeError("expected a Mobject or Group")
 
@@ -239,7 +204,7 @@ def _rotation_angle_2d(angle: float, axis: object = OUT) -> float:
     return -value if z < 0.0 else value
 
 
-class Group(_base.Group, _BaseMobject):
+class Group(Mobject):
     """Python identities and ergonomics over a shared Rust semantic family."""
 
     def __init__(self, *mobjects: object) -> None:
@@ -374,14 +339,14 @@ class Group(_base.Group, _BaseMobject):
         edge: object = None,
         buff: float = _base.DEFAULT_MOBJECT_TO_EDGE_BUFFER,
     ) -> Group:
-        return self._align_on_frame(_as_vec2(_base.LEFT if edge is None else edge), float(buff))
+        return self._align_on_frame(_base._as_vec2(_base.LEFT if edge is None else edge), float(buff))
 
     def to_corner(
         self,
         corner: object = None,
         buff: float = _base.DEFAULT_MOBJECT_TO_EDGE_BUFFER,
     ) -> Group:
-        return self._align_on_frame(_as_vec2(_base.DL if corner is None else corner), float(buff))
+        return self._align_on_frame(_base._as_vec2(_base.DL if corner is None else corner), float(buff))
 
     def _align_on_frame(self, direction: _base.Vec2, buff: float) -> Group:
         point = _critical_for(self, direction)
@@ -438,112 +403,13 @@ class VGroup(Group):
     pass
 
 
-class Scene(_BaseScene):
-    """Manim-style lifecycle and membership ergonomics over the shared Rust host."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        # Explicit retained/export-only wrappers stay deletion-owned by #959.
-        # Ordinary membership and painter order are derived from shared Rust.
-        self._compat_top_level: list[object] = []
-
-    def setup(self) -> None:
-        pass
-
-    def construct(self) -> None:
-        pass
-
-    def tear_down(self) -> None:
-        pass
-
-    def _register_top_level(self, value: object) -> None:
-        if (
-            getattr(value, "_semantic_handle", None) is not None
-            or getattr(value, "_semantic_family_handle", None) is not None
-        ):
-            _base._scene_operations()._register_membership_wrappers(self, value)
-            return
-        if not any(existing is value for existing in self._compat_top_level):
-            self._compat_top_level.append(value)
-
-    @property
-    def mobjects(self) -> list[object]:
-        return _base._scene_operations()._canonical_scene_mobjects(self)
-
-    def _edit_membership(self, kind: str, values: tuple[object, ...] = (), *, key=None) -> None:
-        _base._scene_operations()._canonical_edit_membership(self, kind, values, key=key)
-
-    def add(self, *mobjects: object, key: str | None = None) -> _BaseMobject | Scene:
-        if not mobjects:
-            return self
-        self._edit_membership("add", mobjects, key=key)
-
-        # Preserve Noon's established one-object return as a backwards-compatible
-        # extension. Typical Manim source ignores Scene.add's return value.
-        leaves = [member for value in mobjects for member in _leaf_mobjects(value)]
-        return leaves[0] if len(leaves) == 1 else self
-
-    def remove(self, *mobjects: object) -> Scene:
-        self._edit_membership("remove", mobjects)
-        return self
-
-    def clear(self) -> Scene:
-        self._edit_membership("clear")
-        return self
-
-    def replace(self, old_mobject: object, new_mobject: object) -> Scene:
-        self._edit_membership("replace", (old_mobject, new_mobject))
-        return self
-
-
-def _mobject_get_edge_center(self: _BaseMobject, direction: object) -> _base.Vec2:
-    return self.get_critical_point(direction)
-
-
-def _mobject_get_corner(self: _BaseMobject, direction: object) -> _base.Vec2:
-    return self.get_critical_point(direction)
-
-
-def _mobject_get_left(self: _BaseMobject) -> _base.Vec2:
-    return self.get_critical_point(_base.LEFT)
-
-
-def _mobject_get_right(self: _BaseMobject) -> _base.Vec2:
-    return self.get_critical_point(_base.RIGHT)
-
-
-def _mobject_get_top(self: _BaseMobject) -> _base.Vec2:
-    return self.get_critical_point(_base.UP)
-
-
-def _mobject_get_bottom(self: _BaseMobject) -> _base.Vec2:
-    return self.get_critical_point(_base.DOWN)
-
-
-def _mobject_get_coord(
-    self: _BaseMobject, dim: int, direction: object = _base.ORIGIN
-) -> float:
-    if dim not in (0, 1):
-        raise NotImplementedError("Noon currently exposes x/y authoring coordinates only")
-    point = self.get_critical_point(direction)
-    return float(point[dim])
-
-
-def _mobject_get_x(self: _BaseMobject, direction: object = _base.ORIGIN) -> float:
-    return self.get_coord(0, direction)
-
-
-def _mobject_get_y(self: _BaseMobject, direction: object = _base.ORIGIN) -> float:
-    return self.get_coord(1, direction)
-
-
 def _mobject_rescale_to_fit(
-    self: _BaseMobject,
+    self: Mobject,
     length: float,
     dim: int,
     stretch: bool = False,
     **kwargs: Any,
-) -> _BaseMobject:
+) -> Mobject:
     if kwargs:
         unsupported = ", ".join(sorted(kwargs))
         raise NotImplementedError(
@@ -560,26 +426,10 @@ def _mobject_rescale_to_fit(
     return self.scale(factor)
 
 
-def _mobject_scale_to_fit_width(self: _BaseMobject, width: float, **kwargs: Any) -> _BaseMobject:
-    return self.rescale_to_fit(width, 0, stretch=False, **kwargs)
-
-
-def _mobject_scale_to_fit_height(self: _BaseMobject, height: float, **kwargs: Any) -> _BaseMobject:
-    return self.rescale_to_fit(height, 1, stretch=False, **kwargs)
-
-
-def _mobject_stretch_to_fit_width(self: _BaseMobject, width: float, **kwargs: Any) -> _BaseMobject:
-    return self.rescale_to_fit(width, 0, stretch=True, **kwargs)
-
-
-def _mobject_stretch_to_fit_height(self: _BaseMobject, height: float, **kwargs: Any) -> _BaseMobject:
-    return self.rescale_to_fit(height, 1, stretch=True, **kwargs)
-
-
 def _mobject_match_dim_size(
-    self: _BaseMobject, mobject: _BaseMobject, dim: int, **kwargs: Any
-) -> _BaseMobject:
-    if not isinstance(mobject, _BaseMobject):
+    self: Mobject, mobject: Mobject, dim: int, **kwargs: Any
+) -> Mobject:
+    if not isinstance(mobject, Mobject):
         raise TypeError("dimension match target must be a Mobject")
     if dim == 0:
         length = mobject.width
@@ -590,29 +440,17 @@ def _mobject_match_dim_size(
     return self.rescale_to_fit(length, dim, **kwargs)
 
 
-def _mobject_match_width(
-    self: _BaseMobject, mobject: _BaseMobject, **kwargs: Any
-) -> _BaseMobject:
-    return self.match_dim_size(mobject, 0, **kwargs)
-
-
-def _mobject_match_height(
-    self: _BaseMobject, mobject: _BaseMobject, **kwargs: Any
-) -> _BaseMobject:
-    return self.match_dim_size(mobject, 1, **kwargs)
-
-
 def _state_target(
-    self: _BaseMobject,
-    mobject: _BaseMobject,
+    self: Mobject,
+    mobject: Mobject,
     *,
     match_height: bool,
     match_width: bool,
     match_depth: bool,
     match_center: bool,
     stretch: bool,
-) -> _BaseMobject:
-    if not isinstance(mobject, _BaseMobject):
+) -> Mobject:
+    if not isinstance(mobject, Mobject):
         raise TypeError("state target must be a Mobject")
     if match_depth:
         raise NotImplementedError("depth matching requires the shared 2.5D family model")
@@ -637,7 +475,7 @@ def _state_target(
     return target
 
 
-def _mobject_generate_target(self: _BaseMobject, use_deepcopy: bool = False) -> _BaseMobject:
+def _mobject_generate_target(self: Mobject, use_deepcopy: bool = False) -> Mobject:
     """Create the detached target through the installed shared target editor."""
     # Canonical Mobjects install `_copy_for_animate_target`, which delegates target
     # capture to Rust.  This preserves effective-state capture for a live source and
@@ -658,28 +496,28 @@ def _mobject_generate_target(self: _BaseMobject, use_deepcopy: bool = False) -> 
     return target
 
 
-def _mobject_save_state(self: _BaseMobject) -> _BaseMobject:
+def _mobject_save_state(self: Mobject) -> Mobject:
     if hasattr(self, "saved_state"):
         self.saved_state = None
     self.saved_state = self.copy()
     return self
 
 
-def _mobject_restore(self: _BaseMobject) -> _BaseMobject:
+def _mobject_restore(self: Mobject) -> Mobject:
     if not hasattr(self, "saved_state") or self.saved_state is None:
         raise Exception("Trying to restore without having saved")
     return self.become(self.saved_state)
 
 
 def _mobject_become(
-    self: _BaseMobject,
-    mobject: _BaseMobject,
+    self: Mobject,
+    mobject: Mobject,
     match_height: bool = False,
     match_width: bool = False,
     match_depth: bool = False,
     match_center: bool = False,
     stretch: bool = False,
-) -> _BaseMobject:
+) -> Mobject:
     target = _state_target(
         self,
         mobject,
@@ -693,9 +531,9 @@ def _mobject_become(
 
 
 def _mobject_replace(
-    self: _BaseMobject, mobject: _BaseMobject, dim_to_match: int = 0, stretch: bool = False
-) -> _BaseMobject:
-    if not isinstance(mobject, _BaseMobject):
+    self: Mobject, mobject: Mobject, dim_to_match: int = 0, stretch: bool = False
+) -> Mobject:
+    if not isinstance(mobject, Mobject):
         raise TypeError("replacement target must be a Mobject")
     if dim_to_match not in (0, 1):
         raise NotImplementedError("replace currently supports width (0) or height (1)")
@@ -721,12 +559,12 @@ class MoveToTarget:
             raise NotImplementedError(
                 "MoveToTarget(Group/VGroup) requires retained family Transform semantics"
             )
-        if not isinstance(mobject, _BaseMobject):
+        if not isinstance(mobject, Mobject):
             raise TypeError("MoveToTarget target must be a Mobject")
         if not hasattr(mobject, "target"):
             raise ValueError("MoveToTarget called on mobject without attribute 'target'")
         target = mobject.target
-        if not isinstance(target, _BaseMobject) or isinstance(target, Group):
+        if not isinstance(target, Mobject) or isinstance(target, Group):
             raise NotImplementedError(
                 "MoveToTarget currently requires a leaf Mobject target produced by generate_target()"
             )
@@ -736,62 +574,6 @@ class MoveToTarget:
                 "unsupported MoveToTarget option(s): " + ", ".join(unsupported)
             )
         return _base.Transform(mobject, target, key=kwargs.get("key"))
-
-
-def install() -> None:
-    """Install the compatibility surface into the public ``noon`` module."""
-
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-
-    # Existing Mobject methods resolve _as_vec2 dynamically from noon.py globals,
-    # so replacing that helper makes inherited transforms/layout accept z=0 vectors.
-    _base._as_vec2 = _as_vec2
-    _BaseMobject.get_edge_center = _mobject_get_edge_center
-    _BaseMobject.get_corner = _mobject_get_corner
-    _BaseMobject.get_left = _mobject_get_left
-    _BaseMobject.get_right = _mobject_get_right
-    _BaseMobject.get_top = _mobject_get_top
-    _BaseMobject.get_bottom = _mobject_get_bottom
-    _BaseMobject.get_coord = _mobject_get_coord
-    _BaseMobject.get_x = _mobject_get_x
-    _BaseMobject.get_y = _mobject_get_y
-    _BaseMobject.rescale_to_fit = _mobject_rescale_to_fit
-    _BaseMobject.scale_to_fit_width = _mobject_scale_to_fit_width
-    _BaseMobject.scale_to_fit_height = _mobject_scale_to_fit_height
-    _BaseMobject.stretch_to_fit_width = _mobject_stretch_to_fit_width
-    _BaseMobject.stretch_to_fit_height = _mobject_stretch_to_fit_height
-    _BaseMobject.match_dim_size = _mobject_match_dim_size
-    _BaseMobject.match_width = _mobject_match_width
-    _BaseMobject.match_height = _mobject_match_height
-    _BaseMobject.generate_target = _mobject_generate_target
-    _BaseMobject.save_state = _mobject_save_state
-    _BaseMobject.restore = _mobject_restore
-
-    public = {
-        "VMobject": VMobject,
-        "Circle": Circle,
-        "Rectangle": Rectangle,
-        "Square": Square,
-        "Line": Line,
-        "Path": Path,
-        "Group": Group,
-        "VGroup": VGroup,
-        "Scene": Scene,
-        "MoveToTarget": MoveToTarget,
-        "OUT": OUT,
-        "IN": IN,
-    }
-    for name, value in public.items():
-        setattr(_base, name, value)
-
-    exports = list(_base.__all__)
-    for name in public:
-        if name not in exports:
-            exports.append(name)
-    _base.__all__ = exports
 
 
 _FAMILY_COPY_METADATA = object()
@@ -850,7 +632,7 @@ def copy_wrapper_attributes(source, target, memo=None, excluded=()):
 def _shift_group_members(self: Group, direction: object) -> Group:
     # Existing per-member callback fallback; shared callback family operations
     # in #955 own its retirement. Ordinary typed family shifts stay in Rust.
-    offset = _as_vec2(direction)
+    offset = _base._as_vec2(direction)
     for member in self.submobjects:
         member.shift(offset)
     return self

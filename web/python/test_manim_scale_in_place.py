@@ -66,9 +66,8 @@ class ManimScaleInPlaceTests(unittest.TestCase):
 
             from _typed_geometry_test_support import identity_only_wrapper as identity
             import _manim_compat
-            _manim_compat.install()
+
             import _manim_rate_functions
-            _manim_rate_functions.install()
             import _manim_animate  # noqa: F401
             import _manim_animation_options  # installs the public ScaleInPlace request
 

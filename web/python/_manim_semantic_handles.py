@@ -669,8 +669,8 @@ def _line_init(
     color: _base.Color | None = None,
     **kwargs: Any,
 ) -> None:
-    start_value = _base.LEFT if start is None else _compat._as_vec2(start)
-    end_value = _base.RIGHT if end is None else _compat._as_vec2(end)
+    start_value = _base.LEFT if start is None else _base._as_vec2(start)
+    end_value = _base.RIGHT if end is None else _base._as_vec2(end)
     # A temporary Line created inside a canonical callback is an operand, not a
     # new authored object. Ask the active Rust callback context for an opaque,
     # identity-free endpoint value before touching the shared authoring store.
@@ -811,7 +811,7 @@ def _get_center(self: _base.Mobject) -> _base.Vec2:
 
 def _get_critical_point(self: _base.Mobject, direction: object) -> _base.Vec2:
     """Read a leaf critical point from the authoritative semantic layout."""
-    axis = _compat._as_vec2(direction)
+    axis = _base._as_vec2(direction)
     if isinstance(self, _compat.Group):
         # Groups query their shared family handle rather than a leaf binding.
         return _compat._critical_for(self, axis)
@@ -990,11 +990,11 @@ def _rotate(
         raise NotImplementedError(f"unsupported Manim rotate option(s): {unsupported}")
     signed_angle = _compat._rotation_angle_2d(angle, axis)
     if about_point is not None:
-        pivot = _compat._as_vec2(about_point)
+        pivot = _base._as_vec2(about_point)
     elif about_edge is None:
         pivot = _base.Vec2(float(handle.centerX), float(handle.centerY))
     else:
-        edge = _compat._as_vec2(about_edge)
+        edge = _base._as_vec2(about_edge)
         pivot = _base.Vec2(
             float(handle.criticalX(edge.x, edge.y)),
             float(handle.criticalY(edge.x, edge.y)),

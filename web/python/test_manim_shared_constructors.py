@@ -98,7 +98,7 @@ class ManimSharedConstructorTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_compat
-            _manim_compat.install()
+
             public_methods = tuple(getattr(_manim_compat._base.Mobject, name)
                                    for name in ("__init__", "copy", "next_to", "width"))
             group_shift = _manim_compat.Group.shift

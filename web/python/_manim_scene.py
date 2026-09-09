@@ -88,11 +88,9 @@ def _reserve_typed_binding(
     # the semantic handle and this wrapper's derived ObjectId. Re-adding that
     # exact handle must use liveAdd, not allocate a second export identity.
     prior = getattr(mobject, "_object", None)
-    if prior is not None and prior.id in scene._object_positions:
+    if prior is not None and prior.id in scene._binding_handles:
         prior_key = scene._object_keys.get(prior.id)
-        geometry_handles = getattr(scene, "_semantic_geometry_handles", {})
-        text_handles = getattr(scene, "_semantic_text_handles", {})
-        prior_handle = geometry_handles.get(prior.id, text_handles.get(prior.id))
+        prior_handle = scene._binding_handles[prior.id]
         if prior_key is not None and prior_handle is handle:
             if key is not None and _ir._authoring_key("key", key, prior_key) != prior_key:
                 raise ValueError("a re-added canonical Mobject keeps its existing key")
@@ -381,18 +379,7 @@ def _record_mobject_binding(
     obj: _ir.Object,
     handle: object,
 ) -> None:
-    scene._object_positions[obj.id] = len(scene._objects)
-    # The compatibility table retains identity only on the shared path.
-    scene._objects.append({"id": obj.id})
-    if isinstance(mobject, _typst._RetainedTextMobject):
-        handles = getattr(scene, "_semantic_text_handles", None)
-        if handles is None:
-            handles = scene._semantic_text_handles = {}
-    else:
-        handles = getattr(scene, "_semantic_geometry_handles", None)
-        if handles is None:
-            handles = scene._semantic_geometry_handles = {}
-    handles[obj.id] = handle
+    scene._binding_handles[obj.id] = handle
     mobject._bind(scene, obj)
 
 
@@ -779,8 +766,7 @@ def _canonical_wait(
             or getattr(scene, "_canonical_authoring_context", None) is not None
         )
     ):
-        if execution_context(scene) is None:
-            raise NotImplementedError("Scene.wait request is unsupported by the shared Rust engine")
+        execution_context(scene)
         _start_default_synchronous_continuation(scene)
     if _semantic_continuation_active(scene):
         try:
@@ -1105,7 +1091,7 @@ def _canonical_composition_rate_id(kwargs: dict[str, object]) -> str | None:
     if easing is not None and rate_func is not None:
         raise ValueError("use either easing or rate_func, not both")
     return str(easing) if easing is not None else (
-        _compat._easing_from_rate_func(rate_func) if rate_func is not None else "linear"
+        _rate_functions.easing_from_rate_func(rate_func) if rate_func is not None else "linear"
     )
 
 
@@ -1205,7 +1191,7 @@ def _canonical_passing_flash_options(
         None if run_time is None else float(run_time),
         play_rate
         if play_rate is not None
-        else None if rate_func is None else _compat._easing_from_rate_func(rate_func),
+        else None if rate_func is None else _rate_functions.easing_from_rate_func(rate_func),
     )
 
 
@@ -1369,7 +1355,7 @@ def _canonical_text_write_options(animation: object):
     rate_func = args.get("rate_func")
     return (
         None if run_time is None else float(run_time),
-        None if rate_func is None else _compat._easing_from_rate_func(rate_func),
+        None if rate_func is None else _rate_functions.easing_from_rate_func(rate_func),
         None if lag_ratio is None else float(lag_ratio),
     )
 
@@ -1399,7 +1385,7 @@ def _canonical_text_reveal_options(animation: object):
     rate_func = args.get("rate_func")
     return (
         None if run_time is None else float(run_time),
-        None if rate_func is None else _compat._easing_from_rate_func(rate_func),
+        None if rate_func is None else _rate_functions.easing_from_rate_func(rate_func),
         None if lag_ratio is None else float(lag_ratio),
         None if introducer is None else bool(introducer),
         None if remover is None else bool(remover),
@@ -1449,7 +1435,7 @@ def _build_canonical_composition_candidate(
         kind, composition_run_time, composition_lag_ratio, play_run_time,
     )
     candidate.setCompositionRateFunction(
-        _compat._easing_from_rate_func(group.rate_func) if group is not None else "linear"
+        _rate_functions.easing_from_rate_func(group.rate_func) if group is not None else "linear"
     )
     # For flat Scene.play arguments, shared child option resolution already
     # applies the play rate. Only an explicit group gets a root rate override.
@@ -1956,10 +1942,10 @@ def _build_canonical_composition_candidate(
             child = _canonical_composition_child_options(animation, child_kwargs)
             angle = float(animation.angle) * _rotate._axis_sign(animation.axis)
             if animation.about_point is not None:
-                point = _compat._as_vec2(animation.about_point)
+                point = _base._as_vec2(animation.about_point)
                 pivot_kind, pivot_x, pivot_y = "point", point.x, point.y
             elif animation.about_edge is not None:
-                edge = _compat._as_vec2(animation.about_edge)
+                edge = _base._as_vec2(animation.about_edge)
                 pivot_kind, pivot_x, pivot_y = "edge", edge.x, edge.y
             else:
                 pivot_kind, pivot_x, pivot_y = "center", 0.0, 0.0
@@ -1981,7 +1967,7 @@ def _build_canonical_composition_candidate(
             None if root_group is not None else _canonical_play_options(dict(root_kwargs)),
         )
         nested.setCompositionRateFunction(
-            _compat._easing_from_rate_func(root_group.rate_func) if root_group is not None else "linear"
+            _rate_functions.easing_from_rate_func(root_group.rate_func) if root_group is not None else "linear"
         )
         play_rate = _canonical_composition_rate_id(root_kwargs)
         if play_rate is not None:
@@ -2325,13 +2311,8 @@ def _canonical_bind_position(
     return self
 
 
-def execution_context(scene, callbacks=None):
-    """Select typed geometry/native-Text execution; unsupported contracts stay explicit."""
-    del callbacks  # Callback declarations now lower through the canonical context.
-    handles = getattr(scene, "_semantic_geometry_handles", {})
-    text_handles = getattr(scene, "_semantic_text_handles", {})
-    if len(handles) + len(text_handles) != len(scene._object_positions):
-        return None
+def execution_context(scene):
+    """Prepare callbacks on this Scene's one shared Rust execution context."""
     context = _context(scene)
     # Python keeps callable identity only. This bootstrap writes the authored
     # occurrence intervals into the one shared Rust semantic store before the
@@ -2353,11 +2334,6 @@ class LiveExecution:
 
     def __init__(self, scene: _base.Scene, duration: float | None = None) -> None:
         context = execution_context(scene)
-        if context is None:
-            raise RuntimeError(
-                "live execution currently supports typed static geometry/native Text, "
-                "canonical scalar ValueTracker tracks, and predeclared property callbacks"
-            )
         self._scene = scene
         if duration is None:
             handoff = context.liveHandoffDuration()
@@ -2473,11 +2449,6 @@ def _declare_live_transform_to(
     ``LiveExecution.play``.
     """
     context = execution_context(self)
-    if context is None:
-        raise RuntimeError(
-            "live animation currently supports typed static geometry/native Text, "
-            "canonical scalar ValueTracker tracks, and predeclared property callbacks"
-        )
     if not isinstance(source, _base.Mobject) or source._scene is not self:
         raise ValueError("live animation source must belong to this Scene")
     if not isinstance(target, _base.Mobject) or target._scene is not None:

@@ -68,7 +68,7 @@ class ManimSharedMatchXYTests(unittest.TestCase):
                 for name in ("set_coord", "match_coord", "match_x", "match_y", "rotate_about_origin")
             }
             import _manim_compat
-            _manim_compat.install()
+
             import _manim_geometry
             import _manim_semantic_handles as handles
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 class ManimConstantExportTests(unittest.TestCase):
-    def test_standard_buffer_constants_are_star_imported(self) -> None:
+    def test_public_facade_imports_without_bootstrap(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()
         existing_pythonpath = env.get("PYTHONPATH")
@@ -19,9 +19,12 @@ class ManimConstantExportTests(unittest.TestCase):
 
         source = textwrap.dedent(
             """
+            from noon import Mobject, Scene, Vec2
+            assert Vec2(1, 2) + [3, 4, 0] == Vec2(4, 6)
             import _manim_compat
-            _manim_compat.install()
-            import _manim_geometry  # noqa: F401
+            assert _manim_compat.Mobject is Mobject
+            assert _manim_compat.Scene is Scene
+            assert _manim_compat.Group.__bases__ == (Mobject,)
 
             namespace = {}
             exec("from noon import *", namespace)
@@ -39,6 +42,11 @@ class ManimConstantExportTests(unittest.TestCase):
             assert namespace["MED_SMALL_BUFF"] == 0.25
             assert namespace["MED_LARGE_BUFF"] == 0.5
             assert namespace["LARGE_BUFF"] == 1.0
+            wait = namespace["Wait"](0.25)
+            group = namespace["AnimationGroup"](wait)
+            assert wait.run_time == 0.25 and group.animations == [wait]
+            assert wait.rate_func is group.rate_func is namespace["linear"]
+            assert namespace["smooth"](0.5) == 0.5
             """
         )
         completed = subprocess.run(

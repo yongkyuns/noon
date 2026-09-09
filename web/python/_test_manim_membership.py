@@ -18,6 +18,8 @@ def install_test_membership(compat: Any) -> None:
         *,
         key: str | None = None,
     ) -> None:
+        if not hasattr(scene, "_test_membership"):
+            scene._test_membership = []
         if kind == "add":
             leaves = [
                 member
@@ -32,8 +34,9 @@ def install_test_membership(compat: Any) -> None:
                     object_id = scene._next_object_id
                     scene._next_object_id += 1
                     obj = compat._ir.Object(object_id, scene._owner)
-                    scene._object_positions[object_id] = len(scene._objects)
-                    scene._objects.append({"id": object_id})
+                    handle = getattr(member, "_semantic_handle", None)
+                    if handle is not None:
+                        scene._binding_handles[object_id] = handle
                     member._bind(scene, obj)
                 elif member._scene is not scene:
                     raise ValueError("Mobject already belongs to another Scene")
@@ -43,27 +46,29 @@ def install_test_membership(compat: Any) -> None:
 
         if kind == "remove":
             removed = {id(value) for value in values}
-            scene._compat_top_level = [
-                value for value in scene._compat_top_level if id(value) not in removed
+            scene._test_membership = [
+                value for value in scene._test_membership if id(value) not in removed
             ]
             return
         if kind == "clear":
-            scene._compat_top_level.clear()
+            scene._test_membership.clear()
             return
         if kind == "replace":
             old, new = values
-            previous = list(scene._compat_top_level)
+            previous = list(scene._test_membership)
             edit(scene, "add", (new,))
-            scene._compat_top_level = [
+            scene._test_membership = [
                 new if value is old else value for value in previous
             ]
             return
         raise ValueError(f"unknown test membership operation {kind!r}")
 
     def register(scene, value):
-        if not any(existing is value for existing in scene._compat_top_level):
-            scene._compat_top_level.append(value)
+        if not hasattr(scene, "_test_membership"):
+            scene._test_membership = []
+        if not any(existing is value for existing in scene._test_membership):
+            scene._test_membership.append(value)
 
     compat.Scene._edit_membership = edit
     compat.Scene._register_top_level = register
-    compat.Scene.mobjects = property(lambda scene: list(scene._compat_top_level))
+    compat.Scene.mobjects = property(lambda scene: list(getattr(scene, "_test_membership", ())))

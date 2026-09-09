@@ -226,11 +226,10 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_compat
-            _manim_compat.install()
+
             from _test_manim_membership import install_test_membership
             install_test_membership(_manim_compat)
             import _manim_rate_functions
-            _manim_rate_functions.install()
             import _manim_semantic_handles as handles
             import _typed_geometry_test_support as _geometry_test
             _geometry_test.install_module_bridge(handles, FakeHandle)
@@ -251,8 +250,9 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             square.shift(RIGHT)
             assert handle.calls == [("shift", 1.0, 0.0)], handle.calls
             assert handle.snapshot_requests == 0
-            stored = scene._objects[square.id]
-            assert stored == {"id": square.id}, "binding must retain identity metadata only"
+            assert scene._binding_handles[square.id] is handle
+            assert not hasattr(scene, "_objects"), "binding must not recreate object snapshots"
+            assert not hasattr(scene, "_object_positions"), "Rust owns execution positions"
             assert square.get_center().x == 1.0
 
             class EffectiveLayout:
@@ -394,7 +394,7 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             else:
                 raise AssertionError("half-typed become fell back through raw geometry")
 
-            stored_before = copy.deepcopy(stored)
+            bindings_before = dict(scene._binding_handles)
             square.set_fill(GREEN, opacity=0.25)
             assert handle.snapshot_requests == 0
             assert abs(handle.snapshot["style"]["fill"]["alpha"] - 0.25) < 1e-12
@@ -403,7 +403,7 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             assert handle.snapshot_requests == 0
             assert abs(handle.snapshot["style"]["opacity"] - 0.4) < 1e-12
 
-            assert stored == stored_before
+            assert scene._binding_handles == bindings_before
 
             first = animate._AlignedAnimationBuilder(square)
             first_target = first.target

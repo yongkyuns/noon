@@ -126,11 +126,10 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
             import noon
             animate_property = noon.Mobject.animate
             import _manim_compat
-            _manim_compat.install()
+
             from _test_manim_membership import install_test_membership
             install_test_membership(_manim_compat)
             import _manim_rate_functions
-            _manim_rate_functions.install()
             import _manim_semantic_handles as handles
             import _typed_geometry_test_support as _geometry_test
             _geometry_test.install_module_bridge(handles, FakeHandle)
