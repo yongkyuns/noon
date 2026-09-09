@@ -3,13 +3,13 @@
 use std::{mem::size_of, sync::Arc};
 
 use noon_core::{FontResourceHandle, FontResourceId, TextResourceHandle, TextResourceId};
-use noon_text_atlas::{GlyphAtlasEntry, GlyphAtlasPlane, GpuGlyphAtlas};
-use noon_text_raster::{
-    GlyphRaster, GlyphRasterFormat, GlyphRasterImage, GlyphRasterKey, GlyphRasterPlacement,
-};
-use noon_text_render_wgpu::{
+use noon_render_wgpu::text::atlas::{GlyphAtlasEntry, GlyphAtlasPlane, GpuGlyphAtlas};
+use noon_render_wgpu::text::{
     GlyphQuadInstance, PreparedRetainedTextFrame, PreparedTextItem, TextCamera2D,
     TextGlyphGpuRenderer,
+};
+use noon_text_raster::{
+    GlyphRaster, GlyphRasterFormat, GlyphRasterImage, GlyphRasterKey, GlyphRasterPlacement,
 };
 
 fn raster_key(glyph_id: u16) -> GlyphRasterKey {
@@ -46,7 +46,7 @@ fn mask_raster(width: u32, height: u32, value: u8) -> GlyphRaster {
     })
 }
 
-fn quad(image: noon_text_atlas::GlyphAtlasImage) -> GlyphQuadInstance {
+fn quad(image: noon_render_wgpu::text::atlas::GlyphAtlasImage) -> GlyphQuadInstance {
     GlyphQuadInstance {
         origin: [-0.5, -0.5],
         axis_x: [1.0, 0.0],

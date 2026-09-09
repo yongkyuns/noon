@@ -5,6 +5,12 @@ use std::{
     sync::Arc,
 };
 
+use crate::text::atlas::{GlyphAtlasPlane, GpuGlyphAtlas};
+use crate::text::{
+    GlyphQuadInstance, PreparedRetainedTextFrame, PreparedTextItem, RetainedTextPrepareStats,
+    RetainedTextQuadPreparer, TextCamera2D, TextDeviceMetrics, TextGlyphGpuRenderer,
+    TextGpuDrawError, TextGpuDrawStats, TextGpuUploadStats, TextPrepareError,
+};
 use noon_core::{
     Color, FontResourceHandle, FontResourceLookup, GeometryRef, GeometryResource,
     GeometryResourceLookup, GlyphRun, ObjectContentRef, ObjectId, PathCommand, PublicationContext,
@@ -14,12 +20,6 @@ use noon_core::{
 #[cfg(test)]
 use noon_core::{FontResourceArena, GeometryResourceArena, TextResourceArena, TextVectorStyle};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState, RendererPublication};
-use noon_text_atlas::{GlyphAtlasPlane, GpuGlyphAtlas};
-use noon_text_render_wgpu::{
-    GlyphQuadInstance, PreparedRetainedTextFrame, PreparedTextItem, RetainedTextPrepareStats,
-    RetainedTextQuadPreparer, TextCamera2D, TextDeviceMetrics, TextGlyphGpuRenderer,
-    TextGpuDrawError, TextGpuDrawStats, TextGpuUploadStats, TextPrepareError,
-};
 #[cfg(test)]
 use noon_typst::{compile_typst_resource, TypstMode};
 use swash::{
@@ -375,13 +375,13 @@ fn observed_glyph_ranges(
                 return None;
             };
             let dirty_ranges = match plane {
-                noon_text_atlas::GlyphAtlasPlane::Mask => text.dirty_mask_ranges,
-                noon_text_atlas::GlyphAtlasPlane::Color => text.dirty_color_ranges,
+                crate::text::atlas::GlyphAtlasPlane::Mask => text.dirty_mask_ranges,
+                crate::text::atlas::GlyphAtlasPlane::Color => text.dirty_color_ranges,
             };
             Some(RetainedPreparedGlyphRange {
                 plane: match plane {
-                    noon_text_atlas::GlyphAtlasPlane::Mask => RetainedGlyphPlane::Mask,
-                    noon_text_atlas::GlyphAtlasPlane::Color => RetainedGlyphPlane::Color,
+                    crate::text::atlas::GlyphAtlasPlane::Mask => RetainedGlyphPlane::Mask,
+                    crate::text::atlas::GlyphAtlasPlane::Color => RetainedGlyphPlane::Color,
                 },
                 page: *page,
                 instance_range: instance_range.clone(),
@@ -2211,11 +2211,11 @@ fn copy_local_text_snapshot_updates(
             let start = instance_range.start as usize;
             let end = instance_range.end as usize;
             match plane {
-                noon_text_atlas::GlyphAtlasPlane::Mask => {
+                crate::text::atlas::GlyphAtlasPlane::Mask => {
                     mask_destination[start..end].copy_from_slice(&mask_source[start..end]);
                     push_coalesced_range(dirty_mask_ranges, instance_range.clone());
                 }
-                noon_text_atlas::GlyphAtlasPlane::Color => {
+                crate::text::atlas::GlyphAtlasPlane::Color => {
                     color_destination[start..end].copy_from_slice(&color_source[start..end]);
                     push_coalesced_range(dirty_color_ranges, instance_range.clone());
                 }

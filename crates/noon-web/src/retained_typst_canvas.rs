@@ -3,9 +3,9 @@ mod wasm {
     use noon::integration::RetainedScene;
     use noon::{MathTypst, Typst};
     use noon_core::Vec2;
+    use noon_render_wgpu::text::TextDeviceMetrics;
     use noon_render_wgpu::{Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState};
     use noon_runtime::SceneInstance;
-    use noon_text_render_wgpu::TextDeviceMetrics;
     use wasm_bindgen::prelude::*;
     use web_sys::OffscreenCanvas;
 

@@ -1,10 +1,10 @@
 use std::{mem::size_of, ops::Range};
 
+use crate::text::atlas::{GlyphAtlasPlane, GpuGlyphAtlas};
 use bytemuck::{Pod, Zeroable};
 use noon_core::Vec2;
-use noon_text_atlas::{GlyphAtlasPlane, GpuGlyphAtlas};
 
-use crate::{GlyphQuadInstance, PreparedRetainedTextFrame, PreparedTextItem};
+use super::{GlyphQuadInstance, PreparedRetainedTextFrame, PreparedTextItem};
 
 const GLYPH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 6] = [
     wgpu::VertexAttribute {
@@ -794,8 +794,8 @@ fn ensure_capacity(
 mod tests {
     use std::sync::Arc;
 
+    use crate::text::atlas::{GlyphAtlasEntry, GpuGlyphAtlas};
     use noon_core::{FontResourceHandle, FontResourceId, TextResourceHandle, TextResourceId};
-    use noon_text_atlas::{GlyphAtlasEntry, GpuGlyphAtlas};
     use noon_text_raster::{
         GlyphRaster, GlyphRasterFormat, GlyphRasterImage, GlyphRasterKey, GlyphRasterPlacement,
     };
