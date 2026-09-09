@@ -124,20 +124,20 @@ class VMobject(_BaseMobject):
         return _copy_mobject(self)
 
     def set_color(self, color: object, family: bool = True) -> VMobject:
-        from _manim_semantic_handles import _set_vmobject_color
-        return _set_vmobject_color(self, color, family=family)
+        from _manim_updaters import _canonical_vmobject_set_color
+        return _canonical_vmobject_set_color(self, color, family=family)
 
     def set_fill(self, color: object = None, opacity: float | None = None, family: bool = True) -> VMobject:
-        from _manim_semantic_handles import _set_fill
-        return _set_fill(self, color=color, opacity=opacity, family=family)
+        from _manim_updaters import _canonical_vmobject_set_fill
+        return _canonical_vmobject_set_fill(self, color=color, opacity=opacity, family=family)
 
     def set_stroke(self, color: object = None, width: float | None = None, opacity: float | None = None, family: bool = True) -> VMobject:
-        from _manim_semantic_handles import _set_stroke
-        return _set_stroke(self, color=color, width=width, opacity=opacity, family=family)
+        from _manim_updaters import _canonical_vmobject_set_stroke
+        return _canonical_vmobject_set_stroke(self, color=color, width=width, opacity=opacity, family=family)
 
     def set_opacity(self, opacity: float, family: bool = True) -> VMobject:
-        from _manim_semantic_handles import _set_opacity
-        return _set_opacity(self, opacity, family=family)
+        from _manim_updaters import _canonical_vmobject_set_opacity
+        return _canonical_vmobject_set_opacity(self, opacity, family=family)
 
     def get_fill_opacity(self) -> float:
         from _manim_semantic_handles import _get_fill_opacity
@@ -897,8 +897,6 @@ def install() -> None:
     _BaseMobject.get_x = _mobject_get_x
     _BaseMobject.get_y = _mobject_get_y
     _BaseMobject.set_coord = _mobject_set_coord
-    _BaseMobject.set_x = _mobject_set_x
-    _BaseMobject.set_y = _mobject_set_y
     _BaseMobject.rescale_to_fit = _mobject_rescale_to_fit
     _BaseMobject.scale_to_fit_width = _mobject_scale_to_fit_width
     _BaseMobject.scale_to_fit_height = _mobject_scale_to_fit_height
@@ -910,7 +908,6 @@ def install() -> None:
     _BaseMobject.match_coord = _mobject_match_coord
     _BaseMobject.match_x = _mobject_match_x
     _BaseMobject.match_y = _mobject_match_y
-    _BaseMobject.rotate = _mobject_rotate
     _BaseMobject.rotate_about_origin = _mobject_rotate_about_origin
     _BaseMobject.width = property(_BaseMobject.width.fget, _set_width_property)
     _BaseMobject.height = property(_BaseMobject.height.fget, _set_height_property)

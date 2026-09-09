@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from typing import Any, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 import _noon_ir as _ir
 
@@ -195,6 +195,12 @@ GRAY_E = GREY_E = _hex_color(0x222222)
 GRAY = GREY = GRAY_C
 
 
+def _callback_operations():
+    # The adapter selects a staged callback view or the normal semantic handle.
+    import _manim_updaters
+    return _manim_updaters
+
+
 class Mobject:
     """Python identity wrapper; shared Rust handles own all semantic state."""
 
@@ -234,14 +240,14 @@ class Mobject:
     def _bind_to_scene(self, scene: Scene, *, key: str | None = None) -> _ir.Object:
         return _scene_operations()._bind_mobject(self, scene, key=key)
 
-    def _current_raw(self) -> _ir.Mobject:
-        raise RuntimeError("Mobject queries require the shared Rust authoring host")
+    def _current_raw(self):
+        return _callback_operations()._canonical_current_raw(self)
 
-    def _apply(self, raw: _ir.Mobject) -> Mobject:
-        raise NotImplementedError("raw replacement is unsupported; use a shared semantic operation")
+    def _apply(self, raw: object) -> Mobject:
+        return _callback_operations()._canonical_apply(self, raw)
 
     def get_center(self) -> Vec2:
-        raise RuntimeError("Mobject layout requires the shared Rust authoring host")
+        return _callback_operations()._canonical_get_center(self)
 
     @property
     def width(self) -> float:
@@ -251,42 +257,38 @@ class Mobject:
     def height(self) -> float:
         raise RuntimeError("Mobject layout requires the shared Rust authoring host")
 
-    def shift(self, direction: Vec2 | tuple[float, float]) -> Mobject:
-        raise RuntimeError("Mobject edits require the shared Rust authoring host")
+    def shift(self, direction: object) -> Mobject:
+        return _callback_operations()._canonical_shift(self, direction)
 
-    def move_to(self, point: Vec2 | tuple[float, float]) -> Mobject:
-        return self.shift(_as_vec2(point) - self.get_center())
+    def move_to(self, point: object, *args: object, **kwargs: object) -> Mobject:
+        return _callback_operations()._canonical_move_to(self, point, *args, **kwargs)
 
     def center(self) -> Mobject:
         return self.move_to(ORIGIN)
 
     def set_x(self, x: float) -> Mobject:
-        center = self.get_center()
-        return self.shift(Vec2(float(x) - center.x, 0.0))
+        return _callback_operations()._canonical_set_x(self, x)
 
     def set_y(self, y: float) -> Mobject:
-        center = self.get_center()
-        return self.shift(Vec2(0.0, float(y) - center.y))
+        return _callback_operations()._canonical_set_y(self, y)
 
-    def scale(self, factor: float | tuple[float, float]) -> Mobject:
-        raise RuntimeError("Mobject edits require the shared Rust authoring host")
+    def scale(self, *args: object, **kwargs: object) -> Mobject:
+        return _callback_operations()._canonical_scale(self, *args, **kwargs)
 
-    def rotate(self, angle: float) -> Mobject:
-        raise RuntimeError("Mobject edits require the shared Rust authoring host")
+    def rotate(self, *args: object, **kwargs: object) -> Mobject:
+        return _callback_operations()._canonical_rotate(self, *args, **kwargs)
 
     def set_color(self, color: Color) -> Mobject:
-        raise RuntimeError("Mobject edits require the shared Rust authoring host")
+        return _callback_operations()._canonical_set_color(self, color)
 
     def set_fill(self, color: Color | None = None, opacity: float | None = None) -> Mobject:
-        raise RuntimeError("Mobject edits require the shared Rust authoring host")
+        return _callback_operations()._canonical_set_fill(self, color, opacity)
 
-    def set_stroke(
-        self, color: Color | None = None, width: float | None = None
-    ) -> Mobject:
-        raise RuntimeError("Mobject edits require the shared Rust authoring host")
+    def set_stroke(self, color: Color | None = None, width: float | None = None) -> Mobject:
+        return _callback_operations()._canonical_set_stroke(self, color, width)
 
     def set_opacity(self, opacity: float) -> Mobject:
-        raise RuntimeError("Mobject edits require the shared Rust authoring host")
+        return _callback_operations()._canonical_set_opacity(self, opacity)
 
     def set_object_opacity(self, opacity: float) -> Mobject:
         """Set Noon's object-composite opacity independently of paint opacity.
@@ -335,6 +337,22 @@ class Mobject:
     @property
     def animate(self) -> _AnimationBuilder:
         return _AnimationBuilder(self)
+
+
+    def add_updater(self, update_function: Callable[..., Any], index: int | None = None, call_updater: bool = False) -> Mobject:
+        return _callback_operations().add_updater(self, update_function, index, call_updater)
+
+    def remove_updater(self, update_function: Callable[..., Any]) -> Mobject:
+        return _callback_operations().remove_updater(self, update_function)
+
+    def clear_updaters(self, recursive: bool = True) -> Mobject:
+        return _callback_operations().clear_updaters(self, recursive)
+
+    def get_updaters(self) -> list[Callable[..., Any]]:
+        return _callback_operations().get_updaters(self)
+
+    def has_updaters(self) -> bool:
+        return _callback_operations().has_updaters(self)
 
 
 class Group:

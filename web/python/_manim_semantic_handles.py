@@ -145,7 +145,6 @@ def _manim_arrange(
 # Install compatibility placement before capturing fallbacks below. The generic
 # formulas use dynamic ``shift``/query dispatch, so after semantic-handle install
 # the same code mutates Rust/WASM-owned detached objects and ordinary scene objects.
-_base.Mobject.move_to = _manim_move_to
 _base.Mobject.next_to = _manim_next_to
 _base.Mobject.align_to = _manim_align_to
 _compat.Group.move_to = _manim_move_to
@@ -172,17 +171,13 @@ except ImportError:  # Native CPython tests install explicit bridge fixtures.
     _new_membership_batch = None
 
 _INSTALLED = False
-_ORIGINAL_SHIFT = _base.Mobject.shift
-_ORIGINAL_MOVE_TO = _base.Mobject.move_to
-_ORIGINAL_SCALE = _base.Mobject.scale
-_ORIGINAL_ROTATE = _base.Mobject.rotate
-_ORIGINAL_SET_COLOR = _base.Mobject.set_color
+_ORIGINAL_MOVE_TO = _manim_move_to
 _ORIGINAL_SET_OBJECT_OPACITY = _base.Mobject.set_object_opacity
 _ORIGINAL_NEXT_TO = _base.Mobject.next_to
 _ORIGINAL_ALIGN_TO = _base.Mobject.align_to
 _ORIGINAL_ALIGN_ON_FRAME = _base.Mobject._align_on_frame
-_ORIGINAL_BECOME = _base.Mobject.become
-_ORIGINAL_REPLACE = _base.Mobject.replace
+_ORIGINAL_BECOME = _compat._mobject_become
+_ORIGINAL_REPLACE = _compat._mobject_replace
 
 _ORIGINAL_GROUP_SHIFT = _compat.Group.shift
 _ORIGINAL_GROUP_MOVE_TO = _compat.Group.move_to
@@ -884,7 +879,7 @@ def _set_height_property(self: _base.Mobject, height: float) -> None:
 def _shift(self: _base.Mobject, direction: object) -> _base.Mobject:
     handle = _handle_for(self)
     if handle is None:
-        return _ORIGINAL_SHIFT(self, direction)
+        raise RuntimeError("Mobject edits require a current shared Rust semantic handle")
     offset = _base._as_vec2(direction)
     context = _live_mutation_context(self)
     if context is not None:
@@ -958,7 +953,7 @@ def _move_to(
 def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
     handle = _handle_for(self)
     if handle is None:
-        return _ORIGINAL_SCALE(self, factor)
+        raise RuntimeError("Mobject edits require a current shared Rust semantic handle")
     if isinstance(factor, (tuple, list, _base.Vec2)):
         value = _base._as_vec2(factor)
     else:
@@ -1002,14 +997,7 @@ def _rotate(
 
     handle = _handle_for(self)
     if handle is None:
-        return _ORIGINAL_ROTATE(
-            self,
-            angle,
-            axis,
-            about_point=about_point,
-            about_edge=about_edge,
-            **kwargs,
-        )
+        raise RuntimeError("Mobject edits require a current shared Rust semantic handle")
     context = _live_mutation_context(self)
     if context is not None:
         if kwargs or about_point is not None or about_edge is not None:
@@ -1042,7 +1030,7 @@ def _rotate(
 def _set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobject:
     handle = _handle_for(self)
     if handle is None:
-        return _ORIGINAL_SET_COLOR(self, color)
+        raise RuntimeError("Mobject edits require a current shared Rust semantic handle")
     if not isinstance(color, _base.Color):
         raise TypeError("color must be a Color")
     live_context = _live_mutation_context(self)
@@ -1997,21 +1985,13 @@ def install() -> None:
     _INSTALLED = True
 
     _base.Mobject.__init__ = _init
-    _base.Mobject._current_raw = _current_raw
-    _base.Mobject._apply = _apply
     _base.Mobject.copy = _copy_mobject
     _base.Mobject.__deepcopy__ = _compat.deepcopy_semantic_wrapper
     _compat.Group.__deepcopy__ = _compat.deepcopy_semantic_wrapper
     _base.Mobject._copy_for_animate_target = _target_mobject
-    _base.Mobject.get_center = _get_center
     _base.Mobject.get_critical_point = _get_critical_point
     _base.Mobject.width = property(_width, _set_width_property)
     _base.Mobject.height = property(_height, _set_height_property)
-    _base.Mobject.shift = _shift
-    _base.Mobject.move_to = _move_to
-    _base.Mobject.scale = _scale
-    _base.Mobject.rotate = _rotate
-    _base.Mobject.set_color = _set_color
     _base.Mobject.set_object_opacity = _set_object_opacity
     _base.Mobject.become = _become
     _base.Mobject.replace = _replace

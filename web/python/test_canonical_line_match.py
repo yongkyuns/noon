@@ -50,7 +50,7 @@ class CanonicalLineMatchTests(unittest.TestCase):
             assert manim.Line.__init__.__module__ == "_manim_compat"
             import _manim_geometry  # installs match_points
             import _manim_updaters as updaters
-            updaters.install()
+
 
             line = manim.Line((-1.0, 0.0), (1.0, 0.0))
             assert len(allocations) == 1, len(allocations)

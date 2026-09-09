@@ -170,7 +170,7 @@ import _manim_indication
 _manim_indication.install()
 import _manim_reactive
 import _manim_updaters
-_manim_updaters.install()
+
 import _manim_camera
 _manim_camera.install()
 `);

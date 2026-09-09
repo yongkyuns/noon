@@ -6,6 +6,8 @@ const semanticHandlesSource = readFileSync(
   new URL("./python/_manim_semantic_handles.py", import.meta.url),
   "utf8",
 );
+const facadeSource = readFileSync(new URL("./python/noon.py", import.meta.url), "utf8");
+const callbackSource = readFileSync(new URL("./python/_manim_updaters.py", import.meta.url), "utf8");
 const rustHandleSource = readFileSync(
   new URL("../crates/noon/src/semantic_mobject.rs", import.meta.url),
   "utf8",
@@ -35,11 +37,10 @@ test("detached Mobject layout queries stay owned by the shared semantic handle",
   const height = functionBody(semanticHandlesSource, "_height", "_set_width_property");
   assert.match(height, /handle\.height/);
 
-  assert.match(
-    semanticHandlesSource,
-    /_base\.Mobject\.get_center = _get_center/,
-    "install() must keep get_center on the semantic-handle adapter",
-  );
+  assert.match(facadeSource, /return _callback_operations\(\)\._canonical_get_center\(self\)/);
+  assert.match(callbackSource, /return _semantic_operations\(\)\._get_center\(self\)/);
+  assert.doesNotMatch(callbackSource, /def install\(|_ORIGINAL_/);
+
   assert.match(
     semanticHandlesSource,
     /_base\.Mobject\.width = property\(_width, _set_width_property\)/,
