@@ -438,7 +438,7 @@ mod wasm {
         webgl_recovery_pending: Rc<Cell<bool>>,
         webgl_loss_listener: Option<Closure<dyn FnMut(web_sys::Event)>>,
         webgl_restore_listener: Option<Closure<dyn FnMut(web_sys::Event)>>,
-        gpu_recovery_frame_pending: bool,
+        surface_frame_pending: bool,
     }
 
     #[wasm_bindgen(js_class = ExecutionCanvasRenderer)]
@@ -543,7 +543,7 @@ mod wasm {
                 profiling_enabled.then(|| GpuTimestampProfiler::new(&self.device, &self.queue));
             self.gpu_generation = next_generation;
             self.pending_changes = FrameChanges::all();
-            self.gpu_recovery_frame_pending = true;
+            self.surface_frame_pending = true;
             self.last_draw_calls = 0;
             self.last_text_draw_calls = 0;
             self.last_instances_drawn = 0;
@@ -566,7 +566,7 @@ mod wasm {
                 CanvasExecutionSource::Direct(direct) => {
                     direct.session().wake_state().frame_pending()
                 }
-            } || self.gpu_recovery_frame_pending;
+            } || self.surface_frame_pending;
             if !self.drawable || !changes_pending {
                 return Ok(false);
             }
@@ -599,7 +599,7 @@ mod wasm {
             if self.source.direct().is_some() {
                 let rendered = self.render_direct(surface_texture, reconfigure_after_present)?;
                 if rendered {
-                    self.gpu_recovery_frame_pending = false;
+                    self.surface_frame_pending = false;
                 }
                 return Ok(rendered);
             }
@@ -660,11 +660,15 @@ mod wasm {
             if reconfigure_after_present {
                 self.surface.configure(&self.device, &self.config);
             }
-            self.gpu_recovery_frame_pending = false;
+            self.surface_frame_pending = false;
             Ok(true)
         }
 
         pub fn resize(&mut self, width: u32, height: u32) -> Result<(), JsValue> {
+            // Assigning canvas dimensions clears its contents even when unchanged.
+            if self.canvas.width() == width && self.canvas.height() == height {
+                return Ok(());
+            }
             self.canvas.set_width(width);
             self.canvas.set_height(height);
             self.drawable = width > 0 && height > 0;
@@ -675,9 +679,8 @@ mod wasm {
                 self.config.width = width;
                 self.config.height = height;
                 self.surface.configure(&self.device, &self.config);
-                self.update_camera()?;
             }
-            Ok(())
+            self.update_camera()
         }
 
         /// Manual camera control remains as a low-level host API. Authoritative
@@ -761,6 +764,17 @@ mod wasm {
             self.source.frame().map_or(0.0, |frame| frame.time)
         }
 
+        /// Read-only diagnostic identity; never feeds back into engine execution.
+        #[cfg(debug_assertions)]
+        #[wasm_bindgen(js_name = directSceneRevision)]
+        pub fn direct_scene_revision(&self) -> Result<u64, JsValue> {
+            let session = self
+                .source
+                .direct()
+                .ok_or_else(|| js_message("revision diagnostics require a direct session"))?;
+            Ok(session.publication_context().scene_revision().get())
+        }
+
         /// Seek a direct Rust/WASM execution session and publish its renderer-facing changes.
         #[wasm_bindgen(js_name = seekDirect)]
         pub fn seek(&mut self, time: f64) -> Result<bool, JsValue> {
@@ -799,7 +813,8 @@ mod wasm {
                 BrowserHostWake::Idle => ("idle", None),
             };
             serde_json::to_string(&DirectWakeDirectiveJson {
-                present_now: directive.present_now(),
+                present_now: self.drawable
+                    && (directive.present_now() || self.surface_frame_pending),
                 cadence,
                 delay_ms,
             })
@@ -1274,7 +1289,7 @@ mod wasm {
                 webgl_recovery_pending,
                 webgl_loss_listener,
                 webgl_restore_listener,
-                gpu_recovery_frame_pending: false,
+                surface_frame_pending: false,
             };
             result.update_camera()?;
             Ok(result)
@@ -1423,6 +1438,8 @@ mod wasm {
                 self.config.height,
             );
             self.renderer.set_camera(&self.queue, camera);
+            // Surface/camera invalidation is platform state, not a semantic revision.
+            self.surface_frame_pending = true;
             Ok(())
         }
     }

@@ -1,8 +1,4 @@
-import { loadExecutionTransportFixture } from "../scripts/explicit-transport-scene-fixture.js";
-import init, {
-  EngineScenePlayer,
-  ExecutionCanvasRenderer,
-} from "./pkg/noon_web.js";
+import init, { createDirectRecoverySmokeRenderer } from "./pkg/noon_web.js";
 import {
   drainRendererGpuDiagnostics,
   formatGpuDiagnostic,
@@ -15,13 +11,10 @@ const SMOKE_RENDER_HORIZON_SECONDS = 24 * 60 * 60;
 const state = {
   ready: false,
   error: null,
-  revision: 0,
   frames: 0,
 };
 
-let engine = null;
 let renderer = null;
-let incrementalTime = null;
 let backingWidth = canvas.width;
 let backingHeight = canvas.height;
 let rendererCanvas = null;
@@ -29,16 +22,7 @@ let webglContextRecovery = null;
 
 window.noonSmoke = {
   state,
-  loadScene() {
-    throw new Error("Noon browser smoke harness is not ready");
-  },
   renderAt() {
-    throw new Error("Noon browser smoke harness is not ready");
-  },
-  beginIncremental() {
-    throw new Error("Noon browser smoke harness is not ready");
-  },
-  renderIncrementalAt() {
     throw new Error("Noon browser smoke harness is not ready");
   },
   resizeBacking() {
@@ -51,7 +35,7 @@ window.noonSmoke = {
     return {
       ready: state.ready,
       error: state.error,
-      revision: state.revision,
+      revision: renderer ? renderer.directSceneRevision().toString() : null,
       frames: state.frames,
     };
   },
@@ -61,7 +45,7 @@ function metrics() {
   return {
     ready: state.ready,
     error: state.error,
-    revision: state.revision,
+    revision: renderer ? renderer.directSceneRevision().toString() : null,
     frames: state.frames,
     time: renderer?.time() ?? Number.NaN,
     objectCount: renderer?.objectCount() ?? 0,
@@ -111,15 +95,6 @@ function drainGpuDiagnostics() {
   }
 }
 
-function applyDelta(json) {
-  if (json === undefined || json === null) {
-    return false;
-  }
-  const applied = renderer.applyDeltaJson(json);
-  drainGpuDiagnostics();
-  return applied;
-}
-
 function recordPresent() {
   drainGpuDiagnostics();
   const presented = renderer.render();
@@ -148,58 +123,15 @@ function flushPending() {
   presentPending();
 }
 
-function seekWithSnapshot(time) {
-  engine.seekDeltaJson(time);
-  applyDelta(engine.snapshotDeltaJson());
-}
-
 async function presentAt(timeSeconds) {
   const time = validateRenderTime(timeSeconds);
   flushPending();
-  seekWithSnapshot(time);
-  incrementalTime = null;
+  renderer.seekDirect(time);
+  // These diagnostic calls explicitly request a fresh platform frame at the
+  // same authored time, including repeated GPU error/recovery probes.
+  renderer.setCamera(0.0, 0.0, MANIM_DEFAULT_CAMERA_HEIGHT);
   const presented = presentPending();
-  if (presented) {
-    await waitForPaint();
-  }
-  return { ...metrics(), presented };
-}
-
-async function beginIncremental() {
-  flushPending();
-  seekWithSnapshot(0.0);
-  const presented = presentPending();
-  incrementalTime = 0.0;
-  if (presented) {
-    await waitForPaint();
-  }
-  return { ...metrics(), presented };
-}
-
-async function presentIncrementalAt(timeSeconds) {
-  const time = validateRenderTime(timeSeconds);
-  if (incrementalTime === null) {
-    throw new Error("incremental smoke playback must begin with a presented beginIncremental() frame");
-  }
-  if (time < incrementalTime) {
-    throw new RangeError("incremental smoke render time must not move backwards");
-  }
-  if (time === incrementalTime) {
-    return { ...metrics(), presented: true };
-  }
-
-  flushPending();
-  const delta = engine.seekDeltaJson(time);
-  if (delta === undefined || delta === null) {
-    applyDelta(engine.snapshotDeltaJson());
-  } else {
-    applyDelta(delta);
-  }
-  const presented = presentPending();
-  if (presented) {
-    incrementalTime = time;
-    await waitForPaint();
-  }
+  if (presented) await waitForPaint();
   return { ...metrics(), presented };
 }
 
@@ -207,45 +139,22 @@ async function resizeBacking(width, height) {
   backingWidth = validateBackingDimension("backing width", width);
   backingHeight = validateBackingDimension("backing height", height);
   renderer.resize(backingWidth, backingHeight);
-  incrementalTime = null;
+  const directive = JSON.parse(renderer.directWakeDirectiveJson(performance.now()));
+  const presented = directive.presentNow && presentPending();
   await waitForPaint();
-  return metrics();
+  return { ...metrics(), presented };
 }
 
 async function start() {
   await init();
 
-  engine = new EngineScenePlayer(
-    await loadExecutionTransportFixture("empty"),
-    SMOKE_RENDER_HORIZON_SECONDS,
-    1,
-  );
-  const offscreen = canvas.transferControlToOffscreen();
-  rendererCanvas = offscreen;
-  renderer = await ExecutionCanvasRenderer.create(offscreen, engine.initialDeltaJson());
+  rendererCanvas = canvas.transferControlToOffscreen();
+  const fixture = new URL(location.href).searchParams.get("fixture") ?? "circle";
+  renderer = await createDirectRecoverySmokeRenderer(rendererCanvas, fixture);
   renderer.resize(backingWidth, backingHeight);
-  renderer.setCamera(0.0, 0.0, MANIM_DEFAULT_CAMERA_HEIGHT);
   presentPending();
 
-  window.noonSmoke.loadScene = (sceneJson) => {
-    if (typeof sceneJson !== "string") {
-      throw new TypeError("sceneJson must be a string");
-    }
-    flushPending();
-    const result = JSON.parse(engine.reconcileSceneDeltaJson(sceneJson));
-    applyDelta(result.delta);
-    incrementalTime = null;
-    state.revision += 1;
-    state.error = null;
-    return {
-      incremental: result.incremental,
-      revision: state.revision,
-      objectCount: renderer.objectCount(),
-    };
-  };
   window.noonSmoke.renderAt = presentAt;
-  window.noonSmoke.beginIncremental = beginIncremental;
-  window.noonSmoke.renderIncrementalAt = presentIncrementalAt;
   window.noonSmoke.resizeBacking = resizeBacking;
   window.noonSmoke.webglContextControl = () => {
     if (webglContextRecovery !== null) return webglContextRecovery;

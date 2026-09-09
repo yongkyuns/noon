@@ -245,6 +245,8 @@ if [[ -e 'crates/noon-web/src/legacy/clock.rs' ]]; then
 fi
 
 deleted_legacy_validation_paths=(
+  'scripts/explicit-transport-scene-fixture.js'
+  'web/fixtures/execution-transport.json'
   'crates/noon-ir/src/mixed.rs'
   'crates/noon-ir/src/semantic'
   'crates/noon-ir/tests/reactive_runtime.rs'
