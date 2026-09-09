@@ -130,7 +130,14 @@ impl std::fmt::Display for RetainedPlannedFamilyFrameError {
     }
 }
 
-impl std::error::Error for RetainedPlannedFamilyFrameError {}
+impl std::error::Error for RetainedPlannedFamilyFrameError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Plan(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl From<RetainedFamilyFramePlanError> for RetainedPlannedFamilyFrameError {
     fn from(value: RetainedFamilyFramePlanError) -> Self {

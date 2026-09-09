@@ -318,7 +318,14 @@ impl std::fmt::Display for PreparedScalarSignalTimelineError {
     }
 }
 
-impl std::error::Error for PreparedScalarSignalTimelineError {}
+impl std::error::Error for PreparedScalarSignalTimelineError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Lowering(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl From<SemanticReactiveLoweringError> for PreparedScalarSignalTimelineError {
     fn from(value: SemanticReactiveLoweringError) -> Self {
@@ -490,7 +497,15 @@ impl std::fmt::Display for SemanticReactiveLoweringError {
     }
 }
 
-impl std::error::Error for SemanticReactiveLoweringError {}
+impl std::error::Error for SemanticReactiveLoweringError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Signal(error) => Some(error),
+            Self::Reactive(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 /// Lower only the native-reactive dependency closure reachable from visible object
 /// bindings in one semantic execution projection.

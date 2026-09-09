@@ -251,6 +251,28 @@ pub enum PreparedSemanticAnimationLookupError {
     InitialObjectPropertyTrack,
 }
 
+impl std::fmt::Display for PreparedSemanticAnimationLookupError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Transaction(error) => error.fmt(formatter),
+            Self::Existing(error) => error.fmt(formatter),
+            Self::InitialObjectPropertyTrack => formatter.write_str(
+                "initial object property tracks are not prepared animation declarations",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PreparedSemanticAnimationLookupError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Transaction(error) => Some(error),
+            Self::Existing(error) => Some(error),
+            Self::InitialObjectPropertyTrack => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum PreparedSemanticAnimationScheduleError {
     InvalidStartTime(f64),
@@ -311,7 +333,15 @@ impl std::fmt::Display for PreparedScalarAnimationTrackError {
     }
 }
 
-impl std::error::Error for PreparedScalarAnimationTrackError {}
+impl std::error::Error for PreparedScalarAnimationTrackError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Signal { error, .. } => Some(error),
+            Self::InvalidTimeMap { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+}
 
 /// Derive authored scalar timeline tracks in the recursive scheduler's stable leaf order.
 pub fn derive_prepared_scalar_animation_tracks(
@@ -369,7 +399,16 @@ impl std::fmt::Display for PreparedSemanticAnimationScheduleError {
     }
 }
 
-impl std::error::Error for PreparedSemanticAnimationScheduleError {}
+impl std::error::Error for PreparedSemanticAnimationScheduleError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Lookup { error, .. } => Some(error),
+            Self::Options { error, .. } => Some(error),
+            Self::Composition { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticAnimationScheduleError {
@@ -460,7 +499,16 @@ impl std::fmt::Display for SemanticAnimationScheduleError {
     }
 }
 
-impl std::error::Error for SemanticAnimationScheduleError {}
+impl std::error::Error for SemanticAnimationScheduleError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Animation(error) => Some(error),
+            Self::Options { error, .. } => Some(error),
+            Self::Composition { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+}
 
 /// Resolve one explicitly selected semantic animation declaration into deterministic
 /// execution timing without creating another scheduler or evaluator.
