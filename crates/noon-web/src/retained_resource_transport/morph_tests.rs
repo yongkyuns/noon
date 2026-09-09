@@ -6,8 +6,8 @@ use noon_core::{GeometryRef, Vec2};
 #[test]
 fn compiled_table_keeps_stable_local_pairs_but_excludes_dynamic_screen_space_fallback() {
     use noon_core::{
-        Easing, ObjectId, Property, RetainedObjectDefinition, StrokeWidthMode, Style,
-        TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint,
+        Easing, ObjectId, Property, StrokeWidthMode, Style, TrackDefinition, TrackId, TrackTiming,
+        TrackValues, Transform2D, TransformTrackEndpoint,
     };
     for (mode, target_mode, target_scale_x, expected_count, expected_preparations) in [
         (
@@ -66,12 +66,12 @@ fn compiled_table_keeps_stable_local_pairs_but_excludes_dynamic_screen_space_fal
                 ..style
             },
         };
-        let object = RetainedObjectDefinition {
-            id: ObjectId::new(0),
-            content: from.geometry.clone().into(),
-            transform: from.transform,
+        let object = noon_compile::CompiledObject::new(
+            ObjectId::new(0),
+            from.geometry.clone().into(),
+            from.transform,
             style,
-        };
+        );
         let track = TrackDefinition {
             id: TrackId::new(0),
             object: object.id,
@@ -80,16 +80,8 @@ fn compiled_table_keeps_stable_local_pairs_but_excludes_dynamic_screen_space_fal
             timing: TrackTiming::new(0.0, 1.0, Easing::Linear),
             time_map: Default::default(),
         };
-        let compiled = noon_compile::CompiledScene::compile_objects(
-            vec![noon_compile::CompiledObject::new(
-                object.id,
-                object.content,
-                object.transform,
-                object.style,
-            )],
-            &[track],
-        )
-        .unwrap();
+        let compiled =
+            noon_compile::CompiledScene::compile_objects(vec![object], &[track]).unwrap();
         let geometries = compiled_render_geometries(&compiled);
         let preparations = compiled_render_geometry_preparations(&compiled, &geometries).unwrap();
         assert_eq!(preparations.len(), expected_preparations);

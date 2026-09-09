@@ -158,8 +158,7 @@ fn active_family_mode(
 mod operation_selection_tests {
     use noon_core::{
         FamilyAnimationState, GeometryRef, ObjectContentRef, RateFunction,
-        RetainedFamilyAnimationPlanBuilder, RetainedObjectDefinition, SemanticStore, Style,
-        TextResourceArena, Transform2D,
+        RetainedFamilyAnimationPlanBuilder, SemanticStore, Style, TextResourceArena, Transform2D,
     };
     use noon_runtime::{FrameObjectState, FrameState};
 
@@ -188,14 +187,30 @@ mod operation_selection_tests {
         semantics.add_member(family, first).unwrap();
         semantics.add_member(family, second).unwrap();
 
-        let first_object =
-            RetainedObjectDefinition::geometry(ObjectId::new(10), GeometryRef::circle(1.0));
-        let second_object =
-            RetainedObjectDefinition::geometry(ObjectId::new(11), GeometryRef::circle(1.0));
+        let first_object = noon_runtime::FrameObjectState {
+            id: ObjectId::new(10),
+            content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+            transform: noon_core::Transform2D::IDENTITY,
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
+        let second_object = noon_runtime::FrameObjectState {
+            id: ObjectId::new(11),
+            content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+            transform: noon_core::Transform2D::IDENTITY,
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
         let texts = TextResourceArena::new();
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&semantics, family).unwrap();
-        builder.accept_leaf(first, &first_object, &texts).unwrap();
-        builder.accept_leaf(second, &second_object, &texts).unwrap();
+        builder
+            .accept_leaf(first, first_object.id, &first_object.content, &texts)
+            .unwrap();
+        builder
+            .accept_leaf(second, second_object.id, &second_object.content, &texts)
+            .unwrap();
         let plan = builder.finish().unwrap();
 
         let frame = FrameState {

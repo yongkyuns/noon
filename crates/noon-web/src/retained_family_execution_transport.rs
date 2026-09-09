@@ -729,16 +729,20 @@ mod tests {
     }
 
     fn geometry_plan() -> RetainedFamilyAnimationPlan {
-        let object = noon_core::RetainedObjectDefinition::geometry(
-            ObjectId::new(7),
-            GeometryRef::circle(1.0),
-        );
+        let object = noon_runtime::FrameObjectState {
+            id: ObjectId::new(7),
+            content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+            transform: noon_core::Transform2D::IDENTITY,
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
         let mut semantics = noon_core::SemanticStore::new();
         let leaf = semantics.insert_authoring_object();
         let mut builder =
             noon_core::RetainedFamilyAnimationPlanBuilder::begin(&semantics, leaf).unwrap();
         builder
-            .accept_leaf(leaf, &object, &TextResourceArena::new())
+            .accept_leaf(leaf, object.id, &object.content, &TextResourceArena::new())
             .unwrap();
         builder.finish().unwrap()
     }

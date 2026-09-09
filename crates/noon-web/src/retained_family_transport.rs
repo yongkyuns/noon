@@ -3,8 +3,7 @@ use std::collections::HashSet;
 use noon_core::{
     FamilyAnimationError, FamilyAnimationLeafBinding, FamilyAnimationState, ObjectId,
     RetainedFamilyAnimationMemberPlanError, RetainedFamilyAnimationPlan,
-    RetainedFamilyAnimationPlanBuilder, RetainedObjectDefinition, SemanticNodeId,
-    TextResourceLookup,
+    RetainedFamilyAnimationPlanBuilder, SemanticNodeId, TextResourceLookup,
 };
 use noon_runtime::FrameState;
 use serde::{Deserialize, Serialize};
@@ -176,14 +175,8 @@ impl RetainedFamilyPlanTransport {
         for binding in &self.bindings {
             let object = object_for_id(binding.object)
                 .ok_or(RetainedFamilyTransportError::MissingObject(binding.object))?;
-            let definition = RetainedObjectDefinition {
-                id: object.id,
-                content: object.content.clone(),
-                transform: object.transform,
-                style: object.style,
-            };
             builder
-                .accept_leaf(binding.semantic_leaf, &definition, texts)
+                .accept_leaf(binding.semantic_leaf, object.id, &object.content, texts)
                 .map_err(RetainedFamilyTransportError::Plan)?;
         }
         let plan = builder

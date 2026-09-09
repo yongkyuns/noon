@@ -141,7 +141,7 @@ def main() -> int:
         if re.search(r'\bFrontendMobjectHandle\b', source):
             errors.append(f'{path}: deleted FrontendMobjectHandle authority returned')
         code = re.sub(r'/\*.*?\*/|//[^\n]*', '', source, flags=re.S)
-        if re.search(r'\b(?:SceneDefinition|ObjectDefinition|ObjectSnapshot|ScenePatch|MutationTransaction|PatchError|MutationImpact)\b', code):
+        if re.search(r'\b(?:SceneDefinition|ObjectDefinition|ObjectSnapshot|ScenePatch|MutationTransaction|PatchError|MutationImpact|RetainedObjectDefinition)\b', code):
             errors.append(f'{path}: retired scene/patch model returned; use shared semantic operations and typed execution data')
         if path == 'crates/noon-web/src/retained_family_transport.rs' and re.search(r'\bSemanticStore\b', code):
             errors.append(f'{path}: family transport must preserve source identities without a receiver-owned semantic store')

@@ -3,9 +3,9 @@ use crate::TextResourceArena;
 
 use crate::{
     FamilyAnimationLeafProgress, FamilyAnimationLeafSpan, FamilyAnimationMemberEvaluationError,
-    FamilyAnimationMemberPlan, FamilyAnimationMemberPlanBuilder, FamilyAnimationState, ObjectId,
-    RetainedAnimationMember, RetainedAnimationMembers, RetainedFamilyAnimationMemberPlanError,
-    RetainedObjectDefinition, SemanticNodeId, SemanticStore, TextResourceLookup,
+    FamilyAnimationMemberPlan, FamilyAnimationMemberPlanBuilder, FamilyAnimationState,
+    ObjectContentRef, ObjectId, RetainedAnimationMember, RetainedAnimationMembers,
+    RetainedFamilyAnimationMemberPlanError, SemanticNodeId, SemanticStore, TextResourceLookup,
 };
 
 /// Prepared retained-content binding for one semantic family leaf.
@@ -175,12 +175,13 @@ impl RetainedFamilyAnimationPlanBuilder {
     pub fn accept_leaf(
         &mut self,
         semantic_leaf: SemanticNodeId,
-        object: &RetainedObjectDefinition,
+        object: ObjectId,
+        content: &ObjectContentRef,
         texts: &(impl TextResourceLookup + ?Sized),
     ) -> Result<(), RetainedFamilyAnimationMemberPlanError> {
         let members = self
             .inner
-            .accept_retained_leaf(semantic_leaf, object, texts)?;
+            .accept_retained_leaf(semantic_leaf, object, content, texts)?;
         self.members_by_leaf.push(members);
         Ok(())
     }
@@ -352,13 +353,18 @@ mod tests {
                 ],
             ))
             .unwrap();
-        let text = RetainedObjectDefinition::text(ObjectId::new(10), text_handle);
-        let circle =
-            RetainedObjectDefinition::geometry(ObjectId::new(11), GeometryRef::circle(1.0));
+        let text_id = ObjectId::new(10);
+        let text = ObjectContentRef::Text(text_handle);
+        let circle_id = ObjectId::new(11);
+        let circle = ObjectContentRef::Geometry(GeometryRef::circle(1.0));
 
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&store, family).unwrap();
-        builder.accept_leaf(text_leaf, &text, &texts).unwrap();
-        builder.accept_leaf(circle_leaf, &circle, &texts).unwrap();
+        builder
+            .accept_leaf(text_leaf, text_id, &text, &texts)
+            .unwrap();
+        builder
+            .accept_leaf(circle_leaf, circle_id, &circle, &texts)
+            .unwrap();
         (builder.finish().unwrap(), text_leaf, circle_leaf)
     }
 
