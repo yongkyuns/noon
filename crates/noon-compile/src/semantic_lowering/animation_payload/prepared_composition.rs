@@ -347,8 +347,9 @@ where
                     &mut captures,
                     &mut effective_properties,
                 )?;
-                let channels = lower_transform_channels(source, target, from, interpolation)
-                    .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
+                let channels =
+                    lower_transform_channels(prepared.store(), source, target, from, interpolation)
+                        .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
                 for channel in channels {
                     push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
                 }
