@@ -1,4 +1,4 @@
-use crate::{GeometryRef, ObjectDefinition, ObjectId, Style, TextResourceHandle, Transform2D};
+use crate::{GeometryRef, ObjectId, Style, TextResourceHandle, Transform2D};
 use crate::{
     SemanticNodeId, SemanticPresentation, SemanticSignalValueKind, SemanticStyle,
     SemanticTransform2_5D, StoredGeometry,
@@ -318,17 +318,6 @@ impl RetainedObjectDefinition {
     }
 }
 
-impl From<&ObjectDefinition> for RetainedObjectDefinition {
-    fn from(value: &ObjectDefinition) -> Self {
-        Self {
-            id: value.id,
-            content: ObjectContentRef::Geometry(value.geometry.clone()),
-            transform: value.transform,
-            style: value.style,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,20 +454,6 @@ mod tests {
             Some(StoredGeometry::Resource(handle))
         );
         assert_eq!(arena.len(), 1);
-    }
-
-    #[test]
-    fn legacy_geometry_converts_without_changing_semantics() {
-        let mut legacy = ObjectDefinition::new(ObjectId::new(7), GeometryRef::circle(2.0));
-        legacy.transform.translation.x = 3.0;
-        legacy.style.opacity = 0.4;
-
-        let retained = RetainedObjectDefinition::from(&legacy);
-        assert_eq!(retained.id, legacy.id);
-        assert_eq!(retained.content.geometry(), Some(&legacy.geometry));
-        assert_eq!(retained.transform, legacy.transform);
-        assert_eq!(retained.style, legacy.style);
-        assert_eq!(retained.content.text(), None);
     }
 
     #[test]

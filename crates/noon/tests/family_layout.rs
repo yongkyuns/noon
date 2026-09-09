@@ -95,3 +95,21 @@ fn empty_family_observation_has_origin_bounds_without_scene_changes() {
     observation.shift(3.0, 4.0).unwrap();
     assert_eq!(scene.integration_store().borrow().scene_revision(), before);
 }
+
+#[test]
+fn object_next_to_and_frame_corner_use_shared_bounds_and_buffers() {
+    let scene = Scene::new();
+    let mut left = scene.circle(1.0).unwrap();
+    left.shift(-2.0, 0.0).unwrap();
+    let mut right = scene.square(1.0).unwrap();
+    let buffer = f64::from(noon_core::DEFAULT_MOBJECT_TO_MOBJECT_BUFFER);
+    right.next_to_handle(&left, 1.0, 0.0, buffer).unwrap();
+    let gap = right.critical_point(-1.0, 0.0).unwrap().0 - left.critical_point(1.0, 0.0).unwrap().0;
+    assert!((gap - buffer).abs() < 1e-6);
+
+    let buffer = f64::from(noon_core::DEFAULT_MOBJECT_TO_EDGE_BUFFER);
+    right.align_on_frame(1.0, 1.0, buffer).unwrap();
+    let corner = right.critical_point(1.0, 1.0).unwrap();
+    assert!((corner.0 - (f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5 - buffer)).abs() < 1e-5);
+    assert!((corner.1 - (f64::from(noon_core::DEFAULT_FRAME_HEIGHT) * 0.5 - buffer)).abs() < 1e-5);
+}

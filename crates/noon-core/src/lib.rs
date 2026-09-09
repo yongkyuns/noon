@@ -8,13 +8,13 @@
 #![forbid(unsafe_code)]
 
 mod graph_topology;
-mod patch;
+mod object_state;
 mod reactive;
 mod semantic_store;
 mod timeline;
 
 pub use graph_topology::*;
-pub use patch::*;
+pub use object_state::*;
 pub use reactive::*;
 pub use semantic_store::*;
 pub use timeline::*;
@@ -724,357 +724,14 @@ impl GeometryRef {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ObjectDefinition {
-    pub id: ObjectId,
-    pub geometry: GeometryRef,
-    pub transform: Transform2D,
-    pub style: Style,
-}
-
-impl ObjectDefinition {
-    pub fn new(id: ObjectId, geometry: GeometryRef) -> Self {
-        Self {
-            id,
-            geometry,
-            transform: Transform2D::default(),
-            style: Style::default(),
-        }
-    }
-
-    pub fn snapshot(&self) -> ObjectSnapshot {
-        ObjectSnapshot::from(self)
-    }
-
-    pub fn world_bounds(&self) -> Option<Rect> {
-        self.snapshot().world_bounds()
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ObjectSnapshot {
-    pub geometry: GeometryRef,
-    pub transform: Transform2D,
-    pub style: Style,
-}
-
-impl ObjectSnapshot {
-    pub fn new(geometry: GeometryRef) -> Self {
-        Self {
-            geometry,
-            transform: Transform2D::default(),
-            style: Style::default(),
-        }
-    }
-
-    pub fn shift(mut self, offset: Vec2) -> Self {
-        self.transform.translation += offset;
-        self
-    }
-
-    pub fn move_to(mut self, point: Vec2) -> Self {
-        let center = self.center();
-        self.transform.translation += point - center;
-        self
-    }
-
-    pub fn center(&self) -> Vec2 {
-        self.world_bounds()
-            .map(Rect::center)
-            .unwrap_or(self.transform.translation)
-    }
-
-    pub fn scale_by(mut self, factor: f32) -> Self {
-        self.transform.scale = self.transform.scale * factor;
-        self
-    }
-
-    pub fn scale_xy(mut self, factor: Vec2) -> Self {
-        self.transform.scale = self.transform.scale.component_mul(factor);
-        self
-    }
-
-    pub fn rotate_by(mut self, angle: f32) -> Self {
-        self.transform.rotation += angle;
-        self
-    }
-
-    pub fn set_color(mut self, color: Color) -> Self {
-        if self.style.fill.is_some() {
-            self.style.fill = Some(color);
-        }
-        if self.style.stroke.is_some() {
-            self.style.stroke = Some(color);
-        }
-        if self.style.fill.is_none() && self.style.stroke.is_none() {
-            self.style.fill = Some(color);
-        }
-        self
-    }
-
-    pub fn set_fill(mut self, color: Option<Color>, opacity: Option<f32>) -> Self {
-        match (color, opacity) {
-            (Some(mut color), Some(opacity)) => {
-                color.alpha = opacity;
-                self.style.fill = Some(color);
-            }
-            (Some(mut color), None) => {
-                if let Some(existing) = self.style.fill {
-                    color.alpha = existing.alpha;
-                }
-                self.style.fill = Some(color);
-            }
-            (None, Some(opacity)) => {
-                if let Some(mut fill) = self.style.fill {
-                    fill.alpha = opacity;
-                    self.style.fill = Some(fill);
-                }
-            }
-            (None, None) => {}
-        }
-        self
-    }
-
-    pub fn set_stroke(mut self, color: Option<Color>, width: Option<f32>) -> Self {
-        self.style.stroke = color;
-        if let Some(width) = width {
-            self.style.stroke_width = width;
-        }
-        self
-    }
-
-    pub fn set_opacity(mut self, opacity: f32) -> Self {
-        self.style.opacity = opacity;
-        self
-    }
-
-    pub fn local_bounds(&self) -> Option<Rect> {
-        self.geometry.local_bounds()
-    }
-
-    pub fn world_bounds(&self) -> Option<Rect> {
-        self.geometry.world_bounds(self.transform)
-    }
-
-    pub fn width(&self) -> f32 {
-        self.world_bounds().map_or(0.0, Rect::width)
-    }
-
-    pub fn height(&self) -> f32 {
-        self.world_bounds().map_or(0.0, Rect::height)
-    }
-
-    pub fn next_to(mut self, target: &ObjectSnapshot, direction: Vec2, buff: f32) -> Self {
-        let Some(axis) = direction.normalized() else {
-            return self;
-        };
-        let Some(target_bounds) = target.world_bounds() else {
-            return self;
-        };
-        let Some(self_bounds) = self.world_bounds() else {
-            return self;
-        };
-        let target_point = target_bounds.critical_point(axis);
-        let point_to_align = self_bounds.critical_point(-axis);
-        self.transform.translation += target_point - point_to_align + axis * buff;
-        self
-    }
-
-    pub fn align_to(mut self, target: &ObjectSnapshot, direction: Vec2) -> Self {
-        let Some(target_bounds) = target.world_bounds() else {
-            return self;
-        };
-        let Some(self_bounds) = self.world_bounds() else {
-            return self;
-        };
-        let target_point = target_bounds.critical_point(direction);
-        let point_to_align = self_bounds.critical_point(direction);
-        let mask = Vec2::new(direction.x.signum().abs(), direction.y.signum().abs());
-        self.transform.translation += (target_point - point_to_align).component_mul(mask);
-        self
-    }
-
-    pub fn to_edge(self, direction: Vec2, buff: f32) -> Self {
-        self.align_on_frame(direction, buff)
-    }
-
-    pub fn to_corner(self, direction: Vec2, buff: f32) -> Self {
-        self.align_on_frame(direction, buff)
-    }
-
-    fn align_on_frame(mut self, direction: Vec2, buff: f32) -> Self {
-        let Some(bounds) = self.world_bounds() else {
-            return self;
-        };
-        let frame_target = Vec2::new(
-            direction.x.signum() * DEFAULT_FRAME_WIDTH * 0.5,
-            direction.y.signum() * DEFAULT_FRAME_HEIGHT * 0.5,
-        );
-        let point_to_align = bounds.critical_point(direction);
-        let shift = frame_target - point_to_align - direction * buff;
-        let mask = Vec2::new(direction.x.signum().abs(), direction.y.signum().abs());
-        self.transform.translation += shift.component_mul(mask);
-        self
-    }
-}
-
-impl From<&ObjectDefinition> for ObjectSnapshot {
-    fn from(value: &ObjectDefinition) -> Self {
-        Self {
-            geometry: value.geometry.clone(),
-            transform: value.transform,
-            style: value.style,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct SceneDefinition {
-    pub(crate) objects: Vec<ObjectDefinition>,
-    pub(crate) next_object_id: u64,
-    pub(crate) tracks: Vec<TrackDefinition>,
-    pub(crate) next_track_id: u64,
-    pub(crate) camera_object: Option<ObjectId>,
-}
-
-impl SceneDefinition {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn add(&mut self, geometry: GeometryRef) -> ObjectId {
-        let id = ObjectId::new(self.next_object_id);
-        self.next_object_id = self
-            .next_object_id
-            .checked_add(1)
-            .expect("Noon object ID space exhausted");
-        self.objects.push(ObjectDefinition::new(id, geometry));
-        id
-    }
-
-    pub fn add_snapshot(&mut self, snapshot: ObjectSnapshot) -> ObjectId {
-        let id = self.add(snapshot.geometry.clone());
-        let object = self.object_mut(id).expect("newly added object exists");
-        object.transform = snapshot.transform;
-        object.style = snapshot.style;
-        id
-    }
-
-    pub fn snapshot(&self, id: ObjectId) -> Option<ObjectSnapshot> {
-        self.object(id).map(ObjectSnapshot::from)
-    }
-
-    pub fn set_snapshot(&mut self, id: ObjectId, snapshot: ObjectSnapshot) -> bool {
-        let Some(object) = self.object_mut(id) else {
-            return false;
-        };
-        object.geometry = snapshot.geometry;
-        object.transform = snapshot.transform;
-        object.style = snapshot.style;
-        true
-    }
-
-    /// Select an ordinary semantic object whose transform/rectangle bounds define
-    /// the active 2D camera frame. The same transform timeline remains available to
-    /// every frontend; this marker only gives the runtime a viewport role.
-    pub fn set_camera_object(&mut self, id: ObjectId) -> bool {
-        if self.object(id).is_none() {
-            return false;
-        }
-        self.camera_object = Some(id);
-        true
-    }
-
-    pub const fn camera_object(&self) -> Option<ObjectId> {
-        self.camera_object
-    }
-
-    pub(crate) fn clear_camera_object_if(&mut self, id: ObjectId) {
-        if self.camera_object == Some(id) {
-            self.camera_object = None;
-        }
-    }
-
-    pub fn objects(&self) -> &[ObjectDefinition] {
-        &self.objects
-    }
-
-    pub fn object(&self, id: ObjectId) -> Option<&ObjectDefinition> {
-        self.objects.iter().find(|object| object.id == id)
-    }
-
-    pub fn object_mut(&mut self, id: ObjectId) -> Option<&mut ObjectDefinition> {
-        self.objects.iter_mut().find(|object| object.id == id)
-    }
-
-    pub fn len(&self) -> usize {
-        self.objects.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.objects.is_empty()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn object_ids_are_deterministic_for_identical_insertion() {
-        let mut first = SceneDefinition::new();
-        let mut second = SceneDefinition::new();
-
-        let first_circle = first.add(GeometryRef::circle(1.0));
-        let first_rect = first.add(GeometryRef::rectangle(2.0, 3.0));
-        let second_circle = second.add(GeometryRef::circle(1.0));
-        let second_rect = second.add(GeometryRef::rectangle(2.0, 3.0));
-
-        assert_eq!(first_circle, ObjectId::new(0));
-        assert_eq!(first_rect, ObjectId::new(1));
-        assert_eq!(first_circle, second_circle);
-        assert_eq!(first_rect, second_rect);
-    }
-
-    #[test]
-    fn insertion_identity_survives_property_mutation() {
-        let mut scene = SceneDefinition::new();
-        let circle = scene.add(GeometryRef::circle(2.0));
-
-        let object = scene.object_mut(circle).expect("object must exist");
-        object.transform.translation = Vec2::new(4.0, -2.0);
-        object.style.opacity = 0.5;
-
-        let object = scene.object(circle).expect("object must still exist");
-        assert_eq!(object.id, circle);
-        assert_eq!(object.transform.translation, Vec2::new(4.0, -2.0));
-        assert_eq!(object.style.opacity, 0.5);
-    }
-
-    #[test]
-    fn camera_object_is_explicit_shared_scene_identity() {
-        let mut scene = SceneDefinition::new();
-        let frame = scene.add(GeometryRef::rectangle(
-            DEFAULT_FRAME_WIDTH,
-            DEFAULT_FRAME_HEIGHT,
-        ));
-        assert_eq!(scene.camera_object(), None);
-        assert!(scene.set_camera_object(frame));
-        assert_eq!(scene.camera_object(), Some(frame));
-        assert!(!scene.set_camera_object(ObjectId::new(99)));
-        assert_eq!(scene.camera_object(), Some(frame));
+    fn camera_and_execution_state_defaults_are_renderer_independent() {
         assert_eq!(Camera2DState::default().center, ORIGIN);
         assert_eq!(Camera2DState::default().height, DEFAULT_FRAME_HEIGHT);
-    }
-
-    #[test]
-    fn objects_start_with_renderer_independent_defaults() {
-        let mut scene = SceneDefinition::new();
-        let rectangle = scene.add(GeometryRef::rectangle(4.0, 2.0));
-        let object = scene.object(rectangle).expect("object must exist");
-
-        assert_eq!(object.transform, Transform2D::IDENTITY);
-        assert_eq!(object.style, Style::default());
+        assert_eq!(Transform2D::default(), Transform2D::IDENTITY);
     }
 
     #[test]
@@ -1142,11 +799,13 @@ mod tests {
 
     #[test]
     fn primitive_world_bounds_include_rotation_scale_and_translation() {
-        let snapshot = ObjectSnapshot::new(GeometryRef::rectangle(2.0, 1.0))
-            .scale_xy(Vec2::new(2.0, 1.0))
-            .rotate_by(PI / 2.0)
-            .shift(RIGHT * 3.0);
-        let bounds = snapshot.world_bounds().expect("rectangle has bounds");
+        let bounds = GeometryRef::rectangle(2.0, 1.0)
+            .world_bounds(Transform2D {
+                translation: RIGHT * 3.0,
+                rotation: PI / 2.0,
+                scale: Vec2::new(2.0, 1.0),
+            })
+            .expect("rectangle has bounds");
         assert!((bounds.width() - 1.0).abs() < 1e-5);
         assert!((bounds.height() - 4.0).abs() < 1e-5);
         assert!((bounds.center().x - 3.0).abs() < 1e-5);
@@ -1154,13 +813,13 @@ mod tests {
 
     #[test]
     fn line_world_bounds_follow_transformed_endpoints() {
-        let snapshot = ObjectSnapshot::new(GeometryRef::line(
-            Vec2::new(-1.0, -1.0),
-            Vec2::new(1.0, 1.0),
-        ))
-        .rotate_by(PI / 4.0)
-        .shift(RIGHT * 3.0);
-        let bounds = snapshot.world_bounds().expect("line has bounds");
+        let bounds = GeometryRef::line(Vec2::new(-1.0, -1.0), Vec2::new(1.0, 1.0))
+            .world_bounds(Transform2D {
+                translation: RIGHT * 3.0,
+                rotation: PI / 4.0,
+                ..Transform2D::IDENTITY
+            })
+            .expect("line has bounds");
         assert!(bounds.width().abs() < 1e-5);
         assert!((bounds.height() - 2.0_f32.sqrt() * 2.0).abs() < 1e-5);
         assert!((bounds.center().x - 3.0).abs() < 1e-5);
@@ -1173,8 +832,12 @@ mod tests {
             .move_to(Vec2::new(0.0, 1.0))
             .line_to(Vec2::new(1.0, 1.0))
             .line_to(Vec2::new(1.0, 0.0));
-        let snapshot = ObjectSnapshot::new(GeometryRef::path(path)).rotate_by(PI / 4.0);
-        let bounds = snapshot.world_bounds().expect("path has bounds");
+        let bounds = GeometryRef::path(path)
+            .world_bounds(Transform2D {
+                rotation: PI / 4.0,
+                ..Transform2D::IDENTITY
+            })
+            .expect("path has bounds");
         let root_two = 2.0_f32.sqrt();
         assert!((bounds.width() - root_two).abs() < 1e-5);
         assert!((bounds.height() - root_two * 0.5).abs() < 1e-5);
@@ -1187,39 +850,16 @@ mod tests {
         let path = VectorPath::new()
             .move_to(ORIGIN)
             .quadratic_to(Vec2::new(0.0, 2.0), Vec2::new(2.0, 0.0));
-        let snapshot = ObjectSnapshot::new(GeometryRef::path(path)).rotate_by(PI / 2.0);
-        let bounds = snapshot.world_bounds().expect("path has bounds");
+        let bounds = GeometryRef::path(path)
+            .world_bounds(Transform2D {
+                rotation: PI / 2.0,
+                ..Transform2D::IDENTITY
+            })
+            .expect("path has bounds");
         assert!((bounds.min.x + 2.0).abs() < 1e-5);
         assert!(bounds.max.x.abs() < 1e-5);
         assert!(bounds.min.y.abs() < 1e-5);
         assert!((bounds.max.y - 2.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn next_to_uses_semantic_bounds_and_buffer() {
-        let left = ObjectSnapshot::new(GeometryRef::circle(1.0)).shift(LEFT * 2.0);
-        let right = ObjectSnapshot::new(GeometryRef::square(1.0)).next_to(
-            &left,
-            RIGHT,
-            DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
-        );
-        let gap = right.world_bounds().unwrap().min.x - left.world_bounds().unwrap().max.x;
-        assert!((gap - DEFAULT_MOBJECT_TO_MOBJECT_BUFFER).abs() < 1e-6);
-    }
-
-    #[test]
-    fn to_corner_respects_default_frame_and_buffer() {
-        let snapshot = ObjectSnapshot::new(GeometryRef::square(1.0))
-            .to_corner(UR, DEFAULT_MOBJECT_TO_EDGE_BUFFER);
-        let bounds = snapshot.world_bounds().unwrap();
-        assert!(
-            (bounds.max.x - (DEFAULT_FRAME_WIDTH * 0.5 - DEFAULT_MOBJECT_TO_EDGE_BUFFER)).abs()
-                < 1e-5
-        );
-        assert!(
-            (bounds.max.y - (DEFAULT_FRAME_HEIGHT * 0.5 - DEFAULT_MOBJECT_TO_EDGE_BUFFER)).abs()
-                < 1e-5
-        );
     }
 
     #[test]
