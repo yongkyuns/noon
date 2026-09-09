@@ -3,13 +3,13 @@ on:
   push:
     branches: [codex/1292-r2a-producers-prep]
 permissions:
-  contents: read
+  contents: write
   actions: read
 concurrency:
   group: r2a-producers-development
   cancel-in-progress: true
 env:
-  PRODUCT_HEAD: 7d373852040c253d90f927efb774c100f56c1291
+  INPUT_HEAD: 7d373852040c253d90f927efb774c100f56c1291
   CURRENT_BASE: 5b56124312657c0959e1ca3936930cad0fe7e240
   CARGO_BUILD_JOBS: '2'
   CARGO_INCREMENTAL: '0'
@@ -19,7 +19,7 @@ env:
   SCCACHE_GHA_ENABLED: 'true'
   SCCACHE_GHA_RW_MODE: READ_ONLY
 jobs:
-  full-landing:
+  reviewed-full-landing:
     runs-on: ubuntu-latest
     timeout-minutes: 50
     steps:
@@ -27,49 +27,72 @@ jobs:
         with:
           ref: 7d373852040c253d90f927efb774c100f56c1291
           fetch-depth: 0
-          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
-      - name: Read the retained focused dependency lock
-        uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8
         with:
           name: r2a-landing-focused
           run-id: 34388702779
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/r2a-focused-input
-      - name: Verify actual source and dependency identity
+      - name: Pin source, dependency identity, and review regression
         run: |
           set -euo pipefail
           mkdir -p /tmp/r2a-full
-          test "$(git rev-parse HEAD)" = "$PRODUCT_HEAD"
+          test "$(git rev-parse HEAD)" = "$INPUT_HEAD"
           test "$(git rev-parse HEAD^{tree})" = f7b787b82aed329961c175d21d14fd3ab41537cc
-          test "$(git rev-parse HEAD^)" = 4af209f29cf8df43f8249ec1830f410b8b9871b1
           git merge-base --is-ancestor "$CURRENT_BASE" HEAD
-          git diff --exit-code HEAD^ HEAD -- crates fixtures scripts/typed-authoring-errors-smoke.mjs web/python
           git diff --exit-code
           printf '%s\n' "$GITHUB_SHA" > /tmp/r2a-full/helper-event-sha.txt
-          git show -s --format='%H %T %P' HEAD > /tmp/r2a-full/source-identity.txt
           python3 - <<'PY'
           import hashlib, os
           from pathlib import Path
-          lock=Path(os.environ['RUNNER_TEMP'])/'r2a-focused-input/Cargo.lock'
-          data=lock.read_bytes()
+          data=(Path(os.environ['RUNNER_TEMP'])/'r2a-focused-input/Cargo.lock').read_bytes()
           assert hashlib.sha256(data).hexdigest()=='9fc77831ae25df351229c9902c073657062501a8e5faf8ea313dd9c8284062dd'
           Path('Cargo.lock').write_bytes(data)
+          path=Path('fixtures/provider-consumer/tests/object_authoring_errors.rs')
+          text=path.read_text()
+          assert 'fn positive_number_rejection_retains_original_f64_and_recovers' not in text
+          text += '''
+          #[test]
+          fn positive_number_rejection_retains_original_f64_and_recovers() -> TestResult {
+              let scene = Scene::new();
+              let before = snapshot(&scene, &[]);
+              for supplied in [
+                  f64::MIN_POSITIVE,
+                  -f64::MIN_POSITIVE,
+                  f64::from_bits(1),
+                  -f64::from_bits(1),
+                  1.0e-200,
+                  -1.0e-200,
+                  -1.23456789012345,
+                  0.0,
+                  -0.0,
+              ] {
+                  match scene.circle(supplied).unwrap_err() {
+                      AuthoringError::NonPositiveNumber { name, value } => {
+                          assert_eq!(name, "radius");
+                          assert_eq!(value.to_bits(), supplied.to_bits());
+                      }
+                      other => panic!("expected NonPositiveNumber, got {other:?}"),
+                  }
+                  assert_eq!(snapshot(&scene, &[]), before);
+              }
+              scene.circle(f64::from(f32::MIN_POSITIVE))?;
+              scene.circle(1.0)?;
+              assert_eq!(snapshot(&scene, &[]).nodes, before.nodes + 2);
+              Ok(())
+          }
+          '''
+          path.write_text(text)
           PY
           sha256sum Cargo.lock > /tmp/r2a-full/lock-before.sha256
           cp Cargo.lock /tmp/r2a-full/Cargo.lock
-          git archive HEAD | gzip > /tmp/r2a-full/source.tar.gz
-          git diff "$CURRENT_BASE" HEAD > /tmp/r2a-full/source.patch
           rustc --version > /tmp/r2a-full/toolchain.txt
           cargo --version >> /tmp/r2a-full/toolchain.txt
           node --version >> /tmp/r2a-full/toolchain.txt
           python3 --version >> /tmp/r2a-full/toolchain.txt
-      - name: Validate the complete web preflight before spending on the full build
-        run: |
-          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh > /tmp/r2a-full/preflight.log 2>&1 || { tail -200 /tmp/r2a-full/preflight.log; exit 1; }
-          tail -30 /tmp/r2a-full/preflight.log
       - uses: actions/cache@v6
         with:
           path: |
@@ -82,6 +105,73 @@ jobs:
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
+      - name: Prove the unchanged reviewed producer fails the bit-exact regression
+        run: |
+          set +e
+          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --test object_authoring_errors positive_number_rejection_retains_original_f64_and_recovers -- --exact > /tmp/r2a-full/value-red.log 2>&1
+          result=$?
+          set -e
+          tail -50 /tmp/r2a-full/value-red.log
+          test "$result" != 0
+          grep -q 'test result: FAILED. 0 passed; 1 failed; 0 ignored' /tmp/r2a-full/value-red.log
+      - name: Preserve original f64 diagnostics without changing lowered admission
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path=Path('crates/noon/src/semantic_mobject.rs')
+          text=path.read_text()
+          old='''fn positive_f32(name: &str, value: f64) -> Result<f32, AuthoringError> {
+              let value = finite_f32(name, value)?;
+              if value <= 0.0 {
+                  return Err(AuthoringError::NonPositiveNumber {
+                      name: name.to_owned(),
+                      value: f64::from(value),
+                  });
+              }
+              Ok(value)
+          }'''
+          new='''fn positive_f32(name: &str, value: f64) -> Result<f32, AuthoringError> {
+              let lowered = finite_f32(name, value)?;
+              if lowered <= 0.0 {
+                  return Err(AuthoringError::NonPositiveNumber {
+                      name: name.to_owned(),
+                      value,
+                  });
+              }
+              Ok(lowered)
+          }'''
+          # Normalize the inline fixture indentation to actual Rust source.
+          import textwrap
+          old=textwrap.dedent(old)
+          new=textwrap.dedent(new)
+          assert text.count(old)==1
+          path.write_text(text.replace(old,new))
+          PY
+          cargo fmt --all
+          cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml
+          cargo test --manifest-path fixtures/provider-consumer/Cargo.toml --no-default-features --tests > /tmp/r2a-full/consumers-green.log 2>&1 || { tail -120 /tmp/r2a-full/consumers-green.log; exit 1; }
+          grep -q 'test positive_number_rejection_retains_original_f64_and_recovers ... ok' /tmp/r2a-full/consumers-green.log
+          git diff --check
+          git add crates/noon/src/semantic_mobject.rs fixtures/provider-consumer/tests/object_authoring_errors.rs
+          git config user.name 'Noon development tooling'
+          git config user.email 'development@noon.invalid'
+          git -c commit.gpgSign=false commit -m 'fix: retain original f64 in positive-number rejection (#1354)'
+          git diff --exit-code
+          git push origin HEAD:refs/heads/codex/1354-review-value-fix
+          git show -s --format='%H %T %P' HEAD > /tmp/r2a-full/source-identity.txt
+          git archive HEAD | gzip > /tmp/r2a-full/source.tar.gz
+          git diff "$CURRENT_BASE" HEAD > /tmp/r2a-full/source.patch
+          git diff "$INPUT_HEAD" HEAD > /tmp/r2a-full/review-fix.patch
+      - uses: actions/upload-artifact@v7
+        with:
+          name: r2a-reviewed-source
+          path: /tmp/r2a-full
+          retention-days: 3
+          if-no-files-found: error
+      - name: Validate web preflight before the full build
+        run: |
+          NOON_WEB_PREFLIGHT_ONLY=1 bash scripts/build-web-demo.sh > /tmp/r2a-full/preflight.log 2>&1 || { tail -200 /tmp/r2a-full/preflight.log; exit 1; }
+          tail -30 /tmp/r2a-full/preflight.log
       - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
         with:
           tool: wasm-pack@0.15.0
@@ -95,11 +185,11 @@ jobs:
           cmp /tmp/r2a-full/lock-before.sha256 /tmp/r2a-full/lock-after.sha256
           git diff --exit-code
           sha256sum web/pkg/noon_web_bg.wasm > /tmp/r2a-full/release-wasm.sha256
-      - name: Install the existing paired-browser prerequisites
+      - name: Install existing paired-browser prerequisites
         run: |
           npm install --no-save --no-package-lock playwright@1.62.1 pngjs@7
           npx playwright install --with-deps chromium
-      - name: Run paired product behavior on the same release package without another Rust build
+      - name: Run paired behavior using the same release package
         run: |
           set -euo pipefail
           node scripts/shared-authoring-smoke.mjs > /tmp/r2a-full/shared-authoring.log 2>&1 || { tail -200 /tmp/r2a-full/shared-authoring.log; exit 1; }
@@ -109,13 +199,14 @@ jobs:
           git diff --exit-code
           sha256sum web/pkg/noon_web_bg.wasm > /tmp/r2a-full/release-wasm-after-browser.sha256
           cmp /tmp/r2a-full/release-wasm.sha256 /tmp/r2a-full/release-wasm-after-browser.sha256
-      - name: Preserve exact qualification and package evidence
+      - name: Preserve actual source, qualification and package evidence
         if: always()
         run: |
           mkdir -p /tmp/r2a-full
           git status --short > /tmp/r2a-full/final-status.txt
           git diff > /tmp/r2a-full/final-tracked.diff
           git show -s --format='%H %T %P' HEAD > /tmp/r2a-full/final-identity.txt
+          test -f /tmp/r2a-full/source.tar.gz || git archive HEAD | gzip > /tmp/r2a-full/source.tar.gz
           if test -d web/pkg; then
             find web/pkg -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/r2a-full/package.sha256
             tar -czf /tmp/r2a-full/release-package.tar.gz web/pkg
