@@ -24,6 +24,12 @@ mod manim_scale_bridge;
 #[cfg(target_arch = "wasm32")]
 mod manim_shape_matcher_handle_bridge;
 mod renderer_observation;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+mod renderer_recovery_smoke;
 #[cfg(feature = "renderer")]
 mod retained_execution_canvas;
 mod retained_execution_resources;
@@ -54,6 +60,12 @@ pub use execution_transport::*;
 pub use execution_wake::*;
 pub use legacy::{PlayerError, ReconcileOutcome};
 pub use renderer_observation::*;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+pub use renderer_recovery_smoke::*;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 pub use retained_execution_canvas::*;
 pub use retained_execution_resources::*;

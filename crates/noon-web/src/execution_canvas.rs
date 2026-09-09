@@ -765,7 +765,7 @@ mod wasm {
         }
 
         /// Read-only diagnostic identity; never feeds back into engine execution.
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "renderer-smoke"))]
         #[wasm_bindgen(js_name = directSceneRevision)]
         pub fn direct_scene_revision(&self) -> Result<u64, JsValue> {
             let session = self
