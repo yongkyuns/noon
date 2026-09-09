@@ -21,6 +21,7 @@ class OrdinaryFamilyPlacement(Scene):
         family.align_to(UP, UP)
         family.move_to(target, coor_mask=(1, 0, 0))
         center = family.get_center()
+        family.set_x(center.x).set_y(center.y)
         family.to_corner(2 * RIGHT + UP, buff=0.25)
         assert abs(family.get_right().x - (DEFAULT_FRAME_WIDTH / 2 - 0.5)) < 1e-6
         assert abs(family.get_top().y - 3.75) < 1e-6
@@ -30,6 +31,7 @@ class OrdinaryFamilyPlacement(Scene):
         self.wait(1)
         # After the barrier, the same typed target observes live effective bounds.
         center = family.get_center()
+        family.set_x(center.x).set_y(center.y)
         family.to_edge(DOWN, buff=0.5)
         assert abs(family.get_bottom().y + 3.5) < 1e-6
         family.move_to(center)

@@ -191,7 +191,7 @@
       "surface": "Deterministic Group/VGroup aggregate bounds, center, width/height, and critical-point queries",
       "classification": "shared-rust",
       "owner": {"language": "rust", "path": "crates/noon/src/family_layout.rs", "symbol": "MobjectFamily::layout/FamilyLayout"},
-      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_compat_bounds_for"}],
+      "adapters": [{"language": "python", "path": "web/python/_manim_semantic_handles.py", "symbol": "_group_layout_observation"}],
       "reason": "Rust aggregates semantic family membership using authored bounds or current effective runtime transforms through LiveSession. Python only checks local wrapper eligibility; it cannot feed per-leaf bounds or construct a partial observation."
     },
     {
