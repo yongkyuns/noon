@@ -28,6 +28,21 @@ class OrdinaryCallbackSparseReads(Scene):
             phase_time = _manim_updaters._canonical_callback_time(mobject)
             phase_counts[phase_time] = phase_counts.get(phase_time, 0) + 1
             assert phase_counts[phase_time] == 1
+            # Nested aliases must move once, retaining the preceding leaf edit.
+            mobject.shift((0.25, 0.0))
+            prior_x = mobject.get_center().x
+            family.shift((1.0, 0.0))
+            assert abs(mobject.get_center().x - (prior_x + 1.0)) < 1e-5
+            shifted = mobject.get_center()
+            try:
+                invalid_family.shift((1.0, 0.0))
+            except (RuntimeError, ReferenceError):
+                pass
+            else:
+                raise AssertionError("family translation accepted a non-live member")
+            assert mobject.get_center() == shifted
+            family.shift((-1.0, 0.0))
+            assert abs(mobject.get_center().x - prior_x) < 1e-5
             # One Rust-selected family read fetches the missing anchor row.
             # Recolor must observe the preceding family alpha edit, not authored alpha.
             family.set_fill(opacity=0.6)
@@ -56,7 +71,8 @@ class OrdinaryCallbackSparseReads(Scene):
         # track exists. This proves callback reads do not depend on active or
         # touched signal rows.
         await self.wait(0.25)
-        assert circle.get_center() == (-1.0, 1.0)
+        center = circle.get_center()
+        assert abs(center.x + 1.0) < 1e-5 and abs(center.y - 1.0) < 1e-5, center
         await self.play(tracker.animate.set_value(2.0), run_time=1.0, rate_func=linear)
 
         # The timed track has completed. Rust appends the persistent hold, and
@@ -67,4 +83,5 @@ class OrdinaryCallbackSparseReads(Scene):
 
         assert phase_counts.get(0.0) == 1
         assert self.time == 1.5
-        assert circle.get_center() == (2.0, 1.0)
+        center = circle.get_center()
+        assert abs(center.x - 2.0) < 1e-5 and abs(center.y - 1.0) < 1e-5, center

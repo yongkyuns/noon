@@ -472,12 +472,3 @@ def copy_wrapper_attributes(source, target, memo=None, excluded=()):
     for name, value in source.__dict__.items():
         if name not in excluded:
             setattr(target, name, copy.deepcopy(value, memo))
-
-
-def _shift_group_members(self: Group, direction: object) -> Group:
-    # Existing per-member callback fallback; shared callback family operations
-    # in #955 own its retirement. Ordinary typed family shifts stay in Rust.
-    offset = _base._as_vec2(direction)
-    for member in self.submobjects:
-        member.shift(offset)
-    return self

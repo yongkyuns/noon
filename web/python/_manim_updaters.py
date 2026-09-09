@@ -672,7 +672,7 @@ class _CanonicalCallbackContext:
         self._rows[key] = row
         return key, row
 
-    def paint_family(self, family, operation, arguments):
+    def _family_rows(self, family):
         # Rust selects the unique leaves and reads them against this phase token
         # in one request. Python only retains the permitted callback read view.
         from _noon_errors import engine_call
@@ -692,6 +692,11 @@ class _CanonicalCallbackContext:
             received = self._frame_items
         rows = {node: self._rows.get(node) or _PhasePropertyRow.from_wire(received[node])
                 for node in keys}
+        return rows
+
+    def paint_family(self, family, operation, arguments):
+        from _noon_errors import engine_call
+        rows = self._family_rows(family)
         # Row selection preserves preceding writes, including scalar leaf edits.
         styles = [[*node, row.style.to_wire()] for node, row in rows.items()]
         if operation == "Color":
@@ -722,6 +727,37 @@ class _CanonicalCallbackContext:
                     (style.stroke is not None and style.stroke_width != before.stroke_width)):
                 row.invalidate_bounds()
             self.style_changed(node, before, row)
+
+    def shift_family(self, family, offset):
+        from _noon_errors import engine_call
+        rows = self._family_rows(family)
+        def bounds_wire(row):
+            if row.bounds is None or not row.bounds_translation_only:
+                return None
+            x0, y0, x1, y1 = row.bounds
+            return {"min": {"x": x0, "y": y0}, "max": {"x": x1, "y": y1}}
+        wire = [[*node, row.transform.to_wire(), bounds_wire(row)] for node, row in rows.items()]
+        raw = engine_call(self._operations.callbackFamilyShift, family,
+            str(self.token["publication"]["scene_revision"]),
+            json.dumps(wire, separators=(",", ":")), offset.x, offset.y,
+            operation="Group.shift")
+        # Decode the complete Rust result before exposing any property/write.
+        changes = []
+        for slot, generation, transform, bounds in json.loads(str(raw)):
+            node = (slot, generation)
+            if node not in rows:
+                raise RuntimeError("family translation returned an unread semantic node")
+            translated = _PhasePropertyRow.from_wire({"transform": transform,
+                "style": rows[node].style.to_wire(), "bounds": bounds})
+            changes.append((node, translated))
+        self._rows.update(rows)
+        for node, translated in changes:
+            row = rows[node]
+            before = row.transform
+            row.transform = translated.transform
+            row.bounds = translated.bounds
+            row.bounds_translation_only = translated.bounds_translation_only
+            self.transform_changed(node, before, row)
 
     def transform_changed(
         self, key: tuple[int, int], before: _PhaseTransform, row: _PhasePropertyRow

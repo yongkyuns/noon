@@ -255,6 +255,48 @@ impl RustHostCallbackContext<'_> {
         Ok(())
     }
 
+    /// Translate one semantic family once per leaf in the current ordered phase.
+    /// Read and validate the entire operation before caching rows or appending
+    /// any writes; a caught late rejection preserves preceding overlay edits.
+    pub fn shift_family(
+        &mut self,
+        family: &crate::MobjectFamily,
+        x: f64,
+        y: f64,
+    ) -> Result<(), crate::FamilyCallbackTranslationError> {
+        let token = self.overlay.token();
+        let rows: BTreeMap<_, _> = self
+            .session
+            .required_callback_family_read(
+                &family.integration_store().borrow(),
+                token,
+                family.node_id(),
+            )?
+            .into_iter()
+            .collect();
+        let changes = family.prepare_callback_translation(
+            token.publication().scene_revision(),
+            x,
+            y,
+            |node| {
+                self.overlay
+                    .object(node)
+                    .or_else(|| rows.get(&node))
+                    .map(|row| (row.transform, row.bounds))
+                    .ok_or(ExecutionSessionCallbackError::UnknownObject(node))
+            },
+        )?;
+        for (node, row) in rows {
+            self.overlay.cache_read_object(node, row);
+        }
+        for change in changes {
+            self.overlay
+                .set_transform(change.node, change.transform)
+                .expect("all selected family rows were read and validated before writes");
+        }
+        Ok(())
+    }
+
     pub fn set_target_style(&mut self, style: Style) -> Result<(), ExecutionSessionCallbackError> {
         self.overlay.set_style(self.target, style)
     }

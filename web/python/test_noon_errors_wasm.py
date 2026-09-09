@@ -459,6 +459,101 @@ class WasmErrorProjectionTests(unittest.TestCase):
                             target.free()
                         store.free()
 
+    def test_callback_family_shift_is_unique_and_atomic_with_same_phase_retry(self):
+        import copy
+        import _manim_updaters as updaters
+        from noon import Circle, Group, Scene
+        from _manim_scene import _context
+        host.resetStore()
+        scene=Scene()
+        first, second, missing, untouched=Circle(),Circle(),Circle(),Circle()
+        nested=Group(first,second)
+        family=Group(first,nested)
+        invalid=Group(first,missing)
+        scene.add(first,second,untouched)
+        context=_context(scene)
+        context.addUpdater(first._semantic_handle,"73",0.0)
+        context.beginOrdinaryWait(0.25)
+        player=context.createExecutionPlayer(0.25,41)
+        phase=json.loads(player.initialCallbackPhaseJson())
+        player.initialDeltaJson()
+        overlay=updaters._CanonicalCallbackContext(phase,context)
+        reads=[]
+        def pinned_read(kind,key):
+            reads.append(kind)
+            return json.loads(str(engine_call(player.requiredCallbackReadJson,
+                json.dumps(phase["token"]),json.dumps({"kind":kind,"node":{"slot":key[0],"generation":key[1]}}))))
+        overlay._read=pinned_read
+        token=updaters._ACTIVE_CANONICAL_CONTEXT.set(overlay)
+        updaters._ACTIVE_CONTEXTS[id(scene)]=overlay
+        def observed():
+            return (copy.deepcopy(overlay._rows),copy.deepcopy(overlay.effective_batch()),
+                    player.debugFrameJson(),bytes(player.resourceBundleBytes()),
+                    first._semantic_handle.snapshotJson(),context.liveExecutionOwnership())
+        try:
+            # The callback reads actual Rust-generated phase rows, not a forged
+            # snapshot; only transport delivery is inline in this boundary test.
+            first.shift((0.25,0))
+            before_count=len(overlay.effective_batch()["writes"])
+            self.assertIs(family.shift((1,0)),family)
+            # Centers come from f32 effective bounds; rejection snapshots and
+            # exact write counts below remain bit-for-bit checks.
+            with self.subTest(reproduction="nested alias requested +1"):
+                self.assertAlmostEqual(first.get_center().x, 1.25, delta=1e-6, msg="alias received a second translation")
+                self.assertAlmostEqual(second.get_center().x, 1.0, delta=1e-6)
+                self.assertEqual(len(overlay.effective_batch()["writes"])-before_count,2)
+            family.shift((-1,0))
+            before=observed()
+            missing_handle=missing._semantic_handle
+            missing._semantic_handle=None
+            try:
+                with self.subTest(reproduction="caught late member failure"):
+                    with self.assertRaises((RuntimeError,ReferenceError)):
+                        invalid.shift((1,0))
+                    self.assertAlmostEqual(first.get_center().x, 0.25, delta=1e-6, msg="late failure retained an earlier +1 write")
+                    self.assertEqual(observed(),before)
+            finally:
+                missing._semantic_handle=missing_handle
+            with self.assertRaises(ValueError):
+                family.shift((float("nan"),0))
+            self.assertEqual(observed(),before)
+            family.shift((1,0))
+            successful=observed()
+            with self.assertRaises((RuntimeError,ReferenceError)):
+                invalid.shift((1,0))
+            self.assertEqual(observed(),successful)
+            family.shift((-1,0))
+            self.assertAlmostEqual(first.get_center().x, 0.25, delta=1e-6)
+            self.assertAlmostEqual(second.get_center().x, 0.0, delta=1e-6)
+            self.assertIsNone(player.drainDeltaJson())
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene),None)
+            updaters._ACTIVE_CANONICAL_CONTEXT.reset(token)
+        resources=bytes(player.resourceBundleBytes())
+        authored=first._semantic_handle.snapshotJson()
+        engine_call(player.commitCallbackPhaseJson,json.dumps(overlay.effective_batch()))
+        frame=json.loads(player.debugFrameJson())
+        self.assertEqual(frame["objects"][0]["transform"]["translation"]["x"],0.25)
+        self.assertEqual(frame["objects"][2]["transform"]["translation"]["x"],0.0)
+        self.assertEqual(first._semantic_handle.snapshotJson(),authored)
+        self.assertEqual(bytes(player.resourceBundleBytes()),resources)
+        # Finish the same callback segment, acknowledge its actual endpoint,
+        # and return the very same player without replaying a callback.
+        for _ in range(3):
+            drive=player.driveLiveSegmentToAuthoredTime(0.25)
+            reached=drive.reachedEndpoint
+            next_phase=drive.callbackPhaseJson
+            drive.free()
+            if reached: break
+            self.assertIsNotNone(next_phase)
+            next_phase=json.loads(next_phase)
+            engine_call(player.commitCallbackPhaseJson,json.dumps({"token":next_phase["token"],"writes":[]}))
+        self.assertTrue(reached)
+        engine_call(player.completeLiveSegment)
+        context.returnExecutionPlayer(player)
+        self.assertEqual(context.liveExecutionOwnership(),"returned")
+        self.assertEqual(json.loads(context.liveDebugFrameJson())["time"],0.25)
+
 
 async def check_real_promise_rejection():
     """A real JS Promise rejects with a failure produced by actual WASM completion."""
