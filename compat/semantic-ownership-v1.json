@@ -9,6 +9,7 @@
     "shared-rust"
   ],
   "duplicate_debt_budgets": [
+    {"path": "web/python/_manim_shared_geometry.py", "token": "_ORIGINAL_", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/noon.py", "token": "def _bounds(", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/noon.py", "token": "def _raw_mobject(", "maximum": 0, "migration_issue": "#61"},
     {"path": "web/python/_manim_semantic_handles.py", "token": "_ORIGINAL_", "maximum": 0, "migration_issue": "#61"},

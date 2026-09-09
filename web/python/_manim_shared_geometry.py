@@ -15,9 +15,6 @@ import _manim_compat as _compat
 import _manim_geometry as _geometry
 import _manim_semantic_handles as _shared
 
-_ORIGINAL_DOT_INIT = _geometry.Dot.__init__
-_ORIGINAL_ELLIPSE_INIT = _geometry.Ellipse.__init__
-_ORIGINAL_TRIANGLE_INIT = _geometry.Triangle.__init__
 _INSTALLED = False
 
 
@@ -139,16 +136,7 @@ def _dot_init(
     **kwargs: Any,
 ) -> None:
     if _shared._create_geometry_handle is None:
-        _ORIGINAL_DOT_INIT(
-            self,
-            point=point,
-            radius=radius,
-            stroke_width=stroke_width,
-            fill_opacity=fill_opacity,
-            color=color,
-            **kwargs,
-        )
-        return
+        raise RuntimeError("Geometry construction requires the shared Rust authoring host")
 
     point_value = _compat._as_vec2(point)
     radius_value = _shared._ir._positive_number("radius", radius)
@@ -166,8 +154,7 @@ def _dot_init(
 
 def _triangle_init(self: _geometry.Triangle, **kwargs: Any) -> None:
     if _shared._create_geometry_handle is None:
-        _ORIGINAL_TRIANGLE_INIT(self, **kwargs)
-        return
+        raise RuntimeError("Geometry construction requires the shared Rust authoring host")
 
     options = dict(kwargs)
     color = options.pop("color", None)
@@ -184,8 +171,7 @@ def _ellipse_init(
     **kwargs: Any,
 ) -> None:
     if _shared._create_geometry_handle is None:
-        _ORIGINAL_ELLIPSE_INIT(self, width=width, height=height, **kwargs)
-        return
+        raise RuntimeError("Geometry construction requires the shared Rust authoring host")
 
     width_value = _shared._ir._positive_number("width", width)
     height_value = _shared._ir._positive_number("height", height)
@@ -560,10 +546,6 @@ def install() -> None:
     _base.Mobject.match_x = _match_x
     _base.Mobject.match_y = _match_y
     _base.Mobject.rotate_about_origin = _rotate_about_origin
-    if _shared._create_geometry_handle is not None:
-        _geometry.Dot.__init__ = _dot_init
-        _geometry.Ellipse.__init__ = _ellipse_init
-        _geometry.Triangle.__init__ = _triangle_init
 
     public = {
         "Elbow": Elbow,
