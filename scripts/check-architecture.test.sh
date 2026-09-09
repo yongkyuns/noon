@@ -41,6 +41,12 @@ with tempfile.TemporaryDirectory(prefix='noon architecture gate ') as directory:
         (path / 'src').mkdir(parents=True)
         (path / 'src/lib.rs').write_text('')
         (path / 'Cargo.toml').write_text(f'[package]\nname = "{name}"\nversion = "0.1.0"\nedition = "2021"\n')
+    # The clean fixture must obey the same ordinary core ownership as the repo.
+    core = root / 'crates/noon-core/src'
+    owners = ['animation', 'publication', 'reactive', 'resources', 'semantic_store']
+    (core / 'lib.rs').write_text(''.join(f'mod {owner};\n' for owner in owners))
+    for owner in owners:
+        (core / f'{owner}.rs').write_text('')
     (root / 'crates/noon-core/src/semantic_store.rs').write_text('struct SemanticNodeId;\nimpl SemanticNodeId {}\nstruct SemanticStore;\n')
     (root / 'crates/noon-web/src/clock.rs').write_text('struct PlaybackClock;\n')
     (root / 'web').mkdir()
