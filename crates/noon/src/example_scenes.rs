@@ -3289,3 +3289,5 @@ pub mod path_subcurves;
 pub mod path_smoothing;
 
 pub mod boolean_geometry;
+
+pub mod path_alignment;

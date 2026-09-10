@@ -84,3 +84,21 @@ def change_anchor_mode(value, mode):
         method = context.liveChangeFamilyAnchorMode if family else context.liveChangeAnchorMode
         engine_call(method, handle, mode == "smooth")
     return value
+
+
+def align_points(value, other):
+    from _manim_compat import VMobject
+    from _manim_updaters import canonical_callback_phase_active
+    if not isinstance(other, VMobject):
+        raise TypeError("align_points requires a VMobject")
+    if canonical_callback_phase_active():
+        raise NotImplementedError("callback path editing requires shared transient resource publication")
+    handle, other_handle = _handle_for(value), _handle_for(other)
+    if handle is None or other_handle is None:
+        raise RuntimeError("path alignment requires shared semantic handles")
+    context = _live_mutation_context(value) or _live_mutation_context(other) or _live_constructor_context("path")
+    if context is None:
+        engine_call(handle.alignPoints, other_handle, operation="VMobject.align_points")
+    else:
+        engine_call(context.liveAlignPoints, handle, other_handle, operation="VMobject.align_points")
+    return value

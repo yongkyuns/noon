@@ -190,7 +190,7 @@ impl crate::LiveSession<'_> {
             })
             .collect::<Result<Vec<_>, crate::LiveSessionError>>()?;
         let mut store = self.store.borrow_mut();
-        crate::path_smoothing::PreparedAnchorEdits::prepare(&store, states, smooth)?.publish(
+        crate::path_smoothing::prepare_anchor_edits(&store, states, smooth)?.publish(
             &mut store,
             |store, transaction| {
                 self.session

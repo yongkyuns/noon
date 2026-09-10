@@ -833,6 +833,21 @@ def _canonical_curve_layout(api):
     return [_object_observation(obj) for obj in (circle, ellipse, circle.copy(), family)]
 
 
+def _path_alignment(api):
+    point = lambda x, y: api.RIGHT * x + api.UP * y
+    a = api.Line(point(0, 0), point(3, 0)).shift(api.UP)
+    b = api.VMobject().start_new_path(point(0, 0))
+    b.add_cubic_bezier_curve_to(point(1, 2), point(2, 2), point(3, 0))
+    b.insert_n_curves(4)
+    a.align_points(b)
+    observations = [[[list(p)[:2] for p in column] for column in obj.get_anchors_and_handles()] for obj in (a, b)]
+    empty = api.VMobject()
+    square = api.Square(side_length=2)
+    empty.align_points(square)
+    observations.extend([[[list(p)[:2] for p in column] for column in obj.get_anchors_and_handles()] for obj in (empty, square)])
+    return observations
+
+
 def _boolean_geometry(api):
     a = api.Square(side_length=2)
     b = api.Square(side_length=2).shift(api.RIGHT)
@@ -945,6 +960,7 @@ def _point_matching(api):
 
 
 FIXTURES = [
+    Fixture("path_alignment", lambda: _path_alignment(noon), lambda: _path_alignment(manim), 1e-5),
     Fixture("boolean_geometry", lambda: _boolean_geometry(noon), lambda: _boolean_geometry(manim), 1e-5),
     Fixture("path_smoothing", lambda: _path_smoothing(noon), lambda: _path_smoothing(manim), 1e-5),
     Fixture("path_subcurves", lambda: _path_subcurves(noon), lambda: _path_subcurves(manim), 1e-5),

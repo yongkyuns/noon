@@ -1,3 +1,6 @@
+mod alignment;
+pub use alignment::align_paths;
+
 use noon_core::{PathCommand, SemanticVec3, Vec2, VectorPath};
 
 const MANIM_LENGTH_SAMPLE_POINTS: usize = 10;

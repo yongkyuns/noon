@@ -1,9 +1,11 @@
 //! Persistent vector edits publish new immutable content through one transaction.
+mod transaction;
 use crate::{AuthoringError, Mobject};
 use noon_core::{
     SemanticMutationTransaction, SemanticObjectContent, SemanticObjectState, SemanticStore,
     StoredGeometry, Vec2, VectorPath,
 };
+pub(crate) use transaction::PreparedPathEdits;
 
 pub(crate) fn corners_path(points: &[Vec2]) -> Result<VectorPath, AuthoringError> {
     if points.iter().any(|p| !p.x.is_finite() || !p.y.is_finite()) {

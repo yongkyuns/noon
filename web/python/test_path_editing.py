@@ -110,3 +110,25 @@ class SmoothingDispatchTests(unittest.TestCase):
         with patch.object(editing, '_handle_for') as resolve:
             with self.assertRaises(ValueError): value.change_anchor_mode('unknown')
             resolve.assert_not_called()
+
+class AlignmentDispatchTests(unittest.TestCase):
+    def test_pair_is_aligned_by_one_shared_call_in_either_mode(self):
+        a, b = [identity_only_wrapper(compat.VMobject) for _ in range(2)]
+        left, right = Mock(), Mock()
+        for context in (None, Mock()):
+            with patch.object(editing, '_handle_for', side_effect=lambda v: left if v is a else right), \
+                 patch.object(editing, '_live_mutation_context', side_effect=lambda v: context if v is b else None), \
+                 patch.object(editing, '_live_constructor_context', return_value=None):
+                self.assertIs(a.align_points(b), a)
+                if context is None:
+                    left.alignPoints.assert_called_once_with(right)
+                else:
+                    context.liveAlignPoints.assert_called_once_with(left, right)
+
+    def test_invalid_pair_or_callback_rejects_before_resolving_handles(self):
+        value = identity_only_wrapper(compat.VMobject)
+        with patch.object(editing, '_handle_for') as resolve:
+            with self.assertRaises(TypeError): value.align_points(object())
+            with patch('_manim_updaters.canonical_callback_phase_active', return_value=True):
+                with self.assertRaises(NotImplementedError): value.align_points(value)
+            resolve.assert_not_called()

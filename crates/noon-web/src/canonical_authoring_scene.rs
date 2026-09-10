@@ -5929,6 +5929,19 @@ mod wasm {
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(typed_js_error)
         }
+        #[wasm_bindgen(js_name = liveAlignPoints)]
+        pub fn live_align_points(
+            &mut self,
+            left: &crate::WasmAuthoringMobjectHandle,
+            right: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_align_points(left.semantic_mobject(), right.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = livePointwiseBecomePartial)]
         pub fn live_pointwise_become_partial(
             &mut self,
