@@ -1740,7 +1740,7 @@ mod tests {
     }
 
     #[test]
-    fn transformed_layout_distinguishes_analytic_and_path_dimensions() {
+    fn transformed_layout_uses_canonical_control_handles() {
         let authoring_store =
             std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
         let mut ellipse = Mobject::from_geometry(
@@ -1751,8 +1751,16 @@ mod tests {
         .unwrap();
         ellipse.scale(2.0, 1.0).unwrap();
         ellipse.rotate(std::f64::consts::FRAC_PI_4).unwrap();
-        assert!((ellipse.width().unwrap() - 10.0_f64.sqrt()).abs() < 1e-12);
-        assert!((ellipse.height().unwrap() - 10.0_f64.sqrt()).abs() < 1e-12);
+        assert!(
+            (ellipse.width().unwrap() - (3.0 + (4.0 / 3.0) * (std::f64::consts::PI / 16.0).tan()))
+                .abs()
+                < 1e-12
+        );
+        assert!(
+            (ellipse.height().unwrap() - (3.0 + (4.0 / 3.0) * (std::f64::consts::PI / 16.0).tan()))
+                .abs()
+                < 1e-12
+        );
 
         let mut diagonal = Mobject::from_geometry(
             std::rc::Rc::clone(&authoring_store),

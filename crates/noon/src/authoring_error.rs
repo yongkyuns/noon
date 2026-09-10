@@ -174,8 +174,6 @@ pub enum AuthoringError {
     VectorLowering(noon_core::SemanticLoweringError),
     /// Immutable geometry resource validation failed.
     GeometryResource(noon_core::GeometryResourceError),
-    /// The authored layout is incompatible with its geometry.
-    GeometryLayout(noon_core::SemanticGeometryLayoutError),
     /// The shared arc constructor rejected its inputs.
     Arc(crate::arc_authoring::ArcAuthoringError),
     /// The shared elbow constructor rejected its inputs.
@@ -276,7 +274,6 @@ impl std::fmt::Display for AuthoringError {
             Self::Transaction(error) => error.fmt(f),
             Self::VectorLowering(error) => error.fmt(f),
             Self::GeometryResource(error) => error.fmt(f),
-            Self::GeometryLayout(error) => error.fmt(f),
             Self::Arc(error) => error.fmt(f),
             Self::Elbow(error) => error.fmt(f),
             Self::RoundedRectangle(error) => error.fmt(f),
@@ -297,7 +294,6 @@ impl std::error::Error for AuthoringError {
             Self::Transaction(error) => Some(error),
             Self::VectorLowering(error) => Some(error),
             Self::GeometryResource(error) => Some(error),
-            Self::GeometryLayout(error) => Some(error),
             Self::Arc(error) => Some(error),
             Self::Elbow(error) => Some(error),
             Self::RoundedRectangle(error) => Some(error),
@@ -332,12 +328,6 @@ impl From<noon_core::SemanticLoweringError> for AuthoringError {
 impl From<noon_core::GeometryResourceError> for AuthoringError {
     fn from(error: noon_core::GeometryResourceError) -> Self {
         Self::GeometryResource(error)
-    }
-}
-
-impl From<noon_core::SemanticGeometryLayoutError> for AuthoringError {
-    fn from(error: noon_core::SemanticGeometryLayoutError) -> Self {
-        Self::GeometryLayout(error)
     }
 }
 

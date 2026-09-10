@@ -257,11 +257,6 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::GeometryResource(cause) => {
                 Self::caused_by("authoring.geometry_resource", message, cause.into())
             }
-            AuthoringError::GeometryLayout(cause) => Self::caused_by(
-                "authoring.geometry_layout",
-                message,
-                Self::new("invalid_input", "geometry.invalid_layout", cause),
-            ),
             AuthoringError::Arc(cause) => Self::caused_by(
                 "authoring.arc",
                 message,

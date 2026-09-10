@@ -5,12 +5,11 @@
 //! transient input to shared preparation and coherent publication.
 use crate::{state_replacement::prepare_become_state, AuthoringError, ManimBecomeOptions};
 use noon_core::{
-    Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticGeometryContent,
-    SemanticGeometryLayout, SemanticMutationImpact, SemanticMutationTransaction,
-    SemanticNodeCreation, SemanticNodeId, SemanticObjectContent, SemanticObjectProperty,
-    SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle, SemanticTransform2_5D,
-    SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Transform2D, Vec2,
-    VectorPath,
+    Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticMutationImpact,
+    SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticObjectContent,
+    SemanticObjectProperty, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle,
+    SemanticTransform2_5D, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode,
+    Transform2D, Vec2, VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 mod bounds;
@@ -50,7 +49,6 @@ pub struct ManimLineEndpoints {
 #[derive(Clone, Debug)]
 pub struct ManimGeometryOptions {
     geometry: GeometryRef,
-    layout: SemanticGeometryLayout,
     transform: SemanticTransform2_5D,
     style: SemanticStyle,
     z_index: f64,
@@ -71,7 +69,6 @@ impl ManimGeometryOptions {
             return Err(AuthoringError::InvalidEllipseDimensions { width, height });
         }
         let mut options = Self::new(GeometryRef::circle(1.0), manim_style(Color::RED));
-        options.layout = SemanticGeometryLayout::ManimEllipseControlHull;
         options.set_scale(width * 0.5, height * 0.5)?;
         Ok(options)
     }
@@ -144,7 +141,6 @@ impl ManimGeometryOptions {
     fn new(geometry: GeometryRef, style: SemanticStyle) -> Self {
         Self {
             geometry,
-            layout: SemanticGeometryLayout::GeometryBounds,
             transform: SemanticTransform2_5D::default(),
             style,
             z_index: 0.0,
@@ -325,9 +321,7 @@ impl ManimGeometryOptions {
             return Err(AuthoringError::NonFiniteObjectState);
         }
         let geometry = import_geometry(store, self.geometry)?;
-        let content = SemanticGeometryContent::with_layout(geometry, self.layout)
-            .map_err(AuthoringError::from)?;
-        let mut state = SemanticObjectState::new(content);
+        let mut state = SemanticObjectState::new(geometry);
         state.transform = self.transform;
         state.style = self.style;
         state.set_z_index(self.z_index);
@@ -454,7 +448,6 @@ impl Mobject {
             store,
             ManimGeometryOptions {
                 geometry,
-                layout: SemanticGeometryLayout::GeometryBounds,
                 transform,
                 style,
                 z_index: 0.0,
@@ -1149,7 +1142,7 @@ pub(crate) fn validate_content(
 ) -> Result<(), AuthoringError> {
     match content {
         SemanticObjectContent::Geometry(content) => {
-            if let StoredGeometry::Resource(handle) = content.geometry() {
+            if let StoredGeometry::Resource(handle) = content {
                 store
                     .geometry_resources()
                     .get(handle)

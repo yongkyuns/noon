@@ -807,7 +807,17 @@ def _path_family_arrangement(api):
     return results
 
 
+def _canonical_curve_layout(api):
+    circle = api.Circle(radius=1).stretch(2, 0).stretch(0.75, 1)
+    ellipse = api.Ellipse(width=4, height=1.5)
+    for obj in (circle, ellipse):
+        obj.rotate(api.PI / 6)
+    family = api.VGroup(circle, ellipse)
+    return [_object_observation(obj) for obj in (circle, ellipse, circle.copy(), family)]
+
+
 FIXTURES = [
+    Fixture("canonical_curve_layout", lambda: _canonical_curve_layout(noon), lambda: _canonical_curve_layout(manim), 1e-5),
     Fixture("path_family_arrangement", lambda: _path_family_arrangement(noon), lambda: _path_family_arrangement(manim), 1e-5),
     Fixture("arc_geometry", lambda: _arc_geometry(noon), lambda: _arc_geometry(manim), 1e-5),
     Fixture("z_index", lambda: _z_index_probe(noon), lambda: _z_index_probe(manim)),

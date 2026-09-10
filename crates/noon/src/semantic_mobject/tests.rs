@@ -25,8 +25,8 @@ fn aliases_and_copies_share_the_arena_but_only_aliases_share_state() {
         .unwrap()
         .clone();
     assert_eq!(
-        state.content.geometry(),
-        Some(StoredGeometry::Circle { radius: 2.0 })
+        state.content,
+        SemanticObjectContent::Geometry(StoredGeometry::Circle { radius: 2.0 })
     );
     assert_eq!(
         state.transform.translation,
@@ -116,15 +116,30 @@ fn ellipse_layout_is_shared_by_queries_live_admission_and_become() {
     let expected_height = 2.464_228_071_008_26;
     assert!((ellipse.width().unwrap() - expected_width).abs() < 1.0e-12);
     assert!((ellipse.height().unwrap() - expected_height).abs() < 1.0e-12);
-    assert!((ellipse.critical_point(1.0, 0.0).unwrap().0 - expected_width * 0.5).abs() < 1.0e-12);
+    assert!((ellipse.critical_point(1.0, 0.0).unwrap().0 - 3.0_f64.sqrt()).abs() < 1.0e-12);
     let SemanticObjectContent::Geometry(content) = ellipse.state().unwrap().content else {
         panic!("Ellipse remains analytic geometry")
     };
-    assert_eq!(content.geometry(), StoredGeometry::Circle { radius: 1.0 });
+    assert_eq!(content, StoredGeometry::Circle { radius: 1.0 });
+    let mut circle = scene.circle(1.0).unwrap();
+    circle.scale(2.0, 0.75).unwrap();
+    circle.rotate(std::f64::consts::PI / 6.0).unwrap();
     assert_eq!(
-        content.layout(),
-        SemanticGeometryLayout::ManimEllipseControlHull
+        circle.layout_bounds().unwrap(),
+        ellipse.layout_bounds().unwrap()
     );
+    assert_eq!(
+        circle.boundary_bounds().unwrap(),
+        ellipse.boundary_bounds().unwrap()
+    );
+    assert_eq!(
+        circle.copy_handle().unwrap().layout_bounds().unwrap(),
+        ellipse.layout_bounds().unwrap()
+    );
+    let family = scene
+        .family(&[(&circle).into(), (&ellipse).into()])
+        .unwrap();
+    assert!((family.layout().unwrap().width() - expected_width).abs() < 1e-12);
 
     let mut source = scene.rectangle(6.0, 2.0).unwrap();
     let resource_count = scene
@@ -146,10 +161,7 @@ fn ellipse_layout_is_shared_by_queries_live_admission_and_become() {
     let SemanticObjectContent::Geometry(content) = source.state().unwrap().content else {
         panic!("become retains Ellipse geometry")
     };
-    assert_eq!(
-        content.layout(),
-        SemanticGeometryLayout::ManimEllipseControlHull
-    );
+    assert_eq!(content, StoredGeometry::Circle { radius: 1.0 });
     assert_eq!(
         scene
             .integration_store()
@@ -253,8 +265,8 @@ fn resource_geometry_is_store_owned_and_lowers_from_the_same_node() {
     let mut object = scene.path(path, SemanticStyle::default()).unwrap();
     let content = object.state().unwrap().content;
     assert!(matches!(
-        content.geometry(),
-        Some(StoredGeometry::Resource(_))
+        content,
+        SemanticObjectContent::Geometry(StoredGeometry::Resource(_))
     ));
     let copy = object.copy_handle().unwrap();
     assert_eq!(copy.state().unwrap().content, content);
@@ -298,8 +310,8 @@ fn typed_manim_geometry_preserves_semantic_precision_and_matcher_defaults() {
     );
     assert_eq!(object.state().unwrap().transform.translation.x, precise_x);
     assert!(matches!(
-        object.state().unwrap().content.geometry(),
-        Some(StoredGeometry::Resource(_))
+        object.state().unwrap().content,
+        SemanticObjectContent::Geometry(StoredGeometry::Resource(_))
     ));
 
     let point = Bounds2D64::point(3.0, -1.0);
@@ -627,8 +639,8 @@ fn specialized_manim_geometry_uses_one_semantic_identity_per_constructor() {
     assert_eq!(underline.center().unwrap().1, -1.25);
     for object in [triangle, elbow, rounded, annular, sector, annulus, dashed] {
         assert!(matches!(
-            object.state().unwrap().content.geometry(),
-            Some(StoredGeometry::Resource(_))
+            object.state().unwrap().content,
+            SemanticObjectContent::Geometry(StoredGeometry::Resource(_))
         ));
     }
     assert_eq!(scene.integration_store().borrow().len(), before_nodes + 9);

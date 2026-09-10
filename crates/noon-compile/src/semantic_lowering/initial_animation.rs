@@ -382,14 +382,13 @@ fn lower_transform_endpoint(
     let SemanticObjectContent::Geometry(content) = state.content else {
         return Err(SemanticInitialAnimationError::InvalidLeaf { animation });
     };
-    let geometry =
-        lower_semantic_geometry_value(content.geometry(), Some(store)).map_err(|error| {
-            SemanticInitialAnimationError::EndpointGeometry {
-                animation,
-                node,
-                error,
-            }
-        })?;
+    let geometry = lower_semantic_geometry_value(content, Some(store)).map_err(|error| {
+        SemanticInitialAnimationError::EndpointGeometry {
+            animation,
+            node,
+            error,
+        }
+    })?;
     let transform = lower_semantic_transform(node, state).map_err(|error| {
         SemanticInitialAnimationError::EndpointValue {
             animation,

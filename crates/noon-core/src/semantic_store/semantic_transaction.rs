@@ -1984,7 +1984,6 @@ pub(super) fn validate_object_content_resource(
 ) -> Result<(), SemanticMutationTransactionError> {
     match content {
         SemanticObjectContent::Geometry(geometry) => {
-            let geometry = geometry.geometry();
             if !geometry.is_finite() {
                 return Err(SemanticMutationTransactionError::InvalidObjectContent { index });
             }

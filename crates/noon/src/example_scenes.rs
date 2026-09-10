@@ -3267,3 +3267,5 @@ pub mod z_index;
 pub mod arc_geometry;
 
 pub mod path_arrangement;
+
+pub mod canonical_curve_layout;
