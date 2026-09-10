@@ -1043,6 +1043,17 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_scale_layout(
+        &mut self,
+        anchor: &noon::LayoutAnchor,
+        x: f64,
+        y: f64,
+        pivot: noon::ManimRotationPivot,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.scale_layout(anchor, x, y, pivot))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_rotate_layout(
         &mut self,
         anchor: &noon::LayoutAnchor,

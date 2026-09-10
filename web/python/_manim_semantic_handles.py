@@ -744,7 +744,7 @@ def _match_dim_size(self, mobject, dim, stretch=False, **kwargs):
     return self
 
 
-def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
+def _scale(self: _base.Mobject, factor: object, *, about_point=None, about_edge=None) -> _base.Mobject:
     handle = _handle_for(self)
     if handle is None:
         raise RuntimeError("Mobject edits require a current shared Rust semantic handle")
@@ -753,6 +753,8 @@ def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
     else:
         scalar = float(factor)
         value = _base.Vec2(scalar, scalar)
+    if about_point is not None or about_edge is not None:
+        return _planar_affine(self, "scale", (value.x, value.y), about_point, about_edge)
     context = _live_mutation_context(self)
     if context is not None:
         try:
@@ -1450,9 +1452,11 @@ def _group_arrange_in_grid(self, rows=None, cols=None, buff=_base.MED_SMALL_BUFF
     return self
 
 
-def _group_scale(self: _compat.Group, factor: object) -> _compat.Group:
+def _group_scale(self: _compat.Group, factor: object, *, about_point=None, about_edge=None) -> _compat.Group:
     scale = (_base._as_vec2(factor) if isinstance(factor, (tuple, list, _base.Vec2))
              else _base.Vec2(float(factor), float(factor)))
+    if about_point is not None or about_edge is not None:
+        return _planar_affine(self, "scale", (scale.x, scale.y), about_point, about_edge)
     handle = getattr(self, "_semantic_family_handle", None)
     if handle is None:
         raise RuntimeError("Group scale requires the shared Rust authoring host")

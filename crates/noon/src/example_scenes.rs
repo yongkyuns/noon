@@ -3259,3 +3259,5 @@ pub mod style_operations;
 pub mod paint_queries_gradients;
 
 pub mod planar_affine;
+
+pub mod scale_pivots;

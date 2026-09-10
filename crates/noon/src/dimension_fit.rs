@@ -83,11 +83,8 @@ impl LayoutAnchor {
                     .map_err(AuthoringError::from)?;
                 validate_fit_stretch(state.transform.rotation_z, stretch)?;
             }
-            crate::family_affine::FamilyAffine::Scale(x, y).transaction(
-                &store,
-                layout.leaves(),
-                layout.bounds(),
-            )?
+            crate::family_affine::FamilyAffine::Scale(x, y, crate::ManimRotationPivot::Center)
+                .transaction(&store, layout.leaves(), layout.bounds())?
         };
         transaction
             .apply(&mut self.integration_store().borrow_mut())

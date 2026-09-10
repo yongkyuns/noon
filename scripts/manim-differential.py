@@ -319,6 +319,19 @@ def _grid_inferred_and_alias_probe(api):
     return _members_observation(group)
 
 
+def _scale_pivots_probe(api):
+    result = []
+    for pivot in ({}, {"about_point": [0, 0, 0]}, {"about_edge": api.RIGHT}):
+        line = api.Line([1, 1, 0], [3, 2, 0])
+        line.scale(1.5, **pivot)
+        result.append([_point_observation(line.get_start()), _point_observation(line.get_end())])
+        a, b = api.Square().shift(api.LEFT), api.Square().shift(api.RIGHT)
+        family = api.VGroup(a, api.VGroup(a, b))
+        family.scale(1.5, **pivot)
+        result.append([_point_observation(a.get_center()), _point_observation(b.get_center()), float(family.width)])
+    return result
+
+
 def _planar_flip_probe(api):
     observations = []
     for axis in (api.RIGHT, api.UP, api.RIGHT + api.UP, api.OUT):
@@ -698,6 +711,7 @@ def _paint_queries_gradients(api):
 
 
 FIXTURES = [
+    Fixture("scale_pivots", lambda: _scale_pivots_probe(noon), lambda: _scale_pivots_probe(manim)),
     Fixture("planar_flip_pivots", lambda: _planar_flip_probe(noon), lambda: _planar_flip_probe(manim)),
 
     Fixture("vgroup_become_cross_alias", lambda: _family_become_cross_alias(noon), lambda: _family_become_cross_alias(manim)),

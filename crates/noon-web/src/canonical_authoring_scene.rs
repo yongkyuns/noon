@@ -6564,6 +6564,28 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveScaleLayout)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_scale_layout(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            scale_x: f64,
+            scale_y: f64,
+            x: f64,
+            y: f64,
+            about_point: bool,
+        ) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_scale_layout(&source.anchor, scale_x, scale_y, pivot)
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = liveRotateLayout)]
         pub fn live_rotate_layout(
             &mut self,

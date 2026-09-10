@@ -6,8 +6,7 @@ fn manim_scale_about_point_moves_center_relative_to_pivot() {
     let mut line = scene.line((1.0, 1.0), (3.0, 1.0)).unwrap();
     let before = scene.revision();
 
-    line.manim_scale_about_point(2.0, 3.0, 0.0, 0.0)
-        .unwrap();
+    line.manim_scale_about_point(2.0, 3.0, 0.0, 0.0).unwrap();
 
     assert_eq!(scene.revision(), before.checked_next().unwrap());
     let center = line.center().unwrap();
@@ -22,8 +21,7 @@ fn manim_scale_about_edge_keeps_the_selected_critical_point_fixed() {
     let mut line = scene.line((1.0, 1.0), (3.0, 1.0)).unwrap();
     let before = scene.revision();
 
-    line.manim_scale_about_edge(2.0, 1.0, 1.0, 0.0)
-        .unwrap();
+    line.manim_scale_about_edge(2.0, 1.0, 1.0, 0.0).unwrap();
 
     assert_eq!(scene.revision(), before.checked_next().unwrap());
     let center = line.center().unwrap();
@@ -87,4 +85,37 @@ fn rejected_explicit_scale_pivot_is_atomic() {
     }
 
     assert_eq!(scene.revision(), before);
+}
+
+#[test]
+fn aliased_family_scale_keeps_its_edge_and_rejects_world_shear_atomically() {
+    use noon::{LayoutAnchor, ManimRotationPivot};
+    let scene = Scene::new();
+    let mut a = scene.square(1.).unwrap();
+    let mut b = scene.square(1.).unwrap();
+    a.shift(-1., 0.).unwrap();
+    b.shift(1., 0.).unwrap();
+    let nested = scene.family(&[(&a).into(), (&b).into()]).unwrap();
+    let family = scene.family(&[(&a).into(), (&nested).into()]).unwrap();
+    LayoutAnchor::from(&family)
+        .scale(2., 2., ManimRotationPivot::Edge(1., 0.))
+        .unwrap();
+    assert_eq!(a.center().unwrap(), (-3.5, 0.));
+    assert_eq!(b.center().unwrap(), (0.5, 0.));
+    b.rotate(0.3).unwrap();
+    let before = [a.state().unwrap(), b.state().unwrap()];
+    assert!(family.scale(2., 1.).is_err());
+    assert_eq!([a.state().unwrap(), b.state().unwrap()], before);
+}
+
+#[test]
+fn paired_scale_example_uses_the_retained_execution_path() {
+    assert_eq!(
+        noon::example_scenes::scale_pivots::session()
+            .unwrap()
+            .frame()
+            .objects
+            .len(),
+        4
+    );
 }

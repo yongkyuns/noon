@@ -347,6 +347,22 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmLayoutAnchor {
+        pub fn scale(
+            &self,
+            scale_x: f64,
+            scale_y: f64,
+            x: f64,
+            y: f64,
+            about_point: bool,
+        ) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
+            self.anchor.scale(scale_x, scale_y, pivot).map_err(js_error)
+        }
+
         pub fn rotate(&self, angle: f64, x: f64, y: f64, about_point: bool) -> Result<(), JsValue> {
             let pivot = if about_point {
                 noon::ManimRotationPivot::Point(x, y)

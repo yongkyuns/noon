@@ -42,9 +42,10 @@ impl LiveSession<'_> {
         let Some((x, y)) = scale else {
             return Ok(());
         };
-        let transaction = crate::family_affine::FamilyAffine::Scale(x, y)
-            .transaction(&self.store.borrow(), &leaves, bounds)
-            .map_err(LiveSessionError::from)?;
+        let transaction =
+            crate::family_affine::FamilyAffine::Scale(x, y, crate::ManimRotationPivot::Center)
+                .transaction(&self.store.borrow(), &leaves, bounds)
+                .map_err(LiveSessionError::from)?;
         self.apply(transaction).map(|_| ())
     }
 
@@ -110,7 +111,10 @@ impl LiveSession<'_> {
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.affine_family(family, crate::family_affine::FamilyAffine::Scale(x, y))
+        self.affine_family(
+            family,
+            crate::family_affine::FamilyAffine::Scale(x, y, crate::ManimRotationPivot::Center),
+        )
     }
 
     /// Apply Manim's default center-pivot scale through one coherent live publication.
@@ -168,21 +172,21 @@ impl LiveSession<'_> {
         y: f64,
         pivot: crate::ManimRotationPivot,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        // Persistent placement-compatible edits may not overwrite an active affine
-        // or content driver. Detached target editors follow the same validation path.
-        let transform = self.placement_authored_transform(mobject)?;
-        let bounds = self.family_member_bounds(mobject)?.or_else(|| {
-            Some(Bounds2D64::point(
-                f64::from(transform.translation.x),
-                f64::from(transform.translation.y),
-            ))
-        });
-        let transaction = crate::family_affine::FamilyAffine::ScaleAbout(x, y, pivot)
-            .transaction(&self.store.borrow(), &[mobject.node_id()], bounds)
-            .map_err(LiveSessionError::from)?;
-        self.apply(transaction)
+        self.scale_layout(&crate::LayoutAnchor::from(mobject), x, y, pivot)
+    }
+
+    /// Publish an object or family scale about a coherent shared pivot.
+    pub fn scale_layout(
+        &mut self,
+        anchor: &crate::LayoutAnchor,
+        x: f64,
+        y: f64,
+        pivot: crate::ManimRotationPivot,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.affine_layout(
+            anchor,
+            crate::family_affine::FamilyAffine::Scale(x, y, pivot),
+        )
     }
 
     /// Rotate a family through the same authored transaction and live publication lane.
