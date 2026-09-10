@@ -105,24 +105,45 @@ try {
     { name: "automatic-no-jspi", host: null, disableJspi: true },
   ]) {
     const context = await browser.newContext({ ...devices["iPhone 13"] });
-    // Hold only the worker module response while recording the empty canvas.
-    // This preserves the real startup autoplay while making its first execution
-    // observable; clicking Run after preload would measure a replacement whose
-    // metrics wait for the previous Python context to retire.
+    if (variant.disableJspi) {
+      await context.route("**/__noon_no_jspi_worker__.mjs", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "text/javascript",
+          body: [
+            "delete WebAssembly.promising; delete WebAssembly.Suspending;",
+            "if (typeof WebAssembly.promising !== 'undefined' || typeof WebAssembly.Suspending !== 'undefined') throw new Error('JSPI test precondition failed');",
+            "await import('./python-worker.js');",
+            "",
+          ].join("\n"),
+        });
+      });
+      await context.addInitScript(() => {
+        window.Worker = new Proxy(window.Worker, {
+          construct(target, args, newTarget) {
+            if (/\/python-worker\.js(?:[?#]|$)/.test(String(args[0]))) {
+              const workerUrl = new URL(String(args[0]), location.href);
+              return Reflect.construct(
+                target,
+                [new URL("./__noon_no_jspi_worker__.mjs", workerUrl), ...args.slice(1)],
+                newTarget,
+              );
+            }
+            return Reflect.construct(target, args, newTarget);
+          },
+        });
+      });
+    }
+    // Hold only the immutable worker module response while recording the empty
+    // canvas. The no-JSPI case changes the worker environment via a synthetic
+    // wrapper, never the verified python-worker.js bytes themselves.
     let releaseStartup;
     const startup = new Promise((resolve) => { releaseStartup = resolve; });
     releasePendingStartup = releaseStartup;
     await context.route("**/python-worker.js", async (route) => {
       const response = await route.fetch();
       await startup;
-      if (!variant.disableJspi) {
-        await route.fulfill({ response });
-        return;
-      }
-      await route.fulfill({ response, body:
-        "delete WebAssembly.promising; delete WebAssembly.Suspending;\n" +
-        "if (typeof WebAssembly.promising !== 'undefined' || typeof WebAssembly.Suspending !== 'undefined') throw new Error('JSPI test precondition failed');\n" + await response.text(),
-      });
+      await route.fulfill({ response });
     });
     const page = await context.newPage();
     activePage = page;
