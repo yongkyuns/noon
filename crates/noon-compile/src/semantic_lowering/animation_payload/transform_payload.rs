@@ -153,8 +153,7 @@ pub(super) fn validate_transform_payload_shape(
     if source.content != target.content && !is_supported_content_morph(source, target) {
         return Err(TransformPayloadValidationIssue::ContentChange);
     }
-    if source.style.stroke_width != target.style.stroke_width
-        || source.style.stroke_width_mode != target.style.stroke_width_mode
+    if source.style.stroke_width_mode != target.style.stroke_width_mode
         || source.style.stroke_join != target.style.stroke_join
         || source.style.stroke_cap != target.style.stroke_cap
     {
