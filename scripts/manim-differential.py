@@ -682,7 +682,33 @@ def _paint_queries_gradients(api):
     return observations
 
 
+def _arc_geometry(api):
+    arc = api.Arc(
+        radius=1.25,
+        start_angle=-0.3,
+        angle=1.8,
+        num_components=9,
+        arc_center=(-2.0, 0.8, 0.0),
+    )
+    implicit = api.ArcBetweenPoints(
+        (-0.5, -1.5, 0.0),
+        (2.5, 1.0, 0.0),
+        angle=api.PI / 2,
+    )
+    negative_radius = api.ArcBetweenPoints(
+        (0.5, -2.0, 0.0),
+        (3.0, -2.0, 0.0),
+        radius=-2.0,
+    )
+    return {
+        "arc": _object_observation(arc),
+        "implicit": _object_observation(implicit),
+        "negative_radius": _object_observation(negative_radius),
+    }
+
+
 FIXTURES = [
+    Fixture("arc_geometry", lambda: _arc_geometry(noon), lambda: _arc_geometry(manim), 1e-5),
     Fixture("vgroup_become_cross_alias", lambda: _family_become_cross_alias(noon), lambda: _family_become_cross_alias(manim)),
     Fixture("vgroup_become_restore", lambda: _family_become(noon), lambda: _family_become(manim)),
     Fixture("paint_queries_gradients", lambda: _paint_queries_gradients(noon), lambda: _paint_queries_gradients(manim)),
