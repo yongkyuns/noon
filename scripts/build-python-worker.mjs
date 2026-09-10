@@ -85,7 +85,7 @@ for (const [label, block] of [["runtime promise", promiseBlock], ["ready", ready
   }
 }
 
-const runtimeBuildHelpers = String.raw`
+const runtimeBuildHelpers = `
 async function loadRuntimeBuild() {
   const response = await fetch(new URL("./runtime-build-identity.json", import.meta.url), { redirect: "error" });
   if (!response.ok) {
@@ -124,7 +124,7 @@ async function validateRuntimeBuildIdentity(payload) {
     const descriptor = payload.files[key];
     if (!isRecord(descriptor) || !hasExactKeys(descriptor, ["path", "sha256"]) ||
         descriptor.path !== expectedPaths[key] || !/^[0-9a-f]{64}$/.test(descriptor.sha256)) {
-      throw new Error(`Noon runtime build identity has invalid ${key} provenance`);
+      throw new Error(\`Noon runtime build identity has invalid \${key} provenance\`);
     }
     files[key] = Object.freeze({ path: descriptor.path, sha256: descriptor.sha256 });
   }
@@ -166,7 +166,7 @@ function hasExactKeys(value, expected) {
 }
 `;
 
-let generatedSource = source
+const generatedSource = source
   .replace(fetchBlock, generatedFetchBlock)
   .replace(promiseBlock, generatedPromiseBlock)
   .replace(readyBlock, generatedReadyBlock)
