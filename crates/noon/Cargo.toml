@@ -30,6 +30,7 @@ required-features = ["diagnostics"]
 serde_json = { version = "1", optional = true }
 noon-compile = { path = "../noon-compile" }
 noon-core = { path = "../noon-core" }
+noon-geometry = { path = "../noon-geometry" }
 noon-runtime = { path = "../noon-runtime" }
 noon-text = { path = "../noon-text", optional = true }
 noon-typst = { path = "../noon-typst", optional = true, default-features = false }
