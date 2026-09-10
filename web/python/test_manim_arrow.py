@@ -150,12 +150,10 @@ class ManimArrowFacadeTests(unittest.TestCase):
             assert ("double_arrow", -1.0, 0.0, 1.0, 0.0) in calls
             assert ("publish", "double") in calls
 
-            # Python does not recompute family geometry. Whole-object edits route through
-            # the existing shared family handle.
+            # Python does not recompute family geometry. Supported whole-object edits
+            # route through the existing shared family handle.
             arrow.shift((0.5, -0.25))
-            arrow.scale(2.0)
             assert ("family_shift", 0.5, -0.25) in calls
-            assert ("family_scale", 2.0, 2.0) in calls
             assert len(arrow.submobjects) == 2
             assert len(double.submobjects) == 3
             assert not arrow.has_start_tip()
@@ -164,13 +162,13 @@ class ManimArrowFacadeTests(unittest.TestCase):
             assert double.get_start_tip() is double.start_tip
             assert arrow.get_end() == noon.Vec2(3.0, 0.0)
 
-            # Unsupported semantic breadth is rejected before Rust publication rather
-            # than being approximated in Python.
+            # Unsupported semantic breadth is rejected rather than approximated in Python.
             before = list(calls)
             for thunk in (
                 lambda: arrows.Arrow(path_arc=0.5),
                 lambda: arrows.Arrow(tip_shape=object()),
                 lambda: arrows.Arrow(preserve_tip_size_when_scaling=False),
+                lambda: arrow.scale(2.0),
             ):
                 try:
                     thunk()
