@@ -17,7 +17,7 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund playwright@1.62.1
     && test -r /opt/noon-runner/pyodide/pyodide.asm.wasm \
     && test -r /opt/noon-runner/pyodide/python_stdlib.zip \
     && test -r /opt/noon-runner/pyodide/package.json \
-    && test "$(node -p \"require('/opt/noon-runner/pyodide/package.json').version\")" = "${PYODIDE_VERSION}" \
+    && node -e "if (require('/opt/noon-runner/pyodide/package.json').version !== '${PYODIDE_VERSION}') process.exit(1)" \
     && rm -rf /tmp/pyodide-core /tmp/pyodide-core.tar.bz2 \
     && chmod -R a+rX /opt/noon-runner
 
