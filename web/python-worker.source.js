@@ -5,6 +5,7 @@ import initNoonWeb, {
   WasmSceneMembershipBatch,
   resolveAnimationOptions,
 } from "./pkg/noon_web.js";
+import { resolveAnimationOptionsPlain } from "./animation-options.js";
 import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
 import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
@@ -129,7 +130,7 @@ async function initializePyodide() {
     authoringStore.createManimTypst(source, math, fontSize);
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
   self.noonCreateAuthoringFamilyHandle = (batch, zIndex) => authoringStore.createFamily(batch, zIndex);
-  self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
+  self.noonResolveAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveAnimationOptions, ...args);
   const bindingsReadyAt = performance.now();
 
   for (const [index, descriptor] of PYTHON_COMPAT_MODULES.entries()) {
@@ -208,20 +209,6 @@ async function loadCompatibilityBundle() {
   return bundle.modules;
 }
 
-function resolveAnimationOptionsPlain(...args) {
-  const result = resolveAnimationOptions(...args);
-  try {
-    return {
-      runTime: result.runTime,
-      rateFunc: result.rateFunc,
-      lagRatio: result.lagRatio,
-      pathArc: result.pathArc,
-      reverseRateFunction: result.reverseRateFunction,
-    };
-  } finally {
-    result.free();
-  }
-}
 
 function registerContinuationContext(context) {
   if (activeAuthoringRun === null) {
