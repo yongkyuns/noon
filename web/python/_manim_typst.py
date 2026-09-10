@@ -8,6 +8,7 @@ store rather than from a Python-owned text document.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from _noon_errors import engine_call
 
 import math
@@ -28,6 +29,24 @@ except ImportError:  # Import remains possible for source-only CPython tests.
 
 
 _DEFAULT_NATIVE_FONT = "DejaVu Sans Mono"
+
+
+@dataclass(frozen=True, slots=True)
+class TextSourcePart:
+    """Immutable observation of one Rust-owned semantic text source part.
+
+    ``source_start`` and ``source_end`` are UTF-8 byte offsets into the authored
+    source. Cluster/vector ranges are observations of the current retained resource;
+    ``semantic_key`` is the stable source-part identity.
+    """
+
+    source_start: int
+    source_end: int
+    first_cluster: int
+    cluster_count: int
+    first_vector: int
+    vector_count: int
+    semantic_key: str | None
 
 
 def _validated_font_size(value: float) -> float:
@@ -157,6 +176,39 @@ class _RetainedTextMobject(_base.Mobject):
     def source(self) -> str:
         return self._source
 
+    def source_parts_for(self, needle: str) -> tuple[TextSourcePart, ...]:
+        """Return Rust-owned non-overlapping source matches in authored order."""
+
+        if not isinstance(needle, str):
+            raise TypeError("text source-part needle must be a string")
+        handle = self._semantic_handle
+        if not hasattr(handle, "textSourcePartsFor"):
+            raise NotImplementedError(
+                "text source-part queries require the shared Rust authoring handle"
+            )
+        raw_parts = engine_call(handle.textSourcePartsFor, needle)
+        try:
+            parts: list[TextSourcePart] = []
+            for index in range(int(raw_parts.length)):
+                raw = engine_call(raw_parts.item, index)
+                try:
+                    parts.append(
+                        TextSourcePart(
+                            source_start=int(raw.sourceStart),
+                            source_end=int(raw.sourceEnd),
+                            first_cluster=int(raw.firstCluster),
+                            cluster_count=int(raw.clusterCount),
+                            first_vector=int(raw.firstVector),
+                            vector_count=int(raw.vectorCount),
+                            semantic_key=(None if raw.semanticKey is None else str(raw.semanticKey)),
+                        )
+                    )
+                finally:
+                    raw.free()
+            return tuple(parts)
+        finally:
+            raw_parts.free()
+
     @property
     def id(self) -> int:
         if self._object is None:
@@ -233,7 +285,6 @@ class _RetainedTextMobject(_base.Mobject):
         return self
 
 
-
 class _RetainedTypstMobject(_RetainedTextMobject):
     _math_mode = False
 
@@ -257,13 +308,24 @@ class _RetainedTypstMobject(_RetainedTextMobject):
         if live_context is None:
             handle = _new_typst_handle(source, self._math_mode, font_size)
         else:
-            handle = engine_call(live_context.liveCreateManimTypst,
-                source, bool(self._math_mode), font_size, float(color.red),
-                float(color.green), float(color.blue), float(color.alpha), opacity,
+            handle = engine_call(
+                live_context.liveCreateManimTypst,
+                source,
+                bool(self._math_mode),
+                font_size,
+                float(color.red),
+                float(color.green),
+                float(color.blue),
+                float(color.alpha),
+                opacity,
             )
             self._canonical_live_target_context = live_context
         self._initialize_text(
-            source, font_size, handle, color, opacity,
+            source,
+            font_size,
+            handle,
+            color,
+            opacity,
             presentation_applied=live_context is not None,
         )
 
@@ -301,7 +363,8 @@ class Text(_RetainedTextMobject):
         if live_context is None:
             handle = _new_native_text_handle(text, font, font_size, line_spacing)
         else:
-            handle = engine_call(live_context.liveCreateManimText,
+            handle = engine_call(
+                live_context.liveCreateManimText,
                 text,
                 font,
                 font_size,

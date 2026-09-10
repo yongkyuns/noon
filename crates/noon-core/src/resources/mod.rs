@@ -19,5 +19,8 @@ pub use mutation::*;
 mod text;
 pub use text::*;
 
+mod text_parts;
+pub use text_parts::*;
+
 mod transaction;
 pub use transaction::*;
