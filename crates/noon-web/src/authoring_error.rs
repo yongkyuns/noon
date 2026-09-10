@@ -260,6 +260,9 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::PathQuery(cause) => {
                 Self::new("invalid_input", "path.invalid_query", cause)
             }
+            AuthoringError::MorphQuery(cause) => {
+                Self::new("invalid_input", "path.invalid_morph_query", cause)
+            }
             AuthoringError::Boolean(cause) => {
                 Self::new("invalid_input", "path.invalid_boolean", cause)
             }

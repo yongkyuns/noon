@@ -189,6 +189,16 @@ pub fn plan_morph_preserving_order(
     plan_morph_impl(source, target, options, false)
 }
 
+/// Interpolate canonical cubic controls using the same correspondence as ordered
+/// morph preparation. This is an immutable observation, not tessellated geometry.
+pub fn interpolate_path_preserving_order(
+    source: &VectorPath,
+    target: &VectorPath,
+    progress: f32,
+) -> Result<VectorPath, MorphError> {
+    correspondence::interpolate(source, target, progress)
+}
+
 fn plan_morph_impl(
     source: &VectorPath,
     target: &VectorPath,

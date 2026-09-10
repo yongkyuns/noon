@@ -18,7 +18,7 @@ pub struct PathQuery {
 }
 
 impl PathQuery {
-    fn prepare(
+    pub(crate) fn prepare(
         path: &VectorPath,
         transform: SemanticTransform2_5D,
     ) -> Result<Self, AuthoringError> {
