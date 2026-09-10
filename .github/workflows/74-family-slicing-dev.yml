@@ -26,7 +26,141 @@ jobs:
           printf '%s\n' "$base" > /tmp/b1-slicing/base.txt
           git checkout --detach "$base"
           git apply --recount --index <(git show codex/74-family-slicing-prep:.github/74-family-slicing.patch)
-          git apply --recount --index <(git show codex/74-family-slicing-prep:.github/74-family-slicing-acceptance.patch)
+          python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          canonical = """from manim import *
+
+
+          class GroupSlicing(Scene):
+              def construct(self):
+                  first = Square(side_length=0.5).shift(LEFT * 2.0)
+                  middle = Circle(radius=0.3)
+                  last = Rectangle(width=0.8, height=0.4).shift(RIGHT * 2.0)
+                  family = VGroup(first, middle, last)
+
+                  self.add(*family)
+                  family[1:].shift(UP * 0.75)
+                  self.wait(1.0)
+          """
+          noon_source = canonical.replace("from manim import *", "from noon import *", 1)
+          canonical_path = Path("parity/manim-v0.21/core-examples/group_slicing.py")
+          gallery_source_path = Path("web/python/examples/manim_compatible_group_slicing.py")
+          thumbnail_path = Path("web/thumbnails/manim/compatible-group-slicing.svg")
+          for path in (canonical_path, gallery_source_path, thumbnail_path):
+              if path.exists():
+                  raise SystemExit(f"refusing to overwrite unexpected current-master path: {path}")
+              path.parent.mkdir(parents=True, exist_ok=True)
+          canonical_path.write_text(canonical, encoding="utf-8")
+          gallery_source_path.write_text(noon_source, encoding="utf-8")
+          thumbnail_path.write_text("""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title desc">
+            <title id="title">Group slicing demo</title>
+            <desc id="desc">A square stays low while the circle and rectangle selected by a VGroup slice move upward.</desc>
+            <rect width="640" height="360" fill="#10141d"/>
+            <rect x="120" y="205" width="70" height="70" rx="5" fill="#58c4dd"/>
+            <circle cx="320" cy="140" r="43" fill="#d147bd"/>
+            <rect x="430" y="105" width="110" height="70" rx="5" fill="#83c167"/>
+            <path d="M228 228 C258 228 272 198 292 174" fill="none" stroke="#f7d96f" stroke-width="5" stroke-dasharray="10 10" opacity="0.75"/>
+          </svg>
+          """, encoding="utf-8")
+
+          raster_manifest = Path("parity/manim-v0.21/manifest.json")
+          raster_text = raster_manifest.read_text(encoding="utf-8")
+          raster_data = json.loads(raster_text)
+          if any(fixture.get("id") == "group-slicing" for fixture in raster_data["fixtures"]):
+              raise SystemExit("current master already contains group-slicing raster fixture")
+          raster_marker = '\n  ],\n  "sample_fractions": ['
+          raster_index = raster_text.find(raster_marker)
+          if raster_index < 0:
+              raise SystemExit("could not locate raster fixture-list terminator")
+          raster_entry = '''    {
+              "id": "group-slicing",
+              "scene": "GroupSlicing",
+              "source": "parity/manim-v0.21/core-examples/group_slicing.py",
+              "expected_duration": 1.0
+            }'''
+          raster_text = raster_text[:raster_index].rstrip() + ",\n" + raster_entry + raster_text[raster_index:]
+          raster_manifest.write_text(raster_text, encoding="utf-8")
+
+          compat_manifest = Path("web/python/examples/manim_compatibility_manifest.json")
+          compat_text = compat_manifest.read_text(encoding="utf-8")
+          compat_data = json.loads(compat_text)
+          if any(entry.get("id") == "compatible-group-slicing" for entry in compat_data["entries"]):
+              raise SystemExit("current master already contains compatible-group-slicing gallery entry")
+          max_order = max(int(entry.get("order", 0)) for entry in compat_data["entries"])
+          gallery_order = max_order + 10
+          compat_marker = "\n  ]\n}"
+          compat_index = compat_text.rfind(compat_marker)
+          if compat_index < 0:
+              raise SystemExit("could not locate compatibility manifest terminator")
+          compat_entry = f'''    {{
+              "id": "compatible-group-slicing",
+              "title": "GroupSlicing",
+              "summary": "Slice a VGroup and mutate the selected shared members without replacing the original family.",
+              "status": "ready",
+              "path": "python/examples/manim_compatible_group_slicing.py",
+              "category": "manim-compatible/grouping",
+              "features": ["VGroup", "slice", "shared identity", "shift", "Manim-compatible"],
+              "reuse": "manim-compatible-parity-v0.21",
+              "parity_status": "parity-qualified",
+              "parity_fixture": "group-slicing",
+              "thumbnail": "thumbnails/manim/compatible-group-slicing.svg",
+              "thumbnail_alt": "Square below a circle and rectangle shifted upward through a VGroup slice",
+              "thumbnail_time": 1.0,
+              "order": {gallery_order}
+            }}'''
+          compat_text = compat_text[:compat_index].rstrip() + ",\n" + compat_entry + compat_text[compat_index:]
+          compat_manifest.write_text(compat_text, encoding="utf-8")
+
+          test_path = Path("web/manim-compatibility-gallery.test.mjs")
+          test_text = test_path.read_text(encoding="utf-8")
+          if "compatible-group-slicing" in test_text:
+              raise SystemExit("current master already tests compatible-group-slicing")
+          count_match = re.search(r"assert\.equal\(gallery\.examples\.length, (\d+)\);", test_text)
+          if count_match is None:
+              raise SystemExit("could not locate compatibility-gallery count assertion")
+          new_count = int(count_match.group(1)) + 1
+          test_text = test_text[:count_match.start()] + f"assert.equal(gallery.examples.length, {new_count});" + test_text[count_match.end():]
+          map_anchor = test_text.find("gallery.examples.map((entry) => entry.id)")
+          list_end = test_text.find("  ],\n);", map_anchor)
+          if map_anchor < 0 or list_end < 0:
+              raise SystemExit("could not locate compatibility-gallery expected-id list")
+          test_text = test_text[:list_end] + '    "compatible-group-slicing",\n' + test_text[list_end:]
+          console_marker = '\nconsole.log("✓ Noon-authored Manim-compatible gallery examples");'
+          console_index = test_text.rfind(console_marker)
+          if console_index < 0:
+              raise SystemExit("could not locate compatibility-gallery completion marker")
+          slicing_checks = r'''
+
+          const slicingEntry = readyEntries.find((entry) => entry.id === "compatible-group-slicing");
+          assert.ok(slicingEntry, "group slicing must be a ready compatibility example");
+          assert.equal(slicingEntry.parity_fixture, "group-slicing");
+          const slicingSource = await readFile(new URL(`./${slicingEntry.path}`, import.meta.url), "utf8");
+          assert.match(slicingSource, /family\[1:\]\.shift\(UP \* 0\.75\)/);
+          const slicingCanonical = await readFile(
+            new URL("../parity/manim-v0.21/core-examples/group_slicing.py", import.meta.url),
+            "utf8",
+          );
+          assert.equal(
+            slicingSource.replace("from noon import *", "from manim import *"),
+            slicingCanonical,
+            "group slicing gallery source must stay import-only equivalent to its canonical Manim fixture",
+          );
+          '''
+          test_text = test_text[:console_index] + slicing_checks + test_text[console_index:]
+          test_path.write_text(test_text, encoding="utf-8")
+          PY
+          git add \
+            parity/manim-v0.21/core-examples/group_slicing.py \
+            parity/manim-v0.21/manifest.json \
+            scripts/manim-differential.py \
+            web/manim-compatibility-gallery.test.mjs \
+            web/python/_manim_compat.py \
+            web/python/examples/manim_compatible_group_slicing.py \
+            web/python/examples/manim_compatibility_manifest.json \
+            web/thumbnails/manim/compatible-group-slicing.svg
           python3 -m py_compile \
             web/python/_manim_compat.py \
             scripts/manim-differential.py \
