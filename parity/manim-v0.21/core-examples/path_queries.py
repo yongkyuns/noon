@@ -15,4 +15,5 @@ class OrdinaryPathQueries(Scene):
         target = rectangle.copy().stretch(1.2, 0)
         self.play(Transform(rectangle, target), run_time=1, rate_func=linear)
         self.wait(0.2)
+        self.remove(ellipse)
         self.play(Create(ellipse), run_time=1, rate_func=linear)
