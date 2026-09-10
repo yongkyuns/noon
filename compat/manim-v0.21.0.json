@@ -14,8 +14,8 @@
   "overrides": {
     "Mobject": {"status": "partial", "category": "core-object", "dependency": "#74", "reason": "Common transform/style/layout methods exist; full family/state/query parity is pending."},
     "VMobject": {"status": "partial", "category": "core-object", "dependency": "#74/#78", "reason": "Vector object facade exists; full path-building/query semantics are pending."},
-    "Group": {"status": "partial", "category": "core-object", "dependency": "#51/#74", "reason": "Authoring group exists but retained semantic family identity is still being migrated."},
-    "VGroup": {"status": "partial", "category": "core-object", "dependency": "#51/#74", "reason": "Authoring group exists but retained semantic family identity is still being migrated."},
+    "Group": {"status": "partial", "category": "core-object", "dependency": "#74", "reason": "Shared semantic family identity exists; remaining membership, state and query compatibility qualification is pending."},
+    "VGroup": {"status": "partial", "category": "core-object", "dependency": "#74", "reason": "Shared semantic family identity exists; remaining membership, state and query compatibility qualification is pending."},
     "Scene": {"status": "partial", "category": "scene", "dependency": "#89", "reason": "Core add/remove/play/wait lifecycle exists; ordering/camera/section breadth is pending."},
     "Circle": {"status": "supported", "category": "geometry", "evidence": "scripts/manim-compat-smoke.mjs; web/python/test_manim_shared_constructors.py"},
     "Rectangle": {"status": "supported", "category": "geometry", "evidence": "scripts/manim-compat-smoke.mjs; web/python/test_manim_shared_constructors.py"},
