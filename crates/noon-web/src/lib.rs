@@ -45,6 +45,8 @@ mod retained_resource_transport;
 #[cfg(feature = "renderer")]
 mod retained_typst_canvas;
 mod semantic_execution_player;
+#[cfg(target_arch = "wasm32")]
+mod text_parts;
 
 pub use authoring_error::AuthoringFailure;
 #[cfg(target_arch = "wasm32")]
@@ -80,3 +82,5 @@ pub use retained_resource_transport::*;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 pub use retained_typst_canvas::*;
 pub use semantic_execution_player::*;
+#[cfg(target_arch = "wasm32")]
+pub use text_parts::*;
