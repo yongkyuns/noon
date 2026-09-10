@@ -8,9 +8,7 @@ use super::affine::EffectiveAnimationProperties;
 use super::family_transform::{
     derive_family_transform_correspondence, FamilyTransformCorrespondenceError,
 };
-use super::super::{
-    PreparedSemanticAnimationScheduleProjection, SemanticExecutionIndex,
-};
+use super::super::{PreparedSemanticAnimationScheduleProjection, SemanticExecutionIndex};
 
 /// One activation-time family Transform occurrence before execution publication.
 ///
@@ -19,7 +17,7 @@ use super::super::{
 /// semantic or execution identity. `source_execution_object_id` is the existing source
 /// leaf's stable execution row and serves only as the effective-state capture/ordering
 /// anchor for a derived source copy.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PreparedFamilyTransformOccurrence {
     pub animation: SemanticTransactionNodeRef,
     pub source: SemanticNodeId,
@@ -86,9 +84,10 @@ impl std::fmt::Display for PreparedFamilyTransformActivationError {
                 formatter,
                 "prepared family Transform {animation:?} retains pending family endpoint {endpoint:?}"
             ),
-            Self::Correspondence { animation, error } => {
-                write!(formatter, "prepared family Transform {animation:?} correspondence failed: {error}")
-            }
+            Self::Correspondence { animation, error } => write!(
+                formatter,
+                "prepared family Transform {animation:?} correspondence failed: {error}"
+            ),
             Self::MissingExecutionSource { animation, source } => write!(
                 formatter,
                 "prepared family Transform {animation:?} source leaf {}:{} is not in the stable execution index",
