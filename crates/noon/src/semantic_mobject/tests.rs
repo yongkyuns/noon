@@ -485,7 +485,7 @@ fn analytic_line_match_preserves_source_content_and_paint() {
 }
 
 #[test]
-fn manim_line_endpoints_preserve_f64_transform_and_color_is_stroke_first() {
+fn manim_line_endpoints_preserve_f64_transform_and_color_prefers_visible_fill() {
     let scene = Scene::new();
     let mut line = scene.line((-1.0, -0.5), (1.0, 0.5)).unwrap();
     line.set_scale(1.5, 0.75).unwrap();
@@ -513,12 +513,12 @@ fn manim_line_endpoints_preserve_f64_transform_and_color_is_stroke_first() {
             end: expected_end,
         }
     );
-    assert_eq!(line.manim_color().unwrap(), Color::rgba(0.2, 0.4, 0.8, 0.0));
+    assert_eq!(line.manim_color().unwrap(), Color::rgb(1.0, 0.0, 0.0));
 
     assert!(scene.circle(1.0).unwrap().manim_line_endpoints().is_err());
     let resource_style = SemanticStyle {
-        stroke: Some(SemanticPaint::Resource(7)),
-        fill: Some(SemanticPaint::Solid(Color::RED)),
+        fill: Some(SemanticPaint::Resource(7)),
+        stroke: Some(SemanticPaint::Solid(Color::RED)),
         ..SemanticStyle::default()
     };
     assert!(style::manim_color_from_semantic(&resource_style).is_err());
@@ -530,7 +530,7 @@ fn manim_line_endpoints_preserve_f64_transform_and_color_is_stroke_first() {
             ..SemanticStyle::default()
         })
         .unwrap(),
-        Color::rgba(Color::GREEN.red, Color::GREEN.green, Color::GREEN.blue, 0.4)
+        Color::GREEN
     );
     assert_eq!(
         style::manim_color_from_semantic(&SemanticStyle {

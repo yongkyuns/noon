@@ -116,6 +116,8 @@ pub enum AuthoringError {
     InvalidStrokeCap(String),
     /// A layout direction is non-finite.
     NonFiniteDirection,
+    /// A color gradient requires at least one reference color.
+    EmptyColorGradient,
     /// A layout direction has zero length.
     ZeroDirection,
     /// Line matching received non-finite endpoints.
@@ -150,6 +152,8 @@ pub enum AuthoringError {
         columns: usize,
         members: usize,
     },
+    /// Grid alignment, sizing or flow options are inconsistent.
+    InvalidGridOption(&'static str),
     /// An internal arrangement plan has not observed all required bounds.
     IncompleteArrangement,
     /// The node is not represented in this family-local copy mapping.
@@ -224,6 +228,7 @@ impl std::fmt::Display for AuthoringError {
             Self::InvalidStrokeJoin(_) => f.write_str("stroke_join must be round, miter, or bevel"),
             Self::InvalidStrokeCap(_) => f.write_str("stroke_cap must be round, butt, or square"),
             Self::NonFiniteDirection => f.write_str("direction must be finite"),
+            Self::EmptyColorGradient => f.write_str("a color gradient requires at least one color"),
             Self::ZeroDirection => f.write_str("direction must be non-zero"),
             Self::NonFiniteLineEndpoints => {
                 f.write_str("Line.match_points endpoints must be finite")
@@ -253,6 +258,7 @@ impl std::fmt::Display for AuthoringError {
             Self::InsufficientGridCapacity { .. } => {
                 f.write_str("too few grid rows and columns to fit all members")
             }
+            Self::InvalidGridOption(name) => write!(f, "invalid grid {name} option"),
             Self::IncompleteArrangement => f.write_str("family arrangement bounds are incomplete"),
             Self::MissingCopySource(source) => {
                 write!(f, "source {source:?} is not part of this family copy")
