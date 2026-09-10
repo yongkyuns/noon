@@ -32,12 +32,12 @@ function fixture(t, overrides = {}, limits = {}) {
           return this.snapshotValue;
         },
         get snapshot() { return this.snapshotValue; },
-        close(reason) {
+        async close(reason) {
           this.closeCalls.push(reason);
           this.closed = true;
           this.state = "closed";
           this.snapshotValue = { state: "closed" };
-          overrides.onClose?.(this, reason);
+          await overrides.onClose?.(this, reason);
           return this.snapshotValue;
         },
         ...overrides.session,
@@ -47,7 +47,7 @@ function fixture(t, overrides = {}, limits = {}) {
     },
     ...limits,
   });
-  t.after(() => registry.dispose());
+  t.after(async () => { await registry.dispose().catch(() => {}); });
   return { registry, created };
 }
 
@@ -73,15 +73,18 @@ test("open publishes one opaque session only after first-frame readiness", async
   assert.deepEqual(created[0].openCalls, [["scene", { loopDurationSeconds: 4 }]]);
 });
 
-test("known IDs are still rejected across transport scopes and after close", async (t) => {
-  const { registry } = fixture(t);
+test("known IDs are rejected across transport scopes and immediately after close starts", async (t) => {
+  const gate = deferred();
+  const { registry } = fixture(t, { onClose: () => gate.promise });
   const scopeA = registry.openScope();
   const scopeB = registry.openScope();
   const { sessionId } = await registry.open(scopeA, "scene");
   assert.throws(() => registry.inspect(scopeB, sessionId), /cross-scope|stale/);
-  registry.close(scopeA, sessionId);
+  const closing = registry.close(scopeA, sessionId);
   assert.throws(() => registry.inspect(scopeA, sessionId), /cross-scope|stale/);
   assert.deepEqual(registry.counts, { scopes: 2, sessions: 0 });
+  gate.resolve();
+  assert.equal((await closing).state, "closed");
 });
 
 test("concurrent conflicting samples are rejected before duplicate engine work", async (t) => {
@@ -107,15 +110,21 @@ test("concurrent conflicting samples are rejected before duplicate engine work",
   assert.equal((await registry.sample(scope, sessionId, 2)).frame.publishedTime, 2);
 });
 
-test("operation cancellation closes ownership and makes the session ID stale", async (t) => {
-  const gate = deferred();
+test("operation cancellation waits for asynchronous cleanup before rejecting", async (t) => {
+  const sampleGate = deferred();
   const entered = deferred();
+  const closeGate = deferred();
   const { registry, created } = fixture(t, { session: {
     async sample(time) {
       this.sampleCalls.push(time);
       entered.resolve();
-      await gate.promise;
+      await sampleGate.promise;
       return { state: "ready", frame: { publishedTime: time } };
+    },
+    async close(reason) {
+      this.closeCalls.push(reason);
+      await closeGate.promise;
+      return { state: "closed" };
     },
   } });
   const scope = registry.openScope();
@@ -124,31 +133,50 @@ test("operation cancellation closes ownership and makes the session ID stale", a
   const sampling = registry.sample(scope, sessionId, 1, { signal: controller.signal });
   await entered.promise;
   controller.abort("client canceled");
-  await assert.rejects(sampling, /client canceled/);
+  await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(created[0].closeCalls, ["client canceled"]);
   assert.throws(() => registry.inspect(scope, sessionId), /stale|cross-scope/);
-  gate.resolve();
+  let settled = false;
+  sampling.finally(() => { settled = true; }).catch(() => {});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false, "canceled operation must not settle before cleanup");
+  closeGate.resolve();
+  await assert.rejects(sampling, /client canceled/);
+  sampleGate.resolve();
 });
 
-test("transport disconnect rejects a non-cooperative open immediately and cleans accounting", async (t) => {
-  const gate = deferred();
+test("transport disconnect rejects open ownership immediately but awaits cleanup completion", async (t) => {
+  const openGate = deferred();
   const entered = deferred();
+  const closeGate = deferred();
   const { registry, created } = fixture(t, { session: {
     async open() {
       entered.resolve();
-      await gate.promise;
+      await openGate.promise;
       return { state: "ready" };
+    },
+    async close(reason) {
+      this.closeCalls.push(reason);
+      await closeGate.promise;
+      return { state: "closed" };
     },
   } });
   const scope = registry.openScope();
   const opening = registry.open(scope, "scene");
   await entered.promise;
-  registry.closeScope(scope, "transport disconnected");
-  await assert.rejects(opening, /transport disconnected/);
-  assert.deepEqual(created[0].closeCalls, ["transport disconnected"]);
+  const closingScope = registry.closeScope(scope, "transport disconnected");
   assert.deepEqual(registry.counts, { scopes: 0, sessions: 0 });
-  gate.resolve();
   assert.throws(() => registry.open(scope, "again"), /stale preview scope/);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(created[0].closeCalls, ["transport disconnected"]);
+  let scopeSettled = false;
+  closingScope.finally(() => { scopeSettled = true; }).catch(() => {});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(scopeSettled, false);
+  closeGate.resolve();
+  assert.equal((await closingScope)[0].state, "closed");
+  await assert.rejects(opening, /transport disconnected/);
+  openGate.resolve();
 });
 
 test("pre-aborted requests never create a session", async (t) => {
@@ -161,9 +189,9 @@ test("pre-aborted requests never create a session", async (t) => {
   assert.deepEqual(registry.counts, { scopes: 1, sessions: 0 });
 });
 
-test("failed open releases quota and a fresh open can recover", async (t) => {
+test("failed open awaits cleanup, releases quota, and a fresh open can recover", async (t) => {
   let fail = true;
-  const { registry } = fixture(t, { session: {
+  const { registry, created } = fixture(t, { session: {
     async open() {
       if (fail) { fail = false; throw new Error("source failed"); }
       this.snapshotValue = { state: "ready" };
@@ -172,6 +200,7 @@ test("failed open releases quota and a fresh open can recover", async (t) => {
   } }, { maxSessions: 1, maxSessionsPerScope: 1 });
   const scope = registry.openScope();
   await assert.rejects(registry.open(scope, "bad"), /source failed/);
+  assert.deepEqual(created[0].closeCalls, ["source failed"]);
   assert.deepEqual(registry.counts, { scopes: 1, sessions: 0 });
   assert.match((await registry.open(scope, "good")).sessionId, /^[0-9a-f-]{36}$/);
 });
@@ -189,9 +218,20 @@ test("scope and session quotas reject atomically without evicting live ownership
   assert.equal(registry.inspect(scopeB, b.sessionId).state, "ready");
 });
 
+test("cleanup failures are surfaced after atomic ownership release", async (t) => {
+  const { registry } = fixture(t, { session: {
+    async close() { throw new Error("container cleanup failed"); },
+  } });
+  const scope = registry.openScope();
+  const { sessionId } = await registry.open(scope, "scene");
+  await assert.rejects(registry.close(scope, sessionId), /container cleanup failed/);
+  assert.deepEqual(registry.counts, { scopes: 1, sessions: 0 });
+  assert.throws(() => registry.inspect(scope, sessionId), /stale|cross-scope/);
+});
+
 test("invalid factories, signals, and close reasons do not corrupt registry state", async (t) => {
   const invalid = new AgentPreviewSessionRegistry({ createSession: () => ({}) });
-  t.after(() => invalid.dispose());
+  t.after(async () => { await invalid.dispose().catch(() => {}); });
   const invalidScope = invalid.openScope();
   await assert.rejects(invalid.open(invalidScope, "scene"), /invalid session/);
   assert.deepEqual(invalid.counts, { scopes: 1, sessions: 0 });
@@ -200,21 +240,29 @@ test("invalid factories, signals, and close reasons do not corrupt registry stat
   const scope = registry.openScope();
   await assert.rejects(registry.open(scope, "scene", { signal: {} }), /AbortSignal/);
   const { sessionId } = await registry.open(scope, "scene");
-  assert.throws(() => registry.close(scope, sessionId, ""), /reason/);
+  await assert.rejects(registry.close(scope, sessionId, ""), /reason/);
   assert.equal(registry.inspect(scope, sessionId).state, "ready");
-  assert.throws(() => registry.closeScope(scope, ""), /reason/);
+  await assert.rejects(registry.closeScope(scope, ""), /reason/);
   assert.equal(registry.inspect(scope, sessionId).state, "ready");
 });
 
-test("registry shutdown closes every session and rejects future operations", async (t) => {
-  const { registry, created } = fixture(t);
+test("registry shutdown awaits every cleanup and rejects future operations immediately", async (t) => {
+  const closeGate = deferred();
+  const { registry, created } = fixture(t, { onClose: () => closeGate.promise });
   const scopeA = registry.openScope();
   const scopeB = registry.openScope();
   await registry.open(scopeA, "a");
   await registry.open(scopeB, "b");
-  registry.dispose("server shutdown");
-  assert.deepEqual(created.map((session) => session.closeCalls), [["server shutdown"], ["server shutdown"]]);
+  const disposing = registry.dispose("server shutdown");
   assert.deepEqual(registry.counts, { scopes: 0, sessions: 0 });
   assert.throws(() => registry.openScope(), /disposed/);
-  registry.dispose("server shutdown");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(created.map((session) => session.closeCalls), [["server shutdown"], ["server shutdown"]]);
+  let settled = false;
+  disposing.finally(() => { settled = true; }).catch(() => {});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  closeGate.resolve();
+  assert.equal((await disposing).length, 2);
+  assert.equal(await registry.dispose("server shutdown"), await disposing);
 });

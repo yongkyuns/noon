@@ -5,6 +5,7 @@ export class AgentPreviewSessionRegistry {
   #scopes = new Map();
   #sessionCount = 0;
   #disposed = false;
+  #disposePromise = null;
   #limits;
 
   constructor({ createSession, maxScopes = 32, maxSessions = 64, maxSessionsPerScope = 16 } = {}) {
@@ -50,7 +51,7 @@ export class AgentPreviewSessionRegistry {
     this.#sessionCount += 1;
 
     const canceled = cancellation(signal, () => {
-      this.#release(scope, sessionId, entry, abortReason(signal));
+      void this.#release(scope, sessionId, entry, abortReason(signal)).catch(() => {});
     });
     try {
       const snapshot = await Promise.race([
@@ -62,7 +63,7 @@ export class AgentPreviewSessionRegistry {
       entry.busy = false;
       return Object.freeze({ sessionId, snapshot });
     } catch (error) {
-      this.#release(scope, sessionId, entry, errorMessage(error, "preview open failed"));
+      await this.#releasePreserving(error, scope, sessionId, entry, errorMessage(error, "preview open failed"));
       throw error;
     } finally {
       canceled.remove();
@@ -75,13 +76,13 @@ export class AgentPreviewSessionRegistry {
     this.#assertSignal(signal);
     if (signal?.aborted) {
       const error = abortError(signal.reason);
-      this.#release(scope, sessionId, entry, error.message);
+      await this.#releasePreserving(error, scope, sessionId, entry, error.message);
       throw error;
     }
     if (entry.busy) throw new Error("preview session operation already in progress");
     entry.busy = true;
     const canceled = cancellation(signal, () => {
-      this.#release(scope, sessionId, entry, abortReason(signal));
+      void this.#release(scope, sessionId, entry, abortReason(signal)).catch(() => {});
     });
     try {
       return await Promise.race([
@@ -89,6 +90,11 @@ export class AgentPreviewSessionRegistry {
         canceled.promise,
         entry.releasedPromise,
       ]);
+    } catch (error) {
+      if (entry.released || signal?.aborted) {
+        await this.#releasePreserving(error, scope, sessionId, entry, errorMessage(error, "preview sample failed"));
+      }
+      throw error;
     } finally {
       canceled.remove();
       entry.busy = false;
@@ -101,12 +107,12 @@ export class AgentPreviewSessionRegistry {
     return entry.session.snapshot;
   }
 
-  close(scopeCapability, sessionId, reason = "preview session closed") {
+  async close(scopeCapability, sessionId, reason = "preview session closed") {
     const { scope, entry } = this.#entry(scopeCapability, sessionId);
-    return this.#release(scope, sessionId, entry, requireReason(reason));
+    return await this.#release(scope, sessionId, entry, requireReason(reason));
   }
 
-  closeScope(scopeCapability, reason = "preview transport disconnected") {
+  async closeScope(scopeCapability, reason = "preview transport disconnected") {
     this.#assertLive();
     const message = requireReason(reason);
     const scope = this.#scopes.get(scopeCapability);
@@ -117,20 +123,24 @@ export class AgentPreviewSessionRegistry {
       cleanup.push(this.#release(scope, sessionId, entry, message));
     }
     this.#scopes.delete(scopeCapability);
-    return Object.freeze(cleanup);
+    return await settleCleanup(cleanup, "preview scope cleanup failed");
   }
 
   dispose(reason = "preview registry shutdown") {
-    if (this.#disposed) return;
+    if (this.#disposePromise) return this.#disposePromise;
+    if (this.#disposed) return Promise.resolve(Object.freeze([]));
     const message = requireReason(reason);
     this.#disposed = true;
+    const cleanup = [];
     for (const [capability, scope] of [...this.#scopes]) {
       scope.closed = true;
       for (const [sessionId, entry] of [...scope.sessions]) {
-        this.#release(scope, sessionId, entry, message);
+        cleanup.push(this.#release(scope, sessionId, entry, message));
       }
       this.#scopes.delete(capability);
     }
+    this.#disposePromise = settleCleanup(cleanup, "preview registry cleanup failed");
+    return this.#disposePromise;
   }
 
   get counts() {
@@ -155,15 +165,23 @@ export class AgentPreviewSessionRegistry {
   }
 
   #release(scope, sessionId, entry, reason) {
-    if (entry.released) return null;
+    if (entry.cleanupPromise) return entry.cleanupPromise;
     entry.released = true;
     if (scope.sessions.get(sessionId) === entry) scope.sessions.delete(sessionId);
     this.#sessionCount -= 1;
     entry.rejectReleased(new Error(reason));
+    entry.cleanupPromise = Promise.resolve().then(() => entry.session.close(reason));
+    entry.cleanupPromise.catch(() => {});
+    return entry.cleanupPromise;
+  }
+
+  async #releasePreserving(primaryError, scope, sessionId, entry, reason) {
     try {
-      return entry.session.close(reason);
-    } catch (error) {
-      return Object.freeze({ cleanupError: errorMessage(error, "preview close failed") });
+      await this.#release(scope, sessionId, entry, reason);
+    } catch (cleanupError) {
+      if (primaryError && typeof primaryError === "object") {
+        primaryError.cleanupError = errorMessage(cleanupError, "preview close failed");
+      }
     }
   }
 
@@ -182,13 +200,16 @@ function createEntry(session) {
   let rejectReleased;
   const releasedPromise = new Promise((_, reject) => { rejectReleased = reject; });
   releasedPromise.catch(() => {});
-  return { session, busy: true, released: false, releasedPromise, rejectReleased };
+  return { session, busy: true, released: false, releasedPromise, rejectReleased, cleanupPromise: null };
 }
 
 function assertSession(session) {
   if (!session || typeof session.open !== "function" || typeof session.sample !== "function" ||
       typeof session.close !== "function" || !("snapshot" in session)) {
-    try { session?.close?.("invalid preview session factory result"); } catch {}
+    try {
+      const cleanup = session?.close?.("invalid preview session factory result");
+      Promise.resolve(cleanup).catch(() => {});
+    } catch {}
     throw new TypeError("preview-session factory returned an invalid session");
   }
 }
@@ -209,6 +230,15 @@ function cancellation(signal, onAbort) {
   signal.addEventListener("abort", listener, { once: true });
   if (signal.aborted) listener();
   return { promise, remove: () => signal.removeEventListener("abort", listener) };
+}
+
+async function settleCleanup(promises, message) {
+  const settled = await Promise.allSettled(promises);
+  const failures = settled.filter((entry) => entry.status === "rejected");
+  if (failures.length > 0) {
+    throw new AggregateError(failures.map((entry) => entry.reason), message);
+  }
+  return Object.freeze(settled.map((entry) => entry.value));
 }
 
 function abortError(reason) {
