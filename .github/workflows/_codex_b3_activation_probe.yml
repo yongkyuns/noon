@@ -17,12 +17,12 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Compile activation preparation
+      - name: Test activation preparation
         id: check
         shell: bash
         run: |
           set +e
-          cargo check -p noon-compile --tests 2>&1 | tee activation-check.log
+          cargo test -p noon-compile --test family_transform_activation 2>&1 | tee activation-check.log
           status=${PIPESTATUS[0]}
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit 0
