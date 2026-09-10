@@ -105,6 +105,7 @@ class GroupMembershipLive(Scene):
         assert int(pair._semantic_family_handle.memberCount) == 2
         pair.add(left)
         assert len(pair) == 2
+        assert list(pair) == [right, left]
         assert int(pair._semantic_family_handle.memberCount) == 2
         layout = pair._semantic_family_handle.layout()
         assert abs(float(layout.width) - pair.width) < 1e-12
@@ -113,7 +114,7 @@ class GroupMembershipLive(Scene):
         assert int(alias._semantic_family_handle.memberCount) == 1
 
         duplicate = VGroup(left, alias, left)
-        assert list(duplicate) == [left, alias]
+        assert list(duplicate) == [alias, left]
         spare = Circle(radius=0.1)
         cycle = VGroup(pair)
         before = list(pair.submobjects)
