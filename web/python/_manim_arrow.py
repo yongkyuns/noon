@@ -18,17 +18,8 @@ except ImportError:  # Native CPython tests install explicit bridge fixtures.
     _create_arrow_handle = None
 
 
-def _numeric_endpoint(name: str, value: object) -> _base.Vec2:
-    if isinstance(value, (_base.Mobject, _compat.Group)):
-        raise NotImplementedError(
-            f"{name} Mobject endpoints require the shared Rust boundary-point constructor"
-        )
-    return _base._as_vec2(value)
-
-
-def _constructor_options(options: object, kwargs: dict[str, Any]) -> None:
-    values = dict(kwargs)
-    allowed = {
+_ARROW_CONSTRUCTOR_OPTIONS = frozenset(
+    {
         "position",
         "rotation",
         "scale",
@@ -39,30 +30,52 @@ def _constructor_options(options: object, kwargs: dict[str, Any]) -> None:
         "opacity",
         "z_index",
     }
-    unknown = sorted(set(values) - allowed)
+)
+
+
+def _numeric_endpoint(name: str, value: object) -> _base.Vec2:
+    if isinstance(value, (_base.Mobject, _compat.Group)):
+        raise NotImplementedError(
+            f"{name} Mobject endpoints require the shared Rust boundary-point constructor"
+        )
+    return _base._as_vec2(value)
+
+
+def _apply_constructor_options(options: object, kwargs: dict[str, Any]) -> None:
+    """Coerce the supported Python constructor surface, then delegate to Rust."""
+
+    values = dict(kwargs)
+    unknown = sorted(set(values) - _ARROW_CONSTRUCTOR_OPTIONS)
     if unknown:
         raise TypeError(f"unsupported Arrow constructor option(s): {', '.join(unknown)}")
+    _shared._apply_shared_constructor_options(options, values)
 
-    if "z_index" in values:
-        engine_call(options.setZIndex, _ir._finite_number("z_index", values["z_index"]))
-    if "position" in values:
-        point = _ir._vec2("position", values["position"])
-        engine_call(options.setTranslation, point["x"], point["y"])
-    if "rotation" in values:
-        engine_call(options.setRotation, _ir._finite_number("rotation", values["rotation"]))
-    if "scale" in values:
-        scale = _ir._vec2("scale", values["scale"])
-        engine_call(options.setScale, scale["x"], scale["y"])
-    if "stroke_width" in values:
-        engine_call(options.setStrokeWidth, _compat._manim_stroke_width(values["stroke_width"]))
-    if "stroke_width_mode" in values:
-        engine_call(options.setStrokeWidthMode, _ir._stroke_width_mode(values["stroke_width_mode"]))
-    if "stroke_join" in values:
-        engine_call(options.setStrokeJoin, _ir._stroke_join(values["stroke_join"]))
-    if "stroke_cap" in values:
-        engine_call(options.setStrokeCap, _ir._stroke_cap(values["stroke_cap"]))
-    if "opacity" in values:
-        engine_call(options.setObjectOpacity, _compat._opacity("opacity", values["opacity"]))
+
+def _apply_arrow_parameters(
+    options: object,
+    *,
+    buff: object,
+    tip_length: object,
+    max_tip_length_to_length_ratio: object,
+    max_stroke_width_to_length_ratio: object,
+) -> None:
+    """Convert public Manim units; Rust owns every resulting Arrow rule."""
+
+    engine_call(options.setBuff, _ir._finite_number("buff", buff))
+    engine_call(options.setTipLength, _ir._finite_number("tip_length", tip_length))
+    engine_call(
+        options.setMaxTipLengthToLengthRatio,
+        _ir._finite_number(
+            "max_tip_length_to_length_ratio", max_tip_length_to_length_ratio
+        ),
+    )
+    stroke_ratio = _ir._finite_number(
+        "max_stroke_width_to_length_ratio", max_stroke_width_to_length_ratio
+    )
+    engine_call(
+        options.setMaxStrokeWidthToLengthRatio,
+        stroke_ratio * _compat.MANIM_CAIRO_LINE_WIDTH_MULTIPLE,
+    )
 
 
 def _leaf(handle: object, cls: type[_base.Mobject] = _compat.VMobject) -> _base.Mobject:
@@ -81,27 +94,65 @@ def _attach_arrow_family(self: "Arrow", created: object) -> None:
     self._shaft = shaft
     self.tip = end_tip
     self.start_tip = start_tip
-    members = [shaft, end_tip]
+    members = [shaft]
     if start_tip is not None:
         members.append(start_tip)
+    members.append(end_tip)
     self._semantic_member_wrappers = {
         _shared._family_wrapper_key(member): member for member in members
     }
 
 
-def _create(self: "Arrow", options: object, *, color: object | None, kwargs: dict[str, Any]) -> None:
+def _create(
+    self: "Arrow",
+    options: object,
+    *,
+    color: object | None,
+    kwargs: dict[str, Any],
+) -> None:
     if _create_arrow_handle is None:
         raise RuntimeError("Arrow construction requires the shared Rust authoring host")
     if _shared._live_constructor_context("Arrow") is not None:
         raise NotImplementedError(
             "live Arrow construction requires shared retained-family publication support"
         )
+    _apply_constructor_options(options, kwargs)
     if color is not None:
-        parsed = _compat._as_color("color", color)
-        engine_call(options.setColor, parsed.red, parsed.green, parsed.blue, parsed.alpha)
-    _constructor_options(options, kwargs)
+        _shared._apply_constructor_color(options, _compat._as_color("color", color))
     created = engine_call(_create_arrow_handle, options)
     _attach_arrow_family(self, created)
+
+
+def _validate_straight_arrow_options(
+    *,
+    path_arc: float | None,
+    preserve_tip_size_when_scaling: bool,
+    normal_vector: object,
+    use_rectangular_stem: bool,
+    tip_shape: object | None,
+) -> None:
+    """Reject compatibility breadth this straight-Arrow batch does not claim."""
+
+    if path_arc not in (None, 0, 0.0):
+        raise NotImplementedError("curved Arrow path_arc is not part of the straight #77 batch")
+    if not preserve_tip_size_when_scaling:
+        raise NotImplementedError("preserve_tip_size_when_scaling=False is not yet supported")
+    if use_rectangular_stem:
+        raise NotImplementedError("rectangular Arrow stems are not part of the straight #77 batch")
+    if tip_shape is not None:
+        raise NotImplementedError("custom Arrow tip classes require shared tip-shape semantics")
+    try:
+        normal = tuple(float(value) for value in normal_vector)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as error:
+        raise TypeError("normal_vector must be a three-component numeric vector") from error
+    if len(normal) != 3 or any(not _base.math.isfinite(value) for value in normal):
+        raise ValueError("normal_vector must contain three finite values")
+    if not (
+        abs(normal[0]) <= 1.0e-12
+        and abs(normal[1]) <= 1.0e-12
+        and abs(abs(normal[2]) - 1.0) <= 1.0e-12
+    ):
+        raise NotImplementedError("2D Arrow supports only the +/-z normal")
 
 
 class Arrow(_compat.Group):
@@ -126,27 +177,13 @@ class Arrow(_compat.Group):
     ) -> None:
         if _arrow_options is None:
             raise RuntimeError("Arrow construction requires the shared Rust authoring host")
-        if path_arc not in (None, 0, 0.0):
-            raise NotImplementedError("curved Arrow path_arc is not part of the straight #77 batch")
-        if not preserve_tip_size_when_scaling:
-            raise NotImplementedError("preserve_tip_size_when_scaling=False is not yet supported")
-        if use_rectangular_stem:
-            raise NotImplementedError("rectangular Arrow stems are not part of the straight #77 batch")
-        if tip_shape is not None:
-            raise NotImplementedError("custom Arrow tip classes require shared tip-shape semantics")
-        try:
-            normal = tuple(float(value) for value in normal_vector)  # type: ignore[arg-type]
-        except (TypeError, ValueError) as error:
-            raise TypeError("normal_vector must be a three-component numeric vector") from error
-        if len(normal) != 3 or any(not _base.math.isfinite(value) for value in normal):
-            raise ValueError("normal_vector must contain three finite values")
-        if not (
-            abs(normal[0]) <= 1.0e-12
-            and abs(normal[1]) <= 1.0e-12
-            and abs(abs(normal[2]) - 1.0) <= 1.0e-12
-        ):
-            raise NotImplementedError("2D Arrow supports only the +/-z normal")
-
+        _validate_straight_arrow_options(
+            path_arc=path_arc,
+            preserve_tip_size_when_scaling=preserve_tip_size_when_scaling,
+            normal_vector=normal_vector,
+            use_rectangular_stem=use_rectangular_stem,
+            tip_shape=tip_shape,
+        )
         start_point = _numeric_endpoint("start", start)
         end_point = _numeric_endpoint("end", end)
         options = engine_call(
@@ -156,22 +193,12 @@ class Arrow(_compat.Group):
             end_point.x,
             end_point.y,
         )
-        engine_call(options.setBuff, _ir._finite_number("buff", buff))
-        engine_call(options.setTipLength, _ir._finite_number("tip_length", tip_length))
-        engine_call(
-            options.setMaxTipLengthToLengthRatio,
-            _ir._finite_number(
-                "max_tip_length_to_length_ratio", max_tip_length_to_length_ratio
-            ),
-        )
-        # Rust stores scene-space stroke widths, so only this public Manim stroke
-        # ratio crosses the facade with Cairo's documented 0.01 conversion.
-        stroke_ratio = _ir._finite_number(
-            "max_stroke_width_to_length_ratio", max_stroke_width_to_length_ratio
-        )
-        engine_call(
-            options.setMaxStrokeWidthToLengthRatio,
-            stroke_ratio * _compat.MANIM_CAIRO_LINE_WIDTH_MULTIPLE,
+        _apply_arrow_parameters(
+            options,
+            buff=buff,
+            tip_length=tip_length,
+            max_tip_length_to_length_ratio=max_tip_length_to_length_ratio,
+            max_stroke_width_to_length_ratio=max_stroke_width_to_length_ratio,
         )
         _create(self, options, color=color, kwargs=kwargs)
 
@@ -183,6 +210,7 @@ class Arrow(_compat.Group):
     def get_end(self) -> _base.Vec2:
         from _manim_path_queries import endpoint
 
+        # Rust builds the tip path with its public apex as the first retained point.
         return endpoint(self.tip, False)
 
     def get_tip(self):
@@ -216,22 +244,14 @@ class Vector(Arrow):
     ) -> None:
         if _arrow_options is None:
             raise RuntimeError("Vector construction requires the shared Rust authoring host")
-        direction = _numeric_endpoint("direction", direction)
-        options = engine_call(_arrow_options.vector, direction.x, direction.y)
-        engine_call(options.setBuff, _ir._finite_number("buff", buff))
-        engine_call(options.setTipLength, _ir._finite_number("tip_length", tip_length))
-        engine_call(
-            options.setMaxTipLengthToLengthRatio,
-            _ir._finite_number(
-                "max_tip_length_to_length_ratio", max_tip_length_to_length_ratio
-            ),
-        )
-        stroke_ratio = _ir._finite_number(
-            "max_stroke_width_to_length_ratio", max_stroke_width_to_length_ratio
-        )
-        engine_call(
-            options.setMaxStrokeWidthToLengthRatio,
-            stroke_ratio * _compat.MANIM_CAIRO_LINE_WIDTH_MULTIPLE,
+        direction_point = _numeric_endpoint("direction", direction)
+        options = engine_call(_arrow_options.vector, direction_point.x, direction_point.y)
+        _apply_arrow_parameters(
+            options,
+            buff=buff,
+            tip_length=tip_length,
+            max_tip_length_to_length_ratio=max_tip_length_to_length_ratio,
+            max_stroke_width_to_length_ratio=max_stroke_width_to_length_ratio,
         )
         _create(self, options, color=color, kwargs=kwargs)
 
@@ -262,20 +282,12 @@ class DoubleArrow(Arrow):
             end_point.x,
             end_point.y,
         )
-        engine_call(options.setBuff, _ir._finite_number("buff", buff))
-        engine_call(options.setTipLength, _ir._finite_number("tip_length", tip_length))
-        engine_call(
-            options.setMaxTipLengthToLengthRatio,
-            _ir._finite_number(
-                "max_tip_length_to_length_ratio", max_tip_length_to_length_ratio
-            ),
-        )
-        stroke_ratio = _ir._finite_number(
-            "max_stroke_width_to_length_ratio", max_stroke_width_to_length_ratio
-        )
-        engine_call(
-            options.setMaxStrokeWidthToLengthRatio,
-            stroke_ratio * _compat.MANIM_CAIRO_LINE_WIDTH_MULTIPLE,
+        _apply_arrow_parameters(
+            options,
+            buff=buff,
+            tip_length=tip_length,
+            max_tip_length_to_length_ratio=max_tip_length_to_length_ratio,
+            max_stroke_width_to_length_ratio=max_stroke_width_to_length_ratio,
         )
         _create(self, options, color=color, kwargs=kwargs)
 
