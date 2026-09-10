@@ -88,6 +88,12 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: tools/noon-mcp/package-lock.json
+      - if: steps.source.outputs.enabled == 'true'
+        name: Install exact locked MCP dependencies without lifecycle hooks
+        working-directory: tools/noon-mcp
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - if: steps.source.outputs.enabled == 'true'
         name: Validate isolation contract units
         working-directory: tools/noon-mcp
@@ -114,13 +120,16 @@ jobs:
         env:
           NOON_PREVIEW_RUNTIME_CONFIG: ${{ runner.temp }}/noon-preview/runtime.json
         working-directory: tools/noon-mcp
-        run: timeout --signal=TERM 150s node test/docker-isolation-smoke.mjs | tee "$RUNNER_TEMP/noon-preview-isolation.json"
+        run: |
+          set -o pipefail
+          timeout --signal=TERM 150s node test/docker-isolation-smoke.mjs | tee "$RUNNER_TEMP/noon-preview-isolation.json"
       - if: steps.source.outputs.enabled == 'true'
         name: Verify persistent shared runner when present
         env:
           NOON_PREVIEW_RUNTIME_CONFIG: ${{ runner.temp }}/noon-preview/runtime.json
         working-directory: tools/noon-mcp
         run: |
+          set -o pipefail
           if [[ -f test/docker-runner-smoke.mjs ]]; then
             timeout --signal=TERM 180s node test/docker-runner-smoke.mjs | tee "$RUNNER_TEMP/noon-preview-runner.json"
           else
@@ -132,6 +141,7 @@ jobs:
           NOON_PREVIEW_RUNTIME_CONFIG: ${{ runner.temp }}/noon-preview/runtime.json
         working-directory: tools/noon-mcp
         run: |
+          set -o pipefail
           if [[ -f test/docker-cli-smoke.mjs ]]; then
             timeout --signal=TERM 180s node test/docker-cli-smoke.mjs | tee "$RUNNER_TEMP/noon-preview-cli.json"
           else
@@ -143,6 +153,7 @@ jobs:
           NOON_PREVIEW_RUNTIME_CONFIG: ${{ runner.temp }}/noon-preview/runtime.json
         working-directory: tools/noon-mcp
         run: |
+          set -o pipefail
           if [[ -f test/docker-mcp-rendering-smoke.mjs ]]; then
             timeout --signal=TERM 300s node test/docker-mcp-rendering-smoke.mjs | tee "$RUNNER_TEMP/noon-preview-mcp.json"
           else
