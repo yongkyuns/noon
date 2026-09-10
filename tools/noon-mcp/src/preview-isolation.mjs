@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { addAbortListener } from "node:events";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -16,6 +17,7 @@ export const DEFAULT_PREVIEW_LIMITS = Object.freeze({
 
 const IMAGE_ID = /^sha256:[0-9a-f]{64}$/;
 const CONTAINER_ID = /^[0-9a-f]{12,64}$/;
+const CONTAINER_NAME = /^noon-preview-[0-9a-f-]{36}$/;
 const MAX_DOCKER_OUTPUT = 256 * 1024;
 
 function boundedInt(name, value, min, max) {
@@ -97,7 +99,7 @@ export async function loadPreviewRuntimeConfig({
   });
 }
 
-export function buildDockerCreateArgs(config, command) {
+export function buildDockerCreateArgs(config, command, { containerName } = {}) {
   if (!config || typeof config !== "object" || !IMAGE_ID.test(config.imageId ?? "")) {
     throw new TypeError("Docker preview config requires a content-addressed image ID");
   }
@@ -109,8 +111,12 @@ export function buildDockerCreateArgs(config, command) {
   const toolingRoot = safeHostPath("toolingRoot", config.toolingRoot);
   const seccomp = safeHostPath("seccompProfile", config.seccompProfile);
   const cpu = String(limits.cpuCount);
+  if (containerName !== undefined && !CONTAINER_NAME.test(containerName)) {
+    throw new TypeError("containerName must be an owned Noon preview name");
+  }
   return Object.freeze([
     "create",
+    ...(containerName ? [`--name=${containerName}`] : []),
     "--rm",
     "--init",
     "--interactive",
@@ -151,7 +157,10 @@ export function validateDockerInspection(inspect, config) {
   const security = Array.isArray(host.SecurityOpt) ? host.SecurityOpt : [];
   const capDrop = Array.isArray(host.CapDrop) ? host.CapDrop.map((value) => String(value).toUpperCase()) : [];
   const failures = [];
+  if (inspect.Image !== config.imageId) failures.push("container image identity mismatch");
   if (host.NetworkMode !== "none") failures.push("network must be none");
+  if (host.IpcMode !== "private") failures.push("IPC namespace must be private");
+  if (host.PidMode !== "private") failures.push("PID namespace must be private");
   if (host.ReadonlyRootfs !== true) failures.push("root filesystem must be read-only");
   if (host.Privileged === true) failures.push("privileged mode forbidden");
   if (container.User !== "pwuser") failures.push("container must run as pwuser");
@@ -163,6 +172,9 @@ export function validateDockerInspection(inspect, config) {
   if (!capDrop.includes("ALL")) failures.push("all Linux capabilities must be dropped");
   if (!security.some((value) => value.startsWith("no-new-privileges"))) failures.push("no-new-privileges required");
   if (!security.some((value) => value.startsWith("seccomp="))) failures.push("explicit seccomp profile required");
+  const tmpfs = host.Tmpfs ?? {};
+  if (typeof tmpfs["/work"] !== "string" || !tmpfs["/work"].includes(`size=${limits.workBytes}`)) failures.push("bounded /work tmpfs required");
+  if (typeof tmpfs["/tmp"] !== "string" || !tmpfs["/tmp"].includes(`size=${limits.tmpBytes}`)) failures.push("bounded /tmp tmpfs required");
   for (const destination of ["/noon/web", "/noon/tools/noon-mcp"]) {
     const entry = mount(destination);
     if (!entry || entry.RW !== false || entry.Type !== "bind") failures.push(`${destination} must be a read-only bind mount`);
@@ -171,40 +183,60 @@ export function validateDockerInspection(inspect, config) {
   return true;
 }
 
-function captureProcess(executable, args, { signal, maxBytes = MAX_DOCKER_OUTPUT } = {}) {
+function captureProcess(executable, args, { signal, maxBytes = MAX_DOCKER_OUTPUT, timeoutMs = 15_000 } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = Buffer.alloc(0);
     let stderr = Buffer.alloc(0);
     let overflow = false;
+    let settled = false;
+    let abortSubscription;
+    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
     const append = (current, chunk) => {
       const remaining = maxBytes - current.length;
       if (remaining <= 0) { overflow = true; return current; }
       if (chunk.length > remaining) overflow = true;
       return Buffer.concat([current, chunk.subarray(0, Math.max(0, remaining))]);
     };
+    const finish = (callback) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      abortSubscription?.[Symbol.dispose]();
+      callback();
+    };
     child.stdout.on("data", (chunk) => { stdout = append(stdout, chunk); });
     child.stderr.on("data", (chunk) => { stderr = append(stderr, chunk); });
-    child.once("error", reject);
-    child.once("close", (code, receivedSignal) => {
+    child.once("error", (error) => finish(() => reject(error)));
+    child.once("close", (code, receivedSignal) => finish(() => {
+      const detail = stderr.toString("utf8").trim().slice(0, 1200);
       if (overflow) return reject(new Error("Docker command output exceeded diagnostic limit"));
-      if (code !== 0) {
-        const detail = stderr.toString("utf8").trim().slice(0, 1200);
-        return reject(new Error(`Docker command failed (${code ?? receivedSignal}): ${detail}`));
-      }
+      if (code !== 0) return reject(new Error(`Docker command failed (${code ?? receivedSignal}): ${detail}`));
       resolve(stdout.toString("utf8").trim());
-    });
-    if (signal) {
-      if (signal.aborted) child.kill("SIGKILL");
-      else signal.addEventListener("abort", () => child.kill("SIGKILL"), { once: true });
-    }
+    }));
+    if (signal) abortSubscription = addAbortListener(signal, () => child.kill("SIGKILL"));
   });
 }
 
-async function removeContainer(config, id) {
-  if (!CONTAINER_ID.test(id ?? "")) return;
-  try { await captureProcess(config.dockerExecutable, ["rm", "--force", id]); }
-  catch { /* cleanup outcome is reported by the owner; never retarget another ID */ }
+function ownedContainerSelector(value) {
+  return CONTAINER_ID.test(value ?? "") || CONTAINER_NAME.test(value ?? "");
+}
+
+function missingContainer(error) {
+  return /No such (?:container|object)/i.test(String(error?.message ?? error));
+}
+
+async function removeContainer(config, selector) {
+  if (!ownedContainerSelector(selector)) {
+    return Object.freeze({ outcome: "invalid_selector", removed: false });
+  }
+  try {
+    await captureProcess(config.dockerExecutable, ["rm", "--force", selector], { timeoutMs: 10_000 });
+    return Object.freeze({ outcome: "removed", removed: true });
+  } catch (error) {
+    if (missingContainer(error)) return Object.freeze({ outcome: "already_absent", removed: true });
+    return Object.freeze({ outcome: "failed", removed: false, error: String(error.message ?? error).slice(0, 1200) });
+  }
 }
 
 export class DockerIsolatedProcess {
@@ -215,16 +247,36 @@ export class DockerIsolatedProcess {
   #abortSubscription;
   #stderr = Buffer.alloc(0);
   #stderrTruncated = false;
+  #cleanupError = null;
   #exited;
 
   static async launch(config, command, { signal } = {}) {
     if (signal !== undefined && !(signal instanceof AbortSignal)) throw new TypeError("signal must be an AbortSignal");
     if (signal?.aborted) throw new Error("preview launch canceled before container creation");
-    const createArgs = buildDockerCreateArgs(config, command);
-    const id = await captureProcess(config.dockerExecutable, createArgs, { signal });
-    if (!CONTAINER_ID.test(id)) throw new Error("Docker returned an invalid container identity");
+    const containerName = `noon-preview-${randomUUID()}`;
+    const createArgs = buildDockerCreateArgs(config, command, { containerName });
+    let id;
     try {
-      const inspectionText = await captureProcess(config.dockerExecutable, ["inspect", id], { signal });
+      id = await captureProcess(config.dockerExecutable, createArgs, { timeoutMs: 15_000 });
+    } catch (error) {
+      const cleanup = await removeContainer(config, containerName);
+      if (!cleanup.removed) error.cleanup = cleanup;
+      throw error;
+    }
+    if (!CONTAINER_ID.test(id)) {
+      const cleanup = await removeContainer(config, containerName);
+      const error = new Error("Docker returned an invalid container identity");
+      if (!cleanup.removed) error.cleanup = cleanup;
+      throw error;
+    }
+    if (signal?.aborted) {
+      const cleanup = await removeContainer(config, id);
+      const error = new Error("preview launch canceled after container creation");
+      if (!cleanup.removed) error.cleanup = cleanup;
+      throw error;
+    }
+    try {
+      const inspectionText = await captureProcess(config.dockerExecutable, ["inspect", id], { signal, timeoutMs: 10_000 });
       const inspection = JSON.parse(inspectionText)?.[0];
       validateDockerInspection(inspection, config);
       const attached = spawn(config.dockerExecutable, ["start", "--attach", "--interactive", id], {
@@ -232,7 +284,8 @@ export class DockerIsolatedProcess {
       });
       return new DockerIsolatedProcess(config, id, attached, signal);
     } catch (error) {
-      await removeContainer(config, id);
+      const cleanup = await removeContainer(config, id);
+      if (!cleanup.removed) error.cleanup = cleanup;
       throw error;
     }
   }
@@ -252,7 +305,11 @@ export class DockerIsolatedProcess {
       if (chunk.length > remaining) this.#stderrTruncated = true;
       this.#stderr = Buffer.concat([this.#stderr, chunk.subarray(0, remaining)]);
     });
-    if (signal) this.#abortSubscription = addAbortListener(signal, () => { void this.close("preview operation canceled"); });
+    if (signal) this.#abortSubscription = addAbortListener(signal, () => {
+      void this.close("preview operation canceled").catch((error) => {
+        this.#cleanupError = String(error.message ?? error).slice(0, 1200);
+      });
+    });
   }
 
   get containerId() { return this.#containerId; }
@@ -260,7 +317,7 @@ export class DockerIsolatedProcess {
   get stdout() { return this.#attached.stdout; }
   get exited() { return this.#exited; }
   get diagnostics() {
-    return Object.freeze({ stderr: this.#stderr.toString("utf8"), stderrTruncated: this.#stderrTruncated });
+    return Object.freeze({ stderr: this.#stderr.toString("utf8"), stderrTruncated: this.#stderrTruncated, cleanupError: this.#cleanupError });
   }
 
   async close(reason = "preview container closed") {
@@ -269,9 +326,13 @@ export class DockerIsolatedProcess {
     this.#closed = true;
     this.#abortSubscription?.[Symbol.dispose]();
     try { this.#attached.stdin.end(); } catch {}
-    await removeContainer(this.#config, this.#containerId);
+    const cleanup = await removeContainer(this.#config, this.#containerId);
     try { await Promise.race([this.#exited, new Promise((resolve) => setTimeout(resolve, 1_500))]); } catch {}
     if (this.#attached.exitCode === null && this.#attached.signalCode === null) this.#attached.kill("SIGKILL");
-    return true;
+    if (!cleanup.removed) {
+      this.#cleanupError = cleanup.error ?? "preview container cleanup failed";
+      throw new Error(this.#cleanupError);
+    }
+    return Object.freeze({ closed: true, containerId: this.#containerId, cleanup });
   }
 }
