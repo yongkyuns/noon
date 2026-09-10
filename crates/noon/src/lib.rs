@@ -80,6 +80,7 @@ pub mod integration;
 mod live_program;
 mod live_session;
 mod native_signal_authoring;
+mod path_editing;
 mod path_queries;
 mod point_matching;
 mod rotation_authoring;

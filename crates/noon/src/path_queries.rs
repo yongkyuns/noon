@@ -70,11 +70,10 @@ impl PathQuery {
     }
 }
 
-pub(crate) fn prepare_content(
+pub(crate) fn content_path(
     store: &SemanticStore,
     content: SemanticObjectContent,
-    transform: SemanticTransform2_5D,
-) -> Result<PathQuery, AuthoringError> {
+) -> Result<std::borrow::Cow<'_, VectorPath>, AuthoringError> {
     let SemanticObjectContent::Geometry(content) = content else {
         return Err(AuthoringError::Unsupported(
             UnsupportedAuthoringOperation::PathQueryContent,
@@ -89,15 +88,20 @@ pub(crate) fn prepare_content(
                 .geometry_resources()
                 .get(handle)
                 .ok_or(AuthoringError::MissingGeometryResource(handle))?;
-            return PathQuery::prepare(path, transform);
+            return Ok(std::borrow::Cow::Borrowed(path));
         }
     };
-    // Analytic primitives have bounded-size canonical outlines. Retained custom
-    // paths above are borrowed directly rather than cloned into another resource.
-    PathQuery::prepare(
-        &canonical_outline_path(&primitive).expect("analytic primitive outline"),
-        transform,
-    )
+    Ok(std::borrow::Cow::Owned(
+        canonical_outline_path(&primitive).expect("analytic primitive outline"),
+    ))
+}
+
+pub(crate) fn prepare_content(
+    store: &SemanticStore,
+    content: SemanticObjectContent,
+    transform: SemanticTransform2_5D,
+) -> Result<PathQuery, AuthoringError> {
+    PathQuery::prepare(content_path(store, content)?.as_ref(), transform)
 }
 
 impl Mobject {

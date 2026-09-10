@@ -300,6 +300,13 @@ impl WasmManimGeometryOptions {
         .map_err(js_error)
     }
 
+    #[wasm_bindgen(js_name = emptyPath)]
+    pub fn empty_path() -> Result<Self, JsValue> {
+        noon::ManimGeometryOptions::path(VectorPath::new())
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
     pub fn path(path: WasmAuthoringVectorPath) -> Result<Self, JsValue> {
         noon::ManimGeometryOptions::path(path.path)
             .map(Self::from_options)
@@ -314,9 +321,21 @@ pub struct WasmAuthoringVectorPath {
     path: VectorPath,
 }
 
-fn point(x: f64, y: f64) -> Result<Vec2, JsValue> {
+pub(crate) fn point(x: f64, y: f64) -> Result<Vec2, JsValue> {
     let value = noon::integration::authoring_xy_f64(x, y).map_err(js_error)?;
     Ok(Vec2::new(value.x as f32, value.y as f32))
+}
+
+pub(crate) fn points(values: &[f64]) -> Result<Vec<Vec2>, JsValue> {
+    if values.len() % 2 != 0 {
+        return Err(js_error(noon::AuthoringError::InvalidPointCoordinates(
+            values.len(),
+        )));
+    }
+    values
+        .chunks_exact(2)
+        .map(|pair| point(pair[0], pair[1]))
+        .collect()
 }
 
 #[wasm_bindgen]

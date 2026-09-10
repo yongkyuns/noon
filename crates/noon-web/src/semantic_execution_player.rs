@@ -437,6 +437,15 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_points_as_corners(
+        &mut self,
+        source: &noon::Mobject,
+        points: &[noon_core::Vec2],
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_points_as_corners(source, points))
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_match_points(
         &mut self,
         source: &noon::Mobject,

@@ -1266,7 +1266,11 @@ fn build_lyon_path_with_manim_progress(path: &VectorPath) -> Result<Path, Geomet
                     curve_index += 1;
                     builder.line_to(point(to.x, to.y), &[progress(curve_index)]);
                 }
-                builder.end(false);
+                // The explicit closing edge already carries the final progress
+                // value. Close the contour as well so its first anchor receives
+                // the same stroke join as every other anchor; the native closing
+                // segment now has zero geometric length.
+                builder.end(true);
                 active = false;
                 current = Some(to);
             }
@@ -1493,6 +1497,25 @@ mod tests {
         let three_quarters = mesh.reveal_head_position(0.75).expect("reveal head");
         assert!((three_quarters.x - 100.0).abs() < 1e-5);
         assert!((three_quarters.y - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn closed_stroke_shape_does_not_depend_on_the_first_anchor() {
+        let a = Vec2::new(0., 0.);
+        let b = Vec2::new(2., 0.);
+        let c = Vec2::new(1., 2.);
+        let paths = [
+            VectorPath::new().move_to(a).line_to(b).line_to(c).close(),
+            VectorPath::new().move_to(b).line_to(c).line_to(a).close(),
+        ];
+        let meshes: Vec<_> = paths
+            .iter()
+            .map(|path| {
+                tessellate_styled_with_fill(path, 0.4, StrokeJoin::Miter, StrokeCap::Butt, false)
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(meshes[0].bounds, meshes[1].bounds);
     }
 
     #[test]
