@@ -266,12 +266,7 @@ where
     Ok((cells, leaf_count))
 }
 
-fn make_cell<F>(
-    sampler: &mut Sampler<F>,
-    min: IsolinePoint,
-    max: IsolinePoint,
-    depth: u32,
-) -> Cell
+fn make_cell<F>(sampler: &mut Sampler<F>, min: IsolinePoint, max: IsolinePoint, depth: u32) -> Cell
 where
     F: FnMut(IsolinePoint) -> f64,
 {
@@ -287,11 +282,7 @@ where
     }
 }
 
-fn split_cell<F>(
-    sampler: &mut Sampler<F>,
-    cells: &mut Vec<Cell>,
-    cell_index: usize,
-) -> [usize; 4]
+fn split_cell<F>(sampler: &mut Sampler<F>, cells: &mut Vec<Cell>, cell_index: usize) -> [usize; 4]
 where
     F: FnMut(IsolinePoint) -> f64,
 {
@@ -315,9 +306,7 @@ where
 fn should_descend_deep_cell(cell: &Cell, tolerance: IsolinePoint) -> bool {
     let lower = cell.vertices[0].point;
     let upper = cell.vertices[3].point;
-    if upper.x - lower.x < 10.0 * tolerance.x
-        && upper.y - lower.y < 10.0 * tolerance.y
-    {
+    if upper.x - lower.x < 10.0 * tolerance.x && upper.y - lower.y < 10.0 * tolerance.y {
         return false;
     }
 
@@ -392,11 +381,7 @@ impl<'a, F> Triangulator<'a, F>
 where
     F: FnMut(IsolinePoint) -> f64,
 {
-    fn new(
-        cells: &'a [Cell],
-        sampler: &'a mut Sampler<F>,
-        tolerance: IsolinePoint,
-    ) -> Self {
+    fn new(cells: &'a [Cell], sampler: &'a mut Sampler<F>, tolerance: IsolinePoint) -> Self {
         Self {
             cells,
             sampler,
@@ -541,11 +526,7 @@ where
         let base = self.triangles.len();
         self.triangles.extend(triangles);
         for index in 0..4 {
-            self.next_sandwich(
-                base + index,
-                base + (index + 1) % 4,
-                base + (index + 2) % 4,
-            );
+            self.next_sandwich(base + index, base + (index + 1) % 4, base + (index + 2) % 4);
         }
     }
 
@@ -641,13 +622,7 @@ where
     }
 }
 
-fn four_triangles(
-    a: Sample,
-    b: Sample,
-    c: Sample,
-    d: Sample,
-    center: Sample,
-) -> [Triangle; 4] {
+fn four_triangles(a: Sample, b: Sample, c: Sample, d: Sample, center: Sample) -> [Triangle; 4] {
     [
         Triangle::new([a, b, center]),
         Triangle::new([b, c, center]),
@@ -705,10 +680,7 @@ mod tests {
     use super::*;
 
     fn bounds() -> IsolineBounds {
-        IsolineBounds::new(
-            IsolinePoint::new(-2.0, -2.0),
-            IsolinePoint::new(2.0, 2.0),
-        )
+        IsolineBounds::new(IsolinePoint::new(-2.0, -2.0), IsolinePoint::new(2.0, 2.0))
     }
 
     #[test]
@@ -732,10 +704,7 @@ mod tests {
     fn adaptive_budget_matches_breadth_first_leaf_overshoot() {
         let plan = plan_isoline(
             |point| point.x,
-            IsolineBounds::new(
-                IsolinePoint::new(-1.0, -1.0),
-                IsolinePoint::new(1.0, 1.0),
-            ),
+            IsolineBounds::new(IsolinePoint::new(-1.0, -1.0), IsolinePoint::new(1.0, 1.0)),
             IsolineOptions {
                 min_depth: 1,
                 max_quads: 8,
@@ -817,10 +786,7 @@ mod tests {
         assert_eq!(
             plan_isoline(
                 |_| panic!("invalid bounds must fail before sampling"),
-                IsolineBounds::new(
-                    IsolinePoint::new(1.0, 0.0),
-                    IsolinePoint::new(0.0, 1.0),
-                ),
+                IsolineBounds::new(IsolinePoint::new(1.0, 0.0), IsolinePoint::new(0.0, 1.0)),
                 IsolineOptions::default(),
             ),
             Err(IsolineError::InvalidBounds)
