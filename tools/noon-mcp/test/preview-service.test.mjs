@@ -80,6 +80,7 @@ class FakeSession {
 
   async sample(time) {
     this.#control.sampled.push(time);
+    if (this.#control.sampleBarrier) await this.#control.sampleBarrier;
     if (this.#control.sampleErrorAt === time) {
       if (this.#control.fatalSampleError) {
         this.#snapshot = Object.freeze({ ...this.#snapshot, state: "closed", error: "fixture fatal sample" });
@@ -106,7 +107,7 @@ function setup({ maxFramesPerSession = 32, artifactLimits = {}, session = {} } =
     createSession: () => {
       const control = {
         opened: [], sampled: [], closed: [], buildIdentity: BUILD_IDENTITY,
-        openError: null, sampleErrorAt: null, fatalSampleError: false,
+        openError: null, sampleErrorAt: null, fatalSampleError: false, sampleBarrier: null,
         ...session,
       };
       controls.push(control);
@@ -158,6 +159,27 @@ test("batch sampling preflights ordering and retained-frame budget before advanc
   assert.equal(service.inspect(scope, opened.sessionId).retainedFrames, 4);
   await assert.rejects(service.sample(scope, opened.sessionId, 2), /retained frame limit/);
   assert.deepEqual(controls[0].sampled, [0.5, 1, 1]);
+});
+
+test("overlapping composition requests reject before entering the shared session", async () => {
+  let releaseSample;
+  const sampleBarrier = new Promise((resolve) => { releaseSample = resolve; });
+  const { service, scope, controls } = setup({ session: { sampleBarrier } });
+  const opened = await service.open(scope, "scene()");
+
+  const first = service.sample(scope, opened.sessionId, 0.5);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(controls[0].sampled, [0.5]);
+
+  await assert.rejects(service.sample(scope, opened.sessionId, 1), /preview service operation already in progress/);
+  assert.deepEqual(controls[0].sampled, [0.5]);
+  assert.equal(service.inspect(scope, opened.sessionId).retainedFrames, 1);
+
+  releaseSample();
+  const completed = await first;
+  assert.equal(completed.artifact.provenance.requestedTime, 0.5);
+  assert.equal(service.inspect(scope, opened.sessionId).retainedFrames, 2);
+  assert.equal(service.stats.sessions, 1);
 });
 
 test("missing observed build identity rejects open and retires the execution session", async () => {
