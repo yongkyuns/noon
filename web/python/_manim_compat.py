@@ -51,6 +51,20 @@ def _as_color(name: str, value: object) -> _base.Color:
 class VMobject(Mobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
 
+    def __init__(self, *, color=None, **kwargs):
+        from _manim_semantic_handles import _geometry_options, _apply_shared_constructor_options, _apply_constructor_color, _attach_geometry_options
+        from _noon_errors import engine_call
+        if _geometry_options is None:
+            raise RuntimeError("Mobject construction requires the shared Rust authoring host")
+        options = engine_call(_geometry_options.emptyPath)
+        _apply_shared_constructor_options(options, kwargs)
+        _apply_constructor_color(options, color)
+        _attach_geometry_options(self, options, "VMobject")
+
+    def set_points_as_corners(self, points):
+        from _manim_path_editing import set_points_as_corners
+        return set_points_as_corners(self, points)
+
     def set_color_by_gradient(self, *colors):
         from _manim_semantic_handles import _set_color_by_gradient
         return _set_color_by_gradient(self, *colors)

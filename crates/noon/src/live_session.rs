@@ -7,6 +7,7 @@
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
 mod family_layout;
+mod path_editing;
 mod path_queries;
 mod point_matching;
 mod z_index;

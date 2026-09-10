@@ -3275,3 +3275,5 @@ pub mod path_arrangement;
 pub mod canonical_curve_layout;
 
 pub mod point_matching;
+
+pub mod path_editing;

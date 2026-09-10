@@ -10,6 +10,8 @@
 pub enum UnsupportedAuthoringOperation {
     /// Point matching requires vector geometry on both operands.
     PointMatchContent,
+    /// Persistent point editing requires retained vector geometry.
+    PathEditContent,
     /// Effective family layout requires authored content without overrides.
     EffectiveFamilyLayoutRenderOverride,
     /// move_to cannot compose with an active effective affine driver.
@@ -61,6 +63,7 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::EffectivePathRenderOverride => "path queries require current retained content without active render overrides",
             Self::PathQueryContent => "path queries require retained geometry",
             Self::ExternalGeometry => "external geometry must resolve to an immutable semantic resource",
+            Self::PathEditContent => "point editing requires retained vector geometry",
             Self::PointMatchContent => "match_points requires vector geometry on both operands",
             Self::LineMatchSourceContent => "Line.match_points requires an analytic Line source",
             Self::RotatedDimensionStretch => "dimension stretching of rotated objects is unsupported",
@@ -100,6 +103,8 @@ pub enum AuthoringError {
     InvalidEllipseDimensions { width: f64, height: f64 },
     /// Geometry contains non-finite values.
     NonFiniteGeometry,
+    /// Flattened XY point input has an incomplete coordinate pair.
+    InvalidPointCoordinates(usize),
     /// The requested object state contains non-finite values.
     NonFiniteObjectState,
     /// An imported compact transform contains non-finite values.
@@ -217,6 +222,10 @@ impl std::fmt::Display for AuthoringError {
             Self::InvalidEllipseDimensions { .. } => {
                 f.write_str("Ellipse width and height must be positive")
             }
+            Self::InvalidPointCoordinates(count) => write!(
+                f,
+                "point coordinates require XY pairs, received {count} values"
+            ),
             Self::NonFiniteGeometry => f.write_str("geometry must be finite"),
             Self::NonFiniteObjectState => {
                 f.write_str("geometry, transform, and style must be finite")

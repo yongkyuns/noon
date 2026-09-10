@@ -1358,6 +1358,13 @@ mod wasm {
             self.clone_handle()
         }
 
+        /// Replace world-space corners through the shared semantic transaction.
+        #[wasm_bindgen(js_name = setPointsAsCorners)]
+        pub fn set_points_as_corners(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            self.handle.set_points_as_corners(&points).map_err(js_error)
+        }
+
         /// Share another vector object’s geometry and transform while preserving
         /// the source identity, paint, and painter priority.
         #[wasm_bindgen(js_name = matchPoints)]

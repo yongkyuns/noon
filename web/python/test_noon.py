@@ -30,8 +30,10 @@ class SceneBoundaryTests(unittest.TestCase):
         for constructor in (Mobject, VMobject):
             with self.assertRaises(TypeError):
                 constructor(object())
-            with self.assertRaisesRegex(TypeError, "base type"):
-                constructor()
+        with self.assertRaisesRegex(TypeError, "base type"):
+            Mobject()
+        with self.assertRaisesRegex(RuntimeError, "shared Rust"):
+            VMobject()
         for name in ("_make_mobject", "Circle", "Rectangle", "Line", "Path"):
             self.assertFalse(hasattr(_noon_ir, name), name)
 

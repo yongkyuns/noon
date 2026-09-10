@@ -14,7 +14,12 @@ pub fn session() -> Result<ExecutionSession, String> {
             shape.shift(x, 0.)?;
             let (right, center_y) = shape.critical_point(1., 0.)?;
             let mut marker = scene.square(0.12)?;
-            marker.set_fill(1., 1., 0., 1.)?;
+            marker.set_fill(
+                f64::from(noon_core::YELLOW.red),
+                f64::from(noon_core::YELLOW.green),
+                f64::from(noon_core::YELLOW.blue),
+                1.,
+            )?;
             marker.set_stroke_width(0.)?;
             marker.shift(right, center_y)?;
             scene.add_many(&[(&shape).into(), (&marker).into()])?;
