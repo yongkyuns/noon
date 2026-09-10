@@ -7,6 +7,12 @@ on:
       - "scripts/manim-api-coverage.py"
       - "compat/manim-v0.21.0.json"
       - "web/python/**"
+      - "web/semantic-preview-session*"
+      - "web/manim-raster-host*"
+      - "web/authoring-client.js"
+      - "web/authoring-execution-client.js"
+      - "scripts/build-web-demo.sh"
+      - ".github/actions/dev-wasm-build/**"
       - ".github/workflows/authoring-agent-discovery.yml"
   push:
     branches: [master]
@@ -16,6 +22,12 @@ on:
       - "scripts/manim-api-coverage.py"
       - "compat/manim-v0.21.0.json"
       - "web/python/**"
+      - "web/semantic-preview-session*"
+      - "web/manim-raster-host*"
+      - "web/authoring-client.js"
+      - "web/authoring-execution-client.js"
+      - "scripts/build-web-demo.sh"
+      - ".github/actions/dev-wasm-build/**"
       - ".github/workflows/authoring-agent-discovery.yml"
 permissions:
   contents: read
@@ -50,3 +62,46 @@ jobs:
         run: npm test
       - name: Preserve explicit CI topology registration
         run: node ../../web/ci-workflow-topology.test.mjs
+
+  preview-isolation:
+    name: Docker-isolated real browser preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NOON_PREVIEW_CACHE: ${{ runner.temp }}/noon-preview
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Validate isolation contract units
+        working-directory: tools/noon-mcp
+        run: node --test test/preview-isolation.test.mjs
+      - name: Build current browser package with exact provenance
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          preflight: "false"
+          cache-ref: ${{ github.event.pull_request.base.sha || github.sha }}
+      - name: Record Docker runtime
+        run: |
+          docker version
+          docker info --format '{{json .SecurityOptions}}'
+      - name: Prepare content-addressed preview runtime
+        working-directory: tools/noon-mcp
+        run: node scripts/setup-preview-runtime.mjs > "$RUNNER_TEMP/noon-preview-setup.json"
+      - name: Verify isolated real-browser preview
+        env:
+          NOON_PREVIEW_RUNTIME_CONFIG: ${{ runner.temp }}/noon-preview/runtime.json
+        working-directory: tools/noon-mcp
+        run: timeout --signal=TERM 150s node test/docker-isolation-smoke.mjs | tee "$RUNNER_TEMP/noon-preview-isolation.json"
+      - name: Upload isolation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-preview-isolation-evidence
+          path: |
+            ${{ runner.temp }}/noon-preview-setup.json
+            ${{ runner.temp }}/noon-preview-isolation.json
+            ${{ runner.temp }}/noon-preview/runtime.json
+          if-no-files-found: warn
+          retention-days: 14
