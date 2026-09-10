@@ -295,7 +295,9 @@ fn validate_derived_display_objects(
             ));
         }
         if !transform_is_finite(state.transform)
-            || state.render_transform.is_some_and(|value| !transform_is_finite(value))
+            || state
+                .render_transform
+                .is_some_and(|value| !transform_is_finite(value))
         {
             return Err(DerivedDisplayPublicationError::InvalidTransform(
                 object.occurrence_index,
