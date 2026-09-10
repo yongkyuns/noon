@@ -2,6 +2,8 @@
 
 mod authoring_error;
 #[cfg(target_arch = "wasm32")]
+mod authoring_arc;
+#[cfg(target_arch = "wasm32")]
 mod authoring_geometry;
 mod authoring_mobject;
 mod authoring_options;
