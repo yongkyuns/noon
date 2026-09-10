@@ -6,21 +6,6 @@ use crate::{
 };
 use noon_runtime::{FrameChanges, FrameState};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct RenderOrderKey {
-    pub z_index: i32,
-    pub insertion_order: u64,
-}
-
-impl RenderOrderKey {
-    pub const fn new(z_index: i32, insertion_order: u64) -> Self {
-        Self {
-            z_index,
-            insertion_order,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RenderPrimitive {
     Circle,
@@ -42,24 +27,6 @@ pub struct OrderedRenderBatch {
     pub primitive: RenderPrimitive,
     pub instance_range: Range<u32>,
 }
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RenderOrderError {
-    KeyCountMismatch { objects: usize, keys: usize },
-}
-
-impl std::fmt::Display for RenderOrderError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::KeyCountMismatch { objects, keys } => write!(
-                formatter,
-                "render order key count {keys} does not match scene object count {objects}"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for RenderOrderError {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VisibleRenderError {
@@ -263,67 +230,16 @@ impl FramePreparer {
 }
 
 impl FramePreparer {
-    /// Install explicit semantic z/painter keys for subsequent preparations.
-    ///
-    /// The current runtime has not yet migrated #62 presentation metadata into
-    /// `FrameObjectState`, so this narrow adapter lets that migration land later
-    /// without changing the renderer ordering algorithm again. When no keys are
-    /// supplied, object-vector order remains the stable painter order.
-    pub fn set_render_order_keys(
-        &mut self,
-        frame: &FrameState,
-        keys: &[RenderOrderKey],
-    ) -> Result<(), RenderOrderError> {
-        if keys.len() != frame.objects.len() {
-            return Err(RenderOrderError::KeyCountMismatch {
-                objects: frame.objects.len(),
-                keys: keys.len(),
-            });
-        }
-        if self.render_order_keys != keys {
-            self.render_order_keys.clear();
-            self.render_order_keys.extend_from_slice(keys);
-            self.initialized = false;
-        }
-        Ok(())
-    }
-
-    pub fn clear_render_order_keys(&mut self) {
-        if !self.render_order_keys.is_empty() {
-            self.render_order_keys.clear();
-            self.initialized = false;
-        }
-    }
-
     pub(crate) fn append_ordered_render_slot(&mut self, slot: PreparedSlot) {
-        debug_assert!(
-            self.render_order_keys.is_empty(),
-            "explicit render-order keys require structural rebuild",
-        );
         push_slot_batches(&mut self.render_batches, slot);
     }
 
     pub(crate) fn append_ordered_reveal_head(&mut self, line_index: usize) {
-        debug_assert!(
-            self.render_order_keys.is_empty(),
-            "explicit render-order keys require structural rebuild",
-        );
         push_batch(&mut self.render_batches, RenderPrimitive::Line, line_index);
     }
 
     pub(crate) fn rebuild_ordered_render_batches(&mut self) {
         self.render_batches.clear();
-
-        if self.render_order_keys.len() == self.slots.len() {
-            // Explicit z-order is comparatively uncommon and genuinely needs a
-            // sortable indirection. Keep that allocation isolated to this path.
-            let mut object_indices = (0..self.slots.len()).collect::<Vec<_>>();
-            object_indices.sort_by_key(|&index| self.render_order_keys[index]);
-            for object_index in object_indices {
-                push_slot_batches(&mut self.render_batches, self.slots[object_index]);
-            }
-            return;
-        }
 
         if self.painter_order_installed {
             for &object_index in &self.painter_order_indices {
@@ -334,7 +250,7 @@ impl FramePreparer {
             return;
         }
 
-        // Legacy/default painter order is the semantic object-vector order.
+        // Low-level scratch frames without a runtime permutation use storage order.
         for slot in self.slots.iter().copied() {
             push_slot_batches(&mut self.render_batches, slot);
         }
@@ -347,17 +263,6 @@ impl FramePreparer {
     /// compatible boundary batches without touching immutable geometry or mega-path
     /// streams.
     pub(crate) fn rebuild_render_order_chunks(&mut self, range: Option<Range<usize>>) {
-        if !self.render_order_keys.is_empty() {
-            self.render_chunks.clear();
-            self.render_chunks_active = false;
-            self.render_order_batch_count = 0;
-            self.render_order_mega_batch_count = 0;
-            self.render_order_mega_path_count = 0;
-            self.render_chunk_boundary_merges.clear();
-            self.render_order_boundary_merge_count = 0;
-            self.render_order_mega_boundary_merge_count = 0;
-            return;
-        }
         let position_count = if self.painter_order_installed {
             self.painter_order_indices.len()
         } else {
@@ -728,23 +633,14 @@ mod tests {
     }
 
     #[test]
-    fn explicit_z_keys_reorder_without_changing_instance_storage() {
+    fn runtime_painter_order_preserves_instance_storage() {
         let frame = frame(vec![
             object(0, GeometryRef::circle(1.0)),
             object(1, GeometryRef::rectangle(2.0, 2.0)),
             object(2, GeometryRef::circle(0.5)),
         ]);
         let mut preparer = FramePreparer::new();
-        preparer
-            .set_render_order_keys(
-                &frame,
-                &[
-                    RenderOrderKey::new(5, 0),
-                    RenderOrderKey::new(-1, 1),
-                    RenderOrderKey::new(5, 2),
-                ],
-            )
-            .unwrap();
+        preparer.set_painter_order(&frame, &[1, 0, 2]);
         let prepared = preparer.prepare(&frame);
         assert_eq!(
             prepared.render_batches[0].primitive,
@@ -755,19 +651,6 @@ mod tests {
             RenderPrimitive::Circle
         );
         assert_eq!(prepared.render_batches[1].instance_range, 0..2);
-    }
-
-    #[test]
-    fn key_count_must_match_scene() {
-        let frame = frame(vec![object(0, GeometryRef::circle(1.0))]);
-        let mut preparer = FramePreparer::new();
-        assert!(matches!(
-            preparer.set_render_order_keys(&frame, &[]),
-            Err(RenderOrderError::KeyCountMismatch {
-                objects: 1,
-                keys: 0
-            })
-        ));
     }
 
     #[test]
