@@ -37,7 +37,7 @@ const BUILD_IDENTITY = Object.freeze({
     glue: Object.freeze({ sha256: "d".repeat(64) }),
     verifier: Object.freeze({ sha256: "e".repeat(64) }),
   }),
-  buildId: "fixture-build",
+  buildId: "f".repeat(64),
 });
 
 function capture(time, buildIdentity = BUILD_IDENTITY) {
@@ -128,7 +128,7 @@ test("open binds submitted source, observed build and actual PNG to one opaque s
     engineRevision: "a".repeat(40),
     wasmSha256: "c".repeat(64),
     workerSha256: "b".repeat(64),
-    buildId: "fixture-build",
+    buildId: "f".repeat(64),
   });
   assert.equal(opened.artifact.provenance.sourceSha256,
     createHash("sha256").update(source, "utf8").digest("hex"));
