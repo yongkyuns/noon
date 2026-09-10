@@ -34,7 +34,7 @@ use noon_typst::{
     compile_typst_resource, compile_typst_resource_with_fonts, TypstMode, TypstResourceArtifact,
 };
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
-use swash::{FontRef, StringId};
+use swash::{FontRef, StringId, Stretch, Style as FontStyle, Weight};
 
 /// Typst's retained artifact is authored at 10pt, so its public Manim-style font size
 /// remains an object transform and does not alter glyph/cluster identity.
@@ -422,17 +422,38 @@ impl Text {
 #[cfg(feature = "native-text")]
 fn bundled_native_font(family: &str) -> Result<NativeFontFace, TextAuthoringError> {
     #[cfg(feature = "bundled-fonts")]
-    for data in typst_assets::fonts() {
-        let Some(font) = FontRef::from_index(data, 0) else {
-            continue;
-        };
-        let matches = font.localized_strings().any(|name| {
-            matches!(
-                name.id(),
-                StringId::Family | StringId::TypographicFamily | StringId::WwsFamily
-            ) && name.to_string().eq_ignore_ascii_case(family)
-        });
-        if matches {
+    {
+        let mut fallback = None;
+        for data in typst_assets::fonts() {
+            let Some(font) = FontRef::from_index(data, 0) else {
+                continue;
+            };
+            let matches = font.localized_strings().any(|name| {
+                matches!(
+                    name.id(),
+                    StringId::Family | StringId::TypographicFamily | StringId::WwsFamily
+                ) && name.to_string().eq_ignore_ascii_case(family)
+            });
+            if !matches {
+                continue;
+            }
+
+            fallback.get_or_insert(data);
+            let attributes = font.attributes();
+            if attributes.weight() == Weight::NORMAL
+                && attributes.style() == FontStyle::Normal
+                && attributes.stretch() == Stretch::NORMAL
+            {
+                return NativeFontFace::new(
+                    Arc::<str>::from(family),
+                    Arc::<[u8]>::from(data),
+                    0,
+                )
+                .map_err(TextAuthoringError::NativeText);
+            }
+        }
+
+        if let Some(data) = fallback {
             return NativeFontFace::new(Arc::<str>::from(family), Arc::<[u8]>::from(data), 0)
                 .map_err(TextAuthoringError::NativeText);
         }
