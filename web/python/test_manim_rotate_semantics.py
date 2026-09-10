@@ -1,107 +1,42 @@
-import os
-import subprocess
-import sys
-import textwrap
+"""Wrapper forwarding only; Rust and pinned Manim probes qualify pivot geometry."""
+import math
 import unittest
-from pathlib import Path
+from unittest.mock import Mock, patch
+
+import noon
+import _manim_compat as compat
+import _manim_semantic_handles as handles
+from _typed_geometry_test_support import identity_only_wrapper
 
 
 class ManimRotateSemanticsTests(unittest.TestCase):
-    def test_rotate_uses_manim_pivots_for_python_and_semantic_handles(self) -> None:
-        python_dir = Path(__file__).resolve().parent
-        env = os.environ.copy()
-        existing = env.get("PYTHONPATH")
-        env["PYTHONPATH"] = str(python_dir) if not existing else os.pathsep.join((str(python_dir), existing))
-        source = textwrap.dedent(
-  """
-  import json
-  import math
-  import _manim_compat
+    def test_object_and_family_pivots_use_the_same_authored_or_live_operation(self):
+        for cls in (compat.VMobject, compat.VGroup):
+            for live in (False, True):
+                with self.subTest(cls=cls, live=live):
+                    value = identity_only_wrapper(cls, submobjects=[])
+                    anchor, context = Mock(), (Mock() if live else None)
+                    value.get_center = Mock(side_effect=AssertionError("Rust resolves pivots"))
+                    with patch.object(handles, "_layout_anchor", return_value=anchor), \
+                         patch.object(handles, "_live_mutation_context", return_value=context), \
+                         patch.object(handles, "_group_live_layout_context", return_value=context):
+                        self.assertIs(value.rotate(math.pi, about_edge=noon.LEFT), value)
+                        self.assertIs(value.rotate_about_origin(0.5), value)
+                        self.assertIs(value.flip(noon.UP, about_point=(2, 3)), value)
+                    owner = context if live else anchor
+                    prefix = (anchor,) if live else ()
+                    rotation = getattr(owner, "liveRotateLayout" if live else "rotate")
+                    self.assertEqual(rotation.call_args_list, [
+                        unittest.mock.call(*prefix, math.pi, -1., 0., False),
+                        unittest.mock.call(*prefix, .5, 0., 0., True)])
+                    getattr(owner, "liveFlipLayout" if live else "flip").assert_called_once_with(
+                        *prefix, 0., 1., 0., 2., 3., True)
 
-  from noon import IN, LEFT, Line, ORIGIN, PI, RIGHT
-
-  def close(a, b, eps=1e-9):
-      assert abs(a - b) <= eps, (a, b)
-
-  import _manim_semantic_handles as handles
-
-  class FakeHandle:
-      def __init__(self, snapshot_json):
-          self.snapshot = json.loads(snapshot_json)
-      def snapshotJson(self):
-          return json.dumps(self.snapshot, separators=(\",\", \":\"))
-      def cloneHandle(self):
-          return FakeHandle(self.snapshotJson())
-      @property
-      def centerX(self):
-          line = self.snapshot[\"geometry\"][\"line\"]
-          local_x = (float(line[\"start\"][\"x\"]) + float(line[\"end\"][\"x\"])) * 0.5
-          local_y = (float(line[\"start\"][\"y\"]) + float(line[\"end\"][\"y\"])) * 0.5
-          transform = self.snapshot[\"transform\"]
-          x = local_x * float(transform[\"scale\"][\"x\"])
-          y = local_y * float(transform[\"scale\"][\"y\"])
-          angle = float(transform[\"rotation\"])
-          return (
-              x * math.cos(angle)
-              - y * math.sin(angle)
-              + float(transform[\"translation\"][\"x\"])
-          )
-      @property
-      def centerY(self):
-          line = self.snapshot[\"geometry\"][\"line\"]
-          local_x = (float(line[\"start\"][\"x\"]) + float(line[\"end\"][\"x\"])) * 0.5
-          local_y = (float(line[\"start\"][\"y\"]) + float(line[\"end\"][\"y\"])) * 0.5
-          transform = self.snapshot[\"transform\"]
-          x = local_x * float(transform[\"scale\"][\"x\"])
-          y = local_y * float(transform[\"scale\"][\"y\"])
-          angle = float(transform[\"rotation\"])
-          return (
-              x * math.sin(angle)
-              + y * math.cos(angle)
-              + float(transform[\"translation\"][\"y\"])
-          )
-      def setFillOpacity(self, opacity):
-          if self.snapshot[\"style\"][\"fill\"] is not None:
-              self.snapshot[\"style\"][\"fill\"][\"alpha\"] = float(opacity)
-      def setStrokeOpacity(self, opacity):
-          if self.snapshot[\"style\"][\"stroke\"] is not None:
-              self.snapshot[\"style\"][\"stroke\"][\"alpha\"] = float(opacity)
-      def shift(self, x, y):
-          t = self.snapshot[\"transform\"][\"translation\"]
-          t[\"x\"] += float(x); t[\"y\"] += float(y)
-      def scale(self, x, y):
-          s = self.snapshot[\"transform\"][\"scale\"]
-          s[\"x\"] *= float(x); s[\"y\"] *= float(y)
-      def rotateAboutPoint(self, angle, point_x, point_y):
-          t = self.snapshot[\"transform\"][\"translation\"]
-          dx = t[\"x\"] - point_x; dy = t[\"y\"] - point_y
-          c = math.cos(angle); s = math.sin(angle)
-          t[\"x\"] = point_x + dx * c - dy * s
-          t[\"y\"] = point_y + dx * s + dy * c
-          self.snapshot[\"transform\"][\"rotation\"] += float(angle)
-
-  import _typed_geometry_test_support as _geometry_test
-
-  _geometry_test.install_module_bridge(handles, FakeHandle)
-
-  semantic = Line(ORIGIN, RIGHT).shift(2 * RIGHT)
-  before = semantic.get_center()
-  semantic.rotate(PI / 2)
-  after = semantic.get_center()
-  close(after.x, before.x)
-  close(after.y, before.y)
-  semantic_origin = Line(ORIGIN, RIGHT).shift(2 * RIGHT)
-  semantic_origin.rotate(PI / 2, about_point=ORIGIN)
-  close(semantic_origin.get_center().x, 0.0)
-  close(semantic_origin.get_center().y, 2.5)
-  """
-        )
-        completed = subprocess.run(
-  [sys.executable, "-c", source], cwd=python_dir, env=env,
-  capture_output=True, text=True, check=False,
-        )
-        self.assertEqual(completed.returncode, 0, f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}")
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_unknown_options_and_invalid_vector_shapes_do_not_dispatch(self):
+        value = identity_only_wrapper(compat.VMobject)
+        with patch.object(handles, "_layout_anchor") as anchor:
+            with self.assertRaises(NotImplementedError):
+                value.rotate(1, surprise=True)
+            with self.assertRaises(TypeError):
+                value.flip((1, 2, 3, 4))
+            anchor.assert_not_called()

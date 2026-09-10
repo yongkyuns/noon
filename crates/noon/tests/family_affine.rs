@@ -84,6 +84,17 @@ fn active_affine_driver_rejects_family_edit_without_partial_publication() {
     live.advance_segment_to(segment, 1.0).unwrap();
     let before = live.effective(&a).unwrap();
     assert!(live.scale_family(&family, 2.0, 2.0).is_err());
+    let anchor = noon::LayoutAnchor::from(&family);
+    assert!(live
+        .flip_layout(
+            &anchor,
+            noon::SemanticVec3::new(0., 1., 0.),
+            ManimRotationPivot::Center
+        )
+        .is_err());
+    assert!(live
+        .rotate_layout(&anchor, 0.5, ManimRotationPivot::Point(0., 0.))
+        .is_err());
     assert_eq!(live.effective(&a).unwrap(), before);
     live.advance_segment_to(segment, segment.end_time())
         .unwrap();

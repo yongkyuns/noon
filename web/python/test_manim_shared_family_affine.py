@@ -14,6 +14,7 @@ class SharedFamilyAffineTests(unittest.TestCase):
             with self.subTest(live=live):
                 family = identity_only_wrapper(compat.VGroup, submobjects=[])
                 family._semantic_family_handle = Mock()
+                family._semantic_family_handle.memberKeys.return_value = []
                 family.get_center = Mock(side_effect=AssertionError("Python must not resolve family pivots"))
                 context = Mock() if live else None
                 with patch.object(handles, "_group_live_layout_context", return_value=context):
@@ -23,7 +24,10 @@ class SharedFamilyAffineTests(unittest.TestCase):
                 owner = context if live else family._semantic_family_handle
                 prefix = (family._semantic_family_handle,) if live else ()
                 getattr(owner, "liveScaleFamily" if live else "scale").assert_called_once_with(*prefix, 2.0, 3.0)
-                self.assertEqual(getattr(owner, "liveRotateFamily" if live else "rotate").call_args_list,
+                anchor = family._semantic_family_handle.layoutAnchor.return_value
+                owner = context if live else anchor
+                prefix = (anchor,) if live else ()
+                self.assertEqual(getattr(owner, "liveRotateLayout" if live else "rotate").call_args_list,
                                  [unittest.mock.call(*prefix, 0.5, 1.0, -1.0, False),
                                   unittest.mock.call(*prefix, 0.25, 4.0, 5.0, True)])
 

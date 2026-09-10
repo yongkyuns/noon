@@ -2220,19 +2220,18 @@ impl<'a> LiveSession<'a> {
         self.set_property(mobject, SemanticObjectProperty::Scale, scale)
     }
 
-    /// Add a center-relative affine rotation through the shared live
-    /// transaction. Pivot/layout rotation remains outside the bounded ordinary
-    /// affine facade.
+    /// Rotate about the coherent effective geometry center through the shared
+    /// affine transaction. Active affine drivers must complete before this edit.
     pub fn rotate(
         &mut self,
         mobject: &Mobject,
         angle: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let angle = authoring_render_f64("rotation", angle).map_err(LiveSessionError::from)?;
-        let rotation = self.authored(mobject)?.transform.rotation_z + angle;
-        let rotation =
-            authoring_render_f64("rotation result", rotation).map_err(LiveSessionError::from)?;
-        self.set_property(mobject, SemanticObjectProperty::RotationZ, rotation)
+        self.rotate_layout(
+            &crate::LayoutAnchor::from(mobject),
+            angle,
+            crate::ManimRotationPivot::Center,
+        )
     }
 
     pub fn set_scale(

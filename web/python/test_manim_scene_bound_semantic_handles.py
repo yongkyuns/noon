@@ -113,17 +113,6 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                     scale["x"] *= float(x)
                     scale["y"] *= float(y)
 
-                def rotateAboutPoint(self, angle, point_x, point_y):
-                    self.calls.append(("rotateAboutPoint", float(angle)))
-                    t = self.snapshot["transform"]["translation"]
-                    dx = t["x"] - float(point_x)
-                    dy = t["y"] - float(point_y)
-                    c = math.cos(float(angle))
-                    s = math.sin(float(angle))
-                    t["x"] = float(point_x) + dx * c - dy * s
-                    t["y"] = float(point_y) + dx * s + dy * c
-                    self.snapshot["transform"]["rotation"] += float(angle)
-
                 def setFillOpacity(self, opacity):
                     fill = self.snapshot["style"]["fill"]
                     if fill is None:

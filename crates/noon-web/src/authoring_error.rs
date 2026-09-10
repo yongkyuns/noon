@@ -224,6 +224,9 @@ impl From<AuthoringError> for AuthoringFailure {
                 "authoring.invalid_grid_dimensions",
                 message,
             ),
+            AuthoringError::InvalidFlipAxis => {
+                Self::new("invalid_input", "authoring.invalid_flip_axis", message)
+            }
             AuthoringError::InvalidGridOption(_) => {
                 Self::new("invalid_input", "authoring.invalid_grid_option", message)
             }
