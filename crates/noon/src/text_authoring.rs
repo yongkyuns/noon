@@ -40,10 +40,11 @@ use swash::{FontRef, StringId};
 /// remains an object transform and does not alter glyph/cluster identity.
 #[cfg(feature = "typst")]
 pub const SCALE_FACTOR_PER_FONT_POINT: f32 = 1.0 / 960.0;
-/// Native text is shaped at its requested point size, so only the point-to-scene
-/// conversion belongs in the object transform.
+/// Swash reports its requested size in device pixels while Manim's public native
+/// Text font size is point-based. Convert 72 typographic points per scene-inch here;
+/// the renderer must not compensate for this semantic unit conversion.
 #[cfg(feature = "native-text")]
-pub const NATIVE_POINT_TO_SCENE_SCALE: f32 = 1.0 / 96.0;
+pub const NATIVE_POINT_TO_SCENE_SCALE: f32 = 1.0 / 72.0;
 #[cfg(feature = "typst")]
 pub const DEFAULT_TYPST_FONT_SIZE: f32 = 48.0;
 #[cfg(feature = "native-text")]
