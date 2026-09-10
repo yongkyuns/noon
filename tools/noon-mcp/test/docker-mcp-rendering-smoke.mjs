@@ -167,6 +167,21 @@ try {
     "noon_sample_frames",
   ]);
 
+  const sourceFailure = await client.callTool({
+    name: "noon_open_scene",
+    arguments: {
+      source: "from noon import *\nraise RuntimeError('mcp-source-error-probe')\n",
+      loopDurationSeconds: 4,
+    },
+  }, { timeout: 120_000 });
+  assert.equal(sourceFailure.isError, true, "real source execution failure must remain an MCP tool error");
+  assert.deepEqual(sourceFailure.content.map((item) => item.type), ["text"],
+    "source execution failure must not invent image content");
+  assert.ok(sourceFailure.structuredContent?.error && typeof sourceFailure.structuredContent.error.message === "string",
+    "source execution failure must retain bounded structured diagnostics");
+  assert.ok(sourceFailure.structuredContent.error.message.length > 0 && sourceFailure.structuredContent.error.message.length <= 1200);
+  await waitForNoOwnedContainers();
+
   const baseline = await renderRun(client, source, sourceSha256);
 
   const intruder = await connectClient("cross-transport");
@@ -292,6 +307,7 @@ try {
     revisedSourceSha256,
     baselineFrameSha256: baseline.hashes,
     revisedFrameSha256: revised.hashes,
+    sourceFailureRecovered: true,
     cancellationRecovered: true,
     disconnectCleanup: true,
     cliEquivalent: true,
