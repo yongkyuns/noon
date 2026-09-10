@@ -9382,7 +9382,11 @@ mod tests {
         );
         assert_eq!(
             context.mobject_color(&line).unwrap(),
-            Color::rgba(1.0, 1.0, 0.0, 0.7)
+            Color::rgb(0.0, 1.0, 0.0)
+        );
+        assert_eq!(
+            context.mobject_stroke_color(&line).unwrap(),
+            Some(Color::rgb(1.0, 1.0, 0.0))
         );
         assert_eq!(context.mobject_stroke_opacity(&line).unwrap(), 0.7);
     }
