@@ -2126,7 +2126,10 @@ impl<'a> LiveSession<'a> {
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         plan.observe_leaf_bounds(|leaf| {
             let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
-            self.family_member_bounds(&mobject)
+            Ok::<_, LiveSessionError>(crate::family_arrangement::ArrangementBounds {
+                dimensions: self.family_member_bounds(&mobject)?,
+                anchors: self.family_member_measure(&mobject, true)?,
+            })
         })?;
         let transaction = plan.transaction(|leaf| {
             let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;

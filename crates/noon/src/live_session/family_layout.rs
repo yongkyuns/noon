@@ -351,7 +351,7 @@ impl LiveSession<'_> {
         self.family_member_measure(mobject, false)
     }
 
-    fn family_member_measure(
+    pub(super) fn family_member_measure(
         &self,
         mobject: &Mobject,
         boundary: bool,

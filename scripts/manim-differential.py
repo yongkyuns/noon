@@ -810,7 +810,22 @@ def _arc_geometry(api):
     }
 
 
+def _path_family_arrangement(api):
+    results = []
+    for grid in (False, True):
+        a = api.Arc(radius=1, start_angle=-0.3, angle=1.8, num_components=3)
+        b = a.copy()
+        family = api.VGroup(a, b)
+        if grid:
+            family.arrange_in_grid(rows=1, cols=2, buff=(0.25, 0.25))
+        else:
+            family.arrange(api.RIGHT, buff=0.25)
+        results.append([_object_observation(obj) for obj in (a, b, family)])
+    return results
+
+
 FIXTURES = [
+    Fixture("path_family_arrangement", lambda: _path_family_arrangement(noon), lambda: _path_family_arrangement(manim), 1e-5),
     Fixture("arc_geometry", lambda: _arc_geometry(noon), lambda: _arc_geometry(manim), 1e-5),
     Fixture("z_index", lambda: _z_index_probe(noon), lambda: _z_index_probe(manim)),
     Fixture("scale_pivots", lambda: _scale_pivots_probe(noon), lambda: _scale_pivots_probe(manim)),
@@ -895,7 +910,6 @@ FIXTURES = [
 UNSUPPORTED = {
     "family_insert_assignment": "duplicate-edge insert and indexed assignment remain under #74",
     "family_aliasing": "Shared semantic identity exists; exhaustive nested-family mutation/copy parity remains under #74",
-    "z_index": "Noon does not yet expose the 2.5D/z semantic model (#62)",
     "updater_frame_semantics": "host/native updater phase semantics are being defined in #56",
     "animation_lifecycle": "requires a reference Scene/animation-state probe, to be added incrementally",
     "stroke_scaling": "semantic stroke-width/scaling mode is being defined in #62",

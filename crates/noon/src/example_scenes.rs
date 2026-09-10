@@ -3267,3 +3267,5 @@ pub mod z_index;
 
 pub mod animated_stroke_width;
 pub mod arc_geometry;
+
+pub mod path_arrangement;
