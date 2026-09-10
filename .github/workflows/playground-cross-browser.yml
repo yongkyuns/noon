@@ -12,6 +12,7 @@ on:
       - "!crates/**/tests/**"
       - "scripts/build-web-demo.sh"
       - "scripts/build-python-worker.mjs"
+      - "scripts/build-runtime-identity.mjs"
       - "scripts/playground-browser-matrix-smoke.mjs"
       - "scripts/playground-example-browser-smoke.mjs"
       - "scripts/playground-main-thread-mobile-smoke.mjs"
@@ -27,6 +28,7 @@ on:
       - "!crates/**/tests/**"
       - "scripts/build-web-demo.sh"
       - "scripts/build-python-worker.mjs"
+      - "scripts/build-runtime-identity.mjs"
       - "scripts/playground-browser-matrix-smoke.mjs"
       - "scripts/playground-example-browser-smoke.mjs"
       - "scripts/playground-main-thread-mobile-smoke.mjs"
@@ -87,6 +89,7 @@ jobs:
           path: |
             web/pkg
             web/python-worker.js
+            web/runtime-build-identity.json
             web/python/compat-bundle.*.json
           if-no-files-found: error
           retention-days: 1
