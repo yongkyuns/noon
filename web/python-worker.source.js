@@ -149,7 +149,9 @@ function measureStartupTask(metrics, key, task) {
 
 async function loadCompatibilityBundle() {
   const response = await fetch(new URL("./python/compat-bundle.json", import.meta.url));
-  if (!response.ok) throw new Error(`Unable to load Noon Python compatibility bundle: HTTP ${response.status}`);
+  if (!response.ok) {
+    throw new Error(`Unable to load Noon Python compatibility bundle: HTTP ${response.status}`);
+  }
   const bundle = await response.json();
   if (!isRecord(bundle) || bundle.version !== 1 || !Array.isArray(bundle.modules)) throw new Error("Noon Python compatibility bundle has an invalid envelope");
   if (bundle.modules.length !== PYTHON_COMPAT_MODULES.length) throw new Error(`Noon Python compatibility bundle module count ${bundle.modules.length} does not match manifest ${PYTHON_COMPAT_MODULES.length}`);
