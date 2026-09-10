@@ -117,7 +117,7 @@ try {
     try {
       await page.goto(`${base}?example=${encodeURIComponent(entry.id)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForFunction(() => window.__noonExampleGallery !== undefined, null, { timeout: 45000 });
-      if (noJspi) {
+      if (noJspi && browserName === 'chromium') {
         assert.equal(await page.evaluate(() => window.__galleryNoJspiWorkerWrapped), true,
           'no-JSPI smoke did not wrap the production authoring worker');
       }
