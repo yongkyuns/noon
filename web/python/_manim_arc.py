@@ -98,10 +98,19 @@ class ArcBetweenPoints(Arc):
             component_count,
             operation="ArcBetweenPoints",
         )
+        metadata = engine_call(
+            _shared._geometry_options.arcBetweenPointsMetadata,
+            start_point.x,
+            start_point.y,
+            end_point.x,
+            end_point.y,
+            angle_value,
+            radius_value,
+            operation="ArcBetweenPoints.metadata",
+        )
         _finish_candidate(self, candidate, "ArcBetweenPoints", options)
-        self.angle = angle_value
+        self.radius = float(metadata.radius)
+        self.start_angle = 0.0
+        self.angle = float(metadata.angle)
         self.num_components = component_count
-        # Do not duplicate implicit-radius recovery in Python. Explicit radius metadata is
-        # authoring syntax; implicit geometric metadata remains a shared-Rust query follow-up.
-        if radius_value is not None:
-            self.radius = abs(radius_value)
+        self.arc_center = _base.ORIGIN
