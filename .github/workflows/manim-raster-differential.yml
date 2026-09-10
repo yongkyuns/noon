@@ -7,6 +7,8 @@ on:
       - "web/manim-raster-host.js"
       - "scripts/semantic-preview-*"
       - "scripts/agent-preview-capture*.mjs"
+      - "scripts/manim-differential.py"
+      - "scripts/manim-differential-noon.mjs"
       - ".github/workflows/manim-raster-differential.yml"
   push:
     branches:
@@ -32,7 +34,6 @@ jobs:
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: READ_ONLY
       NOON_WASM_SKIP_OPT: "1"
-      NOON_SKIP_PLAYGROUND_TEST: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -91,6 +92,19 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
+      - name: Compare public Python semantics with pinned ManimCE
+        timeout-minutes: 5
+        run: |
+          node scripts/manim-differential-noon.mjs browser-smoke-artifacts/manim-differential/noon.json
+          python scripts/manim-differential.py --noon-observations browser-smoke-artifacts/manim-differential/noon.json --json > browser-smoke-artifacts/manim-differential/comparison.json
+      - name: Upload semantic differential observations
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: manim-semantic-differential
+          path: browser-smoke-artifacts/manim-differential
+          if-no-files-found: warn
+          retention-days: 7
       - name: Verify semantic preview frames, cancellation, and fresh-run recovery
         run: timeout --signal=TERM 180s node scripts/semantic-preview-smoke.mjs
       - name: Verify actual preview PNG capture enters bounded artifact storage
