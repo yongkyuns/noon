@@ -63,3 +63,24 @@ def insert_n_curves(value, n):
     else:
         engine_call(context.liveInsertNCurves, handle, count, operation="VMobject.insert_n_curves")
     return value
+
+
+def change_anchor_mode(value, mode):
+    from _manim_compat import Group
+    from _manim_updaters import canonical_callback_phase_active
+    if mode not in ("smooth", "jagged"):
+        raise ValueError("mode must be 'smooth' or 'jagged'")
+    if canonical_callback_phase_active():
+        raise NotImplementedError("callback path editing requires shared transient resource publication")
+    family = isinstance(value, Group)
+    handle = getattr(value, "_semantic_family_handle", None) if family else _handle_for(value)
+    if handle is None:
+        raise RuntimeError("path editing requires a shared semantic handle")
+    from _manim_semantic_handles import _group_target_context
+    context = _group_target_context(value) if family else (_live_mutation_context(value) or _live_constructor_context("path"))
+    if context is None:
+        engine_call(handle.makeSmooth if mode == "smooth" else handle.makeJagged)
+    else:
+        method = context.liveChangeFamilyAnchorMode if family else context.liveChangeAnchorMode
+        engine_call(method, handle, mode == "smooth")
+    return value

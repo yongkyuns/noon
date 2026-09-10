@@ -655,12 +655,32 @@ impl SemanticStore {
     where
         E: From<crate::GeometryResourceError>,
     {
-        let handle = self.insert_geometry_path(path).map_err(E::from)?;
-        let result = publish(self, handle);
+        self.with_geometry_paths([path], |store, handles| publish(store, handles[0]))
+    }
+
+    /// Admit a local batch of immutable paths for one atomic transaction. Any
+    /// allocation or publication error releases every unpublished batch resource.
+    pub fn with_geometry_paths<T, E>(
+        &mut self,
+        paths: impl IntoIterator<Item = crate::VectorPath>,
+        publish: impl FnOnce(&mut Self, &[crate::GeometryResourceHandle]) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<crate::GeometryResourceError>,
+    {
+        let mut handles = Vec::new();
+        let result = (|| {
+            for path in paths {
+                handles.push(self.insert_geometry_path(path).map_err(E::from)?);
+            }
+            publish(self, &handles)
+        })();
         if result.is_err() {
-            self.geometry_resources
-                .remove(handle.id)
-                .expect("an unpublished fresh path remains removable");
+            for handle in handles {
+                self.geometry_resources
+                    .remove(handle.id)
+                    .expect("an unpublished fresh path remains removable");
+            }
         }
         result
     }

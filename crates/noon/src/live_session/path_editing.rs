@@ -37,6 +37,19 @@ impl LiveSession<'_> {
         Mobject::from_node(Rc::clone(self.store), id).map_err(LiveSessionError::from)
     }
 
+    pub fn set_points_smoothly(
+        &mut self,
+        object: &Mobject,
+        points: &[noon_core::Vec2],
+    ) -> Result<(), LiveSessionError> {
+        self.edit_path(object, PathEdit::SmoothCorners(points))
+    }
+    pub fn make_smooth(&mut self, object: &Mobject) -> Result<(), LiveSessionError> {
+        self.edit_path(object, PathEdit::AnchorMode(true))
+    }
+    pub fn make_jagged(&mut self, object: &Mobject) -> Result<(), LiveSessionError> {
+        self.edit_path(object, PathEdit::AnchorMode(false))
+    }
     /// Replace persistent world-space corners at a coherent publication boundary.
     pub fn set_points_as_corners(
         &mut self,
@@ -140,5 +153,51 @@ impl LiveSession<'_> {
 impl From<noon_core::GeometryResourceError> for LiveSessionError {
     fn from(error: noon_core::GeometryResourceError) -> Self {
         crate::AuthoringError::from(error).into()
+    }
+}
+
+impl crate::LiveSession<'_> {
+    pub fn make_family_smooth(
+        &mut self,
+        family: &MobjectFamily,
+    ) -> Result<(), crate::LiveSessionError> {
+        self.change_family_anchor_mode(family, true)
+    }
+    pub fn make_family_jagged(
+        &mut self,
+        family: &MobjectFamily,
+    ) -> Result<(), crate::LiveSessionError> {
+        self.change_family_anchor_mode(family, false)
+    }
+    fn change_family_anchor_mode(
+        &mut self,
+        family: &MobjectFamily,
+        smooth: bool,
+    ) -> Result<(), crate::LiveSessionError> {
+        self.require_family(family)?;
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        let nodes = self
+            .store
+            .borrow()
+            .ordered_leaf_nodes(family.node_id())
+            .map_err(crate::AuthoringError::from)?;
+        let states = nodes
+            .into_iter()
+            .map(|node| {
+                let object = Mobject::from_node(std::rc::Rc::clone(self.store), node)?;
+                Ok((node, self.capture_mobject_state(&object)?))
+            })
+            .collect::<Result<Vec<_>, crate::LiveSessionError>>()?;
+        let mut store = self.store.borrow_mut();
+        crate::path_smoothing::PreparedAnchorEdits::prepare(&store, states, smooth)?.publish(
+            &mut store,
+            |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map(|_| ())
+                    .map_err(crate::LiveSessionError::from)
+            },
+        )
     }
 }

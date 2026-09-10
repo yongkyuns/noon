@@ -3283,3 +3283,5 @@ pub mod path_selection;
 pub mod path_refinement;
 
 pub mod path_subcurves;
+
+pub mod path_smoothing;

@@ -487,6 +487,42 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_points_smoothly(
+        &mut self,
+        object: &noon::Mobject,
+        points: &[noon_core::Vec2],
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_points_smoothly(object, points))
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_change_anchor_mode(
+        &mut self,
+        object: &noon::Mobject,
+        smooth: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            if smooth {
+                live.make_smooth(object)
+            } else {
+                live.make_jagged(object)
+            }
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_change_family_anchor_mode(
+        &mut self,
+        family: &noon::MobjectFamily,
+        smooth: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            if smooth {
+                live.make_family_smooth(family)
+            } else {
+                live.make_family_jagged(family)
+            }
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_insert_n_curves(
         &mut self,
         object: &noon::Mobject,

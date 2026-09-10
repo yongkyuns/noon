@@ -1016,6 +1016,14 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = makeSmooth)]
+        pub fn make_smooth(&self) -> Result<(), JsValue> {
+            self.semantic_family()?.make_smooth().map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = makeJagged)]
+        pub fn make_jagged(&self) -> Result<(), JsValue> {
+            self.semantic_family()?.make_jagged().map_err(js_error)
+        }
         #[wasm_bindgen(js_name = copyFamily)]
         pub fn copy_family(
             &self,
@@ -1485,6 +1493,20 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setPointsSmoothly)]
+        pub fn set_points_smoothly(&mut self, coordinates: Vec<f64>) -> Result<(), JsValue> {
+            self.handle
+                .set_points_smoothly(&crate::authoring_geometry::points(&coordinates)?)
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = makeSmooth)]
+        pub fn make_smooth(&mut self) -> Result<(), JsValue> {
+            self.handle.make_smooth().map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = makeJagged)]
+        pub fn make_jagged(&mut self) -> Result<(), JsValue> {
+            self.handle.make_jagged().map_err(js_error)
+        }
         #[wasm_bindgen(js_name = insertNCurves)]
         pub fn insert_n_curves(&mut self, additional: u32) -> Result<(), JsValue> {
             self.handle

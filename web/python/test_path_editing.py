@@ -85,3 +85,28 @@ class PathEditingTests(unittest.TestCase):
             for count in [-1, 2**32]:
                 with self.assertRaises(ValueError): value.insert_n_curves(count)
             with self.assertRaises(TypeError): value.insert_n_curves(0.5)
+
+class SmoothingDispatchTests(unittest.TestCase):
+    def test_path_and_family_modes_dispatch_without_python_geometry(self):
+        import _manim_semantic_handles as handles
+        for family in (False, True):
+            value = object.__new__(compat.VGroup) if family else identity_only_wrapper(compat.VMobject)
+            handle = Mock()
+            if family: value._semantic_family_handle = handle
+            for context in (None, Mock()):
+                with patch.object(editing, '_handle_for', return_value=handle), \
+                     patch.object(editing, '_live_mutation_context', return_value=context), \
+                     patch.object(editing, '_live_constructor_context', return_value=None), \
+                     patch.object(handles, '_group_target_context', return_value=context):
+                    self.assertIs(value.make_smooth(), value)
+                    self.assertIs(value.make_jagged(), value)
+                if context is None:
+                    handle.makeSmooth.assert_called_once_with()
+                    handle.makeJagged.assert_called_once_with()
+                else:
+                    method = context.liveChangeFamilyAnchorMode if family else context.liveChangeAnchorMode
+                    self.assertEqual(method.call_args_list[0].args, (handle, True))
+                    self.assertEqual(method.call_args_list[1].args, (handle, False))
+        with patch.object(editing, '_handle_for') as resolve:
+            with self.assertRaises(ValueError): value.change_anchor_mode('unknown')
+            resolve.assert_not_called()

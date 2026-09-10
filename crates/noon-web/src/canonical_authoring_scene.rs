@@ -5815,6 +5815,45 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetPointsSmoothly)]
+        pub fn live_set_points_smoothly(
+            &mut self,
+            object: &crate::WasmAuthoringMobjectHandle,
+            coordinates: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_points_smoothly(
+                    object.semantic_mobject(),
+                    &crate::authoring_geometry::points(&coordinates)?,
+                )
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveChangeAnchorMode)]
+        pub fn live_change_anchor_mode(
+            &mut self,
+            object: &crate::WasmAuthoringMobjectHandle,
+            smooth: bool,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_change_anchor_mode(object.semantic_mobject(), smooth)
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveChangeFamilyAnchorMode)]
+        pub fn live_change_family_anchor_mode(
+            &mut self,
+            family: &crate::WasmAuthoringFamilyHandle,
+            smooth: bool,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_change_family_anchor_mode(&family.semantic_family()?, smooth)
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = liveInsertNCurves)]
         pub fn live_insert_n_curves(
             &mut self,

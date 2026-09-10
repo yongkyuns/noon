@@ -65,6 +65,20 @@ class VMobject(Mobject):
         from _manim_path_editing import set_points_as_corners
         return set_points_as_corners(self, points)
 
+    def set_points_smoothly(self, points):
+        from _manim_path_editing import edit_points
+        return edit_points(self, "setPointsSmoothly", "liveSetPointsSmoothly", points, array=True)
+
+    def make_smooth(self):
+        return self.change_anchor_mode("smooth")
+
+    def make_jagged(self):
+        return self.change_anchor_mode("jagged")
+
+    def change_anchor_mode(self, mode):
+        from _manim_path_editing import change_anchor_mode
+        return change_anchor_mode(self, mode)
+
     def start_new_path(self, point):
         from _manim_path_editing import edit_points
         return edit_points(self, "startNewPath", "liveStartNewPath", (point,))
@@ -518,7 +532,15 @@ class Group(Mobject):
 
 
 class VGroup(Group):
-    pass
+    def make_smooth(self):
+        return self.change_anchor_mode("smooth")
+
+    def make_jagged(self):
+        return self.change_anchor_mode("jagged")
+
+    def change_anchor_mode(self, mode):
+        from _manim_path_editing import change_anchor_mode
+        return change_anchor_mode(self, mode)
 
 
 def _mobject_generate_target(self: Mobject, use_deepcopy: bool = False) -> Mobject:

@@ -833,6 +833,22 @@ def _canonical_curve_layout(api):
     return [_object_observation(obj) for obj in (circle, ellipse, circle.copy(), family)]
 
 
+def _path_smoothing(api):
+    point = lambda x, y: api.RIGHT * x + api.UP * y
+    source = api.VMobject().set_points_smoothly([point(0, 0), point(1, 1), point(2, 0)])
+    closed = api.Square(side_length=2).shift(api.RIGHT * 2 + api.UP * 2)
+    family = api.VGroup(source, closed)
+    def observe():
+        return [[[list(p)[:2] for p in column] for column in value.get_anchors_and_handles()]
+                for value in (source, closed)]
+    result = [observe()]
+    family.make_smooth()
+    result.append(observe())
+    family.make_jagged()
+    result.append(observe())
+    return result
+
+
 def _path_subcurves(api):
     point = lambda x, y: api.RIGHT * x + api.UP * y
     source = api.Square(side_length=2).shift(api.LEFT * 2)
@@ -917,6 +933,7 @@ def _point_matching(api):
 
 
 FIXTURES = [
+    Fixture("path_smoothing", lambda: _path_smoothing(noon), lambda: _path_smoothing(manim), 1e-5),
     Fixture("path_subcurves", lambda: _path_subcurves(noon), lambda: _path_subcurves(manim), 1e-5),
     Fixture("path_refinement", lambda: _path_refinement(noon), lambda: _path_refinement(manim), 1e-5),
     Fixture("path_selection", lambda: _path_selection(noon), lambda: _path_selection(manim), 1e-5),

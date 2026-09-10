@@ -68,6 +68,8 @@ pub(crate) fn path_transaction(
 /// replacement transaction. This is not retained scene or runtime state.
 pub(crate) enum PathEdit<'a> {
     Corners(&'a [Vec2]),
+    SmoothCorners(&'a [Vec2]),
+    AnchorMode(bool),
     Start(Vec2),
     Line(Vec2),
     Quadratic(Vec2, Vec2),
@@ -91,6 +93,11 @@ impl PathEdit<'_> {
         if let Self::Corners(points) = self {
             return corners_path(points).map(Some);
         }
+        if let Self::SmoothCorners(points) = self {
+            return noon_geometry::change_path_anchor_mode(&corners_path(points)?, true)
+                .map(Some)
+                .map_err(AuthoringError::PathQuery);
+        }
         if let Self::Partial { source, a, b } = self {
             let path = world_path(store, source)?;
             // Manim leaves the destination unchanged when the source has no
@@ -113,6 +120,11 @@ impl PathEdit<'_> {
             return Ok(None);
         }
         let mut path = world_path(store, state)?;
+        if let Self::AnchorMode(smooth) = self {
+            return noon_geometry::change_path_anchor_mode(&path, smooth)
+                .map(Some)
+                .map_err(AuthoringError::PathQuery);
+        }
         if let Self::Subdivide(additional) = self {
             return noon_geometry::subdivide_path(&path, additional)
                 .map(Some)
@@ -161,6 +173,8 @@ impl PathEdit<'_> {
                     }
                 }
                 Self::Corners(_)
+                | Self::SmoothCorners(_)
+                | Self::AnchorMode(_)
                 | Self::Start(_)
                 | Self::Reverse
                 | Self::Subdivide(_)
@@ -279,6 +293,17 @@ impl Mobject {
         let id = created_subcurve_id(&result);
         drop(store);
         Self::from_node(std::rc::Rc::clone(self.integration_store()), id)
+    }
+
+    /// Replace world-space corners with one smooth retained cubic spline.
+    pub fn set_points_smoothly(&mut self, points: &[Vec2]) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::SmoothCorners(points))
+    }
+    pub fn make_smooth(&mut self) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::AnchorMode(true))
+    }
+    pub fn make_jagged(&mut self) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::AnchorMode(false))
     }
 
     /// Set a polyline from world-space corners, preserving identity and paint.
