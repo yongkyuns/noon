@@ -522,6 +522,36 @@ impl CanonicalAuthoringScene {
         )
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn mobject_fill_color(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
+        self.mobject_observation(
+            target,
+            noon::Mobject::fill_color,
+            crate::SemanticExecutionPlayer::live_effective_fill_color,
+        )
+    }
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_stroke_color(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
+        self.mobject_observation(
+            target,
+            noon::Mobject::stroke_color,
+            crate::SemanticExecutionPlayer::live_effective_stroke_color,
+        )
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn mobject_stroke_width(&mut self, target: &noon::Mobject) -> Result<f64, AuthoringFailure> {
+        self.mobject_observation(
+            target,
+            noon::Mobject::stroke_width,
+            crate::SemanticExecutionPlayer::live_effective_stroke_width,
+        )
+    }
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_color(
         &mut self,
@@ -5358,6 +5388,63 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = queryMobjectFillColor)]
+        pub fn query_mobject_fill_color(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<Option<crate::WasmManimColor>, JsValue> {
+            self.inner
+                .mobject_fill_color(target.semantic_mobject())
+                .map(|color| color.map(crate::WasmManimColor::from_color))
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = queryMobjectStrokeColor)]
+        pub fn query_mobject_stroke_color(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<Option<crate::WasmManimColor>, JsValue> {
+            self.inner
+                .mobject_stroke_color(target.semantic_mobject())
+                .map(|color| color.map(crate::WasmManimColor::from_color))
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = queryMobjectStrokeWidth)]
+        pub fn query_mobject_stroke_width(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .mobject_stroke_width(target.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveSetColorGradient)]
+        pub fn live_set_color_gradient(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            values: &[f64],
+        ) -> Result<(), JsValue> {
+            let colors =
+                crate::authoring_mobject::gradient_colors(values).map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_color_gradient(&target.semantic_mobject(), &colors)
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveSetFamilyColorGradient)]
+        pub fn live_set_family_color_gradient(
+            &mut self,
+            target: &crate::WasmAuthoringFamilyHandle,
+            values: &[f64],
+        ) -> Result<(), JsValue> {
+            let colors =
+                crate::authoring_mobject::gradient_colors(values).map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_color_gradient(&target.semantic_family()?, &colors)
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = queryMobjectColor)]
         pub fn query_mobject_color(
             &mut self,
@@ -9244,7 +9331,7 @@ mod tests {
         );
         assert_eq!(
             context.mobject_color(&line).unwrap(),
-            Color::rgba(0.0, 0.0, 1.0, 0.8)
+            Color::rgb(0.0, 1.0, 0.0)
         );
         {
             let player = context.live_player(2.0).unwrap();
@@ -9258,9 +9345,7 @@ mod tests {
         assert!((context.mobject_fill_opacity(&line).unwrap() - 0.2).abs() < 1e-6);
         assert!((context.mobject_stroke_opacity(&line).unwrap() - 0.6).abs() < 1e-6);
         assert_eq!(line.stroke_opacity().unwrap(), 0.8);
-        assert!((color.red - 0.5).abs() < 1.0e-6);
-        assert!((color.blue - 0.5).abs() < 1.0e-6);
-        assert!((color.alpha - 0.6).abs() < 1.0e-6);
+        assert_eq!(color, Color::rgb(0.0, 1.0, 0.0));
         assert_eq!(line.manim_line_endpoints().unwrap().start, (-1.0, 0.0));
 
         let player = context.take_execution_player(2.0, 17).unwrap();
@@ -9323,7 +9408,11 @@ mod tests {
         );
         assert_eq!(
             context.mobject_color(&line).unwrap(),
-            Color::rgba(1.0, 1.0, 0.0, 0.7)
+            Color::rgb(0.0, 1.0, 0.0)
+        );
+        assert_eq!(
+            context.mobject_stroke_color(&line).unwrap(),
+            Some(Color::rgb(1.0, 1.0, 0.0))
         );
         assert_eq!(context.mobject_stroke_opacity(&line).unwrap(), 0.7);
     }

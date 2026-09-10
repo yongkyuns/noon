@@ -69,6 +69,7 @@ mod family_authoring;
 mod family_callback_paint;
 mod family_callback_translation;
 mod family_copy;
+mod family_gradient;
 mod family_layout;
 mod family_style;
 mod focus_on_authoring;
@@ -167,3 +168,5 @@ pub mod prelude {
         Vec2, VectorPath,
     };
 }
+
+pub use family_gradient::color_gradient;

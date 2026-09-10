@@ -1075,6 +1075,52 @@ def _align_on_frame(
     return self
 
 
+def _paint_color(self, channel):
+    from _manim_updaters import _canonical_phase_context
+    phase = _canonical_phase_context(self)
+    if phase is not None:
+        raise NotImplementedError("paint color getters in host callbacks require staged color observation")
+    color = _typed_manim_observation(self, f"{channel}Color", f"queryMobject{channel.title()}Color")
+    if color is None:
+        return None
+    return _base.Color(float(color.red), float(color.green), float(color.blue), 1.0)
+
+
+def _get_stroke_width(self, background=False):
+    if background:
+        raise NotImplementedError("background strokes require shared background paint")
+    from _manim_updaters import _canonical_phase_context
+    if _canonical_phase_context(self) is not None:
+        raise NotImplementedError("stroke width getters in host callbacks require staged width observation")
+    width = _typed_manim_observation(self, "strokeWidth", "queryMobjectStrokeWidth", handle_property=True)
+    if width is None:
+        raise RuntimeError("paint observations require the shared Rust authoring host")
+    return float(width) * 100.0
+
+
+def _gradient_components(colors):
+    # This only converts the language-boundary argument; Rust owns interpolation.
+    from pyodide.ffi import to_js
+    return to_js([component for color in colors for component in
+                  (color.red, color.green, color.blue, color.alpha)])
+
+
+def _set_color_by_gradient(self, *colors):
+    from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
+    if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
+        raise NotImplementedError("per-member gradients in host callbacks require staged paint publication")
+    parsed = [_compat._as_color("gradient color", color) for color in colors]
+    target, context, suffix = _style_target(self)
+    if target is None:
+        raise RuntimeError("gradients require the shared Rust authoring host")
+    arguments = _gradient_components(parsed)
+    if context is None:
+        engine_call(target.setColorGradient, arguments)
+    else:
+        engine_call(getattr(context, f"liveSet{suffix}ColorGradient"), target, arguments)
+    return self
+
+
 def _style_target(value):
     if isinstance(value, _compat.Group):
         return value._semantic_family_handle, _group_target_context(value), "Family"

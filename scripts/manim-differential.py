@@ -636,9 +636,35 @@ def _zero_extent_replace(api):
     return _object_observation(source)
 
 
+def _paint_rgb(color):
+    # Normalize provider color representations only; never alter scene semantics.
+    if hasattr(color, "to_rgb"):
+        return [float(value) for value in color.to_rgb()]
+    return [color.red, color.green, color.blue]
+
+
+def _paint_queries_gradients(api):
+    boxes = [api.Square(side_length=1) for _ in range(5)]
+    group = api.VGroup(boxes[0], api.VGroup(*boxes))
+    group.set_fill(opacity=0.4).set_stroke(width=6)
+    group.set_color_by_gradient("#FF0000", "#00FF00", "#0000FF")
+    observations = [[_paint_rgb(obj.get_color()), _paint_rgb(obj.get_fill_color()),
+                     _paint_rgb(obj.get_stroke_color()), obj.get_stroke_width(),
+                     obj.get_fill_opacity()] for obj in boxes]
+    first = boxes[0]
+    first.set_fill(color="#FF0000").set_stroke(color="#0000FF")
+    observations.append(_paint_rgb(first.get_color()))
+    first.set_fill(opacity=0)
+    observations.append(_paint_rgb(first.get_color()))
+    first.set_color(first.get_color())
+    observations.append([first.get_fill_opacity(), first.get_stroke_opacity()])
+    return observations
+
+
 FIXTURES = [
     Fixture("vgroup_become_cross_alias", lambda: _family_become_cross_alias(noon), lambda: _family_become_cross_alias(manim)),
     Fixture("vgroup_become_restore", lambda: _family_become(noon), lambda: _family_become(manim)),
+    Fixture("paint_queries_gradients", lambda: _paint_queries_gradients(noon), lambda: _paint_queries_gradients(manim)),
     Fixture("style_operations", lambda: _style_operations(noon), lambda: _style_operations(manim)),
 
 

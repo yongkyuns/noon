@@ -1026,7 +1026,35 @@ impl<'a> LiveSession<'a> {
             .map_err(LiveSessionError::from)
     }
 
-    /// Read Manim's stroke-first color at the current publication.
+    pub fn effective_fill_color(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<Option<Color>, LiveSessionError> {
+        mobject.fill_color().map_err(LiveSessionError::from)?;
+        Ok(self
+            .effective(mobject)?
+            .style
+            .fill
+            .map(crate::semantic_mobject::opaque_paint_color))
+    }
+
+    pub fn effective_stroke_color(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<Option<Color>, LiveSessionError> {
+        mobject.stroke_color().map_err(LiveSessionError::from)?;
+        Ok(self
+            .effective(mobject)?
+            .style
+            .stroke
+            .map(crate::semantic_mobject::opaque_paint_color))
+    }
+
+    pub fn effective_stroke_width(&self, mobject: &Mobject) -> Result<f64, LiveSessionError> {
+        Ok(f64::from(self.effective(mobject)?.style.stroke_width))
+    }
+
+    /// Read visible fill RGB, falling back to stroke RGB, at the current publication.
     pub fn effective_manim_color(&self, mobject: &Mobject) -> Result<Color, LiveSessionError> {
         // Resource paints do not have a scalar Manim color representation. Check
         // the selected authored channel before observing its lowered runtime style.
@@ -2386,6 +2414,36 @@ impl<'a> LiveSession<'a> {
         self.apply(transaction)
     }
 
+    pub fn set_family_color_by_gradient(
+        &mut self,
+        family: &MobjectFamily,
+        colors: &[Color],
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(
+            family
+                .gradient_transaction(colors)
+                .map_err(LiveSessionError::from)?,
+        )
+    }
+
+    pub fn set_color_by_gradient(
+        &mut self,
+        object: &Mobject,
+        colors: &[Color],
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let colors = crate::color_gradient(colors, 1).map_err(LiveSessionError::from)?;
+        let color = colors[0];
+        self.set_color(
+            object,
+            color.red.into(),
+            color.green.into(),
+            color.blue.into(),
+            color.alpha.into(),
+        )
+    }
+
     /// Recolor a family's unique leaves through one coherent authored publication.
     pub fn set_family_color(
         &mut self,
@@ -2800,13 +2858,10 @@ mod tests {
                 end: (1.0, 1.0),
             }
         );
-        assert_eq!(
-            line.manim_color().unwrap(),
-            Color::rgba(0.0, 0.0, 1.0, 0.25)
-        );
+        assert_eq!(line.manim_color().unwrap(), Color::rgb(0.0, 0.0, 1.0));
         assert_eq!(
             live.effective_manim_color(&line).unwrap(),
-            Color::rgba(0.5, 0.0, 0.5, 0.5)
+            Color::rgb(0.5, 0.0, 0.5)
         );
         let effective = live.effective(&line).unwrap();
         assert_eq!(effective.fill_opacity(), 0.0);

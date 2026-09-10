@@ -376,6 +376,17 @@
         "max_differing_ratio": 0.003,
         "max_mean_absolute_channel_error": 0.1
       }
+    },
+    {
+      "id": "paint-queries-gradients",
+      "scene": "PaintQueriesGradients",
+      "source": "parity/manim-v0.21/core-examples/paint_queries_gradients.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
     }
   ],
   "sample_fractions": [

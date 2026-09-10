@@ -1,4 +1,31 @@
 #[cfg(target_arch = "wasm32")]
+pub(crate) fn gradient_colors(
+    values: &[f64],
+) -> Result<Vec<noon::Color>, crate::authoring_error::AuthoringFailure> {
+    if !values.len().is_multiple_of(4) {
+        return Err(crate::authoring_error::AuthoringFailure::new(
+            "invalid_input",
+            "gradient.invalid_components",
+            "gradient colors require RGBA components",
+        ));
+    }
+    values
+        .chunks_exact(4)
+        .map(|c| {
+            family_color(true, c[0], c[1], c[2], c[3])
+                .map(|color| color.expect("enabled color"))
+                .map_err(|error| {
+                    crate::authoring_error::AuthoringFailure::new(
+                        "invalid_input",
+                        "gradient.invalid_color",
+                        error,
+                    )
+                })
+        })
+        .collect()
+}
+
+#[cfg(target_arch = "wasm32")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn style_update(
     fill_enabled: bool,
@@ -665,6 +692,14 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setColorGradient)]
+        pub fn set_color_gradient(&mut self, values: &[f64]) -> Result<(), JsValue> {
+            let colors = super::gradient_colors(values).map_err(js_error)?;
+            self.semantic_family()?
+                .set_color_by_gradient(&colors)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setStyle)]
         #[allow(clippy::too_many_arguments)]
         pub fn set_style(
@@ -1031,6 +1066,33 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
+        #[wasm_bindgen(js_name = fillColor)]
+        pub fn fill_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
+            self.handle
+                .fill_color()
+                .map(|color| color.map(WasmManimColor::from_color))
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = strokeColor)]
+        pub fn stroke_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
+            self.handle
+                .stroke_color()
+                .map(|color| color.map(WasmManimColor::from_color))
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(getter, js_name = strokeWidth)]
+        pub fn stroke_width(&self) -> Result<f64, JsValue> {
+            self.handle.stroke_width().map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setColorGradient)]
+        pub fn set_color_gradient(&mut self, values: &[f64]) -> Result<(), JsValue> {
+            let colors = super::gradient_colors(values).map_err(js_error)?;
+            self.handle.set_color_by_gradient(&colors).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setStyle)]
         #[allow(clippy::too_many_arguments)]
         pub fn set_style(

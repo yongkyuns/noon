@@ -2,21 +2,30 @@
 use super::*;
 use noon_core::Style;
 
-pub(super) fn manim_color_from_semantic(style: &SemanticStyle) -> Result<Color, AuthoringError> {
-    let selected = style.stroke.as_ref().or(style.fill.as_ref());
-    let opacity = if style.stroke.is_some() {
-        style.stroke_opacity
-    } else {
-        style.fill_opacity
-    };
-    match selected {
-        Some(SemanticPaint::Solid(_)) => Ok(solid_color_with_opacity(selected, opacity)
-            .expect("selected solid paint produces one color")),
+pub(crate) fn paint_color(paint: Option<&SemanticPaint>) -> Result<Option<Color>, AuthoringError> {
+    match paint {
+        Some(SemanticPaint::Solid(color)) => {
+            Ok(Some(Color::rgb(color.red, color.green, color.blue)))
+        }
         Some(SemanticPaint::Resource(_)) => Err(AuthoringError::Unsupported(
             crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
         )),
-        None => Ok(Color::WHITE),
+        None => Ok(None),
     }
+}
+
+pub(super) fn manim_color_from_semantic(style: &SemanticStyle) -> Result<Color, AuthoringError> {
+    let fill_visible = match style.fill.as_ref() {
+        Some(SemanticPaint::Solid(color)) => f64::from(color.alpha) * style.fill_opacity > 0.0,
+        Some(SemanticPaint::Resource(_)) => style.fill_opacity > 0.0,
+        None => false,
+    };
+    paint_color(if fill_visible {
+        style.fill.as_ref()
+    } else {
+        style.stroke.as_ref()
+    })
+    .map(|color| color.unwrap_or(Color::WHITE))
 }
 
 /// Observable paint alpha is the solid color alpha times its authored multiplier.
@@ -32,8 +41,17 @@ fn manim_paint_opacity(paint: Option<&SemanticPaint>, opacity: f64) -> Result<f6
     }
 }
 
+pub(crate) fn opaque_paint_color(color: Color) -> Color {
+    Color::rgb(color.red, color.green, color.blue)
+}
+
 pub(crate) fn manim_color_from_effective(style: &Style) -> Color {
-    style.stroke.or(style.fill).unwrap_or(Color::WHITE)
+    style
+        .fill
+        .filter(|color| color.alpha > 0.0)
+        .or(style.stroke)
+        .map(opaque_paint_color)
+        .unwrap_or(Color::WHITE)
 }
 
 pub(crate) trait PaintStyleEdit {
@@ -329,6 +347,20 @@ pub(super) fn parse_stroke_cap(cap: &str) -> Result<StrokeCap, AuthoringError> {
 }
 
 impl Mobject {
+    /// RGB paint observation; opacity is queried independently.
+    pub fn fill_color(&self) -> Result<Option<Color>, AuthoringError> {
+        paint_color(self.state()?.style.fill.as_ref())
+    }
+
+    pub fn stroke_color(&self) -> Result<Option<Color>, AuthoringError> {
+        paint_color(self.state()?.style.stroke.as_ref())
+    }
+
+    /// Stored stroke width in scene units, independent of object scale.
+    pub fn stroke_width(&self) -> Result<f64, AuthoringError> {
+        Ok(self.state()?.style.stroke_width)
+    }
+
     pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), AuthoringError> {
         let mut state = self.state()?;
         state.style.stroke_width_mode = parse_stroke_width_mode(mode)?;

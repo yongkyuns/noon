@@ -182,6 +182,9 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::NonFiniteDirection => {
                 Self::new("invalid_input", "authoring.non_finite_direction", message)
             }
+            AuthoringError::EmptyColorGradient => {
+                Self::new("invalid_input", "authoring.empty_color_gradient", message)
+            }
             AuthoringError::ZeroDirection => {
                 Self::new("invalid_input", "authoring.zero_direction", message)
             }
