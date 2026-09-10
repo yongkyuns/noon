@@ -6960,6 +6960,18 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveZIndex)]
+        pub fn live_z_index(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_z_index(&source.anchor)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveSetZIndex)]
         pub fn live_set_z_index(
             &mut self,

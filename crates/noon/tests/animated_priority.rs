@@ -36,6 +36,7 @@ fn method_priority_is_discrete_exact_and_persists_with_returning_motion() {
     );
     live.advance_segment_to(segment, 2.0).unwrap();
     assert_eq!(live.effective(&source).unwrap().z_index, 1.0000000000000002);
+    assert_eq!(live.z_index(&(&source).into()).unwrap(), 1.0000000000000002);
     assert_eq!(
         live.effective(&source).unwrap().transform.translation.x,
         0.0
@@ -77,12 +78,12 @@ fn ordinary_transform_ignores_target_priority() {
 fn paired_example_retains_each_completed_priority_interval() {
     let mut session = noon::example_scenes::animated_priority::session().unwrap();
     for (time, expected) in [
-        (0.5, vec![0, 1]),
-        (1.25, vec![1, 0]),
-        (2.0, vec![1, 0]),
-        (2.75, vec![0, 1]),
-        (4.0, vec![0, 1]),
-        (4.75, vec![1, 0]),
+        (0.25, vec![0, 1]),
+        (0.6, vec![1, 0]),
+        (1.0, vec![1, 0]),
+        (1.4, vec![0, 1]),
+        (2.5, vec![0, 1]),
+        (3.125, vec![1, 0]),
     ] {
         session.seek(time).unwrap();
         assert_eq!(session.painter_order(), expected);
@@ -119,6 +120,7 @@ fn nested_sequence_captures_prior_priority_and_reconciles_only_final_authored_va
         .unwrap();
     live.advance_segment_to(segment, 1.75).unwrap();
     assert_eq!(live.effective(&source).unwrap().z_index, 2.0);
+    assert_eq!(live.z_index(&(&source).into()).unwrap(), 2.0);
     live.advance_segment_to(segment, segment.end_time())
         .unwrap();
     live.complete_segment(segment).unwrap();

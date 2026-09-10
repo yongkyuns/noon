@@ -1219,6 +1219,14 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_z_index(
+        &mut self,
+        anchor: &noon::LayoutAnchor,
+    ) -> Result<f64, AuthoringFailure> {
+        self.with_live_session(|live| live.z_index(anchor))
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_z_index(
         &mut self,
         anchor: &noon::LayoutAnchor,

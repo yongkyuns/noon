@@ -788,7 +788,7 @@ try {
     { filename: "ordinary_path_selection.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_path_refinement.py", objectCount: 8, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_path_subcurves.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
-    { filename: "ordinary_animated_priority.py", objectCount: 2, expectedDuration: 5.0, endpointTime: null },
+    { filename: "ordinary_animated_priority.py", objectCount: 2, expectedDuration: 3.25, endpointTime: null },
     { filename: "ordinary_path_alignment.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_boolean_geometry.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_path_smoothing.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },

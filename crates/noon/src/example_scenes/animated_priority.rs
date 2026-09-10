@@ -36,7 +36,7 @@ pub fn session() -> Result<ExecutionSession, String> {
                     &back,
                     &target,
                     AnimationOptions::new()
-                        .run_time(1.0)
+                        .run_time(0.5)
                         .rate_func(RateFunction::Linear),
                 )
                 .method_target(),
@@ -45,7 +45,7 @@ pub fn session() -> Result<ExecutionSession, String> {
                 live.declare_and_activate_composition(&request, AnimationOptions::new())?;
             live.advance_segment_to(segment, segment.end_time())?;
             live.complete_segment(segment)?;
-            let wait = live.wait_segment(0.5)?;
+            let wait = live.wait_segment(0.25)?;
             live.advance_segment_to(wait, wait.end_time())?;
             live.complete_segment(wait)?;
         }
@@ -85,7 +85,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         let segment = live.declare_and_activate_composition(&request, AnimationOptions::new())?;
         live.advance_segment_to(segment, segment.end_time())?;
         live.complete_segment(segment)?;
-        let wait = live.wait_segment(0.5)?;
+        let wait = live.wait_segment(0.25)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;
         Ok(session)
