@@ -15,6 +15,21 @@ const config = await loadPreviewRuntimeConfig({
 });
 const source = await readFile(path.join(repoRoot, "web/python/examples/manim_parity_square_to_circle.py"), "utf8");
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const runtimeBuildIdentity = JSON.parse(await readFile(
+  path.join(repoRoot, "web/runtime-build-identity.json"), "utf8"));
+assert.equal(runtimeBuildIdentity.schema, 1);
+assert.match(runtimeBuildIdentity.buildId, /^[0-9a-f]{64}$/);
+assert.ok(runtimeBuildIdentity.sourceRevision === null || /^[0-9a-f]{40}$/.test(runtimeBuildIdentity.sourceRevision));
+for (const [name, descriptor] of Object.entries(runtimeBuildIdentity.files)) {
+  assert.match(descriptor.sha256, /^[0-9a-f]{64}$/, `${name} must have a SHA-256 identity`);
+  const bytes = await readFile(path.join(repoRoot, "web", descriptor.path));
+  assert.equal(hash(bytes), descriptor.sha256, `${name} manifest hash must match the exact built bytes`);
+}
+
+function assertObservedBuildIdentity(sample, label) {
+  assert.deepEqual(sample.buildIdentity, runtimeBuildIdentity,
+    `${label} must report the runtime identity observed by the browser worker`);
+}
 
 async function deterministicRun(label) {
   const session = new DockerPreviewSession(config);
@@ -25,6 +40,7 @@ async function deterministicRun(label) {
     assert.equal(initial.frame.rendererBackend, "WebGL2");
     assert.equal(initial.image.mimeType, "image/png");
     assert.ok(initial.imageData.length > 1000);
+    assertObservedBuildIdentity(initial, `${label} initial frame`);
 
     const one = await session.sample(1);
     const middle = await session.sample(1.5);
@@ -35,6 +51,7 @@ async function deterministicRun(label) {
       assert.equal(sample.frame.publishedTime, time);
       assert.equal(sample.frame.rendererBackend, "WebGL2");
       assert.ok(sample.imageData.length > 1000);
+      assertObservedBuildIdentity(sample, `${label} sample ${time}`);
     }
     const hashes = [initial, one, middle, final].map((sample) => hash(sample.imageData));
     assert.notEqual(hashes[0], hashes[1], "Create must change the preview image");
@@ -44,6 +61,7 @@ async function deterministicRun(label) {
     const inspected = await session.inspect();
     assert.equal(inspected.frame.requestedTime, 3);
     assert.equal(inspected.image.sha256, hashes[3]);
+    assertObservedBuildIdentity(inspected, `${label} inspection`);
     return { label, hashes, last: inspected };
   } finally {
     const closed = await session.close(`${label} complete`);
@@ -74,6 +92,8 @@ try {
     ok: true,
     firstHashes: first.hashes,
     freshHashes: fresh.hashes,
+    buildId: runtimeBuildIdentity.buildId,
+    sourceRevision: runtimeBuildIdentity.sourceRevision,
     cancelElapsedMs: elapsedMs,
     cleanup: closed.cleanup,
   }));
