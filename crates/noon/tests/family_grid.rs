@@ -84,3 +84,199 @@ fn nested_aliases_use_one_live_transaction_and_foreign_grids_are_rejected() {
         .is_err());
     assert_eq!(live.effective(&a).unwrap(), before);
 }
+
+#[test]
+fn all_fill_orders_place_members_in_their_cells() {
+    use noon::FamilyGridOptions;
+    for (flow, expected) in [
+        (
+            "rd",
+            [
+                (-1., 0.5),
+                (0., 0.5),
+                (1., 0.5),
+                (-1., -0.5),
+                (0., -0.5),
+                (1., -0.5),
+            ],
+        ),
+        (
+            "ld",
+            [
+                (1., 0.5),
+                (0., 0.5),
+                (-1., 0.5),
+                (1., -0.5),
+                (0., -0.5),
+                (-1., -0.5),
+            ],
+        ),
+        (
+            "ru",
+            [
+                (-1., -0.5),
+                (0., -0.5),
+                (1., -0.5),
+                (-1., 0.5),
+                (0., 0.5),
+                (1., 0.5),
+            ],
+        ),
+        (
+            "lu",
+            [
+                (1., -0.5),
+                (0., -0.5),
+                (-1., -0.5),
+                (1., 0.5),
+                (0., 0.5),
+                (-1., 0.5),
+            ],
+        ),
+        (
+            "dr",
+            [
+                (-1., 0.5),
+                (-1., -0.5),
+                (0., 0.5),
+                (0., -0.5),
+                (1., 0.5),
+                (1., -0.5),
+            ],
+        ),
+        (
+            "dl",
+            [
+                (1., 0.5),
+                (1., -0.5),
+                (0., 0.5),
+                (0., -0.5),
+                (-1., 0.5),
+                (-1., -0.5),
+            ],
+        ),
+        (
+            "ur",
+            [
+                (-1., -0.5),
+                (-1., 0.5),
+                (0., -0.5),
+                (0., 0.5),
+                (1., -0.5),
+                (1., 0.5),
+            ],
+        ),
+        (
+            "ul",
+            [
+                (1., -0.5),
+                (1., 0.5),
+                (0., -0.5),
+                (0., 0.5),
+                (-1., -0.5),
+                (-1., 0.5),
+            ],
+        ),
+    ] {
+        let scene = Scene::new();
+        let members: Vec<_> = (0..6).map(|_| scene.square(0.5).unwrap()).collect();
+        let family = scene
+            .family(&members.iter().map(Into::into).collect::<Vec<_>>())
+            .unwrap();
+        family
+            .arrange_in_grid_with_options(&FamilyGridOptions {
+                rows: Some(2),
+                columns: Some(3),
+                gap: (0.5, 0.5),
+                flow: flow.parse().unwrap(),
+                ..Default::default()
+            })
+            .unwrap();
+        for (object, point) in members.iter().zip(expected) {
+            assert_eq!(object.center().unwrap(), point, "{flow}");
+        }
+    }
+}
+
+#[test]
+fn explicit_sizes_and_alignments_infer_dimensions_and_publish_from_live_bounds() {
+    use noon::FamilyGridOptions;
+    let (mut scene, family, members, unrelated) = fixture();
+    scene.add_many(&[(&family).into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let before = unrelated.state().unwrap();
+    let mut live = scene.live(&mut session);
+    live.arrange_family_in_grid_with_options(
+        &family,
+        &FamilyGridOptions {
+            gap: (0.5, 0.25),
+            cell_alignment: (-1., -1.),
+            row_alignments: Some("ud".into()),
+            column_alignments: Some("lr".into()),
+            row_heights: Some(vec![Some(3.), None]),
+            column_widths: Some(vec![None, Some(2.)]),
+            flow: noon::GridFlow::DownRight,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    // Top-left a, bottom-left b, top-right c, bottom-right d. Explicit
+    // alignment lists override the supplied default cell alignment.
+    for (object, expected) in
+        members
+            .iter()
+            .zip([(1.75, 3.625), (1.25, 0.125), (5.0, 3.125), (4.75, 0.375)])
+    {
+        assert_eq!(live.effective_layout(object).unwrap().center, expected);
+    }
+    assert_eq!(
+        live.effective_family_layout(&family).unwrap().center,
+        (3., 2.)
+    );
+    assert_eq!(unrelated.state().unwrap(), before);
+}
+
+#[test]
+fn malformed_grid_options_are_atomic_and_huge_spare_capacity_keeps_precision() {
+    use noon::FamilyGridOptions;
+    let (scene, family, members, _) = fixture();
+    let before = scene.revision();
+    for options in [
+        FamilyGridOptions {
+            rows: Some(2),
+            row_alignments: Some("u".into()),
+            ..Default::default()
+        },
+        FamilyGridOptions {
+            row_alignments: Some("ux".into()),
+            ..Default::default()
+        },
+        FamilyGridOptions {
+            rows: Some(2),
+            row_heights: Some(vec![None]),
+            ..Default::default()
+        },
+        FamilyGridOptions {
+            column_widths: Some(vec![Some(f64::NAN)]),
+            ..Default::default()
+        },
+    ] {
+        assert!(family.arrange_in_grid_with_options(&options).is_err());
+        assert_eq!(scene.revision(), before);
+    }
+    family
+        .arrange_in_grid(Some(usize::MAX), Some(usize::MAX), 0.5, 0.25)
+        .unwrap();
+    assert_eq!(family.layout().unwrap().center(), (3., 2.));
+    assert_eq!(members[0].center().unwrap().1, 2.);
+    assert_eq!(
+        members[1].center().unwrap().0 - members[0].center().unwrap().0,
+        2.
+    );
+}
+
+#[test]
+fn paired_grid_example_uses_the_normal_execution_session() {
+    let session = noon::example_scenes::family_grid::session().unwrap();
+    assert_eq!(session.frame().objects.len(), 4);
+}

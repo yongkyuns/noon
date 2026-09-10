@@ -234,6 +234,52 @@ mod wasm {
         }
     }
 
+    /// Transient grid call arguments; all sizing and validation belong to shared Rust.
+    #[wasm_bindgen]
+    pub struct WasmFamilyGridOptions {
+        pub(crate) options: noon::FamilyGridOptions,
+    }
+
+    #[wasm_bindgen]
+    impl WasmFamilyGridOptions {
+        #[wasm_bindgen(js_name = setAlignment)]
+        pub fn set_alignment(
+            &mut self,
+            x: f64,
+            y: f64,
+            rows: Option<String>,
+            columns: Option<String>,
+        ) {
+            self.options.cell_alignment = (x, y);
+            self.options.row_alignments = rows;
+            self.options.column_alignments = columns;
+        }
+        #[wasm_bindgen(js_name = setFlow)]
+        pub fn set_flow(&mut self, flow: &str) -> Result<(), JsValue> {
+            self.options.flow = flow.parse().map_err(js_error)?;
+            Ok(())
+        }
+        #[wasm_bindgen(js_name = setSizeLists)]
+        pub fn set_size_lists(&mut self, rows: bool, columns: bool) {
+            self.options.row_heights = rows.then(Vec::new);
+            self.options.column_widths = columns.then(Vec::new);
+        }
+        #[wasm_bindgen(js_name = addRowHeight)]
+        pub fn add_row_height(&mut self, value: Option<f64>) {
+            self.options
+                .row_heights
+                .get_or_insert_with(Vec::new)
+                .push(value);
+        }
+        #[wasm_bindgen(js_name = addColumnWidth)]
+        pub fn add_column_width(&mut self, value: Option<f64>) {
+            self.options
+                .column_widths
+                .get_or_insert_with(Vec::new)
+                .push(value);
+        }
+    }
+
     /// Inert typed layout intent; identity and member selection stay in Rust.
     #[wasm_bindgen]
     pub struct WasmLayoutAnchor {
@@ -670,21 +716,28 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = arrangeInGrid)]
-        pub fn arrange_in_grid(
+        #[wasm_bindgen(js_name = gridOptions)]
+        pub fn grid_options(
             &self,
             rows: Option<u32>,
             columns: Option<u32>,
             gap_x: f64,
             gap_y: f64,
-        ) -> Result<(), JsValue> {
+        ) -> WasmFamilyGridOptions {
+            WasmFamilyGridOptions {
+                options: noon::FamilyGridOptions {
+                    rows: rows.map(|v| v as usize),
+                    columns: columns.map(|v| v as usize),
+                    gap: (gap_x, gap_y),
+                    ..Default::default()
+                },
+            }
+        }
+
+        #[wasm_bindgen(js_name = arrangeInGrid)]
+        pub fn arrange_in_grid(&self, options: &WasmFamilyGridOptions) -> Result<(), JsValue> {
             self.semantic_family()?
-                .arrange_in_grid(
-                    rows.map(|v| v as usize),
-                    columns.map(|v| v as usize),
-                    gap_x,
-                    gap_y,
-                )
+                .arrange_in_grid_with_options(&options.options)
                 .map_err(js_error)
         }
 

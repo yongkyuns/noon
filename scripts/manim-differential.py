@@ -298,6 +298,27 @@ def _manim_vgroup_arrange_grid() -> Any:
     return _members_observation(group)
 
 
+def _grid_options_probe(api, flow, alignment_lists=True):
+    members = [api.Rectangle(width=w, height=h).shift(api.RIGHT * 2)
+               for w, h in ((2, 1), (1, .5), (.5, 2), (1, 1), (.7, .4))]
+    group = api.VGroup(*members)
+    options = dict(rows=2, cols=3, buff=(.5, .25), cell_alignment=api.UP + api.LEFT,
+                   row_heights=[3, None], col_widths=[None, 2, None], flow_order=flow)
+    if alignment_lists:
+        options.update(row_alignments="ud", col_alignments="lcr")
+    group.arrange_in_grid(**options)
+    return _members_observation(group)
+
+
+def _grid_inferred_and_alias_probe(api):
+    a, b = api.Square(side_length=.5), api.Rectangle(width=1, height=.5)
+    nested = api.VGroup(a, b)
+    group = api.VGroup(nested, a)
+    group.arrange_in_grid(row_alignments="u", col_widths=[None, 2],
+                          cell_alignment=api.UP + api.LEFT, flow_order="ld")
+    return _members_observation(group)
+
+
 def _noon_vgroup_scale() -> Any:
     group = noon.VGroup(
         noon.Circle(radius=0.25),
@@ -602,6 +623,13 @@ FIXTURES = [
         _noon_vgroup_copy_independence,
         _manim_vgroup_copy_independence,
     ),
+    *[Fixture(f"grid_options_{flow}_{aligned}",
+              lambda f=flow, a=aligned: _grid_options_probe(noon, f, a),
+              lambda f=flow, a=aligned: _grid_options_probe(manim, f, a))
+      for flow in ("rd", "dr", "ld", "dl", "ru", "ur", "lu", "ul")
+      for aligned in (False, True)],
+    Fixture("grid_inferred_alias", lambda: _grid_inferred_and_alias_probe(noon),
+            lambda: _grid_inferred_and_alias_probe(manim)),
     Fixture("vgroup_arrange_grid", _noon_vgroup_arrange_grid, _manim_vgroup_arrange_grid),
     Fixture("vgroup_scale", _noon_vgroup_scale, _manim_vgroup_scale),
     Fixture("vgroup_rotate", _noon_vgroup_rotate, _manim_vgroup_rotate),

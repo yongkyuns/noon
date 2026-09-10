@@ -331,13 +331,15 @@ class Group(Mobject):
         return _base._semantic_operations()._group_arrange(self, direction, buff, center, **kwargs)
 
     def arrange_in_grid(
-        self,
-        rows: int | None = None,
-        cols: int | None = None,
+        self, rows: int | None = None, cols: int | None = None,
         buff: float | tuple[float, float] = _base.MED_SMALL_BUFF,
+        cell_alignment: object = _base.ORIGIN, row_alignments: str | None = None,
+        col_alignments: str | None = None, row_heights=None, col_widths=None,
+        flow_order: str = "rd",
     ) -> Group:
         from _manim_semantic_handles import _group_arrange_in_grid
-        return _group_arrange_in_grid(self, rows, cols, buff)
+        return _group_arrange_in_grid(self, rows, cols, buff, cell_alignment,
+            row_alignments, col_alignments, row_heights, col_widths, flow_order)
 
     @property
     def animate(self):

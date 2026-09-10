@@ -150,6 +150,8 @@ pub enum AuthoringError {
         columns: usize,
         members: usize,
     },
+    /// Grid alignment, sizing or flow options are inconsistent.
+    InvalidGridOption(&'static str),
     /// An internal arrangement plan has not observed all required bounds.
     IncompleteArrangement,
     /// The node is not represented in this family-local copy mapping.
@@ -253,6 +255,7 @@ impl std::fmt::Display for AuthoringError {
             Self::InsufficientGridCapacity { .. } => {
                 f.write_str("too few grid rows and columns to fit all members")
             }
+            Self::InvalidGridOption(name) => write!(f, "invalid grid {name} option"),
             Self::IncompleteArrangement => f.write_str("family arrangement bounds are incomplete"),
             Self::MissingCopySource(source) => {
                 write!(f, "source {source:?} is not part of this family copy")
