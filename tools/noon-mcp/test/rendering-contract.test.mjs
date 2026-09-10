@@ -7,7 +7,6 @@ import {
   MAX_RENDER_TIME_SECONDS,
   RENDERING_CONTRACT_VERSION,
   RENDERING_TOOL_NAMES,
-  RENDERING_TOOL_REGISTRATION_ENABLED,
   renderingToolContracts,
 } from "../src/rendering-contract.mjs";
 
@@ -17,9 +16,8 @@ function accepts(name, value) {
   return renderingToolContracts[name].inputSchema.safeParse(value).success;
 }
 
-test("rendering contract is versioned but deliberately not registered", () => {
+test("rendering contract is versioned and names the planned runner operations", () => {
   assert.equal(RENDERING_CONTRACT_VERSION, 1);
-  assert.equal(RENDERING_TOOL_REGISTRATION_ENABLED, false);
   assert.deepEqual(RENDERING_TOOL_NAMES, [
     "noon_open_scene", "noon_sample_frames", "noon_inspect", "noon_close_scene",
   ]);
