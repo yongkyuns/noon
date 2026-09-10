@@ -825,7 +825,7 @@ def _path_family_arrangement(api):
 
 
 def _canonical_curve_layout(api):
-    circle = api.Circle(radius=1).stretch(2, 0).stretch(0.75, 1)
+    circle = api.Circle(radius=1).stretch_to_fit_width(4).stretch_to_fit_height(1.5)
     ellipse = api.Ellipse(width=4, height=1.5)
     for obj in (circle, ellipse):
         obj.rotate(api.PI / 6)

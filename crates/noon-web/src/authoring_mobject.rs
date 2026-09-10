@@ -1358,8 +1358,8 @@ mod wasm {
             self.clone_handle()
         }
 
-        /// Analytic Line-to-Line point matching. Rust validates both operands and
-        /// commits only the source transform, preserving its content and paint.
+        /// Share another vector object’s geometry and transform while preserving
+        /// the source identity, paint, and painter priority.
         #[wasm_bindgen(js_name = matchPoints)]
         pub fn match_points(&mut self, target: &WasmAuthoringMobjectHandle) -> Result<(), JsValue> {
             self.handle.match_points(&target.handle).map_err(js_error)
