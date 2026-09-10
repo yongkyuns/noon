@@ -22,12 +22,20 @@ class _Part:
         self.firstVector = first_vector
         self.vectorCount = vector_count
         self.semanticKey = semantic_key
+        self.freed = 0
+
+    def free(self):
+        self.freed += 1
 
 
 class _PartList:
     def __init__(self, parts):
         self._parts = parts
         self.length = len(parts)
+        self.freed = 0
+
+    def free(self):
+        self.freed += 1
 
     def item(self, index):
         return self._parts[index]
@@ -40,7 +48,8 @@ class _Handle:
 
     def textSourcePartsFor(self, needle):
         self.needles.append(needle)
-        return _PartList(self.parts)
+        self.last_result = _PartList(self.parts)
+        return self.last_result
 
 
 class ManimTextSourcePartTests(unittest.TestCase):
@@ -58,6 +67,8 @@ class ManimTextSourcePartTests(unittest.TestCase):
         parts = label.source_parts_for("é")
 
         self.assertEqual(handle.needles, ["é"])
+        self.assertEqual(handle.last_result.freed, 1)
+        self.assertTrue(all(part.freed == 1 for part in handle.parts))
         self.assertIsInstance(parts, tuple)
         self.assertEqual(
             parts,
@@ -68,6 +79,16 @@ class ManimTextSourcePartTests(unittest.TestCase):
         )
         with self.assertRaises(dataclasses.FrozenInstanceError):
             parts[0].source_start = 4
+
+    def test_failed_projection_releases_both_wasm_owners(self):
+        raw = _Part("invalid", 2, 0, 1, 0, 0, None)
+        handle = _Handle([raw])
+        label = object.__new__(typst._RetainedTextMobject)
+        label._semantic_handle = handle
+        with self.assertRaises(ValueError):
+            label.source_parts_for("x")
+        self.assertEqual(raw.freed, 1)
+        self.assertEqual(handle.last_result.freed, 1)
 
     def test_source_part_query_validates_only_python_argument_shape(self):
         label = object.__new__(typst._RetainedTextMobject)

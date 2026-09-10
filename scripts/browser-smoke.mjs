@@ -30,6 +30,7 @@ await mkdir(artifactDir, { recursive: true });
 // Remaining generic authoring/lifecycle cases run in directExecutionProof and
 // the shared Python corpus. These fixtures protect renderer-specific raster work.
 const examples = [
+  { name: "Text source parts", factory: "createDirectTextSourcePartsSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Paint queries and gradients", factory: "createDirectPaintQueriesGradientsSmokeRenderer", objectCount: 5, duration: 0.2 },
   { name: "Filled path Transform", factory: "createDirectFilledPathTransformRenderer", objectCount: 1, duration: 3.2 },
   { name: "Dimension fitting", factory: "createDirectDimensionFittingSmokeRenderer", objectCount: 2, duration: 0.2 },

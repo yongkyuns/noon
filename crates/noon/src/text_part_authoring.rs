@@ -129,4 +129,13 @@ mod tests {
         ));
         assert_eq!(circle.state().unwrap(), before);
     }
+    #[test]
+    fn paired_source_parts_example_executes_and_seeks() {
+        let mut session = crate::example_scenes::text_source_parts::session().unwrap();
+        session.seek(0.).unwrap();
+        assert_eq!(session.frame().objects.len(), 2);
+        let start = session.frame().objects.clone();
+        session.seek(0.2).unwrap();
+        assert_eq!(session.frame().objects, start);
+    }
 }

@@ -187,24 +187,27 @@ class _RetainedTextMobject(_base.Mobject):
                 "text source-part queries require the shared Rust authoring handle"
             )
         raw_parts = engine_call(handle.textSourcePartsFor, needle)
-        count = int(raw_parts.length)
-        parts: list[TextSourcePart] = []
-        for index in range(count):
-            raw = engine_call(raw_parts.item, index)
-            parts.append(
-                TextSourcePart(
-                    source_start=int(raw.sourceStart),
-                    source_end=int(raw.sourceEnd),
-                    first_cluster=int(raw.firstCluster),
-                    cluster_count=int(raw.clusterCount),
-                    first_vector=int(raw.firstVector),
-                    vector_count=int(raw.vectorCount),
-                    semantic_key=(
-                        None if raw.semanticKey is None else str(raw.semanticKey)
-                    ),
-                )
-            )
-        return tuple(parts)
+        try:
+            parts: list[TextSourcePart] = []
+            for index in range(int(raw_parts.length)):
+                raw = engine_call(raw_parts.item, index)
+                try:
+                    parts.append(
+                        TextSourcePart(
+                            source_start=int(raw.sourceStart),
+                            source_end=int(raw.sourceEnd),
+                            first_cluster=int(raw.firstCluster),
+                            cluster_count=int(raw.clusterCount),
+                            first_vector=int(raw.firstVector),
+                            vector_count=int(raw.vectorCount),
+                            semantic_key=(None if raw.semanticKey is None else str(raw.semanticKey)),
+                        )
+                    )
+                finally:
+                    raw.free()
+            return tuple(parts)
+        finally:
+            raw_parts.free()
 
     @property
     def id(self) -> int:
