@@ -906,16 +906,19 @@ def _replace(
 ) -> _base.Mobject:
     if not isinstance(mobject, _base.Mobject):
         raise TypeError("replacement target must be a Mobject")
-    if dim_to_match not in (0, 1):
-        raise NotImplementedError("replace currently supports width (0) or height (1)")
-    if (_live_mutation_context(self) is not None
-            or _live_mutation_context(mobject) is not None):
-        raise NotImplementedError("canonical live affine targets do not support replace")
-    handle = _handle_for(self)
-    other_handle = _handle_for(mobject)
-    if handle is None or other_handle is None:
-        raise NotImplementedError("replace requires valid shared semantic handles for both Mobjects")
-    engine_call(handle.replaceHandle, other_handle, int(dim_to_match), bool(stretch))
+    source, context = _dimension_fit_source(self, dim_to_match, {})
+    target = _layout_anchor(mobject)
+    if target is None:
+        raise RuntimeError("replacement requires a shared Rust target layout")
+    if context is None:
+        context = (_group_live_layout_context(mobject) if isinstance(mobject, _compat.Group)
+                   else _live_mutation_context(mobject))
+    if context is None:
+        context = _live_constructor_context("replace")
+    if context is None:
+        engine_call(source.replaceLayout, target, int(dim_to_match), bool(stretch))
+    else:
+        engine_call(context.liveReplaceLayout, source, target, int(dim_to_match), bool(stretch))
     return self
 
 

@@ -773,6 +773,7 @@ try {
     { filename: "ordinary_filled_path_transform.py", objectCount: 1, expectedDuration: 3.2, endpointTime: null },
     { filename: "ordinary_family_placement.py", objectCount: 3, expectedDuration: 1, endpointTime: null },
     { filename: "ordinary_dimension_fitting.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_family_replacement.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_affine.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_style_operations.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_paint.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },

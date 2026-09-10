@@ -323,6 +323,22 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = replaceLayout)]
+        pub fn replace_layout(
+            &self,
+            target: &WasmLayoutAnchor,
+            dimension: u32,
+            stretch: bool,
+        ) -> Result<(), JsValue> {
+            self.anchor
+                .replace_layout(
+                    &target.anchor,
+                    dimension.try_into().map_err(js_error)?,
+                    stretch,
+                )
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = matchDimSize)]
         pub fn match_dim_size(
             &self,
@@ -1358,18 +1374,6 @@ mod wasm {
                         stretch,
                     },
                 )
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = replaceHandle)]
-        pub fn replace_handle(
-            &mut self,
-            other: &WasmAuthoringMobjectHandle,
-            dim_to_match: u32,
-            stretch: bool,
-        ) -> Result<(), JsValue> {
-            self.handle
-                .replace_handle(&other.handle, dim_to_match, stretch)
                 .map_err(js_error)
         }
 
