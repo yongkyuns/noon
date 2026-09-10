@@ -25,6 +25,7 @@ impl ScheduledCaptures {
                 continue;
             };
             match (property, values) {
+                (Property::ZIndex, TrackValues::ZIndex { to, .. }) => value.z_index = *to,
                 (Property::Position, TrackValues::Vec2 { from, to }) => {
                     value.transform.translation = if *at_end { *to } else { *from }
                 }
@@ -102,7 +103,18 @@ impl ScheduledCaptures {
             let Some((_, end)) = intervals.get(&owner) else {
                 continue;
             };
-            if *end > *start {
+            let end = self
+                .latest_tracks
+                .get(&key)
+                .map(|index| &tracks[*index])
+                .filter(|track| track.property == Property::ZIndex)
+                .map_or(*end, |track| track.timing.start_time);
+            // Adjacent normalized intervals can differ by a few rounding bits
+            // after mapping back to root seconds (e.g. 2.5 * (0.2 + 0.4)
+            // versus 2.5 * 0.6). Do not turn that arithmetic noise into a
+            // simultaneous-driver conflict; meaningful overlaps still reject.
+            let rounding = 4.0 * f64::EPSILON * end.abs().max(start.abs()).max(f64::MIN_POSITIVE);
+            if end - *start > rounding {
                 continue;
             }
             if let Some(index) = self.latest_tracks.get(&key) {

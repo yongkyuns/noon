@@ -97,6 +97,10 @@ impl PreparedSemanticAnimationActivation {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PreparedSemanticAnimationLoweringError {
+    PriorityCompletionTimeMap {
+        animation: SemanticTransactionNodeRef,
+        error: noon_core::CompositionTimeMapError,
+    },
     Schedule(PreparedSemanticAnimationScheduleError),
     TextGlyph(super::TextGlyphLoweringError),
     Target {
@@ -154,11 +158,6 @@ pub enum PreparedSemanticAnimationLoweringError {
         target: SemanticTransactionNodeRef,
         target_state: SemanticTransactionNodeRef,
     },
-    UnsupportedPainterOrderChange {
-        animation: SemanticTransactionNodeRef,
-        target: SemanticTransactionNodeRef,
-        target_state: SemanticTransactionNodeRef,
-    },
     UnsupportedBindingChange {
         animation: SemanticTransactionNodeRef,
         target: SemanticTransactionNodeRef,
@@ -179,6 +178,10 @@ pub enum PreparedSemanticAnimationLoweringError {
         animation: SemanticTransactionNodeRef,
         target: SemanticTransactionNodeRef,
         property: SemanticObjectProperty,
+    },
+    MultiplePriorityDrivers {
+        first_animation: SemanticTransactionNodeRef,
+        next_animation: SemanticTransactionNodeRef,
     },
     MultipleDrivers {
         first_animation: SemanticTransactionNodeRef,
@@ -342,6 +345,8 @@ where
             PreparedSemanticScheduledAnimationPayload::TransformTo {
                 target_state,
                 interpolation,
+
+                complete_priority,
             } => {
                 let target = prepared.object_state(target_state).map_err(|error| {
                     PreparedSemanticAnimationLoweringError::Target {
@@ -364,6 +369,44 @@ where
                         .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
                 for channel in channels {
                     push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
+                }
+                if complete_priority && from.z_index != target.z_index() {
+                    if let Some(first_animation) = driven.insert(
+                        driver_key(leaf.execution_object_id, Property::ZIndex),
+                        leaf.animation,
+                    ) {
+                        return Err(
+                            PreparedSemanticAnimationLoweringError::MultiplePriorityDrivers {
+                                first_animation,
+                                next_animation: leaf.animation,
+                            },
+                        );
+                    }
+                    let alpha = leaf
+                        .finish_time_map
+                        .monotone_root_alpha(1.0)
+                        .map_err(|error| {
+                            PreparedSemanticAnimationLoweringError::PriorityCompletionTimeMap {
+                                animation: leaf.animation,
+                                error,
+                            }
+                        })?;
+                    let end = leaf.timing.start_time + leaf.timing.duration * alpha;
+                    tracks.push(PreparedSemanticAnimationTrack {
+                        animation: leaf.animation,
+                        target: leaf.target,
+                        execution_object_id: leaf.execution_object_id,
+                        property: Property::ZIndex,
+                        completion: SemanticAnimationCompletion::Priority {
+                            value: target.z_index(),
+                        },
+                        values: TrackValues::ZIndex {
+                            from: from.z_index,
+                            to: target.z_index(),
+                        },
+                        timing: noon_core::TrackTiming::instant(end),
+                        time_map: noon_core::CompositionTimeMap::identity(),
+                    });
                 }
                 continue;
             }
@@ -815,6 +858,7 @@ where
         captured
     } else if admitted {
         EffectiveAnimationProperties {
+            z_index: source.z_index(),
             transform: super::super::projection::lower_semantic_transform_value(source).map_err(
                 |_| PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
                     animation: leaf.animation,
@@ -938,13 +982,6 @@ fn prepared_payload_error(
                 target_state,
             }
         }
-        AffinePayloadIssue::UnsupportedPainterOrderChange => {
-            PreparedSemanticAnimationLoweringError::UnsupportedPainterOrderChange {
-                animation: leaf.animation,
-                target: leaf.target,
-                target_state,
-            }
-        }
         AffinePayloadIssue::UnsupportedBindingChange => {
             PreparedSemanticAnimationLoweringError::UnsupportedBindingChange {
                 animation: leaf.animation,
@@ -1038,6 +1075,7 @@ mod tests {
 
     fn effective(translation: Vec2) -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {
+            z_index: 0.0,
             transform: Transform2D {
                 translation,
                 ..Transform2D::IDENTITY
@@ -1522,6 +1560,7 @@ mod tests {
         );
         let prepared = transaction.prepare(&mut store).unwrap();
         let effective = EffectiveAnimationProperties {
+            z_index: 0.0,
             transform: Transform2D {
                 translation: Vec2::new(3.0, 2.0),
                 rotation: 0.25,

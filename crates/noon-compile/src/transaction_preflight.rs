@@ -434,7 +434,7 @@ pub(super) fn preflight_transaction_with_resources(
                 {
                     return Err(CompilePatchError::TrackReconciliationMismatch(*track));
                 }
-                if reconciled.authored_duration <= 0.0
+                if (reconciled.authored_duration <= 0.0 && reconciled.property != Property::ZIndex)
                     || !matches!(
                         reconciled.property,
                         Property::Position
@@ -447,6 +447,7 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::Appearance
                             | Property::Reveal
                             | Property::Morph
+                            | Property::ZIndex
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));

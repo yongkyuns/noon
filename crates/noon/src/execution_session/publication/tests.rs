@@ -232,6 +232,8 @@ fn completed_effective_query_can_author_and_activate_the_next_segment() {
                 target: nodes[0],
                 target_state: target,
                 interpolation: noon_core::SemanticTransformInterpolation::Affine,
+
+                complete_priority: false,
             },
             options,
         ));
@@ -550,6 +552,8 @@ fn authored_value_change_during_animation_is_rejected_before_publication() {
             target: nodes[0],
             target_state: target,
             interpolation: noon_core::SemanticTransformInterpolation::Affine,
+
+            complete_priority: false,
         },
         options,
     ));

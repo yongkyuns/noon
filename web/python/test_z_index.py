@@ -16,7 +16,9 @@ class ZIndexTests(unittest.TestCase):
                     del value._scene
                     del value._object
                 anchor, context = Mock(), (Mock() if live else None)
-                anchor.zIndex.return_value = -2.5
+                anchor.zIndex.return_value = 7.0 if live else -2.5
+                if live:
+                    context.liveZIndex.return_value = -2.5
                 with patch.object(handles, "_layout_anchor", return_value=anchor), \
                      patch.object(handles, "_live_mutation_context", return_value=context), \
                      patch.object(handles, "_group_live_layout_context", return_value=context):

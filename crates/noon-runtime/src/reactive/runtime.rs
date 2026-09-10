@@ -520,6 +520,7 @@ const fn property_slot(property: Property) -> u8 {
         Property::Appearance => 9,
         Property::Reveal => 10,
         Property::Morph => 11,
+        Property::ZIndex => 12,
     }
 }
 

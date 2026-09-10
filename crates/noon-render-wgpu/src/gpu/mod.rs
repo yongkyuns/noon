@@ -1554,6 +1554,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    z_index: 0.0,
                     id: ObjectId::new(1),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(0.25)),
                     text_bounds: None,
@@ -1562,6 +1563,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    z_index: 0.0,
                     id: ObjectId::new(3),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::line(
                         Vec2::new(-0.5, 0.0),
@@ -1573,6 +1575,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    z_index: 0.0,
                     id: ObjectId::new(2),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::rectangle(
                         0.5, 0.25,
@@ -1602,6 +1605,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    z_index: 0.0,
                     id: ObjectId::new(1),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::path(path)),
                     text_bounds: None,
@@ -1617,6 +1621,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    z_index: 0.0,
                     id: ObjectId::new(2),
                     content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(0.2)),
                     text_bounds: None,
