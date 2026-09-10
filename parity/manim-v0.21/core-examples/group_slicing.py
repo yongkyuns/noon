@@ -9,5 +9,4 @@ class GroupSlicing(Scene):
         family = VGroup(first, middle, last)
 
         self.add(*family)
-        family[1:].shift(UP * 0.75)
-        self.wait(1.0)
+        self.play(family[1:].animate(run_time=1.0).shift(UP * 0.75))
