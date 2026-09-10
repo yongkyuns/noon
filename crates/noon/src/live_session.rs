@@ -996,7 +996,7 @@ impl<'a> LiveSession<'a> {
             let transform = observed.object.transform;
             drop(store);
             (
-                target.layout_bounds_at(transform),
+                target.boundary_bounds_at(transform),
                 (
                     f64::from(transform.translation.x),
                     f64::from(transform.translation.y),
@@ -1005,7 +1005,7 @@ impl<'a> LiveSession<'a> {
         } else {
             let state = target.state().map_err(LiveSessionError::from)?;
             (
-                target.layout_bounds(),
+                target.boundary_bounds(),
                 (state.transform.translation.x, state.transform.translation.y),
             )
         };
@@ -1081,35 +1081,19 @@ impl<'a> LiveSession<'a> {
         transform: Transform2D,
         publication: PublicationContext,
     ) -> Result<EffectiveMobjectLayout, LiveSessionError> {
-        let bounds = mobject
-            .layout_bounds_at(transform)
-            .map_err(LiveSessionError::from)?;
-        let (center, width, height) = if let Some(Bounds2D64 {
-            min_x,
-            min_y,
-            max_x,
-            max_y,
-        }) = bounds
-        {
+        let bounds = mobject.layout_bounds_at(transform)?;
+        let boundary = mobject.boundary_bounds_at(transform)?;
+        let center = boundary.map_or(
             (
-                ((min_x + max_x) * 0.5, (min_y + max_y) * 0.5),
-                max_x - min_x,
-                max_y - min_y,
-            )
-        } else {
-            (
-                (
-                    f64::from(transform.translation.x),
-                    f64::from(transform.translation.y),
-                ),
-                0.0,
-                0.0,
-            )
-        };
+                f64::from(transform.translation.x),
+                f64::from(transform.translation.y),
+            ),
+            |b| ((b.min_x + b.max_x) * 0.5, (b.min_y + b.max_y) * 0.5),
+        );
         Ok(EffectiveMobjectLayout {
             center,
-            width,
-            height,
+            width: bounds.map_or(0.0, Bounds2D64::width),
+            height: bounds.map_or(0.0, Bounds2D64::height),
             publication,
         })
     }

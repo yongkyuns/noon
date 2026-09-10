@@ -178,3 +178,47 @@ fn paired_arc_example_uses_the_shared_execution_session() {
     let session = noon::example_scenes::arc_geometry::session().unwrap();
     assert_eq!(session.frame().objects.len(), 3);
 }
+
+#[test]
+fn arc_layout_distinguishes_anchor_center_and_control_hull_dimensions() {
+    let scene = Scene::new();
+    let arc = scene
+        .geometry(Options::arc(1.25, -0.3, 1.8, 9, -2., 0.8).unwrap())
+        .unwrap();
+    let bounds = arc.layout_bounds().unwrap().unwrap();
+    close64(arc.center().unwrap().0, -1.332546237637556);
+    close64(bounds.width(), 1.1650965988224176);
+    let arc = scene
+        .geometry(
+            Options::arc_between_points(-0.5, -1.5, 2.5, 1., std::f64::consts::FRAC_PI_2, None, 9)
+                .unwrap(),
+        )
+        .unwrap();
+    let bounds = arc.layout_bounds().unwrap().unwrap();
+    close64(arc.center().unwrap().1, -0.25);
+    close64(bounds.height(), 2.516375616589823);
+}
+
+#[test]
+fn arc_family_and_live_layout_share_anchor_centers_and_handle_extents() {
+    let mut scene = Scene::new();
+    let arc = scene
+        .geometry(Options::arc(1.25, -0.3, 1.8, 9, -2., 0.8).unwrap())
+        .unwrap();
+    let group = scene.family(&[(&arc).into()]).unwrap();
+    close64(group.layout().unwrap().center().0, -1.332546237637556);
+    close64(group.layout().unwrap().width(), 1.1650965988224176);
+    scene.add_many(&[(&group).into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut session);
+    let initial = live.effective_layout(&arc).unwrap();
+    let family = live.effective_family_layout(&group).unwrap();
+    close64(initial.center.0, family.center.0);
+    close64(initial.width, family.width);
+    live.rescale_to_fit(&(&group).into(), 2., noon::LayoutDimension::Width, false)
+        .unwrap();
+    let after = live.effective_family_layout(&group).unwrap();
+    close64(after.center.0, initial.center.0);
+    close64(after.center.1, initial.center.1);
+    close64(after.width, 2.);
+}

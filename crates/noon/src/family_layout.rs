@@ -19,6 +19,7 @@ pub struct FamilyLayout {
     store: Rc<RefCell<SemanticStore>>,
     leaves: Vec<SemanticNodeId>,
     bounds: Option<Bounds2D64>,
+    boundary: Option<Bounds2D64>,
 }
 
 /// A typed destination for authored family placement.
@@ -131,6 +132,7 @@ impl LayoutAnchor {
                 store: Rc::clone(&self.store),
                 leaves: vec![node],
                 bounds,
+                boundary: object.boundary_bounds()?.or(bounds),
             })
         }
     }
@@ -148,7 +150,7 @@ impl LayoutAnchor {
         let source = self.layout()?;
         let alignment = aligner.layout()?;
         let delta = RelativePlacement::Next(args)
-            .delta(alignment.bounds, |x, y| source.target_point(target, x, y))?;
+            .delta(alignment.boundary, |x, y| source.target_point(target, x, y))?;
         source.shift(delta.0, delta.1)
     }
 }
@@ -162,24 +164,18 @@ impl MobjectFamily {
             .borrow()
             .ordered_leaf_nodes(self.node_id())
             .map_err(AuthoringError::from)?;
-        let mut bounds: Option<Bounds2D64> = None;
+        let mut bounds = None;
+        let mut boundary = None;
         for &leaf in &leaves {
-            let Some(next) =
-                Mobject::from_node(Rc::clone(self.integration_store()), leaf)?.layout_bounds()?
-            else {
-                continue;
-            };
-            if let Some(total) = &mut bounds {
-                total.include(next.min_x, next.min_y);
-                total.include(next.max_x, next.max_y);
-            } else {
-                bounds = Some(next);
-            }
+            let object = Mobject::from_node(Rc::clone(self.integration_store()), leaf)?;
+            union_bounds(&mut bounds, object.layout_bounds()?);
+            union_bounds(&mut boundary, object.boundary_bounds()?);
         }
         Ok(FamilyLayout {
             store: Rc::clone(self.integration_store()),
             leaves,
             bounds,
+            boundary,
         })
     }
 
@@ -200,8 +196,12 @@ impl FamilyLayout {
         self.bounds
     }
 
+    pub(crate) fn boundary_bounds(&self) -> Option<Bounds2D64> {
+        self.boundary
+    }
+
     pub fn center(&self) -> (f64, f64) {
-        let bounds = self.bounds.unwrap_or_else(|| Bounds2D64::point(0.0, 0.0));
+        let bounds = self.boundary.unwrap_or_else(|| Bounds2D64::point(0.0, 0.0));
         (
             (bounds.min_x + bounds.max_x) * 0.5,
             (bounds.min_y + bounds.max_y) * 0.5,
@@ -216,7 +216,7 @@ impl FamilyLayout {
     }
 
     pub fn critical_point(&self, x: f64, y: f64) -> (f64, f64) {
-        bounds_critical_point(self.bounds, x, y)
+        bounds_critical_point(self.boundary, x, y)
     }
 
     pub fn shift(&self, x: f64, y: f64) -> Result<(), AuthoringError> {
@@ -262,7 +262,7 @@ impl FamilyLayout {
         target: FamilyLayoutTarget<'_>,
         placement: RelativePlacement,
     ) -> Result<(), AuthoringError> {
-        let delta = placement.delta(self.bounds, |x, y| self.target_point(target, x, y))?;
+        let delta = placement.delta(self.boundary, |x, y| self.target_point(target, x, y))?;
         self.shift(delta.0, delta.1)
     }
 
@@ -389,4 +389,15 @@ pub(crate) fn frame_alignment_target(
         coordinate(direction.x, noon_core::DEFAULT_FRAME_WIDTH),
         coordinate(direction.y, noon_core::DEFAULT_FRAME_HEIGHT),
     ))
+}
+
+pub(crate) fn union_bounds(total: &mut Option<Bounds2D64>, next: Option<Bounds2D64>) {
+    if let Some(next) = next {
+        if let Some(total) = total {
+            total.include(next.min_x, next.min_y);
+            total.include(next.max_x, next.max_y);
+        } else {
+            *total = Some(next);
+        }
+    }
 }
