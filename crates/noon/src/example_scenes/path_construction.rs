@@ -18,7 +18,12 @@ pub fn session() -> Result<ExecutionSession, String> {
         )?;
         curves.close_path()?;
         let mut polygon = scene.square(1.)?;
-        polygon.set_fill(1., 1., 0., 0.3)?;
+        polygon.set_fill(
+            f64::from(noon_core::YELLOW.red),
+            f64::from(noon_core::YELLOW.green),
+            f64::from(noon_core::YELLOW.blue),
+            0.3,
+        )?;
         polygon.shift(-2., -2.)?;
         scene.add_many(&[(&curves).into(), (&polygon).into()])?;
         let mut session = scene.execution_session()?;
