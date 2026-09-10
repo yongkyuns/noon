@@ -104,9 +104,8 @@ mod z_index;
 pub use animation_authoring::DeclaredAnimation;
 pub use arc_authoring::ArcAuthoringError;
 pub use arrow_authoring::{
-    ManimArrow, ManimArrowOptions, DEFAULT_ARROW_STROKE_WIDTH,
-    DEFAULT_ARROW_STROKE_WIDTH_RATIO, DEFAULT_ARROW_TIP_LENGTH,
-    DEFAULT_ARROW_TIP_LENGTH_RATIO,
+    ManimArrow, ManimArrowOptions, DEFAULT_ARROW_STROKE_WIDTH, DEFAULT_ARROW_STROKE_WIDTH_RATIO,
+    DEFAULT_ARROW_TIP_LENGTH, DEFAULT_ARROW_TIP_LENGTH_RATIO,
 };
 pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
 pub use boolean_authoring::{BooleanOperation, BooleanPathError};
