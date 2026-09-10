@@ -10,6 +10,7 @@ import { deriveNoonPreviewSeccompProfile } from "../src/preview-seccomp.mjs";
 const PLAYWRIGHT_VERSION = "1.62.1";
 const SECCOMP_URL = `https://raw.githubusercontent.com/microsoft/playwright/v${PLAYWRIGHT_VERSION}/utils/docker/seccomp_profile.json`;
 const SECCOMP_GIT_BLOB = "fddc05fb520affb145404e6f6f647ca96af8087d";
+const SECCOMP_FETCH_ATTEMPTS = 4;
 const IMAGE_TAG = "noon-preview-runtime:1.62.1";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(scriptDir, "..");
@@ -34,15 +35,44 @@ function run(executable, args, { cwd } = {}) {
   });
 }
 
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 function gitBlobSha1(bytes) {
   const prefix = Buffer.from(`blob ${bytes.length}\0`, "utf8");
   return createHash("sha1").update(prefix).update(bytes).digest("hex");
 }
 
+async function fetchPinnedSeccompBytes() {
+  let lastError = null;
+  for (let attempt = 1; attempt <= SECCOMP_FETCH_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(SECCOMP_URL, {
+        redirect: "error",
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!response.ok) {
+        const error = new Error(`HTTP ${response.status}`);
+        if (response.status < 500) throw error;
+        lastError = error;
+      } else {
+        return Buffer.from(await response.arrayBuffer());
+      }
+    } catch (error) {
+      lastError = error;
+      if (/HTTP 4\d\d/.test(String(error?.message ?? error))) throw error;
+    }
+    if (attempt < SECCOMP_FETCH_ATTEMPTS) await delay(250 * (2 ** (attempt - 1)));
+  }
+  throw new Error(
+    `failed to fetch pinned Playwright seccomp profile after ${SECCOMP_FETCH_ATTEMPTS} attempts: ${String(lastError?.message ?? lastError)}`,
+    { cause: lastError },
+  );
+}
+
 async function installSeccompProfile() {
-  const response = await fetch(SECCOMP_URL, { redirect: "error", signal: AbortSignal.timeout(15_000) });
-  if (!response.ok) throw new Error(`failed to fetch pinned Playwright seccomp profile: HTTP ${response.status}`);
-  const upstreamBytes = Buffer.from(await response.arrayBuffer());
+  const upstreamBytes = await fetchPinnedSeccompBytes();
   const identity = gitBlobSha1(upstreamBytes);
   if (identity !== SECCOMP_GIT_BLOB) {
     throw new Error(`pinned Playwright seccomp profile identity mismatch: ${identity}`);
