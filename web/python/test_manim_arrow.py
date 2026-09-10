@@ -79,6 +79,12 @@ class ManimArrowFacadeTests(unittest.TestCase):
                 def setStrokeJoin(self, value): self._record("stroke_join", str(value))
                 def setStrokeCap(self, value): self._record("stroke_cap", str(value))
                 def setObjectOpacity(self, value): self._record("object_opacity", float(value))
+                def setFill(self, r, g, b, a): self._record("fill", float(r), float(g), float(b), float(a))
+                def disableFill(self): self._record("disable_fill")
+                def setFillOpacity(self, value): self._record("fill_opacity", float(value))
+                def setStrokeColor(self, r, g, b, a): self._record("stroke_color", float(r), float(g), float(b), float(a))
+                def disableStroke(self): self._record("disable_stroke")
+                def setStrokeOpacity(self, value): self._record("stroke_opacity", float(value))
                 def setColor(self, r, g, b, a): self._record("color", float(r), float(g), float(b), float(a))
 
             class Factory:
@@ -162,13 +168,15 @@ class ManimArrowFacadeTests(unittest.TestCase):
             assert double.get_start_tip() is double.start_tip
             assert arrow.get_end() == noon.Vec2(3.0, 0.0)
 
-            # Unsupported semantic breadth is rejected rather than approximated in Python.
+            # Unsupported ManimCE semantic breadth rejects rather than being approximated.
             before = list(calls)
             for thunk in (
                 lambda: arrows.Arrow(path_arc=0.5),
                 lambda: arrows.Arrow(tip_shape=object()),
-                lambda: arrows.Arrow(preserve_tip_size_when_scaling=False),
+                lambda: arrows.Arrow(tip_style={"fill_opacity": 0.0}),
+                lambda: arrows.DoubleArrow(tip_shape_start=object()),
                 lambda: arrow.scale(2.0),
+                lambda: arrow.scale(2.0, scale_tips=True),
             ):
                 try:
                     thunk()
@@ -177,6 +185,20 @@ class ManimArrowFacadeTests(unittest.TestCase):
                 else:
                     raise AssertionError("unsupported Arrow case unexpectedly succeeded")
             assert calls == before
+
+            # Old/non-ManimCE constructor names are no longer advertised as supported.
+            publish_count = sum(call[0] == "publish" for call in calls)
+            for name, value in (
+                ("preserve_tip_size_when_scaling", False),
+                ("use_rectangular_stem", True),
+            ):
+                try:
+                    arrows.Arrow(**{name: value})
+                except TypeError:
+                    pass
+                else:
+                    raise AssertionError(f"stale Arrow option {name} unexpectedly succeeded")
+            assert sum(call[0] == "publish" for call in calls) == publish_count
             """
         )
         completed = subprocess.run(
