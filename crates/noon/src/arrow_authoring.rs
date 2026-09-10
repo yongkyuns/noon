@@ -149,8 +149,12 @@ impl ManimArrowOptions {
     }
 
     fn prepare(self, store: &mut SemanticStore) -> Result<PreparedArrow, AuthoringError> {
-        let (visible_start, visible_end, direction, length) =
-            shortened_line(self.start, self.end, self.buff)?;
+        let ShortenedLine {
+            visible_start,
+            visible_end,
+            direction,
+            length,
+        } = shortened_line(self.start, self.end, self.buff)?;
         let effective_tip_length = self
             .tip_length
             .min(self.max_tip_length_to_length_ratio * length);
@@ -272,6 +276,13 @@ struct CommittedArrow {
     start_tip: Option<noon_core::SemanticNodeId>,
 }
 
+struct ShortenedLine {
+    visible_start: (f64, f64),
+    visible_end: (f64, f64),
+    direction: (f64, f64),
+    length: f64,
+}
+
 fn commit_prepared(
     store: &mut SemanticStore,
     prepared: PreparedArrow,
@@ -354,7 +365,7 @@ fn shortened_line(
     start: (f64, f64),
     end: (f64, f64),
     buff: f64,
-) -> Result<((f64, f64), (f64, f64), (f64, f64), f64), AuthoringError> {
+) -> Result<ShortenedLine, AuthoringError> {
     let dx = end.0 - start.0;
     let dy = end.1 - start.1;
     let length = dx.hypot(dy);
@@ -381,7 +392,12 @@ fn shortened_line(
     ] {
         crate::integration::authoring_render_f64(name, value)?;
     }
-    Ok((visible_start, visible_end, direction, visible_length))
+    Ok(ShortenedLine {
+        visible_start,
+        visible_end,
+        direction,
+        length: visible_length,
+    })
 }
 
 fn triangle_tip_path(
