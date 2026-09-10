@@ -80,7 +80,7 @@ pub(crate) fn prepare_content(
             UnsupportedAuthoringOperation::PathQueryContent,
         ));
     };
-    let primitive = match content.geometry() {
+    let primitive = match content {
         StoredGeometry::Circle { radius } => GeometryRef::circle(radius),
         StoredGeometry::Rectangle { size } => GeometryRef::Rectangle { size },
         StoredGeometry::Line { start, end } => GeometryRef::Line { start, end },

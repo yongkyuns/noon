@@ -579,12 +579,10 @@ impl Clone for SemanticStore {
             if let Some(node) = slot.node.as_mut() {
                 if let Some(state) = node.object_state.as_mut() {
                     match &mut state.content {
-                        crate::SemanticObjectContent::Geometry(content) => {
-                            if let Some(handle) = content.resource_handle_mut() {
-                                if self.geometry_resources.get(*handle).is_some() {
-                                    handle.arena = namespace;
-                                }
-                            }
+                        crate::SemanticObjectContent::Geometry(
+                            crate::StoredGeometry::Resource(handle),
+                        ) if self.geometry_resources.get(*handle).is_some() => {
+                            handle.arena = namespace;
                         }
                         crate::SemanticObjectContent::Text(handle)
                             if self.text_resources.get(*handle).is_some() =>

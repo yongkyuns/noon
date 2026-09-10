@@ -81,7 +81,7 @@ fn plan(
     let content = match (spec.mode, state.content) {
         (_, noon_core::SemanticObjectContent::Geometry(content)) if family_member.is_some() => {
             ObjectContentRef::Geometry(
-                lower_semantic_geometry_value(content.geometry(), Some(store)).map_err(|_| {
+                lower_semantic_geometry_value(content, Some(store)).map_err(|_| {
                     TextGlyphLoweringError::MissingSemanticTarget(semantic_target.into())
                 })?,
             )

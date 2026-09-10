@@ -8,6 +8,8 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum UnsupportedAuthoringOperation {
+    /// Point matching requires vector geometry on both operands.
+    PointMatchContent,
     /// Effective family layout requires authored content without overrides.
     EffectiveFamilyLayoutRenderOverride,
     /// move_to cannot compose with an active effective affine driver.
@@ -36,14 +38,8 @@ pub enum UnsupportedAuthoringOperation {
     ResourcePaintOpacityQuery,
     /// external geometry must resolve to an immutable semantic resource.
     ExternalGeometry,
-    /// Line.match_points target has unsupported nonuniform scaling.
-    LineMatchNonuniformScale,
-    /// Line.match_points requires an analytic Line target.
-    LineMatchTargetContent,
     /// Line.match_points requires an analytic Line source.
     LineMatchSourceContent,
-    /// Line endpoint queries require an analytic Line.
-    LineEndpointContent,
     /// dimension stretching of rotated objects is unsupported.
     RotatedDimensionStretch,
 }
@@ -65,10 +61,8 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::EffectivePathRenderOverride => "path queries require current retained content without active render overrides",
             Self::PathQueryContent => "path queries require retained geometry",
             Self::ExternalGeometry => "external geometry must resolve to an immutable semantic resource",
-            Self::LineMatchNonuniformScale => "Line.match_points target has unsupported nonuniform scaling",
-            Self::LineMatchTargetContent => "Line.match_points requires an analytic Line target",
+            Self::PointMatchContent => "match_points requires vector geometry on both operands",
             Self::LineMatchSourceContent => "Line.match_points requires an analytic Line source",
-            Self::LineEndpointContent => "Line endpoint queries require an analytic Line",
             Self::RotatedDimensionStretch => "dimension stretching of rotated objects is unsupported",
         })
     }
@@ -180,8 +174,6 @@ pub enum AuthoringError {
     VectorLowering(noon_core::SemanticLoweringError),
     /// Immutable geometry resource validation failed.
     GeometryResource(noon_core::GeometryResourceError),
-    /// The authored layout is incompatible with its geometry.
-    GeometryLayout(noon_core::SemanticGeometryLayoutError),
     /// A path observation received invalid geometry or sampling parameters.
     PathQuery(noon_geometry::PathProportionError),
     /// The shared arc constructor rejected its inputs.
@@ -284,7 +276,6 @@ impl std::fmt::Display for AuthoringError {
             Self::Transaction(error) => error.fmt(f),
             Self::VectorLowering(error) => error.fmt(f),
             Self::GeometryResource(error) => error.fmt(f),
-            Self::GeometryLayout(error) => error.fmt(f),
             Self::PathQuery(error) => error.fmt(f),
             Self::Arc(error) => error.fmt(f),
             Self::Elbow(error) => error.fmt(f),
@@ -306,7 +297,6 @@ impl std::error::Error for AuthoringError {
             Self::Transaction(error) => Some(error),
             Self::VectorLowering(error) => Some(error),
             Self::GeometryResource(error) => Some(error),
-            Self::GeometryLayout(error) => Some(error),
             Self::PathQuery(error) => Some(error),
             Self::Arc(error) => Some(error),
             Self::Elbow(error) => Some(error),
@@ -342,12 +332,6 @@ impl From<noon_core::SemanticLoweringError> for AuthoringError {
 impl From<noon_core::GeometryResourceError> for AuthoringError {
     fn from(error: noon_core::GeometryResourceError) -> Self {
         Self::GeometryResource(error)
-    }
-}
-
-impl From<noon_core::SemanticGeometryLayoutError> for AuthoringError {
-    fn from(error: noon_core::SemanticGeometryLayoutError) -> Self {
-        Self::GeometryLayout(error)
     }
 }
 

@@ -4,78 +4,6 @@ use crate::{
     SemanticTransform2_5D, StoredGeometry,
 };
 
-/// Authoring-time layout meaning for geometry whose renderer representation is shared.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum SemanticGeometryLayout {
-    /// Derive layout from the stored render geometry itself.
-    #[default]
-    GeometryBounds,
-    /// Match Manim's eight-cubic Circle/Ellipse control-point hull.
-    ManimEllipseControlHull,
-}
-
-/// A geometry/layout combination rejected before it becomes authored content.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum SemanticGeometryLayoutError {
-    EllipseRequiresCircle(StoredGeometry),
-}
-
-impl std::fmt::Display for SemanticGeometryLayoutError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::EllipseRequiresCircle(_) => {
-                f.write_str("Manim Ellipse layout requires analytic Circle geometry")
-            }
-        }
-    }
-}
-
-impl std::error::Error for SemanticGeometryLayoutError {}
-
-/// One semantic geometry payload. Layout meaning travels with content while
-/// compiler and renderer geometry continue to consume the same `StoredGeometry`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SemanticGeometryContent {
-    geometry: StoredGeometry,
-    layout: SemanticGeometryLayout,
-}
-
-impl SemanticGeometryContent {
-    pub const fn new(geometry: StoredGeometry) -> Self {
-        Self {
-            geometry,
-            layout: SemanticGeometryLayout::GeometryBounds,
-        }
-    }
-
-    pub fn with_layout(
-        geometry: StoredGeometry,
-        layout: SemanticGeometryLayout,
-    ) -> Result<Self, SemanticGeometryLayoutError> {
-        if layout == SemanticGeometryLayout::ManimEllipseControlHull
-            && !matches!(geometry, StoredGeometry::Circle { .. })
-        {
-            return Err(SemanticGeometryLayoutError::EllipseRequiresCircle(geometry));
-        }
-        Ok(Self { geometry, layout })
-    }
-
-    pub const fn geometry(self) -> StoredGeometry {
-        self.geometry
-    }
-
-    pub const fn layout(self) -> SemanticGeometryLayout {
-        self.layout
-    }
-
-    pub(crate) fn resource_handle_mut(&mut self) -> Option<&mut crate::GeometryResourceHandle> {
-        match &mut self.geometry {
-            StoredGeometry::Resource(handle) => Some(handle),
-            _ => None,
-        }
-    }
-}
-
 /// Target authored content carried by one semantic object.
 ///
 /// Cheap analytic geometry stays inline through [`StoredGeometry`]. Heavy geometry
@@ -85,14 +13,14 @@ impl SemanticGeometryContent {
 /// slot, frontend identity, or renderer identity.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SemanticObjectContent {
-    Geometry(SemanticGeometryContent),
+    Geometry(StoredGeometry),
     Text(TextResourceHandle),
 }
 
 impl SemanticObjectContent {
     pub const fn geometry(self) -> Option<StoredGeometry> {
         match self {
-            Self::Geometry(content) => Some(content.geometry()),
+            Self::Geometry(content) => Some(content),
             Self::Text(_) => None,
         }
     }
@@ -107,12 +35,6 @@ impl SemanticObjectContent {
 
 impl From<StoredGeometry> for SemanticObjectContent {
     fn from(value: StoredGeometry) -> Self {
-        Self::Geometry(SemanticGeometryContent::new(value))
-    }
-}
-
-impl From<SemanticGeometryContent> for SemanticObjectContent {
-    fn from(value: SemanticGeometryContent) -> Self {
         Self::Geometry(value)
     }
 }
@@ -139,8 +61,8 @@ pub enum SemanticObjectRole {
 /// Stable authored object properties that may be driven by native-reactive signals.
 ///
 /// These names describe semantic state, not execution slots or legacy timeline
-/// properties. `z_index` is intentionally absent until integer signal/conversion
-/// semantics are defined; content/paint replacement also remains a separate
+/// properties. Painter priority uses the discrete semantic ordering transaction;
+/// content/paint replacement also remains a separate
 /// mutation class rather than being forced into the scalar/vector signal model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SemanticObjectProperty {
@@ -330,31 +252,6 @@ mod tests {
         assert_eq!(state.insertion_order(), 0);
         assert_eq!(state.role(), SemanticObjectRole::Ordinary);
         assert!(state.signal_bindings().is_empty());
-    }
-
-    #[test]
-    fn semantic_geometry_layout_is_checked_and_defaults_to_geometry_bounds() {
-        let circle = SemanticGeometryContent::with_layout(
-            StoredGeometry::Circle { radius: 1.0 },
-            SemanticGeometryLayout::ManimEllipseControlHull,
-        )
-        .unwrap();
-        assert_eq!(circle.geometry(), StoredGeometry::Circle { radius: 1.0 });
-        assert_eq!(
-            circle.layout(),
-            SemanticGeometryLayout::ManimEllipseControlHull
-        );
-        assert!(SemanticGeometryContent::with_layout(
-            StoredGeometry::Rectangle {
-                size: Vec2::new(2.0, 1.0),
-            },
-            SemanticGeometryLayout::ManimEllipseControlHull,
-        )
-        .is_err());
-        assert_eq!(
-            SemanticGeometryContent::new(StoredGeometry::Circle { radius: 1.0 }).layout(),
-            SemanticGeometryLayout::GeometryBounds
-        );
     }
 
     #[test]

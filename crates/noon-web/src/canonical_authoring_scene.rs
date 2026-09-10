@@ -5727,6 +5727,19 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveMatchPoints)]
+        pub fn live_match_points(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_match_points(source.semantic_mobject(), target.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+
         /// Replace one object's content and presentation through the shared semantic owner.
         #[wasm_bindgen(js_name = liveBecomeMobject)]
         pub fn live_become_mobject(

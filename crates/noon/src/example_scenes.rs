@@ -3269,3 +3269,7 @@ pub mod animated_stroke_width;
 pub mod arc_geometry;
 
 pub mod path_arrangement;
+
+pub mod canonical_curve_layout;
+
+pub mod point_matching;

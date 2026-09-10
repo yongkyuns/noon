@@ -782,6 +782,8 @@ try {
     { filename: "ordinary_planar_affine.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_arc_geometry.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_path_arrangement.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_canonical_curve_layout.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_point_matching.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_animated_stroke_width.py", objectCount: 1, expectedDuration: 2, endpointTime: null },
     { filename: "ordinary_path_queries.py", objectCount: 10, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_z_index.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },

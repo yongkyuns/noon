@@ -180,18 +180,19 @@ class ApplyMethod:
 
 
 def match_points(self: _base.Mobject, mobject: object) -> _base.Mobject:
-    if not isinstance(self, _compat.Line) or not isinstance(mobject, _compat.Line):
-        raise NotImplementedError(
-            "match_points currently supports analytic Line-to-Line matching"
-        )
+    if not isinstance(self, _compat.VMobject) or not isinstance(mobject, _compat.VMobject):
+        raise TypeError("match_points requires vector Mobjects")
     # The canonical callback path stages the Rust-derived effective transform in
     # its ordered overlay. A callback-local target is an opaque endpoint operand
     # and therefore never allocates semantic identity in the authoring store.
     try:
-        from _manim_updaters import canonical_line_match
+        from _manim_updaters import canonical_line_match, canonical_callback_phase_active
 
-        if canonical_line_match(self, mobject):
+        if (isinstance(self, _compat.Line) and isinstance(mobject, _compat.Line)
+                and canonical_line_match(self, mobject)):
             return self
+        if canonical_callback_phase_active():
+            raise NotImplementedError("callback point matching requires the shared Line transform operation")
     except ImportError:
         pass
 
@@ -202,10 +203,18 @@ def match_points(self: _base.Mobject, mobject: object) -> _base.Mobject:
         or target_handle is None
         or not bool(getattr(self, "_semantic_handle_fresh", False))
         or not bool(getattr(mobject, "_semantic_handle_fresh", False))
-        or not hasattr(source_handle, "matchLine")
+        or not hasattr(source_handle, "matchPoints")
     ):
         raise NotImplementedError(
-            "Line.match_points requires opaque shared semantic Line handles"
+            "match_points requires opaque shared semantic vector handles"
         )
-    engine_call(source_handle.matchLine, target_handle, operation="Line.match_points")
+    from _manim_semantic_handles import _live_mutation_context, _live_constructor_context
+    context = (
+        _live_mutation_context(self) or _live_mutation_context(mobject)
+        or _live_constructor_context("match_points")
+    )
+    if context is None:
+        engine_call(source_handle.matchPoints, target_handle, operation="VMobject.match_points")
+    else:
+        engine_call(context.liveMatchPoints, source_handle, target_handle, operation="VMobject.match_points")
     return self

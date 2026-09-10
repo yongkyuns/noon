@@ -47,9 +47,8 @@ pub use crate::text_authoring::SCALE_FACTOR_PER_FONT_POINT;
 pub use crate::text_authoring::{RetainedMobject, RetainedScene};
 pub use noon_core::{
     GeometryResource, GeometryResourceArena, GeometryResourceError, GeometryResourceHandle,
-    GeometryResourceLookup, HostCallbackId, SemanticFamilyPairingError,
-    SemanticGeometryLayoutError, SemanticLoweringError, SemanticMutationImpact,
-    SemanticMutationTransaction, SemanticMutationTransactionError,
+    GeometryResourceLookup, HostCallbackId, SemanticFamilyPairingError, SemanticLoweringError,
+    SemanticMutationImpact, SemanticMutationTransaction, SemanticMutationTransactionError,
     SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeKind,
     SemanticScalarSignalQueryError, SemanticSceneOperationError, SemanticSignalBindingError,
     SemanticSignalError, SemanticStore, SemanticStoreError, SemanticStoreIdentity,

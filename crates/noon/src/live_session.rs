@@ -8,6 +8,7 @@
 
 mod family_layout;
 mod path_queries;
+mod point_matching;
 mod z_index;
 pub use family_layout::LiveLayoutTarget;
 
