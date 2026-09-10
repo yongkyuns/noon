@@ -3264,3 +3264,5 @@ pub mod scale_pivots;
 
 pub mod path_queries;
 pub mod z_index;
+
+pub mod animated_stroke_width;
