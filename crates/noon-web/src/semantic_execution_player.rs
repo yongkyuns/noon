@@ -802,6 +802,17 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_replace_layout(
+        &mut self,
+        source: &noon::LayoutAnchor,
+        target: &noon::LayoutAnchor,
+        dimension: noon::LayoutDimension,
+        stretch: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.replace_layout(source, target, dimension, stretch))
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_match_dim_size(
         &mut self,
         source: &noon::LayoutAnchor,

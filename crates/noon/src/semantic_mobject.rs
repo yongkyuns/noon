@@ -668,26 +668,13 @@ impl Mobject {
         dim_to_match: u32,
         stretch: bool,
     ) -> Result<(), AuthoringError> {
-        self.require_same_store(other)?;
-        if dim_to_match > 1 {
-            return Err(AuthoringError::InvalidDimension(dim_to_match));
-        }
-        let (w, h) = (self.width()?, self.height()?);
-        let (tw, th) = (other.width()?, other.height()?);
-        let (x, y) = if stretch {
-            if w == 0.0 || h == 0.0 {
-                return Err(AuthoringError::ZeroReplaceExtent);
-            }
-            (tw / w, th / h)
-        } else {
-            let (a, b) = if dim_to_match == 0 { (w, tw) } else { (h, th) };
-            if a == 0.0 {
-                return Err(AuthoringError::ZeroReplaceExtent);
-            }
-            (b / a, b / a)
-        };
-        self.scale_about_center(x, y, other.center()?)
+        crate::LayoutAnchor::from(&*self).replace_layout(
+            &crate::LayoutAnchor::from(other),
+            dim_to_match.try_into()?,
+            stretch,
+        )
     }
+
     pub fn move_to(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
         self.validate()?;
         semantic_xy(x, y)?;

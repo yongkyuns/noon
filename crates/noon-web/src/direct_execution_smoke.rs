@@ -733,3 +733,12 @@ pub async fn create_direct_family_state_smoke_renderer(
     let program = noon::example_scenes::family_state::program().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
+
+/// Shared replacement uses the native object/family transaction and live session.
+#[wasm_bindgen(js_name = createDirectFamilyReplacementSmokeRenderer)]
+pub async fn create_direct_family_replacement_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::family_replacement::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
