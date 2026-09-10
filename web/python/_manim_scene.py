@@ -1928,6 +1928,13 @@ def _build_canonical_composition_candidate(
                     abs_tol=1e-12,
                 )
             )
+            if type(leaf) is _animate._AlignedAnimationBuilder:
+                entering_id = str(reserve(source).object.id) if source._scene is None else None
+                builder.appendMethodTransformTo(
+                    entering_id, source_handle, target_handle, point_correspondence,
+                    float(child.run_time), str(child.rate_func),
+                )
+                return
             if source._scene is None:
                 reservation = reserve(source)
                 method = builder.appendEnteringPointTransformTo if point_correspondence else builder.appendEnteringTransformTo

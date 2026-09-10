@@ -17,6 +17,7 @@ fn retained_geometry_frame(
         family_animation_plan_indices: Vec::new(),
         time: 0.5,
         objects: vec![FrameObjectState {
+            z_index: 0.0,
             id: ObjectId::new(1),
             content: ObjectContentRef::Geometry(semantic_geometry),
             text_bounds: None,

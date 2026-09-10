@@ -26,6 +26,7 @@ use super::transform_payload::{
 /// The activation-time effective domains consumed by the shared animation lowerer.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EffectiveAnimationProperties {
+    pub z_index: f64,
     pub transform: Transform2D,
     pub style: Style,
     pub appearance: f32,
@@ -35,6 +36,8 @@ pub struct EffectiveAnimationProperties {
 /// Exact authored reconciliation performed when one execution channel is released.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticAnimationCompletion {
+    /// Method completion copies exact priority even for returning interpolation.
+    Priority { value: f64 },
     Property {
         property: SemanticObjectProperty,
         value: SemanticSignalValue,
@@ -138,6 +141,10 @@ impl SemanticAffineAnimationTrackProjection {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticAffineAnimationTrackError {
+    PriorityCompletionTimeMap {
+        animation: SemanticNodeId,
+        error: noon_core::CompositionTimeMapError,
+    },
     Animation(SemanticAnimationError),
     Target {
         animation: SemanticNodeId,
@@ -179,11 +186,6 @@ pub enum SemanticAffineAnimationTrackError {
         target: SemanticNodeId,
         target_state: SemanticNodeId,
     },
-    UnsupportedPainterOrderChange {
-        animation: SemanticNodeId,
-        target: SemanticNodeId,
-        target_state: SemanticNodeId,
-    },
     UnsupportedBindingChange {
         animation: SemanticNodeId,
         target: SemanticNodeId,
@@ -208,6 +210,10 @@ pub enum SemanticAffineAnimationTrackError {
         animation: SemanticNodeId,
         target: SemanticNodeId,
         property: SemanticObjectProperty,
+    },
+    MultiplePriorityDrivers {
+        first_animation: SemanticNodeId,
+        next_animation: SemanticNodeId,
     },
     MultipleDrivers {
         first_animation: SemanticNodeId,
@@ -342,20 +348,6 @@ impl std::fmt::Display for SemanticAffineAnimationTrackError {
                 target_state.slot(),
                 target_state.generation()
             ),
-            Self::UnsupportedPainterOrderChange {
-                animation,
-                target,
-                target_state,
-            } => write!(
-                formatter,
-                "semantic animation {}:{} changes z/painter order from target {}:{} to target-state {}:{}",
-                animation.slot(),
-                animation.generation(),
-                target.slot(),
-                target.generation(),
-                target_state.slot(),
-                target_state.generation()
-            ),
             Self::UnsupportedBindingChange {
                 animation,
                 target,
@@ -413,6 +405,8 @@ impl std::fmt::Display for SemanticAffineAnimationTrackError {
                 target.slot(),
                 target.generation()
             ),
+            Self::PriorityCompletionTimeMap { animation, error } => write!(formatter, "priority completion for {animation:?} has unsupported timing: {error}"),
+            Self::MultiplePriorityDrivers { first_animation, next_animation } => write!(formatter, "conflicting priority completions: {first_animation:?} and {next_animation:?}"),
             Self::MultipleDrivers {
                 first_animation,
                 next_animation,
@@ -697,7 +691,7 @@ where
             }
             continue;
         }
-        let (target_state, interpolation) = match leaf.payload {
+        let (target_state, interpolation, complete_priority) = match leaf.payload {
             SemanticScheduledAnimationPayload::SubsetDisplayMember { .. } => {
                 unreachable!("subset display payload was lowered above")
             }
@@ -707,7 +701,9 @@ where
             SemanticScheduledAnimationPayload::TransformTo {
                 target_state,
                 interpolation,
-            } => (target_state, interpolation),
+
+                complete_priority,
+            } => (target_state, interpolation, complete_priority),
             SemanticScheduledAnimationPayload::Fade { .. }
             | SemanticScheduledAnimationPayload::TextGlyph { .. }
             | SemanticScheduledAnimationPayload::Indicate { .. }
@@ -745,6 +741,42 @@ where
         for channel in channels {
             push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
         }
+        if complete_priority && from.z_index != target.z_index() {
+            if let Some(first_animation) = driven.insert(
+                driver_key(leaf.execution_object_id, Property::ZIndex),
+                leaf.animation,
+            ) {
+                return Err(SemanticAffineAnimationTrackError::MultiplePriorityDrivers {
+                    first_animation,
+                    next_animation: leaf.animation,
+                });
+            }
+            let alpha = leaf
+                .finish_time_map
+                .monotone_root_alpha(1.0)
+                .map_err(
+                    |error| SemanticAffineAnimationTrackError::PriorityCompletionTimeMap {
+                        animation: leaf.animation,
+                        error,
+                    },
+                )?;
+            let end = leaf.timing.start_time + leaf.timing.duration * alpha;
+            tracks.push(SemanticAffineAnimationTrack {
+                animation: leaf.animation,
+                target: leaf.target,
+                execution_object_id: leaf.execution_object_id,
+                property: Property::ZIndex,
+                completion: SemanticAnimationCompletion::Priority {
+                    value: target.z_index(),
+                },
+                values: TrackValues::ZIndex {
+                    from: from.z_index,
+                    to: target.z_index(),
+                },
+                timing: noon_core::TrackTiming::instant(end),
+                time_map: CompositionTimeMap::identity(),
+            });
+        }
     }
 
     Ok(SemanticAffineAnimationTrackProjection { tracks })
@@ -762,11 +794,15 @@ fn validate_leaf_matches_declaration(
             target,
             target_state,
             interpolation,
+
+            complete_priority,
         } if *target == leaf.target
             && leaf.payload
                 == SemanticScheduledAnimationPayload::TransformTo {
                     target_state: *target_state,
                     interpolation: *interpolation,
+
+                    complete_priority: *complete_priority,
                 } =>
         {
             Ok(())
@@ -988,7 +1024,6 @@ pub(super) enum AffinePayloadIssue {
     UnsupportedContentChange,
     UnsupportedPointCorrespondence,
     UnsupportedStyleChange,
-    UnsupportedPainterOrderChange,
     UnsupportedBindingChange,
     UnsupportedDepthChange(SemanticAffineAnimationField),
     UnsupportedLifecycle {
@@ -1017,9 +1052,6 @@ impl From<TransformPayloadValidationIssue> for AffinePayloadIssue {
         match value {
             TransformPayloadValidationIssue::ContentChange => Self::UnsupportedContentChange,
             TransformPayloadValidationIssue::StyleChange => Self::UnsupportedStyleChange,
-            TransformPayloadValidationIssue::PainterOrderChange => {
-                Self::UnsupportedPainterOrderChange
-            }
             TransformPayloadValidationIssue::BindingChange => Self::UnsupportedBindingChange,
             TransformPayloadValidationIssue::DepthChange(field) => {
                 Self::UnsupportedDepthChange(field)
@@ -2104,13 +2136,6 @@ fn existing_payload_error(
                 target_state,
             }
         }
-        AffinePayloadIssue::UnsupportedPainterOrderChange => {
-            SemanticAffineAnimationTrackError::UnsupportedPainterOrderChange {
-                animation: leaf.animation,
-                target: leaf.target,
-                target_state,
-            }
-        }
         AffinePayloadIssue::UnsupportedBindingChange => {
             SemanticAffineAnimationTrackError::UnsupportedBindingChange {
                 animation: leaf.animation,
@@ -2268,7 +2293,8 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> (u64, u8) {
         Property::Reveal => 8,
         Property::Transform => 9,
         Property::Morph => 10,
-        Property::Presence => 11,
+        Property::ZIndex => 11,
+        Property::Presence => 12,
     };
     (object.get(), slot)
 }
@@ -2308,6 +2334,7 @@ mod tests {
 
     fn effective(transform: Transform2D) -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {
+            z_index: 0.0,
             transform,
             style: Style {
                 stroke_width: 0.0,
@@ -2358,6 +2385,7 @@ mod tests {
             end: Vec2::new(1.0, 0.5),
         });
         let from = EffectiveAnimationProperties {
+            z_index: 0.0,
             transform: Transform2D {
                 translation: Vec2::new(10.0, -20.0),
                 rotation: std::f32::consts::FRAC_PI_2,
@@ -2487,6 +2515,7 @@ mod tests {
         let mut source = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
         source.transform.translation = SemanticVec3::new(-2.0, 1.0, 0.0);
         let from = EffectiveAnimationProperties {
+            z_index: 0.0,
             transform: Transform2D {
                 translation: Vec2::new(-2.0, 1.0),
                 rotation: 0.0,
@@ -2682,6 +2711,7 @@ mod tests {
             &schedule(&store, &index, animation),
             |_| {
                 Some(EffectiveAnimationProperties {
+                    z_index: 0.0,
                     transform: Transform2D::default(),
                     style: current,
                     appearance: 1.0,
@@ -2918,6 +2948,7 @@ mod tests {
             .unwrap();
         let index = index(&store);
         let current = EffectiveAnimationProperties {
+            z_index: 0.0,
             transform: Transform2D::default(),
             style: Style {
                 stroke_width: 0.0,
@@ -2991,6 +3022,8 @@ mod tests {
         leaf.payload = SemanticScheduledAnimationPayload::TransformTo {
             target_state: target,
             interpolation: noon_core::SemanticTransformInterpolation::Affine,
+
+            complete_priority: false,
         };
 
         assert_eq!(

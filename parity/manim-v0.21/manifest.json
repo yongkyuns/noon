@@ -11,6 +11,17 @@
   },
   "fixtures": [
     {
+      "id": "animated-priority",
+      "scene": "OrdinaryAnimatedPriority",
+      "source": "parity/manim-v0.21/core-examples/animated_priority.py",
+      "expected_duration": 3.25,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
       "id": "path-alignment",
       "scene": "OrdinaryPathAlignment",
       "source": "parity/manim-v0.21/core-examples/path_alignment.py",

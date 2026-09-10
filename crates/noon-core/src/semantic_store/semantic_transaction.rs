@@ -717,6 +717,7 @@ impl SemanticMutationTransaction {
             target,
             target_state,
             SemanticTransformInterpolation::Affine,
+            false,
             options,
         )
     }
@@ -727,6 +728,7 @@ impl SemanticMutationTransaction {
         target: impl Into<SemanticTransactionNodeRef>,
         target_state: impl Into<SemanticTransactionNodeRef>,
         interpolation: SemanticTransformInterpolation,
+        complete_priority: bool,
         options: AnimationOptions,
     ) -> SemanticLocalNodeToken {
         let token = self.allocate_local_node_token();
@@ -737,6 +739,8 @@ impl SemanticMutationTransaction {
                     target: target.into(),
                     target_state: target_state.into(),
                     interpolation,
+
+                    complete_priority,
                 },
                 options,
             ),

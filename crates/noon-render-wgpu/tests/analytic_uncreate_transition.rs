@@ -15,6 +15,7 @@ fn rectangle_frame(reveal: f32) -> FrameState {
         family_animation_plan_indices: Vec::new(),
         time: 0.0,
         objects: vec![FrameObjectState {
+            z_index: 0.0,
             id: ObjectId::new(1),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::rectangle(2.0, 2.0)),
             text_bounds: None,

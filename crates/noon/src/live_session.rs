@@ -46,6 +46,7 @@ use std::{cell::RefCell, rc::Rc};
 /// it is an observation, not another runtime authority.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectiveMobjectState {
+    pub z_index: f64,
     pub transform: Transform2D,
     pub style: Style,
     pub appearance: f32,
@@ -259,6 +260,7 @@ pub struct TransformToRequest<'a> {
     source: &'a Mobject,
     target_state: &'a Mobject,
     interpolation: noon_core::SemanticTransformInterpolation,
+    complete_priority: bool,
     options: AnimationOptions,
 }
 
@@ -391,6 +393,13 @@ pub enum AnimationCompositionRequest<'a> {
 }
 
 impl<'a> TransformToRequest<'a> {
+    /// Complete an animated method target, including its exact painter priority.
+    /// Ordinary Transform/MoveToTarget interpolation leaves priority unchanged.
+    pub const fn method_target(mut self) -> Self {
+        self.complete_priority = true;
+        self
+    }
+
     pub const fn new(
         source: &'a Mobject,
         target_state: &'a Mobject,
@@ -400,6 +409,7 @@ impl<'a> TransformToRequest<'a> {
             source,
             target_state,
             interpolation: noon_core::SemanticTransformInterpolation::Affine,
+            complete_priority: false,
             options,
         }
     }
@@ -414,6 +424,7 @@ impl<'a> TransformToRequest<'a> {
             source,
             target_state,
             interpolation: noon_core::SemanticTransformInterpolation::PointCorrespondence,
+            complete_priority: false,
             options,
         }
     }
@@ -819,6 +830,7 @@ impl<'a> LiveSession<'a> {
                 &mut state.transform.rotation_z,
                 observed.object.transform.rotation,
             );
+            state.set_z_index(observed.object.z_index);
             state.style = target_style_from_effective(&state.style, observed.object.style)?;
         }
         Ok(state)
@@ -956,6 +968,7 @@ impl<'a> LiveSession<'a> {
             .session
             .effective_semantic_object(&store, mobject.node_id())?;
         Ok(EffectiveMobjectState {
+            z_index: object.z_index,
             transform: object.transform,
             style: object.style,
             appearance: object.appearance,
@@ -1618,6 +1631,7 @@ impl<'a> LiveSession<'a> {
                     source: child.source.node_id(),
                     target_state: child.target_state.node_id(),
                     interpolation: child.interpolation,
+                    complete_priority: child.complete_priority,
                     options: child.options,
                 }
             }

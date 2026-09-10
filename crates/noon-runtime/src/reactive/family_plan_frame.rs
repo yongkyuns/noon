@@ -176,6 +176,7 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let text_handle = texts.insert(text_resource()).unwrap();
         let text = crate::FrameObjectState {
+            z_index: 0.0,
             id: ObjectId::new(10),
             content: noon_core::ObjectContentRef::Text(text_handle),
             transform: noon_core::Transform2D::IDENTITY,
@@ -184,6 +185,7 @@ mod tests {
             text_bounds: None,
         };
         let circle = crate::FrameObjectState {
+            z_index: 0.0,
             id: ObjectId::new(11),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
             transform: noon_core::Transform2D::IDENTITY,
@@ -204,6 +206,7 @@ mod tests {
             time: 1.0,
             objects: vec![
                 FrameObjectState {
+                    z_index: 0.0,
                     id: ObjectId::new(10),
                     content: ObjectContentRef::Text(text_handle),
                     text_bounds: Some(Rect::new(Vec2::ZERO, Vec2::ONE)),
@@ -212,6 +215,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    z_index: 0.0,
                     id: ObjectId::new(11),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
                     text_bounds: None,
@@ -251,6 +255,7 @@ mod tests {
         let (plan, mut frame, mut states) = mixed_fixture();
         states[0] = None;
         frame.objects.push(FrameObjectState {
+            z_index: 0.0,
             id: ObjectId::new(99),
             content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
             text_bounds: None,

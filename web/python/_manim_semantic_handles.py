@@ -825,6 +825,10 @@ def _get_z_index(self):
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("painter priority requires the shared Rust authoring host")
+    context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
+               else _live_mutation_context(self))
+    if context is not None:
+        return float(engine_call(context.liveZIndex, anchor))
     return float(engine_call(anchor.zIndex))
 
 

@@ -57,7 +57,19 @@ fn authored_live_and_family_reorders_match_a_stable_reference() {
             .map(|&i| semantic_execution_object_id(objects[i].node_id()))
             .collect::<Vec<_>>();
         assert_eq!(order(&session), expected, "step {step}");
-        assert_eq!(session.frame().objects, rows);
+        for (actual, original) in session.frame().objects.iter().zip(&rows) {
+            let mut expected = original.clone();
+            expected.z_index = objects
+                .iter()
+                .find(|object| semantic_execution_object_id(object.node_id()) == actual.id)
+                .unwrap()
+                .z_index()
+                .unwrap();
+            assert_eq!(
+                actual, &expected,
+                "only priority changes in stable execution rows"
+            );
+        }
         assert_eq!(session.last_patch_stats().full_seeks, 0);
         assert_eq!(session.last_patch_stats().full_group_rebuilds, 0);
     }

@@ -559,7 +559,11 @@ impl SceneInstance {
         let mut changed = self.update_requested_family_animations(prepared.time);
         for (object_index, row) in final_rows {
             if row.differs_from_frame(&self.frame, object_index) {
+                let priority_changed = row.z_index != self.frame.objects[object_index].z_index;
                 row.write_to_frame(&mut self.frame, object_index);
+                if priority_changed {
+                    self.reposition_painter_row(object_index);
+                }
                 self.mark_changed(object_index);
                 changed = true;
             }

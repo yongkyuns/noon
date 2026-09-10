@@ -284,6 +284,13 @@ fn lower_object_track_values(
     values: &SemanticObjectTrackValues,
 ) -> Result<(Property, TrackValues), SemanticInitialAnimationError> {
     let direct = match (property, values) {
+        (SemanticObjectTrackProperty::ZIndex, SemanticObjectTrackValues::Scalar { from, to }) => (
+            Property::ZIndex,
+            TrackValues::ZIndex {
+                from: *from,
+                to: *to,
+            },
+        ),
         (SemanticObjectTrackProperty::Presence, SemanticObjectTrackValues::Bool { from, to }) => (
             Property::Presence,
             TrackValues::Bool {

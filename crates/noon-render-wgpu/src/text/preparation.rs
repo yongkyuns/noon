@@ -871,6 +871,7 @@ mod tests {
             family_animation_plan_indices: Vec::new(),
             time: 0.0,
             objects: vec![FrameObjectState {
+                z_index: 0.0,
                 id: ObjectId::new(1),
                 content: ObjectContentRef::Text(text),
                 text_bounds: None,
@@ -894,6 +895,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    z_index: 0.0,
                     id: ObjectId::new(1),
                     content: ObjectContentRef::Text(text),
                     text_bounds: None,
@@ -902,6 +904,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    z_index: 0.0,
                     id: ObjectId::new(2),
                     content: ObjectContentRef::Text(text),
                     text_bounds: None,

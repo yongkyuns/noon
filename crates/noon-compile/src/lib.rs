@@ -2,6 +2,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod order_index;
+use order_index::{move_order_row, reposition_order_row};
+
 mod execution_patch;
 mod semantic_lowering;
 mod transaction_preflight;
@@ -31,6 +34,7 @@ pub use transform::TransformGeometryPlan;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DynamicProperties {
     pub presence: bool,
+    pub z_index: bool,
     pub transform: bool,
     pub position: bool,
     pub rotation: bool,
@@ -48,6 +52,7 @@ impl DynamicProperties {
     fn mark(&mut self, property: Property) {
         match property {
             Property::Presence => self.presence = true,
+            Property::ZIndex => self.z_index = true,
             Property::Transform => self.transform = true,
             Property::Position => self.position = true,
             Property::Rotation => self.rotation = true,
@@ -64,6 +69,7 @@ impl DynamicProperties {
 
     pub const fn any(self) -> bool {
         self.presence
+            || self.z_index
             || self.transform
             || self.position
             || self.rotation
@@ -663,7 +669,7 @@ impl CompiledScene {
         let mut candidates = BTreeMap::<CompiledChannelKey, Vec<&TrackDefinition>>::new();
         for track in tracks {
             validate_track_definition(track).map_err(CompilePatchError::InvalidTrack)?;
-            if track.timing.duration <= 0.0
+            if (track.timing.duration <= 0.0 && track.property != Property::ZIndex)
                 || !matches!(
                     track.property,
                     Property::Position
@@ -676,6 +682,7 @@ impl CompiledScene {
                         | Property::Appearance
                         | Property::Reveal
                         | Property::Morph
+                        | Property::ZIndex
                 )
             {
                 return Err(CompilePatchError::UnsupportedTrackReconciliation(track.id));
@@ -848,30 +855,23 @@ impl CompiledScene {
         current != destination
     }
 
-    /// Restore one row's z/family ordering using a binary search and one local move.
+    /// Current semantic family traversal rank, used only as an equal-priority tie-breaker.
+    pub fn family_rank(&self, index: u32) -> Option<u32> {
+        self.family_ranks.get(index as usize).copied().flatten()
+    }
+
     fn reposition_painter_row(&mut self, index: u32) {
-        let position = self.painter_ranks[index as usize].expect("live painter rank") as usize;
-        let z = self.objects[index as usize].base_z_index;
-        let family_rank = self.family_ranks[index as usize].expect("live family rank");
-        // Search the sorted sequence with the changed row logically excluded.
-        let mut low = 0;
-        let mut high = self.painter_order.len() - 1;
-        while low < high {
-            let middle = low + (high - low) / 2;
-            let candidate = self.painter_order[middle + usize::from(middle >= position)] as usize;
-            let other_z = self.objects[candidate].base_z_index;
-            if other_z < z || (other_z == z && self.family_ranks[candidate].unwrap() < family_rank)
-            {
-                low = middle + 1;
-            } else {
-                high = middle;
-            }
-        }
-        move_order_row(
+        reposition_order_row(
             &mut self.painter_order,
             &mut self.painter_ranks,
-            position,
-            low,
+            index,
+            |a, b| {
+                self.objects[a as usize]
+                    .base_z_index
+                    .partial_cmp(&self.objects[b as usize].base_z_index)
+                    .expect("validated finite priorities")
+                    .then_with(|| self.family_ranks[a as usize].cmp(&self.family_ranks[b as usize]))
+            },
         );
     }
 
@@ -1385,7 +1385,7 @@ impl CompiledScene {
                 {
                     return Err(CompilePatchError::TrackReconciliationMismatch(*track));
                 }
-                if compiled.timing.duration <= 0.0
+                if (compiled.timing.duration <= 0.0 && compiled.property != Property::ZIndex)
                     || !matches!(
                         compiled.property,
                         Property::Position
@@ -1398,6 +1398,7 @@ impl CompiledScene {
                             | Property::Appearance
                             | Property::Reveal
                             | Property::Morph
+                            | Property::ZIndex
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));
@@ -1658,24 +1659,6 @@ fn validate_execution_content_resource(
     Ok(())
 }
 
-fn move_order_row(
-    order: &mut [u32],
-    ranks: &mut [Option<u32>],
-    position: usize,
-    destination: usize,
-) {
-    let first = position.min(destination);
-    let last = position.max(destination);
-    if position < destination {
-        order[first..=last].rotate_left(1);
-    } else {
-        order[first..=last].rotate_right(1);
-    }
-    for rank in first..=last {
-        ranks[order[rank] as usize] = Some(rank as u32);
-    }
-}
-
 fn validate_z_index(object: ObjectId, value: f64) -> Result<(), CompilePatchError> {
     if value.is_finite() {
         Ok(())
@@ -1751,6 +1734,7 @@ const fn property_rank(property: Property) -> u8 {
         Property::Appearance => 9,
         Property::Reveal => 10,
         Property::Morph => 11,
+        Property::ZIndex => 12,
     }
 }
 
@@ -2032,6 +2016,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[animated_index].dynamic,
             DynamicProperties {
+                z_index: false,
                 presence: false,
                 transform: false,
                 position: false,
@@ -2076,6 +2061,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
+                z_index: false,
                 scale: true,
                 ..DynamicProperties::default()
             }
@@ -2105,6 +2091,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
+                z_index: false,
                 stroke_width: true,
                 ..DynamicProperties::default()
             }
@@ -2135,6 +2122,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
+                z_index: false,
                 appearance: true,
                 ..DynamicProperties::default()
             }
@@ -2168,6 +2156,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
+                z_index: false,
                 presence: true,
                 ..DynamicProperties::default()
             }
@@ -2386,6 +2375,7 @@ mod tests {
         assert_eq!(
             compiled.objects()[0].dynamic,
             DynamicProperties {
+                z_index: false,
                 presence: false,
                 transform: false,
                 position: false,
