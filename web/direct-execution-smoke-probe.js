@@ -27,6 +27,7 @@ const {
   createDirectOrdinaryAffineLifecycleSmokeRenderer,
   createDirectOrdinaryCompositionSmokeRenderer,
   createDirectMixedScalarCompositionSmokeRenderer,
+  createDirectFamilyStateSmokeRenderer,
   createDirectFamilyTransformIndicateSmokeRenderer,
   createDirectFamilyArrangementSmokeRenderer,
   createDirectFamilyPlacementSmokeRenderer,
@@ -1305,6 +1306,36 @@ async function directMixedScalarCompositionProof(expectedBackend) {
   }
 }
 
+async function directFamilyStateProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectFamilyStateSmokeRenderer(canvas);
+  const samples = [];
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await presentDirectFrame(renderer);
+    for (const [time, leftX, rightX, y] of [[0, -1, 1, 0], [200, -0.5, 1.5, 0.5], [400, -2, 0, 0], [601, -2, 0, 0]]) {
+      renderer.advanceDirectRealtime(time);
+      await settleDirectPublication(renderer, time);
+      const left = await sampleRenderedColor(canvas, leftX, y);
+      const right = await sampleRenderedColor(canvas, rightX, y);
+      if (!(left.red > 180 && left.blue < 50 && right.blue > 180 && right.red < 50)) {
+        throw new Error(`direct family state at ${time}ms missed expected members: ${JSON.stringify({left, right})}`);
+      }
+      samples.push({ time, left, right });
+    }
+    if (renderer.rendererBackend() !== expectedBackend || renderer.objectCount() !== 2
+        || JSON.parse(renderer.directWakeDirectiveJson(601)).cadence !== "idle") {
+      throw new Error("direct family state did not settle on the ordinary renderer");
+    }
+    return { samples };
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directFamilyTransformIndicateProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectFamilyTransformIndicateSmokeRenderer(canvas);
@@ -2512,6 +2543,7 @@ async function start() {
   metrics.affineLifecycle = await directAffineLifecycleProof(expectedBackend);
   metrics.timedComposition = await directTimedCompositionProof(expectedBackend);
   metrics.mixedScalarComposition = await directMixedScalarCompositionProof(expectedBackend);
+  metrics.familyState = await directFamilyStateProof(expectedBackend);
   metrics.familyTransformIndicate = await directFamilyTransformIndicateProof(expectedBackend);
   metrics.familyArrangement = await directFamilyArrangementProof(expectedBackend);
   metrics.styleOperations = await directStyleOperationsProof(expectedBackend);

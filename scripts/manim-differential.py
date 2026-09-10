@@ -298,6 +298,42 @@ def _manim_vgroup_arrange_grid() -> Any:
     return _members_observation(group)
 
 
+def _grid_options_probe(api, flow, alignment_lists=True):
+    members = [api.Rectangle(width=w, height=h).shift(api.RIGHT * 2)
+               for w, h in ((2, 1), (1, .5), (.5, 2), (1, 1), (.7, .4))]
+    group = api.VGroup(*members)
+    options = dict(rows=2, cols=3, buff=(.5, .25), cell_alignment=api.UP + api.LEFT,
+                   row_heights=[3, None], col_widths=[None, 2, None], flow_order=flow)
+    if alignment_lists:
+        options.update(row_alignments="ud", col_alignments="lcr")
+    group.arrange_in_grid(**options)
+    return _members_observation(group)
+
+
+def _grid_inferred_and_alias_probe(api):
+    a, b = api.Square(side_length=.5), api.Rectangle(width=1, height=.5)
+    nested = api.VGroup(a, b)
+    group = api.VGroup(nested, a)
+    group.arrange_in_grid(row_alignments="u", col_widths=[None, 2],
+                          cell_alignment=api.UP + api.LEFT, flow_order="ld")
+    return _members_observation(group)
+
+
+def _planar_flip_probe(api):
+    observations = []
+    for axis in (api.RIGHT, api.UP, api.RIGHT + api.UP, api.OUT):
+        for pivot in ({}, {"about_point": 2 * api.RIGHT + api.UP}, {"about_edge": api.RIGHT + api.UP}):
+            line = api.Line(api.LEFT, api.RIGHT + api.UP).rotate(.37).shift(2 * api.LEFT)
+            line.flip(axis, **pivot)
+            observations.append([_point_observation(line.get_start()), _point_observation(line.get_end())])
+    a = api.Rectangle(width=2, height=1).rotate(.3).shift(api.LEFT)
+    b = api.Line(api.ORIGIN, api.RIGHT + api.UP)
+    family = api.VGroup(a, api.VGroup(a, b))
+    family.flip(api.UP, about_point=api.ORIGIN).rotate_about_origin(.2)
+    return {"leaves": observations, "family": _object_observation(family),
+            "rectangle": _object_observation(a), "line": _object_observation(b)}
+
+
 def _noon_vgroup_scale() -> Any:
     group = noon.VGroup(
         noon.Circle(radius=0.25),
@@ -536,6 +572,41 @@ def _group_coordinate_dimensions(api, group_class):
     return observations
 
 
+def _family_become(api):
+    def make(width, height, distance):
+        a = api.Square(side_length=width).shift(distance * api.LEFT)
+        b = api.Rectangle(width=width, height=height).shift(distance * api.RIGHT)
+        return api.VGroup(a, api.VGroup(a, b))
+    source = make(1.0, 2.0, 2.0)
+    target = make(2.0, 3.0, 3.0).shift(api.RIGHT + api.UP)
+    observations = []
+    for options in ({}, {"match_height": True}, {"match_height": True, "match_width": True},
+                    {"stretch": True, "match_center": True}):
+        value = source.copy()
+        first = value[0]
+        second = value[1][1]
+        value.become(target, **options)
+        observations.append({"family": _object_observation(value),
+                             "first": _object_observation(first), "second": _object_observation(second),
+                             "alias": first is value[1][0], "target": _object_observation(target)})
+    source.save_state()
+    source.become(target)
+    source.restore()
+    return {"states": observations, "restored": _object_observation(source)}
+
+
+def _family_become_cross_alias(api):
+    observations = []
+    for match_center in (False, True):
+        a = api.Square(side_length=1).shift(api.LEFT)
+        b = api.Square(side_length=1).shift(api.RIGHT)
+        source = api.VGroup(a, b)
+        target = api.VGroup(b, a)
+        source.become(target, match_center=match_center)
+        observations.append([_object_observation(a), _object_observation(b)])
+    return observations
+
+
 def _style_operations(api):
     a = api.Square(side_length=1).shift(api.LEFT)
     b = api.Circle(radius=0.5).shift(api.RIGHT)
@@ -550,6 +621,28 @@ def _style_operations(api):
     family.match_style(api.VGroup(b, api.VGroup(b, a)))
     observations.append([a.get_fill_opacity(), b.get_fill_opacity()])
     return observations
+
+
+def _family_membership_order(provider: Any, group_name: str) -> Any:
+    a, b, c = [provider.Square(side_length=1.0) for _ in range(3)]
+    group_type = getattr(provider, group_name)
+    nested = group_type(a, b)
+    family = group_type(a, nested, a)
+    names = {id(a): "a", id(b): "b", id(c): "c", id(nested): "nested"}
+    order = lambda: [names[id(member)] for member in family.submobjects]
+    observed = [order()]
+    family.add(c, nested, c)
+    observed.append(order())
+    family.add(a)
+    observed.append(order())
+    family.remove(nested, nested)
+    observed.append(order())
+    family.add(nested)
+    observed.append(order())
+    copied = family.copy()
+    return {"order": observed, "nested_identity": nested[0] is a and nested[1] is b,
+            "copy_alias": copied[1] is copied[2][0],
+            "copy_independent": copied[1] is not a}
 
 
 def _family_replace(api, source_family, target_family, stretch):
@@ -579,8 +672,42 @@ def _zero_extent_replace(api):
     return _object_observation(source)
 
 
+def _paint_rgb(color):
+    # Normalize provider color representations only; never alter scene semantics.
+    if hasattr(color, "to_rgb"):
+        return [float(value) for value in color.to_rgb()]
+    return [color.red, color.green, color.blue]
+
+
+def _paint_queries_gradients(api):
+    boxes = [api.Square(side_length=1) for _ in range(5)]
+    group = api.VGroup(boxes[0], api.VGroup(*boxes))
+    group.set_fill(opacity=0.4).set_stroke(width=6)
+    group.set_color_by_gradient("#FF0000", "#00FF00", "#0000FF")
+    observations = [[_paint_rgb(obj.get_color()), _paint_rgb(obj.get_fill_color()),
+                     _paint_rgb(obj.get_stroke_color()), obj.get_stroke_width(),
+                     obj.get_fill_opacity()] for obj in boxes]
+    first = boxes[0]
+    first.set_fill(color="#FF0000").set_stroke(color="#0000FF")
+    observations.append(_paint_rgb(first.get_color()))
+    first.set_fill(opacity=0)
+    observations.append(_paint_rgb(first.get_color()))
+    first.set_color(first.get_color())
+    observations.append([first.get_fill_opacity(), first.get_stroke_opacity()])
+    return observations
+
+
 FIXTURES = [
+    Fixture("planar_flip_pivots", lambda: _planar_flip_probe(noon), lambda: _planar_flip_probe(manim)),
+
+    Fixture("vgroup_become_cross_alias", lambda: _family_become_cross_alias(noon), lambda: _family_become_cross_alias(manim)),
+    Fixture("vgroup_become_restore", lambda: _family_become(noon), lambda: _family_become(manim)),
+    Fixture("paint_queries_gradients", lambda: _paint_queries_gradients(noon), lambda: _paint_queries_gradients(manim)),
     Fixture("style_operations", lambda: _style_operations(noon), lambda: _style_operations(manim)),
+
+
+    Fixture("group_membership_order", lambda: _family_membership_order(noon, "Group"), lambda: _family_membership_order(manim, "Group")),
+    Fixture("vgroup_membership_order", lambda: _family_membership_order(noon, "VGroup"), lambda: _family_membership_order(manim, "VGroup")),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",
               lambda sf=source_family, tf=target_family, st=stretch: _family_replace(noon, sf, tf, st),
               lambda sf=source_family, tf=target_family, st=stretch: _family_replace(manim, sf, tf, st))
@@ -619,6 +746,13 @@ FIXTURES = [
         _noon_vgroup_copy_independence,
         _manim_vgroup_copy_independence,
     ),
+    *[Fixture(f"grid_options_{flow}_{aligned}",
+              lambda f=flow, a=aligned: _grid_options_probe(noon, f, a),
+              lambda f=flow, a=aligned: _grid_options_probe(manim, f, a))
+      for flow in ("rd", "dr", "ld", "dl", "ru", "ur", "lu", "ul")
+      for aligned in (False, True)],
+    Fixture("grid_inferred_alias", lambda: _grid_inferred_and_alias_probe(noon),
+            lambda: _grid_inferred_and_alias_probe(manim)),
     Fixture("vgroup_arrange_grid", _noon_vgroup_arrange_grid, _manim_vgroup_arrange_grid),
     Fixture("vgroup_scale", _noon_vgroup_scale, _manim_vgroup_scale),
     Fixture("vgroup_rotate", _noon_vgroup_rotate, _manim_vgroup_rotate),
@@ -641,6 +775,7 @@ FIXTURES = [
 # Explicitly tracked but not yet differential-gated.  Keep this list close to the
 # harness so unsupported behavior is never silently treated as a mismatch.
 UNSUPPORTED = {
+    "family_insert_assignment": "duplicate-edge insert and indexed assignment remain under #74",
     "family_aliasing": "Shared semantic identity exists; exhaustive nested-family mutation/copy parity remains under #74",
     "z_index": "Noon does not yet expose the 2.5D/z semantic model (#62)",
     "updater_frame_semantics": "host/native updater phase semantics are being defined in #56",

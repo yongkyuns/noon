@@ -70,8 +70,6 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      NOON_PREVIEW_CACHE: ${{ runner.temp }}/noon-preview
     steps:
       - uses: actions/checkout@v7
       - id: source
@@ -107,6 +105,8 @@ jobs:
           docker info --format '{{json .SecurityOptions}}'
       - if: steps.source.outputs.enabled == 'true'
         name: Prepare content-addressed preview runtime
+        env:
+          NOON_PREVIEW_CACHE: ${{ runner.temp }}/noon-preview
         working-directory: tools/noon-mcp
         run: node scripts/setup-preview-runtime.mjs > "$RUNNER_TEMP/noon-preview-setup.json"
       - if: steps.source.outputs.enabled == 'true'

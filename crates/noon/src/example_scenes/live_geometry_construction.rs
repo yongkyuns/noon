@@ -10,7 +10,8 @@ use std::rc::Rc;
 
 const LINE_START: (f64, f64) = (-1.111_538_105_676_658, -3.074_759_526_419_164_5);
 const LINE_END: (f64, f64) = (1.111_538_105_676_658, -0.925_240_473_580_835_5);
-const LINE_COLOR: Color = Color::rgba(0.2, 0.4, 0.8, 0.35);
+const LINE_COLOR: Color = Color::rgb(0.2, 0.4, 0.8);
+const LINE_OPACITY: f64 = 0.35;
 
 pub struct LiveGeometryConstruction {
     stage: u8,
@@ -59,7 +60,7 @@ impl LiveContinuation for LiveGeometryConstruction {
                     1.0,
                 )
                 .map_err(|error| error.to_string())?;
-                line.set_stroke_opacity(f64::from(LINE_COLOR.alpha))
+                line.set_stroke_opacity(LINE_OPACITY)
                     .map_err(|error| error.to_string())?;
                 line.set_stroke_width(0.04)
                     .map_err(|error| error.to_string())?;
