@@ -30,13 +30,14 @@ async function fixture(t) {
     "",
   ].join("\n"));
   await put("tracked.txt", "clean\n");
+  await put("web/runtime-build-verifier.js", "export const verifier = true;\n");
   const git = (...args) => execFileSync("git", args, {
     cwd: root,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
   git("init", "-q");
-  git("add", ".gitignore", "tracked.txt");
+  git("add", ".gitignore", "tracked.txt", "web/runtime-build-verifier.js");
   git("-c", "user.name=Noon Test", "-c", "user.email=noon@example.invalid", "commit", "-qm", "fixture");
 
   await put("web/python-worker.js", "worker bytes\n");
@@ -45,7 +46,7 @@ async function fixture(t) {
   return { root, put, git };
 }
 
-test("identity binds exact worker, wasm, and glue bytes without timestamps", async (t) => {
+test("identity binds exact runtime bytes without timestamps", async (t) => {
   const { root, git } = await fixture(t);
   const first = await createRuntimeBuildIdentity(root);
   const second = await createRuntimeBuildIdentity(root);
@@ -56,6 +57,7 @@ test("identity binds exact worker, wasm, and glue bytes without timestamps", asy
   assert.equal(first.files.worker.sha256, digest("worker bytes\n"));
   assert.equal(first.files.wasm.sha256, digest(Buffer.from([0, 97, 115, 109, 1])));
   assert.equal(first.files.glue.sha256, digest("export default function init() {}\n"));
+  assert.equal(first.files.verifier.sha256, digest("export const verifier = true;\n"));
   assert.match(first.buildId, /^[0-9a-f]{64}$/);
 
   const written = await writeRuntimeBuildIdentity(root);
