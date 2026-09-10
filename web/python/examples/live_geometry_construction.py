@@ -49,7 +49,7 @@ class LiveGeometryConstruction(Scene):
         )
         assert_point(line.get_start(), LINE_START)
         assert_point(line.get_end(), LINE_END)
-        assert_color(line.get_color(), LINE_COLOR)
+        assert_color(line.get_color(), Color(1.0, 1.0, 0.0))
         assert abs(line.get_stroke_opacity() - LINE_OPACITY) < 1e-6
         late_path = Path(
             VectorPath().move_to((-0.3, -0.3)).line_to((0.3, -0.3))
@@ -65,7 +65,7 @@ class LiveGeometryConstruction(Scene):
         )
         assert_point(line.get_start(), (LINE_START[0], LINE_START[1] + 1.0))
         assert_point(line.get_end(), (LINE_END[0], LINE_END[1] + 1.0))
-        assert_color(line.get_color(), LINE_COLOR)
+        assert_color(line.get_color(), Color(1.0, 1.0, 0.0))
         assert abs(line.get_stroke_opacity() - LINE_OPACITY) < 1e-6
         dot = Dot((-4.0, -1.5, 0.0), radius=0.25, color=Color(1.0, 0.0, 0.0))
         annulus = Annulus(inner_radius=0.25, outer_radius=0.5, arc_center=(4.0, -1.5, 0.0),

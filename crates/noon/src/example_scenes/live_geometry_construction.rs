@@ -75,7 +75,7 @@ impl LiveContinuation for LiveGeometryConstruction {
                 )?;
                 assert_color(
                     line.manim_color().map_err(|error| error.to_string())?,
-                    LINE_COLOR,
+                    Color::rgb(1.0, 1.0, 0.0),
                 )?;
                 let mut late_path = ManimGeometryOptions::path(
                     VectorPath::new()
@@ -142,7 +142,7 @@ impl LiveContinuation for LiveGeometryConstruction {
                 assert_color(
                     live.effective_manim_color(line)
                         .map_err(|error| error.to_string())?,
-                    LINE_COLOR,
+                    Color::rgb(1.0, 1.0, 0.0),
                 )?;
                 let mut dot = ManimGeometryOptions::dot(-4.0, -1.5, 0.25)
                     .map_err(|error| error.to_string())?;
