@@ -22,6 +22,8 @@ struct Curve {
 pub enum PathProportionError {
     InvalidProportion(f32),
     EmptyPath,
+    InvalidMetric,
+    InvalidSampleCount,
 }
 
 impl std::fmt::Display for PathProportionError {
@@ -34,6 +36,12 @@ impl std::fmt::Display for PathProportionError {
                 )
             }
             Self::EmptyPath => formatter.write_str("path has no drawable curves"),
+            Self::InvalidMetric => {
+                formatter.write_str("path metric must have finite coordinates, scales and length")
+            }
+            Self::InvalidSampleCount => {
+                formatter.write_str("path length sample count must be at least two")
+            }
         }
     }
 }
@@ -64,163 +72,98 @@ fn validate_proportion_f64(alpha: f64) -> Result<(), PathProportionError> {
 #[derive(Clone, Debug)]
 pub struct PathProportionPlan {
     curves: Vec<Curve>,
-    lengths: Vec<f32>,
-    cumulative_lengths: Vec<f32>,
-    total_length: f32,
+    lengths: Vec<f64>,
+    cumulative_lengths: Vec<f64>,
+    total_length: f64,
+    scale: (f64, f64),
 }
 
 impl PathProportionPlan {
-    /// Prepare the reusable proportion measure for `path`.
+    /// Prepare the reusable local-space proportion measure for `path`.
     pub fn new(path: &VectorPath) -> Result<Self, PathProportionError> {
+        Self::with_scale(path, (1.0, 1.0))
+    }
+
+    /// Prepare a measure in the metric induced by a planar scale.
+    /// Rotation and translation preserve lengths; nonuniform scale changes
+    /// which curve contains a given proportion. Points remain in local space.
+    pub fn with_scale(path: &VectorPath, scale: (f64, f64)) -> Result<Self, PathProportionError> {
+        if !scale.0.is_finite() || !scale.1.is_finite() {
+            return Err(PathProportionError::InvalidMetric);
+        }
         let curves = collect_curves(path);
         if curves.is_empty() {
             return Err(PathProportionError::EmptyPath);
         }
-
-        let lengths = curves
+        let lengths: Vec<_> = curves
             .iter()
-            .copied()
-            .map(sampled_curve_length)
-            .collect::<Vec<_>>();
+            .map(|&curve| sampled_curve_length(curve, scale, MANIM_LENGTH_SAMPLE_POINTS))
+            .collect();
         let mut cumulative_lengths = Vec::with_capacity(lengths.len());
-        let mut total_length = 0.0_f32;
+        let mut total_length = 0.0;
         for &length in &lengths {
             total_length += length;
             cumulative_lengths.push(total_length);
         }
-
+        if !total_length.is_finite() {
+            return Err(PathProportionError::InvalidMetric);
+        }
         Ok(Self {
             curves,
             lengths,
             cumulative_lengths,
             total_length,
+            scale,
         })
     }
 
-    /// Return the point at `alpha` using the prepared Manim-compatible measure.
+    /// Return a local point using this plan's metric and renderer precision.
     pub fn point(&self, alpha: f32) -> Result<Vec2, PathProportionError> {
-        validate_proportion(alpha)?;
-
-        if alpha == 1.0 {
-            return Ok(self
-                .curves
-                .last()
-                .expect("path proportion plans are never empty")
-                .to);
-        }
-
-        let target_length = alpha * self.total_length;
-        if target_length.is_finite() {
-            let curve_index = self
-                .cumulative_lengths
-                .partition_point(|&end_length| end_length < target_length);
-            if curve_index < self.curves.len() {
-                let current_length = curve_index
-                    .checked_sub(1)
-                    .map_or(0.0, |index| self.cumulative_lengths[index]);
-                let length = self.lengths[curve_index];
-                let residue = if length > 0.0 {
-                    ((target_length - current_length) / length).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                return Ok(curve_point(self.curves[curve_index], residue));
-            }
-        } else {
-            // Keep the historical malformed-geometry behavior. Valid retained paths are finite,
-            // but direct callers can still construct a VectorPath containing non-finite points.
-            let mut current_length = 0.0_f32;
-            for (curve, length) in self
-                .curves
-                .iter()
-                .copied()
-                .zip(self.lengths.iter().copied())
-            {
-                if current_length + length >= target_length {
-                    let residue = if length > 0.0 {
-                        ((target_length - current_length) / length).clamp(0.0, 1.0)
-                    } else {
-                        0.0
-                    };
-                    return Ok(curve_point(curve, residue));
-                }
-                current_length += length;
-            }
-        }
-
-        // The target is computed from the same sampled lengths above, so only
-        // floating-point roundoff or malformed non-finite geometry can reach this fallback.
-        Ok(self
-            .curves
-            .last()
-            .expect("path proportion plans are never empty")
-            .to)
+        let point = self.point_f64(f64::from(alpha))?;
+        Ok(Vec2::new(point.x as f32, point.y as f32))
     }
 
-    /// Return a high-precision authoring point without quantizing `alpha` or
-    /// Bezier interpolation to the renderer's f32 coordinate type.
-    ///
-    /// The curve-selection measure is deliberately the same immutable sampled
-    /// measure prepared by [`Self::new`]. Only the proportion arithmetic and
-    /// point evaluation are lifted to f64, so there is one canonical Manim path
-    /// measure and precision-sensitive consumers do not need a second geometry
-    /// implementation.
+    /// Return a local point without quantizing proportion or interpolation.
     pub fn point_f64(&self, alpha: f64) -> Result<SemanticVec3, PathProportionError> {
         validate_proportion_f64(alpha)?;
-
         if alpha == 1.0 {
-            return Ok(SemanticVec3::from_vec2(
-                self.curves
-                    .last()
-                    .expect("path proportion plans are never empty")
-                    .to,
-            ));
+            return Ok(SemanticVec3::from_vec2(self.curves.last().unwrap().to));
         }
-
-        let total_length = f64::from(self.total_length);
-        let target_length = alpha * total_length;
-        if target_length.is_finite() {
-            let curve_index = self
-                .cumulative_lengths
-                .partition_point(|&end_length| f64::from(end_length) < target_length);
-            if curve_index < self.curves.len() {
-                let current_length = curve_index
-                    .checked_sub(1)
-                    .map_or(0.0, |index| f64::from(self.cumulative_lengths[index]));
-                let length = f64::from(self.lengths[curve_index]);
-                let residue = if length > 0.0 {
-                    ((target_length - current_length) / length).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                return Ok(curve_point_f64(self.curves[curve_index], residue));
-            }
+        let target = alpha * self.total_length;
+        let index = self
+            .cumulative_lengths
+            .partition_point(|&end| end < target)
+            .min(self.curves.len() - 1);
+        let previous = index
+            .checked_sub(1)
+            .map_or(0.0, |i| self.cumulative_lengths[i]);
+        let residue = if self.lengths[index] > 0.0 {
+            ((target - previous) / self.lengths[index]).clamp(0.0, 1.0)
         } else {
-            let mut current_length = 0.0_f64;
-            for (curve, length) in self
-                .curves
-                .iter()
-                .copied()
-                .zip(self.lengths.iter().copied().map(f64::from))
-            {
-                if current_length + length >= target_length {
-                    let residue = if length > 0.0 {
-                        ((target_length - current_length) / length).clamp(0.0, 1.0)
-                    } else {
-                        0.0
-                    };
-                    return Ok(curve_point_f64(curve, residue));
-                }
-                current_length += length;
-            }
-        }
+            0.0
+        };
+        Ok(curve_point_f64(self.curves[index], residue))
+    }
 
-        Ok(SemanticVec3::from_vec2(
-            self.curves
-                .last()
-                .expect("path proportion plans are never empty")
-                .to,
-        ))
+    /// Approximate arc length in this plan's metric. The default ten-sample
+    /// measure is retained; an explicit sample count only visits this path.
+    pub fn arc_length(&self, sample_points: Option<usize>) -> Result<f64, PathProportionError> {
+        let samples = sample_points.unwrap_or(MANIM_LENGTH_SAMPLE_POINTS);
+        if samples < 2 {
+            return Err(PathProportionError::InvalidSampleCount);
+        }
+        if samples == MANIM_LENGTH_SAMPLE_POINTS {
+            return Ok(self.total_length);
+        }
+        let length: f64 = self
+            .curves
+            .iter()
+            .map(|&curve| sampled_curve_length(curve, self.scale, samples))
+            .sum();
+        if !length.is_finite() {
+            return Err(PathProportionError::InvalidMetric);
+        }
+        Ok(length)
     }
 }
 
@@ -391,13 +334,13 @@ fn collect_curves(path: &VectorPath) -> Vec<Curve> {
     curves
 }
 
-fn sampled_curve_length(curve: Curve) -> f32 {
-    let denominator = (MANIM_LENGTH_SAMPLE_POINTS - 1) as f32;
-    let mut previous = curve_point(curve, 0.0);
-    let mut length = 0.0_f32;
-    for sample in 1..MANIM_LENGTH_SAMPLE_POINTS {
-        let point = curve_point(curve, sample as f32 / denominator);
-        length += (point - previous).length();
+fn sampled_curve_length(curve: Curve, scale: (f64, f64), samples: usize) -> f64 {
+    let denominator = (samples - 1) as f64;
+    let mut previous = curve_point_f64(curve, 0.0);
+    let mut length = 0.0;
+    for sample in 1..samples {
+        let point = curve_point_f64(curve, sample as f64 / denominator);
+        length += ((point.x - previous.x) * scale.0).hypot((point.y - previous.y) * scale.1);
         previous = point;
     }
     length

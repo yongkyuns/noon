@@ -80,6 +80,7 @@ pub mod integration;
 mod live_program;
 mod live_session;
 mod native_signal_authoring;
+mod path_queries;
 mod rotation_authoring;
 mod rounded_rectangle_authoring;
 mod scalar_authoring;
@@ -143,6 +144,7 @@ pub use noon_core::{
     YELLOW_E,
 };
 pub use noon_runtime::EvaluationError;
+pub use path_queries::PathQuery;
 pub use rotation_authoring::ManimRotationPivot;
 pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
