@@ -42,7 +42,7 @@ fn ordinary_transform_preflight_is_read_only_and_shares_affine_payload_validatio
         revision
     );
 
-    style_target.set_stroke_width(3.0).unwrap();
+    style_target.set_stroke_cap("round").unwrap();
     let revision = scene.integration_store().borrow().scene_revision();
     assert!(!scene
         .can_ordinary_transform_to(&circle, &style_target, options)
