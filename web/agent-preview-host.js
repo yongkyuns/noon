@@ -1,4 +1,4 @@
-import { PythonAuthoringClient } from "./authoring-client.js";
+import { ProvenancedPythonAuthoringClient } from "./provenanced-authoring-client.js";
 import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { SemanticPreviewSession } from "./semantic-preview-session.js";
 
@@ -14,7 +14,7 @@ async function open(source, loopDurationSeconds = 4) {
   if (closed) throw new Error("agent preview host is closed");
   if (preview !== null) throw new Error("agent preview host opens one scene per page");
   preview = new SemanticPreviewSession({
-    createAuthoringClient: () => new PythonAuthoringClient(),
+    createAuthoringClient: () => new ProvenancedPythonAuthoringClient(),
     createExecutionClient: (options) => new AuthoringExecutionClient(canvas, options),
   });
   const snapshot = await preview.open(source, { loopDurationSeconds });
