@@ -39,6 +39,7 @@ const examples = [
   { name: "Family paint", factory: "createDirectFamilyPaintSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Planar affine", factory: "createDirectPlanarAffineSmokeRenderer", objectCount: 4, duration: 0.2 },
   { name: "Arc geometry", factory: "createDirectArcGeometrySmokeRenderer", objectCount: 3, duration: 0.2 },
+  { name: "Animated stroke width", factory: "createDirectAnimatedStrokeWidthSmokeRenderer", objectCount: 1, duration: 2 },
   { name: "Path queries", factory: "createDirectPathQueriesSmokeRenderer", objectCount: 10, duration: 0.2 },
   { name: "Z-index", factory: "createDirectZIndexSmokeRenderer", objectCount: 3, duration: 0.2 },
   { name: "Scale pivots", factory: "createDirectScalePivotsSmokeRenderer", objectCount: 4, duration: 0.2 },
