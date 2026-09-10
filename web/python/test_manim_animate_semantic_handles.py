@@ -107,15 +107,13 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
                     scale["x"] *= float(x)
                     scale["y"] *= float(y)
 
-                def rotateAboutPoint(self, angle, point_x, point_y):
-                    self.calls.append(("rotateAboutPoint", float(angle)))
-                    translation = self.snapshot["transform"]["translation"]
-                    dx = translation["x"] - float(point_x)
-                    dy = translation["y"] - float(point_y)
-                    cosine = math.cos(float(angle))
-                    sine = math.sin(float(angle))
-                    translation["x"] = float(point_x) + dx * cosine - dy * sine
-                    translation["y"] = float(point_y) + dx * sine + dy * cosine
+                def layoutAnchor(self, index):
+                    assert index is None
+                    return self
+
+                def rotate(self, angle, point_x, point_y, about_point):
+                    self.calls.append(("rotate", float(angle)))
+                    assert (point_x, point_y, about_point) == (0.0, 0.0, False)
                     self.snapshot["transform"]["rotation"] += float(angle)
 
             import _typed_geometry_test_support as _geometry_test
@@ -162,9 +160,7 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
                 ("shift", -1.0, 0.0),
                 "setFillColor",
                 ("scale", 0.3, 0.3),
-                "centerX",
-                "centerY",
-                ("rotateAboutPoint", 0.4),
+                ("rotate", 0.4),
             ], detached_target_handle.calls
             assert detached_source_handle.snapshot_requests == 0
             assert detached_target_handle.snapshot_requests == 0
@@ -198,9 +194,7 @@ class ManimAnimateSemanticHandleTests(unittest.TestCase):
                 ("shift", -1.0, 0.0),
                 "setFillColor",
                 ("scale", 0.3, 0.3),
-                "centerX",
-                "centerY",
-                ("rotateAboutPoint", 0.4),
+                ("rotate", 0.4),
             ], target_handle.calls
             assert source_handle.calls == ["targetEditor"], source_handle.calls
             assert source_handle.snapshot_requests == 0
