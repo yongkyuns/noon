@@ -32,3 +32,68 @@ def arc_length(value, sample_points_per_curve):
         return float(engine_call(query.arcLength, samples))
     finally:
         query.free()
+
+
+def endpoint(value, end):
+    query = _query(value)
+    try:
+        coordinates = engine_call(query.end if end else query.start)
+        return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
+    finally:
+        query.free()
+
+
+def _points(coordinates):
+    return [_base.Vec2(float(coordinates[i]), float(coordinates[i + 1])) for i in range(0, len(coordinates), 2)]
+
+
+def curve_count(value):
+    query = _query(value)
+    try:
+        return int(query.curveCount)
+    finally:
+        query.free()
+
+
+def curve_points(value, n):
+    index = operator.index(n)
+    if not 0 <= index <= 0xFFFFFFFF:
+        raise IndexError("curve index must be between 0 and 4294967295")
+    query = _query(value)
+    try:
+        return _points(engine_call(query.curvePoints, index))
+    finally:
+        query.free()
+
+
+def path_points(value, method):
+    query = _query(value)
+    try:
+        return _points(engine_call(getattr(query, method)))
+    finally:
+        query.free()
+
+
+def anchors_and_handles(value):
+    query = _query(value)
+    try:
+        return [_points(engine_call(getattr(query, method))) for method in
+                ("startAnchors", "firstHandles", "secondHandles", "endAnchors")]
+    finally:
+        query.free()
+
+
+def subpaths(value):
+    query = _query(value)
+    try:
+        return [_points(points) for points in engine_call(query.subpaths)]
+    finally:
+        query.free()
+
+
+def is_closed(value):
+    query = _query(value)
+    try:
+        return bool(engine_call(query.isClosed))
+    finally:
+        query.free()

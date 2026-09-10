@@ -858,3 +858,43 @@ pub async fn create_direct_path_editing_smoke_renderer(
     let session = noon::example_scenes::path_editing::session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
+
+#[wasm_bindgen(js_name = createDirectPathConstructionSmokeRenderer)]
+pub async fn create_direct_path_construction_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::path_construction::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+#[wasm_bindgen(js_name = createDirectPathSelectionSmokeRenderer)]
+pub async fn create_direct_path_selection_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::path_selection::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+#[wasm_bindgen(js_name = createDirectPathRefinementSmokeRenderer)]
+pub async fn create_direct_path_refinement_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::path_refinement::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+#[wasm_bindgen(js_name = createDirectPathSubcurvesSmokeRenderer)]
+pub async fn create_direct_path_subcurves_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::path_subcurves::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+#[wasm_bindgen(js_name = createDirectPathSmoothingSmokeRenderer)]
+pub async fn create_direct_path_smoothing_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::path_smoothing::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}

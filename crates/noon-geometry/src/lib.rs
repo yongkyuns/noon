@@ -6,6 +6,10 @@ mod geometry_proportion;
 mod morph;
 mod outline;
 mod partial;
+mod reverse;
+mod smoothing;
+pub use reverse::reverse_path;
+pub use smoothing::change_path_anchor_mode;
 mod tessellation;
 
 pub use geometry_proportion::*;

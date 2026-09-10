@@ -65,6 +65,88 @@ class VMobject(Mobject):
         from _manim_path_editing import set_points_as_corners
         return set_points_as_corners(self, points)
 
+    def set_points_smoothly(self, points):
+        from _manim_path_editing import edit_points
+        return edit_points(self, "setPointsSmoothly", "liveSetPointsSmoothly", points, array=True)
+
+    def make_smooth(self):
+        return self.change_anchor_mode("smooth")
+
+    def make_jagged(self):
+        return self.change_anchor_mode("jagged")
+
+    def change_anchor_mode(self, mode):
+        from _manim_path_editing import change_anchor_mode
+        return change_anchor_mode(self, mode)
+
+    def start_new_path(self, point):
+        from _manim_path_editing import edit_points
+        return edit_points(self, "startNewPath", "liveStartNewPath", (point,))
+
+    def add_line_to(self, point):
+        from _manim_path_editing import edit_points
+        return edit_points(self, "addLineTo", "liveAddLineTo", (point,))
+
+    def add_quadratic_bezier_curve_to(self, control, anchor):
+        from _manim_path_editing import edit_points
+        return edit_points(self, "addQuadraticBezierCurveTo", "liveAddQuadraticBezierCurveTo", (control, anchor))
+
+    def add_cubic_bezier_curve_to(self, control1, control2, anchor):
+        from _manim_path_editing import edit_points
+        return edit_points(self, "addCubicBezierCurveTo", "liveAddCubicBezierCurveTo", (control1, control2, anchor))
+
+    def insert_n_curves(self, n):
+        from _manim_path_editing import insert_n_curves
+        return insert_n_curves(self, n)
+
+    def get_subcurve(self, a, b):
+        from _manim_semantic_handles import _clone_mobject
+        return _clone_mobject(self, subcurve=(float(a), float(b)))
+
+    def get_subpaths(self):
+        from _manim_path_queries import subpaths
+        return subpaths(self)
+
+    def is_closed(self):
+        from _manim_path_queries import is_closed
+        return is_closed(self)
+
+    def get_num_curves(self):
+        from _manim_path_queries import curve_count
+        return curve_count(self)
+
+    def get_nth_curve_points(self, n):
+        from _manim_path_queries import curve_points
+        return curve_points(self, n)
+
+    def get_start_anchors(self):
+        from _manim_path_queries import path_points
+        return path_points(self, "startAnchors")
+
+    def get_end_anchors(self):
+        from _manim_path_queries import path_points
+        return path_points(self, "endAnchors")
+
+    def get_anchors(self):
+        from _manim_path_queries import path_points
+        return path_points(self, "anchors")
+
+    def get_anchors_and_handles(self):
+        from _manim_path_queries import anchors_and_handles
+        return anchors_and_handles(self)
+
+    def reverse_direction(self):
+        from _manim_path_editing import edit_points
+        return edit_points(self, "reverseDirection", "liveReverseDirection", ())
+
+    def pointwise_become_partial(self, vmobject, a, b):
+        from _manim_path_editing import pointwise_become_partial
+        return pointwise_become_partial(self, vmobject, a, b)
+
+    def close_path(self):
+        from _manim_path_editing import edit_points
+        return edit_points(self, "closePath", "liveClosePath", ())
+
     def set_color_by_gradient(self, *colors):
         from _manim_semantic_handles import _set_color_by_gradient
         return _set_color_by_gradient(self, *colors)
@@ -135,10 +217,12 @@ class VMobject(Mobject):
         return point_from_proportion(self, alpha)
 
     def get_start(self) -> _base.Vec2:
-        return self.point_from_proportion(0.0)
+        from _manim_path_queries import endpoint
+        return endpoint(self, False)
 
     def get_end(self) -> _base.Vec2:
-        return self.point_from_proportion(1.0)
+        from _manim_path_queries import endpoint
+        return endpoint(self, True)
 
     def get_arc_length(self, sample_points_per_curve: int | None = None) -> float:
         from _manim_path_queries import arc_length
@@ -448,7 +532,15 @@ class Group(Mobject):
 
 
 class VGroup(Group):
-    pass
+    def make_smooth(self):
+        return self.change_anchor_mode("smooth")
+
+    def make_jagged(self):
+        return self.change_anchor_mode("jagged")
+
+    def change_anchor_mode(self, mode):
+        from _manim_path_editing import change_anchor_mode
+        return change_anchor_mode(self, mode)
 
 
 def _mobject_generate_target(self: Mobject, use_deepcopy: bool = False) -> Mobject:

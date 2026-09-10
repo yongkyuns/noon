@@ -446,6 +446,127 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_start_new_path(
+        &mut self,
+        source: &noon::Mobject,
+        point: noon_core::Vec2,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.start_new_path(source, point))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_line_to(
+        &mut self,
+        source: &noon::Mobject,
+        point: noon_core::Vec2,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.add_line_to(source, point))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_quadratic_bezier_curve_to(
+        &mut self,
+        source: &noon::Mobject,
+        control: noon_core::Vec2,
+        anchor: noon_core::Vec2,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.add_quadratic_bezier_curve_to(source, control, anchor))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_cubic_bezier_curve_to(
+        &mut self,
+        source: &noon::Mobject,
+        control1: noon_core::Vec2,
+        control2: noon_core::Vec2,
+        anchor: noon_core::Vec2,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            live.add_cubic_bezier_curve_to(source, control1, control2, anchor)
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_points_smoothly(
+        &mut self,
+        object: &noon::Mobject,
+        points: &[noon_core::Vec2],
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_points_smoothly(object, points))
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_change_anchor_mode(
+        &mut self,
+        object: &noon::Mobject,
+        smooth: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            if smooth {
+                live.make_smooth(object)
+            } else {
+                live.make_jagged(object)
+            }
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_change_family_anchor_mode(
+        &mut self,
+        family: &noon::MobjectFamily,
+        smooth: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            if smooth {
+                live.make_family_smooth(family)
+            } else {
+                live.make_family_jagged(family)
+            }
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_insert_n_curves(
+        &mut self,
+        object: &noon::Mobject,
+        additional: usize,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.insert_n_curves(object, additional))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_reverse_direction(
+        &mut self,
+        object: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.reverse_direction(object))
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_subcurve(
+        &mut self,
+        source: &noon::Mobject,
+        a: f64,
+        b: f64,
+    ) -> Result<noon::Mobject, AuthoringFailure> {
+        self.with_live_session(|live| live.subcurve(source, a, b))
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_pointwise_become_partial(
+        &mut self,
+        object: &noon::Mobject,
+        source: &noon::Mobject,
+        a: f64,
+        b: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.pointwise_become_partial(object, source, a, b))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_close_path(
+        &mut self,
+        source: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.close_path(source))
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_match_points(
         &mut self,
         source: &noon::Mobject,

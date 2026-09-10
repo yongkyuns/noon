@@ -82,6 +82,7 @@ mod live_session;
 mod native_signal_authoring;
 mod path_editing;
 mod path_queries;
+mod path_smoothing;
 mod point_matching;
 mod rotation_authoring;
 mod rounded_rectangle_authoring;

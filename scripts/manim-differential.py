@@ -833,6 +833,87 @@ def _canonical_curve_layout(api):
     return [_object_observation(obj) for obj in (circle, ellipse, circle.copy(), family)]
 
 
+def _path_smoothing(api):
+    point = lambda x, y: api.RIGHT * x + api.UP * y
+    source = api.VMobject().set_points_smoothly([point(0, 0), point(1, 1), point(2, 0)])
+    closed = api.Square(side_length=2).shift(api.RIGHT * 2 + api.UP * 2)
+    family = api.VGroup(source, closed)
+    def observe():
+        return [[[list(p)[:2] for p in column] for column in value.get_anchors_and_handles()]
+                for value in (source, closed)]
+    result = [observe()]
+    family.make_smooth()
+    result.append(observe())
+    family.make_jagged()
+    result.append(observe())
+    return result
+
+
+def _path_subcurves(api):
+    point = lambda x, y: api.RIGHT * x + api.UP * y
+    source = api.Square(side_length=2).shift(api.LEFT * 2)
+    def observe(value):
+        return [value.is_closed(), value.get_num_curves(),
+                [[list(p)[:2] for p in subpath] for subpath in value.get_subpaths()]]
+    result = [observe(source), observe(source.get_subcurve(0.875, 0.375)),
+              observe(source.get_subcurve(0.25, 0.25))]
+    path = api.VMobject().start_new_path(point(0, 0)).add_line_to(point(2, 0))
+    path.start_new_path(point(2, 0)).add_line_to(point(4, 1))
+    path.start_new_path(point(6, 0)).add_line_to(point(8, 0))
+    path.start_new_path(point(8, 0))
+    result.append(observe(path))
+    return result
+
+
+def _path_refinement(api):
+    point = lambda x, y: api.RIGHT * x + api.UP * y
+    source = api.VMobject().start_new_path(point(0, 0))
+    source.add_quadratic_bezier_curve_to(point(3, 6), point(6, 0))
+    source.start_new_path(point(10, 0)).add_line_to(point(18, 0))
+    source.shift(api.UP * 2)
+    def observe(value):
+        return [value.get_num_curves(),
+                [list(p)[:2] for p in value.get_anchors()],
+                [[list(p)[:2] for p in column] for column in value.get_anchors_and_handles()],
+                [list(p)[:2] for p in value.get_nth_curve_points(0)]]
+    result = [observe(source)]
+    source.insert_n_curves(3)
+    result.append(observe(source))
+    return result
+
+
+def _path_selection(api):
+    point = lambda x, y: api.RIGHT * x + api.UP * y
+    source = api.VMobject().start_new_path(point(-3, -1))
+    source.add_cubic_bezier_curve_to(point(-3, 2), point(0, 2), point(0, -1))
+    source.start_new_path(point(1, -1)).add_line_to(point(3, 1))
+    selected = source.copy().pointwise_become_partial(source, 0.2, 0.8)
+    def observe(value):
+        return [list(value.get_start())[:2], list(value.get_end())[:2], value.get_arc_length(), _object_observation(value)]
+    result = [observe(selected)]
+    selected.reverse_direction()
+    result.append(observe(selected))
+    selected.pointwise_become_partial(selected, 0.2, 0.8)
+    result.append(observe(selected))
+    return result
+
+
+def _path_construction(api):
+    point = lambda x, y: api.RIGHT * x + api.UP * y
+    path = api.VMobject()
+    path.start_new_path(point(-2, 0))
+    observations = [[list(path.get_start())[:2], list(path.get_end())[:2], path.get_arc_length()]]
+    path.start_new_path(point(0, 0)).add_line_to(point(2, 0))
+    path.start_new_path(point(5, 1))
+    observations.append([list(path.get_start())[:2], list(path.get_end())[:2], path.get_arc_length(), list(path.point_from_proportion(1))[:2]])
+    path.add_quadratic_bezier_curve_to(point(6, 2), point(7, 1))
+    path.add_cubic_bezier_curve_to(point(8, 1), point(8, 0), point(7, 0)).close_path()
+    observations.append([_object_observation(path), path.get_arc_length(), list(path.get_end())[:2]])
+    path.add_line_to(point(8, 1))
+    observations.append([_object_observation(path), path.get_arc_length(), list(path.get_end())[:2]])
+    return observations
+
+
 def _path_editing(api):
     path = api.VMobject(color="#58c4dd").set_points_as_corners([(-2, -1, 0), (0, 1, 0), (2, -1, 0)])
     original = path.copy()
@@ -852,6 +933,11 @@ def _point_matching(api):
 
 
 FIXTURES = [
+    Fixture("path_smoothing", lambda: _path_smoothing(noon), lambda: _path_smoothing(manim), 1e-5),
+    Fixture("path_subcurves", lambda: _path_subcurves(noon), lambda: _path_subcurves(manim), 1e-5),
+    Fixture("path_refinement", lambda: _path_refinement(noon), lambda: _path_refinement(manim), 1e-5),
+    Fixture("path_selection", lambda: _path_selection(noon), lambda: _path_selection(manim), 1e-5),
+    Fixture("path_construction", lambda: _path_construction(noon), lambda: _path_construction(manim), 1e-5),
     Fixture("path_editing", lambda: _path_editing(noon), lambda: _path_editing(manim), 1e-5),
     Fixture("point_matching", lambda: _point_matching(noon), lambda: _point_matching(manim), 1e-5),
     Fixture("canonical_curve_layout", lambda: _canonical_curve_layout(noon), lambda: _canonical_curve_layout(manim), 1e-5),

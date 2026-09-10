@@ -11,6 +11,61 @@
   },
   "fixtures": [
     {
+      "id": "path-smoothing",
+      "scene": "OrdinaryPathSmoothing",
+      "source": "parity/manim-v0.21/core-examples/path_smoothing.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.004,
+        "max_mean_absolute_channel_error": 0.12
+      }
+    },
+    {
+      "id": "path-subcurves",
+      "scene": "OrdinaryPathSubcurves",
+      "source": "parity/manim-v0.21/core-examples/path_subcurves.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 0,
+        "max_differing_ratio": 0.0032,
+        "max_mean_absolute_channel_error": 0.04
+      }
+    },
+    {
+      "id": "path-refinement",
+      "scene": "OrdinaryPathRefinement",
+      "source": "parity/manim-v0.21/core-examples/path_refinement.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.004,
+        "max_mean_absolute_channel_error": 0.12
+      }
+    },
+    {
+      "id": "path-selection",
+      "scene": "OrdinaryPathSelection",
+      "source": "parity/manim-v0.21/core-examples/path_selection.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
+      "id": "path-construction",
+      "scene": "OrdinaryPathConstruction",
+      "source": "parity/manim-v0.21/core-examples/path_construction.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.0038,
+        "max_mean_absolute_channel_error": 0.07
+      }
+    },
+    {
       "id": "path-editing",
       "scene": "OrdinaryPathEditing",
       "source": "parity/manim-v0.21/core-examples/path_editing.py",

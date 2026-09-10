@@ -16,6 +16,7 @@ struct Curve {
     to: Vec2,
     kind: CurveKind,
     subpath: usize,
+    closes_contour: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -24,6 +25,9 @@ pub enum PathProportionError {
     EmptyPath,
     InvalidMetric,
     InvalidSampleCount,
+    InvalidInterval,
+    InvalidCurveCount,
+    InvalidCurveIndex { index: usize, count: usize },
 }
 
 impl std::fmt::Display for PathProportionError {
@@ -39,6 +43,16 @@ impl std::fmt::Display for PathProportionError {
             Self::InvalidMetric => {
                 formatter.write_str("path metric must have finite coordinates, scales and length")
             }
+            Self::InvalidCurveCount => {
+                formatter.write_str("requested curve count exceeds addressable capacity")
+            }
+            Self::InvalidCurveIndex { index, count } => write!(
+                formatter,
+                "curve index {index} is out of bounds for {count} curves"
+            ),
+            Self::InvalidInterval => {
+                formatter.write_str("partial path requires an ordered interval: a <= b")
+            }
             Self::InvalidSampleCount => {
                 formatter.write_str("path length sample count must be at least two")
             }
@@ -47,6 +61,32 @@ impl std::fmt::Display for PathProportionError {
 }
 
 impl std::error::Error for PathProportionError {}
+
+/// Extract a curve-count interval, optionally wrapping a closed path's seam.
+/// The caller validates closure in the intended coordinate space.
+pub fn subcurve_path(path: &VectorPath, a: f32, b: f32) -> Result<VectorPath, PathProportionError> {
+    validate_proportion(a)?;
+    validate_proportion(b)?;
+    if a <= b {
+        return Ok(authored_partial_path(path, a, b));
+    }
+    let first = authored_partial_path(path, a, 1.);
+    let second = authored_partial_path(path, 0., b);
+    let mut result = first;
+    let mut previous = result.endpoints().map(|(_, end)| end);
+    let mut previous_subpath = None;
+    for curve in collect_curves(&second) {
+        // Append without an artificial break at a shared seam. Discontinuities
+        // inside either selected interval are still retained as distinct runs.
+        if previous != Some(curve.from) || previous_subpath.is_some_and(|id| id != curve.subpath) {
+            result = result.move_to(curve.from);
+        }
+        result = append_curve(result, curve);
+        previous = Some(curve.to);
+        previous_subpath = Some(curve.subpath);
+    }
+    Ok(result)
+}
 
 fn validate_proportion(alpha: f32) -> Result<(), PathProportionError> {
     if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
@@ -79,6 +119,41 @@ pub struct PathProportionPlan {
 }
 
 impl PathProportionPlan {
+    pub fn curve_count(&self) -> usize {
+        self.curves.len()
+    }
+
+    /// Cubic controls for one retained curve, promoting lines and quadratics
+    /// exactly. Points remain in local content space regardless of query metric.
+    pub fn curve_points(&self, index: usize) -> Result<[SemanticVec3; 4], PathProportionError> {
+        let curve = self
+            .curves
+            .get(index)
+            .ok_or(PathProportionError::InvalidCurveIndex {
+                index,
+                count: self.curves.len(),
+            })?;
+        let from = SemanticVec3::from_vec2(curve.from);
+        let to = SemanticVec3::from_vec2(curve.to);
+        let (first, second) = match curve.kind {
+            CurveKind::Line | CurveKind::Close => {
+                (lerp_f64(from, to, 1. / 3.), lerp_f64(from, to, 2. / 3.))
+            }
+            CurveKind::Quadratic { control } => {
+                let control = SemanticVec3::from_vec2(control);
+                (
+                    lerp_f64(from, control, 2. / 3.),
+                    lerp_f64(to, control, 2. / 3.),
+                )
+            }
+            CurveKind::Cubic { control1, control2 } => (
+                SemanticVec3::from_vec2(control1),
+                SemanticVec3::from_vec2(control2),
+            ),
+        };
+        Ok([from, first, second, to])
+    }
+
     /// Prepare the reusable local-space proportion measure for `path`.
     pub fn new(path: &VectorPath) -> Result<Self, PathProportionError> {
         Self::with_scale(path, (1.0, 1.0))
@@ -204,6 +279,16 @@ pub fn point_from_proportion_f64(
 /// boundary curves. It does *not* use arc length. This function mirrors that
 /// contract while preserving explicit Noon subpath breaks.
 pub fn pointwise_partial_path(path: &VectorPath, a: f32, b: f32) -> VectorPath {
+    partial_path(path, a, b, false)
+}
+
+/// Persistent partial geometry retains degenerate boundary curves, because later
+/// curve-count selection observes them. Render-only reveal may omit those curves.
+pub fn authored_partial_path(path: &VectorPath, a: f32, b: f32) -> VectorPath {
+    partial_path(path, a, b, true)
+}
+
+fn partial_path(path: &VectorPath, a: f32, b: f32, retain_boundary_curves: bool) -> VectorPath {
     let a = a.clamp(0.0, 1.0);
     let b = b.clamp(a, 1.0);
     if a <= 0.0 && b >= 1.0 {
@@ -218,7 +303,7 @@ pub fn pointwise_partial_path(path: &VectorPath, a: f32, b: f32) -> VectorPath {
     let (lower_index, lower_t) = integer_interpolate(curves.len(), a);
     let (upper_index, upper_t) = integer_interpolate(curves.len(), b);
 
-    if b <= a {
+    if b <= a && !retain_boundary_curves {
         let point = curve_point(curves[lower_index], lower_t);
         return VectorPath::new().move_to(point);
     }
@@ -233,7 +318,7 @@ pub fn pointwise_partial_path(path: &VectorPath, a: f32, b: f32) -> VectorPath {
     {
         let t0 = if index == lower_index { lower_t } else { 0.0 };
         let t1 = if index == upper_index { upper_t } else { 1.0 };
-        if t1 <= t0 {
+        if t1 <= t0 && !retain_boundary_curves {
             continue;
         }
 
@@ -243,15 +328,71 @@ pub fn pointwise_partial_path(path: &VectorPath, a: f32, b: f32) -> VectorPath {
             active_subpath = Some(curve.subpath);
         }
 
-        result = match partial.kind {
-            CurveKind::Line | CurveKind::Close => result.line_to(partial.to),
-            CurveKind::Quadratic { control } => result.quadratic_to(control, partial.to),
-            CurveKind::Cubic { control1, control2 } => {
-                result.cubic_to(control1, control2, partial.to)
-            }
-        };
+        result = append_curve(result, partial);
     }
     result
+}
+
+/// Insert exactly `additional` curves by evenly subdividing existing curves.
+/// Distribution matches Manim's integer repeat-index mapping, independent of
+/// geometric length. Explicit breaks, closed joins and a trailing anchor survive.
+pub fn subdivide_path(
+    path: &VectorPath,
+    additional: usize,
+) -> Result<VectorPath, PathProportionError> {
+    if additional == 0 {
+        return Ok(path.clone());
+    }
+    let curves = collect_curves(path);
+    if curves.is_empty() {
+        if let [PathCommand::MoveTo { to }] = path.commands() {
+            let mut result = VectorPath::new().move_to(*to);
+            for _ in 0..additional {
+                result = result.line_to(*to);
+            }
+            return Ok(result.move_to(*to));
+        }
+        return Err(PathProportionError::EmptyPath);
+    }
+    let total = curves
+        .len()
+        .checked_add(additional)
+        .ok_or(PathProportionError::InvalidCurveCount)?;
+    let mut result = VectorPath::new();
+    let mut active_subpath = None;
+    for (index, &curve) in curves.iter().enumerate() {
+        if active_subpath != Some(curve.subpath) {
+            result = result.move_to(curve.from);
+            active_subpath = Some(curve.subpath);
+        }
+        // u128 prevents multiplication overflow on both native and WASM.
+        let boundary =
+            |i: usize| (i as u128 * total as u128).div_ceil(curves.len() as u128) as usize;
+        let count = boundary(index + 1) - boundary(index);
+        for part in 0..count {
+            let selected = partial_curve(
+                curve,
+                part as f32 / count as f32,
+                (part + 1) as f32 / count as f32,
+            );
+            result = append_curve(result, selected);
+        }
+        if curve.closes_contour {
+            result = result.close();
+        }
+    }
+    if let Some(PathCommand::MoveTo { to }) = path.commands().last() {
+        result = result.move_to(*to);
+    }
+    Ok(result)
+}
+
+fn append_curve(path: VectorPath, curve: Curve) -> VectorPath {
+    match curve.kind {
+        CurveKind::Line | CurveKind::Close => path.line_to(curve.to),
+        CurveKind::Quadratic { control } => path.quadratic_to(control, curve.to),
+        CurveKind::Cubic { control1, control2 } => path.cubic_to(control1, control2, curve.to),
+    }
 }
 
 fn integer_interpolate(curve_count: usize, alpha: f32) -> (usize, f32) {
@@ -286,6 +427,7 @@ fn collect_curves(path: &VectorPath) -> Vec<Curve> {
                         to,
                         kind: CurveKind::Line,
                         subpath,
+                        closes_contour: false,
                     });
                 }
                 current = Some(to);
@@ -297,6 +439,7 @@ fn collect_curves(path: &VectorPath) -> Vec<Curve> {
                         to,
                         kind: CurveKind::Quadratic { control },
                         subpath,
+                        closes_contour: false,
                     });
                 }
                 current = Some(to);
@@ -312,6 +455,7 @@ fn collect_curves(path: &VectorPath) -> Vec<Curve> {
                         to,
                         kind: CurveKind::Cubic { control1, control2 },
                         subpath,
+                        closes_contour: false,
                     });
                 }
                 current = Some(to);
@@ -324,7 +468,11 @@ fn collect_curves(path: &VectorPath) -> Vec<Curve> {
                             to,
                             kind: CurveKind::Close,
                             subpath,
+                            closes_contour: false,
                         });
+                    }
+                    if let Some(last) = curves.last_mut().filter(|curve| curve.subpath == subpath) {
+                        last.closes_contour = true;
                     }
                     current = Some(to);
                 }
@@ -396,6 +544,7 @@ fn partial_curve(curve: Curve, a: f32, b: f32) -> Curve {
             to: lerp(curve.from, curve.to, b),
             kind: curve.kind,
             subpath: curve.subpath,
+            closes_contour: curve.closes_contour,
         },
         CurveKind::Quadratic { control } => {
             let points = partial_quadratic([curve.from, control, curve.to], a, b);
@@ -404,6 +553,7 @@ fn partial_curve(curve: Curve, a: f32, b: f32) -> Curve {
                 to: points[2],
                 kind: CurveKind::Quadratic { control: points[1] },
                 subpath: curve.subpath,
+                closes_contour: curve.closes_contour,
             }
         }
         CurveKind::Cubic { control1, control2 } => {
@@ -416,6 +566,7 @@ fn partial_curve(curve: Curve, a: f32, b: f32) -> Curve {
                     control2: points[2],
                 },
                 subpath: curve.subpath,
+                closes_contour: curve.closes_contour,
             }
         }
     }

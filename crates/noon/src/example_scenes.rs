@@ -3277,3 +3277,13 @@ pub mod canonical_curve_layout;
 pub mod point_matching;
 
 pub mod path_editing;
+
+pub mod path_construction;
+
+pub mod path_selection;
+
+pub mod path_refinement;
+
+pub mod path_subcurves;
+
+pub mod path_smoothing;
