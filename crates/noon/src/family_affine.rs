@@ -186,7 +186,7 @@ impl LayoutAnchor {
         let transaction = operation.transaction(
             &self.integration_store().borrow(),
             layout.leaves(),
-            layout.bounds(),
+            layout.boundary_bounds(),
         )?;
         transaction
             .apply(&mut self.integration_store().borrow_mut())

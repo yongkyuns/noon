@@ -17,8 +17,8 @@ mod bounds;
 mod layout;
 mod manim_geometry;
 mod style;
-pub(crate) use bounds::layout_for_content;
 use bounds::transform_layout_xy;
+pub(crate) use bounds::{boundary_for_content, layout_for_content};
 pub(crate) use style::{
     edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
     edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
@@ -555,6 +555,31 @@ impl Mobject {
         )
     }
 
+    pub(crate) fn boundary_bounds(&self) -> Result<Option<Bounds2D64>, AuthoringError> {
+        let store = self.store.borrow();
+        let state = store
+            .semantic_object_state_checked(self.id)
+            .map_err(AuthoringError::from)?;
+        boundary_for_content(&store, state.content, state.transform)
+    }
+
+    pub(crate) fn boundary_bounds_at(
+        &self,
+        transform: Transform2D,
+    ) -> Result<Option<Bounds2D64>, AuthoringError> {
+        let store = self.store.borrow();
+        let state = store
+            .semantic_object_state_checked(self.id)
+            .map_err(AuthoringError::from)?;
+        boundary_for_content(
+            &store,
+            state.content,
+            semantic_transform_with_effective_affine(state.transform, transform),
+        )
+    }
+
+    /// Bounds used for authored dimensions. Paths include their equivalent cubic
+    /// handles; centers and critical points use path anchors instead.
     pub fn layout_bounds(&self) -> Result<Option<Bounds2D64>, AuthoringError> {
         let store = self.store.borrow();
         let state = store
@@ -580,7 +605,7 @@ impl Mobject {
     }
 
     pub fn center(&self) -> Result<(f64, f64), AuthoringError> {
-        if let Some(b) = self.layout_bounds()? {
+        if let Some(b) = self.boundary_bounds()? {
             Ok(((b.min_x + b.max_x) * 0.5, (b.min_y + b.max_y) * 0.5))
         } else {
             let t = self.state()?.transform.translation;
@@ -690,7 +715,7 @@ impl Mobject {
         direction_x: f64,
         direction_y: f64,
     ) -> Result<(f64, f64), AuthoringError> {
-        let Some(bounds) = self.layout_bounds()? else {
+        let Some(bounds) = self.boundary_bounds()? else {
             return self.center();
         };
         let center = self.center()?;
@@ -857,7 +882,7 @@ pub(crate) fn state_center(
     store: &SemanticStore,
     state: &SemanticObjectState,
 ) -> Result<(f64, f64), AuthoringError> {
-    Ok(layout_for_content(store, state.content, state.transform)?
+    Ok(boundary_for_content(store, state.content, state.transform)?
         .map(|bounds| {
             (
                 (bounds.min_x + bounds.max_x) * 0.5,

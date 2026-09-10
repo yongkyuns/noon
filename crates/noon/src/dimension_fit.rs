@@ -102,7 +102,7 @@ impl LayoutAnchor {
             crate::family_affine::FamilyAffine::Scale(x, y, pivot).transaction(
                 &store,
                 layout.leaves(),
-                layout.bounds(),
+                layout.boundary_bounds(),
             )?
         };
         transaction
@@ -149,8 +149,12 @@ impl LayoutAnchor {
 pub(crate) fn replacement_transaction(
     store: &noon_core::SemanticStore,
     leaves: &[crate::SemanticNodeId],
-    source_bounds: Option<Bounds2D64>,
-    target_leaves: &[(crate::SemanticNodeId, Option<Bounds2D64>)],
+    source: (Option<Bounds2D64>, Option<Bounds2D64>),
+    target_leaves: &[(
+        crate::SemanticNodeId,
+        Option<Bounds2D64>,
+        Option<Bounds2D64>,
+    )],
     dimension: LayoutDimension,
     stretch: bool,
 ) -> Result<noon_core::SemanticMutationTransaction, AuthoringError> {
@@ -164,7 +168,12 @@ pub(crate) fn replacement_transaction(
             total
         })
     }
-    let target_bounds = union(target_leaves.iter().filter_map(|(_, b)| *b));
+    let (source_bounds, source_boundary) = source;
+    let target_bounds = union(
+        target_leaves
+            .iter()
+            .filter_map(|(_, dimensions, _)| *dimensions),
+    );
     let (x, y) = if stretch {
         let x = LayoutDimension::Width
             .scale(
@@ -186,9 +195,9 @@ pub(crate) fn replacement_transaction(
             .scale(source_bounds, dimension.length(target_bounds), false)?
             .unwrap_or((1.0, 1.0))
     };
-    let center = crate::family_layout::bounds_critical_point(source_bounds, 0.0, 0.0);
+    let center = crate::family_layout::bounds_critical_point(source_boundary, 0.0, 0.0);
     let sources: BTreeSet<_> = leaves.iter().copied().collect();
-    let target_after_scale = union(target_leaves.iter().filter_map(|(leaf, bounds)| {
+    let target_after_scale = union(target_leaves.iter().filter_map(|(leaf, _, bounds)| {
         bounds.map(|mut bounds| {
             if sources.contains(leaf) {
                 bounds.min_x = center.0 + (bounds.min_x - center.0) * x;
@@ -244,13 +253,13 @@ impl LayoutAnchor {
             .iter()
             .map(|&node| {
                 let object = crate::Mobject::from_node(Rc::clone(self.integration_store()), node)?;
-                Ok((node, object.layout_bounds()?))
+                Ok((node, object.layout_bounds()?, object.boundary_bounds()?))
             })
             .collect::<Result<Vec<_>, AuthoringError>>()?;
         let transaction = replacement_transaction(
             &self.integration_store().borrow(),
             source.leaves(),
-            source.bounds(),
+            (source.bounds(), source.boundary_bounds()),
             &target_leaves,
             dimension,
             stretch,

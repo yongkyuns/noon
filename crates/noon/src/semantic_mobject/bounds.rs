@@ -53,51 +53,12 @@ fn manim_ellipse_control_hull_bounds(
     }
     bounds
 }
-fn quadratic_layout_point(p0: (f64, f64), p1: (f64, f64), p2: (f64, f64), t: f64) -> (f64, f64) {
-    let u = 1.0 - t;
-    (
-        u * u * p0.0 + 2.0 * u * t * p1.0 + t * t * p2.0,
-        u * u * p0.1 + 2.0 * u * t * p1.1 + t * t * p2.1,
-    )
-}
-fn cubic_layout_point(
-    p0: (f64, f64),
-    p1: (f64, f64),
-    p2: (f64, f64),
-    p3: (f64, f64),
-    t: f64,
-) -> (f64, f64) {
-    let u = 1.0 - t;
-    (
-        u * u * u * p0.0 + 3.0 * u * u * t * p1.0 + 3.0 * u * t * t * p2.0 + t * t * t * p3.0,
-        u * u * u * p0.1 + 3.0 * u * u * t * p1.1 + 3.0 * u * t * t * p2.1 + t * t * t * p3.1,
-    )
-}
-fn cubic_layout_derivative_roots(p0: f64, p1: f64, p2: f64, p3: f64) -> Vec<f64> {
-    let a = -p0 + 3.0 * p1 - 3.0 * p2 + p3;
-    let b = 2.0 * (p0 - 2.0 * p1 + p2);
-    let c = p1 - p0;
-    let epsilon = 1.0e-14;
-    if a.abs() <= epsilon {
-        if b.abs() <= epsilon {
-            return Vec::new();
-        }
-        return vec![-c / b];
-    }
-    let discriminant = b * b - 4.0 * a * c;
-    if discriminant < 0.0 {
-        return Vec::new();
-    }
-    let root = discriminant.sqrt();
-    let mut roots = vec![(-b + root) / (2.0 * a)];
-    if root > epsilon {
-        roots.push((-b - root) / (2.0 * a));
-    }
-    roots
-}
+// Manim authoring dimensions and centers bound the cubic control points.
+// These are layout bounds; runtime visibility continues using geometric bounds.
 fn transformed_path_layout_bounds(
     path: &VectorPath,
     transform: SemanticTransform2_5D,
+    include_handles: bool,
 ) -> Option<Bounds2D64> {
     let mut bounds = None;
     let mut current = None;
@@ -129,23 +90,15 @@ fn transformed_path_layout_bounds(
                 let control = transform_layout_point(transform, control);
                 include_layout_point(&mut bounds, start);
                 include_layout_point(&mut bounds, end);
-                for axis in 0..2 {
-                    let (p0, p1, p2) = if axis == 0 {
-                        (start.0, control.0, end.0)
-                    } else {
-                        (start.1, control.1, end.1)
-                    };
-                    let denominator = p0 - 2.0 * p1 + p2;
-                    if denominator.abs() <= 1.0e-14 {
-                        continue;
-                    }
-                    let t = (p0 - p1) / denominator;
-                    if (0.0..1.0).contains(&t) {
-                        include_layout_point(
-                            &mut bounds,
-                            quadratic_layout_point(start, control, end, t),
-                        );
-                    }
+                // A quadratic is the equivalent cubic with handles at 2/3.
+                for anchor in [start, end].into_iter().filter(|_| include_handles) {
+                    include_layout_point(
+                        &mut bounds,
+                        (
+                            anchor.0 + (control.0 - anchor.0) * (2.0 / 3.0),
+                            anchor.1 + (control.1 - anchor.1) * (2.0 / 3.0),
+                        ),
+                    );
                 }
                 current = Some(end);
             }
@@ -164,18 +117,9 @@ fn transformed_path_layout_bounds(
                 let control2 = transform_layout_point(transform, control2);
                 include_layout_point(&mut bounds, start);
                 include_layout_point(&mut bounds, end);
-                let mut roots =
-                    cubic_layout_derivative_roots(start.0, control1.0, control2.0, end.0);
-                roots.extend(cubic_layout_derivative_roots(
-                    start.1, control1.1, control2.1, end.1,
-                ));
-                for t in roots {
-                    if (0.0..1.0).contains(&t) {
-                        include_layout_point(
-                            &mut bounds,
-                            cubic_layout_point(start, control1, control2, end, t),
-                        );
-                    }
+                if include_handles {
+                    include_layout_point(&mut bounds, control1);
+                    include_layout_point(&mut bounds, control2);
                 }
                 current = Some(end);
             }
@@ -195,6 +139,7 @@ fn transformed_path_layout_bounds(
 fn geometry_layout_bounds(
     geometry: &GeometryRef,
     transform: SemanticTransform2_5D,
+    include_handles: bool,
 ) -> Option<Bounds2D64> {
     match geometry {
         GeometryRef::Circle { radius } => {
@@ -240,7 +185,9 @@ fn geometry_layout_bounds(
             include_layout_point(&mut bounds, transform_layout_point(transform, *end));
             bounds
         }
-        GeometryRef::VectorPath(path) => transformed_path_layout_bounds(path, transform),
+        GeometryRef::VectorPath(path) => {
+            transformed_path_layout_bounds(path, transform, include_handles)
+        }
         GeometryRef::External(_) => None,
     }
 }
@@ -248,6 +195,23 @@ pub(crate) fn layout_for_content(
     store: &SemanticStore,
     content: SemanticObjectContent,
     transform: SemanticTransform2_5D,
+) -> Result<Option<Bounds2D64>, AuthoringError> {
+    measure_content(store, content, transform, true)
+}
+
+pub(crate) fn boundary_for_content(
+    store: &SemanticStore,
+    content: SemanticObjectContent,
+    transform: SemanticTransform2_5D,
+) -> Result<Option<Bounds2D64>, AuthoringError> {
+    measure_content(store, content, transform, false)
+}
+
+fn measure_content(
+    store: &SemanticStore,
+    content: SemanticObjectContent,
+    transform: SemanticTransform2_5D,
+    include_handles: bool,
 ) -> Result<Option<Bounds2D64>, AuthoringError> {
     let geometry = match content {
         SemanticObjectContent::Geometry(geometry) => geometry,
@@ -277,20 +241,24 @@ pub(crate) fn layout_for_content(
     }
     Ok(match geometry.geometry() {
         StoredGeometry::Circle { radius } => {
-            geometry_layout_bounds(&GeometryRef::circle(radius), transform)
+            geometry_layout_bounds(&GeometryRef::circle(radius), transform, include_handles)
         }
         StoredGeometry::Rectangle { size } => {
-            geometry_layout_bounds(&GeometryRef::Rectangle { size }, transform)
+            geometry_layout_bounds(&GeometryRef::Rectangle { size }, transform, include_handles)
         }
-        StoredGeometry::Line { start, end } => {
-            geometry_layout_bounds(&GeometryRef::Line { start, end }, transform)
-        }
+        StoredGeometry::Line { start, end } => geometry_layout_bounds(
+            &GeometryRef::Line { start, end },
+            transform,
+            include_handles,
+        ),
         StoredGeometry::Resource(handle) => match store
             .geometry_resources()
             .get(handle)
             .ok_or(AuthoringError::MissingGeometryResource(handle))?
         {
-            GeometryResource::VectorPath(path) => transformed_path_layout_bounds(path, transform),
+            GeometryResource::VectorPath(path) => {
+                transformed_path_layout_bounds(path, transform, include_handles)
+            }
         },
     })
 }

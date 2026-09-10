@@ -135,9 +135,19 @@ pub(crate) fn prepare_become_states(
     fn center(
         store: &SemanticStore,
         states: &[SemanticObjectState],
-        bounds: Option<Bounds2D64>,
     ) -> Result<(f64, f64), AuthoringError> {
-        if let Some(bounds) = bounds {
+        let mut boundary = None;
+        for state in states {
+            crate::family_layout::union_bounds(
+                &mut boundary,
+                crate::semantic_mobject::boundary_for_content(
+                    store,
+                    state.content,
+                    state.transform,
+                )?,
+            );
+        }
+        if let Some(bounds) = boundary {
             return Ok((
                 (bounds.min_x + bounds.max_x) * 0.5,
                 (bounds.min_y + bounds.max_y) * 0.5,
@@ -179,9 +189,9 @@ pub(crate) fn prepare_become_states(
             y *= factor;
         }
     }
-    let target_center = center(store, &targets, target_bounds)?;
+    let target_center = center(store, &targets)?;
     let destination = if options.match_center {
-        center(store, source, source_bounds)?
+        center(store, source)?
     } else {
         target_center
     };

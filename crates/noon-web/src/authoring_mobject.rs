@@ -1762,7 +1762,7 @@ mod tests {
     }
 
     #[test]
-    fn vector_path_layout_uses_extrema_not_control_hull() {
+    fn vector_path_dimensions_use_equivalent_cubic_handles() {
         let authoring_store =
             std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
         let path = VectorPath::new()
@@ -1778,12 +1778,12 @@ mod tests {
         assert!((bounds.min_x + 1.0).abs() < 1e-9);
         assert!((bounds.max_x - 1.0).abs() < 1e-9);
         assert!(bounds.min_y.abs() < 1e-9);
-        assert!((bounds.max_y - 1.0).abs() < 1e-9);
-        assert!((handle.height().unwrap() - 1.0).abs() < 1e-9);
+        assert!((bounds.max_y - 4.0 / 3.0).abs() < 1e-9);
+        assert!((handle.height().unwrap() - 4.0 / 3.0).abs() < 1e-9);
     }
 
     #[test]
-    fn transformed_layout_bounds_match_manim_world_extrema() {
+    fn transformed_layout_distinguishes_analytic_and_path_dimensions() {
         let authoring_store =
             std::rc::Rc::new(std::cell::RefCell::new(noon_core::SemanticStore::new()));
         let mut ellipse = Mobject::from_geometry(
@@ -1817,7 +1817,7 @@ mod tests {
         )
         .unwrap();
         curve.rotate(std::f64::consts::FRAC_PI_4).unwrap();
-        let expected = 9.0 * 2.0_f64.sqrt() / 8.0;
+        let expected = 4.0 * 2.0_f64.sqrt() / 3.0;
         assert!((curve.width().unwrap() - expected).abs() < 1e-12);
         assert!((curve.height().unwrap() - expected).abs() < 1e-12);
     }
