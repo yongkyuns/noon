@@ -38,7 +38,8 @@ class LiveGeometryConstruction(Scene):
         line = (
             Line(
                 (-1.0, -0.5), (1.0, 0.5),
-                fill=Color(1.0, 1.0, 0.0, 0.7),
+                fill=Color(1.0, 1.0, 0.0),
+                fill_opacity=0.7,
                 stroke=Color(0.2, 0.4, 0.8),
                 stroke_opacity=LINE_OPACITY,
                 stroke_width=4.0,

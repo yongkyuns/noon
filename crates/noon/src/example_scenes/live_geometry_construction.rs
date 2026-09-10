@@ -51,7 +51,7 @@ impl LiveContinuation for LiveGeometryConstruction {
                     .map_err(|error| error.to_string())?;
                 line.set_translation(0.0, -2.0)
                     .map_err(|error| error.to_string())?;
-                line.set_fill_color(1.0, 1.0, 0.0, 0.7)
+                line.set_fill(1.0, 1.0, 0.0, 0.7)
                     .map_err(|error| error.to_string())?;
                 line.set_stroke_color(
                     f64::from(LINE_COLOR.red),
