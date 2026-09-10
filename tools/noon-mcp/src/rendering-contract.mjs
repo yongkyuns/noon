@@ -6,7 +6,6 @@ import * as z from "zod/v4";
 // boundary. Keeping the contract inert prevents a schema-only change from
 // accidentally exposing source execution through MCP.
 export const RENDERING_CONTRACT_VERSION = 1;
-export const RENDERING_TOOL_REGISTRATION_ENABLED = false;
 export const MAX_RENDER_SOURCE_BYTES = 1_000_000;
 export const MAX_RENDER_TIME_SECONDS = 600;
 export const MAX_RENDER_SAMPLES_PER_CALL = 64;
