@@ -34,7 +34,7 @@ fn point_matching_reuses_content_and_preserves_identity_paint_and_priority() {
         assert_eq!(after.content, target.state().unwrap().content);
         assert_eq!(after.transform, target.state().unwrap().transform);
         assert_eq!(after.style, before.style);
-        assert_eq!(after.presentation, before.presentation);
+        assert_eq!(after.presentation(), before.presentation());
         assert_eq!(unrelated.state().unwrap(), other);
         assert_eq!(
             scene
@@ -57,7 +57,7 @@ fn point_matching_reuses_content_and_preserves_identity_paint_and_priority() {
 }
 
 #[test]
-fn live_point_matching_uses_target_effective_geometry_and_leaves_its_driver_active() {
+fn live_point_matching_obeys_publication_boundaries_and_captures_effective_seek_state() {
     let mut scene = Scene::new();
     let source = scene.square(1.).unwrap();
     let target = scene.line((-1., 0.), (1., 0.)).unwrap();
@@ -79,13 +79,23 @@ fn live_point_matching_uses_target_effective_geometry_and_leaves_its_driver_acti
     let mut live = scene.live(&mut session);
     let segment = live.play_animation(&animation).unwrap();
     live.advance_segment_to(segment, 1.).unwrap();
-    live.match_points(&source, &target).unwrap();
-    assert!((source.center().unwrap().1 - 1.).abs() < 1e-6);
-    assert_eq!(
-        source.state().unwrap().content,
-        target.state().unwrap().content
-    );
+    let before = source.state().unwrap();
+    assert!(live.match_points(&source, &target).is_err());
+    assert_eq!(source.state().unwrap(), before);
     live.advance_segment_to(segment, 2.).unwrap();
+    live.complete_segment(segment).unwrap();
+    session.seek(1.).unwrap();
+    {
+        let mut live = scene.live(&mut session);
+        live.match_points(&source, &target).unwrap();
+        assert!((source.center().unwrap().1 - 1.).abs() < 1e-6);
+        assert_eq!(
+            source.state().unwrap().content,
+            target.state().unwrap().content
+        );
+    }
+    session.seek(2.).unwrap();
+    let live = scene.live(&mut session);
     assert!((live.effective_layout(&target).unwrap().center.1 - 2.).abs() < 1e-6);
     assert!((live.effective_layout(&source).unwrap().center.1 - 1.).abs() < 1e-6);
 }

@@ -4,6 +4,7 @@ use crate::point_matching::matched_state;
 impl LiveSession<'_> {
     /// Match geometry from one coherent effective target observation. Derived
     /// render overrides use the existing capture rejection instead of stale data.
+    /// Like other persistent edits, this requires a completed continuation boundary.
     pub fn match_points(
         &mut self,
         source: &Mobject,

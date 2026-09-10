@@ -436,7 +436,7 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_match_points(
         &mut self,
         source: &noon::Mobject,
