@@ -7870,7 +7870,7 @@ mod tests {
         );
 
         let mut unsupported_target = right.target_editor().unwrap();
-        unsupported_target.set_stroke_width(3.0).unwrap();
+        unsupported_target.set_stroke_cap("round").unwrap();
         let unsupported = [bound_transform_child(&right, unsupported_target, child)];
         let revision = context.scene.integration_store().borrow().scene_revision();
         assert!(context

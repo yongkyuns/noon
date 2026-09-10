@@ -1073,7 +1073,7 @@ pub(super) fn lower_affine_channels(
     };
     let target_style =
         lower_semantic_style_value(target).map_err(AffinePayloadIssue::InvalidTargetStyle)?;
-    let mut channels = Vec::with_capacity(6);
+    let mut channels = Vec::with_capacity(7);
     push_affine_channel(
         source,
         SemanticObjectProperty::Translation,
@@ -1155,6 +1155,24 @@ pub(super) fn lower_affine_channels(
             opacity: target.style.stroke_opacity,
         },
         stroke_changed,
+        &mut channels,
+    )?;
+    let width_changed = source.style.stroke_width != target.style.stroke_width
+        || (from.style.stroke_width != target_style.stroke_width
+            && !has_binding(source, SemanticObjectProperty::StrokeWidth));
+    push_affine_channel(
+        source,
+        SemanticObjectProperty::StrokeWidth,
+        Property::StrokeWidth,
+        TrackValues::Scalar {
+            from: from.style.stroke_width,
+            to: target_style.stroke_width,
+        },
+        SemanticAnimationCompletion::Property {
+            property: SemanticObjectProperty::StrokeWidth,
+            value: SemanticSignalValue::Scalar(target.style.stroke_width),
+        },
+        width_changed,
         &mut channels,
     )?;
     let opacity_changed = source.style.object_opacity != target.style.object_opacity
@@ -1888,7 +1906,11 @@ pub(super) fn lower_transform_channels(
         )
     );
     if source.content == target.content {
-        if interpolation == noon_core::SemanticTransformInterpolation::Affine {
+        // A style-only target has no point correspondence work. Keep geometry
+        // resident and let the existing property channels own these changes.
+        let unchanged_affine = lower_semantic_transform_value(target)
+            .is_ok_and(|target_transform| target_transform == from.transform);
+        if interpolation == noon_core::SemanticTransformInterpolation::Affine || unchanged_affine {
             return lower_affine_channels(source, target, from);
         }
         if !point_transform {
@@ -2287,7 +2309,10 @@ mod tests {
     fn effective(transform: Transform2D) -> EffectiveAnimationProperties {
         EffectiveAnimationProperties {
             transform,
-            style: Style::default(),
+            style: Style {
+                stroke_width: 0.0,
+                ..Style::default()
+            },
             appearance: 1.0,
             reveal: 1.0,
         }
@@ -2338,7 +2363,10 @@ mod tests {
                 rotation: std::f32::consts::FRAC_PI_2,
                 scale: Vec2::new(2.0, 3.0),
             },
-            style: Style::default(),
+            style: Style {
+                stroke_width: 0.0,
+                ..Style::default()
+            },
             appearance: 1.0,
             reveal: 1.0,
         };
@@ -2642,6 +2670,7 @@ mod tests {
             .unwrap();
         let index = index(&store);
         let current = Style {
+            stroke_width: 0.0,
             fill: Some(Color::BLUE),
             stroke: Some(Color::WHITE),
             opacity: 0.75,
@@ -2761,11 +2790,60 @@ mod tests {
     }
 
     #[test]
-    fn stroke_width_change_remains_explicitly_unsupported() {
+    fn stroke_width_channel_captures_effective_start() {
+        let mut store = SemanticStore::new();
+        let object = visible_object(&mut store);
+        let source = store.semantic_object_state_checked(object).unwrap();
+        let mut target = source.clone();
+        target.style.stroke_width = 0.2;
+        let mut current = effective(Transform2D::default());
+        current.style.stroke_width = 0.12;
+        let tracks = lower_affine_channels(source, &target, current).unwrap();
+        let width = tracks
+            .iter()
+            .find(|track| track.property == Property::StrokeWidth)
+            .unwrap();
+        assert_eq!(
+            width.values,
+            TrackValues::Scalar {
+                from: 0.12,
+                to: 0.2
+            }
+        );
+    }
+
+    #[test]
+    fn stroke_width_binding_is_preserved_until_an_authored_width_target_conflicts() {
+        let mut store = SemanticStore::new();
+        let object = visible_object(&mut store);
+        let signal = store.insert_semantic_input_signal(0.65_f64).unwrap();
+        store
+            .bind_semantic_signal(signal, object, SemanticObjectProperty::StrokeWidth)
+            .unwrap();
+        let source = store.semantic_object_state_checked(object).unwrap();
+        let mut target = source.clone();
+        target.style.object_opacity = 0.5;
+        let mut current = effective(Transform2D::default());
+        current.style.stroke_width = 0.65;
+        let tracks = lower_affine_channels(source, &target, current).unwrap();
+        assert!(tracks
+            .iter()
+            .all(|track| track.property != Property::StrokeWidth));
+        target.style.stroke_width = 2.0;
+        assert_eq!(
+            lower_affine_channels(source, &target, current),
+            Err(AffinePayloadIssue::ReactiveDriverConflict(
+                SemanticObjectProperty::StrokeWidth
+            ))
+        );
+    }
+
+    #[test]
+    fn discrete_stroke_cap_change_remains_explicitly_unsupported() {
         let mut store = SemanticStore::new();
         let target = visible_object(&mut store);
         let mut target_state = store.semantic_object_state_checked(target).unwrap().clone();
-        target_state.style.stroke_width = 2.0;
+        target_state.style.stroke_cap = noon_core::StrokeCap::Butt;
         let target_state = store.insert_semantic_object(target_state);
         let animation = store
             .insert_semantic_transform_animation(target, target_state, AnimationOptions::new())
@@ -2842,6 +2920,7 @@ mod tests {
         let current = EffectiveAnimationProperties {
             transform: Transform2D::default(),
             style: Style {
+                stroke_width: 0.0,
                 stroke: Some(Color {
                     alpha: 0.65,
                     ..Color::WHITE
