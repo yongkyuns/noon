@@ -742,6 +742,15 @@ pub async fn create_direct_style_operations_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Shared authored/live membership ordering reaches the normal direct renderer.
+#[wasm_bindgen(js_name = createDirectFamilyMembershipOrderSmokeRenderer)]
+pub async fn create_direct_family_membership_order_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::family_membership_order::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Shared replacement uses the native object/family transaction and live session.
 #[wasm_bindgen(js_name = createDirectFamilyReplacementSmokeRenderer)]
 pub async fn create_direct_family_replacement_smoke_renderer(

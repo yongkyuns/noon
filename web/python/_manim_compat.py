@@ -216,6 +216,12 @@ class Group(Mobject):
         _group_init(self, *mobjects)
 
     @property
+    def submobjects(self) -> list[object]:
+        """Ordered shared membership snapshot; edit membership with add/remove."""
+        from _manim_semantic_handles import _group_members
+        return _group_members(self)
+
+    @property
     def id(self) -> int:
         raise AttributeError("Group has no single runtime object id in Noon")
 
@@ -235,7 +241,7 @@ class Group(Mobject):
         return iter(self.submobjects)
 
     def __len__(self) -> int:
-        return len(self.submobjects)
+        return int(self._semantic_family_handle.memberCount)
 
     def __getitem__(self, index: int) -> object:
         return self.submobjects[index]
@@ -442,6 +448,7 @@ def prepare_family_wrapper_copy(source: Group, excluded_fields):
     nodes in one transaction after the fallible host metadata pass has completed.
     """
     pairs = []
+    family_members = []
     memo = {}
 
     def allocate(value):
@@ -452,7 +459,7 @@ def prepare_family_wrapper_copy(source: Group, excluded_fields):
         memo[id(value)] = clone
         pairs.append((value, clone))
         if isinstance(value, Group):
-            clone.submobjects = [allocate(member) for member in value.submobjects]
+            family_members.append((clone, [allocate(member) for member in value.submobjects]))
         return clone
 
     memo[_FAMILY_COPY_METADATA] = allocate
@@ -465,7 +472,7 @@ def prepare_family_wrapper_copy(source: Group, excluded_fields):
         index += 1
         excluded = excluded_fields(original)
         copy_wrapper_attributes(original, clone, memo, excluded | {"submobjects"})
-    return root, pairs
+    return root, pairs, family_members
 
 
 def copy_wrapper_attributes(source, target, memo=None, excluded=()):

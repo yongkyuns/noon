@@ -879,15 +879,16 @@ mod wasm {
         }
 
         #[wasm_bindgen(getter, js_name = memberCount)]
-        pub fn member_count(&self) -> usize {
+        pub fn member_count(&self) -> Result<usize, JsValue> {
             self.family
                 .integration_store()
                 .borrow()
-                .node(self.family.node_id())
-                .map_or(0, |node| node.member_count())
+                .semantic_family_checked(self.family.node_id())
+                .map(|node| node.member_count())
+                .map_err(typed_js_error)
         }
 
-        /// One bounded observation for mirroring a newly constructed wrapper list.
+        /// Observe authoritative family order when a frontend requests members.
         #[wasm_bindgen(js_name = memberKeys)]
         pub fn member_keys(&self) -> Result<Vec<String>, JsValue> {
             let store = self.family.integration_store().borrow();

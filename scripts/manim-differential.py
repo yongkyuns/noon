@@ -587,6 +587,28 @@ def _style_operations(api):
     return observations
 
 
+def _family_membership_order(provider: Any, group_name: str) -> Any:
+    a, b, c = [provider.Square(side_length=1.0) for _ in range(3)]
+    group_type = getattr(provider, group_name)
+    nested = group_type(a, b)
+    family = group_type(a, nested, a)
+    names = {id(a): "a", id(b): "b", id(c): "c", id(nested): "nested"}
+    order = lambda: [names[id(member)] for member in family.submobjects]
+    observed = [order()]
+    family.add(c, nested, c)
+    observed.append(order())
+    family.add(a)
+    observed.append(order())
+    family.remove(nested, nested)
+    observed.append(order())
+    family.add(nested)
+    observed.append(order())
+    copied = family.copy()
+    return {"order": observed, "nested_identity": nested[0] is a and nested[1] is b,
+            "copy_alias": copied[1] is copied[2][0],
+            "copy_independent": copied[1] is not a}
+
+
 def _family_replace(api, source_family, target_family, stretch):
     first = api.Rectangle(width=2.0, height=1.0).shift(2 * api.LEFT)
     second = api.Square(side_length=1.0).shift(2 * api.RIGHT)
@@ -618,6 +640,10 @@ FIXTURES = [
     Fixture("vgroup_become_cross_alias", lambda: _family_become_cross_alias(noon), lambda: _family_become_cross_alias(manim)),
     Fixture("vgroup_become_restore", lambda: _family_become(noon), lambda: _family_become(manim)),
     Fixture("style_operations", lambda: _style_operations(noon), lambda: _style_operations(manim)),
+
+
+    Fixture("group_membership_order", lambda: _family_membership_order(noon, "Group"), lambda: _family_membership_order(manim, "Group")),
+    Fixture("vgroup_membership_order", lambda: _family_membership_order(noon, "VGroup"), lambda: _family_membership_order(manim, "VGroup")),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",
               lambda sf=source_family, tf=target_family, st=stretch: _family_replace(noon, sf, tf, st),
               lambda sf=source_family, tf=target_family, st=stretch: _family_replace(manim, sf, tf, st))
@@ -678,6 +704,7 @@ FIXTURES = [
 # Explicitly tracked but not yet differential-gated.  Keep this list close to the
 # harness so unsupported behavior is never silently treated as a mismatch.
 UNSUPPORTED = {
+    "family_insert_assignment": "duplicate-edge insert and indexed assignment remain under #74",
     "family_aliasing": "Shared semantic identity exists; exhaustive nested-family mutation/copy parity remains under #74",
     "z_index": "Noon does not yet expose the 2.5D/z semantic model (#62)",
     "updater_frame_semantics": "host/native updater phase semantics are being defined in #56",
