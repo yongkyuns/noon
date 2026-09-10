@@ -46,7 +46,12 @@ test("open scene accepts only bounded source and loop duration", () => {
 });
 
 test("sample frames requires an opaque session and monotonic bounded forward schedule", () => {
+  assert.equal(MAX_RENDER_SAMPLES_PER_CALL, 31,
+    "one call plus open_scene's initial frame must fit the default 32-frame retention budget");
   assert.equal(accepts("noon_sample_frames", { session, times: [0, 0.5, 0.5, 4] }), true);
+  assert.equal(accepts("noon_sample_frames", {
+    session, times: Array(MAX_RENDER_SAMPLES_PER_CALL).fill(0),
+  }), true);
   for (const invalid of [
     { session: "short", times: [0] },
     { session: "scene with spaces 123456789", times: [0] },
