@@ -1103,22 +1103,27 @@ impl CompiledScene {
                 if before_index == Some(index) {
                     return Ok(stats);
                 }
-                let position = self
-                    .painter_order
-                    .iter()
-                    .position(|candidate| *candidate == index)
-                    .expect("live object has one painter-order entry");
-                self.painter_order.remove(position);
-                let destination = before_index
-                    .and_then(|anchor| {
-                        self.painter_order
-                            .iter()
-                            .position(|candidate| *candidate == anchor)
-                    })
-                    .unwrap_or(self.painter_order.len());
-                self.painter_order.insert(destination, index);
+                // Both positions are already indexed. Searching the dense painter
+                // vector would make even an adjacent move scan the whole prefix.
+                let position =
+                    self.painter_rank(index)
+                        .expect("live object has a painter rank") as usize;
+                let destination = before_index.map_or(self.painter_order.len() - 1, |anchor| {
+                    let rank = self
+                        .painter_rank(anchor)
+                        .expect("live anchor has a painter rank")
+                        as usize;
+                    rank - usize::from(position < rank)
+                });
                 let first = position.min(destination);
-                let last = position.max(destination).min(self.painter_order.len() - 1);
+                let last = position.max(destination);
+                // Shift only the crossed range. remove+insert would move the
+                // untouched suffix twice, even for a one-position reorder.
+                if position < destination {
+                    self.painter_order[first..=last].rotate_left(1);
+                } else {
+                    self.painter_order[first..=last].rotate_right(1);
+                }
                 for rank in first..=last {
                     self.painter_ranks[self.painter_order[rank] as usize] = Some(rank as u32);
                 }
@@ -2949,5 +2954,40 @@ mod tests {
         assert_eq!(compiled.painter_order(), &[0, 1]);
         assert_eq!(compiled.object_index(returning), Some(0));
         assert_eq!(compiled.object_index(later), Some(1));
+    }
+    #[test]
+    fn indexed_painter_moves_preserve_ranks_and_stable_rows_in_both_directions() {
+        let object = |n| {
+            CompiledObject::new(
+                ObjectId::new(n),
+                GeometryRef::circle(1.),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )
+        };
+        let mut compiled =
+            CompiledScene::compile_objects((1..=5).map(object).collect(), &[]).unwrap();
+        for (moving, before, expected) in [
+            (2, Some(5), [0, 2, 3, 1, 4]),
+            (5, Some(3), [0, 4, 2, 3, 1]),
+            (1, None, [4, 2, 3, 1, 0]),
+            (4, Some(4), [4, 2, 3, 1, 0]),
+            (1, Some(5), [0, 4, 2, 3, 1]),
+        ] {
+            compiled
+                .apply_execution_patch(&ExecutionPatch::ReorderObject {
+                    object: ObjectId::new(moving),
+                    before: before.map(ObjectId::new),
+                })
+                .unwrap();
+            assert_eq!(compiled.painter_order(), &expected);
+            for (rank, index) in expected.into_iter().enumerate() {
+                assert_eq!(compiled.painter_rank(index), Some(rank as u32));
+                assert_eq!(
+                    compiled.object_index(ObjectId::new(index as u64 + 1)),
+                    Some(index)
+                );
+            }
+        }
     }
 }

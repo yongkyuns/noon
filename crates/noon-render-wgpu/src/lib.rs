@@ -559,7 +559,6 @@ pub struct FramePreparer {
     visible_projection_ready: bool,
     visible_projection_key: Vec<VisibleProjectionKey>,
     visible_projection_stats: VisibleRenderProjectionStats,
-    render_order_keys: Vec<RenderOrderKey>,
     // Stable execution-row indices in the runtime's derived semantic painter order.
     painter_order_indices: Vec<u32>,
     // Distinguishes the runtime's explicit empty scene order from the legacy dense
@@ -805,7 +804,7 @@ impl FramePreparer {
     }
 
     fn can_append_structural_slot(&self, frame: &FrameState, object_index: usize) -> bool {
-        if !self.render_order_keys.is_empty() || !frame.is_present(object_index) {
+        if !frame.is_present(object_index) {
             return false;
         }
         matches!(
