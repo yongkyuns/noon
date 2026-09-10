@@ -120,7 +120,12 @@ def _create(
     if color is not None:
         _shared._apply_constructor_color(options, _compat._as_color("color", color))
     created = engine_call(_create_arrow_handle, options)
-    _attach_arrow_family(self, created)
+    try:
+        _attach_arrow_family(self, created)
+    finally:
+        release = getattr(created, "free", None)
+        if release is not None:
+            engine_call(release)
 
 
 def _validate_straight_arrow_options(
