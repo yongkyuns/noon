@@ -60,13 +60,17 @@ fn rotated_become_preserves_world_controls_identity_and_unchanged_resources() {
     assert_eq!(source.node_id(), id);
     assert_eq!(target.state().unwrap(), original);
     assert_eq!(resources(&scene), count + 1);
-    // Repeating the geometry with different paint keeps its resource and still
-    // commits the target style. This exercises the mixed prepared-edit path.
-    target.set_fill(1., 0., 0., 1.).unwrap();
+    // A target with identical retained geometry and different paint keeps its
+    // resource and still commits the target style.
+    let mut painted = source.copy_handle().unwrap();
+    painted.set_fill(1., 0., 0., 1.).unwrap();
     let content = source.state().unwrap().content;
-    source.become_handle(&target, options()).unwrap();
+    source.become_handle(&painted, options()).unwrap();
     assert_eq!(source.state().unwrap().content, content);
-    assert_eq!(source.state().unwrap().style, target.state().unwrap().style);
+    assert_eq!(
+        source.state().unwrap().style,
+        painted.state().unwrap().style
+    );
     assert_eq!(resources(&scene), count + 1);
 }
 

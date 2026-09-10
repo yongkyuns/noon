@@ -78,3 +78,43 @@ impl PreparedPathEdits {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unchanged_path_preserves_resource_and_still_publishes_target_paint() {
+        let scene = crate::Scene::new();
+        let object = scene
+            .path(
+                VectorPath::new()
+                    .move_to(Vec2::ZERO)
+                    .line_to(Vec2::new(2., 0.)),
+                Default::default(),
+            )
+            .unwrap();
+        let before = object.state().unwrap();
+        let mut captured = before.clone();
+        captured.style.opacity = 0.25;
+        let store = scene.integration_store();
+        let path = crate::path_editing::world_path(&store.borrow(), &before).unwrap();
+        let count = store.borrow().geometry_resources().len();
+        let prepared =
+            PreparedPathEdits::prepare(&store.borrow(), [(object.node_id(), captured, path)])
+                .unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_z_index(object.node_id(), 2.0);
+        prepared
+            .with_transaction(transaction)
+            .publish(&mut store.borrow_mut(), |store, transaction| {
+                transaction.apply(store).map_err(AuthoringError::from)
+            })
+            .unwrap();
+        let after = object.state().unwrap();
+        assert_eq!(after.content, before.content);
+        assert_eq!(after.style.opacity, 0.25);
+        assert_eq!(after.z_index(), 2.0);
+        assert_eq!(store.borrow().geometry_resources().len(), count);
+    }
+}

@@ -18,7 +18,7 @@ pub use family_layout::LiveLayoutTarget;
 use crate::execution_session::EffectiveSemanticObject;
 use crate::{
     family_arrangement::FamilyArrangePlan,
-    semantic_mobject::{authoring_render_f64, stage_state_changes},
+    semantic_mobject::authoring_render_f64,
     semantic_mobject::{
         edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
         edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
