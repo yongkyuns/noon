@@ -5838,6 +5838,20 @@ mod wasm {
                 .live_reverse_direction(object.semantic_mobject())
                 .map_err(typed_js_error)
         }
+        #[wasm_bindgen(js_name = liveSubcurve)]
+        pub fn live_subcurve(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            a: f64,
+            b: f64,
+        ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_subcurve(source.semantic_mobject(), a, b)
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = livePointwiseBecomePartial)]
         pub fn live_pointwise_become_partial(
             &mut self,

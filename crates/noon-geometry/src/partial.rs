@@ -62,6 +62,32 @@ impl std::fmt::Display for PathProportionError {
 
 impl std::error::Error for PathProportionError {}
 
+/// Extract a curve-count interval, optionally wrapping a closed path's seam.
+/// The caller validates closure in the intended coordinate space.
+pub fn subcurve_path(path: &VectorPath, a: f32, b: f32) -> Result<VectorPath, PathProportionError> {
+    validate_proportion(a)?;
+    validate_proportion(b)?;
+    if a <= b {
+        return Ok(authored_partial_path(path, a, b));
+    }
+    let first = authored_partial_path(path, a, 1.);
+    let second = authored_partial_path(path, 0., b);
+    let mut result = first;
+    let mut previous = result.endpoints().map(|(_, end)| end);
+    let mut previous_subpath = None;
+    for curve in collect_curves(&second) {
+        // Append without an artificial break at a shared seam. Discontinuities
+        // inside either selected interval are still retained as distinct runs.
+        if previous != Some(curve.from) || previous_subpath.is_some_and(|id| id != curve.subpath) {
+            result = result.move_to(curve.from);
+        }
+        result = append_curve(result, curve);
+        previous = Some(curve.to);
+        previous_subpath = Some(curve.subpath);
+    }
+    Ok(result)
+}
+
 fn validate_proportion(alpha: f32) -> Result<(), PathProportionError> {
     if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
         return Err(PathProportionError::InvalidProportion(alpha));

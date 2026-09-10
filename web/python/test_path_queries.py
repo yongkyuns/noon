@@ -66,3 +66,35 @@ class PathQueryTests(unittest.TestCase):
             query.curvePoints.side_effect = ValueError('curve index out of bounds')
             with self.assertRaises(ValueError): value.get_nth_curve_points(4)
             self.assertEqual(query.free.call_count, 7)
+
+
+class SubpathQueryTests(unittest.TestCase):
+    def test_subpaths_and_closure_free_the_snapshot_on_success_and_error(self):
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock()
+        query.subpaths.return_value = [[0., 0., 1., 0., 2., 0., 3., 0.], [5., 1., 6., 1., 7., 1., 8., 1.]]
+        query.isClosed.return_value = False
+        with patch.object(queries, '_typed_manim_observation', return_value=query):
+            self.assertEqual(value.get_subpaths(), [[(0., 0.), (1., 0.), (2., 0.), (3., 0.)], [(5., 1.), (6., 1.), (7., 1.), (8., 1.)]])
+            self.assertFalse(value.is_closed())
+            self.assertEqual(query.free.call_count, 2)
+            query.subpaths.side_effect = ValueError('bad content')
+            with self.assertRaises(ValueError): value.get_subpaths()
+            self.assertEqual(query.free.call_count, 3)
+
+    def test_subcurve_dispatch_preserves_wrapper_type_and_python_metadata(self):
+        import _manim_semantic_handles as handles
+        value = identity_only_wrapper(compat.VMobject)
+        value.label = {'kind': ['source']}
+        source = Mock()
+        for context in (None, Mock()):
+            with patch.object(handles, '_handle_for', return_value=source), patch.object(handles, '_live_mutation_context', return_value=context):
+                result = value.get_subcurve(0.8, 0.2)
+            expected = source.subcurve.return_value if context is None else context.liveSubcurve.return_value
+            self.assertIs(result._semantic_handle, expected)
+            self.assertIsInstance(result, type(value))
+            self.assertEqual(result.label, value.label)
+            self.assertIsNot(result.label, value.label)
+            if context is None: source.subcurve.assert_called_once_with(0.8, 0.2)
+            else: context.liveSubcurve.assert_called_once_with(source, 0.8, 0.2)
+        source.cloneHandle.assert_not_called()

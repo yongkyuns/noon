@@ -833,6 +833,22 @@ def _canonical_curve_layout(api):
     return [_object_observation(obj) for obj in (circle, ellipse, circle.copy(), family)]
 
 
+def _path_subcurves(api):
+    point = lambda x, y: api.RIGHT * x + api.UP * y
+    source = api.Square(side_length=2).shift(api.LEFT * 2)
+    def observe(value):
+        return [value.is_closed(), value.get_num_curves(),
+                [[list(p)[:2] for p in subpath] for subpath in value.get_subpaths()]]
+    result = [observe(source), observe(source.get_subcurve(0.875, 0.375)),
+              observe(source.get_subcurve(0.25, 0.25))]
+    path = api.VMobject().start_new_path(point(0, 0)).add_line_to(point(2, 0))
+    path.start_new_path(point(2, 0)).add_line_to(point(4, 1))
+    path.start_new_path(point(6, 0)).add_line_to(point(8, 0))
+    path.start_new_path(point(8, 0))
+    result.append(observe(path))
+    return result
+
+
 def _path_refinement(api):
     point = lambda x, y: api.RIGHT * x + api.UP * y
     source = api.VMobject().start_new_path(point(0, 0))
@@ -901,6 +917,7 @@ def _point_matching(api):
 
 
 FIXTURES = [
+    Fixture("path_subcurves", lambda: _path_subcurves(noon), lambda: _path_subcurves(manim), 1e-5),
     Fixture("path_refinement", lambda: _path_refinement(noon), lambda: _path_refinement(manim), 1e-5),
     Fixture("path_selection", lambda: _path_selection(noon), lambda: _path_selection(manim), 1e-5),
     Fixture("path_construction", lambda: _path_construction(noon), lambda: _path_construction(manim), 1e-5),

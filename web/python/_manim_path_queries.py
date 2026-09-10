@@ -81,3 +81,19 @@ def anchors_and_handles(value):
                 ("startAnchors", "firstHandles", "secondHandles", "endAnchors")]
     finally:
         query.free()
+
+
+def subpaths(value):
+    query = _query(value)
+    try:
+        return [_points(points) for points in engine_call(query.subpaths)]
+    finally:
+        query.free()
+
+
+def is_closed(value):
+    query = _query(value)
+    try:
+        return bool(engine_call(query.isClosed))
+    finally:
+        query.free()

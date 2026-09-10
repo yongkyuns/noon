@@ -104,6 +104,39 @@ impl PathQuery {
         anchors
     }
 
+    /// Whether first and last anchors coincide in this snapshot's coordinates.
+    pub fn is_closed(&self) -> Result<bool, AuthoringError> {
+        Ok(points_coincide(self.start()?, self.end()?))
+    }
+
+    /// Cubic point runs separated by noncoincident anchors, matching Manim's
+    /// observable subpaths. Explicit retained contour breaks remain unchanged.
+    /// A dangling anchor joins the final run only when it coincides with its end.
+    pub fn subpaths(&self) -> Vec<Vec<(f64, f64)>> {
+        let mut result = Vec::new();
+        let mut run = Vec::new();
+        for index in 0..self.curve_count() {
+            let points = self.curve_points(index).expect("known curve index");
+            if run
+                .last()
+                .is_some_and(|last| !points_coincide(*last, points[0]))
+            {
+                result.push(std::mem::take(&mut run));
+            }
+            run.extend(points);
+        }
+        if let Some(point) = self.unfinished_anchor {
+            let point = self.transform_point(f64::from(point.x), f64::from(point.y));
+            if run.last().is_some_and(|last| points_coincide(*last, point)) {
+                run.push(point);
+            }
+        }
+        if !run.is_empty() {
+            result.push(run);
+        }
+        result
+    }
+
     /// Point in the coordinate space captured when this query was prepared.
     pub fn point_from_proportion(&self, alpha: f64) -> Result<(f64, f64), AuthoringError> {
         if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
@@ -163,6 +196,11 @@ impl PathQuery {
                 .map_err(AuthoringError::PathQuery)
         })
     }
+}
+
+pub(crate) fn points_coincide(left: (f64, f64), right: (f64, f64)) -> bool {
+    (left.0 - right.0).abs() <= 1e-6 + 1e-5 * right.0.abs()
+        && (left.1 - right.1).abs() <= 1e-6 + 1e-5 * right.1.abs()
 }
 
 pub(crate) fn content_path(

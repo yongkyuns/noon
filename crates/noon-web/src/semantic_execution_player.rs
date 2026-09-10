@@ -503,6 +503,15 @@ impl SemanticExecutionPlayer {
         self.with_live_session(|live| live.reverse_direction(object))
     }
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_subcurve(
+        &mut self,
+        source: &noon::Mobject,
+        a: f64,
+        b: f64,
+    ) -> Result<noon::Mobject, AuthoringFailure> {
+        self.with_live_session(|live| live.subcurve(source, a, b))
+    }
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_pointwise_become_partial(
         &mut self,
         object: &noon::Mobject,

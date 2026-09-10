@@ -1128,6 +1128,21 @@ mod wasm {
                 .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
                 .map_err(js_error)
         }
+        #[wasm_bindgen(js_name = isClosed)]
+        pub fn is_closed(&self) -> Result<bool, JsValue> {
+            self.value.is_closed().map_err(js_error)
+        }
+        pub fn subpaths(&self) -> js_sys::Array {
+            self.value
+                .subpaths()
+                .into_iter()
+                .map(|points| {
+                    let coordinates: Vec<_> =
+                        points.into_iter().flat_map(|(x, y)| [x, y]).collect();
+                    JsValue::from(js_sys::Float64Array::from(coordinates.as_slice()))
+                })
+                .collect()
+        }
         #[wasm_bindgen(js_name = startAnchors)]
         pub fn start_anchors(&self) -> Vec<f64> {
             self.value
@@ -1479,6 +1494,12 @@ mod wasm {
         #[wasm_bindgen(js_name = reverseDirection)]
         pub fn reverse_direction(&mut self) -> Result<(), JsValue> {
             self.handle.reverse_direction().map_err(js_error)
+        }
+        pub fn subcurve(&self, a: f64, b: f64) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            self.handle
+                .subcurve(a, b)
+                .map(Self::from_semantic_mobject)
+                .map_err(js_error)
         }
         #[wasm_bindgen(js_name = pointwiseBecomePartial)]
         pub fn pointwise_become_partial(

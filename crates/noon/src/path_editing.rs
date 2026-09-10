@@ -215,7 +215,72 @@ pub(crate) fn partial_interval(a: f64, b: f64) -> Result<(f32, f32), AuthoringEr
     Ok((a as f32, b as f32))
 }
 
+pub(crate) fn prepare_subcurve(
+    store: &SemanticStore,
+    state: &SemanticObjectState,
+    a: f64,
+    b: f64,
+) -> Result<(SemanticObjectState, Option<VectorPath>), AuthoringError> {
+    partial_interval(a, a)?;
+    partial_interval(b, b)?;
+    let query = crate::path_queries::prepare_content(store, state.content, state.transform)?;
+    let closed = query.is_closed()?;
+    // A singleton has no complete curve and retains its original content.
+    if query.curve_count() == 0 {
+        return Ok((state.clone(), None));
+    }
+    if a > b && !closed {
+        return Err(AuthoringError::PathQuery(
+            noon_geometry::PathProportionError::InvalidInterval,
+        ));
+    }
+    if a == 0. && b == 1. {
+        return Ok((state.clone(), None));
+    }
+    let path = world_path(store, state)?;
+    let selected = noon_geometry::subcurve_path(&path, a as f32, b as f32)
+        .map_err(AuthoringError::PathQuery)?;
+    Ok((path_replacement_state(state.clone())?, Some(selected)))
+}
+
+pub(crate) fn subcurve_creation(state: SemanticObjectState) -> SemanticMutationTransaction {
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_node(noon_core::SemanticNodeCreation::object(state));
+    transaction
+}
+
+pub(crate) fn created_subcurve_id(
+    result: &noon_core::SemanticMutationTransactionResult,
+) -> noon_core::SemanticNodeId {
+    let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+        unreachable!("one subcurve has one semantic creation")
+    };
+    *node
+}
+
 impl Mobject {
+    /// Create a detached copy of this path's interval, preserving paint/priority.
+    /// Closed paths allow a > b to select across the seam; open paths require
+    /// an ordered interval. Source identity, geometry and membership are untouched.
+    pub fn subcurve(&self, a: f64, b: f64) -> Result<Self, AuthoringError> {
+        let state = self.state()?;
+        let mut store = self.integration_store().borrow_mut();
+        let (mut state, path) = prepare_subcurve(&store, &state, a, b)?;
+        let result = if let Some(path) = path {
+            store.with_geometry_path(path, |store, handle| {
+                state.content = StoredGeometry::Resource(handle).into();
+                subcurve_creation(state)
+                    .apply(store)
+                    .map_err(AuthoringError::from)
+            })?
+        } else {
+            subcurve_creation(state).apply(&mut store)?
+        };
+        let id = created_subcurve_id(&result);
+        drop(store);
+        Self::from_node(std::rc::Rc::clone(self.integration_store()), id)
+    }
+
     /// Set a polyline from world-space corners, preserving identity and paint.
     /// Copies retain their previous immutable path; no temporary object is used.
     pub fn set_points_as_corners(&mut self, points: &[Vec2]) -> Result<(), AuthoringError> {

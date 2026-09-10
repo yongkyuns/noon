@@ -519,7 +519,7 @@ def _apply(self: _base.Mobject, raw: _ir.Mobject) -> _base.Mobject:
 
 
 def _clone_mobject(
-    self: _base.Mobject, *, target_state: bool = False
+    self: _base.Mobject, *, target_state: bool = False, subcurve=None
 ) -> _base.Mobject:
     handle = _handle_for(self)
     if handle is None:
@@ -537,6 +537,8 @@ def _clone_mobject(
     clone._scene = None
     clone._object = None
     clone._semantic_handle = (
+        (engine_call(context.liveSubcurve, handle, *subcurve) if context is not None
+         else engine_call(handle.subcurve, *subcurve)) if subcurve is not None else
         engine_call(context.liveTargetEditor, handle)
         if context is not None
         else engine_call(handle.targetEditor) if target_state else engine_call(handle.cloneHandle)

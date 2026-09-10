@@ -85,6 +85,18 @@ class VMobject(Mobject):
         from _manim_path_editing import insert_n_curves
         return insert_n_curves(self, n)
 
+    def get_subcurve(self, a, b):
+        from _manim_semantic_handles import _clone_mobject
+        return _clone_mobject(self, subcurve=(float(a), float(b)))
+
+    def get_subpaths(self):
+        from _manim_path_queries import subpaths
+        return subpaths(self)
+
+    def is_closed(self):
+        from _manim_path_queries import is_closed
+        return is_closed(self)
+
     def get_num_curves(self):
         from _manim_path_queries import curve_count
         return curve_count(self)
