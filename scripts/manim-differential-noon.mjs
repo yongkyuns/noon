@@ -38,7 +38,7 @@ try {
     globalThis.noonAuthoringVectorPath = () => new wasm.WasmAuthoringVectorPath();
     globalThis.noonCreateAuthoringGeometryHandle = options => store.createManimGeometry(options);
     globalThis.noonAuthoringMembershipBatch = kind => new wasm.WasmSceneMembershipBatch(kind);
-    globalThis.noonCreateAuthoringFamilyHandle = batch => store.createFamily(batch);
+    globalThis.noonCreateAuthoringFamilyHandle = (batch, zIndex) => store.createFamily(batch, zIndex);
     for (const { runtimePath, source } of modules) pyodide.FS.writeFile(runtimePath, source);
     pyodide.FS.writeFile("/tmp/noon_differential.py", probes);
     return JSON.parse(await pyodide.runPythonAsync(`

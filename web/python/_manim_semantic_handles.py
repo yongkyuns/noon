@@ -234,21 +234,22 @@ def _constructor_color(name: str, value: object) -> _base.Color:
 def _apply_shared_constructor_options(handle: object, kwargs: dict[str, Any]) -> None:
     """Apply Python constructor coercions to one shared typed target.
 
-    The target is either an already-published opaque handle during initial
-    authoring or an inert Rust primitive candidate. Both routes perform the
-    semantic validation in Rust; Python only applies public argument coercions.
+    The target is an inert Rust geometry candidate. Rust validates semantic
+    state before publication; Python only applies public argument coercions.
     """
     options = dict(kwargs)
     allowed = {
         "position", "rotation", "scale", "fill", "stroke",
         "stroke_width", "stroke_width_mode", "stroke_join", "stroke_cap",
         "opacity", "fill_color", "stroke_color", "fill_opacity",
-        "stroke_opacity",
+        "stroke_opacity", "z_index",
     }
     unknown = sorted(set(options) - allowed)
     if unknown:
         raise TypeError(f"unsupported Mobject constructor option(s): {', '.join(unknown)}")
 
+    if "z_index" in options:
+        engine_call(handle.setZIndex, _ir._finite_number("z_index", options["z_index"]))
     if "position" in options:
         value = _ir._vec2("position", options["position"])
         engine_call(handle.setTranslation, value["x"], value["y"])
@@ -295,10 +296,6 @@ def _apply_shared_constructor_options(handle: object, kwargs: dict[str, Any]) ->
         engine_call(handle.setFillOpacity, _compat._opacity("fill_opacity", options["fill_opacity"]))
     if options.get("stroke_opacity") is not None:
         engine_call(handle.setStrokeOpacity, _compat._opacity("stroke_opacity", options["stroke_opacity"]))
-
-
-def _apply_shared_constructor_kwargs(self: _base.Mobject, kwargs: dict[str, Any]) -> None:
-    _apply_shared_constructor_options(self._semantic_handle, kwargs)
 
 
 def _apply_constructor_color(handle: object, color: _base.Color | None) -> None:
@@ -824,7 +821,7 @@ def _get_z_index(self):
 
 def _set_z_index(self, value, family=True):
     from _manim_updaters import _canonical_phase_context
-    if _canonical_phase_context(self) is not None:
+    if not isinstance(self, _compat.Group) and _canonical_phase_context(self) is not None:
         raise NotImplementedError("z-index during a host callback requires phase-local publication")
     value = float(value)
     anchor = _layout_anchor(self)
@@ -1748,16 +1745,17 @@ def _group_members(self: _compat.Group) -> list[object]:
             for key in engine_call(self._semantic_family_handle.memberKeys)]
 
 
-def _group_init(self: _compat.Group, *mobjects: object) -> None:
+def _group_init(self: _compat.Group, *mobjects: object, z_index: float = 0) -> None:
     if _create_family_handle is None or _new_membership_batch is None:
         raise RuntimeError("Group construction requires the shared Rust authoring host")
+    z_index = _ir._finite_number("z_index", z_index)
     _validate_group_members(self, mobjects)
     context = _live_constructor_context("family")
     batch = _family_membership_batch(context, "add", mobjects)
     family = (
-        engine_call(context.liveCreateFamily, batch)
+        engine_call(context.liveCreateFamily, batch, z_index)
         if context is not None
-        else engine_call(_create_family_handle, batch)
+        else engine_call(_create_family_handle, batch, z_index)
     )
     self._semantic_family_handle = family
     self._semantic_member_wrappers = {_family_wrapper_key(value): value for value in mobjects}

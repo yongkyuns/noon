@@ -11,6 +11,10 @@ class ZIndexTests(unittest.TestCase):
         for cls in (compat.VMobject, compat.VGroup):
             for live in (False, True):
                 value = identity_only_wrapper(cls, submobjects=[])
+                if cls is compat.VGroup:
+                    # Real Group wrappers have family identity, not leaf callback fields.
+                    del value._scene
+                    del value._object
                 anchor, context = Mock(), (Mock() if live else None)
                 anchor.zIndex.return_value = -2.5
                 with patch.object(handles, "_layout_anchor", return_value=anchor), \
@@ -32,3 +36,30 @@ class ZIndexTests(unittest.TestCase):
             with self.assertRaises(NotImplementedError):
                 value.set_z_index(1)
             anchor.assert_not_called()
+
+    def test_geometry_options_forward_priority_before_allocation(self):
+        candidate = Mock()
+        handles._apply_shared_constructor_options(candidate, {"z_index": 2.75})
+        candidate.setZIndex.assert_called_once_with(2.75)
+        candidate.reset_mock()
+        with self.assertRaises(ValueError):
+            handles._apply_shared_constructor_options(candidate, {"z_index": float("nan")})
+        candidate.setZIndex.assert_not_called()
+
+    def test_family_constructor_forwards_root_priority_in_one_creation_call(self):
+        for live in (False, True):
+            context = Mock() if live else None
+            create = Mock()
+            batch = Mock()
+            with patch.object(handles, "_create_family_handle", create), \
+                 patch.object(handles, "_new_membership_batch", Mock()), \
+                 patch.object(handles, "_family_membership_batch", return_value=batch), \
+                 patch.object(handles, "_live_constructor_context", return_value=context):
+                family = compat.VGroup(z_index=-3.5)
+                operation = context.liveCreateFamily if live else create
+                operation.assert_called_once_with(batch, -3.5)
+                self.assertNotIn("z_index", family.__dict__)
+                operation.reset_mock()
+                with self.assertRaises(ValueError):
+                    compat.VGroup(z_index=float("inf"))
+                operation.assert_not_called()

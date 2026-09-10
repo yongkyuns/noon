@@ -32,7 +32,7 @@ class CallbackFixture:
                 members = wasm.WasmSceneMembershipBatch.new("add")
                 for handle in handles:
                     members.appendMobject("", handle)
-                self.families.append(self.store.createFamily(members))
+                self.families.append(self.store.createFamily(members, 0))
         self.context.bindMobject("0", self.target)
         self.context.addUpdater(self.target, "1", 0)
         self.tracker = self.context.createValueTracker(2.0) if with_tracker else None
