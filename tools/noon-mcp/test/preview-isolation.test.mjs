@@ -31,16 +31,22 @@ test("untrusted paths and unbounded resource requests are rejected", () => {
   assert.throws(() => normalizePreviewLimits({ cpuCount: Infinity }), /cpuCount/);
   assert.throws(() => buildDockerCreateArgs({ ...config, imageId: "latest" }, ["node"]), /content-addressed/);
   assert.throws(() => buildDockerCreateArgs(config, []), /command/);
+  assert.throws(() => buildDockerCreateArgs(config, ["node"], { containerName: "other-container" }), /owned Noon preview/);
 });
 
 test("post-create inspection rejects isolation downgrades before workload start", () => {
   const secure = {
+    Image: config.imageId,
     Config: { User: "pwuser" },
     HostConfig: {
-      NetworkMode: "none", ReadonlyRootfs: true, Privileged: false,
+      NetworkMode: "none", IpcMode: "private", PidMode: "private", ReadonlyRootfs: true, Privileged: false,
       Memory: limits.memoryBytes, MemorySwap: limits.memoryBytes,
       NanoCpus: limits.cpuCount * 1e9, PidsLimit: limits.pids, ShmSize: limits.shmBytes,
       CapDrop: ["ALL"], SecurityOpt: ["no-new-privileges=true", `seccomp=${config.seccompProfile}`],
+      Tmpfs: {
+        "/work": `rw,nosuid,nodev,mode=1777,size=${limits.workBytes}`,
+        "/tmp": `rw,nosuid,nodev,mode=1777,size=${limits.tmpBytes}`,
+      },
     },
     Mounts: [
       { Destination: "/noon/web", Type: "bind", RW: false },
@@ -48,7 +54,10 @@ test("post-create inspection rejects isolation downgrades before workload start"
     ],
   };
   assert.equal(validateDockerInspection(secure, config), true);
+  assert.throws(() => validateDockerInspection({ ...secure, Image: `sha256:${"b".repeat(64)}` }, config), /image identity/);
   assert.throws(() => validateDockerInspection({ ...secure, HostConfig: { ...secure.HostConfig, NetworkMode: "default" } }, config), /network must be none/);
+  assert.throws(() => validateDockerInspection({ ...secure, HostConfig: { ...secure.HostConfig, PidMode: "host" } }, config), /PID namespace/);
   assert.throws(() => validateDockerInspection({ ...secure, HostConfig: { ...secure.HostConfig, PidsLimit: 0 } }, config), /PID limit mismatch/);
+  assert.throws(() => validateDockerInspection({ ...secure, HostConfig: { ...secure.HostConfig, Tmpfs: {} } }, config), /tmpfs/);
   assert.throws(() => validateDockerInspection({ ...secure, Mounts: [{ Destination: "/noon/web", Type: "bind", RW: true }] }, config), /read-only bind mount/);
 });
