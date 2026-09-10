@@ -110,7 +110,11 @@ const slicingEntry = readyEntries.find((entry) => entry.id === "compatible-group
 assert.ok(slicingEntry, "group slicing must be a ready compatibility example");
 assert.equal(slicingEntry.parity_fixture, "group-slicing");
 const slicingSource = await readFile(new URL(`./${slicingEntry.path}`, import.meta.url), "utf8");
-assert.match(slicingSource, /family\[1:\]\.shift\(UP \* 0\.75\)/);
+assert.match(
+  slicingSource,
+  /self\.play\(family\[1:\]\.animate\(run_time=1\.0\)\.shift\(UP \* 0\.75\)\)/,
+  "group slicing gallery example must visibly animate the selected shared members",
+);
 const slicingCanonical = await readFile(
   new URL("../parity/manim-v0.21/core-examples/group_slicing.py", import.meta.url),
   "utf8",
