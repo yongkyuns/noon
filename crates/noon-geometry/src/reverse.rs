@@ -4,15 +4,29 @@ use noon_core::{PathCommand, Vec2, VectorPath};
 /// Reverse curve direction and subpath order, preserving each contour's closure.
 /// Work and temporary storage are linear in the selected path only.
 pub fn reverse_path(path: &VectorPath) -> VectorPath {
-    let mut contours: Vec<(Vec2, Vec<(Vec2, PathCommand)>, bool)> = Vec::new();
+    struct Contour {
+        start: Vec2,
+        curves: Vec<(Vec2, PathCommand)>,
+        closed: bool,
+    }
+    let mut contours: Vec<Contour> = Vec::new();
     let mut current = Vec2::ZERO;
     for &command in path.commands() {
         if let PathCommand::MoveTo { to } = command {
-            contours.push((to, Vec::new(), false));
+            contours.push(Contour {
+                start: to,
+                curves: Vec::new(),
+                closed: false,
+            });
             current = to;
             continue;
         }
-        let Some((start, curves, closed)) = contours.last_mut() else {
+        let Some(Contour {
+            start,
+            curves,
+            closed,
+        }) = contours.last_mut()
+        else {
             continue;
         };
         match command {
@@ -33,7 +47,12 @@ pub fn reverse_path(path: &VectorPath) -> VectorPath {
         }
     }
     let mut reversed = VectorPath::new();
-    for (start, curves, closed) in contours.into_iter().rev() {
+    for Contour {
+        start,
+        curves,
+        closed,
+    } in contours.into_iter().rev()
+    {
         let end = curves.last().map_or(start, |(_, command)| match *command {
             PathCommand::LineTo { to }
             | PathCommand::QuadraticTo { to, .. }
