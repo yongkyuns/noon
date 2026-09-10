@@ -8,6 +8,7 @@ const expectedPaths = Object.freeze({
   worker: "./python-worker.js",
   wasm: "./pkg/noon_web_bg.wasm",
   glue: "./pkg/noon_web.js",
+  verifier: "./runtime-build-verifier.js",
 });
 
 // Thin host wrapper over the canonical PythonAuthoringClient. It observes the
@@ -51,11 +52,11 @@ export function validateRuntimeBuildIdentity(value) {
   if (!isRecord(value) || !hasExactKeys(value, ["schema", "sourceRevision", "files", "buildId"]) ||
       value.schema !== 1 || !/^[0-9a-f]{64}$/.test(value.buildId) ||
       (value.sourceRevision !== null && !/^[0-9a-f]{40}$/.test(value.sourceRevision)) ||
-      !isRecord(value.files) || !hasExactKeys(value.files, ["worker", "wasm", "glue"])) {
+      !isRecord(value.files) || !hasExactKeys(value.files, Object.keys(expectedPaths))) {
     throw new Error("Python authoring worker returned an invalid runtime build identity");
   }
   const files = {};
-  for (const key of ["worker", "wasm", "glue"]) {
+  for (const key of Object.keys(expectedPaths)) {
     const descriptor = value.files[key];
     if (!isRecord(descriptor) || !hasExactKeys(descriptor, ["path", "sha256"]) ||
         descriptor.path !== expectedPaths[key] || !/^[0-9a-f]{64}$/.test(descriptor.sha256)) {
