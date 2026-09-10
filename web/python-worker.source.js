@@ -128,7 +128,7 @@ async function initializePyodide() {
   self.noonCreateAuthoringTypstHandle = (source, math, fontSize) =>
     authoringStore.createManimTypst(source, math, fontSize);
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
-  self.noonCreateAuthoringFamilyHandle = (batch) => authoringStore.createFamily(batch);
+  self.noonCreateAuthoringFamilyHandle = (batch, zIndex) => authoringStore.createFamily(batch, zIndex);
   self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
   const bindingsReadyAt = performance.now();
 

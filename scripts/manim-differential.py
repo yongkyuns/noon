@@ -364,11 +364,9 @@ def _grid_inferred_and_alias_probe(api):
 
 
 def _z_index_probe(api):
-    a, b = api.Square(), api.Circle()
-    nested = api.VGroup(a, b)
-    family = api.VGroup(a, nested)
-    family.set_z_index(2.5)
-    family.set_z_index(-1.25, family=False)
+    a, b = api.Square(z_index=2.5), api.Circle(z_index=2.5)
+    nested = api.VGroup(a, b, z_index=2.5)
+    family = api.VGroup(a, nested, z_index=-1.25)
     copy = family.copy()
     a.z_index = 4.5
     return [float(node.z_index) for node in

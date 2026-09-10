@@ -237,9 +237,9 @@ class Group(Mobject):
         from _manim_semantic_handles import _match_style
         return _match_style(self, vmobject, family)
 
-    def __init__(self, *mobjects: object) -> None:
+    def __init__(self, *mobjects: object, z_index: float = 0) -> None:
         from _manim_semantic_handles import _group_init
-        _group_init(self, *mobjects)
+        _group_init(self, *mobjects, z_index=z_index)
 
     @property
     def submobjects(self) -> list[object]:
