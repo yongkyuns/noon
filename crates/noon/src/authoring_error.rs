@@ -16,6 +16,10 @@ pub enum UnsupportedAuthoringOperation {
     PlacementRenderOverride,
     /// effective Line endpoint queries currently support affine and style drivers only.
     EffectiveLineRenderOverride,
+    /// Effective path observations require a queryable retained content version.
+    EffectivePathRenderOverride,
+    /// Text and external content do not expose a vector path.
+    PathQueryContent,
     /// effective layout queries currently support affine and style drivers only.
     EffectiveLayoutRenderOverride,
     /// object state capture cannot represent a non-unit effective appearance.
@@ -58,6 +62,8 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::CaptureResourcePaint => "target editor cannot capture a runtime style backed by a paint resource",
             Self::ResourcePaintColorQuery => "Manim color queries do not support resource paints",
             Self::ResourcePaintOpacityQuery => "Manim opacity queries do not support resource paints",
+            Self::EffectivePathRenderOverride => "path queries require current retained content without active render overrides",
+            Self::PathQueryContent => "path queries require retained geometry",
             Self::ExternalGeometry => "external geometry must resolve to an immutable semantic resource",
             Self::LineMatchNonuniformScale => "Line.match_points target has unsupported nonuniform scaling",
             Self::LineMatchTargetContent => "Line.match_points requires an analytic Line target",
@@ -176,6 +182,8 @@ pub enum AuthoringError {
     GeometryResource(noon_core::GeometryResourceError),
     /// The authored layout is incompatible with its geometry.
     GeometryLayout(noon_core::SemanticGeometryLayoutError),
+    /// A path observation received invalid geometry or sampling parameters.
+    PathQuery(noon_geometry::PathProportionError),
     /// The shared arc constructor rejected its inputs.
     Arc(crate::arc_authoring::ArcAuthoringError),
     /// The shared elbow constructor rejected its inputs.
@@ -277,6 +285,7 @@ impl std::fmt::Display for AuthoringError {
             Self::VectorLowering(error) => error.fmt(f),
             Self::GeometryResource(error) => error.fmt(f),
             Self::GeometryLayout(error) => error.fmt(f),
+            Self::PathQuery(error) => error.fmt(f),
             Self::Arc(error) => error.fmt(f),
             Self::Elbow(error) => error.fmt(f),
             Self::RoundedRectangle(error) => error.fmt(f),
@@ -298,6 +307,7 @@ impl std::error::Error for AuthoringError {
             Self::VectorLowering(error) => Some(error),
             Self::GeometryResource(error) => Some(error),
             Self::GeometryLayout(error) => Some(error),
+            Self::PathQuery(error) => Some(error),
             Self::Arc(error) => Some(error),
             Self::Elbow(error) => Some(error),
             Self::RoundedRectangle(error) => Some(error),

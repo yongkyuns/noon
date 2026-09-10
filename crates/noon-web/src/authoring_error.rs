@@ -262,6 +262,9 @@ impl From<AuthoringError> for AuthoringFailure {
                 message,
                 Self::new("invalid_input", "geometry.invalid_layout", cause),
             ),
+            AuthoringError::PathQuery(cause) => {
+                Self::new("invalid_input", "path.invalid_query", cause)
+            }
             AuthoringError::Arc(cause) => Self::caused_by(
                 "authoring.arc",
                 message,

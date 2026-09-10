@@ -7,6 +7,7 @@
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
 mod family_layout;
+mod path_queries;
 pub use family_layout::LiveLayoutTarget;
 
 use crate::execution_session::EffectiveSemanticObject;

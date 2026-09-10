@@ -319,6 +319,23 @@ def _grid_inferred_and_alias_probe(api):
     return _members_observation(group)
 
 
+def _path_queries_probe(api):
+    shapes = [api.Rectangle(width=2, height=1), api.Circle(radius=.8),
+              api.Line(api.LEFT, api.RIGHT + api.UP)]
+    result = []
+    for shape in shapes:
+        shape.stretch_to_fit_width(3).rotate(.37).shift(api.LEFT * .7 + api.UP * .2)
+        result.append({
+            "start": _point_observation(shape.get_start()),
+            "end": _point_observation(shape.get_end()),
+            "points": [_point_observation(shape.point_from_proportion(alpha))
+                       for alpha in (0, .125, .31, .5, .79, 1)],
+            "length": float(shape.get_arc_length()),
+            "length_25": float(shape.get_arc_length(25)),
+        })
+    return result
+
+
 def _scale_pivots_probe(api):
     result = []
     for pivot in ({}, {"about_point": [0, 0, 0]}, {"about_edge": api.RIGHT}):
@@ -716,6 +733,7 @@ def _paint_queries_gradients(api):
 
 FIXTURES = [
     Fixture("scale_pivots", lambda: _scale_pivots_probe(noon), lambda: _scale_pivots_probe(manim)),
+    Fixture("path_queries", lambda: _path_queries_probe(noon), lambda: _path_queries_probe(manim)),
     Fixture("planar_flip_pivots", lambda: _planar_flip_probe(noon), lambda: _planar_flip_probe(manim)),
 
     Fixture("vgroup_become_cross_alias", lambda: _family_become_cross_alias(noon), lambda: _family_become_cross_alias(manim)),

@@ -1,8 +1,7 @@
-use noon_core::{GeometryRef, SemanticLoweringError, SemanticVec3, Transform2D, Vec2, TAU};
+use noon_core::{GeometryRef, SemanticLoweringError, SemanticVec3, Transform2D, Vec2, VectorPath};
+use std::borrow::Cow;
 
-use crate::{point_from_proportion, point_from_proportion_f64, PathProportionError};
-
-const MANIM_CIRCLE_COMPONENTS: usize = 9;
+use crate::{canonical_outline_path, PathProportionError, PathProportionPlan};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GeometryProportionError {
@@ -14,9 +13,9 @@ impl std::fmt::Display for GeometryProportionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Path(error) => error.fmt(formatter),
-            Self::UnsupportedGeometry => formatter.write_str(
-                "point_from_proportion requires retained circle, line, or vector-path geometry",
-            ),
+            Self::UnsupportedGeometry => {
+                formatter.write_str("point_from_proportion requires retained path-like geometry")
+            }
         }
     }
 }
@@ -29,53 +28,33 @@ impl From<PathProportionError> for GeometryProportionError {
     }
 }
 
-/// Return the local-space point at `alpha` for path-like retained geometry.
-///
-/// Vector paths reuse [`point_from_proportion`]. Lines remain exact analytic
-/// segments. Circles reproduce ManimCE v0.21's nine-component quadratic-Bezier
-/// `Arc(TAU)` representation rather than substituting an ideal trigonometric
-/// circle, so downstream tangent/path queries observe the same authored curve.
+/// Borrow retained paths or construct a bounded canonical primitive outline.
+fn geometry_path(geometry: &GeometryRef) -> Result<Cow<'_, VectorPath>, GeometryProportionError> {
+    if let GeometryRef::VectorPath(path) = geometry {
+        return Ok(Cow::Borrowed(path));
+    }
+    canonical_outline_path(geometry)
+        .map(Cow::Owned)
+        .ok_or(GeometryProportionError::UnsupportedGeometry)
+}
+
+/// Return a local-space point using the same canonical outline and sampled
+/// measure as public path observations and renderer path progress.
 pub fn point_from_geometry_proportion(
     geometry: &GeometryRef,
     alpha: f32,
 ) -> Result<Vec2, GeometryProportionError> {
     validate_proportion_f32(alpha)?;
-    match geometry {
-        GeometryRef::Circle { radius } => Ok(circle_point_from_proportion(*radius, alpha)),
-        GeometryRef::Line { start, end } => Ok(*start + (*end - *start) * alpha),
-        GeometryRef::VectorPath(path) => Ok(point_from_proportion(path, alpha)?),
-        GeometryRef::Rectangle { .. } | GeometryRef::External(_) => {
-            Err(GeometryProportionError::UnsupportedGeometry)
-        }
-    }
+    Ok(PathProportionPlan::new(geometry_path(geometry)?.as_ref())?.point(alpha)?)
 }
 
-/// High-precision authoring query for path-like retained geometry.
-///
-/// Retained coordinates remain renderer-facing f32, but the proportion,
-/// interpolation, analytic circle reconstruction, and downstream finite
-/// differences stay in f64. Vector paths reuse the same prepared sampled-length
-/// measure as [`point_from_geometry_proportion`] rather than maintaining another
-/// path-measure implementation.
+/// High-precision local-space query over the canonical retained path measure.
 pub fn point_from_geometry_proportion_f64(
     geometry: &GeometryRef,
     alpha: f64,
 ) -> Result<SemanticVec3, GeometryProportionError> {
     validate_proportion_f64(alpha)?;
-    match geometry {
-        GeometryRef::Circle { radius } => {
-            Ok(circle_point_from_proportion_f64(f64::from(*radius), alpha))
-        }
-        GeometryRef::Line { start, end } => Ok(lerp_semantic(
-            SemanticVec3::from_vec2(*start),
-            SemanticVec3::from_vec2(*end),
-            alpha,
-        )),
-        GeometryRef::VectorPath(path) => Ok(point_from_proportion_f64(path, alpha)?),
-        GeometryRef::Rectangle { .. } | GeometryRef::External(_) => {
-            Err(GeometryProportionError::UnsupportedGeometry)
-        }
-    }
+    Ok(PathProportionPlan::new(geometry_path(geometry)?.as_ref())?.point_f64(alpha)?)
 }
 
 /// A retained world-space line segment produced from ManimCE-compatible tangent sampling.
@@ -165,13 +144,20 @@ pub fn tangent_segment_from_geometry_proportion(
 
     let lower_alpha = (alpha - d_alpha).clamp(0.0, 1.0);
     let upper_alpha = (alpha + d_alpha).clamp(0.0, 1.0);
+    let plan = PathProportionPlan::with_scale(
+        geometry_path(geometry)?.as_ref(),
+        (f64::from(transform.scale.x), f64::from(transform.scale.y)),
+    )
+    .map_err(GeometryProportionError::from)?;
     let lower = transform_semantic_point(
         transform,
-        point_from_geometry_proportion_f64(geometry, lower_alpha)?,
+        plan.point_f64(lower_alpha)
+            .map_err(GeometryProportionError::from)?,
     );
     let upper = transform_semantic_point(
         transform,
-        point_from_geometry_proportion_f64(geometry, upper_alpha)?,
+        plan.point_f64(upper_alpha)
+            .map_err(GeometryProportionError::from)?,
     );
 
     let dx = upper.x - lower.x;
@@ -212,69 +198,6 @@ fn validate_proportion_f64(alpha: f64) -> Result<(), GeometryProportionError> {
     Ok(())
 }
 
-fn circle_point_from_proportion(radius: f32, alpha: f32) -> Vec2 {
-    if alpha == 1.0 {
-        return Vec2::new(radius, 0.0);
-    }
-
-    let component_count = MANIM_CIRCLE_COMPONENTS as f32;
-    let scaled = alpha * component_count;
-    let component = (scaled.floor() as usize).min(MANIM_CIRCLE_COMPONENTS - 1);
-    let t = scaled - component as f32;
-    let theta = TAU / component_count;
-    let start_angle = component as f32 * theta;
-    let end_angle = (component + 1) as f32 * theta;
-    let middle_angle = (start_angle + end_angle) * 0.5;
-    let control_radius = radius / (theta * 0.5).cos();
-
-    let start = Vec2::new(start_angle.cos() * radius, start_angle.sin() * radius);
-    let control = Vec2::new(
-        middle_angle.cos() * control_radius,
-        middle_angle.sin() * control_radius,
-    );
-    let end = Vec2::new(end_angle.cos() * radius, end_angle.sin() * radius);
-
-    let first = start + (control - start) * t;
-    let second = control + (end - control) * t;
-    first + (second - first) * t
-}
-
-fn circle_point_from_proportion_f64(radius: f64, alpha: f64) -> SemanticVec3 {
-    if alpha == 1.0 {
-        return SemanticVec3::new(radius, 0.0, 0.0);
-    }
-
-    let component_count = MANIM_CIRCLE_COMPONENTS as f64;
-    let scaled = alpha * component_count;
-    let component = (scaled.floor() as usize).min(MANIM_CIRCLE_COMPONENTS - 1);
-    let t = scaled - component as f64;
-    let theta = std::f64::consts::TAU / component_count;
-    let start_angle = component as f64 * theta;
-    let end_angle = (component + 1) as f64 * theta;
-    let middle_angle = (start_angle + end_angle) * 0.5;
-    let control_radius = radius / (theta * 0.5).cos();
-
-    let start = SemanticVec3::new(start_angle.cos() * radius, start_angle.sin() * radius, 0.0);
-    let control = SemanticVec3::new(
-        middle_angle.cos() * control_radius,
-        middle_angle.sin() * control_radius,
-        0.0,
-    );
-    let end = SemanticVec3::new(end_angle.cos() * radius, end_angle.sin() * radius, 0.0);
-
-    let first = lerp_semantic(start, control, t);
-    let second = lerp_semantic(control, end, t);
-    lerp_semantic(first, second, t)
-}
-
-fn lerp_semantic(start: SemanticVec3, end: SemanticVec3, alpha: f64) -> SemanticVec3 {
-    SemanticVec3::new(
-        start.x + (end.x - start.x) * alpha,
-        start.y + (end.y - start.y) * alpha,
-        start.z + (end.z - start.z) * alpha,
-    )
-}
-
 fn transform_semantic_point(transform: Transform2D, point: SemanticVec3) -> SemanticVec3 {
     let scaled_x = point.x * f64::from(transform.scale.x);
     let scaled_y = point.y * f64::from(transform.scale.y);
@@ -309,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn circle_matches_manim_quadratic_arc_proportion_samples() {
+    fn circle_uses_canonical_cairo_path_proportion_samples() {
         let circle = GeometryRef::circle(2.0);
         assert_point(
             point_from_geometry_proportion(&circle, 0.0).unwrap(),
@@ -317,11 +240,11 @@ mod tests {
         );
         assert_point(
             point_from_geometry_proportion(&circle, 0.25).unwrap(),
-            Vec2::new(-0.0057401983, 2.0021698),
+            Vec2::new(0.0, 2.0),
         );
         assert_point(
-            point_from_geometry_proportion(&circle, 0.4).unwrap(),
-            Vec2::new(-1.6191778, 1.1800613),
+            point_from_geometry_proportion(&circle, 0.125).unwrap(),
+            Vec2::new(2f32.sqrt(), 2f32.sqrt()),
         );
         assert_point(
             point_from_geometry_proportion(&circle, 1.0).unwrap(),
@@ -332,19 +255,10 @@ mod tests {
     #[test]
     fn precise_circle_query_preserves_default_tangent_sample_delta() {
         let circle = GeometryRef::circle(2.0);
-        let lower = point_from_geometry_proportion_f64(&circle, 0.4 - 1.0e-6).unwrap();
-        let upper = point_from_geometry_proportion_f64(&circle, 0.4 + 1.0e-6).unwrap();
-
-        assert_semantic(
-            lower,
-            SemanticVec3::new(-1.6191706294001942, 1.1800713157856422, 0.0),
-            1.0e-12,
-        );
-        assert_semantic(
-            upper,
-            SemanticVec3::new(-1.6191850851338567, 1.1800512993440777, 0.0),
-            1.0e-12,
-        );
+        let lower = point_from_geometry_proportion_f64(&circle, 0.125 - 1e-6).unwrap();
+        let upper = point_from_geometry_proportion_f64(&circle, 0.125 + 1e-6).unwrap();
+        assert!(lower.x > upper.x && lower.y < upper.y);
+        assert!(((upper.x - lower.x) / (upper.y - lower.y) + 1.).abs() < 1e-5);
     }
 
     #[test]
@@ -376,14 +290,14 @@ mod tests {
         let segment = tangent_segment_from_geometry_proportion(
             &GeometryRef::circle(2.0),
             Transform2D::IDENTITY,
-            0.4,
+            0.125,
             4.0,
             1.0e-6,
         )
         .unwrap();
 
-        assert_point(segment.start, Vec2::new(-0.4482279, 2.8014424));
-        assert_point(segment.end, Vec2::new(-2.7901278, -0.44131964));
+        assert_point(segment.start, Vec2::new(2.0 * 2f32.sqrt(), 0.0));
+        assert_point(segment.end, Vec2::new(0.0, 2.0 * 2f32.sqrt()));
         assert!((segment.length() - 4.0).abs() <= 1.0e-5);
     }
 
@@ -395,15 +309,25 @@ mod tests {
             scale: Vec2::new(2.0, 0.5),
         };
         let transformed = tangent_segment_from_geometry_proportion(
-            &GeometryRef::circle(2.0),
+            &GeometryRef::path(
+                VectorPath::new()
+                    .move_to(Vec2::ZERO)
+                    .line_to(Vec2::new(1.0, 0.0))
+                    .line_to(Vec2::new(1.0, 1.0)),
+            ),
             transform,
-            0.4,
+            0.9,
             3.0,
             1.0e-4,
         )
         .unwrap();
-        assert_point(transformed.start, Vec2::new(-1.058928, -0.50566184));
-        assert_point(transformed.end, Vec2::new(-3.4772415, -2.2809815));
+        // World lengths are 2 and 0.5: alpha=.9 is halfway up the vertical
+        // segment. Using the local metric would put it at y=.8 instead.
+        let (sin, cos) = transform.rotation.sin_cos();
+        let center = Vec2::new(1.0 + 2.0 * cos - 0.25 * sin, -1.0 + 2.0 * sin + 0.25 * cos);
+        let half_tangent = Vec2::new(-sin, cos) * 1.5;
+        assert_point(transformed.start, center - half_tangent);
+        assert_point(transformed.end, center + half_tangent);
         assert!((transformed.length() - 3.0).abs() <= 1.0e-5);
 
         let endpoint = tangent_segment_from_geometry_proportion(
@@ -486,7 +410,10 @@ mod tests {
             ))
         ));
         assert_eq!(
-            point_from_geometry_proportion(&GeometryRef::rectangle(1.0, 1.0), 0.5),
+            point_from_geometry_proportion(
+                &GeometryRef::External(noon_core::GeometryId::new(0)),
+                0.5
+            ),
             Err(GeometryProportionError::UnsupportedGeometry)
         );
     }

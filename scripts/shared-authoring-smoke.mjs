@@ -780,6 +780,7 @@ try {
     { filename: "ordinary_style_operations.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_paint.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_planar_affine.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_path_queries.py", objectCount: 10, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_scale_pivots.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_grid.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_create_shapes.py", objectCount: 4, expectedDuration: 3.2, endpointTime: null },
