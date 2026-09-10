@@ -235,14 +235,6 @@ class Group(Mobject):
     def get_center(self) -> _base.Vec2:
         return _base._semantic_operations()._get_center(self)
 
-    @property
-    def width(self) -> float:
-        return _base._semantic_operations()._width(self)
-
-    @property
-    def height(self) -> float:
-        return _base._semantic_operations()._height(self)
-
     def shift(self, direction: object) -> Group:
         return _base._semantic_operations()._group_shift(self, direction)
 
@@ -257,11 +249,11 @@ class Group(Mobject):
     def center(self) -> Group:
         return self.move_to(_base.ORIGIN)
 
-    def set_x(self, x: float) -> Group:
-        return self.move_to(_base.Vec2(float(x), 0.0), coor_mask=(1.0, 0.0, 0.0))
+    def set_x(self, x: float, direction: object = _base.ORIGIN) -> Group:
+        return self.set_coord(x, 0, direction)
 
-    def set_y(self, y: float) -> Group:
-        return self.move_to(_base.Vec2(0.0, float(y)), coor_mask=(0.0, 1.0, 0.0))
+    def set_y(self, y: float, direction: object = _base.ORIGIN) -> Group:
+        return self.set_coord(y, 1, direction)
 
     def scale(self, factor: float | tuple[float, float]) -> Group:
         from _manim_semantic_handles import _group_scale
