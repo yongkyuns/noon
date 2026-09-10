@@ -1,4 +1,8 @@
-use lyon_path::{math::point, Path};
+use lyon_path::{
+    builder::{Build, PathBuilder},
+    math::point,
+    Event, Path,
+};
 use lyon_tessellation::{
     BuffersBuilder, FillOptions, FillTessellator, FillVertex, LineCap, LineJoin, StrokeOptions,
     StrokeTessellator, StrokeVertex, VertexBuffers,
@@ -234,34 +238,13 @@ fn tessellate_styled_with_fill_impl(
     }
 
     if stroke_width > 0.0 {
-        StrokeTessellator::new()
-            .tessellate_path(
-                &stroke_path,
-                &StrokeOptions::default()
-                    .with_tolerance(PATH_TESSELLATION_TOLERANCE)
-                    .with_line_width(stroke_width)
-                    .with_miter_limit(MORPH_MITER_LIMIT)
-                    .with_line_cap(lyon_line_cap(stroke_cap))
-                    .with_line_join(lyon_line_join(stroke_join)),
-                &mut BuffersBuilder::new(&mut buffers, |mut vertex: StrokeVertex<'_, '_>| {
-                    let path_progress = vertex
-                        .interpolated_attributes()
-                        .first()
-                        .copied()
-                        .unwrap_or(0.0)
-                        .clamp(0.0, 1.0);
-                    TessellationVertex {
-                        position: vec2(vertex.position().x, vertex.position().y),
-                        surface: PathSurface::Stroke,
-                        // Keep advancement as an independent physical-length metric,
-                        // but drive Create from Manim's curve-index + local-t
-                        // parameter carried as an interpolated endpoint attribute.
-                        path_distance: vertex.advancement(),
-                        path_progress,
-                    }
-                }),
-            )
-            .map_err(|error| GeometryError::Tessellation(error.to_string()))?;
+        let options = StrokeOptions::default()
+            .with_tolerance(PATH_TESSELLATION_TOLERANCE)
+            .with_line_width(stroke_width)
+            .with_miter_limit(MORPH_MITER_LIMIT)
+            .with_line_cap(lyon_line_cap(stroke_cap))
+            .with_line_join(lyon_line_join(stroke_join));
+        tessellate_stroke(&stroke_path, &options, &mut buffers)?;
     }
 
     let stroke_length = buffers
@@ -304,6 +287,97 @@ fn tessellate_styled_with_fill_impl(
         morphing: false,
         reveal_points,
     })
+}
+
+// Lyon's miter calculation treats an exact reversal's zero normal as an
+// unclipped miter, collapsing both sides of the stroke at the cusp. A bevel at
+// that singular join is the finite miter-limit result. Keep every ordinary join
+// and endpoint progress attribute unchanged, including the closure seam.
+fn tessellate_stroke(
+    path: &Path,
+    options: &StrokeOptions,
+    buffers: &mut VertexBuffers<TessellationVertex, u32>,
+) -> Result<(), GeometryError> {
+    let mut output = BuffersBuilder::new(buffers, |mut vertex: StrokeVertex<'_, '_>| {
+        let path_progress = vertex
+            .interpolated_attributes()
+            .first()
+            .copied()
+            .unwrap_or(0.)
+            .clamp(0., 1.);
+        TessellationVertex {
+            position: vec2(vertex.position().x, vertex.position().y),
+            surface: PathSurface::Stroke,
+            path_distance: vertex.advancement(),
+            path_progress,
+        }
+    });
+    let mut tessellator = StrokeTessellator::new();
+    if options.line_join != LineJoin::Miter && options.line_join != LineJoin::MiterClip {
+        return tessellator
+            .tessellate_path(path, options, &mut output)
+            .map_err(|error| GeometryError::Tessellation(error.to_string()));
+    }
+    let events: Vec<_> = path.iter_with_attributes().collect();
+    let mut builder = tessellator.builder_with_attributes(1, options, &mut output);
+    for contour in events.split_inclusive(|event| matches!(event, Event::End { .. })) {
+        let closed = matches!(contour.last(), Some(Event::End { close: true, .. }));
+        let first_line = contour.get(1);
+        let last_line = contour
+            .len()
+            .checked_sub(2)
+            .and_then(|index| contour.get(index));
+        let direction =
+            |event: Option<&Event<(lyon_path::math::Point, &[f32]), lyon_path::math::Point>>| {
+                if let Some(Event::Line { from, to }) = event {
+                    Some(to.0 - from.0)
+                } else {
+                    None
+                }
+            };
+        for (index, event) in contour.iter().enumerate() {
+            let incoming = if matches!(event, Event::Begin { .. }) && closed {
+                direction(last_line)
+            } else {
+                direction(Some(event))
+            };
+            let outgoing = match contour.get(index + 1) {
+                Some(Event::End { close: true, .. }) => direction(first_line),
+                next => direction(next),
+            };
+            let reversal = incoming.zip(outgoing).is_some_and(|(before, after)| {
+                let lengths = before.length() * after.length();
+                lengths > 0.
+                    && before.dot(after) < 0.
+                    && before.cross(after).abs() <= f32::EPSILON * lengths
+            });
+            builder.set_line_join(if reversal {
+                LineJoin::Bevel
+            } else {
+                options.line_join
+            });
+            match *event {
+                Event::Begin { at } => {
+                    builder.begin(at.0, at.1);
+                }
+                Event::Line { to, .. } => {
+                    builder.line_to(to.0, to.1);
+                }
+                Event::Quadratic { ctrl, to, .. } => {
+                    builder.quadratic_bezier_to(ctrl, to.0, to.1);
+                }
+                Event::Cubic {
+                    ctrl1, ctrl2, to, ..
+                } => {
+                    builder.cubic_bezier_to(ctrl1, ctrl2, to.0, to.1);
+                }
+                Event::End { close, .. } => builder.end(close),
+            }
+        }
+    }
+    builder
+        .build()
+        .map_err(|error| GeometryError::Tessellation(error.to_string()))
 }
 
 fn build_reveal_points(path: &VectorPath) -> Result<Vec<RevealPoint>, GeometryError> {
@@ -1385,6 +1459,54 @@ mod tests {
                 Vec2::new(-1.0, 0.0),
             )
             .close()
+    }
+
+    #[test]
+    fn miter_retraces_keep_full_stroke_width_in_open_and_closed_contours() {
+        fn covered(mesh: &TessellatedPath, point: Vec2) -> bool {
+            mesh.indices.as_chunks::<3>().0.iter().any(|triangle| {
+                let vertices =
+                    [triangle[0], triangle[1], triangle[2]].map(|i| mesh.vertices[i as usize]);
+                if vertices.iter().any(|v| v.surface != PathSurface::Stroke) {
+                    return false;
+                }
+                let [a, b, c] = vertices.map(|v| v.position);
+                let cross = |a: Vec2, b: Vec2| a.x * b.y - a.y * b.x;
+                if cross(b - a, c - a).abs() < 1e-10 {
+                    return false;
+                }
+                let sides = [
+                    cross(b - a, point - a),
+                    cross(c - b, point - b),
+                    cross(a - c, point - c),
+                ];
+                sides.iter().all(|s| *s >= -1e-7) || sides.iter().all(|s| *s <= 1e-7)
+            })
+        }
+        for close in [false, true] {
+            let mut path = VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(2., -1.))
+                .line_to(Vec2::ZERO);
+            if close {
+                path = path.close();
+            }
+            let mesh =
+                tessellate_styled_with_fill(&path, 0.1, StrokeJoin::Miter, StrokeCap::Butt, false)
+                    .unwrap();
+            let normal = Vec2::new(1., 2.) * (0.04 / 5_f32.sqrt());
+            for t in [0.1, 0.5, 0.9] {
+                let center = Vec2::new(2., -1.) * t;
+                assert!(
+                    covered(&mesh, center + normal),
+                    "positive side missing at {t}, closed={close}"
+                );
+                assert!(
+                    covered(&mesh, center - normal),
+                    "negative side missing at {t}, closed={close}"
+                );
+            }
+        }
     }
 
     #[test]
