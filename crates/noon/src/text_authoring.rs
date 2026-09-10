@@ -34,7 +34,7 @@ use noon_typst::{
     compile_typst_resource, compile_typst_resource_with_fonts, TypstMode, TypstResourceArtifact,
 };
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
-use swash::{FontRef, StringId};
+use swash::{FontRef, Stretch, StringId, Style as FontStyle, Weight};
 
 /// Typst's retained artifact is authored at 10pt, so its public Manim-style font size
 /// remains an object transform and does not alter glyph/cluster identity.
@@ -422,17 +422,38 @@ impl Text {
 #[cfg(feature = "native-text")]
 fn bundled_native_font(family: &str) -> Result<NativeFontFace, TextAuthoringError> {
     #[cfg(feature = "bundled-fonts")]
-    for data in typst_assets::fonts() {
-        let Some(font) = FontRef::from_index(data, 0) else {
-            continue;
-        };
-        let matches = font.localized_strings().any(|name| {
-            matches!(
-                name.id(),
-                StringId::Family | StringId::TypographicFamily | StringId::WwsFamily
-            ) && name.to_string().eq_ignore_ascii_case(family)
-        });
-        if matches {
+    {
+        let mut fallback = None;
+        for data in typst_assets::fonts() {
+            let Some(font) = FontRef::from_index(data, 0) else {
+                continue;
+            };
+            let matches = font.localized_strings().any(|name| {
+                matches!(
+                    name.id(),
+                    StringId::Family | StringId::TypographicFamily | StringId::WwsFamily
+                ) && name.to_string().eq_ignore_ascii_case(family)
+            });
+            if !matches {
+                continue;
+            }
+            if fallback.is_none() {
+                fallback = Some(data);
+            }
+
+            // Asset order is not a font-selection policy: typst-assets currently
+            // lists bold DejaVu Sans Mono before regular. Unstyled Manim Text asks
+            // Pango for normal stretch, weight, and style, so prefer that face here.
+            let attributes = font.attributes();
+            if attributes.stretch() == Stretch::NORMAL
+                && attributes.weight() == Weight::NORMAL
+                && attributes.style() == FontStyle::Normal
+            {
+                return NativeFontFace::new(Arc::<str>::from(family), Arc::<[u8]>::from(data), 0)
+                    .map_err(TextAuthoringError::NativeText);
+            }
+        }
+        if let Some(data) = fallback {
             return NativeFontFace::new(Arc::<str>::from(family), Arc::<[u8]>::from(data), 0)
                 .map_err(TextAuthoringError::NativeText);
         }
@@ -705,6 +726,17 @@ mod tests {
         assert_eq!(resource.source.as_ref(), "Native Noon");
         assert!(!scene.fonts().is_empty());
         assert!(scene.objects()[0].content.geometry().is_none());
+    }
+
+    #[test]
+    fn bundled_native_text_prefers_regular_face_over_asset_order() {
+        let font = bundled_native_font(DEFAULT_NATIVE_TEXT_FONT_FAMILY).unwrap();
+        let font = FontRef::from_index(font.data.as_ref(), font.face_index as usize).unwrap();
+        let attributes = font.attributes();
+
+        assert_eq!(attributes.stretch(), Stretch::NORMAL);
+        assert_eq!(attributes.weight(), Weight::NORMAL);
+        assert_eq!(attributes.style(), FontStyle::Normal);
     }
 
     #[test]
