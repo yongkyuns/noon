@@ -8,7 +8,11 @@ import * as z from "zod/v4";
 export const RENDERING_CONTRACT_VERSION = 1;
 export const MAX_RENDER_SOURCE_BYTES = 1_000_000;
 export const MAX_RENDER_TIME_SECONDS = 600;
-export const MAX_RENDER_SAMPLES_PER_CALL = 64;
+// AgentPreviewService retains 32 frames per session by default and open_scene
+// publishes the initial frame. A single sample_frames request therefore admits
+// at most 31 additional frames; the service separately preflights remaining
+// capacity across repeated calls before any forward-only advancement.
+export const MAX_RENDER_SAMPLES_PER_CALL = 31;
 
 const sessionHandle = z.string()
   .min(16)
