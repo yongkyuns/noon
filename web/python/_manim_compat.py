@@ -54,6 +54,8 @@ class VMobject(Mobject):
     def __init__(self, *, color=None, **kwargs):
         from _manim_semantic_handles import _geometry_options, _apply_shared_constructor_options, _apply_constructor_color, _attach_geometry_options
         from _noon_errors import engine_call
+        if _geometry_options is None:
+            raise RuntimeError("Mobject construction requires the shared Rust authoring host")
         options = engine_call(_geometry_options.emptyPath)
         _apply_shared_constructor_options(options, kwargs)
         _apply_constructor_color(options, color)
@@ -62,6 +64,26 @@ class VMobject(Mobject):
     def set_points_as_corners(self, points):
         from _manim_path_editing import set_points_as_corners
         return set_points_as_corners(self, points)
+
+    def start_new_path(self, point):
+        from _manim_path_editing import edit_points
+        return edit_points(self, "startNewPath", "liveStartNewPath", (point,))
+
+    def add_line_to(self, point):
+        from _manim_path_editing import edit_points
+        return edit_points(self, "addLineTo", "liveAddLineTo", (point,))
+
+    def add_quadratic_bezier_curve_to(self, control, anchor):
+        from _manim_path_editing import edit_points
+        return edit_points(self, "addQuadraticBezierCurveTo", "liveAddQuadraticBezierCurveTo", (control, anchor))
+
+    def add_cubic_bezier_curve_to(self, control1, control2, anchor):
+        from _manim_path_editing import edit_points
+        return edit_points(self, "addCubicBezierCurveTo", "liveAddCubicBezierCurveTo", (control1, control2, anchor))
+
+    def close_path(self):
+        from _manim_path_editing import edit_points
+        return edit_points(self, "closePath", "liveClosePath", ())
 
     def set_color_by_gradient(self, *colors):
         from _manim_semantic_handles import _set_color_by_gradient
@@ -133,10 +155,12 @@ class VMobject(Mobject):
         return point_from_proportion(self, alpha)
 
     def get_start(self) -> _base.Vec2:
-        return self.point_from_proportion(0.0)
+        from _manim_path_queries import endpoint
+        return endpoint(self, False)
 
     def get_end(self) -> _base.Vec2:
-        return self.point_from_proportion(1.0)
+        from _manim_path_queries import endpoint
+        return endpoint(self, True)
 
     def get_arc_length(self, sample_points_per_curve: int | None = None) -> float:
         from _manim_path_queries import arc_length

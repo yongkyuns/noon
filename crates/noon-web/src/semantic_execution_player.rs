@@ -446,6 +446,55 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_start_new_path(
+        &mut self,
+        source: &noon::Mobject,
+        point: noon_core::Vec2,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.start_new_path(source, point))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_line_to(
+        &mut self,
+        source: &noon::Mobject,
+        point: noon_core::Vec2,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.add_line_to(source, point))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_quadratic_bezier_curve_to(
+        &mut self,
+        source: &noon::Mobject,
+        control: noon_core::Vec2,
+        anchor: noon_core::Vec2,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.add_quadratic_bezier_curve_to(source, control, anchor))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_add_cubic_bezier_curve_to(
+        &mut self,
+        source: &noon::Mobject,
+        control1: noon_core::Vec2,
+        control2: noon_core::Vec2,
+        anchor: noon_core::Vec2,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            live.add_cubic_bezier_curve_to(source, control1, control2, anchor)
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_close_path(
+        &mut self,
+        source: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.close_path(source))
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_match_points(
         &mut self,
         source: &noon::Mobject,

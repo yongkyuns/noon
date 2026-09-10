@@ -1124,6 +1124,15 @@ mod wasm {
                 .map(|(x, y)| vec![x, y])
                 .map_err(js_error)
         }
+        pub fn start(&self) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .start()
+                .map(|(x, y)| vec![x, y])
+                .map_err(js_error)
+        }
+        pub fn end(&self) -> Result<Vec<f64>, JsValue> {
+            self.value.end().map(|(x, y)| vec![x, y]).map_err(js_error)
+        }
         #[wasm_bindgen(js_name = arcLength)]
         pub fn arc_length(&self, samples: Option<u32>) -> Result<f64, JsValue> {
             self.value
@@ -1363,6 +1372,56 @@ mod wasm {
         pub fn set_points_as_corners(&mut self, values: Vec<f64>) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points(&values)?;
             self.handle.set_points_as_corners(&points).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = startNewPath)]
+        pub fn start_new_path(&mut self, point_x: f64, point_y: f64) -> Result<(), JsValue> {
+            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            self.handle.start_new_path(point).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = addLineTo)]
+        pub fn add_line_to(&mut self, point_x: f64, point_y: f64) -> Result<(), JsValue> {
+            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            self.handle.add_line_to(point).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = addQuadraticBezierCurveTo)]
+        pub fn add_quadratic_bezier_curve_to(
+            &mut self,
+            control_x: f64,
+            control_y: f64,
+            anchor_x: f64,
+            anchor_y: f64,
+        ) -> Result<(), JsValue> {
+            let control = crate::authoring_geometry::point(control_x, control_y)?;
+            let anchor = crate::authoring_geometry::point(anchor_x, anchor_y)?;
+            self.handle
+                .add_quadratic_bezier_curve_to(control, anchor)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = addCubicBezierCurveTo)]
+        pub fn add_cubic_bezier_curve_to(
+            &mut self,
+            control1_x: f64,
+            control1_y: f64,
+            control2_x: f64,
+            control2_y: f64,
+            anchor_x: f64,
+            anchor_y: f64,
+        ) -> Result<(), JsValue> {
+            let control1 = crate::authoring_geometry::point(control1_x, control1_y)?;
+            let control2 = crate::authoring_geometry::point(control2_x, control2_y)?;
+            let anchor = crate::authoring_geometry::point(anchor_x, anchor_y)?;
+            self.handle
+                .add_cubic_bezier_curve_to(control1, control2, anchor)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = closePath)]
+        pub fn close_path(&mut self) -> Result<(), JsValue> {
+            self.handle.close_path().map_err(js_error)
         }
 
         /// Share another vector object’s geometry and transform while preserving

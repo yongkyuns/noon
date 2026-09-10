@@ -31,3 +31,21 @@ class PathEditingTests(unittest.TestCase):
             with self.assertRaisesRegex(NotImplementedError, 'transient resource'):
                 value.set_points_as_corners([(1, 2), (3, 4)])
             resolve.assert_not_called()
+
+
+    def test_scalar_point_commands_dispatch_to_shared_operations(self):
+        value = identity_only_wrapper(compat.VMobject)
+        handle = Mock()
+        with patch.object(editing, '_handle_for', return_value=handle), \
+             patch.object(editing, '_live_mutation_context', return_value=None), \
+             patch.object(editing, '_live_constructor_context', return_value=None):
+            self.assertIs(value.start_new_path((1, 2, 0)), value)
+            value.add_line_to((3, 4))
+            value.add_quadratic_bezier_curve_to((5, 6), (7, 8))
+            value.add_cubic_bezier_curve_to((1, 2), (3, 4), (5, 6))
+            value.close_path()
+        handle.startNewPath.assert_called_once_with(1., 2.)
+        handle.addLineTo.assert_called_once_with(3., 4.)
+        handle.addQuadraticBezierCurveTo.assert_called_once_with(5., 6., 7., 8.)
+        handle.addCubicBezierCurveTo.assert_called_once_with(1., 2., 3., 4., 5., 6.)
+        handle.closePath.assert_called_once_with()

@@ -5741,6 +5741,92 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveStartNewPath)]
+        pub fn live_start_new_path(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            point_x: f64,
+            point_y: f64,
+        ) -> Result<(), JsValue> {
+            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_start_new_path(source.semantic_mobject(), point)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAddLineTo)]
+        pub fn live_add_line_to(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            point_x: f64,
+            point_y: f64,
+        ) -> Result<(), JsValue> {
+            let point = crate::authoring_geometry::point(point_x, point_y)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_add_line_to(source.semantic_mobject(), point)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAddQuadraticBezierCurveTo)]
+        pub fn live_add_quadratic_bezier_curve_to(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            control_x: f64,
+            control_y: f64,
+            anchor_x: f64,
+            anchor_y: f64,
+        ) -> Result<(), JsValue> {
+            let control = crate::authoring_geometry::point(control_x, control_y)?;
+            let anchor = crate::authoring_geometry::point(anchor_x, anchor_y)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_add_quadratic_bezier_curve_to(source.semantic_mobject(), control, anchor)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAddCubicBezierCurveTo)]
+        pub fn live_add_cubic_bezier_curve_to(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            control1_x: f64,
+            control1_y: f64,
+            control2_x: f64,
+            control2_y: f64,
+            anchor_x: f64,
+            anchor_y: f64,
+        ) -> Result<(), JsValue> {
+            let control1 = crate::authoring_geometry::point(control1_x, control1_y)?;
+            let control2 = crate::authoring_geometry::point(control2_x, control2_y)?;
+            let anchor = crate::authoring_geometry::point(anchor_x, anchor_y)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_add_cubic_bezier_curve_to(
+                    source.semantic_mobject(),
+                    control1,
+                    control2,
+                    anchor,
+                )
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveClosePath)]
+        pub fn live_close_path(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_close_path(source.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveMatchPoints)]
         pub fn live_match_points(
             &mut self,

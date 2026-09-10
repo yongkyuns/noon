@@ -64,14 +64,128 @@ pub(crate) fn path_transaction(
     transaction
 }
 
+/// Inputs to shared authoring preparation, published using the normal content
+/// replacement transaction. This is not retained scene or runtime state.
+pub(crate) enum PathEdit<'a> {
+    Corners(&'a [Vec2]),
+    Start(Vec2),
+    Line(Vec2),
+    Quadratic(Vec2, Vec2),
+    Cubic(Vec2, Vec2, Vec2),
+    Close,
+}
+
+impl PathEdit<'_> {
+    pub(crate) fn prepare(
+        self,
+        store: &SemanticStore,
+        state: &SemanticObjectState,
+    ) -> Result<VectorPath, AuthoringError> {
+        if let Self::Corners(points) = self {
+            return corners_path(points);
+        }
+        let checked = |name, value| {
+            crate::semantic_mobject::authoring_render_f64(name, value).map(|value| value as f32)
+        };
+        let transform = state.transform;
+        let transform = noon_core::Transform2D {
+            translation: Vec2::new(
+                checked("path translation x", transform.translation.x)?,
+                checked("path translation y", transform.translation.y)?,
+            ),
+            scale: Vec2::new(
+                checked("path scale x", transform.scale.x)?,
+                checked("path scale y", transform.scale.y)?,
+            ),
+            rotation: checked("path rotation", transform.rotation_z)?,
+        };
+        let mut path =
+            crate::path_queries::content_path(store, state.content)?.transformed(transform);
+        if let Self::Start(point) = self {
+            if let Some(noon_core::PathCommand::MoveTo { to }) = path.commands().last().copied() {
+                // Complete an unfinished anchor as one degenerate curve before
+                // beginning another subpath, matching Manim's point semantics.
+                path = path.line_to(to);
+            }
+            path = path.move_to(point);
+        } else {
+            let (first, last) = path.endpoints().ok_or(AuthoringError::PathQuery(
+                noon_geometry::PathProportionError::EmptyPath,
+            ))?;
+            path = match self {
+                Self::Line(to) => path.open_last_subpath().line_to(to),
+                Self::Quadratic(control, to) => path.open_last_subpath().quadratic_to(control, to),
+                Self::Cubic(c1, c2, to) => path.open_last_subpath().cubic_to(c1, c2, to),
+                Self::Close => {
+                    if (last - first).length() < 1e-6 {
+                        path
+                    } else {
+                        // Only complete curves define Manim's subpaths; a
+                        // dangling MoveTo does not hide the previous subpath.
+                        let mut current_start = None;
+                        let mut completed_start = None;
+                        for command in path.commands() {
+                            match *command {
+                                noon_core::PathCommand::MoveTo { to } => current_start = Some(to),
+                                _ => completed_start = current_start,
+                            }
+                        }
+                        let start = completed_start.unwrap_or(last);
+                        let close_contour = current_start == Some(start);
+                        path = path.open_last_subpath().line_to(start);
+                        if close_contour {
+                            path.close()
+                        } else {
+                            path
+                        }
+                    }
+                }
+                Self::Corners(_) | Self::Start(_) => unreachable!(),
+            };
+        }
+        if !path.is_finite() {
+            return Err(AuthoringError::NonFiniteGeometry);
+        }
+        Ok(path)
+    }
+}
+
 impl Mobject {
     /// Set a polyline from world-space corners, preserving identity and paint.
     /// Copies retain their previous immutable path; no temporary object is used.
     pub fn set_points_as_corners(&mut self, points: &[Vec2]) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::Corners(points))
+    }
+    /// Begin a new world-space subpath without connecting it to the previous one.
+    pub fn start_new_path(&mut self, point: Vec2) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::Start(point))
+    }
+    pub fn add_line_to(&mut self, point: Vec2) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::Line(point))
+    }
+    pub fn add_quadratic_bezier_curve_to(
+        &mut self,
+        control: Vec2,
+        anchor: Vec2,
+    ) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::Quadratic(control, anchor))
+    }
+    pub fn add_cubic_bezier_curve_to(
+        &mut self,
+        control1: Vec2,
+        control2: Vec2,
+        anchor: Vec2,
+    ) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::Cubic(control1, control2, anchor))
+    }
+    pub fn close_path(&mut self) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::Close)
+    }
+    fn edit_path(&mut self, edit: PathEdit<'_>) -> Result<(), AuthoringError> {
         let before = self.state()?;
         let after = path_replacement_state(before.clone())?;
-        let path = corners_path(points)?;
         let mut store = self.integration_store().borrow_mut();
+        let path = edit.prepare(&store, &before)?;
         if path_is_unchanged(&store, &before, &after, &path) {
             return Ok(());
         }

@@ -32,3 +32,12 @@ def arc_length(value, sample_points_per_curve):
         return float(engine_call(query.arcLength, samples))
     finally:
         query.free()
+
+
+def endpoint(value, end):
+    query = _query(value)
+    try:
+        coordinates = engine_call(query.end if end else query.start)
+        return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
+    finally:
+        query.free()

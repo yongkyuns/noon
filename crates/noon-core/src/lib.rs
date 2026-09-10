@@ -570,6 +570,50 @@ impl VectorPath {
         self
     }
 
+    /// First and last anchors, including an unfinished subpath's starting point.
+    pub fn endpoints(&self) -> Option<(Vec2, Vec2)> {
+        let mut first = None;
+        let mut last = None;
+        let mut subpath_start = None;
+        for command in self.commands() {
+            match *command {
+                PathCommand::MoveTo { to } => {
+                    first.get_or_insert(to);
+                    subpath_start = Some(to);
+                    last = Some(to);
+                }
+                PathCommand::LineTo { to }
+                | PathCommand::QuadraticTo { to, .. }
+                | PathCommand::CubicTo { to, .. } => last = Some(to),
+                PathCommand::Close => last = subpath_start,
+            }
+        }
+        first.zip(last)
+    }
+
+    /// Reopen the final closed contour for extension, retaining its closing edge.
+    /// Earlier subpaths and their closure flags are unchanged.
+    pub fn open_last_subpath(mut self) -> Self {
+        if !matches!(self.commands.last(), Some(PathCommand::Close)) {
+            return self;
+        }
+        let start = self
+            .commands
+            .iter()
+            .rev()
+            .find_map(|command| match command {
+                PathCommand::MoveTo { to } => Some(*to),
+                _ => None,
+            });
+        self.commands.pop();
+        if let (Some(start), Some((_, last))) = (start, self.endpoints()) {
+            if last != start {
+                self.commands.push(PathCommand::LineTo { to: start });
+            }
+        }
+        self
+    }
+
     pub fn commands(&self) -> &[PathCommand] {
         &self.commands
     }

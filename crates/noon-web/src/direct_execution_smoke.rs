@@ -850,3 +850,11 @@ pub async fn create_direct_path_editing_smoke_renderer(
     let session = noon::example_scenes::path_editing::session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
+
+#[wasm_bindgen(js_name = createDirectPathConstructionSmokeRenderer)]
+pub async fn create_direct_path_construction_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::path_construction::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}

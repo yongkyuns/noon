@@ -13,6 +13,7 @@ use noon_geometry::{canonical_outline_path, PathProportionError, PathProportionP
 pub struct PathQuery {
     plan: Option<PathProportionPlan>,
     transform: SemanticTransform2_5D,
+    endpoints: Option<(noon_core::Vec2, noon_core::Vec2)>,
 }
 
 impl PathQuery {
@@ -26,31 +27,55 @@ impl PathQuery {
                 Err(PathProportionError::EmptyPath) => None,
                 Err(error) => return Err(AuthoringError::PathQuery(error)),
             };
-        Ok(Self { plan, transform })
+        Ok(Self {
+            plan,
+            transform,
+            endpoints: path.endpoints(),
+        })
     }
 
     /// Point in the coordinate space captured when this query was prepared.
     pub fn point_from_proportion(&self, alpha: f64) -> Result<(f64, f64), AuthoringError> {
+        if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
+            return Err(AuthoringError::PathQuery(
+                PathProportionError::InvalidProportion(alpha as f32),
+            ));
+        }
+        if alpha == 1.0 {
+            return self.end();
+        }
         let point = self
             .plan
             .as_ref()
             .ok_or(AuthoringError::PathQuery(PathProportionError::EmptyPath))?
             .point_f64(alpha)
             .map_err(AuthoringError::PathQuery)?;
-        let x = point.x * self.transform.scale.x;
-        let y = point.y * self.transform.scale.y;
+        Ok(self.transform_point(point.x, point.y))
+    }
+
+    fn transform_point(&self, x: f64, y: f64) -> (f64, f64) {
+        let x = x * self.transform.scale.x;
+        let y = y * self.transform.scale.y;
         let (sin, cos) = self.transform.rotation_z.sin_cos();
-        Ok((
+        (
             x * cos - y * sin + self.transform.translation.x,
             x * sin + y * cos + self.transform.translation.y,
-        ))
+        )
     }
 
     pub fn start(&self) -> Result<(f64, f64), AuthoringError> {
-        self.point_from_proportion(0.0)
+        self.endpoint(false)
     }
     pub fn end(&self) -> Result<(f64, f64), AuthoringError> {
-        self.point_from_proportion(1.0)
+        self.endpoint(true)
+    }
+
+    fn endpoint(&self, end: bool) -> Result<(f64, f64), AuthoringError> {
+        let (first, last) = self
+            .endpoints
+            .ok_or(AuthoringError::PathQuery(PathProportionError::EmptyPath))?;
+        let point = if end { last } else { first };
+        Ok(self.transform_point(f64::from(point.x), f64::from(point.y)))
     }
 
     /// Ten samples per curve by default, matching Manim's path query measure.

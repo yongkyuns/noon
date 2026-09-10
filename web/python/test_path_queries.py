@@ -11,14 +11,16 @@ class PathQueryTests(unittest.TestCase):
         query = Mock()
         query.pointFromProportion.return_value = [2.5, -1.0]
         query.arcLength.return_value = 7.25
+        query.start.return_value = [1., 2.]
+        query.end.return_value = [3., 4.]
         with patch.object(queries, '_typed_manim_observation', return_value=query) as observe:
             self.assertEqual(value.point_from_proportion(0.25), (2.5, -1.0))
             observe.assert_called_with(value, 'pathQuery', 'queryMobjectPath')
             query.pointFromProportion.assert_called_with(0.25)
-            value.get_start()
-            query.pointFromProportion.assert_called_with(0.0)
-            value.get_end()
-            query.pointFromProportion.assert_called_with(1.0)
+            self.assertEqual(value.get_start(), (1., 2.))
+            query.start.assert_called_once_with()
+            self.assertEqual(value.get_end(), (3., 4.))
+            query.end.assert_called_once_with()
             self.assertEqual(value.get_arc_length(20), 7.25)
             query.arcLength.assert_called_with(20)
             self.assertEqual(query.free.call_count, 4)
