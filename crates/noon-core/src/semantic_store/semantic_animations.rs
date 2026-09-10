@@ -279,6 +279,13 @@ pub enum SemanticAnimationIntent {
         /// Ordinary Transform leaves source priority unchanged.
         complete_priority: bool,
     },
+    /// Transform one semantic family toward another through compiler-derived visual
+    /// correspondence. The two family identities remain authored scene state;
+    /// unequal padding occurrences never receive semantic identities.
+    FamilyTransformTo {
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+    },
     /// Temporarily scale and recolor one object around a shared activation center.
     /// The compiler captures the effective source and lowers a restoring track.
     Indicate {
@@ -358,6 +365,7 @@ pub enum SemanticAnimationIntent {
 impl SemanticAnimationIntent {
     pub const fn target(&self) -> Option<SemanticNodeId> {
         match self {
+            Self::FamilyTransformTo { source, .. } => Some(*source),
             Self::ObjectPropertyTrack { target, .. }
             | Self::TransformTo { target, .. }
             | Self::Indicate { target, .. }
@@ -377,7 +385,8 @@ impl SemanticAnimationIntent {
 
     pub const fn target_state(&self) -> Option<SemanticNodeId> {
         match self {
-            Self::TransformTo { target_state, .. } => Some(*target_state),
+            Self::TransformTo { target_state, .. }
+            | Self::FamilyTransformTo { target_state, .. } => Some(*target_state),
             Self::ObjectPropertyTrack { .. }
             | Self::Rotate { .. }
             | Self::Indicate { .. }
@@ -395,10 +404,22 @@ impl SemanticAnimationIntent {
         }
     }
 
+    /// Return the two authored family endpoints when this is a family Transform.
+    pub const fn family_transform(&self) -> Option<(SemanticNodeId, SemanticNodeId)> {
+        match self {
+            Self::FamilyTransformTo {
+                source,
+                target_state,
+            } => Some((*source, *target_state)),
+            _ => None,
+        }
+    }
+
     pub const fn composition_kind(&self) -> Option<SemanticAnimationCompositionKind> {
         match self {
             Self::ObjectPropertyTrack { .. }
             | Self::TransformTo { .. }
+            | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
@@ -419,6 +440,7 @@ impl SemanticAnimationIntent {
         match self {
             Self::ObjectPropertyTrack { .. }
             | Self::TransformTo { .. }
+            | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
@@ -779,6 +801,34 @@ impl SemanticStore {
                     interpolation,
 
                     complete_priority,
+                },
+                options,
+            )),
+        )
+    }
+
+    /// Insert one family Transform declaration without expanding semantic children.
+    ///
+    /// Both endpoints must be real semantic families. Correspondence and padding are
+    /// derived below the Semantic Scene and therefore allocate no synthetic members.
+    pub fn insert_semantic_family_transform_animation(
+        &mut self,
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        self.semantic_family_members_checked(source)?;
+        self.semantic_family_members_checked(target_state)?;
+        if source == target_state {
+            return Err(SemanticAnimationError::SameTargetAndTargetState(source));
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::FamilyTransformTo {
+                    source,
+                    target_state,
                 },
                 options,
             )),

@@ -36,6 +36,10 @@ pub enum SemanticTransactionAnimationIntent {
 
         complete_priority: bool,
     },
+    FamilyTransformTo {
+        source: SemanticTransactionNodeRef,
+        target_state: SemanticTransactionNodeRef,
+    },
     Indicate {
         target: SemanticTransactionNodeRef,
         scale_factor: f64,
@@ -110,6 +114,10 @@ impl SemanticTransactionAnimationIntent {
                 target_state,
                 ..
             } => Some([Some(*target), Some(*target_state), None]),
+            Self::FamilyTransformTo {
+                source,
+                target_state,
+            } => Some([Some(*source), Some(*target_state), None]),
             Self::Rotate { target, .. }
             | Self::Indicate { target, .. }
             | Self::DrawBorderThenFill { target, .. }
@@ -135,6 +143,7 @@ impl SemanticTransactionAnimationIntent {
             Self::Composition { children, .. } => children.as_slice(),
             Self::ObjectPropertyTrack { .. }
             | Self::TransformTo { .. }
+            | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
@@ -206,6 +215,13 @@ impl SemanticTransactionAnimation {
                 interpolation: *interpolation,
 
                 complete_priority: *complete_priority,
+            },
+            SemanticAnimationIntent::FamilyTransformTo {
+                source,
+                target_state,
+            } => SemanticTransactionAnimationIntent::FamilyTransformTo {
+                source: (*source).into(),
+                target_state: (*target_state).into(),
             },
             SemanticAnimationIntent::Rotate {
                 target,
@@ -339,6 +355,13 @@ impl SemanticTransactionAnimation {
                 interpolation: *interpolation,
 
                 complete_priority: *complete_priority,
+            },
+            SemanticTransactionAnimationIntent::FamilyTransformTo {
+                source,
+                target_state,
+            } => SemanticAnimationIntent::FamilyTransformTo {
+                source: resolve_node_ref(*source, committed),
+                target_state: resolve_node_ref(*target_state, committed),
             },
             SemanticTransactionAnimationIntent::Rotate {
                 target,
@@ -561,6 +584,29 @@ pub(super) fn preflight_transaction_animation(
                         SemanticMutationTransactionError::SamePendingAnimationTargetAndTargetState {
                             index,
                             node: *target,
+                        }
+                    }
+                });
+            }
+        }
+        SemanticTransactionAnimationIntent::FamilyTransformTo {
+            source,
+            target_state,
+        } => {
+            catalog.ensure_family(*source, index)?;
+            catalog.ensure_family(*target_state, index)?;
+            if source == target_state {
+                return Err(match source {
+                    SemanticTransactionNodeRef::Existing(node) => {
+                        SemanticMutationTransactionError::SameAnimationTargetAndTargetState {
+                            index,
+                            node: *node,
+                        }
+                    }
+                    SemanticTransactionNodeRef::Pending(_) => {
+                        SemanticMutationTransactionError::SamePendingAnimationTargetAndTargetState {
+                            index,
+                            node: *source,
                         }
                     }
                 });
@@ -791,6 +837,12 @@ pub(super) fn commit_add_animation(
                 options,
             )
             .expect("preflighted semantic animation insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::FamilyTransformTo {
+            source,
+            target_state,
+        } => store
+            .insert_semantic_family_transform_animation(*source, *target_state, options)
+            .expect("preflighted semantic family Transform insertion must remain valid while transaction owns the store"),
         SemanticAnimationIntent::Rotate { target, angle, hold_origin } => store
             .insert_semantic_rotate_animation_with_origin_constraint(*target, *angle, *hold_origin, options)
             .expect("preflighted semantic Rotate insertion must remain valid while transaction owns the store"),

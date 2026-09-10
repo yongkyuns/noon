@@ -349,6 +349,13 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
                 references.push((*target, SemanticReferenceKind::AnimationTarget));
                 references.push((*target_state, SemanticReferenceKind::AnimationTargetState));
             }
+            SemanticAnimationIntent::FamilyTransformTo {
+                source,
+                target_state,
+            } => {
+                references.push((*source, SemanticReferenceKind::AnimationTarget));
+                references.push((*target_state, SemanticReferenceKind::AnimationTargetState));
+            }
             SemanticAnimationIntent::Rotate { target, .. }
             | SemanticAnimationIntent::Indicate { target, .. }
             | SemanticAnimationIntent::DrawBorderThenFill { target, .. }
