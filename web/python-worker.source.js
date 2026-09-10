@@ -1,6 +1,7 @@
 import initNoonWeb, {
   WasmAuthoringStore,
   WasmAuthoringVectorPath,
+  WasmManimArrowOptions,
   WasmManimGeometryOptions,
   WasmSceneMembershipBatch,
   resolveAnimationOptions,
@@ -120,9 +121,12 @@ async function initializePyodide() {
     }
   };
   self.noonAuthoringGeometryOptions = WasmManimGeometryOptions;
+  self.noonAuthoringArrowOptions = WasmManimArrowOptions;
   self.noonAuthoringVectorPath = () => new WasmAuthoringVectorPath();
   self.noonCreateAuthoringGeometryHandle = (options) =>
     authoringStore.createManimGeometry(options);
+  self.noonCreateAuthoringArrowHandle = (options) =>
+    authoringStore.createManimArrow(options);
   self.noonCreateAuthoringTextHandle = (source, fontFamily, fontSize, lineSpacing) =>
     authoringStore.createManimText(source, fontFamily, fontSize, lineSpacing);
   self.noonCreateAuthoringTypstHandle = (source, math, fontSize) =>
@@ -346,7 +350,7 @@ function parseContinuationCallbackReadRequest(requestJson) {
   try {
     request = JSON.parse(requestJson);
   } catch (error) {
-    throw new TypeError(`canonical callback read request is not valid JSON: ${error}`);
+    throw new TypeError(`canonical callback read request is not valid JSON: ${error}`));
   }
   if (!isRecord(request) ||
       !Number.isSafeInteger(request.request_id) || request.request_id < 0 ||
