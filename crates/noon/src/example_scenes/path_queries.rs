@@ -59,6 +59,17 @@ pub fn session() -> Result<ExecutionSession, String> {
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;
         assert_eq!(live.effective_path_query(&rectangle)?.start()?, before);
+        let reveal = live.declare_and_activate_create(
+            &ellipse,
+            crate::AnimationOptions::new()
+                .run_time(1.)
+                .rate_func(crate::RateFunction::Linear),
+        )?;
+        live.advance_segment_to(reveal, reveal.end_time() - 0.5)?;
+        let endpoint = live.effective_path_query(&ellipse)?.end()?;
+        assert!((endpoint.0 - 1.3).abs() < 2e-6 && endpoint.1.abs() < 2e-6);
+        live.advance_segment_to(reveal, reveal.end_time())?;
+        live.complete_segment(reveal)?;
         Ok(session)
     };
     build().map_err(|error| error.to_string())

@@ -26,3 +26,9 @@ class OrdinaryPathQueries(Scene):
         wait_end = live.wait(0.2)
         live.advance_to(wait_end)
         live.complete()
+        self.play(Create(ellipse), run_time=1, rate_func=linear)
+        observed = self.live_execution()
+        observed.evaluate(1.7)
+        endpoint = ellipse.get_end()
+        assert abs(endpoint[0] - 1.3) < 2e-6 and abs(endpoint[1]) < 2e-6
+        observed.evaluate(2.2)

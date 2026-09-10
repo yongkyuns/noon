@@ -4,7 +4,7 @@ use crate::{AuthoringError, UnsupportedAuthoringOperation};
 
 impl LiveSession<'_> {
     /// Capture exact current path controls and transform from one coherent
-    /// runtime publication. Active reveals remain explicitly unsupported.
+    /// runtime publication, including the currently revealed prefix of a path.
     pub fn effective_path_query(&self, object: &Mobject) -> Result<PathQuery, LiveSessionError> {
         self.require_mobject(object)?;
         let store = self.store.borrow();
@@ -14,9 +14,6 @@ impl LiveSession<'_> {
         let unsupported = || {
             AuthoringError::Unsupported(UnsupportedAuthoringOperation::EffectivePathRenderOverride)
         };
-        if observed.reveal != 1.0 {
-            return Err(unsupported().into());
-        }
         let geometry = observed
             .render_geometry
             .or_else(|| observed.object.content.geometry())
@@ -27,10 +24,18 @@ impl LiveSession<'_> {
             AuthoringError::Unsupported(UnsupportedAuthoringOperation::PathQueryContent),
         )?;
         if let Some(target) = path.morph_target() {
+            // Retained morph meshes currently use flattened sample progress for
+            // reveal. Do not report different curve-parameter geometry here.
+            if observed.reveal != 1.0 {
+                return Err(unsupported().into());
+            }
             path = noon_geometry::interpolate_path_preserving_order(&path, target, observed.morph)
                 .map_err(AuthoringError::MorphQuery)?;
         } else if observed.morph != 0.0 {
             return Err(unsupported().into());
+        }
+        if observed.reveal != 1.0 {
+            path = noon_geometry::authored_partial_path(&path, 0.0, observed.reveal);
         }
         let state = store
             .semantic_object_state_checked(object.node_id())
