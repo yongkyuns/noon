@@ -117,10 +117,6 @@ try {
     try {
       await page.goto(`${base}?example=${encodeURIComponent(entry.id)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForFunction(() => window.__noonExampleGallery !== undefined, null, { timeout: 45000 });
-      if (noJspi && browserName === 'chromium') {
-        assert.equal(await page.evaluate(() => window.__galleryNoJspiWorkerWrapped), true,
-          'no-JSPI smoke did not wrap the production authoring worker');
-      }
       let completed = false;
       const deadline = Date.now() + 75000;
       while (Date.now() < deadline) {
@@ -146,6 +142,10 @@ try {
         await page.waitForTimeout(100);
       }
       assert.ok(completed, `${entry.id}: initial autoplay did not finish`);
+      if (noJspi && browserName === 'chromium') {
+        assert.equal(await page.evaluate(() => window.__galleryNoJspiWorkerWrapped), true,
+          'no-JSPI smoke did not wrap the production authoring worker');
+      }
       const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
       result.finalMetrics = metrics;
       assert.ok(Number(metrics?.metrics?.presentedFrames) > 0, 'no rendered frames');
