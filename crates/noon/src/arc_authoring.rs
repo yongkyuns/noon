@@ -231,9 +231,8 @@ fn arc_between_points_path(
     }
 
     let base_start = Vec2::new(resolved.base_radius, 0.0);
-    let transform = |point: Vec2| {
-        start + (point - base_start).rotate(resolved.rotation) * resolved.scale
-    };
+    let transform =
+        |point: Vec2| start + (point - base_start).rotate(resolved.rotation) * resolved.scale;
 
     let segment_count = num_components - 1;
     let delta = resolved.angle / segment_count as f32;
