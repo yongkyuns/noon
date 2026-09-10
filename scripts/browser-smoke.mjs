@@ -33,6 +33,7 @@ const examples = [
   { name: "Filled path Transform", factory: "createDirectFilledPathTransformRenderer", objectCount: 1, duration: 3.2 },
   { name: "Dimension fitting", factory: "createDirectDimensionFittingSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Family membership order", factory: "createDirectFamilyMembershipOrderSmokeRenderer", objectCount: 2, duration: 0.2 },
+  { name: "Family replacement", factory: "createDirectFamilyReplacementSmokeRenderer", objectCount: 3, duration: 0.2 },
   { name: "Family affine", factory: "createDirectFamilyAffineSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Family paint", factory: "createDirectFamilyPaintSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Family grid", factory: "createDirectFamilyGridSmokeRenderer", objectCount: 4, duration: 0.2 },

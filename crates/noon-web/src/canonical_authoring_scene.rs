@@ -5139,6 +5139,26 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveReplaceLayout)]
+        pub fn live_replace_layout(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            target: &crate::authoring_mobject::WasmLayoutAnchor,
+            dimension: u32,
+            stretch: bool,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_replace_layout(
+                    &source.anchor,
+                    &target.anchor,
+                    dimension.try_into().map_err(typed_js_error)?,
+                    stretch,
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveMatchDimSize)]
         pub fn live_match_dim_size(
             &mut self,

@@ -111,7 +111,11 @@ async function renderThrough(frameIndex, frameTimes) {
   return {
     error: null,
     presented: true,
+    // Preserve the historical `time` alias while exposing both values that the
+    // preview session actually recorded for artifact provenance.
     time: currentLogicalTime,
+    requestedTime: report.frame.requestedTime,
+    publishedTime: report.frame.publishedTime,
     objectCount: report.frame.objectCount,
     rendererBackend: report.frame.rendererBackend,
     drawCalls: report.frame.drawCalls,

@@ -12,6 +12,7 @@ pub mod family_arrangement;
 pub mod family_grid;
 pub mod family_paint;
 pub mod family_placement;
+pub mod family_replacement;
 pub mod family_transform_indicate;
 pub mod line_passing_flash;
 pub mod live_geometry_construction;

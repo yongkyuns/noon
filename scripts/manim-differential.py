@@ -558,9 +558,42 @@ def _family_membership_order(provider: Any, group_name: str) -> Any:
             "copy_independent": copied[1] is not a}
 
 
+def _family_replace(api, source_family, target_family, stretch):
+    first = api.Rectangle(width=2.0, height=1.0).shift(2 * api.LEFT)
+    second = api.Square(side_length=1.0).shift(2 * api.RIGHT)
+    target = api.Rectangle(width=3.0, height=2.0).shift(api.RIGHT + api.UP)
+    source = api.VGroup(first, api.VGroup(first, second)) if source_family else first
+    target = api.Group(target) if target_family else target
+    source.replace(target, stretch=stretch)
+    return {"source": _object_observation(source), "target": _object_observation(target),
+            "first": _object_observation(first), "second": _object_observation(second)}
+
+
+def _shared_target_replace(api):
+    first = api.Square(side_length=1).shift(api.LEFT)
+    second = api.Square(side_length=1).shift(api.RIGHT)
+    family = api.VGroup(first, second)
+    family.replace(first)
+    return {"family": _object_observation(family), "first": _object_observation(first),
+            "second": _object_observation(second)}
+
+
+def _zero_extent_replace(api):
+    source = api.Line(api.ORIGIN, 2 * api.UP)
+    target = api.Rectangle(width=4, height=6).shift(3 * api.RIGHT + 2 * api.UP)
+    source.replace(target, stretch=True)
+    return _object_observation(source)
+
+
 FIXTURES = [
     Fixture("group_membership_order", lambda: _family_membership_order(noon, "Group"), lambda: _family_membership_order(manim, "Group")),
     Fixture("vgroup_membership_order", lambda: _family_membership_order(noon, "VGroup"), lambda: _family_membership_order(manim, "VGroup")),
+    *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",
+              lambda sf=source_family, tf=target_family, st=stretch: _family_replace(noon, sf, tf, st),
+              lambda sf=source_family, tf=target_family, st=stretch: _family_replace(manim, sf, tf, st))
+      for source_family, target_family, stretch in ((True, False, False), (False, True, True), (True, True, True))],
+    Fixture("replace_shared_target", lambda: _shared_target_replace(noon), lambda: _shared_target_replace(manim)),
+    Fixture("replace_zero_extent", lambda: _zero_extent_replace(noon), lambda: _zero_extent_replace(manim)),
 
     Fixture("group_coordinate_dimensions",
             lambda: _group_coordinate_dimensions(noon, noon.Group),
