@@ -571,6 +571,22 @@ def _family_become_cross_alias(api):
     return observations
 
 
+def _style_operations(api):
+    a = api.Square(side_length=1).shift(api.LEFT)
+    b = api.Circle(radius=0.5).shift(api.RIGHT)
+    family = api.VGroup(a, api.VGroup(a, b))
+    palette = family.copy().set_style(fill_color="#FF0000", fill_opacity=0.3,
+                                     stroke_color="#0000FF", stroke_width=6, stroke_opacity=0.6)
+    family.match_style(palette)
+    family.set_fill().set_stroke().match_style(family)
+    a.match_style(a)
+    observations = [[m.get_fill_opacity(), m.get_stroke_opacity(), _object_observation(m)] for m in [a, b]]
+    a.set_style(fill_opacity=0.7)
+    family.match_style(api.VGroup(b, api.VGroup(b, a)))
+    observations.append([a.get_fill_opacity(), b.get_fill_opacity()])
+    return observations
+
+
 def _family_replace(api, source_family, target_family, stretch):
     first = api.Rectangle(width=2.0, height=1.0).shift(2 * api.LEFT)
     second = api.Square(side_length=1.0).shift(2 * api.RIGHT)
@@ -601,6 +617,7 @@ def _zero_extent_replace(api):
 FIXTURES = [
     Fixture("vgroup_become_cross_alias", lambda: _family_become_cross_alias(noon), lambda: _family_become_cross_alias(manim)),
     Fixture("vgroup_become_restore", lambda: _family_become(noon), lambda: _family_become(manim)),
+    Fixture("style_operations", lambda: _style_operations(noon), lambda: _style_operations(manim)),
     *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",
               lambda sf=source_family, tf=target_family, st=stretch: _family_replace(noon, sf, tf, st),
               lambda sf=source_family, tf=target_family, st=stretch: _family_replace(manim, sf, tf, st))

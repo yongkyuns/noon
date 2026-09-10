@@ -1075,6 +1075,58 @@ def _align_on_frame(
     return self
 
 
+def _style_target(value):
+    if isinstance(value, _compat.Group):
+        return value._semantic_family_handle, _group_target_context(value), "Family"
+    return _handle_for(value), _live_mutation_context(value), ""
+
+
+def _set_style(self, fill_color=None, fill_opacity=None, stroke_color=None,
+               stroke_width=None, stroke_opacity=None, family=True, **kwargs):
+    if kwargs:
+        raise NotImplementedError("unsupported shared style option(s): " + ", ".join(sorted(kwargs)))
+    from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
+    if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
+        raise NotImplementedError("atomic set_style in host callbacks requires staged style publication")
+    if not family and isinstance(self, _compat.Group):
+        raise NotImplementedError("non-recursive Group style requires shared family style state")
+    arguments = (*_family_color_arguments(fill_color),
+                 None if fill_opacity is None else _compat._opacity("fill opacity", fill_opacity),
+                 *_family_color_arguments(stroke_color),
+                 None if stroke_width is None else _compat._manim_stroke_width(stroke_width),
+                 None if stroke_opacity is None else _compat._opacity("stroke opacity", stroke_opacity))
+    handle, context, suffix = _style_target(self)
+    if handle is None:
+        raise RuntimeError("style updates require the shared Rust authoring host")
+    if context is None:
+        engine_call(handle.setStyle, *arguments)
+    else:
+        engine_call(getattr(context, f"liveSet{suffix}Style"), handle, *arguments)
+    return self
+
+
+def _match_style(self, vmobject, family=True):
+    if not isinstance(vmobject, _base.Mobject):
+        raise TypeError("match_style target must be a Mobject")
+    if isinstance(self, _compat.Group) != isinstance(vmobject, _compat.Group):
+        raise NotImplementedError("mixed object/family style matching requires shared family style state")
+    if not family and isinstance(self, _compat.Group):
+        raise NotImplementedError("non-recursive Group style requires shared family style state")
+    from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
+    if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
+        raise NotImplementedError("match_style in host callbacks requires staged style capture")
+    source, context, suffix = _style_target(self)
+    target, target_context, _ = _style_target(vmobject)
+    if source is None or target is None:
+        raise RuntimeError("style matching requires the shared Rust authoring host")
+    context = context or target_context
+    if context is None:
+        engine_call(source.matchStyle, target)
+    else:
+        engine_call(getattr(context, f"liveMatch{suffix}Style"), source, target)
+    return self
+
+
 def _set_fill(
     self: _compat.VMobject,
     color: object = None,
@@ -1101,8 +1153,6 @@ def _set_fill(
                 engine_call(live_context.liveSetFillColor,
                     handle, parsed.red, parsed.green, parsed.blue, parsed.alpha
                 )
-            elif opacity is None:
-                engine_call(live_context.liveDisableFill, handle)
             if opacity is not None and color is None:
                 engine_call(live_context.liveSetFillOpacity,
                     handle, _compat._opacity("fill opacity", opacity)
@@ -1122,8 +1172,6 @@ def _set_fill(
     if color is not None:
         parsed = _compat._as_color("fill color", color)
         engine_call(handle.setFillColor, parsed.red, parsed.green, parsed.blue, parsed.alpha)
-    elif opacity is None:
-        engine_call(handle.disableFill)
     if opacity is not None:
         engine_call(handle.setFillOpacity, _compat._opacity("fill opacity", opacity))
     return self
@@ -1142,9 +1190,8 @@ def _set_stroke(
     live_context = _live_mutation_context(self)
     if live_context is not None:
         if width is not None:
-            raise NotImplementedError(
-                "canonical live style targets do not support stroke-width animation"
-            )
+            return _set_style(self, stroke_color=color, stroke_width=width,
+                              stroke_opacity=opacity, family=family)
         try:
             if color is not None and opacity is not None:
                 parsed = _compat._as_color("stroke color", color)
@@ -1160,9 +1207,7 @@ def _set_stroke(
                 engine_call(live_context.liveSetStrokeColor,
                     handle, parsed.red, parsed.green, parsed.blue, parsed.alpha
                 )
-            elif opacity is None:
-                engine_call(live_context.liveDisableStroke, handle)
-            else:
+            elif opacity is not None:
                 engine_call(live_context.liveSetStrokeOpacity,
                     handle, _compat._opacity("stroke opacity", opacity)
                 )
@@ -1172,8 +1217,6 @@ def _set_stroke(
     if color is not None:
         parsed = _compat._as_color("stroke color", color)
         engine_call(handle.setStrokeColor, parsed.red, parsed.green, parsed.blue, parsed.alpha)
-    elif width is None and opacity is None:
-        engine_call(handle.disableStroke)
     if width is not None:
         engine_call(handle.setStrokeWidth, _compat._manim_stroke_width(width))
     if opacity is not None:

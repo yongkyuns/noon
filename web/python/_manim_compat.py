@@ -51,6 +51,16 @@ def _as_color(name: str, value: object) -> _base.Color:
 class VMobject(Mobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
 
+    def set_style(self, fill_color=None, fill_opacity=None, stroke_color=None,
+                  stroke_width=None, stroke_opacity=None, family=True, **kwargs):
+        from _manim_semantic_handles import _set_style
+        return _set_style(self, fill_color, fill_opacity, stroke_color,
+                          stroke_width, stroke_opacity, family, **kwargs)
+
+    def match_style(self, vmobject, family=True):
+        from _manim_semantic_handles import _match_style
+        return _match_style(self, vmobject, family)
+
     def copy(self) -> VMobject:
         from _manim_semantic_handles import _copy_mobject
         return _copy_mobject(self)
@@ -190,6 +200,16 @@ def _rotation_angle_2d(angle: float, axis: object = OUT) -> float:
 
 class Group(Mobject):
     """Python identities and ergonomics over a shared Rust semantic family."""
+
+    def set_style(self, fill_color=None, fill_opacity=None, stroke_color=None,
+                  stroke_width=None, stroke_opacity=None, family=True, **kwargs):
+        from _manim_semantic_handles import _set_style
+        return _set_style(self, fill_color, fill_opacity, stroke_color,
+                          stroke_width, stroke_opacity, family, **kwargs)
+
+    def match_style(self, vmobject, family=True):
+        from _manim_semantic_handles import _match_style
+        return _match_style(self, vmobject, family)
 
     def __init__(self, *mobjects: object) -> None:
         from _manim_semantic_handles import _group_init
