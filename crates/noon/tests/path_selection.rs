@@ -150,9 +150,7 @@ fn live_partial_rejects_unrepresentable_source_before_allocating() {
     let mut scene = Scene::new();
     let source = scene.circle(1.).unwrap();
     let destination = scene.square(1.).unwrap();
-    scene
-        .add_many(&[(&source).into(), (&destination).into()])
-        .unwrap();
+    scene.add(&destination).unwrap();
     let mut session = scene.execution_session().unwrap();
     let before = destination.state().unwrap();
     let mut live = scene.live(&mut session);
