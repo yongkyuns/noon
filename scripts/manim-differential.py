@@ -509,6 +509,33 @@ def _manim_rotate_about_origin() -> Any:
     return _object_observation(obj)
 
 
+def _group_coordinate_dimensions(api, group_class):
+    first = api.Rectangle(width=2.0, height=1.0).shift(2 * api.LEFT)
+    second = api.Square(side_length=1.0).shift(2 * api.RIGHT)
+    nested = group_class(first, second)
+    family = group_class(first, nested)
+    target = group_class(api.Rectangle(width=0.5, height=2).shift(api.RIGHT + api.UP))
+    observations = []
+    for operation in (
+        lambda: setattr(family, "width", 4.0),
+        lambda: setattr(family, "height", 2.0),
+        lambda: family.set_x(3.0, api.RIGHT).set_y(-2.0, api.DOWN),
+        lambda: family.match_x(target, api.LEFT).match_y(target, api.UP),
+    ):
+        operation()
+        observations.append({
+            "family": _object_observation(family),
+            "first": _object_observation(first),
+            "second": _object_observation(second),
+            "target": _object_observation(target),
+            "members_preserved": family.submobjects[0] is first
+                and family.submobjects[1] is nested
+                and nested.submobjects[0] is first
+                and nested.submobjects[1] is second,
+        })
+    return observations
+
+
 def _family_membership_order(provider: Any, group_name: str) -> Any:
     a, b, c = [provider.Square(side_length=1.0) for _ in range(3)]
     group_type = getattr(provider, group_name)
@@ -534,6 +561,13 @@ def _family_membership_order(provider: Any, group_name: str) -> Any:
 FIXTURES = [
     Fixture("group_membership_order", lambda: _family_membership_order(noon, "Group"), lambda: _family_membership_order(manim, "Group")),
     Fixture("vgroup_membership_order", lambda: _family_membership_order(noon, "VGroup"), lambda: _family_membership_order(manim, "VGroup")),
+
+    Fixture("group_coordinate_dimensions",
+            lambda: _group_coordinate_dimensions(noon, noon.Group),
+            lambda: _group_coordinate_dimensions(manim, manim.Group)),
+    Fixture("vgroup_coordinate_dimensions",
+            lambda: _group_coordinate_dimensions(noon, noon.VGroup),
+            lambda: _group_coordinate_dimensions(manim, manim.VGroup)),
     Fixture("circle_dimensions", _noon_circle_dimensions, _manim_circle_dimensions),
     Fixture("rectangle_dimensions", _noon_rectangle_dimensions, _manim_rectangle_dimensions),
     Fixture("shifted_circle", _noon_shifted_circle, _manim_shifted_circle),
@@ -582,6 +616,7 @@ FIXTURES = [
 # harness so unsupported behavior is never silently treated as a mismatch.
 UNSUPPORTED = {
     "family_insert_assignment": "duplicate-edge insert and indexed assignment remain under #74",
+    "family_aliasing": "Shared semantic identity exists; exhaustive nested-family mutation/copy parity remains under #74",
     "z_index": "Noon does not yet expose the 2.5D/z semantic model (#62)",
     "updater_frame_semantics": "host/native updater phase semantics are being defined in #56",
     "animation_lifecycle": "requires a reference Scene/animation-state probe, to be added incrementally",
