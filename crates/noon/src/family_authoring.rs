@@ -179,6 +179,7 @@ fn last_occurrences(members: &[MobjectFamilyMember<'_>]) -> Vec<usize> {
 pub(crate) fn family_creation_transaction(
     store: &Rc<RefCell<SemanticStore>>,
     members: &[MobjectFamilyMember<'_>],
+    z_index: f64,
 ) -> Result<
     (
         SemanticMutationTransaction,
@@ -191,6 +192,9 @@ pub(crate) fn family_creation_transaction(
     }
     let mut transaction = SemanticMutationTransaction::new();
     let family = transaction.create_node(noon_core::SemanticNodeCreation::family());
+    if z_index != 0.0 {
+        transaction.set_z_index(family, z_index);
+    }
     for index in last_occurrences(members) {
         transaction.add_member(family, members[index].node_id());
     }
@@ -236,7 +240,16 @@ impl MobjectFamily {
         store: Rc<RefCell<SemanticStore>>,
         members: &[MobjectFamilyMember<'_>],
     ) -> Result<Self, AuthoringError> {
-        let (transaction, family) = family_creation_transaction(&store, members)?;
+        Self::create_with_z_index(store, members, 0.0)
+    }
+
+    /// Construct a family with its own priority; member priorities are preserved.
+    pub fn create_with_z_index(
+        store: Rc<RefCell<SemanticStore>>,
+        members: &[MobjectFamilyMember<'_>],
+        z_index: f64,
+    ) -> Result<Self, AuthoringError> {
+        let (transaction, family) = family_creation_transaction(&store, members, z_index)?;
         let result = transaction
             .apply(&mut store.borrow_mut())
             .map_err(AuthoringError::from)?;

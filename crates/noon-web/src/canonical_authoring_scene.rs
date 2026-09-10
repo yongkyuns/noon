@@ -46,11 +46,13 @@ impl SceneMembershipBatch {
     fn create_family(
         &self,
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        z_index: f64,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         if self.kind != SceneMembershipBatchKind::Add {
             return Err("family creation requires an add batch".into());
         }
-        noon::MobjectFamily::create(store, &self.family_members()?).map_err(AuthoringFailure::from)
+        noon::MobjectFamily::create_with_z_index(store, &self.family_members()?, z_index)
+            .map_err(AuthoringFailure::from)
     }
 
     fn edit_family(&self, family: &noon::MobjectFamily) -> Result<Vec<bool>, AuthoringFailure> {
@@ -1964,10 +1966,11 @@ impl CanonicalAuthoringScene {
     fn live_family(
         &mut self,
         members: &[noon::MobjectFamilyMember<'_>],
+        z_index: f64,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         match &mut self.player_ownership {
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_family(members)
+                self.active_live_player()?.live_family(members, z_index)
             }
             PlayerOwnership::Unstarted => {
                 Err("live family creation requires an active canonical session".into())
@@ -2678,8 +2681,9 @@ mod wasm {
         pub(crate) fn create_family(
             &self,
             store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+            z_index: f64,
         ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-            self.inner.create_family(store)
+            self.inner.create_family(store, z_index)
         }
 
         pub(crate) fn edit_family(
@@ -6273,13 +6277,14 @@ mod wasm {
         pub fn live_create_family(
             &mut self,
             batch: WasmSceneMembershipBatch,
+            z_index: f64,
         ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
             if batch.inner.kind != SceneMembershipBatchKind::Add {
                 return Err(typed_js_error("family creation requires an add batch"));
             }
             let members = batch.inner.family_members().map_err(typed_js_error)?;
             self.inner
-                .live_family(&members)
+                .live_family(&members, z_index)
                 .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(typed_js_error)
         }
@@ -6859,14 +6864,14 @@ mod tests {
         };
         assert_eq!(batch.family_members().unwrap().len(), 1);
         let family = batch
-            .create_family(std::rc::Rc::clone(scene.integration_store()))
+            .create_family(std::rc::Rc::clone(scene.integration_store()), 0.0)
             .unwrap();
         let committed = scene.integration_store().borrow().scene_revision();
         assert_eq!(committed, revision.checked_next().unwrap());
         assert_eq!(batch.edit_family(&family).unwrap(), vec![false]);
         batch.kind = SceneMembershipBatchKind::Remove;
         assert!(batch
-            .create_family(std::rc::Rc::clone(scene.integration_store()))
+            .create_family(std::rc::Rc::clone(scene.integration_store()), 0.0)
             .is_err());
         assert_eq!(batch.edit_family(&family).unwrap(), vec![true]);
         batch.kind = SceneMembershipBatchKind::Clear;
@@ -7526,10 +7531,10 @@ mod tests {
         context.live_player(1.0).unwrap();
         let target = context.live_target_editor(&circle).unwrap();
         let family = context
-            .live_family(&[noon::MobjectFamilyMember::Mobject(&target)])
+            .live_family(&[noon::MobjectFamilyMember::Mobject(&target)], 0.0)
             .unwrap();
         let nested = context
-            .live_family(&[noon::MobjectFamilyMember::Family(&family)])
+            .live_family(&[noon::MobjectFamilyMember::Family(&family)], 0.0)
             .unwrap();
         assert_eq!(
             context
@@ -7543,7 +7548,7 @@ mod tests {
         let foreign = noon::Scene::new().circle(0.2).unwrap();
         let revision = context.scene.integration_store().borrow().scene_revision();
         assert!(context
-            .live_family(&[noon::MobjectFamilyMember::Mobject(&foreign)])
+            .live_family(&[noon::MobjectFamilyMember::Mobject(&foreign)], 0.0)
             .is_err());
         assert_eq!(
             context.scene.integration_store().borrow().scene_revision(),
@@ -7607,7 +7612,7 @@ mod tests {
             bindings: Vec::new(),
         };
         let pair = context
-            .live_family(&batch.family_members().unwrap())
+            .live_family(&batch.family_members().unwrap(), 0.0)
             .unwrap();
         assert_eq!(
             context

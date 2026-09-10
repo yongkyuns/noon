@@ -53,6 +53,7 @@ pub struct ManimGeometryOptions {
     layout: SemanticGeometryLayout,
     transform: SemanticTransform2_5D,
     style: SemanticStyle,
+    z_index: f64,
 }
 
 impl ManimGeometryOptions {
@@ -146,6 +147,7 @@ impl ManimGeometryOptions {
             layout: SemanticGeometryLayout::GeometryBounds,
             transform: SemanticTransform2_5D::default(),
             style,
+            z_index: 0.0,
         }
     }
 
@@ -178,6 +180,15 @@ impl ManimGeometryOptions {
             GeometryRef::path(path),
             manim_style(Color::WHITE),
         ))
+    }
+
+    /// Set inert constructor priority without allocating a semantic identity.
+    pub fn set_z_index(&mut self, value: f64) -> Result<(), AuthoringError> {
+        if !value.is_finite() {
+            return Err(AuthoringError::NonFiniteObjectState);
+        }
+        self.z_index = value;
+        Ok(())
     }
 
     pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
@@ -309,6 +320,7 @@ impl ManimGeometryOptions {
             || !self.transform.scale.is_finite()
             || !self.transform.rotation_z.is_finite()
             || !self.style.is_finite()
+            || !self.z_index.is_finite()
         {
             return Err(AuthoringError::NonFiniteObjectState);
         }
@@ -318,6 +330,7 @@ impl ManimGeometryOptions {
         let mut state = SemanticObjectState::new(content);
         state.transform = self.transform;
         state.style = self.style;
+        state.set_z_index(self.z_index);
         Ok(state)
     }
 }
@@ -444,6 +457,7 @@ impl Mobject {
                 layout: SemanticGeometryLayout::GeometryBounds,
                 transform,
                 style,
+                z_index: 0.0,
             },
         )
     }

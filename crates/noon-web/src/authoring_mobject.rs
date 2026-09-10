@@ -266,9 +266,10 @@ mod wasm {
         pub fn create_family(
             &self,
             batch: crate::WasmSceneMembershipBatch,
+            z_index: f64,
         ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
             batch
-                .create_family(Rc::clone(&self.semantics))
+                .create_family(Rc::clone(&self.semantics), z_index)
                 .map(WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(js_error)
         }

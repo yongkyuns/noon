@@ -56,7 +56,8 @@ def install_bridge(target, factory, family_class, object_class, *, js=False):
         self.members = staged
         return changed
 
-    def create(batch):
+    def create(batch, z_index):
+        assert z_index == 0, "this identity fixture only models default constructor inputs"
         assert batch.kind == "add"
         family = factory()
         registry[_identity(family)] = family

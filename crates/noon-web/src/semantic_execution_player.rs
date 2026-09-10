@@ -1473,6 +1473,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_family(
         &mut self,
         members: &[noon::MobjectFamilyMember<'_>],
+        z_index: f64,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         let semantics = self
             .semantics
@@ -1484,7 +1485,7 @@ impl SemanticExecutionPlayer {
                 .expect("live semantic store has one scene root"),
             &mut self.session,
         )
-        .family(members)
+        .family_with_z_index(members, z_index)
         .map_err(AuthoringFailure::from)
     }
 

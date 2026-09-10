@@ -825,8 +825,17 @@ impl<'a> LiveSession<'a> {
         &mut self,
         members: &[MobjectFamilyMember<'_>],
     ) -> Result<MobjectFamily, LiveSessionError> {
+        self.family_with_z_index(members, 0.0)
+    }
+
+    /// Atomically create a detached family with root-only painter priority.
+    pub fn family_with_z_index(
+        &mut self,
+        members: &[MobjectFamilyMember<'_>],
+        z_index: f64,
+    ) -> Result<MobjectFamily, LiveSessionError> {
         let (transaction, family) =
-            crate::family_authoring::family_creation_transaction(self.store, members)
+            crate::family_authoring::family_creation_transaction(self.store, members, z_index)
                 .map_err(LiveSessionError::from)?;
         let result = self.apply(transaction)?;
         let node = result
