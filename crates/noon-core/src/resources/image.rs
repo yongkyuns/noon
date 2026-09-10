@@ -15,20 +15,7 @@ fn next_raster_image_resource_arena() -> u64 {
         .expect("raster image resource arena identity exhausted")
 }
 
-/// Encodings accepted by the Phase B raster-image resource boundary.
-///
-/// Decoding and encoded-header validation happen before or during resource
-/// installation. The retained resource stores the original immutable payload so
-/// browser/native preparation can derive backend-local decoded/texture state
-/// without making that state semantic authority.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum RasterImageEncoding {
-    Png,
-    Jpeg,
-    Webp,
-}
-
-/// Stable identity for one immutable encoded raster-image payload.
+/// Stable identity for one immutable canonical raster-image payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RasterImageResourceId(u64);
 
@@ -56,31 +43,26 @@ pub struct RasterImageResourceHandle {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct RasterImageResourceKey {
-    encoding: RasterImageEncoding,
     width: u32,
     height: u32,
-    data: Arc<[u8]>,
+    rgba8: Arc<[u8]>,
 }
 
-/// Immutable renderer/backend-neutral encoded image resource.
+/// Immutable renderer/backend-neutral canonical raster content.
 ///
-/// `width`/`height` are intrinsic dimensions established by the decoder/resource
-/// preparation boundary. This arena intentionally does not parse image formats;
-/// format-specific parsing belongs to the #79 loader/decoder follow-up and must
-/// occur off the frame path.
+/// File encodings such as PNG/JPEG/WebP and Python ndarray/PIL inputs are loader
+/// concerns. They normalize to tightly packed row-major RGBA8 before entering this
+/// retained arena, matching the pinned Manim model in which image behavior operates
+/// on a normalized RGBA pixel array. Renderer texture residency remains derived and
+/// disposable; it is not stored here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RasterImageResource {
-    encoding: RasterImageEncoding,
     width: u32,
     height: u32,
-    data: Arc<[u8]>,
+    rgba8: Arc<[u8]>,
 }
 
 impl RasterImageResource {
-    pub const fn encoding(&self) -> RasterImageEncoding {
-        self.encoding
-    }
-
     pub const fn width(&self) -> u32 {
         self.width
     }
@@ -89,20 +71,19 @@ impl RasterImageResource {
         self.height
     }
 
-    pub fn data(&self) -> &[u8] {
-        self.data.as_ref()
+    pub fn rgba8(&self) -> &[u8] {
+        self.rgba8.as_ref()
     }
 
     pub fn retained_bytes(&self) -> usize {
-        size_of::<Self>().saturating_add(self.data.len())
+        size_of::<Self>().saturating_add(self.rgba8.len())
     }
 
     fn key(&self) -> RasterImageResourceKey {
         RasterImageResourceKey {
-            encoding: self.encoding,
             width: self.width,
             height: self.height,
-            data: self.data.clone(),
+            rgba8: self.rgba8.clone(),
         }
     }
 }
@@ -117,14 +98,14 @@ struct RasterImageResourceEntry {
 pub struct RasterImageResourceStats {
     pub live_resources: usize,
     pub retained_bytes: usize,
-    pub encoded_bytes: usize,
+    pub pixel_bytes: usize,
 }
 
-/// Content-deduplicating arena for immutable encoded raster images.
+/// Content-deduplicating arena for immutable canonical raster images.
 ///
-/// Equal encoding, intrinsic dimensions and encoded bytes share one retained
-/// allocation. This is resource identity only: semantic object identity, scene
-/// membership, transforms, opacity and GPU texture residency remain owned by
+/// Equal intrinsic dimensions and RGBA8 pixels share one retained allocation.
+/// This is resource identity only: semantic object identity, scene membership,
+/// transforms, opacity, sampling policy and GPU texture residency remain owned by
 /// their normal architecture layers.
 #[derive(Debug)]
 pub struct RasterImageResourceArena {
@@ -132,7 +113,7 @@ pub struct RasterImageResourceArena {
     entries: Vec<RasterImageResourceEntry>,
     handles_by_content: HashMap<RasterImageResourceKey, RasterImageResourceHandle>,
     retained_bytes: usize,
-    encoded_bytes: usize,
+    pixel_bytes: usize,
 }
 
 impl Default for RasterImageResourceArena {
@@ -142,7 +123,7 @@ impl Default for RasterImageResourceArena {
             entries: Vec::new(),
             handles_by_content: HashMap::new(),
             retained_bytes: 0,
-            encoded_bytes: 0,
+            pixel_bytes: 0,
         }
     }
 }
@@ -162,7 +143,7 @@ impl Clone for RasterImageResourceArena {
             entries: self.entries.clone(),
             handles_by_content,
             retained_bytes: self.retained_bytes,
-            encoded_bytes: self.encoded_bytes,
+            pixel_bytes: self.pixel_bytes,
         }
     }
 }
@@ -172,30 +153,29 @@ impl RasterImageResourceArena {
         Self::default()
     }
 
-    /// Intern one already-prepared encoded image.
+    /// Intern one already-normalized tightly packed RGBA8 image.
     ///
-    /// The caller supplies dimensions verified by its decoder/resource-preparation
-    /// boundary. Repeated identical content is allocation-free after lookup.
-    pub fn intern_encoded(
+    /// Repeated identical visual content is allocation-free after lookup. Invalid
+    /// dimensions/lengths fail before the arena changes.
+    pub fn intern_rgba8(
         &mut self,
-        encoding: RasterImageEncoding,
         width: u32,
         height: u32,
-        data: impl Into<Arc<[u8]>>,
+        rgba8: impl Into<Arc<[u8]>>,
     ) -> Result<RasterImageResourceHandle, RasterImageResourceError> {
-        if width == 0 || height == 0 {
-            return Err(RasterImageResourceError::InvalidDimensions { width, height });
-        }
-        let data = data.into();
-        if data.is_empty() {
-            return Err(RasterImageResourceError::EmptyPayload);
+        let expected = expected_rgba8_len(width, height)?;
+        let rgba8 = rgba8.into();
+        if rgba8.len() != expected {
+            return Err(RasterImageResourceError::InvalidPixelLength {
+                expected,
+                actual: rgba8.len(),
+            });
         }
 
         let resource = RasterImageResource {
-            encoding,
             width,
             height,
-            data,
+            rgba8,
         };
         let key = resource.key();
         if let Some(handle) = self.handles_by_content.get(&key).copied() {
@@ -215,7 +195,7 @@ impl RasterImageResourceArena {
         self.retained_bytes = self
             .retained_bytes
             .saturating_add(resource.retained_bytes());
-        self.encoded_bytes = self.encoded_bytes.saturating_add(resource.data.len());
+        self.pixel_bytes = self.pixel_bytes.saturating_add(resource.rgba8.len());
         self.entries.push(RasterImageResourceEntry {
             version: 0,
             value: resource,
@@ -247,7 +227,7 @@ impl RasterImageResourceArena {
         RasterImageResourceStats {
             live_resources: self.entries.len(),
             retained_bytes: self.retained_bytes,
-            encoded_bytes: self.encoded_bytes,
+            pixel_bytes: self.pixel_bytes,
         }
     }
 
@@ -260,19 +240,39 @@ impl RasterImageResourceArena {
     }
 }
 
+fn expected_rgba8_len(width: u32, height: u32) -> Result<usize, RasterImageResourceError> {
+    if width == 0 || height == 0 {
+        return Err(RasterImageResourceError::InvalidDimensions { width, height });
+    }
+    let pixels = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or(RasterImageResourceError::ImageTooLarge { width, height })?;
+    usize::try_from(pixels)
+        .map_err(|_| RasterImageResourceError::ImageTooLarge { width, height })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RasterImageResourceError {
-    EmptyPayload,
     InvalidDimensions { width: u32, height: u32 },
+    ImageTooLarge { width: u32, height: u32 },
+    InvalidPixelLength { expected: usize, actual: usize },
 }
 
 impl std::fmt::Display for RasterImageResourceError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::EmptyPayload => formatter.write_str("raster image payload is empty"),
             Self::InvalidDimensions { width, height } => write!(
                 formatter,
                 "raster image dimensions must be non-zero, got {width}x{height}",
+            ),
+            Self::ImageTooLarge { width, height } => write!(
+                formatter,
+                "raster image dimensions {width}x{height} exceed addressable RGBA8 storage",
+            ),
+            Self::InvalidPixelLength { expected, actual } => write!(
+                formatter,
+                "raster RGBA8 payload has {actual} bytes, expected {expected}",
             ),
         }
     }
@@ -284,61 +284,53 @@ impl std::error::Error for RasterImageResourceError {}
 mod tests {
     use super::*;
 
-    fn png_bytes() -> Arc<[u8]> {
-        Arc::from([0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a])
+    fn rgba(width: u32, height: u32, seed: u8) -> Arc<[u8]> {
+        let len = expected_rgba8_len(width, height).unwrap();
+        (0..len)
+            .map(|index| seed.wrapping_add(index as u8))
+            .collect::<Vec<_>>()
+            .into()
     }
 
     #[test]
     fn repeated_identical_image_reuses_one_resource() {
         let mut arena = RasterImageResourceArena::new();
-        let first = arena
-            .intern_encoded(RasterImageEncoding::Png, 320, 180, png_bytes())
-            .unwrap();
-        let second = arena
-            .intern_encoded(RasterImageEncoding::Png, 320, 180, png_bytes())
-            .unwrap();
+        let first = arena.intern_rgba8(320, 180, rgba(320, 180, 7)).unwrap();
+        let second = arena.intern_rgba8(320, 180, rgba(320, 180, 7)).unwrap();
 
         assert_eq!(first, second);
         assert_eq!(arena.len(), 1);
-        assert_eq!(arena.stats().encoded_bytes, png_bytes().len());
+        assert_eq!(arena.stats().pixel_bytes, 320 * 180 * 4);
+        assert_eq!(arena.get(first).unwrap().rgba8().len(), 320 * 180 * 4);
     }
 
     #[test]
-    fn metadata_participates_in_content_identity() {
+    fn intrinsic_dimensions_participate_in_content_identity() {
+        let bytes = rgba(2, 2, 11);
         let mut arena = RasterImageResourceArena::new();
-        let png = arena
-            .intern_encoded(RasterImageEncoding::Png, 320, 180, png_bytes())
-            .unwrap();
-        let jpeg = arena
-            .intern_encoded(RasterImageEncoding::Jpeg, 320, 180, png_bytes())
-            .unwrap();
-        let resized = arena
-            .intern_encoded(RasterImageEncoding::Png, 640, 360, png_bytes())
-            .unwrap();
+        let square = arena.intern_rgba8(2, 2, bytes.clone()).unwrap();
+        let row = arena.intern_rgba8(4, 1, bytes).unwrap();
 
-        assert_ne!(png, jpeg);
-        assert_ne!(png, resized);
-        assert_eq!(arena.len(), 3);
+        assert_ne!(square, row);
+        assert_eq!(arena.len(), 2);
     }
 
     #[test]
     fn invalid_resource_is_rejected_without_allocation() {
         let mut arena = RasterImageResourceArena::new();
         assert_eq!(
-            arena.intern_encoded(RasterImageEncoding::Png, 0, 10, png_bytes()),
+            arena.intern_rgba8(0, 10, Arc::<[u8]>::from([])),
             Err(RasterImageResourceError::InvalidDimensions {
                 width: 0,
                 height: 10,
             })
         );
         assert_eq!(
-            arena.intern_encoded(
-                RasterImageEncoding::Webp,
-                10,
-                10,
-                Arc::<[u8]>::from([]),
-            ),
-            Err(RasterImageResourceError::EmptyPayload)
+            arena.intern_rgba8(2, 2, Arc::<[u8]>::from([0; 15])),
+            Err(RasterImageResourceError::InvalidPixelLength {
+                expected: 16,
+                actual: 15,
+            })
         );
         assert!(arena.is_empty());
         assert_eq!(arena.stats(), RasterImageResourceStats::default());
@@ -348,12 +340,8 @@ mod tests {
     fn foreign_arena_handle_is_rejected() {
         let mut first = RasterImageResourceArena::new();
         let mut second = RasterImageResourceArena::new();
-        let a = first
-            .intern_encoded(RasterImageEncoding::Png, 32, 18, png_bytes())
-            .unwrap();
-        let b = second
-            .intern_encoded(RasterImageEncoding::Png, 32, 18, png_bytes())
-            .unwrap();
+        let a = first.intern_rgba8(4, 2, rgba(4, 2, 3)).unwrap();
+        let b = second.intern_rgba8(4, 2, rgba(4, 2, 3)).unwrap();
 
         assert_eq!((a.id, a.version), (b.id, b.version));
         assert_ne!(a.arena, b.arena);
@@ -364,9 +352,7 @@ mod tests {
     #[test]
     fn cloned_arena_is_renamespaced_but_shares_payload() {
         let mut source = RasterImageResourceArena::new();
-        let source_handle = source
-            .intern_encoded(RasterImageEncoding::Png, 320, 180, png_bytes())
-            .unwrap();
+        let source_handle = source.intern_rgba8(8, 4, rgba(8, 4, 19)).unwrap();
         let source_payload = source.get_shared(source_handle).unwrap();
 
         let cloned = source.clone();
