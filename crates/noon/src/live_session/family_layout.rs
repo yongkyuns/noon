@@ -51,11 +51,6 @@ impl LiveSession<'_> {
             let object =
                 Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
             self.placement_authored_transform(&object)?;
-            crate::dimension_fit::validate_fit_stretch(
-                self.authored(&object)?.transform.rotation_z,
-                stretch,
-            )
-            .map_err(LiveSessionError::from)?;
         }
         let Some((x, y)) = scale else {
             return Ok(());

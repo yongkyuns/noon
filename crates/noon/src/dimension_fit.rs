@@ -51,15 +51,21 @@ impl LayoutDimension {
     }
 }
 
-pub(crate) fn validate_fit_stretch(rotation: f64, stretch: bool) -> Result<(), AuthoringError> {
-    // The planar affine representation has local scale plus rotation, not shear.
-    // A world-axis stretch of a rotated shape cannot generally use local scale.
-    if stretch && rotation.sin().abs() > 1.0e-12 {
-        return Err(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::RotatedDimensionStretch,
-        ));
+/// Convert a world-axis scale to local factors when no shear is required.
+pub(crate) fn world_scale_factors(
+    rotation: f64,
+    x: f64,
+    y: f64,
+) -> Result<(f64, f64), AuthoringError> {
+    if x == y || rotation.sin().abs() <= 1.0e-12 {
+        return Ok((x, y));
     }
-    Ok(())
+    if rotation.cos().abs() <= 1.0e-12 {
+        return Ok((y, x));
+    }
+    Err(AuthoringError::Unsupported(
+        crate::UnsupportedAuthoringOperation::RotatedDimensionStretch,
+    ))
 }
 
 impl LayoutAnchor {
@@ -93,12 +99,6 @@ impl LayoutAnchor {
         };
         let transaction = {
             let store = self.integration_store().borrow();
-            for &leaf in layout.leaves() {
-                let state = store
-                    .semantic_object_state_checked(leaf)
-                    .map_err(AuthoringError::from)?;
-                validate_fit_stretch(state.transform.rotation_z, stretch)?;
-            }
             crate::family_affine::FamilyAffine::Scale(x, y, pivot).transaction(
                 &store,
                 layout.leaves(),
@@ -205,14 +205,14 @@ pub(crate) fn replacement_transaction(
         let previous = store
             .semantic_object_state_checked(leaf)
             .map_err(AuthoringError::from)?;
-        validate_fit_stretch(previous.transform.rotation_z, stretch && x != y)?;
+        let (local_x, local_y) = world_scale_factors(previous.transform.rotation_z, x, y)?;
         let old_center = state_center(store, previous)?;
         let next_center = (
             destination.0 + (old_center.0 - center.0) * x,
             destination.1 + (old_center.1 - center.1) * y,
         );
         let mut next = previous.clone();
-        scale_state_about_center(store, &mut next, x, y, next_center)?;
+        scale_state_about_center(store, &mut next, local_x, local_y, next_center)?;
         stage_state_changes(&mut transaction, leaf, previous, &next);
     }
     Ok(transaction)
