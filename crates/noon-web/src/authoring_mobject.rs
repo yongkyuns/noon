@@ -1,4 +1,31 @@
 #[cfg(target_arch = "wasm32")]
+pub(crate) fn gradient_colors(
+    values: &[f64],
+) -> Result<Vec<noon::Color>, crate::authoring_error::AuthoringFailure> {
+    if !values.len().is_multiple_of(4) {
+        return Err(crate::authoring_error::AuthoringFailure::new(
+            "invalid_input",
+            "gradient.invalid_components",
+            "gradient colors require RGBA components",
+        ));
+    }
+    values
+        .chunks_exact(4)
+        .map(|c| {
+            family_color(true, c[0], c[1], c[2], c[3])
+                .map(|color| color.expect("enabled color"))
+                .map_err(|error| {
+                    crate::authoring_error::AuthoringFailure::new(
+                        "invalid_input",
+                        "gradient.invalid_color",
+                        error,
+                    )
+                })
+        })
+        .collect()
+}
+
+#[cfg(target_arch = "wasm32")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn style_update(
     fill_enabled: bool,
@@ -263,6 +290,52 @@ mod wasm {
         #[wasm_bindgen(js_name = setAligner)]
         pub fn set_aligner(&mut self, aligner: &WasmLayoutAnchor) {
             self.options.aligner = Some(aligner.anchor.clone());
+        }
+    }
+
+    /// Transient grid call arguments; all sizing and validation belong to shared Rust.
+    #[wasm_bindgen]
+    pub struct WasmFamilyGridOptions {
+        pub(crate) options: noon::FamilyGridOptions,
+    }
+
+    #[wasm_bindgen]
+    impl WasmFamilyGridOptions {
+        #[wasm_bindgen(js_name = setAlignment)]
+        pub fn set_alignment(
+            &mut self,
+            x: f64,
+            y: f64,
+            rows: Option<String>,
+            columns: Option<String>,
+        ) {
+            self.options.cell_alignment = (x, y);
+            self.options.row_alignments = rows;
+            self.options.column_alignments = columns;
+        }
+        #[wasm_bindgen(js_name = setFlow)]
+        pub fn set_flow(&mut self, flow: &str) -> Result<(), JsValue> {
+            self.options.flow = flow.parse().map_err(js_error)?;
+            Ok(())
+        }
+        #[wasm_bindgen(js_name = setSizeLists)]
+        pub fn set_size_lists(&mut self, rows: bool, columns: bool) {
+            self.options.row_heights = rows.then(Vec::new);
+            self.options.column_widths = columns.then(Vec::new);
+        }
+        #[wasm_bindgen(js_name = addRowHeight)]
+        pub fn add_row_height(&mut self, value: Option<f64>) {
+            self.options
+                .row_heights
+                .get_or_insert_with(Vec::new)
+                .push(value);
+        }
+        #[wasm_bindgen(js_name = addColumnWidth)]
+        pub fn add_column_width(&mut self, value: Option<f64>) {
+            self.options
+                .column_widths
+                .get_or_insert_with(Vec::new)
+                .push(value);
         }
     }
 
@@ -643,6 +716,36 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = becomeFamily)]
+        pub fn become_family(
+            &self,
+            target: &WasmAuthoringFamilyHandle,
+            match_height: bool,
+            match_width: bool,
+            match_center: bool,
+            stretch: bool,
+        ) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .become_family(
+                    &target.semantic_family()?,
+                    noon::ManimBecomeOptions {
+                        match_height,
+                        match_width,
+                        match_center,
+                        stretch,
+                    },
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setColorGradient)]
+        pub fn set_color_gradient(&mut self, values: &[f64]) -> Result<(), JsValue> {
+            let colors = super::gradient_colors(values).map_err(js_error)?;
+            self.semantic_family()?
+                .set_color_by_gradient(&colors)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setStyle)]
         #[allow(clippy::too_many_arguments)]
         pub fn set_style(
@@ -746,21 +849,28 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = arrangeInGrid)]
-        pub fn arrange_in_grid(
+        #[wasm_bindgen(js_name = gridOptions)]
+        pub fn grid_options(
             &self,
             rows: Option<u32>,
             columns: Option<u32>,
             gap_x: f64,
             gap_y: f64,
-        ) -> Result<(), JsValue> {
+        ) -> WasmFamilyGridOptions {
+            WasmFamilyGridOptions {
+                options: noon::FamilyGridOptions {
+                    rows: rows.map(|v| v as usize),
+                    columns: columns.map(|v| v as usize),
+                    gap: (gap_x, gap_y),
+                    ..Default::default()
+                },
+            }
+        }
+
+        #[wasm_bindgen(js_name = arrangeInGrid)]
+        pub fn arrange_in_grid(&self, options: &WasmFamilyGridOptions) -> Result<(), JsValue> {
             self.semantic_family()?
-                .arrange_in_grid(
-                    rows.map(|v| v as usize),
-                    columns.map(|v| v as usize),
-                    gap_x,
-                    gap_y,
-                )
+                .arrange_in_grid_with_options(&options.options)
                 .map_err(js_error)
         }
 
@@ -857,15 +967,16 @@ mod wasm {
         }
 
         #[wasm_bindgen(getter, js_name = memberCount)]
-        pub fn member_count(&self) -> usize {
+        pub fn member_count(&self) -> Result<usize, JsValue> {
             self.family
                 .integration_store()
                 .borrow()
-                .node(self.family.node_id())
-                .map_or(0, |node| node.member_count())
+                .semantic_family_checked(self.family.node_id())
+                .map(|node| node.member_count())
+                .map_err(typed_js_error)
         }
 
-        /// One bounded observation for mirroring a newly constructed wrapper list.
+        /// Observe authoritative family order when a frontend requests members.
         #[wasm_bindgen(js_name = memberKeys)]
         pub fn member_keys(&self) -> Result<Vec<String>, JsValue> {
             let store = self.family.integration_store().borrow();
@@ -1008,6 +1119,33 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
+        #[wasm_bindgen(js_name = fillColor)]
+        pub fn fill_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
+            self.handle
+                .fill_color()
+                .map(|color| color.map(WasmManimColor::from_color))
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = strokeColor)]
+        pub fn stroke_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
+            self.handle
+                .stroke_color()
+                .map(|color| color.map(WasmManimColor::from_color))
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(getter, js_name = strokeWidth)]
+        pub fn stroke_width(&self) -> Result<f64, JsValue> {
+            self.handle.stroke_width().map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setColorGradient)]
+        pub fn set_color_gradient(&mut self, values: &[f64]) -> Result<(), JsValue> {
+            let colors = super::gradient_colors(values).map_err(js_error)?;
+            self.handle.set_color_by_gradient(&colors).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setStyle)]
         #[allow(clippy::too_many_arguments)]
         pub fn set_style(

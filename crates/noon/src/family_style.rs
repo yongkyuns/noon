@@ -219,21 +219,29 @@ impl MobjectFamily {
         &self,
         edit: impl Fn(&mut SemanticStyle) -> Result<(), AuthoringError>,
     ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        self.style_transaction_indexed(|_, _, style| edit(style))
+    }
+
+    pub(crate) fn style_transaction_indexed(
+        &self,
+        edit: impl Fn(usize, usize, &mut SemanticStyle) -> Result<(), AuthoringError>,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
         self.validate()?;
         // Validate arguments even for an empty family, before staging any writes.
-        edit(&mut SemanticStyle::default())?;
+        edit(0, 1, &mut SemanticStyle::default())?;
         let store = self.integration_store().borrow();
         let leaves = store
             .ordered_leaf_nodes(self.node_id())
             .map_err(AuthoringError::from)?;
         let mut transaction = SemanticMutationTransaction::new();
-        for leaf in leaves {
+        let count = leaves.len();
+        for (index, leaf) in leaves.into_iter().enumerate() {
             let previous = &store
                 .semantic_object_state_checked(leaf)
                 .map_err(AuthoringError::from)?
                 .style;
             let mut next = previous.clone();
-            edit(&mut next)?;
+            edit(index, count, &mut next)?;
             if next != *previous {
                 transaction.replace_style(leaf, next);
             }

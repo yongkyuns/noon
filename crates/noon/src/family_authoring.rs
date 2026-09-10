@@ -161,6 +161,20 @@ impl MobjectFamilyMember<'_> {
     }
 }
 
+/// Select the last occurrence of each incoming identity, preserving batch order.
+/// This only visits the input batch, never the existing family's siblings.
+fn last_occurrences(members: &[MobjectFamilyMember<'_>]) -> Vec<usize> {
+    let mut seen = BTreeSet::new();
+    let mut indices: Vec<_> = members
+        .iter()
+        .enumerate()
+        .rev()
+        .filter_map(|(index, member)| seen.insert(member.node_id()).then_some(index))
+        .collect();
+    indices.reverse();
+    indices
+}
+
 /// Construct the same pending semantic family for authored and live publication.
 pub(crate) fn family_creation_transaction(
     store: &Rc<RefCell<SemanticStore>>,
@@ -177,11 +191,8 @@ pub(crate) fn family_creation_transaction(
     }
     let mut transaction = SemanticMutationTransaction::new();
     let family = transaction.create_node(noon_core::SemanticNodeCreation::family());
-    let mut seen = BTreeSet::new();
-    for member in members {
-        if seen.insert(member.node_id()) {
-            transaction.add_member(family, member.node_id());
-        }
+    for index in last_occurrences(members) {
+        transaction.add_member(family, members[index].node_id());
     }
     Ok((transaction, family))
 }
@@ -200,23 +211,22 @@ pub(crate) fn family_membership_transaction(
     let node = store
         .semantic_family_checked(family.node_id())
         .map_err(AuthoringError::from)?;
-    let mut seen = BTreeSet::new();
     let mut transaction = SemanticMutationTransaction::new();
-    let changed = members
-        .iter()
-        .map(|member| {
-            let id = member.node_id();
-            let changed = seen.insert(id) && node.contains_member(id) != adding;
-            if changed {
-                if adding {
-                    transaction.add_member(family.node_id(), id);
-                } else {
-                    transaction.remove_member(family.node_id(), id);
-                }
+    let mut changed = vec![false; members.len()];
+    for index in last_occurrences(members) {
+        let id = members[index].node_id();
+        let present = node.contains_member(id);
+        changed[index] = present != adding;
+        if adding {
+            if present {
+                transaction.reorder_member(family.node_id(), id, None);
+            } else {
+                transaction.add_member(family.node_id(), id);
             }
-            changed
-        })
-        .collect();
+        } else if present {
+            transaction.remove_member(family.node_id(), id);
+        }
+    }
     Ok((transaction, changed))
 }
 
@@ -236,7 +246,8 @@ impl MobjectFamily {
         Self::from_node(store, node)
     }
 
-    /// Add one direct member; repeated additions preserve its existing order.
+    /// Add one direct member, moving an existing member to the tail.
+    /// Returns whether membership was new; a false result can still reorder it.
     pub fn add(&self, member: MobjectFamilyMember<'_>) -> Result<bool, AuthoringError> {
         Ok(self.add_many(&[member])?[0])
     }

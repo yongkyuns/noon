@@ -51,6 +51,26 @@ def _as_color(name: str, value: object) -> _base.Color:
 class VMobject(Mobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
 
+    def set_color_by_gradient(self, *colors):
+        from _manim_semantic_handles import _set_color_by_gradient
+        return _set_color_by_gradient(self, *colors)
+
+    set_submobject_colors_by_gradient = set_color_by_gradient
+
+    def get_fill_color(self):
+        from _manim_semantic_handles import _paint_color
+        return _paint_color(self, "fill")
+
+    def get_stroke_color(self, background=False):
+        if background:
+            raise NotImplementedError("background strokes require shared background paint")
+        from _manim_semantic_handles import _paint_color
+        return _paint_color(self, "stroke")
+
+    def get_stroke_width(self, background=False):
+        from _manim_semantic_handles import _get_stroke_width
+        return _get_stroke_width(self, background)
+
     def set_style(self, fill_color=None, fill_opacity=None, stroke_color=None,
                   stroke_width=None, stroke_opacity=None, family=True, **kwargs):
         from _manim_semantic_handles import _set_style
@@ -201,6 +221,12 @@ def _rotation_angle_2d(angle: float, axis: object = OUT) -> float:
 class Group(Mobject):
     """Python identities and ergonomics over a shared Rust semantic family."""
 
+    def set_color_by_gradient(self, *colors):
+        from _manim_semantic_handles import _set_color_by_gradient
+        return _set_color_by_gradient(self, *colors)
+
+    set_submobject_colors_by_gradient = set_color_by_gradient
+
     def set_style(self, fill_color=None, fill_opacity=None, stroke_color=None,
                   stroke_width=None, stroke_opacity=None, family=True, **kwargs):
         from _manim_semantic_handles import _set_style
@@ -214,6 +240,12 @@ class Group(Mobject):
     def __init__(self, *mobjects: object) -> None:
         from _manim_semantic_handles import _group_init
         _group_init(self, *mobjects)
+
+    @property
+    def submobjects(self) -> list[object]:
+        """Ordered shared membership snapshot; edit membership with add/remove."""
+        from _manim_semantic_handles import _group_members
+        return _group_members(self)
 
     @property
     def id(self) -> int:
@@ -235,7 +267,7 @@ class Group(Mobject):
         return iter(self.submobjects)
 
     def __len__(self) -> int:
-        return len(self.submobjects)
+        return int(self._semantic_family_handle.memberCount)
 
     def __getitem__(self, index: int) -> object:
         return self.submobjects[index]
@@ -351,13 +383,15 @@ class Group(Mobject):
         return _base._semantic_operations()._group_arrange(self, direction, buff, center, **kwargs)
 
     def arrange_in_grid(
-        self,
-        rows: int | None = None,
-        cols: int | None = None,
+        self, rows: int | None = None, cols: int | None = None,
         buff: float | tuple[float, float] = _base.MED_SMALL_BUFF,
+        cell_alignment: object = _base.ORIGIN, row_alignments: str | None = None,
+        col_alignments: str | None = None, row_heights=None, col_widths=None,
+        flow_order: str = "rd",
     ) -> Group:
         from _manim_semantic_handles import _group_arrange_in_grid
-        return _group_arrange_in_grid(self, rows, cols, buff)
+        return _group_arrange_in_grid(self, rows, cols, buff, cell_alignment,
+            row_alignments, col_alignments, row_heights, col_widths, flow_order)
 
     @property
     def animate(self):
@@ -409,28 +443,17 @@ def _mobject_restore(self: Mobject) -> Mobject:
 
 
 class MoveToTarget:
-    """ManimCE ``MoveToTarget`` over the shared leaf ``TransformTo`` path."""
+    """Manim target-editor request over the ordinary shared Transform path."""
 
     def __new__(cls, mobject: object, **kwargs: Any):
-        if isinstance(mobject, Group):
-            raise NotImplementedError(
-                "MoveToTarget(Group/VGroup) requires retained family Transform semantics"
-            )
         if not isinstance(mobject, Mobject):
             raise TypeError("MoveToTarget target must be a Mobject")
         if not hasattr(mobject, "target"):
             raise ValueError("MoveToTarget called on mobject without attribute 'target'")
         target = mobject.target
-        if not isinstance(target, Mobject) or isinstance(target, Group):
-            raise NotImplementedError(
-                "MoveToTarget currently requires a leaf Mobject target produced by generate_target()"
-            )
-        unsupported = sorted(set(kwargs) - {"key"})
-        if unsupported:
-            raise NotImplementedError(
-                "unsupported MoveToTarget option(s): " + ", ".join(unsupported)
-            )
-        return _base.Transform(mobject, target, key=kwargs.get("key"))
+        if not isinstance(target, Mobject):
+            raise TypeError("MoveToTarget target state must be a Mobject")
+        return _base.Transform(mobject, target, **kwargs)
 
 
 _FAMILY_COPY_METADATA = object()
@@ -453,6 +476,7 @@ def prepare_family_wrapper_copy(source: Group, excluded_fields):
     nodes in one transaction after the fallible host metadata pass has completed.
     """
     pairs = []
+    family_members = []
     memo = {}
 
     def allocate(value):
@@ -463,7 +487,7 @@ def prepare_family_wrapper_copy(source: Group, excluded_fields):
         memo[id(value)] = clone
         pairs.append((value, clone))
         if isinstance(value, Group):
-            clone.submobjects = [allocate(member) for member in value.submobjects]
+            family_members.append((clone, [allocate(member) for member in value.submobjects]))
         return clone
 
     memo[_FAMILY_COPY_METADATA] = allocate
@@ -476,7 +500,7 @@ def prepare_family_wrapper_copy(source: Group, excluded_fields):
         index += 1
         excluded = excluded_fields(original)
         copy_wrapper_attributes(original, clone, memo, excluded | {"submobjects"})
-    return root, pairs
+    return root, pairs, family_members
 
 
 def copy_wrapper_attributes(source, target, memo=None, excluded=()):
