@@ -85,6 +85,7 @@ impl SemanticExecutionIndex {
                 | SemanticMutationImpact::ObjectProperty { .. }
                 | SemanticMutationImpact::ObjectContent { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }
+                | SemanticMutationImpact::ZIndex { .. }
                 | SemanticMutationImpact::Subscription { .. }
                 | SemanticMutationImpact::UpdaterRegistrations { .. }
                 | SemanticMutationImpact::SignalScoped { .. }
@@ -131,7 +132,7 @@ impl SemanticExecutionIndex {
         let node = store
             .node(root)
             .ok_or(SemanticStoreError::UnknownNode(root))?;
-        if !matches!(node.kind(), SemanticNodeKind::Family) {
+        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
             return Err(SemanticStoreError::NotFamily(root).into());
         }
         self.lower_roots(store, std::iter::once(root))

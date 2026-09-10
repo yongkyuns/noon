@@ -441,7 +441,7 @@ impl LiveSession<'_> {
         let node = anchor.resolve().map_err(LiveSessionError::from)?;
         if matches!(
             self.store.borrow().node(node).map(|n| n.kind()),
-            Some(noon_core::SemanticNodeKind::Family)
+            Some(noon_core::SemanticNodeKind::Family(_))
         ) {
             let family = MobjectFamily::from_node(Rc::clone(self.store), node)
                 .map_err(LiveSessionError::from)?;

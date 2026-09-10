@@ -815,6 +815,30 @@ def _planar_affine(self, operation, arguments, about_point, about_edge):
     return self
 
 
+def _get_z_index(self):
+    anchor = _layout_anchor(self)
+    if anchor is None:
+        raise RuntimeError("painter priority requires the shared Rust authoring host")
+    return float(engine_call(anchor.zIndex))
+
+
+def _set_z_index(self, value, family=True):
+    from _manim_updaters import _canonical_phase_context
+    if _canonical_phase_context(self) is not None:
+        raise NotImplementedError("z-index during a host callback requires phase-local publication")
+    value = float(value)
+    anchor = _layout_anchor(self)
+    if anchor is None:
+        raise RuntimeError("painter priority requires the shared Rust authoring host")
+    context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
+               else _live_mutation_context(self))
+    if context is None:
+        engine_call(anchor.setZIndex, value, bool(family))
+    else:
+        engine_call(context.liveSetZIndex, anchor, value, bool(family))
+    return self
+
+
 def _flip(self, axis=_base.UP, *, about_point=None, about_edge=None):
     from _manim_updaters import _canonical_phase_context
     if not isinstance(self, _compat.Group) and _canonical_phase_context(self) is not None:

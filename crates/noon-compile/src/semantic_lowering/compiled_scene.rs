@@ -15,6 +15,9 @@ use super::SemanticExecutionProjection;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticCompiledSceneError {
     TooManyObjects(usize),
+    InvalidPresentation {
+        node: SemanticNodeId,
+    },
     UnsupportedSignalBindings {
         node: SemanticNodeId,
         count: usize,
@@ -35,6 +38,7 @@ pub enum SemanticCompiledSceneError {
 impl std::fmt::Display for SemanticCompiledSceneError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidPresentation { node } => write!(formatter,"semantic object {}:{} contains a non-finite z-index",node.slot(),node.generation()),
             Self::TooManyObjects(count) => {
                 write!(formatter, "semantic projection contains too many objects: {count}")
             }
@@ -111,7 +115,19 @@ fn materialize_semantic_projection(
     let mut ordered = projection.objects().iter().collect::<Vec<_>>();
     // Root/family traversal already carries the authoritative same-z painter order.
     // Stable sorting applies z layers without restoring global creation order.
-    ordered.sort_by_key(|object| object.presentation.z_index);
+    for object in &ordered {
+        if !object.presentation.z_index.is_finite() {
+            return Err(SemanticCompiledSceneError::InvalidPresentation {
+                node: object.semantic_id,
+            });
+        }
+    }
+    ordered.sort_by(|left, right| {
+        left.presentation
+            .z_index
+            .partial_cmp(&right.presentation.z_index)
+            .unwrap()
+    });
 
     let count = ordered.len();
     if u32::try_from(count).is_err() {
@@ -140,6 +156,7 @@ fn materialize_semantic_projection(
             text_bounds,
             base_transform: object.base_transform,
             base_style: object.base_style,
+            base_z_index: object.presentation.z_index,
             dynamic: DynamicProperties::default(),
             live: true,
         });
@@ -147,7 +164,18 @@ fn materialize_semantic_projection(
     }
 
     let painter_order = (0..objects.len() as u32).collect::<Vec<_>>();
+    let family_order = projection
+        .objects()
+        .iter()
+        .map(|object| object_indices[&object.execution_id])
+        .collect::<Vec<_>>();
+    let mut family_ranks = vec![None; objects.len()];
+    for (rank, &index) in family_order.iter().enumerate() {
+        family_ranks[index as usize] = Some(rank as u32);
+    }
     Ok(CompiledScene {
+        family_order,
+        family_ranks,
         live_object_count: objects.len(),
         painter_ranks: painter_order.iter().copied().map(Some).collect(),
         painter_order,

@@ -461,7 +461,7 @@ pub fn validate_semantic_publication_root(
     root: SemanticNodeId,
 ) -> Result<(), SemanticPublicationLoweringError> {
     let root_node = node_for_root_order(store, root)?;
-    if !matches!(root_node.kind(), SemanticNodeKind::Family) {
+    if !matches!(root_node.kind(), SemanticNodeKind::Family(_)) {
         return Err(
             SemanticLoweringError::Store(noon_core::SemanticStoreError::NotFamily(root)).into(),
         );

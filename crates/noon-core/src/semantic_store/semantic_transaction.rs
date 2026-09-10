@@ -79,6 +79,10 @@ pub enum SemanticMutation {
         object: SemanticTransactionNodeRef,
         content: SemanticObjectContent,
     },
+    SetZIndex {
+        node: SemanticTransactionNodeRef,
+        value: f64,
+    },
     ReplaceStyle {
         object: SemanticTransactionNodeRef,
         style: SemanticStyle,
@@ -139,7 +143,8 @@ pub enum SemanticMutation {
 impl SemanticMutation {
     fn node_references(&self) -> Vec<SemanticTransactionNodeRef> {
         match self {
-            Self::SetProperty { object, .. }
+            Self::SetZIndex { node: object, .. }
+            | Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceStyle { object, .. }
             | Self::ChangeSubscription { object, .. } => vec![*object],
@@ -185,7 +190,8 @@ impl SemanticMutation {
             Self::SetSignal { signal, .. } => Some(*signal),
             Self::AddScalarSignalTrack { signal, .. } => Some(*signal),
             Self::SetScalarSignalAt { signal, .. } => Some(*signal),
-            Self::SetProperty { object, .. }
+            Self::SetZIndex { node: object, .. }
+            | Self::SetProperty { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceStyle { object, .. }
             | Self::ChangeSubscription { object, .. } => object.existing(),
@@ -215,6 +221,7 @@ impl SemanticMutation {
             Self::ReplaceContent { object, .. } => {
                 Some(SemanticMutationKey::ObjectContent(*object))
             }
+            Self::SetZIndex { node, .. } => Some(SemanticMutationKey::ZIndex(*node)),
             Self::ReplaceStyle { object, .. } => Some(SemanticMutationKey::ObjectStyle(*object)),
             Self::ChangeSubscription {
                 object, property, ..
@@ -254,6 +261,7 @@ pub(super) enum SemanticMutationKey {
     },
     ObjectContent(SemanticTransactionNodeRef),
     ObjectStyle(SemanticTransactionNodeRef),
+    ZIndex(SemanticTransactionNodeRef),
     Subscription {
         object: SemanticTransactionNodeRef,
         property: SemanticObjectProperty,
@@ -277,6 +285,9 @@ pub(super) enum SemanticMutationKey {
 /// is introduced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SemanticMutationImpact {
+    ZIndex {
+        node: SemanticNodeId,
+    },
     SignalValue {
         signal: SemanticNodeId,
     },
@@ -337,6 +348,7 @@ pub struct SemanticMutationTransaction {
 
 pub(super) struct SemanticTransactionPreflight {
     changed: Vec<bool>,
+    staged_family_z: HashMap<SemanticTransactionNodeRef, f64>,
     staged_objects: HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
     staged_object_order: Vec<SemanticTransactionNodeRef>,
     staged_updaters: HashMap<SemanticTransactionNodeRef, Vec<SemanticUpdaterRegistration>>,
@@ -467,6 +479,19 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::ReplaceStyle {
             object: object.into(),
             style,
+        });
+        self
+    }
+
+    /// Set authored painter priority on an object or family root atomically.
+    pub fn set_z_index(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        value: f64,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetZIndex {
+            node: node.into(),
+            value,
         });
         self
     }
@@ -1269,6 +1294,7 @@ impl SemanticMutationTransaction {
         let mut family_edges = FamilyEdgePreflight::default();
         let mut pending_sources = HashSet::new();
         let mut staged_objects = HashMap::new();
+        let mut staged_family_z = HashMap::new();
         let mut staged_object_order = Vec::new();
         let mut staged_updaters =
             HashMap::<SemanticTransactionNodeRef, Vec<SemanticUpdaterRegistration>>::new();
@@ -1516,6 +1542,29 @@ impl SemanticMutationTransaction {
                         state.content = *content;
                     }
                     changed.push(did_change);
+                }
+                SemanticMutation::SetZIndex { node, value } => {
+                    catalog.ensure_authoring_node(*node, index)?;
+                    if !value.is_finite() {
+                        return Err(SemanticMutationTransactionError::NonFiniteZIndex {
+                            index,
+                            node: *node,
+                        });
+                    }
+                    if let Some(previous) = catalog.family_z_index(*node) {
+                        let previous = staged_family_z.entry(*node).or_insert(previous);
+                        changed.push(*previous != *value);
+                        *previous = *value;
+                    } else {
+                        let state = catalog.staged_object_state(
+                            &mut staged_objects,
+                            &mut staged_object_order,
+                            *node,
+                            index,
+                        )?;
+                        changed.push(state.z_index() != *value);
+                        state.set_z_index(*value);
+                    }
                 }
                 SemanticMutation::ReplaceStyle { object, style } => {
                     let state = catalog.staged_object_state(
@@ -1781,7 +1830,9 @@ impl SemanticMutationTransaction {
         staged_objects.retain(|node, _| {
             !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token))
         });
+        staged_family_z.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
         Ok(SemanticTransactionPreflight {
+            staged_family_z,
             changed,
             staged_objects,
             staged_object_order,
@@ -2027,6 +2078,14 @@ impl SemanticMutationTransactionResult {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticMutationTransactionError {
+    NonFiniteZIndex {
+        index: usize,
+        node: SemanticTransactionNodeRef,
+    },
+    DuplicateZIndex {
+        index: usize,
+        node: SemanticNodeId,
+    },
     SceneRevisionExhausted,
     InsertionOrderExhausted,
     PendingNodeFromDifferentTransaction {
@@ -2436,6 +2495,8 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 object.slot(),
                 object.generation()
             ),
+            Self::NonFiniteZIndex { index, node } => write!(formatter, "mutation {index} has non-finite z-index for {node:?}"),
+            Self::DuplicateZIndex { index, node } => write!(formatter, "mutation {index} duplicates z-index for {node:?}"),
             Self::DuplicateStyle { index, object } => write!(
                 formatter,
                 "semantic transaction mutation {index} repeats style replacement on object {}:{}",
@@ -2798,3 +2859,6 @@ mod provisional_tests;
 
 #[cfg(test)]
 mod signal_scope_tests;
+
+#[cfg(test)]
+mod z_index_tests;

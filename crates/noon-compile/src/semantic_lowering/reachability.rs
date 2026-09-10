@@ -224,6 +224,7 @@ impl SemanticExecutionReachability {
                 | SemanticMutationImpact::ObjectProperty { .. }
                 | SemanticMutationImpact::ObjectContent { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }
+                | SemanticMutationImpact::ZIndex { .. }
                 | SemanticMutationImpact::Subscription { .. }
                 | SemanticMutationImpact::UpdaterRegistrations { .. }
                 | SemanticMutationImpact::SignalScoped { .. }
@@ -331,7 +332,7 @@ impl SemanticExecutionReachability {
         ))?;
         let kind = match node.kind() {
             SemanticNodeKind::AuthoringObject => ReachabilityKind::Object,
-            SemanticNodeKind::Family => ReachabilityKind::Family {
+            SemanticNodeKind::Family(_) => ReachabilityKind::Family {
                 members: HashSet::new(),
             },
             SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => return Ok(false),

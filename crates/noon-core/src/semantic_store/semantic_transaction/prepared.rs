@@ -188,7 +188,8 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         let changed_objects: HashSet<_> = self
             .candidate_mutations()
             .filter_map(|mutation| match mutation {
-                SemanticMutation::SetProperty { object, .. }
+                SemanticMutation::SetZIndex { node: object, .. }
+                | SemanticMutation::SetProperty { object, .. }
                 | SemanticMutation::ReplaceStyle { object, .. }
                 | SemanticMutation::ReplaceContent { object, .. } => Some(*object),
                 _ => None,
@@ -243,6 +244,50 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 None => Err(SemanticTransactionReadError::UnknownPendingNode(token)),
             },
         }
+    }
+
+    /// Read proposed object or family painter priority without committing it.
+    pub fn z_index(
+        &self,
+        node: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<f64, SemanticTransactionReadError> {
+        let node = node.into();
+        match node {
+            SemanticTransactionNodeRef::Existing(id)
+                if self.preflight.removed_existing.contains(&id) =>
+            {
+                return Err(SemanticTransactionReadError::RemovedExistingNode(id))
+            }
+            SemanticTransactionNodeRef::Pending(token) => {
+                self.validate_read_token(token)?;
+                if self.preflight.removed_pending.contains(&token) {
+                    return Err(SemanticTransactionReadError::RemovedPendingNode(token));
+                }
+            }
+            _ => {}
+        }
+        if let Some(value) = self.preflight.staged_family_z.get(&node) {
+            return Ok(*value);
+        }
+        match node {
+            SemanticTransactionNodeRef::Existing(id) => {
+                if let Some(crate::SemanticNodeKind::Family(presentation)) =
+                    self.store.node(id).map(|node| node.kind())
+                {
+                    return Ok(presentation.z_index);
+                }
+            }
+            SemanticTransactionNodeRef::Pending(token)
+                if matches!(
+                    self.pending_creation(token),
+                    Some(SemanticNodeCreation::Family { .. })
+                ) =>
+            {
+                return Ok(0.0)
+            }
+            _ => {}
+        }
+        self.object_state(node).map(|state| state.z_index())
     }
 
     /// Clone the final staged object state with the insertion order it will receive
@@ -327,7 +372,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     .store
                     .node(family)
                     .ok_or(SemanticTransactionReadError::UnknownExistingNode(family))?;
-                if !matches!(node.kind(), SemanticNodeKind::Family) {
+                if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
                     return Err(SemanticTransactionReadError::NotFamily(family.into()));
                 }
                 Ok(self
@@ -383,7 +428,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     .store
                     .node(scope)
                     .ok_or(SemanticTransactionReadError::UnknownExistingNode(scope))?;
-                if !matches!(node.kind(), SemanticNodeKind::Family) {
+                if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
                     return Err(SemanticTransactionReadError::NotFamily(scope.into()));
                 }
                 node.scoped_signals()
@@ -549,6 +594,15 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     set_object_content(store, object, content);
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::ObjectContent { object });
+                }
+                SemanticMutation::SetZIndex { node, value } => {
+                    let node = resolve_node_ref(node, &committed_nodes);
+                    store
+                        .node_mut(node)
+                        .expect("preflighted authoring node")
+                        .set_z_index(value);
+                    written_slots.insert(node);
+                    impacts.push(SemanticMutationImpact::ZIndex { node });
                 }
                 SemanticMutation::ReplaceStyle { object, style } => {
                     let object = resolve_node_ref(object, &committed_nodes);
