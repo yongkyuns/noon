@@ -797,7 +797,7 @@ try {
     { filename: "ordinary_animated_stroke_width.py", objectCount: 1, expectedDuration: 2, endpointTime: null },
     { filename: "ordinary_path_queries.py", objectCount: 10, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_z_index.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
-    { filename: "ordinary_scale_pivots.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_scale_pivots.py", objectCount: 4, expectedDuration: 1.0, endpointTime: null },
     { filename: "ordinary_family_grid.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_create_shapes.py", objectCount: 4, expectedDuration: 3.2, endpointTime: null },
     { filename: "ordinary_morph_stress.py", objectCount: 96, expectedDuration: 3.4, endpointTime: null },

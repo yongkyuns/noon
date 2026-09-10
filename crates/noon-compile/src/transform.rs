@@ -168,6 +168,18 @@ pub(crate) fn compile_content_morph(
             | (GeometryRef::Circle { .. }, GeometryRef::Circle { .. })
             | (GeometryRef::Rectangle { .. }, GeometryRef::Rectangle { .. })
             | (GeometryRef::VectorPath(_), GeometryRef::VectorPath(_))
+            | (
+                GeometryRef::VectorPath(_),
+                GeometryRef::Circle { .. }
+                    | GeometryRef::Rectangle { .. }
+                    | GeometryRef::Line { .. }
+            )
+            | (
+                GeometryRef::Circle { .. }
+                    | GeometryRef::Rectangle { .. }
+                    | GeometryRef::Line { .. },
+                GeometryRef::VectorPath(_)
+            )
     );
     if !supported {
         return Err(TransformCompileFailure::UnsupportedGeometry);

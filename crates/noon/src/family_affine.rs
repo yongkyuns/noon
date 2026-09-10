@@ -18,7 +18,41 @@ pub(crate) enum FamilyAffine {
 }
 
 impl FamilyAffine {
-    pub(crate) fn transaction(
+    /// Keep ordinary affine edits resource-free. A world-axis scale that requires
+    /// shear is baked into only the affected immutable vector paths.
+    pub(crate) fn prepare(
+        self,
+        store: &SemanticStore,
+        leaves: &[SemanticNodeId],
+        bounds: Option<Bounds2D64>,
+    ) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
+        let mut affine_leaves = Vec::new();
+        let mut replacements = Vec::new();
+        for &leaf in leaves {
+            let state = store.semantic_object_state_checked(leaf)?;
+            if let Self::Scale(x, y, pivot) = self {
+                authoring_render_f64("scale.x", x)?;
+                authoring_render_f64("scale.y", y)?;
+                if crate::dimension_fit::world_scale_factors(state.transform.rotation_z, x, y)
+                    .is_err()
+                {
+                    let pivot =
+                        resolve_pivot(bounds, bounds_critical_point(bounds, 0.0, 0.0), pivot)?;
+                    let path = world_scaled_path(store, state, x, y, pivot, pivot)?;
+                    replacements.push((leaf, state.clone(), path));
+                    continue;
+                }
+            }
+            affine_leaves.push(leaf);
+        }
+        let transaction = self.transaction(store, &affine_leaves, bounds)?;
+        Ok(
+            crate::path_editing::PreparedPathEdits::prepare(store, replacements)?
+                .with_transaction(transaction),
+        )
+    }
+
+    fn transaction(
         self,
         store: &SemanticStore,
         leaves: &[SemanticNodeId],
@@ -116,6 +150,40 @@ impl FamilyAffine {
     }
 }
 
+/// Bake a world-axis deformation only when the ordinary affine cannot express it.
+/// Object-scaled stroke outlines need a full affine representation; retain the
+/// explicit unsupported result instead of changing their visible thickness.
+pub(crate) fn world_scaled_path(
+    store: &SemanticStore,
+    state: &noon_core::SemanticObjectState,
+    x: f64,
+    y: f64,
+    source: (f64, f64),
+    destination: (f64, f64),
+) -> Result<noon_core::VectorPath, AuthoringError> {
+    if state.style.stroke.is_some()
+        && state.style.stroke_width != 0.0
+        && state.style.stroke_width_mode == noon_core::StrokeWidthMode::ScaleWithObject
+    {
+        return Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::RotatedDimensionStretch,
+        ));
+    }
+    let transform = noon_core::Transform2D {
+        translation: noon_core::Vec2::new(
+            authoring_render_f64("stretch translation.x", destination.0 - source.0 * x)? as f32,
+            authoring_render_f64("stretch translation.y", destination.1 - source.1 * y)? as f32,
+        ),
+        scale: noon_core::Vec2::new(x as f32, y as f32),
+        rotation: 0.0,
+    };
+    let path = crate::path_editing::world_path(store, state)?.transformed(transform);
+    if !path.is_finite() {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    Ok(path)
+}
+
 fn resolve_pivot(
     bounds: Option<Bounds2D64>,
     center: (f64, f64),
@@ -183,15 +251,20 @@ impl LayoutAnchor {
 
     fn apply_affine(&self, operation: FamilyAffine) -> Result<(), AuthoringError> {
         let layout = self.layout()?;
-        let transaction = operation.transaction(
+        let prepared = operation.prepare(
             &self.integration_store().borrow(),
             layout.leaves(),
             layout.boundary_bounds(),
         )?;
-        transaction
-            .apply(&mut self.integration_store().borrow_mut())
-            .map(|_| ())
-            .map_err(AuthoringError::from)
+        prepared.publish(
+            &mut self.integration_store().borrow_mut(),
+            |store, transaction| {
+                transaction
+                    .apply(store)
+                    .map(|_| ())
+                    .map_err(AuthoringError::from)
+            },
+        )
     }
 }
 

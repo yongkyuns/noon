@@ -324,6 +324,13 @@ class Mobject:
     def scale_to_fit_height(self: Mobject, height: float, **kwargs: Any) -> Mobject:
         return self.rescale_to_fit(height, 1, stretch=False, **kwargs)
 
+    def stretch(self, factor: float, dim: int, *, about_point=None, about_edge=None) -> Mobject:
+        from _manim_semantic_handles import _stretch
+        return _stretch(self, factor, dim, about_point=about_point, about_edge=about_edge)
+
+    def stretch_about_point(self, factor: float, dim: int, point: object) -> Mobject:
+        return self.stretch(factor, dim, about_point=point)
+
     def stretch_to_fit_width(self: Mobject, width: float, **kwargs: Any) -> Mobject:
         return self.rescale_to_fit(width, 0, stretch=True, **kwargs)
 

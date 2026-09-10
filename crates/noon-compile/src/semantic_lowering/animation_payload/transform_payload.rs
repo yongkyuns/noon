@@ -183,9 +183,7 @@ pub(super) fn is_supported_content_morph(
         ) | (
             Some(StoredGeometry::Rectangle { .. }),
             Some(StoredGeometry::Circle { .. })
-        ) | (
-            Some(StoredGeometry::Resource(_)),
-            Some(StoredGeometry::Resource(_))
-        )
+        ) | (Some(StoredGeometry::Resource(_)), Some(_))
+            | (Some(_), Some(StoredGeometry::Resource(_)))
     )
 }

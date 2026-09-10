@@ -13,6 +13,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         let mut a = scene.square(0.6)?;
         a.set_fill(1., 68. / 255., 102. / 255., 1.)?;
         a.set_stroke_width(0.)?;
+        a.rotate(0.37)?;
         a.shift(-1., -1.)?;
         let mut b = scene.square(0.6)?;
         b.set_fill(1., 204. / 255., 68. / 255., 1.)?;
@@ -48,6 +49,34 @@ pub fn session() -> Result<ExecutionSession, String> {
             false,
             Pivot::Edge(1., 0.),
         )?;
+        live.stretch(
+            &LayoutAnchor::from(&family),
+            0.8,
+            crate::LayoutDimension::Height,
+            Pivot::Point(0., 0.),
+        )?;
+        live.rotate_layout(&LayoutAnchor::from(&b), 0.27, Pivot::Center)?;
+        let target = live.target_editor(&b)?;
+        live.stretch(
+            &LayoutAnchor::from(&target),
+            1.3,
+            crate::LayoutDimension::Width,
+            Pivot::Center,
+        )?;
+        let request = crate::AnimationCompositionRequest::TransformTo(
+            crate::TransformToRequest::new(
+                &b,
+                &target,
+                crate::AnimationOptions::new()
+                    .run_time(0.8)
+                    .rate_func(crate::RateFunction::Linear),
+            )
+            .method_target(),
+        );
+        let segment =
+            live.declare_and_activate_composition(&request, crate::AnimationOptions::new())?;
+        live.advance_segment_to(segment, segment.end_time())?;
+        live.complete_segment(segment)?;
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;

@@ -91,7 +91,7 @@ fn object_can_replace_a_family_and_zero_source_extent_does_not_divide_by_zero() 
 }
 
 #[test]
-fn empty_and_foreign_targets_and_unrepresentable_stretch_fail_atomically() {
+fn invalid_targets_fail_atomically_and_rotated_family_replacement_succeeds() {
     let scene = Scene::new();
     let first = scene.square(1.0).unwrap();
     let mut second = scene.square(1.0).unwrap();
@@ -102,11 +102,7 @@ fn empty_and_foreign_targets_and_unrepresentable_stretch_fail_atomically() {
     let target = scene.rectangle(4.0, 1.0).unwrap();
     let before = [first.state().unwrap(), second.state().unwrap()];
     let revision = scene.revision();
-    for target in [
-        LayoutAnchor::from(&empty),
-        (&foreign).into(),
-        (&target).into(),
-    ] {
+    for target in [LayoutAnchor::from(&empty), (&foreign).into()] {
         assert!(LayoutAnchor::from(&family)
             .replace_layout(&target, Height, true)
             .is_err());
@@ -121,6 +117,11 @@ fn empty_and_foreign_targets_and_unrepresentable_stretch_fail_atomically() {
         .replace_layout(&(&first).into(), Width, false)
         .unwrap();
     assert_eq!(scene.revision(), revision);
+    LayoutAnchor::from(&family)
+        .replace_layout(&(&target).into(), Height, true)
+        .unwrap();
+    close(family.layout().unwrap().width(), 4.0);
+    close(family.layout().unwrap().height(), 1.0);
 }
 
 #[test]
