@@ -854,15 +854,10 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_arrange_family_in_grid(
         &mut self,
         family: &noon::MobjectFamily,
-        rows: Option<usize>,
-        columns: Option<usize>,
-        gap_x: f64,
-        gap_y: f64,
+        options: &noon::FamilyGridOptions,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| {
-            live.arrange_family_in_grid(family, rows, columns, gap_x, gap_y)
-        })
-        .map(|_| ())
+        self.with_live_session(|live| live.arrange_family_in_grid_with_options(family, options))
+            .map(|_| ())
     }
 
     #[cfg(target_arch = "wasm32")]

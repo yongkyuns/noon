@@ -224,6 +224,9 @@ impl From<AuthoringError> for AuthoringFailure {
                 "authoring.invalid_grid_dimensions",
                 message,
             ),
+            AuthoringError::InvalidGridOption(_) => {
+                Self::new("invalid_input", "authoring.invalid_grid_option", message)
+            }
             AuthoringError::InsufficientGridCapacity { .. } => Self::new(
                 "invalid_input",
                 "authoring.insufficient_grid_capacity",

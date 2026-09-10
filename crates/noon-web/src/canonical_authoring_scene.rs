@@ -6474,22 +6474,13 @@ mod wasm {
         pub fn live_arrange_family_in_grid(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
-            rows: Option<u32>,
-            columns: Option<u32>,
-            gap_x: f64,
-            gap_y: f64,
+            options: &crate::authoring_mobject::WasmFamilyGridOptions,
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_arrange_family_in_grid(
-                    &family,
-                    rows.map(|v| v as usize),
-                    columns.map(|v| v as usize),
-                    gap_x,
-                    gap_y,
-                )
+                .live_arrange_family_in_grid(&family, &options.options)
                 .map_err(typed_js_error)
         }
 

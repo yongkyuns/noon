@@ -1406,7 +1406,10 @@ def _group_set_opacity(self, opacity):
     return _group_paint(self, "Opacity", (alpha,))
 
 
-def _group_arrange_in_grid(self, rows=None, cols=None, buff=_base.MED_SMALL_BUFF):
+def _group_arrange_in_grid(self, rows=None, cols=None, buff=_base.MED_SMALL_BUFF,
+                           cell_alignment=_base.ORIGIN, row_alignments=None,
+                           col_alignments=None, row_heights=None, col_widths=None,
+                           flow_order="rd"):
     import operator
 
     def dimension(value):
@@ -1423,12 +1426,21 @@ def _group_arrange_in_grid(self, rows=None, cols=None, buff=_base.MED_SMALL_BUFF
     handle = getattr(self, "_semantic_family_handle", None)
     if handle is None:
         raise RuntimeError("Group grid requires the shared Rust authoring host")
+    options = engine_call(handle.gridOptions, rows, cols, gap.x, gap.y)
+    alignment = _base._as_vec2(cell_alignment)
+    engine_call(options.setAlignment, alignment.x, alignment.y, row_alignments, col_alignments)
+    engine_call(options.setFlow, flow_order)
+    engine_call(options.setSizeLists, row_heights is not None, col_widths is not None)
+    for values, add in ((row_heights, options.addRowHeight), (col_widths, options.addColumnWidth)):
+        if values is not None:
+            for value in values:
+                engine_call(add, None if value is None else float(value))
     context = _group_live_layout_context(self)
     try:
         if context is None:
-            engine_call(handle.arrangeInGrid, rows, cols, gap.x, gap.y)
+            engine_call(handle.arrangeInGrid, options)
         else:
-            engine_call(context.liveArrangeFamilyInGrid, handle, rows, cols, gap.x, gap.y)
+            engine_call(context.liveArrangeFamilyInGrid, handle, options)
     except Exception as error:
         raise_engine_error(error)
     return self

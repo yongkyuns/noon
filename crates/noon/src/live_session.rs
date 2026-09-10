@@ -2102,10 +2102,26 @@ impl<'a> LiveSession<'a> {
         gap_x: f64,
         gap_y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.arrange_family_in_grid_with_options(
+            family,
+            &crate::FamilyGridOptions {
+                rows,
+                columns,
+                gap: (gap_x, gap_y),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Grid alignment and sizing consume coherent live bounds and publish atomically.
+    pub fn arrange_family_in_grid_with_options(
+        &mut self,
+        family: &MobjectFamily,
+        options: &crate::FamilyGridOptions,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_family(family)?;
         self.session.require_published_store(&self.store.borrow())?;
-        let plan = FamilyArrangePlan::grid(family, rows, columns, gap_x, gap_y)
-            .map_err(LiveSessionError::from)?;
+        let plan = FamilyArrangePlan::grid(family, options).map_err(LiveSessionError::from)?;
         self.publish_family_arrangement(plan)
     }
 
