@@ -1,0 +1,32 @@
+name: codex b3 family transform scheduler
+
+on:
+  push:
+    branches: [codex/b3-family-transform-schedule]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/b3-family-transform-schedule
+      - name: Apply and qualify family Transform scheduler
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/_codex_b3_family_schedule_patch.py
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo test -p noon-compile --test family_transform_schedule
+          cargo test -p noon-compile animation_schedule --lib
+          rm tools/_codex_b3_family_schedule_patch.py
+          rm .github/workflows/_codex_b3_family_schedule.yml
+          git config user.name "Yongkyun Shin"
+          git config user.email "yongkyuns@gmail.com"
+          git add -A
+          git commit -m "Project family Transform through shared scheduler"
+          git push origin HEAD:codex/b3-family-transform-schedule
