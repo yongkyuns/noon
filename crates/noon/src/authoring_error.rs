@@ -116,6 +116,8 @@ pub enum AuthoringError {
     InvalidStrokeCap(String),
     /// A layout direction is non-finite.
     NonFiniteDirection,
+    /// A color gradient requires at least one reference color.
+    EmptyColorGradient,
     /// A layout direction has zero length.
     ZeroDirection,
     /// Line matching received non-finite endpoints.
@@ -126,8 +128,6 @@ pub enum AuthoringError {
     UnorderedBounds(noon_core::Bounds2D64),
     /// An operation requested a dimension other than width or height.
     InvalidDimension(u32),
-    /// Replacement would divide by a zero source extent.
-    ZeroReplaceExtent,
     /// Stretch matching would divide by a zero target extent.
     ZeroStretchTarget,
     /// Height matching would divide by a zero target height.
@@ -152,6 +152,10 @@ pub enum AuthoringError {
         columns: usize,
         members: usize,
     },
+    /// Grid alignment, sizing or flow options are inconsistent.
+    InvalidGridOption(&'static str),
+    /// A planar flip needs a nonzero XY axis or a pure Z axis.
+    InvalidFlipAxis,
     /// An internal arrangement plan has not observed all required bounds.
     IncompleteArrangement,
     /// The node is not represented in this family-local copy mapping.
@@ -226,6 +230,7 @@ impl std::fmt::Display for AuthoringError {
             Self::InvalidStrokeJoin(_) => f.write_str("stroke_join must be round, miter, or bevel"),
             Self::InvalidStrokeCap(_) => f.write_str("stroke_cap must be round, butt, or square"),
             Self::NonFiniteDirection => f.write_str("direction must be finite"),
+            Self::EmptyColorGradient => f.write_str("a color gradient requires at least one color"),
             Self::ZeroDirection => f.write_str("direction must be non-zero"),
             Self::NonFiniteLineEndpoints => {
                 f.write_str("Line.match_points endpoints must be finite")
@@ -237,7 +242,6 @@ impl std::fmt::Display for AuthoringError {
             Self::InvalidDimension(_) => {
                 f.write_str("dimension fitting supports width (0) and height (1) only")
             }
-            Self::ZeroReplaceExtent => f.write_str("cannot replace along a zero-length dimension"),
             Self::ZeroStretchTarget => {
                 f.write_str("cannot stretch a zero-width or zero-height target")
             }
@@ -255,6 +259,10 @@ impl std::fmt::Display for AuthoringError {
             }
             Self::InsufficientGridCapacity { .. } => {
                 f.write_str("too few grid rows and columns to fit all members")
+            }
+            Self::InvalidGridOption(name) => write!(f, "invalid grid {name} option"),
+            Self::InvalidFlipAxis => {
+                f.write_str("flip axis must be nonzero and lie in the XY plane or along Z")
             }
             Self::IncompleteArrangement => f.write_str("family arrangement bounds are incomplete"),
             Self::MissingCopySource(source) => {

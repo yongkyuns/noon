@@ -103,6 +103,30 @@ pub fn session() -> Result<ExecutionSession, String> {
         .map_err(|error| error.to_string())?;
     // Exercise shared frame placement, then restore the demonstration layout.
     let center = family.layout().map_err(|error| error.to_string())?.center();
+    for (point, edge, mask) in [
+        (
+            (
+                center.0 + family.layout().map_err(|e| e.to_string())?.width() / 2.0,
+                0.0,
+            ),
+            (1.0, 0.0),
+            (1.0, 0.0),
+        ),
+        (
+            (
+                0.0,
+                center.1 + family.layout().map_err(|e| e.to_string())?.height() / 2.0,
+            ),
+            (0.0, 1.0),
+            (0.0, 1.0),
+        ),
+    ] {
+        family
+            .layout()
+            .map_err(|e| e.to_string())?
+            .move_to(Target::Point(point.0, point.1), edge, mask)
+            .map_err(|e| e.to_string())?;
+    }
     family
         .layout()
         .map_err(|error| error.to_string())?
@@ -130,6 +154,25 @@ pub fn session() -> Result<ExecutionSession, String> {
             .effective_family_layout(&family)
             .map_err(|e| e.to_string())?
             .center;
+        let layout = live
+            .effective_family_layout(&family)
+            .map_err(|e| e.to_string())?;
+        for (point, edge, mask) in [
+            ((center.0 + layout.width / 2.0, 0.0), (1.0, 0.0), (1.0, 0.0)),
+            (
+                (0.0, center.1 + layout.height / 2.0),
+                (0.0, 1.0),
+                (0.0, 1.0),
+            ),
+        ] {
+            live.move_family_to(
+                &family,
+                crate::LiveLayoutTarget::Point(point.0, point.1),
+                edge,
+                mask,
+            )
+            .map_err(|e| e.to_string())?;
+        }
         live.align_family_on_frame(&family, (0.0, -1.0), 0.5)
             .map_err(|e| e.to_string())?;
         let layout = live

@@ -6,7 +6,8 @@ from noon import (
 
 LINE_START = (-1.111538105676658, -3.0747595264191645)
 LINE_END = (1.111538105676658, -0.9252404735808355)
-LINE_COLOR = Color(0.2, 0.4, 0.8, 0.35)
+LINE_COLOR = Color(0.2, 0.4, 0.8)
+LINE_OPACITY = 0.35
 
 
 def assert_point(actual, expected):
@@ -39,7 +40,7 @@ class LiveGeometryConstruction(Scene):
                 (-1.0, -0.5), (1.0, 0.5),
                 fill=Color(1.0, 1.0, 0.0, 0.7),
                 stroke=Color(0.2, 0.4, 0.8),
-                stroke_opacity=LINE_COLOR.alpha,
+                stroke_opacity=LINE_OPACITY,
                 stroke_width=4.0,
             )
             .scale((1.5, 0.75))
@@ -49,6 +50,7 @@ class LiveGeometryConstruction(Scene):
         assert_point(line.get_start(), LINE_START)
         assert_point(line.get_end(), LINE_END)
         assert_color(line.get_color(), LINE_COLOR)
+        assert abs(line.get_stroke_opacity() - LINE_OPACITY) < 1e-6
         late_path = Path(
             VectorPath().move_to((-0.3, -0.3)).line_to((0.3, -0.3))
             .line_to((0.0, 0.3)).close(),
@@ -64,6 +66,7 @@ class LiveGeometryConstruction(Scene):
         assert_point(line.get_start(), (LINE_START[0], LINE_START[1] + 1.0))
         assert_point(line.get_end(), (LINE_END[0], LINE_END[1] + 1.0))
         assert_color(line.get_color(), LINE_COLOR)
+        assert abs(line.get_stroke_opacity() - LINE_OPACITY) < 1e-6
         dot = Dot((-4.0, -1.5, 0.0), radius=0.25, color=Color(1.0, 0.0, 0.0))
         annulus = Annulus(inner_radius=0.25, outer_radius=0.5, arc_center=(4.0, -1.5, 0.0),
                           color=Color(1.0, 1.0, 0.0))

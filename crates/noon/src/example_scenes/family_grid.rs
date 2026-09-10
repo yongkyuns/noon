@@ -1,6 +1,6 @@
 //! Unequal row/column sizes and center-preserving live grid placement.
 //! Paired with ordinary_family_grid.py.
-use crate::{ExecutionSession, Scene};
+use crate::{ExecutionSession, FamilyGridOptions, GridFlow, Scene};
 
 pub fn session() -> Result<ExecutionSession, String> {
     let mut scene = Scene::new();
@@ -13,6 +13,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         object
             .set_fill(0.2, 0.6, 1.0, 0.7)
             .map_err(|error| error.to_string())?;
+        object.set_stroke_width(0.0).map_err(|e| e.to_string())?;
         members.push(object);
     }
     let family = scene
@@ -35,13 +36,25 @@ pub fn session() -> Result<ExecutionSession, String> {
         live.advance_segment_to(wait, wait.end_time())
             .map_err(|e| e.to_string())?;
         live.complete_segment(wait).map_err(|e| e.to_string())?;
-        live.arrange_family_in_grid(&family, Some(1), None, 0.25, 0.25)
-            .map_err(|e| e.to_string())?;
+        live.arrange_family_in_grid_with_options(
+            &family,
+            &FamilyGridOptions {
+                gap: (0.5, 0.25),
+                row_alignments: Some("ud".into()),
+                column_alignments: Some("lr".into()),
+                row_heights: Some(vec![Some(3.0), None]),
+                column_widths: Some(vec![None, Some(2.0)]),
+                flow: GridFlow::DownRight,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| e.to_string())?;
         let layout = live
             .effective_family_layout(&family)
             .map_err(|e| e.to_string())?;
         assert_eq!(layout.center, (1.0, 0.0));
-        assert_eq!(layout.width, 5.25);
+        assert_eq!(layout.width, 4.5);
+        assert_eq!(layout.height, 4.25);
         let wait = live.wait_segment(0.1).map_err(|e| e.to_string())?;
         live.advance_segment_to(wait, wait.end_time())
             .map_err(|e| e.to_string())?;

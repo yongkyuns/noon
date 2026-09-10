@@ -60,6 +60,49 @@ impl LiveSession<'_> {
         self.rescale_to_fit(source, dimension.length(bounds), dimension, stretch)
     }
 
+    /// Replace object/family size and center in one coherent local publication.
+    /// Reads current target bounds. Persistent source edits require resolved
+    /// affine/content drivers, as with ordinary dimension fitting.
+    pub fn replace_layout(
+        &mut self,
+        source: &crate::LayoutAnchor,
+        target: &crate::LayoutAnchor,
+        dimension: crate::LayoutDimension,
+        stretch: bool,
+    ) -> Result<(), LiveSessionError> {
+        let (leaves, bounds) = self.anchor_layout_members(source)?;
+        let (target_nodes, target_bounds) = self.anchor_layout_members(target)?;
+        if target_bounds.is_none() {
+            return Err(crate::AuthoringError::MissingLayoutBounds(
+                target.resolve().map_err(LiveSessionError::from)?,
+            )
+            .into());
+        }
+        for &leaf in &leaves {
+            let object =
+                Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
+            self.placement_authored_transform(&object)?;
+        }
+        let target_leaves = target_nodes
+            .into_iter()
+            .map(|node| {
+                let object = Mobject::from_node(Rc::clone(self.store), node)
+                    .map_err(LiveSessionError::from)?;
+                Ok((node, self.family_member_bounds(&object)?))
+            })
+            .collect::<Result<Vec<_>, LiveSessionError>>()?;
+        let transaction = crate::dimension_fit::replacement_transaction(
+            &self.store.borrow(),
+            &leaves,
+            bounds,
+            &target_leaves,
+            dimension,
+            stretch,
+        )
+        .map_err(LiveSessionError::from)?;
+        self.apply(transaction).map(|_| ())
+    }
+
     /// Publish one alias-aware family scale after validating every local member.
     pub fn scale_family(
         &mut self,
@@ -160,7 +203,41 @@ impl LiveSession<'_> {
         family: &MobjectFamily,
         operation: crate::family_affine::FamilyAffine,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let (leaves, bounds) = self.family_layout_members(family)?;
+        self.affine_layout(&crate::LayoutAnchor::from(family), operation)
+    }
+
+    /// Rotate a selected object or family using coherent live pivot bounds.
+    pub fn rotate_layout(
+        &mut self,
+        anchor: &crate::LayoutAnchor,
+        angle: f64,
+        pivot: crate::ManimRotationPivot,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.affine_layout(
+            anchor,
+            crate::family_affine::FamilyAffine::Rotate(angle, pivot),
+        )
+    }
+
+    /// Reflect selected leaves atomically through the ordinary semantic publication.
+    pub fn flip_layout(
+        &mut self,
+        anchor: &crate::LayoutAnchor,
+        axis: crate::SemanticVec3,
+        pivot: crate::ManimRotationPivot,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.affine_layout(
+            anchor,
+            crate::family_affine::FamilyAffine::Flip(axis, pivot),
+        )
+    }
+
+    fn affine_layout(
+        &mut self,
+        anchor: &crate::LayoutAnchor,
+        operation: crate::family_affine::FamilyAffine,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let (leaves, bounds) = self.anchor_layout_members(anchor)?;
         // As with placement, resolve an active affine driver at its logical
         // completion barrier before a persistent edit; never overwrite it midway.
         for &leaf in &leaves {

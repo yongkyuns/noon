@@ -12,12 +12,13 @@ pub use family_layout::LiveLayoutTarget;
 use crate::execution_session::EffectiveSemanticObject;
 use crate::{
     family_arrangement::FamilyArrangePlan,
-    semantic_mobject::{authoring_render_f64, prepare_become_state, stage_state_changes},
+    semantic_mobject::{authoring_render_f64, stage_state_changes},
     semantic_mobject::{
         edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
         edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
         edit_stroke_opacity,
     },
+    state_replacement::prepare_become_state,
     DeclaredAnimation, ExecutionSegment, ExecutionSegmentAdvanceError,
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError,
@@ -743,6 +744,26 @@ impl<'a> LiveSession<'a> {
         self.apply(transaction)
     }
 
+    /// Replace a matching family's presentation from one coherent capture.
+    /// Existing member identities/order survive, and all edits publish together.
+    pub fn become_family(
+        &mut self,
+        source: &MobjectFamily,
+        target: &MobjectFamily,
+        options: ManimBecomeOptions,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(source)?;
+        self.require_family(target)?;
+        self.require_target_capture()?;
+        let transaction = crate::state_replacement::family_become_transaction(
+            source,
+            target,
+            options,
+            |object| self.capture_mobject_state(object),
+        )?;
+        self.apply(transaction)
+    }
+
     fn capture_mobject_state(
         &self,
         source: &Mobject,
@@ -1005,7 +1026,35 @@ impl<'a> LiveSession<'a> {
             .map_err(LiveSessionError::from)
     }
 
-    /// Read Manim's stroke-first color at the current publication.
+    pub fn effective_fill_color(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<Option<Color>, LiveSessionError> {
+        mobject.fill_color().map_err(LiveSessionError::from)?;
+        Ok(self
+            .effective(mobject)?
+            .style
+            .fill
+            .map(crate::semantic_mobject::opaque_paint_color))
+    }
+
+    pub fn effective_stroke_color(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<Option<Color>, LiveSessionError> {
+        mobject.stroke_color().map_err(LiveSessionError::from)?;
+        Ok(self
+            .effective(mobject)?
+            .style
+            .stroke
+            .map(crate::semantic_mobject::opaque_paint_color))
+    }
+
+    pub fn effective_stroke_width(&self, mobject: &Mobject) -> Result<f64, LiveSessionError> {
+        Ok(f64::from(self.effective(mobject)?.style.stroke_width))
+    }
+
+    /// Read visible fill RGB, falling back to stroke RGB, at the current publication.
     pub fn effective_manim_color(&self, mobject: &Mobject) -> Result<Color, LiveSessionError> {
         // Resource paints do not have a scalar Manim color representation. Check
         // the selected authored channel before observing its lowered runtime style.
@@ -2053,10 +2102,26 @@ impl<'a> LiveSession<'a> {
         gap_x: f64,
         gap_y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.arrange_family_in_grid_with_options(
+            family,
+            &crate::FamilyGridOptions {
+                rows,
+                columns,
+                gap: (gap_x, gap_y),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Grid alignment and sizing consume coherent live bounds and publish atomically.
+    pub fn arrange_family_in_grid_with_options(
+        &mut self,
+        family: &MobjectFamily,
+        options: &crate::FamilyGridOptions,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_family(family)?;
         self.session.require_published_store(&self.store.borrow())?;
-        let plan = FamilyArrangePlan::grid(family, rows, columns, gap_x, gap_y)
-            .map_err(LiveSessionError::from)?;
+        let plan = FamilyArrangePlan::grid(family, options).map_err(LiveSessionError::from)?;
         self.publish_family_arrangement(plan)
     }
 
@@ -2155,19 +2220,18 @@ impl<'a> LiveSession<'a> {
         self.set_property(mobject, SemanticObjectProperty::Scale, scale)
     }
 
-    /// Add a center-relative affine rotation through the shared live
-    /// transaction. Pivot/layout rotation remains outside the bounded ordinary
-    /// affine facade.
+    /// Rotate about the coherent effective geometry center through the shared
+    /// affine transaction. Active affine drivers must complete before this edit.
     pub fn rotate(
         &mut self,
         mobject: &Mobject,
         angle: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let angle = authoring_render_f64("rotation", angle).map_err(LiveSessionError::from)?;
-        let rotation = self.authored(mobject)?.transform.rotation_z + angle;
-        let rotation =
-            authoring_render_f64("rotation result", rotation).map_err(LiveSessionError::from)?;
-        self.set_property(mobject, SemanticObjectProperty::RotationZ, rotation)
+        self.rotate_layout(
+            &crate::LayoutAnchor::from(mobject),
+            angle,
+            crate::ManimRotationPivot::Center,
+        )
     }
 
     pub fn set_scale(
@@ -2317,6 +2381,82 @@ impl<'a> LiveSession<'a> {
         opacity: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.edit_style(mobject, |style| edit_object_opacity(style, opacity))
+    }
+
+    /// Update supplied paint fields through one semantic publication.
+    pub fn set_style(
+        &mut self,
+        object: &Mobject,
+        update: crate::StyleUpdate,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(object, |style| update.apply(style))
+    }
+
+    pub fn set_family_style(
+        &mut self,
+        family: &MobjectFamily,
+        update: crate::StyleUpdate,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_family_style(family, |style| update.apply(style))
+    }
+
+    /// Match coherent effective paint, preserving non-paint source presentation.
+    pub fn match_style(
+        &mut self,
+        source: &Mobject,
+        target: &Mobject,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(source)?;
+        self.require_mobject(target)?;
+        self.require_target_capture()?;
+        let mut style = self.capture_mobject_state(source)?.style;
+        let target = self.capture_mobject_state(target)?.style;
+        crate::family_style::match_paint(&mut style, &target);
+        self.replace_style(source, style)
+    }
+
+    pub fn match_family_style(
+        &mut self,
+        source: &MobjectFamily,
+        target: &MobjectFamily,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(source)?;
+        self.require_family(target)?;
+        self.require_target_capture()?;
+        let transaction = source.match_style_transaction(target, |object| {
+            self.capture_mobject_state(object).map(|state| state.style)
+        })?;
+        self.apply(transaction)
+    }
+
+    pub fn set_family_color_by_gradient(
+        &mut self,
+        family: &MobjectFamily,
+        colors: &[Color],
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(
+            family
+                .gradient_transaction(colors)
+                .map_err(LiveSessionError::from)?,
+        )
+    }
+
+    pub fn set_color_by_gradient(
+        &mut self,
+        object: &Mobject,
+        colors: &[Color],
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let colors = crate::color_gradient(colors, 1).map_err(LiveSessionError::from)?;
+        let color = colors[0];
+        self.set_color(
+            object,
+            color.red.into(),
+            color.green.into(),
+            color.blue.into(),
+            color.alpha.into(),
+        )
     }
 
     /// Recolor a family's unique leaves through one coherent authored publication.
@@ -2733,13 +2873,10 @@ mod tests {
                 end: (1.0, 1.0),
             }
         );
-        assert_eq!(
-            line.manim_color().unwrap(),
-            Color::rgba(0.0, 0.0, 1.0, 0.25)
-        );
+        assert_eq!(line.manim_color().unwrap(), Color::rgb(0.0, 0.0, 1.0));
         assert_eq!(
             live.effective_manim_color(&line).unwrap(),
-            Color::rgba(0.5, 0.0, 0.5, 0.5)
+            Color::rgb(0.5, 0.0, 0.5)
         );
         let effective = live.effective(&line).unwrap();
         assert_eq!(effective.fill_opacity(), 0.0);

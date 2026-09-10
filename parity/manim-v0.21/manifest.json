@@ -93,7 +93,7 @@
       "scene": "CreateStyledSquare",
       "expected_duration": 1.0,
       "raster_tolerance": {
-        "max_differing_ratio": 0.00005,
+        "max_differing_ratio": 5e-05,
         "max_mean_absolute_channel_error": 0.022
       }
     },
@@ -320,6 +320,94 @@
         "max_bounds_delta_px": null,
         "max_differing_ratio": 0.12,
         "max_mean_absolute_channel_error": 8.0
+      }
+    },
+    {
+      "id": "group-coordinate-dimensions",
+      "scene": "GroupCoordinateDimensions",
+      "source": "parity/manim-v0.21/core-examples/group_coordinate_dimensions.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
+      "id": "style-operations",
+      "scene": "StyleOperations",
+      "source": "parity/manim-v0.21/core-examples/style_operations.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
+      "id": "family-membership-order",
+      "scene": "OrdinaryFamilyMembershipOrder",
+      "source": "parity/manim-v0.21/core-examples/family_membership_order.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
+      "id": "family-grid-options",
+      "scene": "OrdinaryFamilyGrid",
+      "source": "parity/manim-v0.21/core-examples/family_grid_options.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
+      "id": "family-state",
+      "scene": "OrdinaryFamilyState",
+      "source": "parity/manim-v0.21/core-examples/family_state.py",
+      "expected_duration": 0.6000000000000001,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
+      "id": "family-replacement",
+      "scene": "FamilyReplacement",
+      "source": "parity/manim-v0.21/core-examples/family_replacement.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
+      "id": "planar-affine",
+      "scene": "OrdinaryPlanarAffine",
+      "source": "parity/manim-v0.21/core-examples/planar_affine.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
+      "id": "paint-queries-gradients",
+      "scene": "PaintQueriesGradients",
+      "source": "parity/manim-v0.21/core-examples/paint_queries_gradients.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
       }
     }
   ],

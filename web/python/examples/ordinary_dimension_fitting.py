@@ -11,11 +11,11 @@ class DimensionFitting(Scene):
         a.shift(LEFT * 2)
         b.shift(RIGHT * 2)
         family = VGroup(a, b, a)
-        family.scale_to_fit_width(4.0)
+        family.width = 4.0
         self.add(family)
         live = self.live_execution()
         a.match_width(b, stretch=True)
-        family.stretch_to_fit_height(2.0)
+        family.height = 2.0
         assert abs(a.width - b.width) < 1e-6
         assert abs(family.height - 2.0) < 1e-6
         live.wait(0.2)

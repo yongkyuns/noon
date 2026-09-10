@@ -182,6 +182,9 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::NonFiniteDirection => {
                 Self::new("invalid_input", "authoring.non_finite_direction", message)
             }
+            AuthoringError::EmptyColorGradient => {
+                Self::new("invalid_input", "authoring.empty_color_gradient", message)
+            }
             AuthoringError::ZeroDirection => {
                 Self::new("invalid_input", "authoring.zero_direction", message)
             }
@@ -198,9 +201,6 @@ impl From<AuthoringError> for AuthoringFailure {
             }
             AuthoringError::InvalidDimension(_) => {
                 Self::new("invalid_input", "authoring.invalid_dimension", message)
-            }
-            AuthoringError::ZeroReplaceExtent => {
-                Self::new("invalid_input", "authoring.zero_replace_extent", message)
             }
             AuthoringError::ZeroStretchTarget => {
                 Self::new("invalid_input", "authoring.zero_stretch_target", message)
@@ -224,6 +224,12 @@ impl From<AuthoringError> for AuthoringFailure {
                 "authoring.invalid_grid_dimensions",
                 message,
             ),
+            AuthoringError::InvalidFlipAxis => {
+                Self::new("invalid_input", "authoring.invalid_flip_axis", message)
+            }
+            AuthoringError::InvalidGridOption(_) => {
+                Self::new("invalid_input", "authoring.invalid_grid_option", message)
+            }
             AuthoringError::InsufficientGridCapacity { .. } => Self::new(
                 "invalid_input",
                 "authoring.insufficient_grid_capacity",

@@ -425,6 +425,17 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_become_family(
+        &mut self,
+        source: &noon::MobjectFamily,
+        target: &noon::MobjectFamily,
+        options: noon::ManimBecomeOptions,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.become_family(source, target, options))
+            .map(|_| ())
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_become_mobject(
         &mut self,
@@ -523,6 +534,81 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_color_gradient(
+        &mut self,
+        target: &noon::Mobject,
+        colors: &[noon::Color],
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_color_by_gradient(target, colors))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_color_gradient(
+        &mut self,
+        target: &noon::MobjectFamily,
+        colors: &[noon::Color],
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_family_color_by_gradient(target, colors))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_fill_color(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
+        self.with_live_session(|live| live.effective_fill_color(target))
+    }
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_effective_stroke_color(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
+        self.with_live_session(|live| live.effective_stroke_color(target))
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_stroke_width(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<f64, AuthoringFailure> {
+        self.with_live_session(|live| live.effective_stroke_width(target))
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_style(
+        &mut self,
+        source: &noon::Mobject,
+        update: noon::StyleUpdate,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_style(source, update))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_match_style(
+        &mut self,
+        source: &noon::Mobject,
+        target: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.match_style(source, target))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_style(
+        &mut self,
+        source: &noon::MobjectFamily,
+        update: noon::StyleUpdate,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_family_style(source, update))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_match_family_style(
+        &mut self,
+        source: &noon::MobjectFamily,
+        target: &noon::MobjectFamily,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.match_family_style(source, target))
+            .map(|_| ())
+    }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_family_color(
         &mut self,
@@ -768,15 +854,10 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_arrange_family_in_grid(
         &mut self,
         family: &noon::MobjectFamily,
-        rows: Option<usize>,
-        columns: Option<usize>,
-        gap_x: f64,
-        gap_y: f64,
+        options: &noon::FamilyGridOptions,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| {
-            live.arrange_family_in_grid(family, rows, columns, gap_x, gap_y)
-        })
-        .map(|_| ())
+        self.with_live_session(|live| live.arrange_family_in_grid_with_options(family, options))
+            .map(|_| ())
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -788,6 +869,17 @@ impl SemanticExecutionPlayer {
         stretch: bool,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.rescale_to_fit(source, length, dimension, stretch))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_replace_layout(
+        &mut self,
+        source: &noon::LayoutAnchor,
+        target: &noon::LayoutAnchor,
+        dimension: noon::LayoutDimension,
+        stretch: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.replace_layout(source, target, dimension, stretch))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -809,17 +901,6 @@ impl SemanticExecutionPlayer {
         y: f64,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|session| session.scale_family(family, x, y))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_rotate_family(
-        &mut self,
-        family: &noon::MobjectFamily,
-        angle: f64,
-        pivot: noon::ManimRotationPivot,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|session| session.rotate_family(family, angle, pivot))
             .map(|_| ())
     }
 
@@ -962,24 +1043,25 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_rotate(
+    pub(crate) fn live_rotate_layout(
         &mut self,
-        mobject: &noon::Mobject,
+        anchor: &noon::LayoutAnchor,
         angle: f64,
+        pivot: noon::ManimRotationPivot,
     ) -> Result<(), AuthoringFailure> {
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .expect("live semantic store has one scene root"),
-            &mut self.session,
-        )
-        .rotate(mobject, angle)
-        .map(|_| ())
-        .map_err(AuthoringFailure::from)
+        self.with_live_session(|live| live.rotate_layout(anchor, angle, pivot))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_flip_layout(
+        &mut self,
+        anchor: &noon::LayoutAnchor,
+        axis: noon::SemanticVec3,
+        pivot: noon::ManimRotationPivot,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.flip_layout(anchor, axis, pivot))
+            .map(|_| ())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
