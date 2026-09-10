@@ -17,89 +17,69 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - name: Apply bounded family-transform intent patch
+      - name: Apply core family-transform intent patch
         shell: bash
         run: |
           python3 <<'PY'
           from pathlib import Path
 
-          def replace_once(path, old, new):
+          def r1(path, old, new):
               p = Path(path)
               s = p.read_text()
               n = s.count(old)
               if n != 1:
-                  raise SystemExit(f"{path}: expected one exact match, found {n}: {old[:80]!r}")
+                  raise SystemExit(f"{path}: expected one match, found {n}: {old[:100]!r}")
               p.write_text(s.replace(old, new, 1))
 
-          def replace_n(path, old, new, expected):
-              p = Path(path)
-              s = p.read_text()
-              n = s.count(old)
-              if n != expected:
-                  raise SystemExit(f"{path}: expected {expected} exact matches, found {n}: {old[:80]!r}")
-              p.write_text(s.replace(old, new))
-
           sem = "crates/noon-core/src/semantic_store/semantic_animations.rs"
-          replace_once(sem,
-          '''    TransformTo {
-              target: SemanticNodeId,
-              target_state: SemanticNodeId,
-              interpolation: SemanticTransformInterpolation,
-
-              /// Animated method targets copy priority when their containing animation finishes.
-              /// Ordinary Transform leaves source priority unchanged.
-              complete_priority: bool,
-          },
+          r1(sem,
+          '''        complete_priority: bool,
+              },
+              /// Temporarily scale and recolor one object around a shared activation center.
           ''',
-          '''    TransformTo {
-              target: SemanticNodeId,
-              target_state: SemanticNodeId,
-              interpolation: SemanticTransformInterpolation,
-
-              /// Animated method targets copy priority when their containing animation finishes.
-              /// Ordinary Transform leaves source priority unchanged.
-              complete_priority: bool,
-          },
-          /// Transform one semantic family toward another family through compiler-derived
-          /// visual correspondence. Family identity/topology remain authored scene state;
-          /// padding occurrences never receive semantic identities.
-          FamilyTransformTo {
-              source: SemanticNodeId,
-              target_state: SemanticNodeId,
-          },
+          '''        complete_priority: bool,
+              },
+              /// Transform one semantic family toward another family through compiler-derived
+              /// visual correspondence. Family identity/topology remain authored scene state;
+              /// padding occurrences never receive semantic identities.
+              FamilyTransformTo {
+                  source: SemanticNodeId,
+                  target_state: SemanticNodeId,
+              },
+              /// Temporarily scale and recolor one object around a shared activation center.
           ''')
-          replace_once(sem,
+          r1(sem,
           '''        match self {
-              Self::ObjectPropertyTrack { target, .. }
+                  Self::ObjectPropertyTrack { target, .. }
           ''',
           '''        match self {
-              Self::FamilyTransformTo { source, .. } => Some(*source),
-              Self::ObjectPropertyTrack { target, .. }
+                  Self::FamilyTransformTo { source, .. } => Some(*source),
+                  Self::ObjectPropertyTrack { target, .. }
           ''')
-          replace_once(sem,
-          '''            Self::SetScalar { signal, .. } => Some(*signal),
-              Self::Wait | Self::Composition { .. } => None,
-          ''',
-          '''            Self::SetScalar { signal, .. } => Some(*signal),
-              Self::Wait | Self::Composition { .. } => None,
-          ''')
-          replace_once(sem,
+          r1(sem,
           '''        match self {
-              Self::TransformTo { target_state, .. } => Some(*target_state),
+                  Self::TransformTo { target_state, .. } => Some(*target_state),
+                  Self::ObjectPropertyTrack { .. }
           ''',
           '''        match self {
-              Self::TransformTo { target_state, .. }
-              | Self::FamilyTransformTo { target_state, .. } => Some(*target_state),
+                  Self::TransformTo { target_state, .. }
+                  | Self::FamilyTransformTo { target_state, .. } => Some(*target_state),
+                  Self::ObjectPropertyTrack { .. }
           ''')
-          replace_n(sem,
-          '''            Self::ObjectPropertyTrack { .. }
-              | Self::Rotate { .. }
-          ''',
-          '''            Self::ObjectPropertyTrack { .. }
-              | Self::FamilyTransformTo { .. }
-              | Self::Rotate { .. }
-          ''', 2)
-          replace_once(sem,
+          p = Path(sem)
+          s = p.read_text()
+          old = '''            Self::ObjectPropertyTrack { .. }
+                  | Self::TransformTo { .. }
+          '''
+          n = s.count(old)
+          if n != 2:
+              raise SystemExit(f"{sem}: expected two leaf-list matches, found {n}")
+          s = s.replace(old, '''            Self::ObjectPropertyTrack { .. }
+                  | Self::TransformTo { .. }
+                  | Self::FamilyTransformTo { .. }
+          ''')
+          p.write_text(s)
+          r1(sem,
           '''    pub const fn composition_kind(&self) -> Option<SemanticAnimationCompositionKind> {
           ''',
           '''    /// Family endpoints for a semantic family Transform, when this declaration owns one.
@@ -115,8 +95,10 @@ jobs:
 
               pub const fn composition_kind(&self) -> Option<SemanticAnimationCompositionKind> {
           ''')
-          insert_method = '''
-              /// Insert one family Transform declaration without expanding semantic children.
+          r1(sem,
+          '''    /// Insert one activation-relative two-phase vector outline/fill declaration.
+          ''',
+          '''    /// Insert one family Transform declaration without expanding semantic children.
               ///
               /// Both endpoints are real semantic families. Unequal correspondence remains a
               /// compiler/runtime derived visual concern and never allocates padding nodes here.
@@ -142,14 +124,11 @@ jobs:
                   )))
               }
 
-          '''
-          replace_once(sem,
-          '''    /// Insert one activation-relative two-phase vector outline/fill declaration.
-          ''', insert_method + '''    /// Insert one activation-relative two-phase vector outline/fill declaration.
+              /// Insert one activation-relative two-phase vector outline/fill declaration.
           ''')
 
           txn = "crates/noon-core/src/semantic_store/semantic_transaction.rs"
-          replace_once(txn,
+          r1(txn,
           '''    /// Stage a centered 2D angular-path rotation declaration.
           ''',
           '''    /// Stage a family Transform declaration without creating semantic padding members.
@@ -177,54 +156,46 @@ jobs:
           ''')
 
           add = "crates/noon-core/src/semantic_store/semantic_transaction/animation_addition.rs"
-          replace_once(add,
-          '''    TransformTo {
-              target: SemanticTransactionNodeRef,
-              target_state: SemanticTransactionNodeRef,
-              interpolation: SemanticTransformInterpolation,
-
-              complete_priority: bool,
-          },
+          r1(add,
+          '''        complete_priority: bool,
+              },
+              Indicate {
           ''',
-          '''    TransformTo {
-              target: SemanticTransactionNodeRef,
-              target_state: SemanticTransactionNodeRef,
-              interpolation: SemanticTransformInterpolation,
-
-              complete_priority: bool,
-          },
+          '''        complete_priority: bool,
+              },
               FamilyTransformTo {
                   source: SemanticTransactionNodeRef,
                   target_state: SemanticTransactionNodeRef,
               },
+              Indicate {
           ''')
-          replace_once(add,
-          '''            Self::TransformTo {
-                  target,
-                  target_state,
-                  ..
-              } => Some([Some(*target), Some(*target_state), None]),
+          r1(add,
+          '''            } => Some([Some(*target), Some(*target_state), None]),
+                  Self::Rotate { target, .. }
           ''',
-          '''            Self::TransformTo {
-                  target,
-                  target_state,
-                  ..
-              } => Some([Some(*target), Some(*target_state), None]),
+          '''            } => Some([Some(*target), Some(*target_state), None]),
                   Self::FamilyTransformTo {
                       source,
                       target_state,
                   } => Some([Some(*source), Some(*target_state), None]),
+                  Self::Rotate { target, .. }
           ''')
-          replace_once(add,
+          r1(add,
           '''            Self::ObjectPropertyTrack { .. }
-              | Self::TransformTo { .. }
+                  | Self::TransformTo { .. }
+                  | Self::Indicate { .. }
           ''',
           '''            Self::ObjectPropertyTrack { .. }
-              | Self::TransformTo { .. }
-              | Self::FamilyTransformTo { .. }
+                  | Self::TransformTo { .. }
+                  | Self::FamilyTransformTo { .. }
+                  | Self::Indicate { .. }
           ''')
-          replace_once(add,
+          r1(add,
           '''            SemanticAnimationIntent::Rotate {
+                  target,
+                  angle,
+                  hold_origin,
+              } => SemanticTransactionAnimationIntent::Rotate {
           ''',
           '''            SemanticAnimationIntent::FamilyTransformTo {
                   source,
@@ -234,9 +205,17 @@ jobs:
                   target_state: (*target_state).into(),
               },
                   SemanticAnimationIntent::Rotate {
+                  target,
+                  angle,
+                  hold_origin,
+              } => SemanticTransactionAnimationIntent::Rotate {
           ''')
-          replace_once(add,
+          r1(add,
           '''            SemanticTransactionAnimationIntent::Rotate {
+                  target,
+                  angle,
+                  hold_origin,
+              } => SemanticAnimationIntent::Rotate {
           ''',
           '''            SemanticTransactionAnimationIntent::FamilyTransformTo {
                   source,
@@ -246,8 +225,12 @@ jobs:
                   target_state: resolve_node_ref(*target_state, committed),
               },
                   SemanticTransactionAnimationIntent::Rotate {
+                  target,
+                  angle,
+                  hold_origin,
+              } => SemanticAnimationIntent::Rotate {
           ''')
-          replace_once(add,
+          r1(add,
           '''        SemanticTransactionAnimationIntent::Rotate { target, angle, .. } => {
           ''',
           '''        SemanticTransactionAnimationIntent::FamilyTransformTo {
@@ -273,9 +256,9 @@ jobs:
                   });
               }
           }
-                  SemanticTransactionAnimationIntent::Rotate { target, angle, .. } => {
+              SemanticTransactionAnimationIntent::Rotate { target, angle, .. } => {
           ''')
-          replace_once(add,
+          r1(add,
           '''        SemanticAnimationIntent::Rotate { target, angle, hold_origin } => store
           ''',
           '''        SemanticAnimationIntent::FamilyTransformTo {
@@ -284,410 +267,17 @@ jobs:
           } => store
               .insert_semantic_family_transform_animation(*source, *target_state, options)
               .expect("preflighted semantic family Transform insertion must remain valid while transaction owns the store"),
-                  SemanticAnimationIntent::Rotate { target, angle, hold_origin } => store
+              SemanticAnimationIntent::Rotate { target, angle, hold_origin } => store
           ''')
 
-          sched = "crates/noon-compile/src/semantic_lowering/animation_schedule.rs"
-          replace_n(sched,
-          '''    scalar_leaves: Vec<SemanticScheduledScalarLeaf>,
-          ''',
-          '''    scalar_leaves: Vec<SemanticScheduledScalarLeaf>,
-              family_transforms: Vec<SemanticScheduledFamilyTransform>,
-          ''', 1)
-          replace_once(sched,
-          '''    pub fn scalar_leaves(&self) -> &[SemanticScheduledScalarLeaf] {
-                  &self.scalar_leaves
-              }
-
-              pub fn len(&self) -> usize {
-                  self.leaves.len() + self.scalar_leaves.len()
-              }
-          ''',
-          '''    pub fn scalar_leaves(&self) -> &[SemanticScheduledScalarLeaf] {
-                  &self.scalar_leaves
-              }
-
-              pub fn family_transforms(&self) -> &[SemanticScheduledFamilyTransform] {
-                  &self.family_transforms
-              }
-
-              pub fn len(&self) -> usize {
-                  self.leaves.len() + self.scalar_leaves.len() + self.family_transforms.len()
-              }
-          ''')
-          replace_once(sched,
-          '''pub struct SemanticScheduledScalarLeaf {
-              pub animation: SemanticNodeId,
-              pub signal: SemanticNodeId,
-              pub target: f64,
-              pub timing: TrackTiming,
-              pub time_map: CompositionTimeMap,
-              pub options: ResolvedAnimationOptions,
-          }
-          ''',
-          '''pub struct SemanticScheduledScalarLeaf {
-              pub animation: SemanticNodeId,
-              pub signal: SemanticNodeId,
-              pub target: f64,
-              pub timing: TrackTiming,
-              pub time_map: CompositionTimeMap,
-              pub options: ResolvedAnimationOptions,
-          }
-
-              /// One scheduled family Transform with shared composition timing and no execution ID.
-              #[derive(Clone, Debug, PartialEq)]
-              pub struct SemanticScheduledFamilyTransform {
-                  pub finish_time_map: CompositionTimeMap,
-                  pub animation: SemanticNodeId,
-                  pub source: SemanticNodeId,
-                  pub target_state: SemanticNodeId,
-                  pub timing: TrackTiming,
-                  pub time_map: CompositionTimeMap,
-                  pub options: ResolvedAnimationOptions,
-              }
-          ''')
-          replace_once(sched,
-          '''    scalar_leaves: Vec<PreparedSemanticScheduledScalarLeaf>,
-          ''',
-          '''    scalar_leaves: Vec<PreparedSemanticScheduledScalarLeaf>,
-              family_transforms: Vec<PreparedSemanticScheduledFamilyTransform>,
-          ''')
-          replace_once(sched,
-          '''    pub fn scalar_leaves(&self) -> &[PreparedSemanticScheduledScalarLeaf] {
-                  &self.scalar_leaves
-              }
-
-              pub fn len(&self) -> usize {
-                  self.leaves.len() + self.scalar_leaves.len()
-              }
-          ''',
-          '''    pub fn scalar_leaves(&self) -> &[PreparedSemanticScheduledScalarLeaf] {
-                  &self.scalar_leaves
-              }
-
-              pub fn family_transforms(&self) -> &[PreparedSemanticScheduledFamilyTransform] {
-                  &self.family_transforms
-              }
-
-              pub fn len(&self) -> usize {
-                  self.leaves.len() + self.scalar_leaves.len() + self.family_transforms.len()
-              }
-          ''')
-          replace_once(sched,
-          '''pub struct PreparedSemanticScheduledScalarLeaf {
-              pub animation: SemanticTransactionNodeRef,
-              pub signal: SemanticNodeId,
-              pub target: f64,
-              pub timing: TrackTiming,
-              pub time_map: CompositionTimeMap,
-              pub options: ResolvedAnimationOptions,
-          }
-          ''',
-          '''pub struct PreparedSemanticScheduledScalarLeaf {
-              pub animation: SemanticTransactionNodeRef,
-              pub signal: SemanticNodeId,
-              pub target: f64,
-              pub timing: TrackTiming,
-              pub time_map: CompositionTimeMap,
-              pub options: ResolvedAnimationOptions,
-          }
-
-              /// Prepared transaction-local form of one scheduled family Transform.
-              #[derive(Clone, Debug, PartialEq)]
-              pub struct PreparedSemanticScheduledFamilyTransform {
-                  pub finish_time_map: CompositionTimeMap,
-                  pub animation: SemanticTransactionNodeRef,
-                  pub source: SemanticTransactionNodeRef,
-                  pub target_state: SemanticTransactionNodeRef,
-                  pub timing: TrackTiming,
-                  pub time_map: CompositionTimeMap,
-                  pub options: ResolvedAnimationOptions,
-              }
-          ''')
-          replace_n(sched,
-          '''    let mut scalar_leaves = Vec::new();
-              for leaf in projection.leaves {
-          ''',
-          '''    let mut scalar_leaves = Vec::new();
-              let mut family_transforms = Vec::new();
-              for leaf in projection.leaves {
-          ''', 2)
-          replace_once(sched,
-          '''            ScheduledAnimationLeaf::Scalar {
-                  animation,
-                  signal,
-                  target,
-                  timing,
-                  time_map,
-                  options,
-              } => scalar_leaves.push(SemanticScheduledScalarLeaf {
-                  animation,
-                  signal,
-                  target,
-                  timing,
-                  time_map,
-                  options,
-              }),
-          ''',
-          '''            ScheduledAnimationLeaf::Scalar {
-                  animation,
-                  signal,
-                  target,
-                  timing,
-                  time_map,
-                  options,
-              } => scalar_leaves.push(SemanticScheduledScalarLeaf {
-                  animation,
-                  signal,
-                  target,
-                  timing,
-                  time_map,
-                  options,
-              }),
-                  ScheduledAnimationLeaf::FamilyTransform {
-                      finish_time_map,
-                      animation,
-                      source,
-                      target_state,
-                      timing,
-                      time_map,
-                      options,
-                  } => family_transforms.push(SemanticScheduledFamilyTransform {
-                      finish_time_map,
-                      animation,
-                      source,
-                      target_state,
-                      timing,
-                      time_map,
-                      options,
-                  }),
-          ''')
-          replace_once(sched,
-          '''        scalar_leaves,
-              })
-          }
-
-          /// Resolve one not-yet-committed animation graph''',
-          '''        scalar_leaves,
-                  family_transforms,
-              })
-          }
-
-          /// Resolve one not-yet-committed animation graph''')
-          replace_once(sched,
-          '''            ScheduledAnimationLeaf::Scalar {
-                  animation,
-                  signal,
-                  target,
-                  timing,
-                  time_map,
-                  options,
-              } => scalar_leaves.push(PreparedSemanticScheduledScalarLeaf {
-                  animation,
-                  signal,
-                  target,
-                  timing,
-                  time_map,
-                  options,
-              }),
-          ''',
-          '''            ScheduledAnimationLeaf::Scalar {
-                  animation,
-                  signal,
-                  target,
-                  timing,
-                  time_map,
-                  options,
-              } => scalar_leaves.push(PreparedSemanticScheduledScalarLeaf {
-                  animation,
-                  signal,
-                  target,
-                  timing,
-                  time_map,
-                  options,
-              }),
-                  ScheduledAnimationLeaf::FamilyTransform {
-                      finish_time_map,
-                      animation,
-                      source,
-                      target_state,
-                      timing,
-                      time_map,
-                      options,
-                  } => family_transforms.push(PreparedSemanticScheduledFamilyTransform {
-                      finish_time_map,
-                      animation,
-                      source,
-                      target_state,
-                      timing,
-                      time_map,
-                      options,
-                  }),
-          ''')
-          replace_once(sched,
-          '''        scalar_leaves,
-              })
-          }
-
-          fn published_payload''',
-          '''        scalar_leaves,
-                  family_transforms,
-              })
-          }
-
-          fn published_payload''')
-          replace_once(sched,
-          '''enum AnimationDeclarationIntent<R> {
-              TransformTo {
-          ''',
-          '''enum AnimationDeclarationIntent<R> {
-              FamilyTransformTo {
-                  source: R,
-                  target_state: R,
-              },
-              TransformTo {
-          ''')
-          replace_once(sched,
-          '''            SemanticAnimationIntent::Indicate {
-          ''',
-          '''            SemanticAnimationIntent::FamilyTransformTo {
-                  source,
-                  target_state,
-              } => {
-                  self.store
-                      .semantic_family_members_checked(*source)
-                      .map_err(SemanticAnimationError::Target)?;
-                  self.store
-                      .semantic_family_members_checked(*target_state)
-                      .map_err(SemanticAnimationError::Target)?;
-                  AnimationDeclarationIntent::FamilyTransformTo {
-                      source: *source,
-                      target_state: *target_state,
-                  }
-              }
-                  SemanticAnimationIntent::Indicate {
-          ''')
-          replace_n(sched,
-          '''                    SemanticAnimationIntent::Indicate {
-          ''',
-          '''                    SemanticAnimationIntent::FamilyTransformTo {
-                          source,
-                          target_state,
-                      } => AnimationDeclarationIntent::FamilyTransformTo {
-                          source: (*source).into(),
-                          target_state: (*target_state).into(),
-                      },
-                          SemanticAnimationIntent::Indicate {
-          ''', 1)
-          replace_once(sched,
-          '''                    SemanticTransactionAnimationIntent::Indicate {
-          ''',
-          '''                    SemanticTransactionAnimationIntent::FamilyTransformTo {
-                          source,
-                          target_state,
-                      } => AnimationDeclarationIntent::FamilyTransformTo {
-                          source: *source,
-                          target_state: *target_state,
-                      },
-                          SemanticTransactionAnimationIntent::Indicate {
-          ''')
-          replace_once(sched,
-          '''            AnimationDeclarationIntent::SetScalar { .. } => {}
-              AnimationDeclarationIntent::Wait | AnimationDeclarationIntent::Composition { .. } => {}
-          ''',
-          '''            AnimationDeclarationIntent::SetScalar { .. }
-              | AnimationDeclarationIntent::FamilyTransformTo { .. } => {}
-              AnimationDeclarationIntent::Wait | AnimationDeclarationIntent::Composition { .. } => {}
-          ''')
-          replace_once(sched,
-          '''enum ScheduledAnimationLeaf<R> {
-              Object {
-          ''',
-          '''enum ScheduledAnimationLeaf<R> {
-              FamilyTransform {
-                  finish_time_map: CompositionTimeMap,
-                  animation: R,
-                  source: R,
-                  target_state: R,
-                  timing: TrackTiming,
-                  time_map: CompositionTimeMap,
-                  options: ResolvedAnimationOptions,
-              },
-              Object {
-          ''')
-          replace_once(sched,
-          '''enum PlannedAnimationKind<R> {
-              Wait,
-          ''',
-          '''enum PlannedAnimationKind<R> {
-              Wait,
-              FamilyTransform {
-                  source: R,
-                  target_state: R,
-                  options: ResolvedAnimationOptions,
-              },
-          ''')
-          replace_once(sched,
-          '''    match state.intent {
-              AnimationDeclarationIntent::TransformTo {
-          ''',
-          '''    match state.intent {
-              AnimationDeclarationIntent::FamilyTransformTo {
-                  source,
-                  target_state,
-              } => {
-                  let options = resolve_animation_options(
-                      AnimationDefaults::MANIM,
-                      state.options,
-                      play_options,
-                  )
-                  .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
-                  Ok(PlannedAnimation {
-                      animation,
-                      run_time: options.run_time,
-                      kind: PlannedAnimationKind::FamilyTransform {
-                          source,
-                          target_state,
-                          options,
-                      },
-                  })
-              }
-                  AnimationDeclarationIntent::TransformTo {
-          ''')
-          replace_once(sched,
-          '''    match &plan.kind {
-              PlannedAnimationKind::Wait => {}
-          ''',
-          '''    match &plan.kind {
-              PlannedAnimationKind::Wait => {}
-              PlannedAnimationKind::FamilyTransform {
-                  source,
-                  target_state,
-                  options,
-              } => leaves.push(ScheduledAnimationLeaf::FamilyTransform {
-                  finish_time_map: finish_time_map.clone(),
-                  animation: plan.animation,
-                  source: *source,
-                  target_state: *target_state,
-                  timing: TrackTiming::new(root_start_time, root_run_time, options.rate_func),
-                  time_map: CompositionTimeMap::from_steps(steps.clone()),
-                  options: *options,
-              }),
-          ''')
-
-          test = Path("crates/noon-compile/tests/family_transform_schedule.rs")
-          test.write_text(r'''use noon_compile::{
-              lower_prepared_semantic_animation_schedule, lower_semantic_animation_schedule,
-              SemanticExecutionIndex,
-          };
-          use noon_core::{
-              AnimationOptions, RateFunction, SemanticMutationTransaction, SemanticObjectState,
-              SemanticStore, StoredGeometry,
+          Path("crates/noon-core/tests/family_transform_intent.rs").write_text(r'''use noon_core::{
+              AnimationOptions, SemanticAnimationIntent, SemanticMutationImpact,
+              SemanticMutationTransaction, SemanticObjectState, SemanticStore, StoredGeometry,
           };
 
-          fn object(store: &mut SemanticStore, radius: f32) -> noon_core::SemanticNodeId {
+          fn object(store: &mut SemanticStore) -> noon_core::SemanticNodeId {
               store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                  radius,
+                  radius: 1.0,
               }))
           }
 
@@ -703,111 +293,96 @@ jobs:
           }
 
           #[test]
-          fn published_family_transform_owns_timing_without_execution_object_identity() {
+          fn family_transform_is_authored_intent_without_padding_nodes_or_topology_change() {
               let mut store = SemanticStore::new();
-              let s0 = object(&mut store, 1.0);
-              let s1 = object(&mut store, 0.7);
-              let t0 = object(&mut store, 0.4);
-              let t1 = object(&mut store, 0.5);
-              let t2 = object(&mut store, 0.6);
+              let s0 = object(&mut store);
+              let s1 = object(&mut store);
+              let t0 = object(&mut store);
+              let t1 = object(&mut store);
+              let t2 = object(&mut store);
               let source = family(&mut store, &[s0, s1]);
               let target = family(&mut store, &[t0, t1, t2]);
-              store.attach_to_scene(source).unwrap();
+              let source_before = store.semantic_family_members_checked(source).unwrap().to_vec();
+              let target_before = store.semantic_family_members_checked(target).unwrap().to_vec();
+              let before_len = store.len();
+
               let animation = store
                   .insert_semantic_family_transform_animation(
                       source,
                       target,
-                      AnimationOptions::new()
-                          .run_time(2.5)
-                          .rate_func(RateFunction::Linear),
+                      AnimationOptions::new().run_time(2.0),
                   )
                   .unwrap();
-              let revision = store.scene_revision();
-              let source_members = store.semantic_family_members_checked(source).unwrap().to_vec();
-              let target_members = store.semantic_family_members_checked(target).unwrap().to_vec();
-              let mut index = SemanticExecutionIndex::new();
-              index.lower_scene(&store).unwrap();
 
-              let schedule = lower_semantic_animation_schedule(
-                  &store,
-                  &index,
-                  animation,
-                  3.0,
-                  AnimationOptions::new(),
-              )
-              .unwrap();
-
-              assert!(schedule.leaves().is_empty());
-              assert!(schedule.scalar_leaves().is_empty());
-              assert_eq!(schedule.family_transforms().len(), 1);
-              assert_eq!(schedule.len(), 1);
-              let family = &schedule.family_transforms()[0];
-              assert_eq!(family.animation, animation);
-              assert_eq!(family.source, source);
-              assert_eq!(family.target_state, target);
-              assert_eq!(family.timing.start_time, 3.0);
-              assert_eq!(family.timing.duration, 2.5);
-              assert_eq!(family.options.rate_func, RateFunction::Linear);
-              assert_eq!(store.scene_revision(), revision);
-              assert_eq!(store.semantic_family_members_checked(source).unwrap(), source_members);
-              assert_eq!(store.semantic_family_members_checked(target).unwrap(), target_members);
+              assert_eq!(store.len(), before_len + 1);
+              let state = store.semantic_animation_state(animation).unwrap();
+              assert_eq!(state.intent().target(), Some(source));
+              assert_eq!(state.intent().target_state(), Some(target));
+              assert_eq!(state.intent().family_transform(), Some((source, target)));
+              assert!(matches!(
+                  state.intent(),
+                  SemanticAnimationIntent::FamilyTransformTo {
+                      source: actual_source,
+                      target_state: actual_target,
+                  } if *actual_source == source && *actual_target == target
+              ));
+              assert_eq!(store.semantic_family_members_checked(source).unwrap(), source_before);
+              assert_eq!(store.semantic_family_members_checked(target).unwrap(), target_before);
           }
 
           #[test]
-          fn prepared_family_transform_uses_the_same_scheduler_without_allocating_object_ids() {
+          fn family_transform_transaction_resolves_existing_families_without_allocating_padding() {
               let mut store = SemanticStore::new();
-              let source_leaf = object(&mut store, 1.0);
-              let target_leaf = object(&mut store, 2.0);
-              let source = family(&mut store, &[source_leaf]);
-              let target = family(&mut store, &[target_leaf]);
-              store.attach_to_scene(source).unwrap();
-              let mut index = SemanticExecutionIndex::new();
-              index.lower_scene(&store).unwrap();
+              let s = object(&mut store);
+              let t0 = object(&mut store);
+              let t1 = object(&mut store);
+              let source = family(&mut store, &[s]);
+              let target = family(&mut store, &[t0, t1]);
+              let before_len = store.len();
+              let source_before = store.semantic_family_members_checked(source).unwrap().to_vec();
 
               let mut transaction = SemanticMutationTransaction::new();
-              let animation = transaction.create_family_transform_animation(
+              transaction.create_family_transform_animation(
                   source,
                   target,
-                  AnimationOptions::new()
-                      .run_time(1.25)
-                      .rate_func(RateFunction::Linear),
+                  AnimationOptions::new().run_time(1.5),
               );
-              let prepared = transaction.prepare(&store).unwrap();
-              let schedule = lower_prepared_semantic_animation_schedule(
-                  &prepared,
-                  &index,
-                  animation,
-                  4.0,
-                  AnimationOptions::new(),
-              )
-              .unwrap();
+              let result = transaction.apply(&mut store).unwrap();
 
-              assert!(schedule.leaves().is_empty());
-              assert!(schedule.scalar_leaves().is_empty());
-              assert_eq!(schedule.family_transforms().len(), 1);
-              let family = &schedule.family_transforms()[0];
-              assert_eq!(family.source.existing(), Some(source));
-              assert_eq!(family.target_state.existing(), Some(target));
-              assert_eq!(family.timing.start_time, 4.0);
-              assert_eq!(family.timing.duration, 1.25);
+              assert_eq!(store.len(), before_len + 1);
+              assert!(matches!(
+                  result.impacts(),
+                  [SemanticMutationImpact::AnimationAdded { .. }]
+              ));
+              assert_eq!(store.semantic_family_members_checked(source).unwrap(), source_before);
           }
 
           #[test]
-          fn family_transform_rejects_object_endpoint_before_semantic_allocation() {
+          fn family_transform_rejects_object_endpoint_atomically() {
               let mut store = SemanticStore::new();
-              let object = object(&mut store, 1.0);
-              let target_leaf = object(&mut store, 2.0);
+              let source_object = object(&mut store);
+              let target_leaf = object(&mut store);
               let target = family(&mut store, &[target_leaf]);
               let revision = store.scene_revision();
               let len = store.len();
 
               assert!(store
                   .insert_semantic_family_transform_animation(
-                      object,
+                      source_object,
                       target,
                       AnimationOptions::new(),
                   )
                   .is_err());
+              assert_eq!(store.scene_revision(), revision);
+              assert_eq!(store.len(), len);
+
+              let mut transaction = SemanticMutationTransaction::new();
+              transaction.create_family_transform_animation(
+                  source_object,
+                  target,
+                  AnimationOptions::new(),
+              );
+              assert!(transaction.apply(&mut store).is_err());
               assert_eq!(store.scene_revision(), revision);
               assert_eq!(store.len(), len);
           }
@@ -816,10 +391,10 @@ jobs:
           Path(".github/workflows/_codex_b3_family_intent_patch.yml").unlink()
           PY
           cargo fmt --all
-          cargo test -p noon-compile --test family_transform_schedule
+          cargo test -p noon-core --test family_transform_intent
           cargo test -p noon-core semantic_animation --lib
           git config user.name "Yongkyun Shin"
           git config user.email "yongkyuns@gmail.com"
           git add -A
-          git commit -m "Add semantic family Transform timing carrier"
+          git commit -m "Add authored semantic family Transform intent"
           git push origin HEAD:codex/b3-family-transform-intent
