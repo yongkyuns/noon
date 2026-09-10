@@ -533,7 +533,7 @@ impl CanonicalAuthoringScene {
             crate::SemanticExecutionPlayer::live_effective_fill_color,
         )
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_stroke_color(
         &mut self,
         target: &noon::Mobject,
