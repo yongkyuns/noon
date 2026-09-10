@@ -7,6 +7,7 @@
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
 mod family_layout;
+mod path_queries;
 mod z_index;
 pub use family_layout::LiveLayoutTarget;
 
