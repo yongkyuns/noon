@@ -5,6 +5,7 @@ import { FrameArtifactStore } from "../../../scripts/agent-preview-artifacts.mjs
 import { createDockerPreviewSessionFactory } from "./preview-runner.mjs";
 
 const DEFAULT_MAX_FRAMES_PER_SESSION = 32;
+const REGISTRY_LIMIT_KEYS = new Set(["maxScopes", "maxSessions", "maxSessionsPerScope"]);
 
 /**
  * Transport-neutral ownership for preview execution plus retained frame evidence.
@@ -36,6 +37,9 @@ export class AgentPreviewService {
     }
     if (!plainRecord(registryLimits) || !plainRecord(artifactLimits)) {
       throw new TypeError("preview service limits must be plain records");
+    }
+    if (Reflect.ownKeys(registryLimits).some((key) => !REGISTRY_LIMIT_KEYS.has(key))) {
+      throw new TypeError("unknown preview session registry limit");
     }
     if (Object.hasOwn(artifactLimits, "maxFramesPerScope")) {
       throw new TypeError("configure retained frame count with maxFramesPerSession");
@@ -94,10 +98,8 @@ export class AgentPreviewService {
   async sampleFrames(scopeCapability, sessionId, times, options = {}) {
     const { scope, entry } = this.#entry(scopeCapability, sessionId);
     const sampleOptions = options ?? {};
-    const normalized = sampleTimes(times, entry.lastRequestedTime);
-    if (normalized.length > this.#maxFramesPerSession - entry.frameCount) {
-      throw new RangeError("preview retained frame limit exceeded");
-    }
+    const remaining = this.#maxFramesPerSession - entry.frameCount;
+    const normalized = sampleTimes(times, entry.lastRequestedTime, remaining);
     throwIfAborted(sampleOptions.signal);
 
     const results = [];
@@ -299,10 +301,11 @@ function publicSnapshot(value) {
   return Object.freeze(snapshot);
 }
 
-function sampleTimes(times, lowerBound) {
+function sampleTimes(times, lowerBound, maxCount) {
   if (!Array.isArray(times) || times.length === 0) {
     throw new TypeError("sample times must be a non-empty array");
   }
+  if (times.length > maxCount) throw new RangeError("preview retained frame limit exceeded");
   let previous = lowerBound;
   return times.map((value) => {
     if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
