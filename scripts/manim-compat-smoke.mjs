@@ -105,6 +105,7 @@ class GroupMembershipLive(Scene):
         assert int(pair._semantic_family_handle.memberCount) == 2
         pair.add(left)
         assert len(pair) == 2
+        assert list(pair) == [right, left]
         assert int(pair._semantic_family_handle.memberCount) == 2
         layout = pair._semantic_family_handle.layout()
         assert abs(float(layout.width) - pair.width) < 1e-12
@@ -113,7 +114,7 @@ class GroupMembershipLive(Scene):
         assert int(alias._semantic_family_handle.memberCount) == 1
 
         duplicate = VGroup(left, alias, left)
-        assert list(duplicate) == [left, alias]
+        assert list(duplicate) == [alias, left]
         spare = Circle(radius=0.1)
         cycle = VGroup(pair)
         before = list(pair.submobjects)
@@ -409,7 +410,7 @@ try {
       for (const member of members) request.appendMobject("", member);
       return request;
     };
-    const family = store.createFamily(batch());
+    const family = store.createFamily(batch(), 0);
     const copy = circle.cloneHandle();
     const target = circle.targetEditor();
     const identity = (handle) => `${handle.semanticSlot}:${handle.semanticGeneration}`;
@@ -430,7 +431,7 @@ try {
     if (family.memberCount !== 0) throw new Error("failed authored batch partially committed");
     family.editMembership(batch(circle, copy, target));
     const layout = family.layout();
-    const foreignFamily = otherStore.createFamily(batch(foreign));
+    const foreignFamily = otherStore.createFamily(batch(foreign), 0);
     const foreignLayout = foreignFamily.layout();
     const layoutBefore = [circle.centerX, copy.centerX, target.centerX, family.memberCount];
     const requireUnchangedLayout = () => {

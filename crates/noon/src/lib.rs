@@ -69,6 +69,8 @@ mod family_authoring;
 mod family_callback_paint;
 mod family_callback_translation;
 mod family_copy;
+mod family_gradient;
+mod family_grid;
 mod family_layout;
 mod family_style;
 mod focus_on_authoring;
@@ -78,6 +80,7 @@ pub mod integration;
 mod live_program;
 mod live_session;
 mod native_signal_authoring;
+mod path_queries;
 mod rotation_authoring;
 mod rounded_rectangle_authoring;
 mod scalar_authoring;
@@ -85,10 +88,12 @@ mod scene;
 mod scene_membership;
 mod sector_authoring;
 mod semantic_mobject;
+mod state_replacement;
 #[cfg(any(feature = "native-text", feature = "typst"))]
 mod text_authoring;
 #[cfg(any(feature = "native-text", feature = "typst"))]
 mod text_part_authoring;
+mod z_index;
 
 pub use animation_authoring::DeclaredAnimation;
 pub use arc_authoring::ArcAuthoringError;
@@ -110,7 +115,9 @@ pub use family_authoring::{MobjectFamily, MobjectFamilyMember};
 pub use family_callback_paint::{FamilyCallbackPaintError, FamilyPaint};
 pub use family_callback_translation::{CallbackFamilyTranslation, FamilyCallbackTranslationError};
 pub use family_copy::FamilyCopy;
+pub use family_grid::{FamilyGridOptions, GridFlow};
 pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor};
+pub use family_style::StyleUpdate;
 pub use focus_on_authoring::FocusOnOptions;
 pub use host_callbacks::{RustHostCallbackContext, RustHostCallbackError, RustHostCallbackTable};
 pub use live_program::{
@@ -139,14 +146,14 @@ pub use noon_core::{
     YELLOW, YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D, YELLOW_E,
 };
 pub use noon_runtime::EvaluationError;
+pub use path_queries::PathQuery;
 pub use rotation_authoring::ManimRotationPivot;
 pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
 pub use scene::Scene;
 pub use scene_membership::SceneMembershipRequest;
-pub use semantic_mobject::{
-    ManimBecomeOptions, ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject,
-};
+pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
+pub use state_replacement::ManimBecomeOptions;
 #[cfg(any(feature = "native-text", feature = "typst"))]
 pub use text_authoring::TextAuthoringError;
 #[cfg(feature = "typst")]
@@ -170,3 +177,5 @@ pub mod prelude {
         Vec2, VectorPath,
     };
 }
+
+pub use family_gradient::color_gradient;

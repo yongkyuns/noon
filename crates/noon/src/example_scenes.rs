@@ -12,6 +12,7 @@ pub mod family_arrangement;
 pub mod family_grid;
 pub mod family_paint;
 pub mod family_placement;
+pub mod family_replacement;
 pub mod family_transform_indicate;
 pub mod line_passing_flash;
 pub mod live_geometry_construction;
@@ -3250,3 +3251,21 @@ pub mod ordinary_focus_on;
 pub mod ordinary_rotating;
 
 pub mod scale_in_place;
+
+pub mod family_membership_order;
+pub mod family_state;
+pub mod style_operations;
+
+pub mod paint_queries_gradients;
+
+pub mod planar_affine;
+
+pub mod scale_pivots;
+
+pub mod path_queries;
+pub mod z_index;
+
+pub mod animated_stroke_width;
+pub mod arc_geometry;
+
+pub mod path_arrangement;

@@ -113,17 +113,6 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                     scale["x"] *= float(x)
                     scale["y"] *= float(y)
 
-                def rotateAboutPoint(self, angle, point_x, point_y):
-                    self.calls.append(("rotateAboutPoint", float(angle)))
-                    t = self.snapshot["transform"]["translation"]
-                    dx = t["x"] - float(point_x)
-                    dy = t["y"] - float(point_y)
-                    c = math.cos(float(angle))
-                    s = math.sin(float(angle))
-                    t["x"] = float(point_x) + dx * c - dy * s
-                    t["y"] = float(point_y) + dx * s + dy * c
-                    self.snapshot["transform"]["rotation"] += float(angle)
-
                 def setFillOpacity(self, opacity):
                     fill = self.snapshot["style"]["fill"]
                     if fill is None:
@@ -406,10 +395,12 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                 operand.copy = lambda: (_ for _ in ()).throw(AssertionError("untyped target was copied"))
                 operand.scale = lambda *args: (_ for _ in ()).throw(AssertionError("untyped target was scaled"))
             for operation in ("become", "replace"):
+                expected_error = NotImplementedError if operation == "become" else RuntimeError
+                expected_message = "both Mobjects" if operation == "become" else "shared Rust layout handle"
                 try:
                     getattr(detached_source, operation)(half_typed, stretch=True)
-                except NotImplementedError as error:
-                    assert "both Mobjects" in str(error)
+                except expected_error as error:
+                    assert expected_message in str(error)
                 else:
                     raise AssertionError(operation + " admitted untyped operands")
 

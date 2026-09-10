@@ -60,7 +60,7 @@ fn reference_order(store: &SemanticStore, root: SemanticNodeId) -> Vec<ObjectId>
         let node = store.node(id).unwrap();
         match node.kind() {
             SemanticNodeKind::AuthoringObject => result.push(semantic_execution_object_id(id)),
-            SemanticNodeKind::Family => {
+            SemanticNodeKind::Family(_) => {
                 for child in node.members_iter() {
                     visit(store, child, seen, result);
                 }

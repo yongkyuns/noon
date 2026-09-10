@@ -32,12 +32,11 @@ class ManimMoveToTargetTests(unittest.TestCase):
                 assert str(error) == "MoveToTarget called on mobject without attribute 'target'"
 
             group = identity(VGroup, submobjects=[])
-            group.generate_target = lambda: None
-            try:
-                MoveToTarget(group)
-                raise AssertionError("group target must fail")
-            except NotImplementedError:
-                pass
+            target = identity(VGroup, submobjects=[])
+            group.target = target
+            request = MoveToTarget(group, run_time=2, rate_func=_manim_rate_functions.linear)
+            assert type(request) is Transform
+            assert request.source is group and request.target is target
 
             # Executable target endpoints are covered by shared-authoring-smoke;
             # this unit test protects Python target-editor selection and rollback.

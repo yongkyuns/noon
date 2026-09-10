@@ -61,7 +61,7 @@ impl SemanticStore {
             let node = self
                 .node(node_id)
                 .ok_or(SemanticFamilyPairingError::UnknownNode(node_id))?;
-            if !matches!(node.kind(), SemanticNodeKind::Family) {
+            if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
                 return Err(SemanticFamilyPairingError::RootIsNotFamily(node_id));
             }
             Ok(())
@@ -83,16 +83,30 @@ impl SemanticStore {
             let target_node = store
                 .node(target)
                 .ok_or(SemanticFamilyPairingError::UnknownNode(target))?;
+            // Memoize family pairs as well as leaves: a shared family DAG must
+            // not expand every alias path, and aliases must agree on both sides.
+            match (source_aliases.get(&source), target_aliases.get(&target)) {
+                (None, None) => {
+                    source_aliases.insert(source, target);
+                    target_aliases.insert(target, source);
+                }
+                (Some(expected_target), Some(expected_source))
+                    if *expected_target == target && *expected_source == source =>
+                {
+                    return Ok(())
+                }
+                _ => return Err(SemanticFamilyPairingError::AliasMismatch { source, target }),
+            }
             match (source_node.kind(), target_node.kind()) {
-                (SemanticNodeKind::Family, SemanticNodeKind::Family) => {
-                    if source_node.members().len() != target_node.members().len() {
+                (SemanticNodeKind::Family(_), SemanticNodeKind::Family(_)) => {
+                    if source_node.member_count() != target_node.member_count() {
                         return Err(SemanticFamilyPairingError::TopologyMismatch {
                             source,
                             target,
                         });
                     }
-                    for (&source_member, target_member) in
-                        source_node.members().iter().zip(target_node.members())
+                    for (source_member, target_member) in
+                        source_node.members_iter().zip(target_node.members_iter())
                     {
                         pair(
                             store,
@@ -112,23 +126,11 @@ impl SemanticStore {
                     if target_node.semantic_object_state().is_none() {
                         return Err(SemanticFamilyPairingError::UnsupportedLeaf(target));
                     }
-                    match (source_aliases.get(&source), target_aliases.get(&target)) {
-                        (None, None) => {
-                            source_aliases.insert(source, target);
-                            target_aliases.insert(target, source);
-                            leaves.push((source, target));
-                            Ok(())
-                        }
-                        (Some(expected_target), Some(expected_source))
-                            if *expected_target == target && *expected_source == source =>
-                        {
-                            Ok(())
-                        }
-                        _ => Err(SemanticFamilyPairingError::AliasMismatch { source, target }),
-                    }
+                    leaves.push((source, target));
+                    Ok(())
                 }
-                (SemanticNodeKind::Family, _)
-                | (SemanticNodeKind::AuthoringObject, SemanticNodeKind::Family) => {
+                (SemanticNodeKind::Family(_), _)
+                | (SemanticNodeKind::AuthoringObject, SemanticNodeKind::Family(_)) => {
                     Err(SemanticFamilyPairingError::TopologyMismatch { source, target })
                 }
                 (SemanticNodeKind::Signal(_), _)
@@ -137,7 +139,7 @@ impl SemanticStore {
                 | (_, SemanticNodeKind::Animation(_)) => {
                     let unsupported = if !matches!(
                         source_node.kind(),
-                        SemanticNodeKind::Family | SemanticNodeKind::AuthoringObject
+                        SemanticNodeKind::Family(_) | SemanticNodeKind::AuthoringObject
                     ) {
                         source
                     } else {
@@ -173,11 +175,28 @@ impl SemanticStore {
         &self,
         root: SemanticNodeId,
     ) -> Result<Vec<SemanticNodeId>, SemanticStoreError> {
+        self.ordered_nodes(root, false)
+    }
+
+    /// Return root and descendants once in family order, including family roots.
+    pub fn ordered_authoring_nodes(
+        &self,
+        root: SemanticNodeId,
+    ) -> Result<Vec<SemanticNodeId>, SemanticStoreError> {
+        self.ordered_nodes(root, true)
+    }
+
+    fn ordered_nodes(
+        &self,
+        root: SemanticNodeId,
+        include_families: bool,
+    ) -> Result<Vec<SemanticNodeId>, SemanticStoreError> {
         fn collect(
             store: &SemanticStore,
             node_id: SemanticNodeId,
             seen: &mut HashSet<SemanticNodeId>,
             leaves: &mut Vec<SemanticNodeId>,
+            include_families: bool,
         ) -> Result<(), SemanticStoreError> {
             let node = store
                 .node(node_id)
@@ -189,9 +208,12 @@ impl SemanticStore {
                 SemanticNodeKind::AuthoringObject => {
                     leaves.push(node_id);
                 }
-                SemanticNodeKind::Family => {
+                SemanticNodeKind::Family(_) => {
+                    if include_families {
+                        leaves.push(node_id);
+                    }
                     for member in node.members() {
-                        collect(store, member, seen, leaves)?;
+                        collect(store, member, seen, leaves, include_families)?;
                     }
                 }
                 SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => {}
@@ -205,7 +227,7 @@ impl SemanticStore {
 
         let mut leaves = Vec::new();
         let mut seen = HashSet::new();
-        collect(self, root, &mut seen, &mut leaves)?;
+        collect(self, root, &mut seen, &mut leaves, include_families)?;
         Ok(leaves)
     }
 }

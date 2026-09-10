@@ -1,9 +1,9 @@
 //! Shared geometry authoring over store-owned semantic object state.
 //!
 //! Handles retain only their originating store and generational identity. All
-//! durable edits use the canonical transaction vocabulary; snapshots are explicit
-//! migration/export adapters owned for deletion by #958/#959.
-use crate::AuthoringError;
+//! durable edits use the canonical transaction vocabulary. Captured state is
+//! transient input to shared preparation and coherent publication.
+use crate::{state_replacement::prepare_become_state, AuthoringError, ManimBecomeOptions};
 use noon_core::{
     Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticGeometryContent,
     SemanticGeometryLayout, SemanticMutationImpact, SemanticMutationTransaction,
@@ -17,11 +17,13 @@ mod bounds;
 mod layout;
 mod manim_geometry;
 mod style;
-use bounds::{layout_for_content, transform_layout_xy};
+use bounds::transform_layout_xy;
+pub(crate) use bounds::{boundary_for_content, layout_for_content};
 pub(crate) use style::{
     edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
     edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
-    edit_stroke_opacity, edit_stroke_width, manim_color_from_effective, PaintStyleEdit,
+    edit_stroke_opacity, edit_stroke_width, manim_color_from_effective, opaque_paint_color,
+    PaintStyleEdit,
 };
 use style::{parse_stroke_cap, parse_stroke_join, parse_stroke_width_mode};
 
@@ -31,16 +33,6 @@ pub struct ManimNextToArgs {
     pub buff: f64,
     pub aligned_edge: (f64, f64),
     pub mask: (f64, f64),
-}
-
-/// Dimension matching applies height then width; stretch overrides both.
-/// Center matching runs last, after the target dimensions have been resolved.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ManimBecomeOptions {
-    pub match_height: bool,
-    pub match_width: bool,
-    pub match_center: bool,
-    pub stretch: bool,
 }
 
 /// World-space endpoints of one analytic Manim Line.
@@ -61,6 +53,7 @@ pub struct ManimGeometryOptions {
     layout: SemanticGeometryLayout,
     transform: SemanticTransform2_5D,
     style: SemanticStyle,
+    z_index: f64,
 }
 
 impl ManimGeometryOptions {
@@ -154,6 +147,7 @@ impl ManimGeometryOptions {
             layout: SemanticGeometryLayout::GeometryBounds,
             transform: SemanticTransform2_5D::default(),
             style,
+            z_index: 0.0,
         }
     }
 
@@ -186,6 +180,15 @@ impl ManimGeometryOptions {
             GeometryRef::path(path),
             manim_style(Color::WHITE),
         ))
+    }
+
+    /// Set inert constructor priority without allocating a semantic identity.
+    pub fn set_z_index(&mut self, value: f64) -> Result<(), AuthoringError> {
+        if !value.is_finite() {
+            return Err(AuthoringError::NonFiniteObjectState);
+        }
+        self.z_index = value;
+        Ok(())
     }
 
     pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
@@ -317,6 +320,7 @@ impl ManimGeometryOptions {
             || !self.transform.scale.is_finite()
             || !self.transform.rotation_z.is_finite()
             || !self.style.is_finite()
+            || !self.z_index.is_finite()
         {
             return Err(AuthoringError::NonFiniteObjectState);
         }
@@ -326,6 +330,7 @@ impl ManimGeometryOptions {
         let mut state = SemanticObjectState::new(content);
         state.transform = self.transform;
         state.style = self.style;
+        state.set_z_index(self.z_index);
         Ok(state)
     }
 }
@@ -452,6 +457,7 @@ impl Mobject {
                 layout: SemanticGeometryLayout::GeometryBounds,
                 transform,
                 style,
+                z_index: 0.0,
             },
         )
     }
@@ -533,7 +539,7 @@ impl Mobject {
         line_endpoints_for_state(&state, state.transform)
     }
 
-    /// Return Manim's stroke-first color without applying object opacity.
+    /// Return visible fill RGB, falling back to stroke RGB, independently of opacity.
     pub fn manim_color(&self) -> Result<Color, AuthoringError> {
         style::manim_color_from_semantic(&self.state()?.style)
     }
@@ -549,6 +555,31 @@ impl Mobject {
         )
     }
 
+    pub(crate) fn boundary_bounds(&self) -> Result<Option<Bounds2D64>, AuthoringError> {
+        let store = self.store.borrow();
+        let state = store
+            .semantic_object_state_checked(self.id)
+            .map_err(AuthoringError::from)?;
+        boundary_for_content(&store, state.content, state.transform)
+    }
+
+    pub(crate) fn boundary_bounds_at(
+        &self,
+        transform: Transform2D,
+    ) -> Result<Option<Bounds2D64>, AuthoringError> {
+        let store = self.store.borrow();
+        let state = store
+            .semantic_object_state_checked(self.id)
+            .map_err(AuthoringError::from)?;
+        boundary_for_content(
+            &store,
+            state.content,
+            semantic_transform_with_effective_affine(state.transform, transform),
+        )
+    }
+
+    /// Bounds used for authored dimensions. Paths include their equivalent cubic
+    /// handles; centers and critical points use path anchors instead.
     pub fn layout_bounds(&self) -> Result<Option<Bounds2D64>, AuthoringError> {
         let store = self.store.borrow();
         let state = store
@@ -574,7 +605,7 @@ impl Mobject {
     }
 
     pub fn center(&self) -> Result<(f64, f64), AuthoringError> {
-        if let Some(b) = self.layout_bounds()? {
+        if let Some(b) = self.boundary_bounds()? {
             Ok(((b.min_x + b.max_x) * 0.5, (b.min_y + b.max_y) * 0.5))
         } else {
             let t = self.state()?.transform.translation;
@@ -657,19 +688,7 @@ impl Mobject {
         line_match_transform(start, end, target_start, target_end)
     }
     pub fn manim_scale(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
-        self.validate()?;
-        let center = self.center()?;
-        self.scale_about_center(x, y, center)
-    }
-    fn scale_about_center(
-        &mut self,
-        x: f64,
-        y: f64,
-        center: (f64, f64),
-    ) -> Result<(), AuthoringError> {
-        let mut state = self.state()?;
-        scale_state_about_center(&self.store.borrow(), &mut state, x, y, center)?;
-        self.commit_state(state)
+        crate::LayoutAnchor::from(&*self).scale(x, y, crate::ManimRotationPivot::Center)
     }
     pub fn replace_handle(
         &mut self,
@@ -677,26 +696,13 @@ impl Mobject {
         dim_to_match: u32,
         stretch: bool,
     ) -> Result<(), AuthoringError> {
-        self.require_same_store(other)?;
-        if dim_to_match > 1 {
-            return Err(AuthoringError::InvalidDimension(dim_to_match));
-        }
-        let (w, h) = (self.width()?, self.height()?);
-        let (tw, th) = (other.width()?, other.height()?);
-        let (x, y) = if stretch {
-            if w == 0.0 || h == 0.0 {
-                return Err(AuthoringError::ZeroReplaceExtent);
-            }
-            (tw / w, th / h)
-        } else {
-            let (a, b) = if dim_to_match == 0 { (w, tw) } else { (h, th) };
-            if a == 0.0 {
-                return Err(AuthoringError::ZeroReplaceExtent);
-            }
-            (b / a, b / a)
-        };
-        self.scale_about_center(x, y, other.center()?)
+        crate::LayoutAnchor::from(&*self).replace_layout(
+            &crate::LayoutAnchor::from(other),
+            dim_to_match.try_into()?,
+            stretch,
+        )
     }
+
     pub fn move_to(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
         self.validate()?;
         semantic_xy(x, y)?;
@@ -709,7 +715,7 @@ impl Mobject {
         direction_x: f64,
         direction_y: f64,
     ) -> Result<(f64, f64), AuthoringError> {
-        let Some(bounds) = self.layout_bounds()? else {
+        let Some(bounds) = self.boundary_bounds()? else {
             return self.center();
         };
         let center = self.center()?;
@@ -785,14 +791,9 @@ impl Mobject {
         self.commit_state(state)
     }
 
+    /// Rotate about the current semantic geometry center, as in ordinary Manim authoring.
     pub fn rotate(&mut self, angle: f64) -> Result<(), AuthoringError> {
-        self.validate()?;
-        let mut state = self.state()?;
-        let angle = authoring_render_f64("rotation", angle)?;
-        let rotation = state.transform.rotation_z + angle;
-        finite_f32("rotation result", rotation)?;
-        state.transform.rotation_z = rotation;
-        self.commit_state(state)
+        self.rotate_with_pivot(angle, crate::ManimRotationPivot::Center)
     }
 
     pub fn rotate_about_point(
@@ -834,7 +835,7 @@ fn line_endpoints_for_state(
     })
 }
 
-fn semantic_transform_with_effective_affine(
+pub(crate) fn semantic_transform_with_effective_affine(
     mut authored: SemanticTransform2_5D,
     effective: Transform2D,
 ) -> SemanticTransform2_5D {
@@ -877,88 +878,11 @@ pub(crate) fn stage_state_changes(
     }
 }
 
-pub(crate) fn prepare_become_state(
-    store: &SemanticStore,
-    source: &SemanticObjectState,
-    mut target: SemanticObjectState,
-    options: ManimBecomeOptions,
-) -> Result<SemanticObjectState, AuthoringError> {
-    validate_content(store, source.content)?;
-    validate_content(store, target.content)?;
-
-    if options.stretch {
-        let source_width = state_dimension(store, source, true)?;
-        let source_height = state_dimension(store, source, false)?;
-        let target_width = state_dimension(store, &target, true)?;
-        let target_height = state_dimension(store, &target, false)?;
-        if target_width == 0.0 || target_height == 0.0 {
-            return Err(AuthoringError::ZeroStretchTarget);
-        }
-        let center = state_center(store, &target)?;
-        scale_state_about_center(
-            store,
-            &mut target,
-            source_width / target_width,
-            source_height / target_height,
-            center,
-        )?;
-    } else {
-        if options.match_height {
-            let source_height = state_dimension(store, source, false)?;
-            let target_height = state_dimension(store, &target, false)?;
-            if target_height == 0.0 {
-                return Err(AuthoringError::ZeroMatchHeight);
-            }
-            let center = state_center(store, &target)?;
-            let factor = source_height / target_height;
-            scale_state_about_center(store, &mut target, factor, factor, center)?;
-        }
-        if options.match_width {
-            let source_width = state_dimension(store, source, true)?;
-            let target_width = state_dimension(store, &target, true)?;
-            if target_width == 0.0 {
-                return Err(AuthoringError::ZeroMatchWidth);
-            }
-            let center = state_center(store, &target)?;
-            let factor = source_width / target_width;
-            scale_state_about_center(store, &mut target, factor, factor, center)?;
-        }
-    }
-    if options.match_center {
-        let source_center = state_center(store, source)?;
-        let target_center = state_center(store, &target)?;
-        target.transform.translation.x += source_center.0 - target_center.0;
-        target.transform.translation.y += source_center.1 - target_center.1;
-        target
-            .transform
-            .translation
-            .lower_xy_f32()
-            .map_err(AuthoringError::from)?;
-    }
-    Ok(target)
-}
-
-fn state_dimension(
-    store: &SemanticStore,
-    state: &SemanticObjectState,
-    horizontal: bool,
-) -> Result<f64, AuthoringError> {
-    Ok(
-        layout_for_content(store, state.content, state.transform)?.map_or(0.0, |bounds| {
-            if horizontal {
-                bounds.width()
-            } else {
-                bounds.height()
-            }
-        }),
-    )
-}
-
 pub(crate) fn state_center(
     store: &SemanticStore,
     state: &SemanticObjectState,
 ) -> Result<(f64, f64), AuthoringError> {
-    Ok(layout_for_content(store, state.content, state.transform)?
+    Ok(boundary_for_content(store, state.content, state.transform)?
         .map(|bounds| {
             (
                 (bounds.min_x + bounds.max_x) * 0.5,
@@ -1219,7 +1143,7 @@ pub(crate) fn import_geometry(
 #[cfg(test)]
 mod tests;
 
-fn validate_content(
+pub(crate) fn validate_content(
     store: &SemanticStore,
     content: SemanticObjectContent,
 ) -> Result<(), AuthoringError> {

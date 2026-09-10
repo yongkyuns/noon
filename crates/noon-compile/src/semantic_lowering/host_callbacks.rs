@@ -302,7 +302,7 @@ pub(super) fn lower_semantic_host_callbacks(
                 plan.insert(target, activation);
             }
         }
-        if matches!(node.kind(), SemanticNodeKind::Family) {
+        if matches!(node.kind(), SemanticNodeKind::Family(_)) {
             pending.extend(node.members().into_iter().rev());
         }
     }

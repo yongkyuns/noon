@@ -28,7 +28,7 @@ pub fn semantic_scene_root_contains(
     target: SemanticNodeId,
 ) -> Result<bool, SemanticSceneOperationError> {
     let root = target_node_checked(store, scene_root)?;
-    if !matches!(root.kind(), SemanticNodeKind::Family) {
+    if !matches!(root.kind(), SemanticNodeKind::Family(_)) {
         return Err(SemanticSceneOperationError::NotSemanticFamily(scene_root));
     }
     target_node_checked(store, target)?;
@@ -61,7 +61,7 @@ pub fn plan_semantic_scene_membership(
     let root = store
         .node(scene_root)
         .ok_or(SemanticSceneOperationError::UnknownNode(scene_root))?;
-    if !matches!(root.kind(), SemanticNodeKind::Family) {
+    if !matches!(root.kind(), SemanticNodeKind::Family(_)) {
         return Err(SemanticSceneOperationError::NotSemanticFamily(scene_root));
     }
     match request {
@@ -353,7 +353,7 @@ fn target_node_checked(
         .node(id)
         .ok_or(SemanticSceneOperationError::UnknownNode(id))?;
     let is_target = match node.kind() {
-        SemanticNodeKind::Family => true,
+        SemanticNodeKind::Family(_) => true,
         SemanticNodeKind::AuthoringObject => node.semantic_object_state().is_some(),
         SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => false,
     };
@@ -389,7 +389,7 @@ fn downward_target_closure(
             continue;
         }
         let node = target_node_checked(store, id)?;
-        if matches!(node.kind(), SemanticNodeKind::Family) {
+        if matches!(node.kind(), SemanticNodeKind::Family(_)) {
             stack.extend(node.members());
         }
     }
@@ -504,7 +504,7 @@ fn collect_root_replacements(
         return Ok(());
     }
 
-    if matches!(node.kind(), SemanticNodeKind::Family) {
+    if matches!(node.kind(), SemanticNodeKind::Family(_)) {
         for member in node.members_iter() {
             collect_root_replacements(
                 store,

@@ -170,6 +170,22 @@
       "thumbnail_alt": "I and LONG text revealing from left to right above a moving square",
       "thumbnail_time": 1.0,
       "order": 1110
-    }
+    },
+    {
+    "id": "compatible-group-slicing",
+    "title": "GroupSlicing",
+    "summary": "Slice a VGroup and mutate the selected shared members without replacing the original family.",
+    "status": "ready",
+    "path": "python/examples/manim_compatible_group_slicing.py",
+    "category": "manim-compatible/grouping",
+    "features": ["VGroup", "slice", "shared identity", "shift", "Manim-compatible"],
+    "reuse": "manim-compatible-parity-v0.21",
+    "parity_status": "parity-qualified",
+    "parity_fixture": "group-slicing",
+    "thumbnail": "thumbnails/manim/compatible-group-slicing.svg",
+    "thumbnail_alt": "Square below a circle and rectangle shifted upward through a VGroup slice",
+    "thumbnail_time": 1.0,
+    "order": 1120
+  }
   ]
 }

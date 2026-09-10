@@ -160,7 +160,16 @@ impl Scene {
         &self,
         members: &[MobjectFamilyMember<'_>],
     ) -> Result<MobjectFamily, crate::AuthoringError> {
-        MobjectFamily::create(Rc::clone(&self.store), members)
+        self.family_with_z_index(members, 0.0)
+    }
+
+    /// Construct a detached family with priority on its root only.
+    pub fn family_with_z_index(
+        &self,
+        members: &[MobjectFamilyMember<'_>],
+        z_index: f64,
+    ) -> Result<MobjectFamily, crate::AuthoringError> {
+        MobjectFamily::create_with_z_index(Rc::clone(&self.store), members, z_index)
     }
     pub fn remove(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Remove(&[

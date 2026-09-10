@@ -273,7 +273,7 @@ where
         if prepared
             .store()
             .node(member)
-            .is_some_and(|node| matches!(node.kind(), noon_core::SemanticNodeKind::Family))
+            .is_some_and(|node| matches!(node.kind(), noon_core::SemanticNodeKind::Family(_)))
         {
             admitted.extend(
                 prepared
@@ -1042,7 +1042,10 @@ mod tests {
                 translation,
                 ..Transform2D::IDENTITY
             },
-            style: noon_core::Style::default(),
+            style: noon_core::Style {
+                stroke_width: 0.0,
+                ..noon_core::Style::default()
+            },
             appearance: 1.0,
             reveal: 1.0,
         }
@@ -1524,7 +1527,10 @@ mod tests {
                 rotation: 0.25,
                 scale: Vec2::new(2.0, 3.0),
             },
-            style: noon_core::Style::default(),
+            style: noon_core::Style {
+                stroke_width: 0.0,
+                ..noon_core::Style::default()
+            },
             appearance: 1.0,
             reveal: 1.0,
         };
@@ -1728,7 +1734,7 @@ mod tests {
         let mut store = noon_core::SemanticStore::new();
         let source = visible_circle(&mut store);
         let mut target_state = store.semantic_object_state_checked(source).unwrap().clone();
-        target_state.style.stroke_width = 2.0;
+        target_state.style.stroke_cap = noon_core::StrokeCap::Butt;
         let mut index = SemanticExecutionIndex::new();
         index.lower_scene(&store).unwrap();
         let before_revision = store.scene_revision();
@@ -1780,8 +1786,9 @@ mod tests {
             SemanticVec3::new(1.0, 0.0, 0.0),
         )));
         let invalid_target = transaction.create_node(SemanticNodeCreation::object(
-            SemanticObjectState::new(StoredGeometry::Rectangle {
-                size: Vec2::new(1.0, 1.0),
+            SemanticObjectState::new(StoredGeometry::Line {
+                start: Vec2::ZERO,
+                end: Vec2::new(1.0, 1.0),
             }),
         ));
         let valid = transaction.create_transform_animation(

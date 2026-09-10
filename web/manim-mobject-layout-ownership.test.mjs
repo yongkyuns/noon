@@ -63,7 +63,7 @@ test("Rust semantic handle remains the layout-query source of truth", () => {
   const widthStart = rustHandleSource.indexOf("pub fn width(&self)", centerStart);
   assert.ok(centerStart >= 0 && widthStart > centerStart);
   const centerBody = rustHandleSource.slice(centerStart, widthStart);
-  assert.match(centerBody, /self\.layout_bounds\(\)/);
+  assert.match(centerBody, /self\.boundary_bounds\(\)/);
 
   const widthEnd = rustHandleSource.indexOf("pub fn height(&self)", widthStart);
   const widthBody = rustHandleSource.slice(widthStart, widthEnd);

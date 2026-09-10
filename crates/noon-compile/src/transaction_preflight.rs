@@ -339,6 +339,12 @@ pub(super) fn preflight_transaction_with_resources(
                 }
                 validate_transform(*object, *transform).map_err(map_object_state_error)?;
             }
+            ExecutionPatch::SetZIndex { object, value } => {
+                if overlay.object_index(scene, *object).is_none() {
+                    return Err(CompilePatchError::UnknownObject(*object));
+                }
+                super::validate_z_index(*object, *value)?;
+            }
             ExecutionPatch::SetStyle { object, style } => {
                 if overlay.object_index(scene, *object).is_none() {
                     return Err(CompilePatchError::UnknownObject(*object));

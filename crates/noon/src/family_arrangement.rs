@@ -2,13 +2,13 @@
 //!
 //! Manim v0.21 sequences next_to against current bounds, then centers once:
 //! <https://github.com/ManimCommunity/manim/blob/v0.21.0/manim/mobject/mobject.py>.
-use crate::AuthoringError;
 use crate::{
     family_authoring::translation_transaction,
     family_layout::{bounds_critical_point, RelativePlacement},
     semantic_mobject::ManimNextToArgs,
     Bounds2D64, LayoutAnchor, Mobject, MobjectFamily, SemanticNodeId, SemanticVec3,
 };
+use crate::{family_grid::GridPlan, AuthoringError, FamilyGridOptions};
 use noon_core::SemanticMutationTransaction;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -62,12 +62,29 @@ impl MobjectFamily {
         gap_x: f64,
         gap_y: f64,
     ) -> Result<(), AuthoringError> {
-        self.commit_arrangement(FamilyArrangePlan::grid(self, rows, columns, gap_x, gap_y)?)
+        self.arrange_in_grid_with_options(&FamilyGridOptions {
+            rows,
+            columns,
+            gap: (gap_x, gap_y),
+            ..Default::default()
+        })
+    }
+
+    /// Arrange with shared alignment, sizing and fill-order policy in one transaction.
+    pub fn arrange_in_grid_with_options(
+        &self,
+        options: &FamilyGridOptions,
+    ) -> Result<(), AuthoringError> {
+        self.commit_arrangement(FamilyArrangePlan::grid(self, options)?)
     }
 
     fn commit_arrangement(&self, mut plan: FamilyArrangePlan) -> Result<(), AuthoringError> {
         plan.observe_leaf_bounds(|leaf| {
-            Mobject::from_node(Rc::clone(self.integration_store()), leaf)?.layout_bounds()
+            let object = Mobject::from_node(Rc::clone(self.integration_store()), leaf)?;
+            Ok::<_, AuthoringError>(ArrangementBounds {
+                dimensions: object.layout_bounds()?,
+                anchors: object.boundary_bounds()?,
+            })
         })?;
         let transaction = plan.transaction::<AuthoringError>(|leaf| {
             Ok(
@@ -85,21 +102,28 @@ impl MobjectFamily {
 }
 
 struct PlacementStep {
-    cell: Option<usize>,
+    cell: Option<(usize, usize)>,
     moved: Vec<SemanticNodeId>,
     source: Vec<SemanticNodeId>,
     target: Vec<SemanticNodeId>,
+}
+
+/// Measurements derived from one immutable leaf, with no independent identity.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ArrangementBounds {
+    pub dimensions: Option<Bounds2D64>,
+    pub anchors: Option<Bounds2D64>,
 }
 
 /// Request-local observations and proposed deltas, never another scene or runtime.
 pub(crate) struct FamilyArrangePlan {
     roots: Vec<SemanticNodeId>,
     steps: Vec<PlacementStep>,
-    bounds: BTreeMap<SemanticNodeId, Option<Bounds2D64>>,
+    bounds: BTreeMap<SemanticNodeId, ArrangementBounds>,
     observed: bool,
     placement: ManimNextToArgs,
     center: bool,
-    grid: Option<(usize, f64, f64)>,
+    grid: Option<GridPlan>,
 }
 
 impl FamilyArrangePlan {
@@ -156,7 +180,10 @@ impl FamilyArrangePlan {
         Ok(Self {
             roots,
             steps,
-            bounds: required.into_iter().map(|id| (id, None)).collect(),
+            bounds: required
+                .into_iter()
+                .map(|id| (id, ArrangementBounds::default()))
+                .collect(),
             observed: false,
             placement: options.placement,
             center: options.center,
@@ -166,54 +193,31 @@ impl FamilyArrangePlan {
 
     pub(crate) fn grid(
         family: &MobjectFamily,
-        rows: Option<usize>,
-        columns: Option<usize>,
-        gap_x: f64,
-        gap_y: f64,
+        options: &FamilyGridOptions,
     ) -> Result<Self, AuthoringError> {
         family.validate()?;
-        crate::semantic_mobject::authoring_render_f64("grid horizontal gap", gap_x)?;
-        crate::semantic_mobject::authoring_render_f64("grid vertical gap", gap_y)?;
-        if rows == Some(0) || columns == Some(0) {
-            return Err(AuthoringError::InvalidGridDimensions { rows, columns });
-        }
         let store = family.integration_store().borrow();
         let ids = store.node(family.node_id()).unwrap().members();
-        let count = ids.len();
-        let columns = columns.unwrap_or_else(|| match rows {
-            Some(rows) => count.div_ceil(rows).max(1),
-            None => (count as f64).sqrt().ceil().max(1.0) as usize,
-        });
-        let used_rows = count.div_ceil(columns);
-        if rows.is_some_and(|rows| rows < used_rows) {
-            return Err(AuthoringError::InsufficientGridCapacity {
-                rows,
-                columns,
-                members: count,
-            });
-        }
+        let grid = GridPlan::new(options, ids.len())?;
         let roots = store
             .ordered_leaf_nodes(family.node_id())
             .map_err(AuthoringError::from)?;
-        let mut steps = Vec::with_capacity(count);
-        // Manim places bottom rows first; preserve that ordering for shared aliases.
-        for row in (0..used_rows).rev() {
-            let start = row * columns;
-            for (column, &id) in ids[start..start + columns.min(count - start)]
-                .iter()
-                .enumerate()
-            {
-                let moved = store.ordered_leaf_nodes(id).map_err(AuthoringError::from)?;
-                steps.push(PlacementStep {
-                    cell: Some(start + column),
-                    source: moved.clone(),
-                    moved,
-                    target: Vec::new(),
-                });
-            }
+        let mut steps = Vec::with_capacity(ids.len());
+        for (index, &id) in ids.iter().enumerate() {
+            let moved = store.ordered_leaf_nodes(id).map_err(AuthoringError::from)?;
+            steps.push(PlacementStep {
+                cell: Some(grid.cell(index)),
+                source: moved.clone(),
+                moved,
+                target: Vec::new(),
+            });
         }
+        steps.sort_by_key(|step| step.cell);
         Ok(Self {
-            bounds: roots.iter().map(|&id| (id, None)).collect(),
+            bounds: roots
+                .iter()
+                .map(|&id| (id, ArrangementBounds::default()))
+                .collect(),
             roots,
             steps,
             observed: false,
@@ -224,13 +228,13 @@ impl FamilyArrangePlan {
                 mask: (1.0, 1.0),
             },
             center: true,
-            grid: Some((columns, gap_x, gap_y)),
+            grid: Some(grid),
         })
     }
 
     pub(crate) fn observe_leaf_bounds<E>(
         &mut self,
-        mut observe: impl FnMut(SemanticNodeId) -> Result<Option<Bounds2D64>, E>,
+        mut observe: impl FnMut(SemanticNodeId) -> Result<ArrangementBounds, E>,
     ) -> Result<(), E> {
         for (&id, bounds) in &mut self.bounds {
             *bounds = observe(id)?;
@@ -247,10 +251,17 @@ impl FamilyArrangePlan {
             return Err(AuthoringError::IncompleteArrangement.into());
         }
         let mut deltas: BTreeMap<_, _> = self.roots.iter().map(|&id| (id, (0.0, 0.0))).collect();
-        let aggregate = |ids: &[SemanticNodeId], deltas: &BTreeMap<SemanticNodeId, (f64, f64)>| {
+        let aggregate = |ids: &[SemanticNodeId],
+                         deltas: &BTreeMap<SemanticNodeId, (f64, f64)>,
+                         dimensions: bool| {
             let mut total: Option<Bounds2D64> = None;
             for id in ids {
-                let Some(bounds) = self.bounds[id] else {
+                let measured = self.bounds[id];
+                let Some(bounds) = (if dimensions {
+                    measured.dimensions
+                } else {
+                    measured.anchors
+                }) else {
                     continue;
                 };
                 let (x, y) = deltas.get(id).copied().unwrap_or((0.0, 0.0));
@@ -270,46 +281,26 @@ impl FamilyArrangePlan {
             total
         };
         let original_center = if self.grid.is_some() {
-            bounds_critical_point(aggregate(&self.roots, &deltas), 0.0, 0.0)
+            bounds_critical_point(aggregate(&self.roots, &deltas, false), 0.0, 0.0)
         } else {
             (0.0, 0.0)
         };
-        let grid_points = self.grid.map(|(columns, gap_x, gap_y)| {
-            let count = self.steps.len();
-            // Only occupied rows/columns consume memory, even for huge explicit capacities.
-            let mut widths = vec![0.0_f64; columns.min(count)];
-            let mut heights = vec![0.0_f64; count.div_ceil(columns)];
-            for step in &self.steps {
-                let cell = step.cell.unwrap();
-                if let Some(bounds) = aggregate(&step.source, &deltas) {
-                    widths[cell % columns] = widths[cell % columns].max(bounds.width());
-                    heights[cell / columns] = heights[cell / columns].max(bounds.height());
-                }
-            }
-            let centers = |sizes: Vec<f64>, gap: f64| {
-                let mut offset = 0.0;
-                sizes
-                    .into_iter()
-                    .map(|size| {
-                        let center = offset + size / 2.0;
-                        offset += size + gap;
-                        center
-                    })
-                    .collect::<Vec<_>>()
-            };
-            (centers(widths, gap_x), centers(heights, gap_y), columns)
+        let grid_points = self.grid.as_ref().map(|grid| {
+            grid.targets(
+                self.steps
+                    .iter()
+                    .map(|step| (step.cell.unwrap(), aggregate(&step.source, &deltas, true))),
+            )
         });
         for step in &self.steps {
-            let source = aggregate(&step.source, &deltas);
-            let delta = if let Some((xs, ys, columns)) = &grid_points {
-                let cell = step.cell.unwrap();
-                let center = bounds_critical_point(source, 0.0, 0.0);
-                (
-                    xs[cell % columns] - center.0,
-                    -ys[cell / columns] - center.1,
-                )
+            let source = aggregate(&step.source, &deltas, false);
+            let delta = if let Some(points) = &grid_points {
+                let (target, alignment) = points[&step.cell.unwrap()];
+                let from = bounds_critical_point(source, alignment.0, alignment.1);
+                let to = bounds_critical_point(Some(target), alignment.0, alignment.1);
+                (to.0 - from.0, to.1 - from.1)
             } else {
-                let target = aggregate(&step.target, &deltas);
+                let target = aggregate(&step.target, &deltas, false);
                 RelativePlacement::Next(self.placement)
                     .delta::<AuthoringError>(source, |x, y| {
                         Ok(bounds_critical_point(target, x, y))
@@ -322,7 +313,7 @@ impl FamilyArrangePlan {
             }
         }
         if self.center {
-            let center = bounds_critical_point(aggregate(&self.roots, &deltas), 0.0, 0.0);
+            let center = bounds_critical_point(aggregate(&self.roots, &deltas, false), 0.0, 0.0);
             for delta in deltas.values_mut() {
                 delta.0 -= center.0 - original_center.0;
                 delta.1 -= center.1 - original_center.1;

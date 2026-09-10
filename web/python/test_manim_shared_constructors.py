@@ -121,6 +121,7 @@ class ManimSharedConstructorTests(unittest.TestCase):
             r = Rectangle()
             s = Square(
                 2.0,
+                color="#FF0000",
                 fill_color="#112233",
                 fill_opacity=0.25,
                 stroke_color=BLUE,

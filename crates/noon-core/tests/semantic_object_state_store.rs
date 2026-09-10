@@ -20,8 +20,8 @@ fn semantic_store_owns_object_state_and_assigns_insertion_order() {
     let first_state = store.node(first).unwrap().semantic_object_state().unwrap();
     let second_state = store.node(second).unwrap().semantic_object_state().unwrap();
 
-    assert_eq!(first_state.z_index(), 7);
-    assert_eq!(second_state.z_index(), -3);
+    assert_eq!(first_state.z_index(), 7.0);
+    assert_eq!(second_state.z_index(), -3.0);
     assert_eq!(first_state.insertion_order(), 0);
     assert_eq!(second_state.insertion_order(), 1);
 }
@@ -96,7 +96,7 @@ fn semantic_state_mutation_is_local_and_preserves_content_identity() {
     );
     assert_eq!(state.transform.translation.z, 8.0);
     assert_eq!(state.style.object_opacity, 0.25);
-    assert_eq!(state.z_index(), 11);
+    assert_eq!(state.z_index(), 11.0);
     assert_eq!(
         store
             .node(unrelated)

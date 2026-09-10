@@ -46,11 +46,13 @@ impl SceneMembershipBatch {
     fn create_family(
         &self,
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        z_index: f64,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         if self.kind != SceneMembershipBatchKind::Add {
             return Err("family creation requires an add batch".into());
         }
-        noon::MobjectFamily::create(store, &self.family_members()?).map_err(AuthoringFailure::from)
+        noon::MobjectFamily::create_with_z_index(store, &self.family_members()?, z_index)
+            .map_err(AuthoringFailure::from)
     }
 
     fn edit_family(&self, family: &noon::MobjectFamily) -> Result<Vec<bool>, AuthoringFailure> {
@@ -511,6 +513,18 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_path_query(
+        &mut self,
+        handle: &noon::Mobject,
+    ) -> Result<noon::PathQuery, AuthoringFailure> {
+        self.mobject_observation(
+            handle,
+            noon::Mobject::path_query,
+            crate::SemanticExecutionPlayer::live_effective_path_query,
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_line_endpoints(
         &mut self,
         handle: &noon::Mobject,
@@ -522,6 +536,36 @@ impl CanonicalAuthoringScene {
         )
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn mobject_fill_color(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
+        self.mobject_observation(
+            target,
+            noon::Mobject::fill_color,
+            crate::SemanticExecutionPlayer::live_effective_fill_color,
+        )
+    }
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_stroke_color(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
+        self.mobject_observation(
+            target,
+            noon::Mobject::stroke_color,
+            crate::SemanticExecutionPlayer::live_effective_stroke_color,
+        )
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn mobject_stroke_width(&mut self, target: &noon::Mobject) -> Result<f64, AuthoringFailure> {
+        self.mobject_observation(
+            target,
+            noon::Mobject::stroke_width,
+            crate::SemanticExecutionPlayer::live_effective_stroke_width,
+        )
+    }
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_color(
         &mut self,
@@ -1922,10 +1966,11 @@ impl CanonicalAuthoringScene {
     fn live_family(
         &mut self,
         members: &[noon::MobjectFamilyMember<'_>],
+        z_index: f64,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         match &mut self.player_ownership {
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_family(members)
+                self.active_live_player()?.live_family(members, z_index)
             }
             PlayerOwnership::Unstarted => {
                 Err("live family creation requires an active canonical session".into())
@@ -2636,8 +2681,9 @@ mod wasm {
         pub(crate) fn create_family(
             &self,
             store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+            z_index: f64,
         ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-            self.inner.create_family(store)
+            self.inner.create_family(store, z_index)
         }
 
         pub(crate) fn edit_family(
@@ -5120,13 +5166,22 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = liveRescaleToFit)]
+        #[allow(clippy::too_many_arguments)]
         pub fn live_rescale_to_fit(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             length: f64,
             dimension: u32,
             stretch: bool,
+            x: f64,
+            y: f64,
+            about_point: bool,
         ) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -5135,12 +5190,13 @@ mod wasm {
                     length,
                     dimension.try_into().map_err(typed_js_error)?,
                     stretch,
+                    pivot,
                 )
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveMatchDimSize)]
-        pub fn live_match_dim_size(
+        #[wasm_bindgen(js_name = liveReplaceLayout)]
+        pub fn live_replace_layout(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             target: &crate::authoring_mobject::WasmLayoutAnchor,
@@ -5150,11 +5206,41 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
+                .live_replace_layout(
+                    &source.anchor,
+                    &target.anchor,
+                    dimension.try_into().map_err(typed_js_error)?,
+                    stretch,
+                )
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveMatchDimSize)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_match_dim_size(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            target: &crate::authoring_mobject::WasmLayoutAnchor,
+            dimension: u32,
+            stretch: bool,
+            x: f64,
+            y: f64,
+            about_point: bool,
+        ) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
                 .live_match_dim_size(
                     &source.anchor,
                     &target.anchor,
                     dimension.try_into().map_err(typed_js_error)?,
                     stretch,
+                    pivot,
                 )
                 .map_err(typed_js_error)
         }
@@ -5307,6 +5393,17 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = queryMobjectPath)]
+        pub fn query_mobject_path(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<crate::WasmPathQuery, JsValue> {
+            self.inner
+                .mobject_path_query(handle.semantic_mobject())
+                .map(crate::WasmPathQuery::from_query)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = queryMobjectLineEndpoints)]
         pub fn query_mobject_line_endpoints(
             &mut self,
@@ -5338,6 +5435,63 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = queryMobjectFillColor)]
+        pub fn query_mobject_fill_color(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<Option<crate::WasmManimColor>, JsValue> {
+            self.inner
+                .mobject_fill_color(target.semantic_mobject())
+                .map(|color| color.map(crate::WasmManimColor::from_color))
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = queryMobjectStrokeColor)]
+        pub fn query_mobject_stroke_color(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<Option<crate::WasmManimColor>, JsValue> {
+            self.inner
+                .mobject_stroke_color(target.semantic_mobject())
+                .map(|color| color.map(crate::WasmManimColor::from_color))
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = queryMobjectStrokeWidth)]
+        pub fn query_mobject_stroke_width(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<f64, JsValue> {
+            self.inner
+                .mobject_stroke_width(target.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveSetColorGradient)]
+        pub fn live_set_color_gradient(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            values: &[f64],
+        ) -> Result<(), JsValue> {
+            let colors =
+                crate::authoring_mobject::gradient_colors(values).map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_color_gradient(&target.semantic_mobject(), &colors)
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveSetFamilyColorGradient)]
+        pub fn live_set_family_color_gradient(
+            &mut self,
+            target: &crate::WasmAuthoringFamilyHandle,
+            values: &[f64],
+        ) -> Result<(), JsValue> {
+            let colors =
+                crate::authoring_mobject::gradient_colors(values).map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_color_gradient(&target.semantic_family()?, &colors)
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = queryMobjectColor)]
         pub fn query_mobject_color(
             &mut self,
@@ -5544,6 +5698,32 @@ mod wasm {
                     &references.copy_references().map_err(typed_js_error)?,
                 )
                 .map(crate::WasmFamilyCopy::from_copy)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveBecomeFamily)]
+        pub fn live_become_family(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            target: &crate::WasmAuthoringFamilyHandle,
+            match_height: bool,
+            match_width: bool,
+            match_center: bool,
+            stretch: bool,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_become_family(
+                    &source.semantic_family()?,
+                    &target.semantic_family()?,
+                    noon::ManimBecomeOptions {
+                        match_height,
+                        match_width,
+                        match_center,
+                        stretch,
+                    },
+                )
                 .map_err(typed_js_error)
         }
 
@@ -6097,13 +6277,14 @@ mod wasm {
         pub fn live_create_family(
             &mut self,
             batch: WasmSceneMembershipBatch,
+            z_index: f64,
         ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
             if batch.inner.kind != SceneMembershipBatchKind::Add {
                 return Err(typed_js_error("family creation requires an add batch"));
             }
             let members = batch.inner.family_members().map_err(typed_js_error)?;
             self.inner
-                .live_family(&members)
+                .live_family(&members, z_index)
                 .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(typed_js_error)
         }
@@ -6151,6 +6332,112 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetStyle)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_set_style(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            fill_enabled: bool,
+            fill_red: f64,
+            fill_green: f64,
+            fill_blue: f64,
+            fill_alpha: f64,
+            fill_opacity: Option<f64>,
+            stroke_enabled: bool,
+            stroke_red: f64,
+            stroke_green: f64,
+            stroke_blue: f64,
+            stroke_alpha: f64,
+            stroke_width: Option<f64>,
+            stroke_opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let update = crate::authoring_mobject::style_update(
+                fill_enabled,
+                fill_red,
+                fill_green,
+                fill_blue,
+                fill_alpha,
+                fill_opacity,
+                stroke_enabled,
+                stroke_red,
+                stroke_green,
+                stroke_blue,
+                stroke_alpha,
+                stroke_width,
+                stroke_opacity,
+            )
+            .map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_style(&source.semantic_mobject(), update)
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveMatchStyle)]
+        pub fn live_match_style(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_match_style(&source.semantic_mobject(), &target.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveSetFamilyStyle)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_set_family_style(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            fill_enabled: bool,
+            fill_red: f64,
+            fill_green: f64,
+            fill_blue: f64,
+            fill_alpha: f64,
+            fill_opacity: Option<f64>,
+            stroke_enabled: bool,
+            stroke_red: f64,
+            stroke_green: f64,
+            stroke_blue: f64,
+            stroke_alpha: f64,
+            stroke_width: Option<f64>,
+            stroke_opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let update = crate::authoring_mobject::style_update(
+                fill_enabled,
+                fill_red,
+                fill_green,
+                fill_blue,
+                fill_alpha,
+                fill_opacity,
+                stroke_enabled,
+                stroke_red,
+                stroke_green,
+                stroke_blue,
+                stroke_alpha,
+                stroke_width,
+                stroke_opacity,
+            )
+            .map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_style(&source.semantic_family()?, update)
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveMatchFamilyStyle)]
+        pub fn live_match_family_style(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            target: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_match_family_style(&source.semantic_family()?, &target.semantic_family()?)
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = liveSetFamilyColor)]
         #[allow(clippy::too_many_arguments)]
         pub fn live_set_family_color(
@@ -6235,22 +6522,13 @@ mod wasm {
         pub fn live_arrange_family_in_grid(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
-            rows: Option<u32>,
-            columns: Option<u32>,
-            gap_x: f64,
-            gap_y: f64,
+            options: &crate::authoring_mobject::WasmFamilyGridOptions,
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_arrange_family_in_grid(
-                    &family,
-                    rows.map(|v| v as usize),
-                    columns.map(|v| v as usize),
-                    gap_x,
-                    gap_y,
-                )
+                .live_arrange_family_in_grid(&family, &options.options)
                 .map_err(typed_js_error)
         }
 
@@ -6266,28 +6544,6 @@ mod wasm {
                 .active_live_player()
                 .map_err(typed_js_error)?
                 .live_scale_family(&family, x, y)
-                .map_err(typed_js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveRotateFamily)]
-        pub fn live_rotate_family(
-            &mut self,
-            handle: &crate::WasmAuthoringFamilyHandle,
-            angle: f64,
-            x: f64,
-            y: f64,
-            about_point: bool,
-        ) -> Result<(), JsValue> {
-            let family = handle.semantic_family()?;
-            let pivot = if about_point {
-                noon::ManimRotationPivot::Point(x, y)
-            } else {
-                noon::ManimRotationPivot::Edge(x, y)
-            };
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_rotate_family(&family, angle, pivot)
                 .map_err(typed_js_error)
         }
 
@@ -6356,20 +6612,88 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveRotate)]
-        pub fn live_rotate(
+        #[wasm_bindgen(js_name = liveScaleLayout)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_scale_layout(
             &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
-            angle: f64,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            scale_x: f64,
+            scale_y: f64,
+            x: f64,
+            y: f64,
+            about_point: bool,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_rotate(handle.semantic_mobject(), angle)
+                .live_scale_layout(&source.anchor, scale_x, scale_y, pivot)
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveRotateLayout)]
+        pub fn live_rotate_layout(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            angle: f64,
+            x: f64,
+            y: f64,
+            about_point: bool,
+        ) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_rotate_layout(&source.anchor, angle, pivot)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetZIndex)]
+        pub fn live_set_z_index(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            value: f64,
+            family: bool,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_z_index(&source.anchor, value, family)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveFlipLayout)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_flip_layout(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            axis_x: f64,
+            axis_y: f64,
+            axis_z: f64,
+            x: f64,
+            y: f64,
+            about_point: bool,
+        ) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_flip_layout(
+                    &source.anchor,
+                    noon::SemanticVec3::new(axis_x, axis_y, axis_z),
+                    pivot,
+                )
                 .map_err(typed_js_error)
         }
 
@@ -6540,14 +6864,14 @@ mod tests {
         };
         assert_eq!(batch.family_members().unwrap().len(), 1);
         let family = batch
-            .create_family(std::rc::Rc::clone(scene.integration_store()))
+            .create_family(std::rc::Rc::clone(scene.integration_store()), 0.0)
             .unwrap();
         let committed = scene.integration_store().borrow().scene_revision();
         assert_eq!(committed, revision.checked_next().unwrap());
         assert_eq!(batch.edit_family(&family).unwrap(), vec![false]);
         batch.kind = SceneMembershipBatchKind::Remove;
         assert!(batch
-            .create_family(std::rc::Rc::clone(scene.integration_store()))
+            .create_family(std::rc::Rc::clone(scene.integration_store()), 0.0)
             .is_err());
         assert_eq!(batch.edit_family(&family).unwrap(), vec![true]);
         batch.kind = SceneMembershipBatchKind::Clear;
@@ -7207,10 +7531,10 @@ mod tests {
         context.live_player(1.0).unwrap();
         let target = context.live_target_editor(&circle).unwrap();
         let family = context
-            .live_family(&[noon::MobjectFamilyMember::Mobject(&target)])
+            .live_family(&[noon::MobjectFamilyMember::Mobject(&target)], 0.0)
             .unwrap();
         let nested = context
-            .live_family(&[noon::MobjectFamilyMember::Family(&family)])
+            .live_family(&[noon::MobjectFamilyMember::Family(&family)], 0.0)
             .unwrap();
         assert_eq!(
             context
@@ -7224,7 +7548,7 @@ mod tests {
         let foreign = noon::Scene::new().circle(0.2).unwrap();
         let revision = context.scene.integration_store().borrow().scene_revision();
         assert!(context
-            .live_family(&[noon::MobjectFamilyMember::Mobject(&foreign)])
+            .live_family(&[noon::MobjectFamilyMember::Mobject(&foreign)], 0.0)
             .is_err());
         assert_eq!(
             context.scene.integration_store().borrow().scene_revision(),
@@ -7288,7 +7612,7 @@ mod tests {
             bindings: Vec::new(),
         };
         let pair = context
-            .live_family(&batch.family_members().unwrap())
+            .live_family(&batch.family_members().unwrap(), 0.0)
             .unwrap();
         assert_eq!(
             context
@@ -7304,7 +7628,7 @@ mod tests {
                 .unwrap()
                 .live_edit_family_members(&pair, &[(&right).into(), (&right).into()], true)
                 .unwrap(),
-            vec![true, false]
+            vec![false, true]
         );
         context
             .live_arrange_family(
@@ -7569,7 +7893,7 @@ mod tests {
         );
 
         let mut unsupported_target = right.target_editor().unwrap();
-        unsupported_target.set_stroke_width(3.0).unwrap();
+        unsupported_target.set_stroke_cap("round").unwrap();
         let unsupported = [bound_transform_child(&right, unsupported_target, child)];
         let revision = context.scene.integration_store().borrow().scene_revision();
         assert!(context
@@ -9070,6 +9394,7 @@ mod tests {
         line.set_stroke_opacity(0.8).unwrap();
         line.set_object_opacity(0.3).unwrap();
         assert!(context.mobject_line_endpoints(&line).is_err());
+        assert!(context.mobject_path_query(&line).is_err());
         assert!(context.mobject_fill_opacity(&line).is_err());
         assert!(context.mobject_stroke_opacity(&line).is_err());
         context.bind_mobject(ObjectId::new(0), &line).unwrap();
@@ -9092,7 +9417,7 @@ mod tests {
         );
         assert_eq!(
             context.mobject_color(&line).unwrap(),
-            Color::rgba(0.0, 0.0, 1.0, 0.8)
+            Color::rgb(0.0, 1.0, 0.0)
         );
         {
             let player = context.live_player(2.0).unwrap();
@@ -9102,16 +9427,18 @@ mod tests {
         let observed = context.mobject_line_endpoints(&line).unwrap();
         assert_eq!(observed.start, (1.0, -1.0));
         assert_eq!(observed.end, (3.0, -1.0));
+        let path = context.mobject_path_query(&line).unwrap();
+        assert_eq!(path.start().unwrap(), observed.start);
+        assert_eq!(path.end().unwrap(), observed.end);
         let color = context.mobject_color(&line).unwrap();
         assert!((context.mobject_fill_opacity(&line).unwrap() - 0.2).abs() < 1e-6);
         assert!((context.mobject_stroke_opacity(&line).unwrap() - 0.6).abs() < 1e-6);
         assert_eq!(line.stroke_opacity().unwrap(), 0.8);
-        assert!((color.red - 0.5).abs() < 1.0e-6);
-        assert!((color.blue - 0.5).abs() < 1.0e-6);
-        assert!((color.alpha - 0.6).abs() < 1.0e-6);
+        assert_eq!(color, Color::rgb(0.0, 1.0, 0.0));
         assert_eq!(line.manim_line_endpoints().unwrap().start, (-1.0, 0.0));
 
         let player = context.take_execution_player(2.0, 17).unwrap();
+        assert!(context.mobject_path_query(&line).is_err());
         {
             let error = context.mobject_line_endpoints(&line).unwrap_err();
             assert_eq!(
@@ -9171,7 +9498,11 @@ mod tests {
         );
         assert_eq!(
             context.mobject_color(&line).unwrap(),
-            Color::rgba(1.0, 1.0, 0.0, 0.7)
+            Color::rgb(0.0, 1.0, 0.0)
+        );
+        assert_eq!(
+            context.mobject_stroke_color(&line).unwrap(),
+            Some(Color::rgb(1.0, 1.0, 0.0))
         );
         assert_eq!(context.mobject_stroke_opacity(&line).unwrap(), 0.7);
     }

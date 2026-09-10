@@ -724,3 +724,105 @@ pub async fn create_direct_dimension_fitting_smoke_renderer(
     let session = noon::example_scenes::dimension_fitting::session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
+
+/// Family become/target/restore use the same Rust continuation on native and web.
+#[wasm_bindgen(js_name = createDirectFamilyStateSmokeRenderer)]
+pub async fn create_direct_family_state_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::family_state::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[wasm_bindgen(js_name = createDirectStyleOperationsSmokeRenderer)]
+pub async fn create_direct_style_operations_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::style_operations::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Shared authored/live membership ordering reaches the normal direct renderer.
+#[wasm_bindgen(js_name = createDirectFamilyMembershipOrderSmokeRenderer)]
+pub async fn create_direct_family_membership_order_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::family_membership_order::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Shared replacement uses the native object/family transaction and live session.
+#[wasm_bindgen(js_name = createDirectFamilyReplacementSmokeRenderer)]
+pub async fn create_direct_family_replacement_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::family_replacement::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+#[wasm_bindgen(js_name = createDirectPaintQueriesGradientsSmokeRenderer)]
+pub async fn create_direct_paint_queries_gradients_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::paint_queries_gradients::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Shared pivot/reflection semantics use the same typed execution session on web.
+#[wasm_bindgen(js_name = createDirectPlanarAffineSmokeRenderer)]
+pub async fn create_direct_planar_affine_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::planar_affine::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Shared scale pivots use the same retained native and Rust/WASM session.
+#[wasm_bindgen(js_name = createDirectScalePivotsSmokeRenderer)]
+pub async fn create_direct_scale_pivots_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::scale_pivots::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Shared path observations use the same execution session on native and web.
+#[wasm_bindgen(js_name = createDirectPathQueriesSmokeRenderer)]
+pub async fn create_direct_path_queries_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::path_queries::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+#[wasm_bindgen(js_name = createDirectZIndexSmokeRenderer)]
+pub async fn create_direct_z_index_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::z_index::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+#[wasm_bindgen(js_name = createDirectArcGeometrySmokeRenderer)]
+pub async fn create_direct_arc_geometry_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::arc_geometry::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+#[wasm_bindgen(js_name = createDirectPathArrangementSmokeRenderer)]
+pub async fn create_direct_path_arrangement_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::path_arrangement::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+#[wasm_bindgen(js_name = createDirectAnimatedStrokeWidthSmokeRenderer)]
+pub async fn create_direct_animated_stroke_width_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::animated_stroke_width::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}

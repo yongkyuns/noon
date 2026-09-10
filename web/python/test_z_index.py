@@ -1,0 +1,65 @@
+"""Thin priority dispatch; ordering and rollback are qualified in shared Rust."""
+import unittest
+from unittest.mock import Mock, patch, call
+import _manim_compat as compat
+import _manim_semantic_handles as handles
+from _typed_geometry_test_support import identity_only_wrapper
+
+
+class ZIndexTests(unittest.TestCase):
+    def test_leaf_and_family_use_shared_authored_or_live_dispatch(self):
+        for cls in (compat.VMobject, compat.VGroup):
+            for live in (False, True):
+                value = identity_only_wrapper(cls, submobjects=[])
+                if cls is compat.VGroup:
+                    # Real Group wrappers have family identity, not leaf callback fields.
+                    del value._scene
+                    del value._object
+                anchor, context = Mock(), (Mock() if live else None)
+                anchor.zIndex.return_value = -2.5
+                with patch.object(handles, "_layout_anchor", return_value=anchor), \
+                     patch.object(handles, "_live_mutation_context", return_value=context), \
+                     patch.object(handles, "_group_live_layout_context", return_value=context):
+                    self.assertEqual(value.z_index, -2.5)
+                    self.assertIs(value.set_z_index(3.25), value)
+                    value.z_index = -1.5
+                owner = context if live else anchor
+                prefix = (anchor,) if live else ()
+                self.assertEqual(getattr(owner, "liveSetZIndex" if live else "setZIndex").call_args_list,
+                                 [call(*prefix, 3.25, True), call(*prefix, -1.5, False)])
+                self.assertNotIn("z_index", value.__dict__)
+
+    def test_phase_edits_reject_before_dispatch(self):
+        value = identity_only_wrapper(compat.VMobject)
+        with patch("_manim_updaters._canonical_phase_context", return_value=Mock()), \
+             patch.object(handles, "_layout_anchor") as anchor:
+            with self.assertRaises(NotImplementedError):
+                value.set_z_index(1)
+            anchor.assert_not_called()
+
+    def test_geometry_options_forward_priority_before_allocation(self):
+        candidate = Mock()
+        handles._apply_shared_constructor_options(candidate, {"z_index": 2.75})
+        candidate.setZIndex.assert_called_once_with(2.75)
+        candidate.reset_mock()
+        with self.assertRaises(ValueError):
+            handles._apply_shared_constructor_options(candidate, {"z_index": float("nan")})
+        candidate.setZIndex.assert_not_called()
+
+    def test_family_constructor_forwards_root_priority_in_one_creation_call(self):
+        for live in (False, True):
+            context = Mock() if live else None
+            create = Mock()
+            batch = Mock()
+            with patch.object(handles, "_create_family_handle", create), \
+                 patch.object(handles, "_new_membership_batch", Mock()), \
+                 patch.object(handles, "_family_membership_batch", return_value=batch), \
+                 patch.object(handles, "_live_constructor_context", return_value=context):
+                family = compat.VGroup(z_index=-3.5)
+                operation = context.liveCreateFamily if live else create
+                operation.assert_called_once_with(batch, -3.5)
+                self.assertNotIn("z_index", family.__dict__)
+                operation.reset_mock()
+                with self.assertRaises(ValueError):
+                    compat.VGroup(z_index=float("inf"))
+                operation.assert_not_called()
