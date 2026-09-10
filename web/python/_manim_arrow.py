@@ -23,17 +23,11 @@ _ARROW_CONSTRUCTOR_OPTIONS = frozenset(
         "position",
         "rotation",
         "scale",
-        "fill",
-        "stroke",
         "stroke_width",
         "stroke_width_mode",
         "stroke_join",
         "stroke_cap",
         "opacity",
-        "fill_color",
-        "stroke_color",
-        "fill_opacity",
-        "stroke_opacity",
         "z_index",
     }
 )
