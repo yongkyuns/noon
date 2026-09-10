@@ -1,0 +1,21 @@
+# Distinct identity/revision/lifetime domains; not one global generation counter.
+...@_style
+
+direction: down
+main: "STATE / LIFETIME PATH" {
+  grid-columns: 4
+  horizontal-gap: 62
+  scene: "SceneRevision\nauthored state" {class: authority}
+  execution: "ExecutionRevision\nderived plan" {class: authority}
+  frame: "FrameEpoch\neffective publication" {class: authority}
+  submit: "SubmissionSerial\nGPU lifetime" {class: node}
+  scene -> execution: "derive"
+  execution -> frame: "publish"
+  frame -> submit: "submit"
+}
+context: "DISTINCT CONTEXT DOMAINS" {
+  grid-columns: 2
+  horizontal-gap: 100
+  identity: "NodeId generation\nidentity validity" {class: node}
+  inputs: "Publication context\nResourceVersion · InputSequence · CallbackEpoch" {class: node}
+}

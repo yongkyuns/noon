@@ -57,14 +57,19 @@ impl LiveContinuation for OrdinarySubsetDisplay {
 }
 
 fn colored_circle(scene: &Scene, x: f64, y: f64, color: Color) -> Result<Mobject, String> {
-    let mut circle = Mobject::manim_circle(Rc::clone(scene.store()), 0.3)?;
-    circle.set_translation(x, y)?;
-    circle.set_fill(
-        f64::from(color.red),
-        f64::from(color.green),
-        f64::from(color.blue),
-        1.0,
-    )?;
+    let mut circle = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.3)
+        .map_err(|error| error.to_string())?;
+    circle
+        .set_translation(x, y)
+        .map_err(|error| error.to_string())?;
+    circle
+        .set_fill(
+            f64::from(color.red),
+            f64::from(color.green),
+            f64::from(color.blue),
+            1.0,
+        )
+        .map_err(|error| error.to_string())?;
     Ok(circle)
 }
 
@@ -80,16 +85,20 @@ pub fn program() -> Result<LiveProgram<OrdinarySubsetDisplay>, String> {
         colored_circle(&scene, 0.0, -0.7, Color::PINK)?,
         colored_circle(&scene, 1.0, -0.7, Color::YELLOW)?,
     ];
-    let increasing = scene.family(&[
-        (&increasing_members[0]).into(),
-        (&increasing_members[1]).into(),
-        (&increasing_members[2]).into(),
-    ])?;
-    let one_by_one = scene.family(&[
-        (&one_by_one_members[0]).into(),
-        (&one_by_one_members[1]).into(),
-        (&one_by_one_members[2]).into(),
-    ])?;
+    let increasing = scene
+        .family(&[
+            (&increasing_members[0]).into(),
+            (&increasing_members[1]).into(),
+            (&increasing_members[2]).into(),
+        ])
+        .map_err(|error| error.to_string())?;
+    let one_by_one = scene
+        .family(&[
+            (&one_by_one_members[0]).into(),
+            (&one_by_one_members[1]).into(),
+            (&one_by_one_members[2]).into(),
+        ])
+        .map_err(|error| error.to_string())?;
     increasing.prepare_subset_display()?;
     one_by_one.prepare_subset_display()?;
     scene

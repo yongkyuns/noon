@@ -9,6 +9,7 @@ mod projection;
 mod publication;
 mod reachability;
 mod reactive;
+mod root_order;
 
 pub use animation_payload::*;
 pub use animation_schedule::*;
@@ -21,3 +22,4 @@ pub use projection::*;
 pub use publication::*;
 pub use reachability::*;
 pub use reactive::*;
+pub use root_order::*;

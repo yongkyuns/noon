@@ -8,22 +8,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 mkdir -p "$TMP/scripts" "$TMP/src" "$TMP/web" "$TMP/crates/noon-core/src" "$TMP/crates/noon-runtime/src" "$TMP/crates/noon-web/src"
 cp "$RATCHET" "$TMP/scripts/architecture-ratchet.sh"
-cp "$ROOT/scripts/architecture_migration_relocations.py" "$ROOT/scripts/architecture_migration_relocations.json" "$TMP/scripts/"
-REVIEWED_RELOCATION_CONFIG="$(cat "$TMP/scripts/architecture_migration_relocations.json")"
-python3 - <<'PY' "$TMP/scripts/architecture_migration_relocations.json"
-import json
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-config = json.loads(path.read_text())
-# Synthetic historical imports qualify the mechanism after real consumers vanish.
-config['rewritten_imports']['crates/noon-web/examples/import_relocation_fixture.rs'] = {
-    'noon::legacy::Elbow': 1, 'noon::legacy::IntoSnapshot': 1,
-}
-config.pop('regression_fixtures', None)
-path.write_text(json.dumps(config, indent=2) + '\n')
-PY
+cp "$ROOT/scripts/architecture_retired_models.py" "$TMP/scripts/"
 
 cd "$TMP"
 git init -q
@@ -67,15 +52,8 @@ printf 'pub fn runtime() {}\n' > crates/noon-runtime/src/runtime.rs
 printf 'pub fn deterministic_replay() {}\n' > crates/noon-web/src/determinism.rs
 printf 'pub fn semantic_snapshot() {}\n' > crates/noon-web/src/semantic_snapshot.rs
 
-# Model the deliberately shrinking ScenePlayer allowlist that remains during A4.
-cat > crates/noon-web/src/legacy.rs <<'EOF'
-pub struct ScenePlayer;
-EOF
-for consumer in execution_transport; do
-  cat > "crates/noon-web/src/${consumer}.rs" <<'EOF'
-use crate::ScenePlayer;
-EOF
-done
+# The legacy player is retired; transport code has no scene-player authority.
+printf 'pub fn execution_transport() {}\n' > crates/noon-web/src/execution_transport.rs
 
 # Model the canonical playback clock left after #1005 removed its legacy duplicate.
 printf 'pub struct PlaybackClock;\n' > crates/noon-web/src/clock.rs
@@ -99,6 +77,7 @@ expect_rejected() {
 
 reset_to_base() {
   git reset -q --hard "$BASE"
+  mkdir -p web
   rm -f src/new_hidden.rs src/duplicate_identity.rs src/runtime_structural_probe.rs src/web_tool_structural_probe.rs src/scene_player_spread_probe.rs src/deleted_legacy_web_probe.rs src/duplicate_clock_probe.rs src/legacy_clock_probe.rs
   rm -f web/browser-smoke.js crates/noon-web/src/duplicate_clock.rs crates/noon-web/src/legacy/clock.rs
   rm -f crates/noon/src/lib.rs crates/noon-web/src/authoring_mobject.rs
@@ -107,7 +86,7 @@ reset_to_base() {
   rmdir crates/noon-web/src/legacy 2>/dev/null || true
 }
 
-# The one deletion-owned payload fixture is permitted only under cfg(test).
+# Retired compiler payloads stay forbidden even inside cfg(test) fixtures.
 reset_to_base
 mkdir -p crates/noon-compile/src/transaction_preflight
 cat > crates/noon-compile/src/transaction_preflight/tests.rs <<'EOF'
@@ -116,7 +95,7 @@ use noon_core::ObjectDefinition;
 EOF
 git add crates/noon-compile
 git commit -qm "test-only patch payload fixture"
-bash scripts/architecture-ratchet.sh "$BASE" >/dev/null
+expect_rejected 'retired patch payload in cfg(test) fixture'
 
 printf 'use noon_core::SceneDefinition;\n' >> crates/noon-compile/src/transaction_preflight/tests.rs
 git add crates/noon-compile
@@ -218,6 +197,19 @@ if bash scripts/architecture-ratchet.sh "$RUNTIME_REGRESSION_BASE" >/dev/null 2>
   exit 1
 fi
 
+# Renderer normalization also rejects pre-existing include and path indirection.
+for declaration in '#[path = "hidden.rs"] mod hidden;' 'include!("hidden.rs");'; do
+  reset_to_base
+  mkdir -p crates/noon-render-wgpu/src
+  printf '%s\n' "$declaration" > crates/noon-render-wgpu/src/gpu.rs
+  git add crates/noon-render-wgpu/src/gpu.rs
+  git commit -qm 'model regressed normalized renderer baseline'
+  if bash scripts/architecture-ratchet.sh HEAD >/dev/null 2>&1; then
+    echo "architecture ratchet test failed: accepted pre-existing renderer module indirection" >&2
+    exit 1
+  fi
+done
+
 # Prove the completed A4.6 tool cutovers are structural, not just growth-ratcheted.
 # Put migration-player dependencies into the comparison base itself, then make an
 # unrelated later commit. The full-tree guard must still reject both tool paths.
@@ -255,7 +247,19 @@ printf 'pub fn unrelated_after_scene_player_spread() {}\n' > src/scene_player_sp
 git add src/scene_player_spread_probe.rs
 git commit -qm "unrelated change after ScenePlayer spread"
 if bash scripts/architecture-ratchet.sh "$SCENE_PLAYER_SPREAD_BASE" >/dev/null 2>&1; then
-  echo "architecture ratchet test failed: accepted ScenePlayer consumer outside migration allowlist" >&2
+  echo "architecture ratchet test failed: accepted restored ScenePlayer consumer" >&2
+  exit 1
+fi
+
+# A shared binding must never revive a Python-owned scene, even if the bridge
+# predates the current comparison base.
+reset_to_base
+mkdir -p web/python
+printf 'def materialize_legacy_geometry(scene): pass\n' > web/python/geometry_bridge.py
+git add web/python/geometry_bridge.py
+git commit -qm "model deleted Python scene materialization returning"
+if bash scripts/architecture-ratchet.sh HEAD >/dev/null 2>&1; then
+  echo "architecture ratchet test failed: accepted Python scene materialization" >&2
   exit 1
 fi
 
@@ -307,38 +311,19 @@ if bash scripts/architecture-ratchet.sh "$LEGACY_CLOCK_REGRESSION_BASE" >/dev/nu
   exit 1
 fi
 
-# #959 namespace relocation is explicit and symbol-preserving, including grouped
-# imports. It grants no new file, alias, glob, or non-import namespace access.
+# Legacy imports are now forbidden even in former migration consumers, including
+# aliases, grouped/raw spellings, globs, and imports predating the comparison base.
 reset_to_base
-mkdir -p crates/noon-web/src crates/noon-web/examples crates/noon/src/legacy
-cat > crates/noon-web/examples/import_relocation_fixture.rs <<'EOF'
-use noon::{Elbow, IntoSnapshot, ReactiveTimelineScene};
-EOF
-git add crates/noon-web/examples/import_relocation_fixture.rs
-git commit -qm "existing unqualified import consumer"
-IMPORT_BASE="$(git rev-parse HEAD)"
-cat > crates/noon-web/examples/import_relocation_fixture.rs <<'EOF'
-use noon::legacy::{
-    Elbow,
-    IntoSnapshot,
-};
-use noon::ReactiveTimelineScene;
-EOF
-bash scripts/architecture-ratchet.sh "$IMPORT_BASE" >/dev/null
-for import in 'use noon::legacy::{Elbow as Hidden, IntoSnapshot};' 'use noon::legacy::*;' 'use noon::legacy::{Elbow, Unknown};' 'use noon::{legacy::{Elbow as Hidden, IntoSnapshot}};' 'use noon::legacy;' 'use noon::{legacy};' 'use noon::legacy as old;' 'use noon::r#legacy::Elbow;' 'use noon::legacy::Elbow @ unsupported;'; do
-  printf '%s\n' "$import" > crates/noon-web/examples/import_relocation_fixture.rs
-  if bash scripts/architecture-ratchet.sh "$IMPORT_BASE" >/dev/null 2>&1; then
-    echo "architecture ratchet test failed: accepted unreviewed import $import" >&2
+mkdir -p crates/noon-web/examples crates/noon/src
+for import in 'use noon::legacy::Elbow;' 'use noon::legacy::{Elbow, IntoSnapshot};' 'use noon::legacy::{Elbow as Hidden, IntoSnapshot};' 'use noon::legacy::*;' 'use noon::{legacy::{Elbow as Hidden}};' 'use noon::legacy;' 'use noon::{legacy};' 'use noon::legacy as old;' 'use noon::r#legacy::Elbow;' 'use noon::legacy::Elbow @ unsupported;'; do
+  printf '%s\n' "$import" > crates/noon-web/examples/import_probe.rs
+  git add crates/noon-web/examples/import_probe.rs
+  git commit -qm 'restore retired namespace in a former migration consumer'
+  if bash scripts/architecture-ratchet.sh HEAD >/dev/null 2>&1; then
+    echo "architecture ratchet test failed: accepted retired import $import" >&2
     exit 1
   fi
 done
-git reset -q --hard "$IMPORT_BASE"
-printf 'use noon::legacy::Elbow;\n' > crates/noon-web/src/new_legacy_consumer.rs
-if bash scripts/architecture-ratchet.sh "$IMPORT_BASE" >/dev/null 2>&1; then
-  echo "architecture ratchet test failed: accepted an untracked new legacy consumer" >&2
-  exit 1
-fi
-rm crates/noon-web/src/new_legacy_consumer.rs
 
 # Deleted adapters must not return with spaced or raw namespace spellings.
 reset_to_base
@@ -356,107 +341,21 @@ if bash scripts/architecture-ratchet.sh "$BASE" >/dev/null 2>&1; then
   exit 1
 fi
 
-# #959 regression fixtures may carry exact migration payloads only in reviewed
-# files. Rust fixtures must be crate-test-only and attached through an ordinary,
-# cfg-gated module. The first reviewed config entry establishes its cap; every
-# later comparison ratchets against the base count, including deletion.
+# Formerly reviewed fixture locations have no legacy model allowance, including
+# test-only source committed before the comparison base.
 reset_to_base
-printf '%s\n' "$REVIEWED_RELOCATION_CONFIG" > scripts/architecture_migration_relocations.json
-mkdir -p crates/noon-web/src/retained_execution_resources crates/noon-web/src/retained_resource_transport
-cat > crates/noon-web/src/retained_execution_resources.rs <<'EOF'
-#[cfg(test)]
-mod morph_tests;
-EOF
-cat > crates/noon-web/src/retained_execution_resources/morph_tests.rs <<'EOF'
-#![cfg(test)]
-// SceneDefinition SceneDefinition ObjectSnapshot ObjectSnapshot ObjectSnapshot
-EOF
-cat > crates/noon-web/src/retained_resource_transport.rs <<'EOF'
-#[cfg(test)]
-mod morph_tests;
-EOF
-cat > crates/noon-web/src/retained_resource_transport/morph_tests.rs <<'EOF'
-#![cfg(test)]
-// ObjectSnapshot ObjectSnapshot ObjectSnapshot
-// RetainedObjectDefinition ObjectDefinition
-EOF
-cat > scripts/retained-dynamic-stress-perf.mjs <<'EOF'
-// Explicit export regression fixture: scene_document SceneSpec
-EOF
-bash scripts/architecture-ratchet.sh "$BASE" >/dev/null
-
-sed -i.bak '1s/.*/\/\/ missing crate test gate/' crates/noon-web/src/retained_execution_resources/morph_tests.rs
-expect_rejected 'regression fixture without first-line cfg(test)'
-rm crates/noon-web/src/retained_execution_resources/morph_tests.rs.bak
-sed -i.bak '1s/.*/#![cfg(test)]/' crates/noon-web/src/retained_execution_resources/morph_tests.rs
-rm crates/noon-web/src/retained_execution_resources/morph_tests.rs.bak
-
-printf 'mod morph_tests;\n' > crates/noon-web/src/retained_execution_resources.rs
-expect_rejected 'regression fixture through an ungated parent module'
-cat > crates/noon-web/src/retained_execution_resources.rs <<'EOF'
-#[cfg(test)]
-mod morph_tests;
-EOF
-printf '// ObjectSnapshot moved into production parent\n' >> crates/noon-web/src/retained_execution_resources.rs
-expect_rejected 'fixture token moved into its production parent'
-sed -i.bak '$d' crates/noon-web/src/retained_execution_resources.rs
-rm crates/noon-web/src/retained_execution_resources.rs.bak
-
-printf '// SceneSpec is not in this fixture inventory\n' >> crates/noon-web/src/retained_execution_resources/morph_tests.rs
-expect_rejected 'new unreviewed fixture token'
-sed -i.bak '$d' crates/noon-web/src/retained_execution_resources/morph_tests.rs
-rm crates/noon-web/src/retained_execution_resources/morph_tests.rs.bak
-printf '// ObjectSnapshot exceeds the reviewed cap\n' >> crates/noon-web/src/retained_execution_resources/morph_tests.rs
-expect_rejected 'regression fixture cap growth'
-sed -i.bak '$d' crates/noon-web/src/retained_execution_resources/morph_tests.rs
-rm crates/noon-web/src/retained_execution_resources/morph_tests.rs.bak
-
-git add scripts/architecture_migration_relocations.json scripts/retained-dynamic-stress-perf.mjs crates/noon-web/src/retained_execution_resources.rs crates/noon-web/src/retained_execution_resources/morph_tests.rs crates/noon-web/src/retained_resource_transport.rs crates/noon-web/src/retained_resource_transport/morph_tests.rs
-git commit -qm 'review bounded migration regression fixtures'
-FIXTURE_BASE="$(git rev-parse HEAD)"
-python3 - <<'PY'
-import json
-import pathlib
-
-path = pathlib.Path('scripts/architecture_migration_relocations.json')
-config = json.loads(path.read_text())
-del config['regression_fixtures']['crates/noon-web/src/retained_execution_resources/morph_tests.rs']
-path.write_text(json.dumps(config, indent=2) + '\n')
-PY
-if bash scripts/architecture-ratchet.sh "$FIXTURE_BASE" >/dev/null 2>&1; then
-  echo 'architecture ratchet test failed: accepted fixture budget entry deletion' >&2
-  exit 1
-fi
-git checkout -q -- scripts/architecture_migration_relocations.json
-sed -i.bak 's/ObjectSnapshot ObjectSnapshot ObjectSnapshot/ObjectSnapshot ObjectSnapshot/' crates/noon-web/src/retained_execution_resources/morph_tests.rs
-rm crates/noon-web/src/retained_execution_resources/morph_tests.rs.bak
-git add crates/noon-web/src/retained_execution_resources/morph_tests.rs
-git commit -qm 'shrink regression fixture payload'
-FIXTURE_SHRUNK_BASE="$(git rev-parse HEAD)"
-printf '// ObjectSnapshot cannot regrow after shrink\n' >> crates/noon-web/src/retained_execution_resources/morph_tests.rs
-if bash scripts/architecture-ratchet.sh "$FIXTURE_SHRUNK_BASE" >/dev/null 2>&1; then
-  echo 'architecture ratchet test failed: accepted fixture regrowth after shrink' >&2
-  exit 1
-fi
-git reset -q --hard "$FIXTURE_SHRUNK_BASE"
-git rm -q crates/noon-web/src/retained_execution_resources/morph_tests.rs
-printf '' > crates/noon-web/src/retained_execution_resources.rs
-git add crates/noon-web/src/retained_execution_resources.rs
-git commit -qm 'delete regression fixture while retaining tombstone budget'
-FIXTURE_DELETED_BASE="$(git rev-parse HEAD)"
-mkdir -p crates/noon-web/src/retained_execution_resources
-cat > crates/noon-web/src/retained_execution_resources.rs <<'EOF'
-#[cfg(test)]
-mod morph_tests;
-EOF
-cat > crates/noon-web/src/retained_execution_resources/morph_tests.rs <<'EOF'
-#![cfg(test)]
-// ObjectSnapshot
-EOF
-if bash scripts/architecture-ratchet.sh "$FIXTURE_DELETED_BASE" >/dev/null 2>&1; then
-  echo 'architecture ratchet test failed: accepted deleted fixture re-addition' >&2
-  exit 1
-fi
+for fixture in retained_execution_resources retained_resource_transport; do
+  mkdir -p "crates/noon-web/src/$fixture"
+  printf '#![cfg(test)]\nuse noon_core::ObjectSnapshot;\n' > "crates/noon-web/src/$fixture/morph_tests.rs"
+  git add "crates/noon-web/src/$fixture/morph_tests.rs"
+  git commit -qm 'restore a retired payload in a former reviewed fixture'
+  if bash scripts/architecture-ratchet.sh HEAD >/dev/null 2>&1; then
+    echo "architecture ratchet test failed: accepted retired fixture payload" >&2
+    exit 1
+  fi
+  git rm -q "crates/noon-web/src/$fixture/morph_tests.rs"
+  git commit -qm 'remove retired fixture probe'
+done
 
 # Canonical authoring remains an absolute-zero island, even for tests and even
 # when the regression was committed before the comparison base.
@@ -474,9 +373,56 @@ for canonical in crates/noon/src/semantic_mobject.rs crates/noon/src/scene.rs cr
   git rm -q "$canonical"
   git commit -qm "remove canonical poison"
 done
+# The unconsumed slotted runtime wrapper must stay deleted even if a regression
+# already exists at the comparison base.
+for symbol in SlottedSceneInstance FrameSlotId RetiredSlotCompactionPolicy ExecutionCompactionStats ExecutionCompactionError TimedSceneInstance TimedSceneRuntimeError TimedSemanticScene SignalTimelineDefinition SignalTrackDefinition SignalTimelineError SemanticScene SceneBuildError RetainedFamilySceneInstance RetainedTextFamilySceneInstance RetainedFamilyPlanSceneInstance RetainedFamilyRuntimeError RetainedTextFamilyRuntimeError RetainedFamilyPlanRuntimeError RetainedTextFamilyFrame FamilyAnimationRequest FamilyAnimationRequestError RetainedFamilyAnimationRequestPlanError; do
+  printf 'pub struct %s;\n' "$symbol" > src/runtime_wrapper_probe.rs
+  git add src/runtime_wrapper_probe.rs
+  git commit -qm 'restore retired runtime wrapper'
+  if bash scripts/architecture-ratchet.sh HEAD >/dev/null 2>&1; then
+    echo "architecture ratchet test failed: accepted retired runtime type $symbol" >&2
+    exit 1
+  fi
+done
+git rm -q src/runtime_wrapper_probe.rs
+git commit -qm 'remove retired runtime wrapper probe'
+# No Rust crate or fixture may preserve the deleted scene API, even when committed
+# before the comparison base.
+for canonical in crates/noon-render-wgpu/src/probe.rs crates/noon-render-wgpu/tests/probe.rs crates/noon-runtime/src/scene_probe.rs crates/noon-runtime/tests/scene_probe.rs crates/noon-compile/src/scene_probe.rs crates/noon-compile/tests/scene_probe.rs crates/noon-core/src/scene_probe.rs crates/noon-core/tests/scene_probe.rs src/scene_probe.rs; do
+  mkdir -p "$(dirname "$canonical")"
+  # Symbol matching and path coverage are independent: qualify every spelling in
+  # one location, then one spelling in each other location instead of multiplying
+  # identical Git-repository probes across the full cross product.
+  retired_symbols=(SceneDefinition)
+  if [[ "$canonical" == crates/noon-render-wgpu/src/probe.rs ]]; then
+    retired_symbols=(SceneDefinition ObjectDefinition ObjectSnapshot ScenePatch MutationTransaction PatchError MutationImpact RetainedObjectDefinition Easing TextFamilyAnimationMode TextFamilyAnimationDefinition TextFamilyAnimationState TextFamilyAnimationError RetainedTextFamilyTransportState RetainedTextFamilyTransportError RetainedGraphTopology MathLayoutArtifact)
+  fi
+  for symbol in "${retired_symbols[@]}"; do
+    printf 'use noon_core::%s;\n' "$symbol" > "$canonical"
+    git add "$canonical"
+    git commit -qm 'poison renderer execution boundary'
+    if bash scripts/architecture-ratchet.sh HEAD >/dev/null 2>&1; then
+      echo "architecture ratchet test failed: accepted $symbol in $canonical" >&2
+      exit 1
+    fi
+  done
+  git rm -q "$canonical"
+  git commit -qm 'remove renderer boundary poison'
+done
+# A receiver must not fabricate semantic identities to decode a family plan.
+mkdir -p crates/noon-web/src
+printf 'use noon_core::SemanticStore;\n' > crates/noon-web/src/retained_family_transport.rs
+git add crates/noon-web/src/retained_family_transport.rs
+git commit -qm 'restore receiver semantic allocation'
+if bash scripts/architecture-ratchet.sh HEAD >/dev/null 2>&1; then
+  echo "architecture ratchet test failed: accepted receiver semantic store" >&2
+  exit 1
+fi
+git rm -q crates/noon-web/src/retained_family_transport.rs
+git commit -qm 'remove receiver semantic allocation'
 # Lowering and live publication must stay typed even when an old patch-codec
 # dependency already exists at the comparison base.
-for canonical in crates/noon-compile/src/semantic_lowering.rs crates/noon-compile/src/semantic_lowering/publication.rs crates/noon/src/execution_session.rs crates/noon/src/execution_session/publication.rs crates/noon/src/live_session.rs; do
+for canonical in crates/noon-compile/src/semantic_lowering.rs crates/noon-compile/src/semantic_lowering/publication.rs crates/noon/src/execution_session.rs crates/noon/src/execution_session/publication.rs crates/noon/src/live_session.rs crates/noon-runtime/src/execution_slots/probe.rs crates/noon-runtime/src/probe/tests.rs; do
   mkdir -p "$(dirname "$canonical")"
   printf 'use noon_core::{ScenePatch, MutationTransaction};\n' > "$canonical"
   git add "$canonical"
@@ -526,12 +472,16 @@ done
 # Tool vocabulary is exempt at exactly its enforcement path, never when copied
 # into product code. Missing comparison commits also fail closed.
 reset_to_base
-cp scripts/architecture_migration_relocations.py src/copied_checker.py
+cp scripts/architecture_retired_models.py src/copied_checker.py
 expect_rejected 'checker vocabulary copied into product code'
 rm src/copied_checker.py
 if bash scripts/architecture-ratchet.sh unavailable-base-959 >/dev/null 2>&1; then
   echo "architecture ratchet test failed: accepted missing comparison base" >&2
   exit 1
 fi
+
+reset_to_base
+printf '\nstruct RetiredMap { object_nodes: () }\n' >> crates/noon-core/src/semantic_store.rs
+expect_rejected 'retired semantic-store execution-ID map'
 
 echo "architecture ratchet self-test passed"

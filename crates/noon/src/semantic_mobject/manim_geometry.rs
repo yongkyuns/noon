@@ -2,7 +2,7 @@
 use super::*;
 
 impl ManimGeometryOptions {
-    pub fn dot(x: f64, y: f64, radius: f64) -> Result<Self, String> {
+    pub fn dot(x: f64, y: f64, radius: f64) -> Result<Self, AuthoringError> {
         let mut style = manim_style(Color::WHITE);
         style.fill_opacity = 1.0;
         style.stroke_width = 0.0;
@@ -11,33 +11,37 @@ impl ManimGeometryOptions {
         Ok(options)
     }
 
-    pub fn triangle() -> Result<Self, String> {
+    pub fn triangle() -> Result<Self, AuthoringError> {
         Ok(Self::new(
             GeometryRef::path(crate::geometry_authoring::manim_triangle_path()),
             manim_style(Color::BLUE),
         ))
     }
 
-    pub fn elbow(width: f64, angle: f64) -> Result<Self, String> {
+    pub fn elbow(width: f64, angle: f64) -> Result<Self, AuthoringError> {
         let path = crate::elbow_authoring::manim_elbow_path(
             finite_f32("width", width)?,
             finite_f32("angle", angle)?,
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(AuthoringError::from)?;
         Ok(Self::new(
             GeometryRef::path(path),
             manim_style(Color::WHITE),
         ))
     }
 
-    pub fn rounded_rectangle(width: f64, height: f64, corner_radius: f64) -> Result<Self, String> {
+    pub fn rounded_rectangle(
+        width: f64,
+        height: f64,
+        corner_radius: f64,
+    ) -> Result<Self, AuthoringError> {
         let radius = finite_f32("corner_radius", corner_radius)?;
         let path = crate::rounded_rectangle_authoring::manim_rounded_rectangle_path(
             positive_f32("width", width)?,
             positive_f32("height", height)?,
             [radius; 4],
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(AuthoringError::from)?;
         Ok(Self::new(
             GeometryRef::path(path),
             manim_style(Color::WHITE),
@@ -53,7 +57,7 @@ impl ManimGeometryOptions {
         num_components: u32,
         center_x: f64,
         center_y: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         let geometry = crate::sector_authoring::annular_sector_geometry(
             inner_radius,
             outer_radius,
@@ -74,7 +78,7 @@ impl ManimGeometryOptions {
         num_components: u32,
         center_x: f64,
         center_y: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         let geometry = crate::sector_authoring::sector_geometry(
             radius,
             angle,
@@ -93,7 +97,7 @@ impl ManimGeometryOptions {
         num_components: u32,
         center_x: f64,
         center_y: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         let geometry = crate::sector_authoring::annulus_geometry(
             inner_radius,
             outer_radius,
@@ -112,7 +116,7 @@ impl ManimGeometryOptions {
         end_y: f64,
         dash_length: f64,
         dashed_ratio: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         let geometry = crate::dashed_line_authoring::dashed_line_geometry(
             start_x,
             start_y,
@@ -124,7 +128,7 @@ impl ManimGeometryOptions {
         Ok(Self::new(geometry, manim_style(Color::WHITE)))
     }
 
-    pub fn underline(bounds: Bounds2D64, buff: f64) -> Result<Self, String> {
+    pub fn underline(bounds: Bounds2D64, buff: f64) -> Result<Self, AuthoringError> {
         for (name, value) in [
             ("bounds.min_x", bounds.min_x),
             ("bounds.min_y", bounds.min_y),
@@ -134,7 +138,7 @@ impl ManimGeometryOptions {
             authoring_render_f64(name, value)?;
         }
         if bounds.max_x < bounds.min_x || bounds.max_y < bounds.min_y {
-            return Err("underline bounds must be ordered".into());
+            return Err(AuthoringError::UnorderedBounds(bounds));
         }
         let buff = authoring_render_f64("buff", buff)?;
         let half_width = bounds.width() * 0.5;
@@ -156,11 +160,11 @@ impl Mobject {
         x: f64,
         y: f64,
         radius: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         Self::from_manim_geometry(store, ManimGeometryOptions::dot(x, y, radius)?)
     }
 
-    pub fn manim_triangle(store: Rc<RefCell<SemanticStore>>) -> Result<Self, String> {
+    pub fn manim_triangle(store: Rc<RefCell<SemanticStore>>) -> Result<Self, AuthoringError> {
         Self::from_manim_geometry(store, ManimGeometryOptions::triangle()?)
     }
 
@@ -168,7 +172,7 @@ impl Mobject {
         store: Rc<RefCell<SemanticStore>>,
         width: f64,
         angle: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         Self::from_manim_geometry(store, ManimGeometryOptions::elbow(width, angle)?)
     }
 
@@ -177,7 +181,7 @@ impl Mobject {
         width: f64,
         height: f64,
         corner_radius: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         Self::from_manim_geometry(
             store,
             ManimGeometryOptions::rounded_rectangle(width, height, corner_radius)?,
@@ -194,7 +198,7 @@ impl Mobject {
         num_components: u32,
         center_x: f64,
         center_y: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         Self::from_manim_geometry(
             store,
             ManimGeometryOptions::annular_sector(
@@ -218,7 +222,7 @@ impl Mobject {
         num_components: u32,
         center_x: f64,
         center_y: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         Self::from_manim_geometry(
             store,
             ManimGeometryOptions::sector(
@@ -240,7 +244,7 @@ impl Mobject {
         num_components: u32,
         center_x: f64,
         center_y: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         Self::from_manim_geometry(
             store,
             ManimGeometryOptions::annulus(
@@ -262,7 +266,7 @@ impl Mobject {
         end_y: f64,
         dash_length: f64,
         dashed_ratio: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         Self::from_manim_geometry(
             store,
             ManimGeometryOptions::dashed_line(
@@ -276,13 +280,13 @@ impl Mobject {
         )
     }
 
-    pub fn manim_underline(target: &Self, buff: f64) -> Result<Self, String> {
+    pub fn manim_underline(target: &Self, buff: f64) -> Result<Self, AuthoringError> {
         target.validate()?;
         let bounds = target
             .layout_bounds()?
-            .ok_or("underline target has no finite bounds")?;
+            .ok_or(AuthoringError::MissingLayoutBounds(target.node_id()))?;
         Self::from_manim_geometry(
-            Rc::clone(target.store()),
+            Rc::clone(target.integration_store()),
             ManimGeometryOptions::underline(bounds, buff)?,
         )
     }

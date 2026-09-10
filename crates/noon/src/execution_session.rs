@@ -2,9 +2,17 @@ mod callback;
 mod completion;
 mod publication;
 mod signal_timeline;
-pub use callback::*;
-pub use completion::*;
-pub use publication::*;
+pub use callback::{
+    CallbackAdvance, CallbackPhaseOverlay, CallbackPhaseToken, CallbackReadRequest,
+    CallbackReadValue, CallbackRendererDirtyClassification, CallbackRendererObservationOutcome,
+    CallbackSequence, CallbackTermination, CallbackTerminationKind,
+    CommittedCallbackRendererObservation, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
+    ExecutionSessionCallbackError, ExecutionSessionCallbackReadError, RequiredCallbackInvocation,
+};
+pub use completion::ExecutionSegmentCompletionError;
+pub use publication::{
+    EffectiveSemanticObject, ExecutionSessionPublicationError, StructuralPublicationStats,
+};
 pub use signal_timeline::SignalTimelineAppendError;
 
 use callback::{CallbackPublicationReceipt, CallbackSchedule, PendingCallbackPhase};
@@ -712,7 +720,12 @@ impl Clone for ExecutionSession {
 }
 
 impl ExecutionSession {
-    pub(crate) fn runtime_identity(&self) -> noon_runtime::RuntimeIdentity {
+    /// Opaque identity of this session's existing mutable runtime incarnation.
+    ///
+    /// Integration hosts may use it to validate ownership handoffs. Moving a session
+    /// or publishing a revision preserves this identity; cloning a session creates a
+    /// different runtime. It grants no authority to mutate or drive that runtime.
+    pub fn runtime_identity(&self) -> noon_runtime::RuntimeIdentity {
         self.runtime.runtime_identity()
     }
 
@@ -4123,6 +4136,79 @@ mod tests {
         assert_eq!(session.frame().objects[0].transform.rotation, 4.0);
         session.seek(0.5).unwrap();
         assert_eq!(session.frame().objects[0].transform.rotation, 1.0);
+    }
+
+    #[test]
+    fn scalar_track_gaps_and_rewind_use_the_shared_execution_schedule() {
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let tracker = store.insert_semantic_input_signal(0.0_f64).unwrap();
+        let external = store.insert_semantic_input_signal(0.25_f64).unwrap();
+        store
+            .bind_semantic_signal(tracker, object, SemanticObjectProperty::RotationZ)
+            .unwrap();
+        store
+            .bind_semantic_signal(external, object, SemanticObjectProperty::ObjectOpacity)
+            .unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_scalar_signal_track(
+            tracker,
+            0.0,
+            1.0,
+            TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+        );
+        transaction.add_scalar_signal_track(
+            tracker,
+            1.0,
+            2.0,
+            TrackTiming::new(2.0, 1.0, RateFunction::Linear),
+        );
+        transaction.apply(&mut store).unwrap();
+        let mut forward = ExecutionSession::from_semantic_store(&store).unwrap();
+        let mut direct = ExecutionSession::from_semantic_store(&store).unwrap();
+        forward.set_reactive_input(external, 0.75_f32).unwrap();
+        direct.set_reactive_input(external, 0.75_f32).unwrap();
+        for (time, value) in [
+            (0.0, 0.0),
+            (0.5, 0.5),
+            (1.0, 1.0),
+            (1.5, 1.0),
+            (2.0, 1.0),
+            (2.5, 1.5),
+            (3.0, 2.0),
+            (4.0, 2.0),
+        ] {
+            forward.advance_to(time).unwrap();
+            direct.seek(time).unwrap();
+            assert_eq!(
+                forward.effective_signal_value(tracker),
+                Some(&ReactiveValue::Scalar(value))
+            );
+            assert_eq!(
+                direct.effective_signal_value(tracker),
+                forward.effective_signal_value(tracker)
+            );
+            assert_eq!(forward.frame().objects[0].transform.rotation, value);
+            assert_eq!(direct.frame().objects[0], forward.frame().objects[0]);
+            assert_eq!(forward.frame().objects[0].style.opacity, 0.75);
+        }
+        forward.seek(1.5).unwrap();
+        assert_eq!(
+            forward.effective_signal_value(tracker),
+            Some(&ReactiveValue::Scalar(1.0))
+        );
+        assert_eq!(forward.frame().objects[0].transform.rotation, 1.0);
+        let before = forward.publication_context();
+        assert_eq!(
+            forward.set_reactive_input(tracker, 9.0_f32),
+            Err(ExecutionSessionInputError::TimelineOwnedSignal { signal: tracker })
+        );
+        assert_eq!(forward.publication_context(), before);
+        assert_eq!(forward.frame().objects[0].style.opacity, 0.75);
     }
 
     #[test]

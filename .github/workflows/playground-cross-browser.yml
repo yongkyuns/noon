@@ -15,6 +15,8 @@ on:
       - "scripts/playground-browser-matrix-smoke.mjs"
       - "scripts/playground-example-browser-smoke.mjs"
       - "scripts/playground-main-thread-mobile-smoke.mjs"
+      - "scripts/playground-gallery-runtime-smoke.mjs"
+      - "scripts/playground-browser-support.mjs"
       - "web/**"
   pull_request:
     paths:
@@ -28,6 +30,8 @@ on:
       - "scripts/playground-browser-matrix-smoke.mjs"
       - "scripts/playground-example-browser-smoke.mjs"
       - "scripts/playground-main-thread-mobile-smoke.mjs"
+      - "scripts/playground-gallery-runtime-smoke.mjs"
+      - "scripts/playground-browser-support.mjs"
       - "web/**"
   workflow_dispatch:
 
@@ -74,7 +78,6 @@ jobs:
           fallback: none
       - name: Build browser package
         env:
-          NOON_SKIP_PLAYGROUND_TEST: "1"
           NOON_WASM_SKIP_OPT: "1"
         run: bash scripts/build-web-demo.sh
       - name: Upload browser runtime assets
@@ -130,7 +133,13 @@ jobs:
           NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
           NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}
-        run: node scripts/playground-browser-matrix-smoke.mjs
+        run: xvfb-run -a node scripts/playground-browser-matrix-smoke.mjs
+      - name: Test every selectable gallery example
+        env:
+          NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
+          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}/gallery
+        run: xvfb-run -a node scripts/playground-gallery-runtime-smoke.mjs
       - name: Test main-thread mobile render fallback
         if: matrix.browser == 'webkit' && matrix.profile == 'mobile-dpr2'
         env:

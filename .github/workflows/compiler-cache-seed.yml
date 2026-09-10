@@ -6,6 +6,11 @@ on:
       - master
     paths:
       - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".cargo/**"
+      - ".github/actions/dev-wasm-build/**"
+      - ".github/ci/**"
       - "crates/**"
       - "scripts/build-web-demo.sh"
       - ".github/workflows/compiler-cache-seed.yml"
@@ -37,46 +42,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Use stable Rust and WASM target
-        run: |
-          rustup default stable
-          rustup target add wasm32-unknown-unknown
-
-      - name: Cache Cargo sources
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-sources-
-
-      - name: Restore and publish WASM build cache
-        uses: actions/cache@v6
-        with:
-          path: |
-            /home/runner/.cache/noon-sccache-wasm
-            ~/.cache/.wasm-pack
-          key: ${{ runner.os }}-wasm-build-v1-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-wasm-build-v1-
-
-      - name: Use sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.16.0
-
-      - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
-        with:
-          tool: wasm-pack@0.15.0
-          fallback: none
-
       - name: Seed browser compile artifacts
-        env:
-          NOON_SKIP_WEB_PREFLIGHT: "1"
-          NOON_SKIP_PLAYGROUND_TEST: "1"
-          NOON_WASM_PROFILE: "dev"
-          NOON_WASM_SKIP_OPT: "1"
-        run: bash scripts/build-web-demo.sh
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          publish-cache: "true"

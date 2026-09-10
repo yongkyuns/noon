@@ -6,6 +6,11 @@ on:
     branches:
       - master
   workflow_dispatch:
+    inputs:
+      base:
+        description: Existing comparison commit or ref (no automatic fallback)
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -24,43 +29,48 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Report guardrail prerequisites
+        run: |
+          python3 --version
+          cargo --version
+
       - name: Validate guardrail scripts
-        run: >-
-          bash -n
-          scripts/check.sh
-          scripts/architecture-ratchet.sh
-          scripts/architecture-ratchet.test.sh
-          scripts/noon-core-module-ownership-ratchet.sh
-          scripts/noon-core-module-ownership-ratchet.test.sh
-          scripts/active-perf-frontend-ratchet.sh
-          scripts/active-perf-frontend-ratchet.test.sh
+        run: |
+          for script in \
+            scripts/check.sh \
+            scripts/check-architecture.sh \
+            scripts/check-architecture.test.sh \
+            scripts/layer-dependency-ratchet.sh \
+            scripts/layer-dependency-ratchet.test.sh \
+            scripts/architecture-ratchet.sh \
+            scripts/architecture-ratchet.test.sh \
+            scripts/noon-core-module-ownership-ratchet.sh \
+            scripts/noon-core-module-ownership-ratchet.test.sh \
+            scripts/renderer-host-boundary-ratchet.sh \
+            scripts/active-perf-frontend-ratchet.sh \
+            scripts/active-perf-frontend-ratchet.test.sh; do
+            bash -n "$script"
+          done
 
       - name: Exercise architecture guardrails
         run: |
           bash scripts/architecture-ratchet.test.sh
           bash scripts/noon-core-module-ownership-ratchet.test.sh
           bash scripts/active-perf-frontend-ratchet.test.sh
+          bash scripts/layer-dependency-ratchet.test.sh
+          python3 scripts/test_check_entrypoint.py
+          bash scripts/check-architecture.test.sh
 
-      - name: Keep ScenePlayer crate-private
-        run: |
-          if grep -En '^[[:space:]]*pub[[:space:]]+use[[:space:]]+legacy::(.*ScenePlayer|\*)' \
-            crates/noon-web/src/lib.rs; then
-            echo "ScenePlayer is a shrinking transport-only authority and must not be publicly re-exported" >&2
-            exit 1
-          fi
-
-      - name: Reject architecture regressions
+      - name: Reject architecture regressions through the local entrypoint
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
+          REQUESTED_BASE: ${{ inputs.base }}
         run: |
-          base="$PR_BASE_SHA"
-          if [[ -z "$base" ]]; then
-            base="$PUSH_BEFORE_SHA"
-          fi
-          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
-            base="HEAD^"
-          fi
-          bash scripts/architecture-ratchet.sh "$base"
-          bash scripts/noon-core-module-ownership-ratchet.sh
-          bash scripts/active-perf-frontend-ratchet.sh
+          case "$GITHUB_EVENT_NAME" in
+            pull_request) base="$PR_BASE_SHA" ;;
+            push) base="$PUSH_BEFORE_SHA" ;;
+            workflow_dispatch) base="$REQUESTED_BASE" ;;
+            *) echo "Unsupported architecture comparison event" >&2; exit 2 ;;
+          esac
+          bash scripts/check.sh architecture "$base"

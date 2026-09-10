@@ -577,10 +577,14 @@ impl SceneInstance {
 
 #[cfg(test)]
 mod tests {
-    use noon_compile::{CompilePatchError, CompiledObject, CompiledScene};
+    use noon_compile::{
+        lower_semantic_execution, CompilePatchError, CompiledObject, CompiledScene,
+        SemanticExecutionIndex,
+    };
     use noon_core::{
-        CompositionTimeMap, Easing, GeometryRef, ObjectId, Property, SemanticScene, Style,
-        TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
+        CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, SemanticObjectProperty,
+        SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, Style, TrackDefinition,
+        TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
     };
 
     use super::*;
@@ -601,7 +605,7 @@ mod tests {
                 from: Vec2::ZERO,
                 to: Vec2::new(10.0, 0.0),
             },
-            timing: TrackTiming::new(1.0, 2.0, Easing::Linear),
+            timing: TrackTiming::new(1.0, 2.0, RateFunction::Linear),
             time_map: CompositionTimeMap::default(),
         };
         CompiledScene::compile_objects(vec![compiled], &[track]).expect("scene must compile")
@@ -711,11 +715,22 @@ mod tests {
 
     #[test]
     fn native_owned_component_is_reapplied_before_next_host_phase() {
-        let mut scene = SemanticScene::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let position = scene.add_input(Vec2::new(3.0, -1.0));
-        scene.bind(position, object, Property::Position);
-        let mut instance = SceneInstance::from_semantic(&scene).unwrap();
+        let mut store = SemanticStore::new();
+        let object =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        store.attach_to_scene(object).unwrap();
+        let position = store
+            .insert_semantic_input_signal(SemanticVec3::new(3.0, -1.0, 0.0))
+            .unwrap();
+        store
+            .bind_semantic_signal(position, object, SemanticObjectProperty::Translation)
+            .unwrap();
+        let mut index = SemanticExecutionIndex::new();
+        let lowered = lower_semantic_execution(&store, &mut index).unwrap();
+        let object = index.execution_object_id(object).unwrap();
+        let mut instance = SceneInstance::from_semantic_execution(lowered);
         instance.take_frame_changes();
 
         let prepared = instance.prepare_advance_to(0.5).unwrap();

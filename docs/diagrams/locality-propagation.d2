@@ -1,0 +1,22 @@
+# A local change stays local through validation, execution, rendering and GPU publication.
+...@_style
+
+direction: right
+source: "Change source" {
+  grid-columns: 1
+  vertical-gap: 30
+  authored: "Authored edit\nproperty · structure · content" {class: node}
+  effective: "Effective write\ntimeline · reactive · callback" {class: node}
+}
+impact: "Impact analysis\nlocal preparation" {class: node}
+runtime: "Affected runtime\nslots · spatial state" {class: authority}
+publish: "Publication\nchanged ranges · resources" {class: node}
+renderer: "Retained renderer\nreuse clean state" {class: authority}
+gpu: "GPU work\ndirty upload · visible draw" {class: node}
+
+source.authored -> impact: "validate"
+impact -> runtime: "prepared effects"
+source.effective -> runtime: "no relowering"
+runtime -> publish: "FrameEpoch"
+publish -> renderer: "dirty projection"
+renderer -> gpu: "upload / encode"

@@ -1,12 +1,20 @@
+use crate::authoring_error::AuthoringFailure;
 use std::collections::{BTreeMap, BTreeSet};
 
-use noon_core::{
-    Color, FamilyAnimationRequest, ObjectId, SemanticObjectState, SemanticPaint, SemanticStyle,
-    SemanticTransform2_5D, Style, TextSourceKind, TrackDefinition, Transform2D, Vec2,
-};
+#[cfg(any(target_arch = "wasm32", test))]
+mod player_ownership;
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) use player_ownership::PlayerReturnError;
+#[cfg(any(target_arch = "wasm32", test))]
+use player_ownership::{PlayerOwnership, RejectedPlayerReturn};
+#[cfg(test)]
+mod ownership_tests;
+#[cfg(test)]
+mod wait_bootstrap_tests;
+
+use noon_core::ObjectId;
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::{HostCallbackId, SemanticFadeDirection, SemanticMutationTransaction, SemanticVec3};
-use noon_ir::{ObjectSpec, SceneSpec, TextSpec};
 
 #[derive(Clone)]
 enum OwnedSceneMembershipMember {
@@ -38,18 +46,22 @@ impl SceneMembershipBatch {
     fn create_family(
         &self,
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
-    ) -> Result<noon::MobjectFamily, String> {
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         if self.kind != SceneMembershipBatchKind::Add {
             return Err("family creation requires an add batch".into());
         }
-        noon::MobjectFamily::create(store, &self.family_members()?)
+        noon::MobjectFamily::create(store, &self.family_members()?).map_err(AuthoringFailure::from)
     }
 
-    fn edit_family(&self, family: &noon::MobjectFamily) -> Result<Vec<bool>, String> {
+    fn edit_family(&self, family: &noon::MobjectFamily) -> Result<Vec<bool>, AuthoringFailure> {
         let members = self.family_members()?;
         match self.kind {
-            SceneMembershipBatchKind::Add => family.add_many(&members),
-            SceneMembershipBatchKind::Remove => family.remove_many(&members),
+            SceneMembershipBatchKind::Add => {
+                family.add_many(&members).map_err(AuthoringFailure::from)
+            }
+            SceneMembershipBatchKind::Remove => {
+                family.remove_many(&members).map_err(AuthoringFailure::from)
+            }
             _ => Err("family membership requires add or remove".into()),
         }
     }
@@ -216,13 +228,7 @@ pub struct CanonicalAuthoringScene {
     bindings: BTreeMap<ObjectId, noon_core::SemanticNodeId>,
     identities: BTreeMap<noon_core::SemanticNodeId, ObjectId>,
     #[cfg(any(target_arch = "wasm32", test))]
-    live_player: Option<crate::SemanticExecutionPlayer>,
-    #[cfg(any(target_arch = "wasm32", test))]
-    live_player_transferred: bool,
-    /// Whether the locally held player was returned by a presentation lease.
-    /// Only that dormant runtime may be superseded by later direct authoring.
-    #[cfg(any(target_arch = "wasm32", test))]
-    live_player_returned: bool,
+    player_ownership: PlayerOwnership,
 }
 
 impl Default for CanonicalAuthoringScene {
@@ -237,21 +243,21 @@ impl CanonicalAuthoringScene {
     pub fn with_store(
         semantics: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     ) -> Self {
-        let scene = noon::Scene::with_store(semantics);
+        let scene = noon::Scene::with_integration_store(semantics);
         Self {
             scene,
             bindings: BTreeMap::new(),
             identities: BTreeMap::new(),
             #[cfg(any(target_arch = "wasm32", test))]
-            live_player: None,
-            #[cfg(any(target_arch = "wasm32", test))]
-            live_player_transferred: false,
-            #[cfg(any(target_arch = "wasm32", test))]
-            live_player_returned: false,
+            player_ownership: PlayerOwnership::Unstarted,
         }
     }
 
-    pub fn bind_mobject(&mut self, id: ObjectId, handle: &noon::Mobject) -> Result<(), String> {
+    pub fn bind_mobject(
+        &mut self,
+        id: ObjectId,
+        handle: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
         self.edit_membership(SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
             members: vec![OwnedSceneMembershipMember::Mobject {
@@ -266,11 +272,11 @@ impl CanonicalAuthoringScene {
     ///
     /// The returned handle is only an alias of the scene-owned semantic identity. It carries no
     /// camera state or frontend allocation authority.
-    pub fn create_camera_frame(&mut self, id: ObjectId) -> Result<noon::Mobject, String> {
+    pub fn create_camera_frame(&mut self, id: ObjectId) -> Result<noon::Mobject, AuthoringFailure> {
         if self.bindings.contains_key(&id) {
-            return Err(format!("canonical object {} is already bound", id.get()));
+            return Err(format!("canonical object {} is already bound", id.get()).into());
         }
-        let frame = self.scene.camera_frame()?;
+        let frame = self.scene.camera_frame().map_err(AuthoringFailure::from)?;
         let node = frame.node_id();
         debug_assert!(!self.identities.contains_key(&node));
         self.bindings.insert(id, node);
@@ -278,73 +284,14 @@ impl CanonicalAuthoringScene {
         Ok(frame)
     }
 
+    #[cfg(test)]
     fn members(&self) -> Result<Vec<noon_core::SemanticNodeId>, String> {
         self.scene
-            .store()
+            .integration_store()
             .borrow()
             .node(self.scene.root())
             .map(|node| node.members().to_vec())
             .ok_or_else(|| "semantic scene root is no longer live".into())
-    }
-
-    pub fn checkpoint(&self) -> usize {
-        self.scene
-            .store()
-            .borrow()
-            .node(self.scene.root())
-            .expect("canonical semantic scene root remains live")
-            .members()
-            .len()
-    }
-
-    pub fn restore(&mut self, checkpoint: usize) -> Result<(), String> {
-        let members = self.members()?;
-        if checkpoint > members.len() {
-            return Err(format!(
-                "canonical authoring checkpoint {checkpoint} exceeds object count {}",
-                members.len()
-            ));
-        }
-        let removed = &members[checkpoint..];
-        let candidates = {
-            let store = self.scene.store().borrow();
-            let mut candidates = BTreeSet::new();
-            let mut pending = removed.to_vec();
-            while let Some(node) = pending.pop() {
-                if !candidates.insert(node) {
-                    continue;
-                }
-                let node = store
-                    .node(node)
-                    .ok_or_else(|| "canonical rollback member is no longer live".to_string())?;
-                pending.extend(node.members().iter().copied());
-            }
-            candidates
-        };
-        let mut transaction = noon_core::SemanticMutationTransaction::new();
-        for node in removed {
-            transaction.remove_member(self.scene.root(), *node);
-        }
-        transaction
-            .apply(&mut self.scene.store().borrow_mut())
-            .map_err(|error| error.to_string())?;
-        let unreachable = {
-            let store = self.scene.store().borrow();
-            candidates
-                .into_iter()
-                .filter_map(|node| {
-                    let bound = self.identities.get(&node).copied()?;
-                    (!noon_core::semantic_scene_root_contains(&store, self.scene.root(), node)
-                        .expect("validated rollback candidates and scene root remain live"))
-                    .then_some((node, bound))
-                })
-                .collect::<Vec<_>>()
-        };
-        for (node, id) in unreachable {
-            self.identities.remove(&node);
-            self.bindings.remove(&id);
-        }
-        Ok(())
     }
 
     pub fn lower_execution(&self) -> Result<noon::ExecutionSession, String> {
@@ -366,57 +313,60 @@ impl CanonicalAuthoringScene {
         active_from: f64,
         position: Option<usize>,
     ) -> Result<(), String> {
-        self.require_pre_execution_updater_target(handle)?;
+        self.require_updater_target(handle)?;
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_updater(handle.node_id(), callback, active_from, position);
-        transaction
-            .apply(&mut self.scene.store().borrow_mut())
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        self.publish_updater_edit(transaction)
     }
 
     /// Close the first open occurrence for this host callback at an exclusive
     /// authored time. The store validates the complete mutation before commit.
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn remove_updater(
         &mut self,
         handle: &noon::Mobject,
         callback: HostCallbackId,
         inactive_from: f64,
     ) -> Result<(), String> {
-        self.require_pre_execution_updater_target(handle)?;
+        self.require_updater_target(handle)?;
         let mut transaction = SemanticMutationTransaction::new();
         transaction.remove_updater(handle.node_id(), callback, inactive_from);
-        transaction
-            .apply(&mut self.scene.store().borrow_mut())
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        self.publish_updater_edit(transaction)
     }
 
     /// Close every open callback occurrence on this target at an exclusive
-    /// authored time before the canonical execution session exists.
-    #[cfg(target_arch = "wasm32")]
+    /// authored time through the owning live session when execution has begun.
+    #[cfg(any(target_arch = "wasm32", test))]
     fn clear_updaters(&mut self, handle: &noon::Mobject, inactive_from: f64) -> Result<(), String> {
-        self.require_pre_execution_updater_target(handle)?;
+        self.require_updater_target(handle)?;
         let mut transaction = SemanticMutationTransaction::new();
         transaction.clear_updaters(handle.node_id(), inactive_from);
+        self.publish_updater_edit(transaction)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn publish_updater_edit(
+        &mut self,
+        transaction: SemanticMutationTransaction,
+    ) -> Result<(), String> {
+        if self.player_ownership.is_transferred() {
+            return Err("return the active execution player before editing updaters".into());
+        }
+        if let Some(player) = self.player_ownership.local_mut() {
+            return player.live_edit_updaters(transaction);
+        }
         transaction
-            .apply(&mut self.scene.store().borrow_mut())
+            .apply(&mut self.scene.integration_store().borrow_mut())
             .map(|_| ())
             .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn require_pre_execution_updater_target(&self, handle: &noon::Mobject) -> Result<(), String> {
-        if self.live_player.is_some() || self.live_player_transferred {
-            return Err(
-                "callback registrations must be authored before canonical execution begins".into(),
-            );
-        }
-        if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
+    fn require_updater_target(&self, handle: &noon::Mobject) -> Result<(), String> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
             return Err("mobject belongs to another authoring store".into());
         }
-        handle.validate()?;
+        handle.validate().map_err(|error| error.to_string())?;
         if !self.identities.contains_key(&handle.node_id()) {
             return Err("callback target is not bound to this canonical Scene".into());
         }
@@ -429,13 +379,15 @@ impl CanonicalAuthoringScene {
         duration: f64,
     ) -> Result<&mut crate::SemanticExecutionPlayer, String> {
         self.prepare_local_player_for_run()?;
-        if let Some(player) = self.live_player.as_mut() {
+        if let Some(player) = self.player_ownership.local_mut() {
             player.set_loop_duration(duration)?;
         } else {
-            self.live_player = Some(self.build_live_player(duration, 0)?);
-            self.live_player_returned = false;
+            self.player_ownership = PlayerOwnership::Active(self.build_live_player(duration, 0)?);
         }
-        Ok(self.live_player.as_mut().expect("live player initialized"))
+        Ok(self
+            .player_ownership
+            .local_mut()
+            .expect("live player initialized"))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -446,7 +398,7 @@ impl CanonicalAuthoringScene {
     ) -> Result<crate::SemanticExecutionPlayer, String> {
         crate::SemanticExecutionPlayer::from_live_session(
             self.lower_execution()?,
-            std::rc::Rc::clone(self.scene.store()),
+            std::rc::Rc::clone(self.scene.integration_store()),
             self.scene.root(),
             duration,
             transport_session,
@@ -458,30 +410,14 @@ impl CanonicalAuthoringScene {
     /// error rather than silently replacing that session.
     #[cfg(any(target_arch = "wasm32", test))]
     fn prepare_local_player_for_run(&mut self) -> Result<(), String> {
-        if self.live_player_transferred {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        let authored_revision = self.scene.store().borrow().scene_revision();
-        let stale = self
-            .live_player
-            .as_ref()
-            .is_some_and(|player| player.scene_revision() != authored_revision);
-        if stale && !self.live_player_returned {
-            return Err("authored scene changed while live execution is active".into());
-        }
-        if stale {
-            self.live_player = None;
-            self.live_player_returned = false;
-        }
-        Ok(())
+        self.player_ownership
+            .prepare_for_run(self.scene.integration_store().borrow().scene_revision())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn returned_player_is_stale(&self) -> bool {
-        self.live_player_returned
-            && self.live_player.as_ref().is_some_and(|player| {
-                player.scene_revision() != self.scene.store().borrow().scene_revision()
-            })
+        self.player_ownership
+            .returned_is_stale(self.scene.integration_store().borrow().scene_revision())
     }
 
     /// Begin an explicit authoring-run publication boundary.
@@ -497,11 +433,11 @@ impl CanonicalAuthoringScene {
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn active_live_player(&mut self) -> Result<&mut crate::SemanticExecutionPlayer, String> {
-        if self.live_player_transferred {
+        if self.player_ownership.is_transferred() {
             return Err("live execution session is running in the semantic engine".into());
         }
-        self.live_player
-            .as_mut()
+        self.player_ownership
+            .local_mut()
             .ok_or_else(|| "begin live execution before reading or mutating it".into())
     }
 
@@ -513,7 +449,7 @@ impl CanonicalAuthoringScene {
         &mut self,
         duration: f64,
     ) -> Result<&mut crate::SemanticExecutionPlayer, String> {
-        if self.live_player.is_none() {
+        if self.player_ownership.is_unstarted() {
             self.live_player(duration)?;
         }
         self.active_live_player()
@@ -524,46 +460,45 @@ impl CanonicalAuthoringScene {
     /// never records or advances lifecycle state itself.
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_execution_ownership(&self) -> &'static str {
-        if self.live_player_transferred {
-            "transferred"
-        } else if self.live_player_returned {
-            "returned"
-        } else if self.live_player.is_some() {
-            "active"
-        } else {
-            "none"
-        }
+        self.player_ownership.browser_name()
     }
 
     /// Route bound observations through the single owner of current execution.
     /// Detached handles are queried directly by their language wrapper.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn mobject_observation<T>(
+    fn mobject_observation<T, E: Into<AuthoringFailure>>(
         &mut self,
         handle: &noon::Mobject,
-        authored: impl FnOnce(&noon::Mobject) -> Result<T, String>,
-        effective: impl FnOnce(&mut crate::SemanticExecutionPlayer, &noon::Mobject) -> Result<T, String>,
-    ) -> Result<T, String> {
-        if self.live_player_transferred {
+        authored: impl FnOnce(&noon::Mobject) -> Result<T, E>,
+        effective: impl FnOnce(
+            &mut crate::SemanticExecutionPlayer,
+            &noon::Mobject,
+        ) -> Result<T, AuthoringFailure>,
+    ) -> Result<T, AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
             return Err("live execution session is running in the semantic engine".into());
         }
-        if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
-            return Err("mobject belongs to another authoring store".into());
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
+            return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                .with_message("mobject belongs to another authoring store"));
         }
-        handle.validate()?;
+        handle.validate().map_err(AuthoringFailure::from)?;
         if !self.identities.contains_key(&handle.node_id()) {
             return Err("mobject is not bound to this canonical Scene".into());
         }
         if !self.returned_player_is_stale() {
-            if let Some(player) = self.live_player.as_mut() {
+            if let Some(player) = self.player_ownership.local_mut() {
                 return effective(player, handle);
             }
         }
-        authored(handle)
+        authored(handle).map_err(Into::into)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn mobject_layout(&mut self, handle: &noon::Mobject) -> Result<(f64, f64, f64, f64), String> {
+    fn mobject_layout(
+        &mut self,
+        handle: &noon::Mobject,
+    ) -> Result<(f64, f64, f64, f64), AuthoringFailure> {
         self.mobject_observation(handle, authored_mobject_layout, |player, handle| {
             let observed = player.live_effective_layout(handle)?;
             Ok((
@@ -579,7 +514,7 @@ impl CanonicalAuthoringScene {
     fn mobject_line_endpoints(
         &mut self,
         handle: &noon::Mobject,
-    ) -> Result<noon::ManimLineEndpoints, String> {
+    ) -> Result<noon::ManimLineEndpoints, AuthoringFailure> {
         self.mobject_observation(
             handle,
             noon::Mobject::manim_line_endpoints,
@@ -588,7 +523,10 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn mobject_color(&mut self, handle: &noon::Mobject) -> Result<noon_core::Color, String> {
+    fn mobject_color(
+        &mut self,
+        handle: &noon::Mobject,
+    ) -> Result<noon_core::Color, AuthoringFailure> {
         self.mobject_observation(
             handle,
             noon::Mobject::manim_color,
@@ -597,19 +535,19 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn mobject_fill_opacity(&mut self, handle: &noon::Mobject) -> Result<f64, String> {
+    fn mobject_fill_opacity(&mut self, handle: &noon::Mobject) -> Result<f64, AuthoringFailure> {
         self.mobject_observation(handle, noon::Mobject::fill_opacity, |player, handle| {
             // Reject resource paints before reading their lowered scalar projection.
-            handle.fill_opacity()?;
+            handle.fill_opacity().map_err(AuthoringFailure::from)?;
             Ok(player.live_effective(handle)?.fill_opacity())
         })
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn mobject_stroke_opacity(&mut self, handle: &noon::Mobject) -> Result<f64, String> {
+    fn mobject_stroke_opacity(&mut self, handle: &noon::Mobject) -> Result<f64, AuthoringFailure> {
         self.mobject_observation(handle, noon::Mobject::stroke_opacity, |player, handle| {
             // Reject resource paints before reading their lowered scalar projection.
-            handle.stroke_opacity()?;
+            handle.stroke_opacity().map_err(AuthoringFailure::from)?;
             Ok(player.live_effective(handle)?.stroke_opacity())
         })
     }
@@ -621,16 +559,18 @@ impl CanonicalAuthoringScene {
         &mut self,
         handle: &noon::Mobject,
         buff: f64,
-    ) -> Result<noon::ManimGeometryOptions, String> {
-        if self.live_player_transferred {
+    ) -> Result<noon::ManimGeometryOptions, AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
             return Err("live execution session is running in the semantic engine".into());
         }
-        if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
-            return Err("mobject belongs to another authoring store".into());
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
+            return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                .with_message("mobject belongs to another authoring store"));
         }
-        handle.validate()?;
+        handle.validate().map_err(AuthoringFailure::from)?;
         let mut bounds = handle
-            .layout_bounds()?
+            .layout_bounds()
+            .map_err(AuthoringFailure::from)?
             .ok_or("Underline target has no layout bounds")?;
         if self.identities.contains_key(&handle.node_id()) {
             let (x, y, width, height) = self.mobject_layout(handle)?;
@@ -641,12 +581,12 @@ impl CanonicalAuthoringScene {
                 max_y: y + height * 0.5,
             };
         }
-        noon::ManimGeometryOptions::underline(bounds, buff)
+        noon::ManimGeometryOptions::underline(bounds, buff).map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn require_pre_execution_signal_authoring(&self) -> Result<(), String> {
-        if self.live_player.is_some() || self.live_player_transferred {
+        if !self.player_ownership.is_unstarted() {
             return Err(
                 "signal declarations and bindings must be authored before canonical execution begins"
                     .into(),
@@ -657,44 +597,62 @@ impl CanonicalAuthoringScene {
 
     /// Create one scalar signal in this context's shared semantic store.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn create_value_tracker(&mut self, initial: f64) -> Result<noon::ValueTracker, String> {
-        if self.live_player_transferred {
+    fn create_value_tracker(
+        &mut self,
+        initial: f64,
+    ) -> Result<noon::ValueTracker, AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
             return Err("live execution session is running in the semantic engine".into());
         }
-        match self.live_player.as_mut() {
+        match self.player_ownership.local_mut() {
             Some(player) => player.live_value_tracker(initial),
-            None => self.scene.value_tracker(initial),
+            None => self
+                .scene
+                .value_tracker(initial)
+                .map_err(AuthoringFailure::from),
         }
     }
 
     /// Associate one store-owned detached tracker with this Scene.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn associate_value_tracker(&mut self, tracker: &noon::ValueTracker) -> Result<(), String> {
-        if self.live_player_transferred {
+    fn associate_value_tracker(
+        &mut self,
+        tracker: &noon::ValueTracker,
+    ) -> Result<(), AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
             return Err("live execution session is running in the semantic engine".into());
         }
-        match self.live_player.as_mut() {
+        match self.player_ownership.local_mut() {
             Some(player) => player.live_associate_value_tracker(tracker),
-            None => self.scene.associate_value_tracker(tracker),
+            None => self
+                .scene
+                .associate_value_tracker(tracker)
+                .map_err(AuthoringFailure::from),
         }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn pointer_position_signal(&self) -> Result<noon::NativeVectorSignal, String> {
+    fn pointer_position_signal(&self) -> Result<noon::NativeVectorSignal, AuthoringFailure> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.pointer_position_signal()
+        self.scene
+            .pointer_position_signal()
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn viewport_size_signal(&self) -> Result<noon::NativeVectorSignal, String> {
+    fn viewport_size_signal(&self) -> Result<noon::NativeVectorSignal, AuthoringFailure> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.viewport_size_signal()
+        self.scene
+            .viewport_size_signal()
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn wheel_delta_signal(&self) -> Result<noon::NativeVectorSignal, String> {
+    fn wheel_delta_signal(&self) -> Result<noon::NativeVectorSignal, AuthoringFailure> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.wheel_delta_signal()
+        self.scene
+            .wheel_delta_signal()
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -702,33 +660,45 @@ impl CanonicalAuthoringScene {
         &self,
         code: String,
         initial: bool,
-    ) -> Result<noon::NativeBoolSignal, String> {
+    ) -> Result<noon::NativeBoolSignal, AuthoringFailure> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.key_state_signal(code, initial)
+        self.scene
+            .key_state_signal(code, initial)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn control_signal(&self, name: String, initial: f64) -> Result<noon::ValueTracker, String> {
+    fn control_signal(
+        &self,
+        name: String,
+        initial: f64,
+    ) -> Result<noon::ValueTracker, AuthoringFailure> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.control_signal(name, initial)
+        self.scene
+            .control_signal(name, initial)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn pointer_down_events(&self, button: u8) -> Result<noon::ValueTracker, String> {
+    fn pointer_down_events(&self, button: u8) -> Result<noon::ValueTracker, AuthoringFailure> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.pointer_down_events(button)
+        self.scene
+            .pointer_down_events(button)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn wheel_events(&self) -> Result<noon::ValueTracker, String> {
+    fn wheel_events(&self) -> Result<noon::ValueTracker, AuthoringFailure> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.wheel_events()
+        self.scene.wheel_events().map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn control_commit_events(&self, name: String) -> Result<noon::ValueTracker, String> {
+    fn control_commit_events(&self, name: String) -> Result<noon::ValueTracker, AuthoringFailure> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.control_commit_events(name)
+        self.scene
+            .control_commit_events(name)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -736,9 +706,11 @@ impl CanonicalAuthoringScene {
         &self,
         object: &noon::Mobject,
         signal: &noon::NativeVectorSignal,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.bind_native_translation(object, signal)
+        self.scene
+            .bind_native_translation(object, signal)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -746,9 +718,11 @@ impl CanonicalAuthoringScene {
         &self,
         object: &noon::Mobject,
         signal: &noon::ValueTracker,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.bind_rotation(object, signal)
+        self.scene
+            .bind_rotation(object, signal)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -756,9 +730,11 @@ impl CanonicalAuthoringScene {
         &self,
         object: &noon::Mobject,
         signal: &noon::ValueTracker,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.bind_opacity(object, signal)
+        self.scene
+            .bind_opacity(object, signal)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -766,9 +742,11 @@ impl CanonicalAuthoringScene {
         &self,
         object: &noon::Mobject,
         signal: &noon::NativeBoolSignal,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.bind_presence(object, signal)
+        self.scene
+            .bind_presence(object, signal)
+            .map_err(AuthoringFailure::from)
     }
 
     /// Build only the common `offset + tracker * direction` semantic expression.
@@ -778,9 +756,11 @@ impl CanonicalAuthoringScene {
         tracker: &noon::ValueTracker,
         direction: SemanticVec3,
         offset: SemanticVec3,
-    ) -> Result<noon::TrackerPosition, String> {
+    ) -> Result<noon::TrackerPosition, AuthoringFailure> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.position_from_tracker(tracker, direction, offset)
+        self.scene
+            .position_from_tracker(tracker, direction, offset)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -788,19 +768,24 @@ impl CanonicalAuthoringScene {
         &self,
         object: &noon::Mobject,
         position: &noon::TrackerPosition,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.require_pre_execution_signal_authoring()?;
-        self.scene.bind_position(object, position)
+        self.scene
+            .bind_position(object, position)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn tracker_value(&mut self, tracker: &noon::ValueTracker) -> Result<f64, String> {
-        if self.live_player_transferred {
+    fn tracker_value(&mut self, tracker: &noon::ValueTracker) -> Result<f64, AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
             return Err("semantic execution session is running in the semantic engine".into());
         }
-        match self.live_player.as_mut() {
+        match self.player_ownership.local_mut() {
             Some(player) => player.live_effective_signal(tracker),
-            None => self.scene.value_tracker_value(tracker),
+            None => self
+                .scene
+                .value_tracker_value(tracker)
+                .map_err(AuthoringFailure::from),
         }
     }
 
@@ -809,13 +794,16 @@ impl CanonicalAuthoringScene {
         &mut self,
         tracker: &noon::ValueTracker,
         value: f64,
-    ) -> Result<(), String> {
-        if self.live_player_transferred {
+    ) -> Result<(), AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
             return Err("semantic execution session is running in the semantic engine".into());
         }
-        match self.live_player.as_mut() {
+        match self.player_ownership.local_mut() {
             Some(player) => player.live_set_signal(tracker, value),
-            None => self.scene.set_value(tracker, value),
+            None => self
+                .scene
+                .set_value(tracker, value)
+                .map_err(AuthoringFailure::from),
         }
     }
 
@@ -840,8 +828,10 @@ impl CanonicalAuthoringScene {
     /// the first operation in an empty scene. Pre-execution scalar declaration
     /// keeps using the explicit `authored_wait` entry point.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn ordinary_wait(&mut self, duration: f64) -> Result<f64, String> {
-        if self.live_player.is_some() && self.active_live_player()?.has_required_callbacks() {
+    fn ordinary_wait(&mut self, duration: f64) -> Result<f64, AuthoringFailure> {
+        if self.player_ownership.local().is_some()
+            && self.active_live_player()?.has_required_callbacks()
+        {
             return Err(
                 "ordinary endpoint-only wait cannot execute required callbacks; use a continuation"
                     .into(),
@@ -853,7 +843,7 @@ impl CanonicalAuthoringScene {
         player.live_complete_segment()?;
         player
             .live_handoff_duration()
-            .ok_or_else(|| "live execution player has no handoff duration".to_owned())
+            .ok_or_else(|| AuthoringFailure::from("live execution player has no handoff duration"))
     }
 
     /// Begin one ordinary wait without advancing it.
@@ -861,8 +851,8 @@ impl CanonicalAuthoringScene {
     /// This exists for the async worker continuation path. The returned endpoint is derived
     /// from the player-owned segment; no Python or JavaScript cursor is created.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn begin_ordinary_wait(&mut self, duration: f64) -> Result<f64, String> {
-        if self.live_player.is_none() {
+    fn begin_ordinary_wait(&mut self, duration: f64) -> Result<f64, AuthoringFailure> {
+        if self.player_ownership.is_unstarted() {
             if self.scene.time() != 0.0 {
                 return Err(
                     "ordinary asynchronous wait cannot follow pre-execution canonical timing"
@@ -871,7 +861,12 @@ impl CanonicalAuthoringScene {
             }
             // A wait has no animation extent, but the presentation clock still needs a
             // positive valid range before its session-derived deadline replaces it.
-            self.live_player(duration.max(1.0))?;
+            let mut player = self.build_live_player(duration.max(1.0), 0)?;
+            let end_time = player.live_wait(duration)?;
+            // Shared admission is fallible. Publish the first runtime only once
+            // it owns a valid segment; rejection leaves this context unstarted.
+            self.player_ownership = PlayerOwnership::Active(player);
+            return Ok(end_time);
         }
         let player = self.active_live_player()?;
         player.live_wait(duration)
@@ -879,12 +874,11 @@ impl CanonicalAuthoringScene {
 
     /// Read only the live runtime's authored handoff duration.
     ///
-    /// Static authoring has no live session, so its existing authored-duration
-    /// projection remains the fallback at the Python export boundary.
+    /// Returns `None` until a live session exists.
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_handoff_duration(&self) -> Option<f64> {
-        self.live_player
-            .as_ref()
+        self.player_ownership
+            .local()
             .and_then(crate::SemanticExecutionPlayer::live_handoff_duration)
     }
 
@@ -896,7 +890,7 @@ impl CanonicalAuthoringScene {
         target: &noon::Mobject,
         options: noon_core::AnimationOptions,
     ) -> Result<noon::DeclaredAnimation, String> {
-        if self.live_player.is_some() || self.live_player_transferred {
+        if !self.player_ownership.is_unstarted() {
             return Err("declare live animations before beginning execution".into());
         }
         self.scene.declare_transform_to(source, target, options)
@@ -907,11 +901,11 @@ impl CanonicalAuthoringScene {
     /// This lets Python update only its derived wrapper attachment after a completed
     /// FadeOut without storing lifecycle state or adding metadata to the player receipt.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_contains_mobject(&mut self, target: &noon::Mobject) -> Result<bool, String> {
-        if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
-            return Err("mobject belongs to another authoring store".into());
+    fn live_contains_mobject(&mut self, target: &noon::Mobject) -> Result<bool, AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
         }
-        target.validate()?;
+        target.validate().map_err(AuthoringFailure::from)?;
         if !self.identities.contains_key(&target.node_id()) {
             return Err("live Mobject is not bound to this canonical Scene".into());
         }
@@ -931,14 +925,13 @@ impl CanonicalAuthoringScene {
             .live_handoff_duration()
             .unwrap_or_else(|| self.scene.time())
             .max(options.run_time.unwrap_or(1.0));
-        let bootstrapped = self.live_player.is_none();
+        let bootstrapped = self.player_ownership.is_unstarted();
         if bootstrapped {
             self.live_player(bootstrap_duration)?;
         }
         if self.active_live_player()?.has_required_callbacks() {
             if bootstrapped {
-                self.live_player = None;
-                self.live_player_returned = false;
+                self.player_ownership = PlayerOwnership::Unstarted;
             }
             return Err(
                 "ordinary endpoint-only animation cannot execute required callbacks; use a continuation"
@@ -947,8 +940,12 @@ impl CanonicalAuthoringScene {
         }
         let end = self.begin_ordinary_affine_lifecycle(id, target, direction, endpoint, options)?;
         let player = self.active_live_player()?;
-        player.live_advance_segment_to(end)?;
-        player.live_complete_segment()?;
+        player
+            .live_advance_segment_to(end)
+            .map_err(|error| error.to_string())?;
+        player
+            .live_complete_segment()
+            .map_err(|error| error.to_string())?;
         player
             .live_handoff_duration()
             .ok_or_else(|| "live execution player has no handoff duration".to_owned())
@@ -967,12 +964,12 @@ impl CanonicalAuthoringScene {
             .live_handoff_duration()
             .unwrap_or_else(|| self.scene.time())
             .max(options.run_time.unwrap_or(1.0));
-        if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
             return Err(
                 "ordinary affine lifecycle mobject belongs to another authoring store".into(),
             );
         }
-        target.validate()?;
+        target.validate().map_err(|error| error.to_string())?;
         let node = target.node_id();
         let is_bound = match (self.bindings.get(&id), self.identities.get(&node)) {
             (None, None) => false,
@@ -1008,8 +1005,12 @@ impl CanonicalAuthoringScene {
             false,
         )?;
         let player = self.active_live_player()?;
-        player.live_advance_segment_to(end)?;
-        player.live_complete_segment()?;
+        player
+            .live_advance_segment_to(end)
+            .map_err(|error| error.to_string())?;
+        player
+            .live_complete_segment()
+            .map_err(|error| error.to_string())?;
         player
             .live_handoff_duration()
             .ok_or_else(|| "live execution player has no handoff duration".into())
@@ -1285,15 +1286,14 @@ impl CanonicalAuthoringScene {
             children: requests,
             options: composition_options,
         };
-        let end = if self.live_player.is_none() {
+        let end = if self.player_ownership.is_unstarted() {
             self.prepare_local_player_for_run()?;
             let mut player = self.build_live_player(bootstrap_duration, 0)?;
             if !allow_required_callbacks && player.has_required_callbacks() {
                 return Err("ordinary composition with required callbacks needs an asynchronous continuation".into());
             }
             let end = player.live_declare_and_activate_composition(&composition, play_options)?;
-            self.live_player = Some(player);
-            self.live_player_returned = false;
+            self.player_ownership = PlayerOwnership::Active(player);
             end
         } else {
             let player = self.active_live_player()?;
@@ -1426,7 +1426,7 @@ impl CanonicalAuthoringScene {
     ) -> Result<(), String> {
         // A continuation cannot restart a pre-authored Rust timeline at zero.
         // This is the common admission guard for every request shape.
-        if self.live_player.is_none() && self.scene.time() != 0.0 {
+        if self.player_ownership.is_unstarted() && self.scene.time() != 0.0 {
             return Err("ordinary composition cannot follow pre-execution canonical timing".into());
         }
         if children.is_empty() {
@@ -1459,14 +1459,14 @@ impl CanonicalAuthoringScene {
                     target,
                     options,
                 } => {
-                    if !tracker.is_in_store(self.scene.store()) {
+                    if !tracker.is_in_store(self.scene.integration_store()) {
                         return Err(
                             "ordinary composition ValueTracker belongs to another authoring store"
                                 .into(),
                         );
                     }
                     self.scene
-                        .store()
+                        .integration_store()
                         .borrow()
                         .semantic_signal_state(tracker.node_id())
                         .map_err(|error| error.to_string())?;
@@ -1489,16 +1489,19 @@ impl CanonicalAuthoringScene {
                     options,
                     ..
                 } => {
-                    if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+                    if !std::rc::Rc::ptr_eq(
+                        self.scene.integration_store(),
+                        target.integration_store(),
+                    ) {
                         return Err(
                             "ordinary subset-display family belongs to another authoring store"
                                 .into(),
                         );
                     }
-                    target.validate()?;
+                    target.validate().map_err(|error| error.to_string())?;
                     let direct_members = self
                         .scene
-                        .store()
+                        .integration_store()
                         .borrow()
                         .semantic_family_members_checked(target.node_id())
                         .map_err(|error| error.to_string())?
@@ -1522,13 +1525,16 @@ impl CanonicalAuthoringScene {
                     )
                     .map_err(|error| error.to_string())?;
                     for (id, member) in entering {
-                        if !std::rc::Rc::ptr_eq(self.scene.store(), member.store()) {
+                        if !std::rc::Rc::ptr_eq(
+                            self.scene.integration_store(),
+                            member.integration_store(),
+                        ) {
                             return Err(
                                 "ordinary subset-display member belongs to another authoring store"
                                     .into(),
                             );
                         }
-                        member.validate()?;
+                        member.validate().map_err(|error| error.to_string())?;
                         if self.bindings.contains_key(id)
                             || self.identities.contains_key(&member.node_id())
                             || !ids.insert(*id)
@@ -1559,15 +1565,18 @@ impl CanonicalAuthoringScene {
                     options,
                     ..
                 } => {
-                    if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+                    if !std::rc::Rc::ptr_eq(
+                        self.scene.integration_store(),
+                        target.integration_store(),
+                    ) {
                         return Err(
                             "ordinary family animation belongs to another authoring store".into(),
                         );
                     }
-                    target.validate()?;
+                    target.validate().map_err(|error| error.to_string())?;
                     let family_leaves = self
                         .scene
-                        .store()
+                        .integration_store()
                         .borrow()
                         .ordered_leaf_nodes(target.node_id())
                         .map_err(|e| e.to_string())?;
@@ -1603,12 +1612,15 @@ impl CanonicalAuthoringScene {
                     )
                     .map_err(|error| error.to_string())?;
                     for (id, member) in entering {
-                        if !std::rc::Rc::ptr_eq(self.scene.store(), member.store()) {
+                        if !std::rc::Rc::ptr_eq(
+                            self.scene.integration_store(),
+                            member.integration_store(),
+                        ) {
                             return Err(
                                 "ordinary family member belongs to another authoring store".into(),
                             );
                         }
-                        member.validate()?;
+                        member.validate().map_err(|error| error.to_string())?;
                         if self.bindings.contains_key(id)
                             || self.identities.contains_key(&member.node_id())
                             || !ids.insert(*id)
@@ -1625,16 +1637,19 @@ impl CanonicalAuthoringScene {
                     options,
                     ..
                 } => {
-                    if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+                    if !std::rc::Rc::ptr_eq(
+                        self.scene.integration_store(),
+                        target.integration_store(),
+                    ) {
                         return Err(
                             "ordinary family DrawBorderThenFill belongs to another authoring store"
                                 .into(),
                         );
                     }
-                    target.validate()?;
+                    target.validate().map_err(|error| error.to_string())?;
                     let family_leaves = self
                         .scene
-                        .store()
+                        .integration_store()
                         .borrow()
                         .ordered_leaf_nodes(target.node_id())
                         .map_err(|e| e.to_string())?;
@@ -1657,10 +1672,13 @@ impl CanonicalAuthoringScene {
                     )
                     .map_err(|error| error.to_string())?;
                     for (id, member) in entering {
-                        if !std::rc::Rc::ptr_eq(self.scene.store(), member.store()) {
+                        if !std::rc::Rc::ptr_eq(
+                            self.scene.integration_store(),
+                            member.integration_store(),
+                        ) {
                             return Err("ordinary family DrawBorderThenFill member belongs to another authoring store".into());
                         }
-                        member.validate()?;
+                        member.validate().map_err(|error| error.to_string())?;
                         if self.bindings.contains_key(id)
                             || self.identities.contains_key(&member.node_id())
                             || !ids.insert(*id)
@@ -1676,15 +1694,19 @@ impl CanonicalAuthoringScene {
                     target_state,
                     options,
                 } => {
-                    if !std::rc::Rc::ptr_eq(self.scene.store(), source.store())
-                        || !std::rc::Rc::ptr_eq(self.scene.store(), target_state.store())
-                    {
+                    if !std::rc::Rc::ptr_eq(
+                        self.scene.integration_store(),
+                        source.integration_store(),
+                    ) || !std::rc::Rc::ptr_eq(
+                        self.scene.integration_store(),
+                        target_state.integration_store(),
+                    ) {
                         return Err(
                             "ordinary family Transform belongs to another authoring store".into(),
                         );
                     }
-                    source.validate()?;
-                    target_state.validate()?;
+                    source.validate().map_err(|error| error.to_string())?;
+                    target_state.validate().map_err(|error| error.to_string())?;
                     noon_core::resolve_animation_options(
                         noon_core::AnimationDefaults::MANIM,
                         *options,
@@ -1696,12 +1718,15 @@ impl CanonicalAuthoringScene {
                 OrdinaryCompositionChild::FamilyIndicate {
                     target, options, ..
                 } => {
-                    if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+                    if !std::rc::Rc::ptr_eq(
+                        self.scene.integration_store(),
+                        target.integration_store(),
+                    ) {
                         return Err(
                             "ordinary family Indicate belongs to another authoring store".into(),
                         );
                     }
-                    target.validate()?;
+                    target.validate().map_err(|error| error.to_string())?;
                     noon_core::resolve_animation_options(
                         noon_core::AnimationDefaults::MANIM,
                         *options,
@@ -1729,12 +1754,15 @@ impl CanonicalAuthoringScene {
                     options,
                     ..
                 } => {
-                    if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+                    if !std::rc::Rc::ptr_eq(
+                        self.scene.integration_store(),
+                        target.integration_store(),
+                    ) {
                         return Err(
                             "ordinary composition target belongs to another authoring store".into(),
                         );
                     }
-                    target.validate()?;
+                    target.validate().map_err(|error| error.to_string())?;
                     if self.identities.contains_key(&target.node_id()) {
                         return Err(
                             "ordinary composition TransformTo target state must be detached".into(),
@@ -1809,12 +1837,12 @@ impl CanonicalAuthoringScene {
                     ..
                 } => (*entering_id, target, *options),
             };
-            if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
+            if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
                 return Err(
                     "ordinary composition target belongs to another authoring store".into(),
                 );
             }
-            target.validate()?;
+            target.validate().map_err(|error| error.to_string())?;
             let resolved = if matches!(child, OrdinaryCompositionChild::Add { .. }) {
                 noon_core::resolve_add_animation_options(
                     noon_core::AnimationDefaults::MANIM,
@@ -1843,7 +1871,9 @@ impl CanonicalAuthoringScene {
             match entering_id {
                 Some(id) => {
                     let node = target.node_id();
-                    let detached = !self.contains_mobject(target)?;
+                    let detached = !self
+                        .contains_mobject(target)
+                        .map_err(|error| error.to_string())?;
                     let binding_available =
                         match (self.bindings.get(&id), self.identities.get(&node)) {
                             (None, None) => detached,
@@ -1868,16 +1898,23 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_target_editor(&mut self, source: &noon::Mobject) -> Result<noon::Mobject, String> {
-        if !std::rc::Rc::ptr_eq(self.scene.store(), source.store()) {
-            return Err("mobject belongs to another authoring store".into());
+    fn live_target_editor(
+        &mut self,
+        source: &noon::Mobject,
+    ) -> Result<noon::Mobject, AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), source.integration_store()) {
+            return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                .with_message("mobject belongs to another authoring store"));
         }
-        source.validate()?;
-        match self.live_execution_ownership() {
-            "none" => source.target_editor(),
-            "active" | "returned" => self.active_live_player()?.live_target_editor(source),
-            "transferred" => Err("live execution session is running in the semantic engine".into()),
-            _ => unreachable!("canonical live ownership has one closed set of states"),
+        source.validate().map_err(AuthoringFailure::from)?;
+        match &mut self.player_ownership {
+            PlayerOwnership::Unstarted => source.target_editor().map_err(AuthoringFailure::from),
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.live_target_editor(source)
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
         }
     }
 
@@ -1885,12 +1922,17 @@ impl CanonicalAuthoringScene {
     fn live_family(
         &mut self,
         members: &[noon::MobjectFamilyMember<'_>],
-    ) -> Result<noon::MobjectFamily, String> {
-        match self.live_execution_ownership() {
-            "active" | "returned" => self.active_live_player()?.live_family(members),
-            "none" => Err("live family creation requires an active canonical session".into()),
-            "transferred" => Err("live execution session is running in the semantic engine".into()),
-            _ => unreachable!("canonical live ownership has one closed set of states"),
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.live_family(members)
+            }
+            PlayerOwnership::Unstarted => {
+                Err("live family creation requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
         }
     }
 
@@ -1900,12 +1942,17 @@ impl CanonicalAuthoringScene {
         family: &noon::MobjectFamily,
         x: f64,
         y: f64,
-    ) -> Result<(), String> {
-        match self.live_execution_ownership() {
-            "active" | "returned" => self.active_live_player()?.live_shift_family(family, x, y),
-            "none" => Err("live family shift requires an active canonical session".into()),
-            "transferred" => Err("live execution session is running in the semantic engine".into()),
-            _ => unreachable!("canonical live ownership has one closed set of states"),
+    ) -> Result<(), AuthoringFailure> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.live_shift_family(family, x, y)
+            }
+            PlayerOwnership::Unstarted => {
+                Err("live family shift requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
         }
     }
 
@@ -1915,7 +1962,7 @@ impl CanonicalAuthoringScene {
         &mut self,
         family: &noon::MobjectFamily,
         options: &noon::FamilyArrangeOptions,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.active_live_player()?
             .live_arrange_family(family, options)
     }
@@ -1925,16 +1972,17 @@ impl CanonicalAuthoringScene {
         &mut self,
         family: &noon::MobjectFamily,
     ) -> Result<(), String> {
-        if !std::rc::Rc::ptr_eq(self.scene.store(), family.store()) {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), family.integration_store()) {
             return Err("subset-display family belongs to another authoring store".into());
         }
-        match self.live_execution_ownership() {
-            "none" => family.prepare_subset_display(),
-            "active" | "returned" => self
+        match &mut self.player_ownership {
+            PlayerOwnership::Unstarted => family.prepare_subset_display(),
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
                 .prepare_family_subset_display(family),
-            "transferred" => Err("live execution session is running in the semantic engine".into()),
-            _ => unreachable!("canonical live ownership has one closed set of states"),
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
         }
     }
 
@@ -1944,22 +1992,25 @@ impl CanonicalAuthoringScene {
         target: &noon::Mobject,
         other: &noon::Mobject,
         options: noon::ManimBecomeOptions,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         for object in [target, other] {
-            if !std::rc::Rc::ptr_eq(self.scene.store(), object.store()) {
-                return Err(
-                    "become objects and canonical context belong to different authoring stores"
-                        .into(),
-                );
+            if !std::rc::Rc::ptr_eq(self.scene.integration_store(), object.integration_store()) {
+                return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                    .with_message(
+                        "become objects and canonical context belong to different authoring stores",
+                    ));
             }
         }
-        match self.live_execution_ownership() {
-            "active" | "returned" => self
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
                 .live_become_mobject(target, other, options),
-            "none" => Err("live become requires an active canonical session".into()),
-            "transferred" => Err("live execution session is running in the semantic engine".into()),
-            _ => unreachable!("canonical live ownership has one closed set of states"),
+            PlayerOwnership::Unstarted => {
+                Err("live become requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
         }
     }
 
@@ -1967,53 +2018,74 @@ impl CanonicalAuthoringScene {
     fn live_create_manim_geometry(
         &mut self,
         options: noon::ManimGeometryOptions,
-    ) -> Result<noon::Mobject, String> {
-        match self.live_execution_ownership() {
-            "active" | "returned" => self
+    ) -> Result<noon::Mobject, AuthoringFailure> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
                 .live_create_manim_geometry(options),
-            "none" => {
+            PlayerOwnership::Unstarted => {
                 Err("live primitive construction requires an active canonical session".into())
             }
-            "transferred" => Err("live execution session is running in the semantic engine".into()),
-            _ => unreachable!("canonical live ownership has one closed set of states"),
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
         }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_create_text(&mut self, text: noon::Text) -> Result<noon::Mobject, String> {
-        match self.live_execution_ownership() {
-            "active" | "returned" => self.active_live_player()?.live_create_text(text),
-            "none" => Err("live Text construction requires an active canonical session".into()),
-            "transferred" => Err("live execution session is running in the semantic engine".into()),
-            _ => unreachable!("canonical live ownership has one closed set of states"),
+    fn live_create_text(&mut self, text: noon::Text) -> Result<noon::Mobject, AuthoringFailure> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.live_create_text(text)
+            }
+            PlayerOwnership::Unstarted => {
+                Err("live Text construction requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
         }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_create_typst(&mut self, text: noon::Typst) -> Result<noon::Mobject, String> {
-        match self.live_execution_ownership() {
-            "active" | "returned" => self.active_live_player()?.live_create_typst(text),
-            "none" => Err("live Typst construction requires an active canonical session".into()),
-            "transferred" => Err("live execution session is running in the semantic engine".into()),
-            _ => unreachable!("canonical live ownership has one closed set of states"),
+    fn live_create_typst(&mut self, text: noon::Typst) -> Result<noon::Mobject, AuthoringFailure> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.live_create_typst(text)
+            }
+            PlayerOwnership::Unstarted => {
+                Err("live Typst construction requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
         }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_create_math_typst(&mut self, text: noon::MathTypst) -> Result<noon::Mobject, String> {
-        match self.live_execution_ownership() {
-            "active" | "returned" => self.active_live_player()?.live_create_math_typst(text),
-            "none" => {
+    fn live_create_math_typst(
+        &mut self,
+        text: noon::MathTypst,
+    ) -> Result<noon::Mobject, AuthoringFailure> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.live_create_math_typst(text)
+            }
+            PlayerOwnership::Unstarted => {
                 Err("live MathTypst construction requires an active canonical session".into())
             }
-            "transferred" => Err("live execution session is running in the semantic engine".into()),
-            _ => unreachable!("canonical live ownership has one closed set of states"),
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
         }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_add_mobject(&mut self, id: ObjectId, handle: &noon::Mobject) -> Result<(), String> {
+    fn live_add_mobject(
+        &mut self,
+        id: ObjectId,
+        handle: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
         self.edit_membership(SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
             members: vec![OwnedSceneMembershipMember::Mobject {
@@ -2024,18 +2096,23 @@ impl CanonicalAuthoringScene {
         })
     }
 
-    fn edit_membership(&mut self, batch: SceneMembershipBatch) -> Result<(), String> {
+    fn edit_membership(&mut self, batch: SceneMembershipBatch) -> Result<(), AuthoringFailure> {
         let mut new_bindings = Vec::new();
         let mut seen_ids = BTreeSet::new();
         let mut seen_nodes = BTreeSet::new();
         for (wrapper_id, handle) in &batch.bindings {
-            if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
-                return Err("membership mobject belongs to another authoring store".into());
+            if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
+                return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                    .with_message("membership mobject belongs to another authoring store"));
             }
-            handle.validate()?;
+            handle.validate().map_err(AuthoringFailure::from)?;
             let node = handle.node_id();
             if !seen_ids.insert(*wrapper_id) || !seen_nodes.insert(node) {
-                return Err("membership batch contains a duplicate mobject binding".into());
+                return Err(AuthoringFailure::new(
+                    "invalid_input",
+                    "boundary.duplicate_binding",
+                    "membership batch contains a duplicate mobject binding",
+                ));
             }
             match (self.bindings.get(wrapper_id), self.identities.get(&node)) {
                 (Some(bound_node), Some(bound_id))
@@ -2052,7 +2129,8 @@ impl CanonicalAuthoringScene {
                     return Err(format!(
                         "canonical object {} has inconsistent membership binding",
                         wrapper_id.get()
-                    ));
+                    )
+                    .into());
                 }
             }
         }
@@ -2060,10 +2138,16 @@ impl CanonicalAuthoringScene {
         for member in &batch.members {
             match member {
                 OwnedSceneMembershipMember::Mobject { wrapper_id, handle } => {
-                    if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
-                        return Err("membership mobject belongs to another authoring store".into());
+                    if !std::rc::Rc::ptr_eq(
+                        self.scene.integration_store(),
+                        handle.integration_store(),
+                    ) {
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "membership mobject belongs to another authoring store",
+                            ));
                     }
-                    handle.validate()?;
+                    handle.validate().map_err(AuthoringFailure::from)?;
                     let node = handle.node_id();
                     if let Some(wrapper_id) = wrapper_id {
                         if !batch
@@ -2074,23 +2158,36 @@ impl CanonicalAuthoringScene {
                             return Err(format!(
                                 "canonical object {} has no validated membership binding",
                                 wrapper_id.get()
-                            ));
+                            )
+                            .into());
                         }
                     } else if matches!(
                         batch.kind,
                         SceneMembershipBatchKind::Add | SceneMembershipBatchKind::Replace
                     ) {
-                        return Err("added membership mobject has no wrapper binding".into());
+                        return Err(AuthoringFailure::new(
+                            "invalid_input",
+                            "boundary.missing_binding",
+                            "added membership mobject has no wrapper binding",
+                        ));
                     }
                     borrowed.push(noon::MobjectFamilyMember::Mobject(handle));
                 }
                 OwnedSceneMembershipMember::Family(family) => {
-                    if !std::rc::Rc::ptr_eq(self.scene.store(), family.store()) {
-                        return Err("membership family belongs to another authoring store".into());
+                    if !std::rc::Rc::ptr_eq(
+                        self.scene.integration_store(),
+                        family.integration_store(),
+                    ) {
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message("membership family belongs to another authoring store"));
                     }
-                    family.validate()?;
+                    family.validate().map_err(AuthoringFailure::from)?;
                     if !seen_nodes.insert(family.node_id()) {
-                        return Err("membership batch contains a duplicate family".into());
+                        return Err(AuthoringFailure::new(
+                            "invalid_input",
+                            "boundary.duplicate_family",
+                            "membership batch contains a duplicate family",
+                        ));
                     }
                     borrowed.push(noon::MobjectFamilyMember::Family(family));
                 }
@@ -2101,13 +2198,21 @@ impl CanonicalAuthoringScene {
             SceneMembershipBatchKind::Remove => noon::SceneMembershipRequest::Remove(&borrowed),
             SceneMembershipBatchKind::Clear => {
                 if !borrowed.is_empty() {
-                    return Err("Clear membership batch must not contain members".into());
+                    return Err(AuthoringFailure::new(
+                        "invalid_input",
+                        "boundary.clear_members",
+                        "Clear membership batch must not contain members",
+                    ));
                 }
                 noon::SceneMembershipRequest::Clear
             }
             SceneMembershipBatchKind::Replace => {
                 let [old, new] = borrowed.as_slice() else {
-                    return Err("Replace membership batch requires exactly old and new".into());
+                    return Err(AuthoringFailure::new(
+                        "invalid_input",
+                        "boundary.replace_arity",
+                        "Replace membership batch requires exactly old and new",
+                    ));
                 };
                 noon::SceneMembershipRequest::Replace {
                     old: *old,
@@ -2116,22 +2221,25 @@ impl CanonicalAuthoringScene {
             }
         };
         #[cfg(not(any(target_arch = "wasm32", test)))]
-        self.scene.edit_membership(request)?;
+        self.scene
+            .edit_membership(request)
+            .map_err(AuthoringFailure::from)?;
         #[cfg(any(target_arch = "wasm32", test))]
-        match self.live_execution_ownership() {
-            "none" if self.scene.time() == 0.0 => {
-                self.scene.edit_membership(request)?;
+        match &mut self.player_ownership {
+            PlayerOwnership::Unstarted if self.scene.time() == 0.0 => {
+                self.scene
+                    .edit_membership(request)
+                    .map_err(AuthoringFailure::from)?;
             }
-            "active" | "returned" => {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
                 self.active_live_player()?.live_edit_membership(request)?;
             }
-            "none" => {
+            PlayerOwnership::Unstarted => {
                 return Err("membership edit cannot follow pre-execution canonical timing".into());
             }
-            "transferred" => {
+            PlayerOwnership::Transferred(_) => {
                 return Err("live execution session is running in the semantic engine".into());
             }
-            _ => unreachable!("canonical live ownership has one closed set of states"),
         }
         for (id, node) in new_bindings {
             self.bindings.insert(id, node);
@@ -2141,9 +2249,9 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn root_membership_keys(&self) -> Result<Vec<String>, String> {
+    fn root_membership_keys(&self) -> Result<Vec<String>, AuthoringFailure> {
         self.scene
-            .store()
+            .integration_store()
             .borrow()
             .semantic_family_members_checked(self.scene.root())
             .map(|members| {
@@ -2152,27 +2260,27 @@ impl CanonicalAuthoringScene {
                     .map(|node| format!("{}:{}", node.slot(), node.generation()))
                     .collect()
             })
-            .map_err(|error| error.to_string())
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn contains_mobject(&self, target: &noon::Mobject) -> Result<bool, String> {
-        if !std::rc::Rc::ptr_eq(self.scene.store(), target.store()) {
-            return Err("mobject belongs to another authoring store".into());
+    fn contains_mobject(&self, target: &noon::Mobject) -> Result<bool, AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
         }
-        target.validate()?;
+        target.validate().map_err(AuthoringFailure::from)?;
         noon_core::semantic_scene_root_contains(
-            &self.scene.store().borrow(),
+            &self.scene.integration_store().borrow(),
             self.scene.root(),
             target.node_id(),
         )
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_remove_mobject(&mut self, handle: &noon::Mobject) -> Result<(), String> {
-        if !std::rc::Rc::ptr_eq(self.scene.store(), handle.store()) {
-            return Err("mobject belongs to another authoring store".into());
+    fn live_remove_mobject(&mut self, handle: &noon::Mobject) -> Result<(), AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
         }
         let node = handle.node_id();
         let id = *self
@@ -2194,11 +2302,11 @@ impl CanonicalAuthoringScene {
         &mut self,
         target: &noon::Mobject,
         source: &noon::Mobject,
-    ) -> Result<(), String> {
-        if !std::rc::Rc::ptr_eq(self.scene.store(), target.store())
-            || !std::rc::Rc::ptr_eq(self.scene.store(), source.store())
+    ) -> Result<(), AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store())
+            || !std::rc::Rc::ptr_eq(self.scene.integration_store(), source.integration_store())
         {
-            return Err("mobject belongs to another authoring store".into());
+            return Err(noon::AuthoringError::ForeignStore.into());
         }
         self.active_live_player()?
             .live_replace_content(target, source)
@@ -2211,17 +2319,13 @@ impl CanonicalAuthoringScene {
         transport_session: u32,
     ) -> Result<crate::SemanticExecutionPlayer, String> {
         self.prepare_local_player_for_run()?;
-        if let Some(player) = self.live_player.as_mut() {
+        if let Some(player) = self.player_ownership.local_mut() {
             player.rebind_transport(duration, transport_session)?;
-            let player = self.live_player.take().expect("live player initialized");
-            self.live_player_transferred = true;
-            self.live_player_returned = false;
-            return Ok(player);
+        } else {
+            let player = self.build_live_player(duration, transport_session)?;
+            self.player_ownership = PlayerOwnership::Active(player);
         }
-        let player = self.build_live_player(duration, transport_session)?;
-        self.live_player_transferred = true;
-        self.live_player_returned = false;
-        Ok(player)
+        self.player_ownership.transfer()
     }
 
     /// Return a player after endpoint setup or renderer recovery. This preserves
@@ -2230,14 +2334,29 @@ impl CanonicalAuthoringScene {
     fn return_execution_player(
         &mut self,
         player: crate::SemanticExecutionPlayer,
-    ) -> Result<(), String> {
-        if !self.live_player_transferred || self.live_player.is_some() {
-            return Err("semantic execution player is not leased by this context".into());
+    ) -> Result<(), RejectedPlayerReturn> {
+        if let Err(reason) = self.validate_execution_player_return(&player) {
+            return Err(RejectedPlayerReturn {
+                reason,
+                player: Box::new(player),
+            });
         }
-        self.live_player = Some(player);
-        self.live_player_transferred = false;
-        self.live_player_returned = true;
+        self.player_ownership = PlayerOwnership::Returned(player);
         Ok(())
+    }
+
+    /// Validate by reference before consuming a player; a rejected return cannot
+    /// replace the rightful lease or mutate its publication/continuation state.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn validate_execution_player_return(
+        &self,
+        player: &crate::SemanticExecutionPlayer,
+    ) -> Result<(), PlayerReturnError> {
+        self.player_ownership.validate_return(
+            player,
+            self.scene.integration_store(),
+            self.scene.root(),
+        )
     }
 
     /// Resume the exact returned player for a newly-authored continuation segment.
@@ -2247,95 +2366,39 @@ impl CanonicalAuthoringScene {
     /// may only resume a player after it has declared one supported pending segment.
     #[cfg(any(target_arch = "wasm32", test))]
     fn resume_execution_player(&mut self) -> Result<crate::SemanticExecutionPlayer, String> {
-        if self.live_player_transferred || !self.live_player_returned {
+        let PlayerOwnership::Returned(player) = &self.player_ownership else {
             return Err("semantic continuation player is not returned to this context".into());
-        }
-        let player = self
-            .live_player
-            .as_ref()
-            .ok_or("semantic continuation context has no returned player")?;
+        };
         if !player.has_pending_live_segment() {
             return Err("semantic continuation has no pending segment to resume".into());
         }
-        player.require_callback_progression_available()?;
-        let player = self
-            .live_player
-            .take()
-            .expect("validated returned player must remain installed");
-        self.live_player_transferred = true;
-        self.live_player_returned = false;
-        Ok(player)
+        player
+            .require_callback_progression_available()
+            .map_err(|error| error.to_string())?;
+        self.player_ownership.transfer()
     }
 
     /// Encode final authored changes through the returned player's existing worker
     /// transport. This neither leases nor advances the completed runtime.
     #[cfg(any(target_arch = "wasm32", test))]
     fn drain_returned_publication_json(&mut self) -> Result<Option<String>, String> {
-        if self.live_player_transferred || !self.live_player_returned {
+        let PlayerOwnership::Returned(player) = &mut self.player_ownership else {
             return Err("final publication requires a returned execution player".into());
-        }
-        let player = self
-            .live_player
-            .as_mut()
-            .ok_or("returned player is absent")?;
-        player.require_callback_progression_available()?;
+        };
+        player
+            .require_callback_progression_available()
+            .map_err(|error| error.to_string())?;
         if player.has_pending_live_segment() {
             return Err("final publication requires a completed continuation segment".into());
         }
         player.drain_delta_json()
     }
-
-    /// Derive the explicit export document from shared semantic state at the boundary.
-    pub fn finalize(
-        &self,
-        geometry_tracks: Vec<TrackDefinition>,
-        family_animations: Vec<FamilyAnimationRequest>,
-        camera_object: Option<ObjectId>,
-    ) -> Result<SceneSpec, String> {
-        let mut objects = Vec::with_capacity(self.identities.len());
-        let leaves = self
-            .scene
-            .store()
-            .borrow()
-            .ordered_leaf_nodes(self.scene.root())
-            .map_err(|error| error.to_string())?;
-        for node in leaves {
-            let handle = noon::Mobject::from_node(std::rc::Rc::clone(self.scene.store()), node)?;
-            let state = handle.state()?;
-            if state.content.text().is_some() {
-                objects.push(canonical_text_export(
-                    &self.scene.store().borrow(),
-                    *self
-                        .identities
-                        .get(&node)
-                        .ok_or("unbound semantic scene member")?,
-                    &state,
-                )?);
-                continue;
-            }
-            let (geometry, transform, style) = crate::geometry_export::mobject_fields(&handle)?;
-            let mut object = ObjectSpec::geometry(
-                *self
-                    .identities
-                    .get(&node)
-                    .ok_or("unbound semantic scene member")?,
-                geometry,
-            );
-            object.transform = transform;
-            object.style = style;
-            objects.push(object);
-        }
-        let mut spec =
-            SceneSpec::new(objects, geometry_tracks).map_err(|error| error.to_string())?;
-        spec.family_animations = family_animations;
-        spec.camera_object = camera_object;
-        spec.validate().map_err(|error| error.to_string())?;
-        Ok(spec)
-    }
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
-fn authored_mobject_layout(handle: &noon::Mobject) -> Result<(f64, f64, f64, f64), String> {
+fn authored_mobject_layout(
+    handle: &noon::Mobject,
+) -> Result<(f64, f64, f64, f64), noon::AuthoringError> {
     let Some(bounds) = handle.layout_bounds()? else {
         let (center_x, center_y) = handle.center()?;
         return Ok((center_x, center_y, 0.0, 0.0));
@@ -2348,127 +2411,8 @@ fn authored_mobject_layout(handle: &noon::Mobject) -> Result<(f64, f64, f64, f64
     ))
 }
 
-/// Project source-level Text content at the explicit export boundary.
-/// Content and presentation are read from the shared semantic store.
-fn canonical_text_export(
-    store: &noon_core::SemanticStore,
-    id: ObjectId,
-    state: &SemanticObjectState,
-) -> Result<ObjectSpec, String> {
-    let text = state
-        .content
-        .text()
-        .ok_or("canonical text export requires text content")?;
-    let resource = store
-        .text_resources()
-        .get(text)
-        .ok_or("canonical text export references an unknown text resource")?;
-    let (text, transform) = match resource.kind {
-        TextSourceKind::Plain => {
-            let run = resource
-                .runs
-                .first()
-                .ok_or("canonical native text resource has no shaped run")?;
-            (
-                TextSpec::native_plain(
-                    resource.source.as_ref(),
-                    run.font.family.as_ref(),
-                    run.font_size,
-                    native_line_spacing(resource)?,
-                ),
-                text_export_transform(
-                    state.transform,
-                    f64::from(noon::NATIVE_POINT_TO_SCENE_SCALE),
-                )?,
-            )
-        }
-        TextSourceKind::Typst => (
-            TextSpec::typst(resource.source.as_ref(), noon::DEFAULT_TYPST_FONT_SIZE),
-            text_export_transform(
-                state.transform,
-                f64::from(noon::DEFAULT_TYPST_FONT_SIZE * noon::SCALE_FACTOR_PER_FONT_POINT),
-            )?,
-        ),
-        TextSourceKind::MathTypst => (
-            TextSpec::math_typst(resource.source.as_ref(), noon::DEFAULT_TYPST_FONT_SIZE),
-            text_export_transform(
-                state.transform,
-                f64::from(noon::DEFAULT_TYPST_FONT_SIZE * noon::SCALE_FACTOR_PER_FONT_POINT),
-            )?,
-        ),
-        kind => {
-            return Err(format!(
-                "canonical text export does not support {kind:?} source"
-            ))
-        }
-    };
-    let mut object = ObjectSpec::text(id, text);
-    object.transform = transform;
-    object.style = legacy_style(&state.style)?;
-    Ok(object)
-}
-
-fn text_export_transform(
-    transform: SemanticTransform2_5D,
-    point_scale: f64,
-) -> Result<Transform2D, String> {
-    Ok(Transform2D {
-        translation: Vec2::new(
-            legacy_f32("text translation x", transform.translation.x)?,
-            legacy_f32("text translation y", transform.translation.y)?,
-        ),
-        scale: Vec2::new(
-            legacy_f32("text scale x", transform.scale.x / point_scale)?,
-            legacy_f32("text scale y", transform.scale.y / point_scale)?,
-        ),
-        rotation: legacy_f32("text rotation", transform.rotation_z)?,
-    })
-}
-
-fn native_line_spacing(resource: &noon_core::TextResource) -> Result<f32, String> {
-    let Some(first) = resource.runs.first() else {
-        return Err("canonical native text resource has no shaped run".into());
-    };
-    if resource.runs.len() < 2 {
-        // A single line has no observable line advance. Preserve Manim's ordinary
-        // default spelling rather than manufacturing wrapper-side metadata.
-        return Ok(-1.0);
-    }
-    let second = &resource.runs[1];
-    let advance = first.transform.ty - second.transform.ty;
-    let spacing = advance / first.font_size - 1.0;
-    if !spacing.is_finite() || spacing < -1.0 {
-        return Err("canonical native text resource has invalid line spacing".into());
-    }
-    Ok(spacing)
-}
-
-fn legacy_style(style: &SemanticStyle) -> Result<Style, String> {
-    Ok(Style {
-        fill: legacy_color(style.fill.as_ref(), style.fill_opacity)?,
-        stroke: legacy_color(style.stroke.as_ref(), style.stroke_opacity)?,
-        stroke_width: legacy_f32("text stroke width", style.stroke_width)?,
-        stroke_width_mode: style.stroke_width_mode,
-        stroke_join: style.stroke_join,
-        stroke_cap: style.stroke_cap,
-        opacity: legacy_f32("text object opacity", style.object_opacity)?,
-    })
-}
-
-fn legacy_color(paint: Option<&SemanticPaint>, opacity: f64) -> Result<Option<Color>, String> {
-    let Some(paint) = paint else {
-        return Ok(None);
-    };
-    let SemanticPaint::Solid(color) = paint else {
-        return Err("legacy text export does not support resource-backed paint".into());
-    };
-    Ok(Some(Color {
-        alpha: legacy_f32("text paint opacity", f64::from(color.alpha) * opacity)?,
-        ..*color
-    }))
-}
-
-fn legacy_f32(name: &str, value: f64) -> Result<f32, String> {
+#[cfg(target_arch = "wasm32")]
+fn checked_f32(name: &str, value: f64) -> Result<f32, String> {
     if !value.is_finite() || value.abs() > f64::from(f32::MAX) {
         return Err(format!("{name} must be a finite f32-compatible number"));
     }
@@ -2477,17 +2421,66 @@ fn legacy_f32(name: &str, value: f64) -> Result<f32, String> {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use serde::de::DeserializeOwned;
+    use noon_core::{Color, Style, Transform2D, Vec2};
     use wasm_bindgen::prelude::*;
 
     use super::*;
+    use crate::authoring_error::js_error as typed_js_error;
 
-    fn js_error(error: impl ToString) -> JsValue {
-        JsValue::from_str(&error.to_string())
+    /// A rejected ownership return retains the consumed WASM player wrapper.
+    /// Its projected JS Error retains `takePlayer()` to recover that exact player;
+    /// returning it to its rightful context requires no lowering or cloning.
+    #[wasm_bindgen]
+    pub struct WasmExecutionPlayerReturnError {
+        rejected: RejectedPlayerReturn,
     }
 
-    fn parse_json<T: DeserializeOwned>(label: &str, json: &str) -> Result<T, JsValue> {
-        serde_json::from_str(json).map_err(|error| js_error(format!("invalid {label}: {error}")))
+    #[wasm_bindgen]
+    impl WasmExecutionPlayerReturnError {
+        #[wasm_bindgen(getter)]
+        pub fn message(&self) -> String {
+            self.rejected.to_string()
+        }
+
+        #[wasm_bindgen(js_name = toString)]
+        pub fn to_js_string(&self) -> String {
+            self.message()
+        }
+
+        /// Consume this rejection and restore ownership of the original player.
+        #[wasm_bindgen(js_name = takePlayer)]
+        pub fn take_player(self) -> crate::SemanticExecutionPlayer {
+            *self.rejected.player
+        }
+    }
+
+    impl WasmExecutionPlayerReturnError {
+        fn into_js_error(self) -> JsValue {
+            // Pyodide requires a real Error, not an Error-like WASM class.
+            // Binding the existing consuming method retains the rejected player
+            // in exactly one Rust owner; no player clone or host lease is added.
+            let error = typed_js_error(AuthoringFailure::from(self.rejected.reason));
+            let rejection = JsValue::from(self);
+            let take_player: js_sys::Function =
+                js_sys::Reflect::get(&rejection, &JsValue::from_str("takePlayer"))
+                    .expect("WASM rejection exposes takePlayer")
+                    .unchecked_into();
+            js_sys::Reflect::set(
+                &error,
+                &JsValue::from_str("takePlayer"),
+                &take_player.bind0(&rejection),
+            )
+            .expect("new Error accepts its recovery capability");
+            error
+        }
+    }
+
+    use crate::authoring_error::js_error;
+
+    // The callback overlay is an explicit codec boundary. Preserve codec causes
+    // without assigning them an authoring category based on their diagnostics.
+    fn callback_codec_error(error: impl std::error::Error + 'static) -> JsValue {
+        typed_js_error(AuthoringFailure::unclassified("callback.codec", &error))
     }
 
     fn parse_object_id(label: &str, value: &str) -> Result<ObjectId, JsValue> {
@@ -2643,14 +2636,14 @@ mod wasm {
         pub(crate) fn create_family(
             &self,
             store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
-        ) -> Result<noon::MobjectFamily, String> {
+        ) -> Result<noon::MobjectFamily, AuthoringFailure> {
             self.inner.create_family(store)
         }
 
         pub(crate) fn edit_family(
             &self,
             family: &noon::MobjectFamily,
-        ) -> Result<Vec<bool>, String> {
+        ) -> Result<Vec<bool>, AuthoringFailure> {
             self.inner.edit_family(family)
         }
     }
@@ -3540,7 +3533,10 @@ mod wasm {
                     "family entering member must follow FamilyDrawBorderThenFill",
                 ));
             };
-            if !std::rc::Rc::ptr_eq(target.store(), member.semantic_mobject().store()) {
+            if !std::rc::Rc::ptr_eq(
+                target.integration_store(),
+                member.semantic_mobject().integration_store(),
+            ) {
                 return Err(js_error(
                     "family entering member belongs to another authoring store",
                 ));
@@ -3589,7 +3585,10 @@ mod wasm {
                     "family entering member must follow FamilySubsetDisplay",
                 ));
             };
-            if !std::rc::Rc::ptr_eq(target.store(), member.semantic_mobject().store()) {
+            if !std::rc::Rc::ptr_eq(
+                target.integration_store(),
+                member.semantic_mobject().integration_store(),
+            ) {
                 return Err(js_error(
                     "family entering member belongs to another authoring store",
                 ));
@@ -3677,7 +3676,10 @@ mod wasm {
                     "family entering member must follow FamilyTextWrite",
                 ));
             };
-            if !std::rc::Rc::ptr_eq(target.store(), member.semantic_mobject().store()) {
+            if !std::rc::Rc::ptr_eq(
+                target.integration_store(),
+                member.semantic_mobject().integration_store(),
+            ) {
                 return Err(js_error(
                     "Text family entering member belongs to another authoring store",
                 ));
@@ -3775,7 +3777,10 @@ mod wasm {
             else {
                 return Err(js_error("family entering member must follow FamilyReveal"));
             };
-            if !std::rc::Rc::ptr_eq(target.store(), member.semantic_mobject().store()) {
+            if !std::rc::Rc::ptr_eq(
+                target.integration_store(),
+                member.semantic_mobject().integration_store(),
+            ) {
                 return Err(js_error(
                     "family reveal member belongs to another authoring store",
                 ));
@@ -3870,7 +3875,10 @@ mod wasm {
             else {
                 return Err(js_error("family entering member must follow FamilyFade"));
             };
-            if !std::rc::Rc::ptr_eq(target.store(), member.semantic_mobject().store()) {
+            if !std::rc::Rc::ptr_eq(
+                target.integration_store(),
+                member.semantic_mobject().integration_store(),
+            ) {
                 return Err(js_error(
                     "fade family entering member belongs to another authoring store",
                 ));
@@ -3987,12 +3995,14 @@ mod wasm {
 
         #[wasm_bindgen(js_name = detachedValue)]
         pub fn detached_value(&self) -> Result<f64, JsValue> {
-            self.tracker.detached_value().map_err(js_error)
+            self.tracker.detached_value().map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = setDetachedValue)]
         pub fn set_detached_value(&self, value: f64) -> Result<(), JsValue> {
-            self.tracker.set_detached_value(value).map_err(js_error)
+            self.tracker
+                .set_detached_value(value)
+                .map_err(typed_js_error)
         }
     }
 
@@ -4112,13 +4122,15 @@ mod wasm {
         /// Consume one complete typed membership request and publish it once.
         #[wasm_bindgen(js_name = editMembership)]
         pub fn edit_membership(&mut self, batch: WasmSceneMembershipBatch) -> Result<(), JsValue> {
-            self.inner.edit_membership(batch.inner).map_err(js_error)
+            self.inner
+                .edit_membership(batch.inner)
+                .map_err(typed_js_error)
         }
 
         /// Return the authoritative direct-root semantic identities in painter order.
         #[wasm_bindgen(js_name = rootMembershipKeys)]
         pub fn root_membership_keys(&self) -> Result<Vec<String>, JsValue> {
-            self.inner.root_membership_keys().map_err(js_error)
+            self.inner.root_membership_keys().map_err(typed_js_error)
         }
 
         /// Query authoritative recursive membership without enumerating the scene.
@@ -4127,10 +4139,13 @@ mod wasm {
             &self,
             target: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<bool, JsValue> {
-            target.id_in_store(self.inner.scene.store(), "scene membership query")?;
+            target.id_in_store(
+                self.inner.scene.integration_store(),
+                "scene membership query",
+            )?;
             self.inner
                 .contains_mobject(target.semantic_mobject())
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         /// Evaluate one callback-local rotation without mutating authored scene state.
@@ -4147,7 +4162,7 @@ mod wasm {
             pivot_x: f64,
             pivot_y: f64,
         ) -> Result<WasmCallbackTransform, JsValue> {
-            let transform = noon::rotate_effective_transform_about_point(
+            let transform = noon::integration::rotate_effective_transform_about_point(
                 Transform2D {
                     translation: Vec2::new(translation_x as f32, translation_y as f32),
                     rotation: rotation as f32,
@@ -4158,6 +4173,159 @@ mod wasm {
             )
             .map_err(js_error)?;
             Ok(WasmCallbackTransform { transform })
+        }
+
+        /// Resolve a typed family only in this authoring store before a pinned read.
+        #[wasm_bindgen(js_name = callbackFamilyKeys)]
+        pub fn callback_family_keys(
+            &self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            revision: &str,
+        ) -> Result<Vec<String>, JsValue> {
+            let family = handle.semantic_family()?;
+            if !std::rc::Rc::ptr_eq(
+                self.inner.scene.integration_store(),
+                family.integration_store(),
+            ) {
+                return Err(typed_js_error(noon::AuthoringError::ForeignStore));
+            }
+            let revision = noon_core::SceneRevision::new(
+                revision.parse::<u64>().map_err(callback_codec_error)?,
+            );
+            family
+                .callback_leaf_nodes(revision)
+                .map(|nodes| {
+                    nodes
+                        .into_iter()
+                        .map(|node| format!("{}:{}", node.slot(), node.generation()))
+                        .collect()
+                })
+                .map_err(typed_js_error)
+        }
+
+        /// One callback-boundary projection of an already prepared effective operation.
+        /// Input rows are the pinned read cache plus preceding ordered overlay writes.
+        #[wasm_bindgen(js_name = callbackFamilyPaint)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn callback_family_paint(
+            &self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            revision: &str,
+            operation: &str,
+            styles_json: &str,
+            has_color: bool,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            width: Option<f64>,
+            opacity: Option<f64>,
+        ) -> Result<String, JsValue> {
+            self.callback_family_keys(handle, revision)?;
+            let family = handle.semantic_family()?;
+            let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
+                .map_err(js_error)?;
+            let operation = match operation {
+                "Color" => noon::FamilyPaint::Color(
+                    color.ok_or_else(|| js_error("family color is required"))?,
+                ),
+                "Fill" => noon::FamilyPaint::Fill { color, opacity },
+                "Stroke" => noon::FamilyPaint::Stroke {
+                    color,
+                    width,
+                    opacity,
+                },
+                "Opacity" => noon::FamilyPaint::Opacity(
+                    opacity.ok_or_else(|| js_error("family opacity is required"))?,
+                ),
+                _ => return Err(js_error("unknown family paint operation")),
+            };
+            let revision = noon_core::SceneRevision::new(
+                revision.parse::<u64>().map_err(callback_codec_error)?,
+            );
+            // This is the existing Python callback view/overlay codec boundary,
+            // never an authored scene or a native/direct-WASM engine boundary.
+            let rows: Vec<(u32, u32, Style)> =
+                serde_json::from_str(styles_json).map_err(callback_codec_error)?;
+            let styles: BTreeMap<_, _> = rows
+                .into_iter()
+                .map(|(slot, generation, style)| {
+                    (noon_core::SemanticNodeId::new(slot, generation), style)
+                })
+                .collect();
+            let changes = family
+                .prepare_callback_paint(revision, operation, |node| {
+                    styles
+                        .get(&node)
+                        .copied()
+                        .ok_or(noon::ExecutionSessionCallbackError::UnknownObject(node))
+                })
+                .map_err(typed_js_error)?;
+            let rows: Vec<_> = changes
+                .into_iter()
+                .map(|(node, style)| (node.slot(), node.generation(), style))
+                .collect();
+            serde_json::to_string(&rows).map_err(callback_codec_error)
+        }
+
+        /// Prepare a family translation over the existing callback read/overlay
+        /// codec boundary. Native/direct-WASM callbacks use the same typed Rust
+        /// operation; this function introduces no worker message or runtime.
+        #[wasm_bindgen(js_name = callbackFamilyShift)]
+        pub fn callback_family_shift(
+            &self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            revision: &str,
+            rows_json: &str,
+            x: f64,
+            y: f64,
+        ) -> Result<String, JsValue> {
+            self.callback_family_keys(handle, revision)?;
+            let family = handle.semantic_family()?;
+            let revision = noon_core::SceneRevision::new(
+                revision.parse::<u64>().map_err(callback_codec_error)?,
+            );
+            let rows: Vec<(u32, u32, Transform2D, Option<noon_core::Rect>)> =
+                serde_json::from_str(rows_json).map_err(callback_codec_error)?;
+            let rows: BTreeMap<_, _> = rows
+                .into_iter()
+                .map(|(slot, generation, transform, bounds)| {
+                    (
+                        noon_core::SemanticNodeId::new(slot, generation),
+                        (transform, bounds),
+                    )
+                })
+                .collect();
+            let changes = family
+                .prepare_callback_translation(revision, x, y, |node| {
+                    rows.get(&node)
+                        .copied()
+                        .ok_or(noon::ExecutionSessionCallbackError::UnknownObject(node))
+                })
+                .map_err(|error| match error {
+                    // Consume the existing selection/read mapper; do not replace
+                    // #1350's callback mapping or #1354's producer signatures.
+                    noon::FamilyCallbackTranslationError::Family(error) => typed_js_error(error),
+                    noon::FamilyCallbackTranslationError::Translation(error) => {
+                        typed_js_error(AuthoringFailure::new(
+                            "invalid_input",
+                            "callback.family.translation",
+                            error,
+                        ))
+                    }
+                })?;
+            let rows: Vec<_> = changes
+                .into_iter()
+                .map(|change| {
+                    (
+                        change.node.slot(),
+                        change.node.generation(),
+                        change.transform,
+                        change.bounds,
+                    )
+                })
+                .collect();
+            serde_json::to_string(&rows).map_err(callback_codec_error)
         }
 
         /// Apply shared Manim `set_color` semantics to callback-local paint.
@@ -4189,7 +4357,38 @@ mod wasm {
                 )?,
             );
             Ok(callback_paint_result(
-                noon::effective_style_with_color(style, red, green, blue, alpha)
+                noon::integration::effective_style_with_color(style, red, green, blue, alpha)
+                    .map_err(js_error)?,
+            ))
+        }
+
+        /// Apply shared paint opacity while leaving whole-object opacity with its owner.
+        #[wasm_bindgen(js_name = callbackPaintSetOpacity)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn callback_paint_set_opacity(
+            &self,
+            fill_red: Option<f64>,
+            fill_green: Option<f64>,
+            fill_blue: Option<f64>,
+            fill_alpha: Option<f64>,
+            stroke_red: Option<f64>,
+            stroke_green: Option<f64>,
+            stroke_blue: Option<f64>,
+            stroke_alpha: Option<f64>,
+            opacity: f64,
+        ) -> Result<WasmCallbackPaint, JsValue> {
+            let style = callback_paint_style(
+                callback_color("callback fill", fill_red, fill_green, fill_blue, fill_alpha)?,
+                callback_color(
+                    "callback stroke",
+                    stroke_red,
+                    stroke_green,
+                    stroke_blue,
+                    stroke_alpha,
+                )?,
+            );
+            Ok(callback_paint_result(
+                noon::integration::effective_style_with_paint_opacity(style, opacity)
                     .map_err(js_error)?,
             ))
         }
@@ -4231,21 +4430,23 @@ mod wasm {
             )?;
             let style = callback_paint_style(fill, stroke);
             let style = match (color, opacity) {
-                (Some(color), Some(opacity)) => noon::effective_style_with_fill(
+                (Some(color), Some(opacity)) => noon::integration::effective_style_with_fill(
                     style,
                     f64::from(color.red),
                     f64::from(color.green),
                     f64::from(color.blue),
                     opacity,
                 ),
-                (Some(color), None) => noon::effective_style_with_fill_color(
+                (Some(color), None) => noon::integration::effective_style_with_fill_color(
                     style,
                     f64::from(color.red),
                     f64::from(color.green),
                     f64::from(color.blue),
                     f64::from(color.alpha),
                 ),
-                (None, Some(opacity)) => noon::effective_style_with_fill_opacity(style, opacity),
+                (None, Some(opacity)) => {
+                    noon::integration::effective_style_with_fill_opacity(style, opacity)
+                }
                 (None, None) => Ok(style),
             }
             .map_err(js_error)?;
@@ -4281,7 +4482,7 @@ mod wasm {
                 )?,
             );
             Ok(callback_paint_result(
-                noon::effective_style_with_stroke_color(
+                noon::integration::effective_style_with_stroke_color(
                     style,
                     color_red,
                     color_green,
@@ -4315,7 +4516,7 @@ mod wasm {
             Ok(WasmCallbackLineTarget {
                 start: point("start", start_x, start_y)?,
                 end: point("end", end_x, end_y)?,
-                store: std::rc::Rc::clone(self.inner.scene.store()),
+                store: std::rc::Rc::clone(self.inner.scene.integration_store()),
             })
         }
 
@@ -4325,8 +4526,11 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
             target: &WasmCallbackLineTarget,
         ) -> Result<WasmCallbackTransform, JsValue> {
-            source.id_in_store(self.inner.scene.store(), "Line.match_points source")?;
-            if !std::rc::Rc::ptr_eq(self.inner.scene.store(), &target.store) {
+            source.id_in_store(
+                self.inner.scene.integration_store(),
+                "Line.match_points source",
+            )?;
+            if !std::rc::Rc::ptr_eq(self.inner.scene.integration_store(), &target.store) {
                 return Err(js_error(
                     "Line.match_points target belongs to another callback context",
                 ));
@@ -4347,7 +4551,7 @@ mod wasm {
             let id = parse_object_id("object ID", object_id)?;
             self.inner
                 .bind_mobject(id, handle.semantic_mobject())
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         /// Create the scene-owned invisible 2D camera frame and return its opaque semantic handle.
@@ -4360,7 +4564,7 @@ mod wasm {
             self.inner
                 .create_camera_frame(id)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = createValueTracker)]
@@ -4368,10 +4572,13 @@ mod wasm {
             &mut self,
             initial: f64,
         ) -> Result<WasmValueTrackerHandle, JsValue> {
-            let tracker = self.inner.create_value_tracker(initial).map_err(js_error)?;
+            let tracker = self
+                .inner
+                .create_value_tracker(initial)
+                .map_err(typed_js_error)?;
             Ok(WasmValueTrackerHandle::from_tracker(
                 tracker,
-                std::rc::Rc::clone(self.inner.scene.store()),
+                std::rc::Rc::clone(self.inner.scene.integration_store()),
             ))
         }
 
@@ -4380,36 +4587,39 @@ mod wasm {
             &mut self,
             tracker: &WasmValueTrackerHandle,
         ) -> Result<(), JsValue> {
-            let tracker = tracker.tracker_in(self.inner.scene.store())?;
+            let tracker = tracker.tracker_in(self.inner.scene.integration_store())?;
             self.inner
                 .associate_value_tracker(tracker)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = pointerPositionSignal)]
         pub fn pointer_position_signal(&mut self) -> Result<WasmNativeVectorSignalHandle, JsValue> {
-            let signal = self.inner.pointer_position_signal().map_err(js_error)?;
+            let signal = self
+                .inner
+                .pointer_position_signal()
+                .map_err(typed_js_error)?;
             Ok(WasmNativeVectorSignalHandle {
                 signal,
-                store: std::rc::Rc::clone(self.inner.scene.store()),
+                store: std::rc::Rc::clone(self.inner.scene.integration_store()),
             })
         }
 
         #[wasm_bindgen(js_name = viewportSizeSignal)]
         pub fn viewport_size_signal(&mut self) -> Result<WasmNativeVectorSignalHandle, JsValue> {
-            let signal = self.inner.viewport_size_signal().map_err(js_error)?;
+            let signal = self.inner.viewport_size_signal().map_err(typed_js_error)?;
             Ok(WasmNativeVectorSignalHandle {
                 signal,
-                store: std::rc::Rc::clone(self.inner.scene.store()),
+                store: std::rc::Rc::clone(self.inner.scene.integration_store()),
             })
         }
 
         #[wasm_bindgen(js_name = wheelDeltaSignal)]
         pub fn wheel_delta_signal(&mut self) -> Result<WasmNativeVectorSignalHandle, JsValue> {
-            let signal = self.inner.wheel_delta_signal().map_err(js_error)?;
+            let signal = self.inner.wheel_delta_signal().map_err(typed_js_error)?;
             Ok(WasmNativeVectorSignalHandle {
                 signal,
-                store: std::rc::Rc::clone(self.inner.scene.store()),
+                store: std::rc::Rc::clone(self.inner.scene.integration_store()),
             })
         }
 
@@ -4422,10 +4632,10 @@ mod wasm {
             let signal = self
                 .inner
                 .key_state_signal(code, initial)
-                .map_err(js_error)?;
+                .map_err(typed_js_error)?;
             Ok(WasmNativeBoolSignalHandle {
                 signal,
-                store: std::rc::Rc::clone(self.inner.scene.store()),
+                store: std::rc::Rc::clone(self.inner.scene.integration_store()),
             })
         }
 
@@ -4435,10 +4645,13 @@ mod wasm {
             name: String,
             initial: f64,
         ) -> Result<WasmValueTrackerHandle, JsValue> {
-            let tracker = self.inner.control_signal(name, initial).map_err(js_error)?;
+            let tracker = self
+                .inner
+                .control_signal(name, initial)
+                .map_err(typed_js_error)?;
             Ok(WasmValueTrackerHandle {
                 tracker,
-                store: std::rc::Rc::clone(self.inner.scene.store()),
+                store: std::rc::Rc::clone(self.inner.scene.integration_store()),
             })
         }
 
@@ -4450,19 +4663,19 @@ mod wasm {
             let tracker = self
                 .inner
                 .pointer_down_events(parse_button(button)?)
-                .map_err(js_error)?;
+                .map_err(typed_js_error)?;
             Ok(WasmValueTrackerHandle {
                 tracker,
-                store: std::rc::Rc::clone(self.inner.scene.store()),
+                store: std::rc::Rc::clone(self.inner.scene.integration_store()),
             })
         }
 
         #[wasm_bindgen(js_name = wheelEvents)]
         pub fn wheel_events(&mut self) -> Result<WasmValueTrackerHandle, JsValue> {
-            let tracker = self.inner.wheel_events().map_err(js_error)?;
+            let tracker = self.inner.wheel_events().map_err(typed_js_error)?;
             Ok(WasmValueTrackerHandle {
                 tracker,
-                store: std::rc::Rc::clone(self.inner.scene.store()),
+                store: std::rc::Rc::clone(self.inner.scene.integration_store()),
             })
         }
 
@@ -4471,10 +4684,13 @@ mod wasm {
             &mut self,
             name: String,
         ) -> Result<WasmValueTrackerHandle, JsValue> {
-            let tracker = self.inner.control_commit_events(name).map_err(js_error)?;
+            let tracker = self
+                .inner
+                .control_commit_events(name)
+                .map_err(typed_js_error)?;
             Ok(WasmValueTrackerHandle {
                 tracker,
-                store: std::rc::Rc::clone(self.inner.scene.store()),
+                store: std::rc::Rc::clone(self.inner.scene.integration_store()),
             })
         }
 
@@ -4484,11 +4700,14 @@ mod wasm {
             object: &crate::WasmAuthoringMobjectHandle,
             signal: &WasmNativeVectorSignalHandle,
         ) -> Result<(), JsValue> {
-            object.id_in_store(self.inner.scene.store(), "native translation binding")?;
-            let signal = signal.signal_in(self.inner.scene.store())?;
+            object.id_in_store(
+                self.inner.scene.integration_store(),
+                "native translation binding",
+            )?;
+            let signal = signal.signal_in(self.inner.scene.integration_store())?;
             self.inner
                 .bind_native_translation(object.semantic_mobject(), signal)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = bindRotation)]
@@ -4497,11 +4716,11 @@ mod wasm {
             object: &crate::WasmAuthoringMobjectHandle,
             signal: &WasmValueTrackerHandle,
         ) -> Result<(), JsValue> {
-            object.id_in_store(self.inner.scene.store(), "rotation binding")?;
-            let signal = signal.tracker_in(self.inner.scene.store())?;
+            object.id_in_store(self.inner.scene.integration_store(), "rotation binding")?;
+            let signal = signal.tracker_in(self.inner.scene.integration_store())?;
             self.inner
                 .bind_rotation(object.semantic_mobject(), signal)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = bindOpacity)]
@@ -4510,11 +4729,11 @@ mod wasm {
             object: &crate::WasmAuthoringMobjectHandle,
             signal: &WasmValueTrackerHandle,
         ) -> Result<(), JsValue> {
-            object.id_in_store(self.inner.scene.store(), "opacity binding")?;
-            let signal = signal.tracker_in(self.inner.scene.store())?;
+            object.id_in_store(self.inner.scene.integration_store(), "opacity binding")?;
+            let signal = signal.tracker_in(self.inner.scene.integration_store())?;
             self.inner
                 .bind_opacity(object.semantic_mobject(), signal)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = bindPresence)]
@@ -4523,11 +4742,11 @@ mod wasm {
             object: &crate::WasmAuthoringMobjectHandle,
             signal: &WasmNativeBoolSignalHandle,
         ) -> Result<(), JsValue> {
-            object.id_in_store(self.inner.scene.store(), "presence binding")?;
-            let signal = signal.signal_in(self.inner.scene.store())?;
+            object.id_in_store(self.inner.scene.integration_store(), "presence binding")?;
+            let signal = signal.signal_in(self.inner.scene.integration_store())?;
             self.inner
                 .bind_presence(object.semantic_mobject(), signal)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = trackerPosition)]
@@ -4539,7 +4758,7 @@ mod wasm {
             offset_x: f64,
             offset_y: f64,
         ) -> Result<WasmTrackerPositionHandle, JsValue> {
-            let tracker = tracker.tracker_in(self.inner.scene.store())?;
+            let tracker = tracker.tracker_in(self.inner.scene.integration_store())?;
             let position = self
                 .inner
                 .tracker_position(
@@ -4547,10 +4766,10 @@ mod wasm {
                     SemanticVec3::new(direction_x, direction_y, 0.0),
                     SemanticVec3::new(offset_x, offset_y, 0.0),
                 )
-                .map_err(js_error)?;
+                .map_err(typed_js_error)?;
             Ok(WasmTrackerPositionHandle {
                 position,
-                store: std::rc::Rc::clone(self.inner.scene.store()),
+                store: std::rc::Rc::clone(self.inner.scene.integration_store()),
             })
         }
 
@@ -4560,11 +4779,14 @@ mod wasm {
             object: &crate::WasmAuthoringMobjectHandle,
             position: &WasmTrackerPositionHandle,
         ) -> Result<(), JsValue> {
-            object.id_in_store(self.inner.scene.store(), "tracker position binding")?;
-            let position = position.position_in(self.inner.scene.store())?;
+            object.id_in_store(
+                self.inner.scene.integration_store(),
+                "tracker position binding",
+            )?;
+            let position = position.position_in(self.inner.scene.integration_store())?;
             self.inner
                 .bind_tracker_position(object.semantic_mobject(), position)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = valueTrackerValue)]
@@ -4572,8 +4794,8 @@ mod wasm {
             &mut self,
             tracker: &WasmValueTrackerHandle,
         ) -> Result<f64, JsValue> {
-            let tracker = tracker.tracker_in(self.inner.scene.store())?;
-            self.inner.tracker_value(tracker).map_err(js_error)
+            let tracker = tracker.tracker_in(self.inner.scene.integration_store())?;
+            self.inner.tracker_value(tracker).map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = setValueTracker)]
@@ -4582,10 +4804,10 @@ mod wasm {
             tracker: &WasmValueTrackerHandle,
             value: f64,
         ) -> Result<(), JsValue> {
-            let tracker = tracker.tracker_in(self.inner.scene.store())?;
+            let tracker = tracker.tracker_in(self.inner.scene.integration_store())?;
             self.inner
                 .set_tracker_value(tracker, value)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = authoredDuration)]
@@ -4600,13 +4822,15 @@ mod wasm {
 
         #[wasm_bindgen(js_name = ordinaryWait)]
         pub fn ordinary_wait(&mut self, duration: f64) -> Result<f64, JsValue> {
-            self.inner.ordinary_wait(duration).map_err(js_error)
+            self.inner.ordinary_wait(duration).map_err(typed_js_error)
         }
 
         /// Begin one ordinary wait for an async continuation without fast-forwarding it.
         #[wasm_bindgen(js_name = beginOrdinaryWait)]
         pub fn begin_ordinary_wait(&mut self, duration: f64) -> Result<f64, JsValue> {
-            self.inner.begin_ordinary_wait(duration).map_err(js_error)
+            self.inner
+                .begin_ordinary_wait(duration)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = beginOrdinaryCompositionBuilder)]
@@ -4778,7 +5002,7 @@ mod wasm {
             self.inner
                 .begin_underline(handle.semantic_mobject(), buff)
                 .map(crate::WasmManimGeometryOptions::from_options)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = queryMobjectLayout)]
@@ -4789,7 +5013,7 @@ mod wasm {
             let (center_x, center_y, width, height) = self
                 .inner
                 .mobject_layout(handle.semantic_mobject())
-                .map_err(js_error)?;
+                .map_err(typed_js_error)?;
             Ok(WasmMobjectLayoutObservation {
                 center_x,
                 center_y,
@@ -4808,9 +5032,9 @@ mod wasm {
             let layout = self
                 .inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_family_layout(&family)
-                .map_err(js_error)?;
+                .map_err(typed_js_error)?;
             Ok(WasmMobjectLayoutObservation {
                 center_x: layout.center.0,
                 center_y: layout.center.1,
@@ -4835,14 +5059,14 @@ mod wasm {
 
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_move_family_to(
                     &family,
                     noon::LiveLayoutTarget::Point(x, y),
                     (edge_x, edge_y),
                     (mask_x, mask_y),
                 )
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveMoveFamilyToMobject)]
@@ -4860,14 +5084,14 @@ mod wasm {
 
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_move_family_to(
                     &family,
                     noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
                     (edge_x, edge_y),
                     (mask_x, mask_y),
                 )
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveMoveFamilyToFamily)]
@@ -4885,14 +5109,54 @@ mod wasm {
             let target = target.semantic_family()?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_move_family_to(
                     &family,
                     noon::LiveLayoutTarget::Family(&target),
                     (edge_x, edge_y),
                     (mask_x, mask_y),
                 )
-                .map_err(js_error)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveRescaleToFit)]
+        pub fn live_rescale_to_fit(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            length: f64,
+            dimension: u32,
+            stretch: bool,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_rescale_to_fit(
+                    &source.anchor,
+                    length,
+                    dimension.try_into().map_err(typed_js_error)?,
+                    stretch,
+                )
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveMatchDimSize)]
+        pub fn live_match_dim_size(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            target: &crate::authoring_mobject::WasmLayoutAnchor,
+            dimension: u32,
+            stretch: bool,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_match_dim_size(
+                    &source.anchor,
+                    &target.anchor,
+                    dimension.try_into().map_err(typed_js_error)?,
+                    stretch,
+                )
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveNextLayoutTo)]
@@ -4912,19 +5176,19 @@ mod wasm {
         ) -> Result<(), JsValue> {
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_next_layout_to_aligned(
                     &source.anchor,
                     noon::LiveLayoutTarget::Anchor(&target.anchor),
                     &aligner.anchor,
-                    noon::semantic_mobject::ManimNextToArgs {
+                    noon::ManimNextToArgs {
                         direction: (direction_x, direction_y),
                         buff,
                         aligned_edge: (edge_x, edge_y),
                         mask: (mask_x, mask_y),
                     },
                 )
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveNextLayoutToPoint)]
@@ -4945,19 +5209,35 @@ mod wasm {
         ) -> Result<(), JsValue> {
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_next_layout_to_aligned(
                     &source.anchor,
                     noon::LiveLayoutTarget::Point(x, y),
                     &aligner.anchor,
-                    noon::semantic_mobject::ManimNextToArgs {
+                    noon::ManimNextToArgs {
                         direction: (direction_x, direction_y),
                         buff,
                         aligned_edge: (edge_x, edge_y),
                         mask: (mask_x, mask_y),
                     },
                 )
-                .map_err(js_error)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveAlignFamilyOnFrame)]
+        pub fn live_align_family_on_frame(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            direction_x: f64,
+            direction_y: f64,
+            buff: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_align_family_on_frame(&family, (direction_x, direction_y), buff)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveAlignFamilyToPoint)]
@@ -4974,13 +5254,13 @@ mod wasm {
 
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_align_family_to(
                     &family,
                     noon::LiveLayoutTarget::Point(x, y),
                     (axis_x, axis_y),
                 )
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveAlignFamilyToMobject)]
@@ -4996,13 +5276,13 @@ mod wasm {
 
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_align_family_to(
                     &family,
                     noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
                     (axis_x, axis_y),
                 )
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveAlignFamilyToFamily)]
@@ -5018,13 +5298,13 @@ mod wasm {
             let target = target.semantic_family()?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_align_family_to(
                     &family,
                     noon::LiveLayoutTarget::Family(&target),
                     (axis_x, axis_y),
                 )
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = queryMobjectLineEndpoints)]
@@ -5035,7 +5315,7 @@ mod wasm {
             self.inner
                 .mobject_line_endpoints(handle.semantic_mobject())
                 .map(crate::WasmManimLineEndpoints::from_endpoints)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = queryMobjectFillOpacity)]
@@ -5045,7 +5325,7 @@ mod wasm {
         ) -> Result<f64, JsValue> {
             self.inner
                 .mobject_fill_opacity(handle.semantic_mobject())
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = queryMobjectStrokeOpacity)]
@@ -5055,7 +5335,7 @@ mod wasm {
         ) -> Result<f64, JsValue> {
             self.inner
                 .mobject_stroke_opacity(handle.semantic_mobject())
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = queryMobjectColor)]
@@ -5066,7 +5346,7 @@ mod wasm {
             self.inner
                 .mobject_color(handle.semantic_mobject())
                 .map(crate::WasmManimColor::from_color)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = declareLiveTransformTo)]
@@ -5077,8 +5357,14 @@ mod wasm {
             run_time: f64,
             rate_function: &str,
         ) -> Result<WasmDeclaredAnimationHandle, JsValue> {
-            source.id_in_store(self.inner.scene.store(), "animation declaration")?;
-            target.id_in_store(self.inner.scene.store(), "animation declaration")?;
+            source.id_in_store(
+                self.inner.scene.integration_store(),
+                "animation declaration",
+            )?;
+            target.id_in_store(
+                self.inner.scene.integration_store(),
+                "animation declaration",
+            )?;
             let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
                 .ok_or_else(|| {
                     js_error(format!(
@@ -5098,7 +5384,7 @@ mod wasm {
                 .map_err(js_error)?;
             Ok(WasmDeclaredAnimationHandle {
                 declaration,
-                store: std::rc::Rc::clone(self.inner.scene.store()),
+                store: std::rc::Rc::clone(self.inner.scene.integration_store()),
             })
         }
 
@@ -5120,7 +5406,10 @@ mod wasm {
             rate_function: &str,
         ) -> Result<f64, JsValue> {
             let id = parse_object_id("object ID", object_id)?;
-            target.id_in_store(self.inner.scene.store(), "ordinary affine lifecycle")?;
+            target.id_in_store(
+                self.inner.scene.integration_store(),
+                "ordinary affine lifecycle",
+            )?;
             let direction = parse_affine_lifecycle_direction(direction)?;
             let endpoint = parse_affine_lifecycle_endpoint(
                 endpoint,
@@ -5173,7 +5462,10 @@ mod wasm {
             rate_function: &str,
         ) -> Result<f64, JsValue> {
             let id = parse_object_id("object ID", object_id)?;
-            target.id_in_store(self.inner.scene.store(), "ordinary affine lifecycle")?;
+            target.id_in_store(
+                self.inner.scene.integration_store(),
+                "ordinary affine lifecycle",
+            )?;
             let direction = parse_affine_lifecycle_direction(direction)?;
             let endpoint = parse_affine_lifecycle_endpoint(
                 endpoint,
@@ -5215,10 +5507,13 @@ mod wasm {
             &mut self,
             target: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<bool, JsValue> {
-            target.id_in_store(self.inner.scene.store(), "live execution context")?;
+            target.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .live_contains_mobject(target.semantic_mobject())
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveTargetEditor)]
@@ -5226,11 +5521,11 @@ mod wasm {
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
-            source.id_in_store(self.inner.scene.store(), "live target editor")?;
+            source.id_in_store(self.inner.scene.integration_store(), "live target editor")?;
             self.inner
                 .live_target_editor(source.semantic_mobject())
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         /// Copy the complete family through one coherent live publication.
@@ -5243,10 +5538,13 @@ mod wasm {
             let source = source.semantic_family()?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
-                .live_copy_family(&source, &references.copy_references().map_err(js_error)?)
+                .map_err(typed_js_error)?
+                .live_copy_family(
+                    &source,
+                    &references.copy_references().map_err(typed_js_error)?,
+                )
                 .map(crate::WasmFamilyCopy::from_copy)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         /// Replace one object's content and presentation through the shared semantic owner.
@@ -5271,7 +5569,7 @@ mod wasm {
                         stretch,
                     },
                 )
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         /// Publish a fully configured geometry through the current live session.
@@ -5283,7 +5581,7 @@ mod wasm {
             self.inner
                 .live_create_manim_geometry(candidate.options)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         /// Shape and publish one detached plain Text object through the current
@@ -5304,18 +5602,18 @@ mod wasm {
         ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
             let text =
                 crate::authoring_mobject::manim_text(source, font_family, font_size, line_spacing)
-                    .map_err(js_error)?
+                    .map_err(typed_js_error)?
                     .color(Color::rgba(
-                        legacy_f32("text red", red)?,
-                        legacy_f32("text green", green)?,
-                        legacy_f32("text blue", blue)?,
-                        legacy_f32("text alpha", alpha)?,
+                        checked_f32("text red", red)?,
+                        checked_f32("text green", green)?,
+                        checked_f32("text blue", blue)?,
+                        checked_f32("text alpha", alpha)?,
                     ))
-                    .set_opacity(legacy_f32("text opacity", opacity)?);
+                    .set_opacity(checked_f32("text opacity", opacity)?);
             self.inner
                 .live_create_text(text)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         /// Compile and publish one detached Typst or MathTypst object through
@@ -5333,14 +5631,14 @@ mod wasm {
             opacity: f64,
         ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
             let font_size = crate::authoring_mobject::text_authoring_f32("font size", font_size)
-                .map_err(js_error)?;
+                .map_err(typed_js_error)?;
             let color = Color::rgba(
-                legacy_f32("text red", red)?,
-                legacy_f32("text green", green)?,
-                legacy_f32("text blue", blue)?,
-                legacy_f32("text alpha", alpha)?,
+                checked_f32("text red", red)?,
+                checked_f32("text green", green)?,
+                checked_f32("text blue", blue)?,
+                checked_f32("text alpha", alpha)?,
             );
-            let opacity = legacy_f32("text opacity", opacity)?;
+            let opacity = checked_f32("text opacity", opacity)?;
             let result = if math {
                 self.inner.live_create_math_typst(
                     noon::MathTypst::new(source)
@@ -5358,7 +5656,7 @@ mod wasm {
             };
             result
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = livePlayAnimation)]
@@ -5366,7 +5664,7 @@ mod wasm {
             &mut self,
             animation: &WasmDeclaredAnimationHandle,
         ) -> Result<f64, JsValue> {
-            let declaration = animation.declaration_in(self.inner.scene.store())?;
+            let declaration = animation.declaration_in(self.inner.scene.integration_store())?;
             self.inner
                 .active_live_player()
                 .map_err(js_error)?
@@ -5380,16 +5678,16 @@ mod wasm {
                 .active_live_player()
                 .map_err(js_error)?
                 .live_wait(duration)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveAdvanceSegmentTo)]
         pub fn live_advance_segment_to(&mut self, time: f64) -> Result<bool, JsValue> {
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_advance_segment_to(time)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveCompleteSegment)]
@@ -5398,16 +5696,16 @@ mod wasm {
                 .active_live_player()
                 .map_err(js_error)?
                 .live_complete_segment()
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveEvaluate)]
         pub fn live_evaluate(&mut self, time: f64) -> Result<(), JsValue> {
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_evaluate(time)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = prepareExecutionRun)]
@@ -5432,12 +5730,41 @@ mod wasm {
             x: f64,
             y: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_set_translation(handle.semantic_mobject(), x, y)
-                .map_err(js_error)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveMoveToLayout)]
+        pub fn live_move_to_layout(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::authoring_mobject::WasmLayoutAnchor,
+            edge_x: f64,
+            edge_y: f64,
+            mask_x: f64,
+            mask_y: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_move_to(
+                    handle.semantic_mobject(),
+                    noon::LiveLayoutTarget::Anchor(&target.anchor),
+                    (edge_x, edge_y),
+                    (mask_x, mask_y),
+                )
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveMoveToPoint)]
@@ -5452,17 +5779,20 @@ mod wasm {
             mask_x: f64,
             mask_y: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_move_to(
                     handle.semantic_mobject(),
                     noon::LiveLayoutTarget::Point(x, y),
                     (edge_x, edge_y),
                     (mask_x, mask_y),
                 )
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveMoveToMobject)]
@@ -5475,18 +5805,24 @@ mod wasm {
             mask_x: f64,
             mask_y: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
-            target.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            target.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_move_to(
                     handle.semantic_mobject(),
                     noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
                     (edge_x, edge_y),
                     (mask_x, mask_y),
                 )
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetFill)]
@@ -5498,12 +5834,15 @@ mod wasm {
             blue: f64,
             opacity: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_set_fill(handle.semantic_mobject(), red, green, blue, opacity)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetFillColor)]
@@ -5515,12 +5854,15 @@ mod wasm {
             blue: f64,
             alpha: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_set_fill_color(handle.semantic_mobject(), red, green, blue, alpha)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveDisableFill)]
@@ -5528,12 +5870,15 @@ mod wasm {
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_disable_fill(handle.semantic_mobject())
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetFillOpacity)]
@@ -5542,12 +5887,15 @@ mod wasm {
             handle: &crate::WasmAuthoringMobjectHandle,
             opacity: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_set_fill_opacity(handle.semantic_mobject(), opacity)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetColor)]
@@ -5559,12 +5907,15 @@ mod wasm {
             blue: f64,
             alpha: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_set_color(handle.semantic_mobject(), red, green, blue, alpha)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetStroke)]
@@ -5576,12 +5927,15 @@ mod wasm {
             blue: f64,
             opacity: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_set_stroke(handle.semantic_mobject(), red, green, blue, opacity)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetStrokeColor)]
@@ -5593,12 +5947,15 @@ mod wasm {
             blue: f64,
             alpha: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_set_stroke_color(handle.semantic_mobject(), red, green, blue, alpha)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveDisableStroke)]
@@ -5606,12 +5963,15 @@ mod wasm {
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_disable_stroke(handle.semantic_mobject())
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetStrokeOpacity)]
@@ -5620,12 +5980,15 @@ mod wasm {
             handle: &crate::WasmAuthoringMobjectHandle,
             opacity: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_set_stroke_opacity(handle.semantic_mobject(), opacity)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetOpacity)]
@@ -5634,12 +5997,15 @@ mod wasm {
             handle: &crate::WasmAuthoringMobjectHandle,
             opacity: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_set_opacity(handle.semantic_mobject(), opacity)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetObjectOpacity)]
@@ -5648,12 +6014,15 @@ mod wasm {
             handle: &crate::WasmAuthoringMobjectHandle,
             opacity: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_set_object_opacity(handle.semantic_mobject(), opacity)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveAdd)]
@@ -5663,10 +6032,13 @@ mod wasm {
             handle: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
             let id = parse_object_id("object ID", object_id)?;
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .live_add_mobject(id, handle.semantic_mobject())
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveRemove)]
@@ -5674,10 +6046,13 @@ mod wasm {
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .live_remove_mobject(handle.semantic_mobject())
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveReplaceContent)]
@@ -5686,11 +6061,17 @@ mod wasm {
             target: &crate::WasmAuthoringMobjectHandle,
             source: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
-            target.id_in_store(self.inner.scene.store(), "live execution context")?;
-            source.id_in_store(self.inner.scene.store(), "live execution context")?;
+            target.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            source.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .live_replace_content(target.semantic_mobject(), source.semantic_mobject())
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveShift)]
@@ -5700,12 +6081,15 @@ mod wasm {
             x: f64,
             y: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_shift(handle.semantic_mobject(), x, y)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         /// Create a complete detached family through the current live publication.
@@ -5715,13 +6099,13 @@ mod wasm {
             batch: WasmSceneMembershipBatch,
         ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
             if batch.inner.kind != SceneMembershipBatchKind::Add {
-                return Err(js_error("family creation requires an add batch"));
+                return Err(typed_js_error("family creation requires an add batch"));
             }
-            let members = batch.inner.family_members().map_err(js_error)?;
+            let members = batch.inner.family_members().map_err(typed_js_error)?;
             self.inner
                 .live_family(&members)
                 .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         /// Commit all requested direct-member edits before returning wrapper decisions.
@@ -5734,16 +6118,16 @@ mod wasm {
             let adding = match batch.inner.kind {
                 SceneMembershipBatchKind::Add => true,
                 SceneMembershipBatchKind::Remove => false,
-                _ => return Err(js_error("family membership requires add or remove")),
+                _ => return Err(typed_js_error("family membership requires add or remove")),
             };
             let family = handle.semantic_family()?;
-            let members = batch.inner.family_members().map_err(js_error)?;
+            let members = batch.inner.family_members().map_err(typed_js_error)?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_edit_family_members(&family, &members, adding)
                 .map(|changed| changed.into_iter().map(u8::from).collect())
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveShiftFamily)]
@@ -5754,14 +6138,157 @@ mod wasm {
             y: f64,
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
-            if !std::rc::Rc::ptr_eq(self.inner.scene.store(), family.store()) {
-                return Err(js_error(
+            if !std::rc::Rc::ptr_eq(
+                self.inner.scene.integration_store(),
+                family.integration_store(),
+            ) {
+                return Err(typed_js_error(
                     "family and canonical context belong to different authoring stores",
                 ));
             }
             self.inner
                 .live_shift_family(&family, x, y)
-                .map_err(js_error)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetFamilyColor)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_set_family_color(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_color(&family, red, green, blue, alpha)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetFamilyFill)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_set_family_fill(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            has_color: bool,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
+                .map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_fill(&family, color, opacity)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetFamilyStroke)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_set_family_stroke(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            has_color: bool,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            width: Option<f64>,
+            opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
+                .map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_stroke(&family, color, width, opacity)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetFamilyOpacity)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_set_family_opacity(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            opacity: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_opacity(&family, opacity)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveArrangeFamilyInGrid)]
+        pub fn live_arrange_family_in_grid(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            rows: Option<u32>,
+            columns: Option<u32>,
+            gap_x: f64,
+            gap_y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_arrange_family_in_grid(
+                    &family,
+                    rows.map(|v| v as usize),
+                    columns.map(|v| v as usize),
+                    gap_x,
+                    gap_y,
+                )
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveScaleFamily)]
+        pub fn live_scale_family(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            x: f64,
+            y: f64,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_scale_family(&family, x, y)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveRotateFamily)]
+        pub fn live_rotate_family(
+            &mut self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+            angle: f64,
+            x: f64,
+            y: f64,
+            about_point: bool,
+        ) -> Result<(), JsValue> {
+            let family = handle.semantic_family()?;
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_rotate_family(&family, angle, pivot)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveArrangeFamily)]
@@ -5773,7 +6300,7 @@ mod wasm {
             let family = handle.semantic_family()?;
             self.inner
                 .live_arrange_family(&family, &options.options)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetScale)]
@@ -5783,12 +6310,15 @@ mod wasm {
             x: f64,
             y: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_set_scale(handle.semantic_mobject(), x, y)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveScale)]
@@ -5798,12 +6328,15 @@ mod wasm {
             x: f64,
             y: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_scale(handle.semantic_mobject(), x, y)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetRotation)]
@@ -5812,12 +6345,15 @@ mod wasm {
             handle: &crate::WasmAuthoringMobjectHandle,
             angle: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_set_rotation(handle.semantic_mobject(), angle)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveRotate)]
@@ -5826,12 +6362,15 @@ mod wasm {
             handle: &crate::WasmAuthoringMobjectHandle,
             angle: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             self.inner
                 .active_live_player()
-                .map_err(js_error)?
+                .map_err(typed_js_error)?
                 .live_rotate(handle.semantic_mobject(), angle)
-                .map_err(js_error)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveEffectiveMobject)]
@@ -5839,14 +6378,17 @@ mod wasm {
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<WasmLiveMobjectState, JsValue> {
-            handle.id_in_store(self.inner.scene.store(), "live execution context")?;
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
             Ok(WasmLiveMobjectState {
                 state: self
                     .inner
                     .active_live_player()
-                    .map_err(js_error)?
+                    .map_err(typed_js_error)?
                     .live_effective(handle.semantic_mobject())
-                    .map_err(js_error)?,
+                    .map_err(typed_js_error)?,
             })
         }
 
@@ -5855,7 +6397,9 @@ mod wasm {
             &mut self,
             player: crate::SemanticExecutionPlayer,
         ) -> Result<(), JsValue> {
-            self.inner.return_execution_player(player).map_err(js_error)
+            self.inner
+                .return_execution_player(player)
+                .map_err(|rejected| WasmExecutionPlayerReturnError { rejected }.into_js_error())
         }
 
         #[wasm_bindgen(js_name = resumeExecutionPlayer)]
@@ -5872,39 +6416,6 @@ mod wasm {
                 .drain_returned_publication_json()
                 .map_err(js_error)
         }
-
-        pub fn checkpoint(&self) -> u32 {
-            u32::try_from(self.inner.checkpoint()).expect("canonical object count fits u32")
-        }
-
-        pub fn restore(&mut self, checkpoint: u32) -> Result<(), JsValue> {
-            self.inner.restore(checkpoint as usize).map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = sceneSpecJson)]
-        pub fn scene_spec_json(
-            &self,
-            geometry_tracks_json: &str,
-            family_animations_json: &str,
-            camera_object_id: &str,
-        ) -> Result<String, JsValue> {
-            let geometry_tracks =
-                parse_json::<Vec<TrackDefinition>>("geometry tracks", geometry_tracks_json)?;
-            let family_animations = parse_json::<Vec<FamilyAnimationRequest>>(
-                "family animations",
-                family_animations_json,
-            )?;
-            let camera_object = if camera_object_id.is_empty() {
-                None
-            } else {
-                Some(parse_object_id("camera object ID", camera_object_id)?)
-            };
-            let spec = self
-                .inner
-                .finalize(geometry_tracks, family_animations, camera_object)
-                .map_err(js_error)?;
-            serde_json::to_string(&spec).map_err(js_error)
-        }
     }
 }
 
@@ -5914,10 +6425,9 @@ pub use wasm::*;
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        AnimationOptions, GeometryRef, HostCallbackId, RateFunction, SemanticMutationTransaction,
+        AnimationOptions, Color, HostCallbackId, RateFunction, SemanticMutationTransaction,
         SemanticVec3, Vec2,
     };
-    use noon_ir::{ObjectSpecContent, TextSpecKind};
 
     use super::*;
 
@@ -6019,7 +6529,7 @@ mod tests {
     fn family_argument_batches_reject_scene_binding_metadata() {
         let scene = noon::Scene::new();
         let object = scene.circle(0.2).unwrap();
-        let revision = scene.store().borrow().scene_revision();
+        let revision = scene.integration_store().borrow().scene_revision();
         let mut batch = SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
             members: vec![OwnedSceneMembershipMember::Mobject {
@@ -6030,25 +6540,28 @@ mod tests {
         };
         assert_eq!(batch.family_members().unwrap().len(), 1);
         let family = batch
-            .create_family(std::rc::Rc::clone(scene.store()))
+            .create_family(std::rc::Rc::clone(scene.integration_store()))
             .unwrap();
-        let committed = scene.store().borrow().scene_revision();
+        let committed = scene.integration_store().borrow().scene_revision();
         assert_eq!(committed, revision.checked_next().unwrap());
         assert_eq!(batch.edit_family(&family).unwrap(), vec![false]);
         batch.kind = SceneMembershipBatchKind::Remove;
         assert!(batch
-            .create_family(std::rc::Rc::clone(scene.store()))
+            .create_family(std::rc::Rc::clone(scene.integration_store()))
             .is_err());
         assert_eq!(batch.edit_family(&family).unwrap(), vec![true]);
         batch.kind = SceneMembershipBatchKind::Clear;
-        let revision = scene.store().borrow().scene_revision();
+        let revision = scene.integration_store().borrow().scene_revision();
         assert!(batch.edit_family(&family).is_err());
         batch.bindings.push((ObjectId::new(1), object.clone()));
         assert!(batch.family_members().is_err());
         batch.bindings.clear();
         batch.members = vec![membership_mobject(1, &object)];
         assert!(batch.family_members().is_err());
-        assert_eq!(scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
     }
 
     #[test]
@@ -6164,7 +6677,13 @@ mod tests {
         let mut other = CanonicalAuthoringScene::with_store(Rc::clone(&store));
         assert!(other.lower_execution().unwrap().frame().objects.is_empty());
         other.bind_mobject(ObjectId::new(0), &object).unwrap();
-        context.restore(0).unwrap();
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Clear,
+                members: Vec::new(),
+                bindings: Vec::new(),
+            })
+            .unwrap();
         assert!(context
             .lower_execution()
             .unwrap()
@@ -6190,10 +6709,10 @@ mod tests {
             first.lower_execution().unwrap().camera().unwrap(),
             noon_core::Camera2DState::default()
         );
-        let checkpoint = first.checkpoint();
+        let members = first.members().unwrap();
         let revision = store.borrow().scene_revision();
         assert!(first.create_camera_frame(ObjectId::new(5)).is_err());
-        assert_eq!(first.checkpoint(), checkpoint);
+        assert_eq!(first.members().unwrap(), members);
         assert_eq!(store.borrow().scene_revision(), revision);
         assert_eq!(
             first.bindings.get(&ObjectId::new(4)),
@@ -6216,108 +6735,14 @@ mod tests {
         let local = first.scene.circle(1.0).unwrap();
         let foreign = second.scene.circle(2.0).unwrap();
         assert_eq!(local.node_id(), foreign.node_id());
-        let revision = first.scene.store().borrow().scene_revision();
+        let revision = first.scene.integration_store().borrow().scene_revision();
         assert!(first.bind_mobject(ObjectId::new(0), &foreign).is_err());
-        assert_eq!(first.checkpoint(), 0);
-        assert_eq!(first.scene.store().borrow().scene_revision(), revision);
+        assert!(first.members().unwrap().is_empty());
+        assert_eq!(
+            first.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
         first.bind_mobject(ObjectId::new(0), &local).unwrap();
-    }
-
-    #[test]
-    fn family_checkpoint_tracks_root_prefix_and_restores_descendant_bindings_atomically() {
-        let mut context = CanonicalAuthoringScene::default();
-        let anchor = context.scene.circle(0.25).unwrap();
-        context.bind_mobject(ObjectId::new(0), &anchor).unwrap();
-        let checkpoint = context.checkpoint();
-
-        let left = context.scene.circle(0.5).unwrap();
-        let right = context.scene.square(0.5).unwrap();
-        let family = context
-            .scene
-            .family(&[(&left).into(), (&right).into()])
-            .unwrap();
-        context
-            .edit_membership(SceneMembershipBatch {
-                kind: SceneMembershipBatchKind::Add,
-                members: vec![OwnedSceneMembershipMember::Family(family)],
-                bindings: vec![
-                    (ObjectId::new(1), left.clone()),
-                    (ObjectId::new(2), right.clone()),
-                ],
-            })
-            .unwrap();
-        assert_eq!(context.checkpoint(), checkpoint + 1);
-        assert_eq!(
-            context.bindings.get(&ObjectId::new(1)),
-            Some(&left.node_id())
-        );
-        assert_eq!(
-            context.bindings.get(&ObjectId::new(2)),
-            Some(&right.node_id())
-        );
-
-        context.restore(checkpoint).unwrap();
-        assert_eq!(context.root_membership_keys().unwrap().len(), checkpoint);
-        assert!(!context.bindings.contains_key(&ObjectId::new(1)));
-        assert!(!context.bindings.contains_key(&ObjectId::new(2)));
-        assert!(!context.identities.contains_key(&left.node_id()));
-        assert!(!context.identities.contains_key(&right.node_id()));
-        assert_eq!(
-            context.bindings.get(&ObjectId::new(0)),
-            Some(&anchor.node_id())
-        );
-
-        let revision = context.scene.store().borrow().scene_revision();
-        let bindings = context.bindings.clone();
-        let identities = context.identities.clone();
-        assert!(context.restore(checkpoint + 1).is_err());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
-        assert_eq!(context.bindings, bindings);
-        assert_eq!(context.identities, identities);
-    }
-
-    #[test]
-    fn checkpoint_restore_keeps_a_binding_reachable_through_a_retained_alias() {
-        let mut context = CanonicalAuthoringScene::default();
-        let shared = context.scene.circle(0.5).unwrap();
-        let retained = context.scene.family(&[(&shared).into()]).unwrap();
-        context
-            .edit_membership(SceneMembershipBatch {
-                kind: SceneMembershipBatchKind::Add,
-                members: vec![OwnedSceneMembershipMember::Family(retained)],
-                bindings: vec![(ObjectId::new(0), shared.clone())],
-            })
-            .unwrap();
-        let checkpoint = context.checkpoint();
-
-        let temporary = context.scene.square(0.5).unwrap();
-        let alias = context
-            .scene
-            .family(&[(&shared).into(), (&temporary).into()])
-            .unwrap();
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_member(context.scene.root(), alias.node_id());
-        transaction
-            .apply(&mut context.scene.store().borrow_mut())
-            .unwrap();
-        context
-            .bindings
-            .insert(ObjectId::new(1), temporary.node_id());
-        context
-            .identities
-            .insert(temporary.node_id(), ObjectId::new(1));
-
-        context.restore(checkpoint).unwrap();
-        assert_eq!(
-            context.bindings.get(&ObjectId::new(0)),
-            Some(&shared.node_id())
-        );
-        assert_eq!(
-            context.identities.get(&shared.node_id()),
-            Some(&ObjectId::new(0))
-        );
-        assert!(!context.bindings.contains_key(&ObjectId::new(1)));
-        assert!(!context.identities.contains_key(&temporary.node_id()));
     }
 
     #[test]
@@ -6337,11 +6762,14 @@ mod tests {
         assert_eq!(context.ordinary_wait(0.3).unwrap(), 0.3);
         // New detached state must publish through the active session as well.
         let collision = context.live_target_editor(&anchor).unwrap();
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
         assert!(context
             .live_add_mobject(ObjectId::new(0), &collision)
             .is_err());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
         assert!(context
             .active_live_player()
             .unwrap()
@@ -6448,7 +6876,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_bind_events_define_the_canonical_object_stream_directly() {
+    fn mixed_bind_events_lower_to_one_ordered_execution_stream() {
         let mut context = CanonicalAuthoringScene::default();
         let circle = context.scene.circle(0.5).unwrap();
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
@@ -6457,23 +6885,27 @@ mod tests {
         let square = context.scene.rectangle(1.0, 1.0).unwrap();
         context.bind_mobject(ObjectId::new(2), &square).unwrap();
 
-        let spec = context.finalize(Vec::new(), Vec::new(), None).unwrap();
+        let execution = context.lower_execution().unwrap();
         assert_eq!(
-            spec.objects
+            execution
+                .frame()
+                .objects
                 .iter()
-                .map(|object| object.id)
+                .map(|object| Some(object.id))
                 .collect::<Vec<_>>(),
-            vec![ObjectId::new(0), ObjectId::new(1), ObjectId::new(2)]
+            [&circle, &label, &square]
+                .map(|handle| execution.execution_object_id(handle.node_id()))
         );
-        let ObjectSpecContent::Text(text) = &spec.objects[1].content else {
-            panic!("middle object must be source-level text");
-        };
-        assert_eq!(text.kind, TextSpecKind::Plain);
-        assert_eq!(text.source, "A");
+        assert!(execution.frame().objects[1].text().is_some());
+        let resource = label.state().unwrap().content.text().unwrap();
+        let store = context.scene.integration_store().borrow();
+        let text = store.text_resources().get(resource).unwrap();
+        assert_eq!(text.kind, noon_core::TextSourceKind::Plain);
+        assert_eq!(text.source.as_ref(), "A");
     }
 
     #[test]
-    fn canonical_export_flattens_family_roots_to_bound_semantic_leaves() {
+    fn family_roots_lower_to_bound_semantic_leaves() {
         let mut context = CanonicalAuthoringScene::default();
         let left = context.scene.circle(0.5).unwrap();
         let right = context.scene.square(0.5).unwrap();
@@ -6485,22 +6917,27 @@ mod tests {
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::Add,
                 members: vec![OwnedSceneMembershipMember::Family(family)],
-                bindings: vec![(ObjectId::new(4), left), (ObjectId::new(9), right)],
+                bindings: vec![
+                    (ObjectId::new(4), left.clone()),
+                    (ObjectId::new(9), right.clone()),
+                ],
             })
             .unwrap();
 
-        let spec = context.finalize(Vec::new(), Vec::new(), None).unwrap();
+        let execution = context.lower_execution().unwrap();
         assert_eq!(
-            spec.objects
+            execution
+                .frame()
+                .objects
                 .iter()
-                .map(|object| object.id)
+                .map(|object| Some(object.id))
                 .collect::<Vec<_>>(),
-            vec![ObjectId::new(4), ObjectId::new(9)],
+            [&left, &right].map(|handle| execution.execution_object_id(handle.node_id()))
         );
     }
 
     #[test]
-    fn native_semantic_text_exports_from_shared_state() {
+    fn native_text_layout_and_presentation_reach_typed_execution() {
         let mut context = CanonicalAuthoringScene::default();
         let mut label = context
             .scene
@@ -6512,23 +6949,30 @@ mod tests {
             .unwrap();
         label.shift(2.0, -1.0).unwrap();
         context.bind_mobject(ObjectId::new(4), &label).unwrap();
-
-        let spec = context.finalize(Vec::new(), Vec::new(), None).unwrap();
-        let ObjectSpecContent::Text(text) = &spec.objects[0].content else {
-            panic!("shared native Text must derive the exported text spec");
-        };
-        assert_eq!(text.source, "A\nB");
-        assert_eq!(text.font_size, 36.0);
-        let noon_ir::TextSpecOptions::NativePlain { line_spacing, .. } = &text.options else {
-            panic!("native Text export requires native options");
-        };
-        assert!((*line_spacing - 0.5).abs() < 1.0e-6);
-        assert_eq!(spec.objects[0].transform.translation, Vec2::new(2.0, -1.0));
-        assert_eq!(spec.objects[0].transform.scale, Vec2::ONE);
+        let execution = context.lower_execution().unwrap();
+        assert!(execution.frame().objects[0].text().is_some());
+        assert_eq!(
+            execution.frame().objects[0].transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
+        let state = label.state().unwrap();
+        let store = context.scene.integration_store().borrow();
+        let text = store
+            .text_resources()
+            .get(state.content.text().unwrap())
+            .unwrap();
+        assert_eq!(text.source.as_ref(), "A\nB");
+        assert_eq!(text.runs.len(), 2);
+        assert_eq!(text.runs[0].font_size, 36.0);
+        assert!((text.runs[0].transform.ty - text.runs[1].transform.ty - 54.0).abs() < 1e-6);
+        assert_eq!(
+            state.transform.scale.x,
+            f64::from(noon::integration::NATIVE_POINT_TO_SCENE_SCALE)
+        );
     }
 
     #[test]
-    fn typst_and_math_typst_export_source_kind_and_effective_presentation() {
+    fn typst_and_math_typst_share_resources_with_typed_execution() {
         let mut context = CanonicalAuthoringScene::default();
         let label = context
             .scene
@@ -6549,61 +6993,40 @@ mod tests {
             .unwrap();
         context.bind_mobject(ObjectId::new(4), &label).unwrap();
         context.bind_mobject(ObjectId::new(5), &equation).unwrap();
-
-        let spec = context.finalize(Vec::new(), Vec::new(), None).unwrap();
-        let ObjectSpecContent::Text(label) = &spec.objects[0].content else {
-            panic!("Typst export must remain source-level text");
-        };
-        assert_eq!(label.kind, TextSpecKind::Typst);
-        assert_eq!(label.source, "*Noon*");
-        assert_eq!(label.font_size, noon::DEFAULT_TYPST_FONT_SIZE);
-        assert_eq!(spec.objects[0].transform.translation, Vec2::new(2.0, -1.0));
-        let scale = spec.objects[0].transform.scale;
-        assert!((scale.x - 1.5).abs() < 1.0e-6 && (scale.y - 1.5).abs() < 1.0e-6);
-        assert_eq!(spec.objects[0].style.fill, Some(noon_core::YELLOW));
-
-        let ObjectSpecContent::Text(equation) = &spec.objects[1].content else {
-            panic!("MathTypst export must remain source-level text");
-        };
-        assert_eq!(equation.kind, TextSpecKind::MathTypst);
-        assert_eq!(equation.source, "frac(x, 2)");
-        assert_eq!(equation.font_size, noon::DEFAULT_TYPST_FONT_SIZE);
-        assert_eq!(spec.objects[1].transform.translation, Vec2::new(-1.0, 0.5));
-        assert_eq!(spec.objects[1].transform.scale, Vec2::ONE);
-        assert_eq!(spec.objects[1].style.opacity, 0.5);
-    }
-
-    #[test]
-    fn updates_preserve_slots_and_append_checkpoint_restore_reclaims_failed_binds() {
-        let mut context = CanonicalAuthoringScene::default();
-        let first = ObjectId::new(0);
-        let mut circle = context.scene.circle(0.5).unwrap();
-        context.bind_mobject(first, &circle).unwrap();
-        let checkpoint = context.checkpoint();
-        let temporary = context.scene.text(noon::Text::new("temporary")).unwrap();
-        context.bind_mobject(ObjectId::new(1), &temporary).unwrap();
-        // Checkpoint rollback is intentionally append-only: an update to an
-        // existing slot remains visible after the failed bind is reclaimed.
-        circle.shift(0.75, 0.0).unwrap();
-        context.restore(checkpoint).unwrap();
-        let exported = context.finalize(Vec::new(), Vec::new(), None).unwrap();
-        let ObjectSpecContent::Geometry(geometry) = &exported.objects[0].content else {
-            panic!("first object must remain geometry-backed");
-        };
-        assert_eq!(geometry, &GeometryRef::circle(0.5));
-        assert_eq!(exported.objects[0].transform.translation.x, 0.75);
-
-        circle.move_to(2.0, -1.0).unwrap();
-        let rectangle = context.scene.rectangle(2.0, 1.0).unwrap();
-        context.bind_mobject(ObjectId::new(1), &rectangle).unwrap();
-
-        let spec = context
-            .finalize(Vec::new(), Vec::new(), Some(first))
-            .unwrap();
-        assert_eq!(spec.objects.len(), 2);
-        assert_eq!(spec.objects[0].id, first);
-        assert_eq!(spec.objects[0].transform.translation, Vec2::new(2.0, -1.0));
-        assert_eq!(spec.camera_object, Some(first));
+        let execution = context.lower_execution().unwrap();
+        assert_eq!(execution.frame().objects.len(), 2);
+        assert!(execution
+            .frame()
+            .objects
+            .iter()
+            .all(|object| object.text().is_some()));
+        assert_eq!(
+            execution.frame().objects[0].transform.translation,
+            Vec2::new(2.0, -1.0)
+        );
+        assert_eq!(
+            execution.frame().objects[1].transform.translation,
+            Vec2::new(-1.0, 0.5)
+        );
+        assert_eq!(
+            label.state().unwrap().style.fill,
+            Some(noon_core::SemanticPaint::Solid(noon_core::YELLOW))
+        );
+        assert_eq!(equation.state().unwrap().style.object_opacity, 0.5);
+        let store = context.scene.integration_store().borrow();
+        for (handle, kind, source) in [
+            (&label, noon_core::TextSourceKind::Typst, "*Noon*"),
+            (
+                &equation,
+                noon_core::TextSourceKind::MathTypst,
+                "frac(x, 2)",
+            ),
+        ] {
+            let resource = handle.state().unwrap().content.text().unwrap();
+            let text = store.text_resources().get(resource).unwrap();
+            assert_eq!(text.kind, kind);
+            assert_eq!(text.source.as_ref(), source);
+        }
     }
 
     #[test]
@@ -6619,7 +7042,7 @@ mod tests {
         let animation = context
             .declare_live_transform_to(&circle, &target, options)
             .unwrap();
-        let store = std::rc::Rc::clone(context.scene.store());
+        let store = std::rc::Rc::clone(context.scene.integration_store());
 
         {
             let player = context.live_player(2.0).unwrap();
@@ -6704,14 +7127,20 @@ mod tests {
         context
             .add_updater(&circle, HostCallbackId::new(9), 0.0, None)
             .unwrap();
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
 
         let mut target = context.live_target_editor(&circle).unwrap();
         target.set_translation(2.0, -1.0).unwrap();
 
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert!(
-            context.scene.store().borrow().scene_revision().get() > revision.get(),
+            context
+                .scene
+                .integration_store()
+                .borrow()
+                .scene_revision()
+                .get()
+                > revision.get(),
             "the detached authored target must be published without bootstrapping a player"
         );
         assert_eq!(
@@ -6747,13 +7176,19 @@ mod tests {
         assert_eq!(target.state().unwrap(), target_before);
 
         let handed_off = context.take_execution_player(1.0, 41).unwrap();
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
         let before = source.state().unwrap();
-        assert!(context
+        let error = context
             .live_become_mobject(&source, &target, Default::default())
-            .unwrap_err()
-            .contains("semantic engine"));
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+            .unwrap_err();
+        assert_eq!(
+            (error.category, error.code),
+            ("unclassified", "unclassified")
+        );
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
         assert_eq!(source.state().unwrap(), before);
         context.return_execution_player(handed_off).unwrap();
         context
@@ -6780,18 +7215,21 @@ mod tests {
         assert_eq!(
             context
                 .scene
-                .store()
+                .integration_store()
                 .borrow()
                 .semantic_family_members_checked(nested.node_id())
                 .unwrap(),
             &[family.node_id()]
         );
         let foreign = noon::Scene::new().circle(0.2).unwrap();
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
         assert!(context
             .live_family(&[noon::MobjectFamilyMember::Mobject(&foreign)])
             .is_err());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
         // Another owner-mediated mutation remains valid after both publications
         // and the rejected foreign member: no stale execution revision is hidden.
         context.live_target_editor(&circle).unwrap();
@@ -6890,7 +7328,7 @@ mod tests {
                 &placement,
                 noon::LiveLayoutTarget::Point(before.center.0, before.center.1),
                 &placement,
-                noon::semantic_mobject::ManimNextToArgs {
+                noon::ManimNextToArgs {
                     direction: (0.0, 0.0),
                     buff: 0.0,
                     aligned_edge: (0.0, 0.0),
@@ -6999,10 +7437,13 @@ mod tests {
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
         context.live_player(1.0).unwrap();
         let player = context.take_execution_player(1.0, 17).unwrap();
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
 
         assert!(context.live_target_editor(&circle).is_err());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
         assert_eq!(context.live_execution_ownership(), "transferred");
 
         context.return_execution_player(player).unwrap();
@@ -7116,18 +7557,21 @@ mod tests {
             .lag_ratio(0.0)
             .rate_func(RateFunction::Linear);
         let play = AnimationOptions::new().rate_func(RateFunction::Linear);
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
 
         context
             .validate_ordinary_mixed_composition(&children, composition, play)
             .unwrap();
-        assert!(context.live_player.is_none());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert!(context.player_ownership.is_unstarted());
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
 
         let mut unsupported_target = right.target_editor().unwrap();
         unsupported_target.set_stroke_width(3.0).unwrap();
         let unsupported = [bound_transform_child(&right, unsupported_target, child)];
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
         assert!(context
             .ordinary_play_mixed_composition(
                 noon_core::SemanticAnimationCompositionKind::Parallel,
@@ -7136,8 +7580,11 @@ mod tests {
                 play,
             )
             .is_err());
-        assert!(context.live_player.is_none());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert!(context.player_ownership.is_unstarted());
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
 
         assert_eq!(
             context
@@ -7222,7 +7669,7 @@ mod tests {
     #[test]
     fn focus_on_creates_and_removes_a_spotlight_without_wrapper_identity() {
         let mut context = CanonicalAuthoringScene::default();
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
         let options = AnimationOptions::new().rate_func(RateFunction::Linear);
         let child = |opacity| OrdinaryCompositionChild::FocusOn {
             focus: noon::FocusOnOptions {
@@ -7239,7 +7686,10 @@ mod tests {
                 AnimationOptions::new()
             )
             .is_err());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
         assert_eq!(
             context
                 .ordinary_play_mixed_composition(
@@ -7266,7 +7716,7 @@ mod tests {
             .introducer(true)
             .remover(true);
         let composition = AnimationOptions::new().rate_func(RateFunction::Linear);
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
         let invalid = OrdinaryCompositionChild::PassingFlash {
             entering_id: Some(id),
             target: line.clone(),
@@ -7282,7 +7732,10 @@ mod tests {
             )
             .is_err());
         assert!(context.bindings.is_empty());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
 
         let valid = OrdinaryCompositionChild::PassingFlash {
             entering_id: Some(id),
@@ -7332,7 +7785,7 @@ mod tests {
             outline,
             options,
         }];
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
         assert!(context
             .ordinary_play_mixed_composition(
                 noon_core::SemanticAnimationCompositionKind::Parallel,
@@ -7341,9 +7794,12 @@ mod tests {
                 AnimationOptions::new(),
             )
             .is_err());
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert!(context.bindings.is_empty());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
 
         let valid = [
             OrdinaryCompositionChild::DrawBorderThenFill {
@@ -7481,7 +7937,7 @@ mod tests {
                 options,
             },
         ];
-        let revision = rejected.scene.store().borrow().scene_revision();
+        let revision = rejected.scene.integration_store().borrow().scene_revision();
         assert!(rejected
             .ordinary_play_mixed_composition(
                 noon_core::SemanticAnimationCompositionKind::Parallel,
@@ -7490,9 +7946,12 @@ mod tests {
                 options,
             )
             .is_err());
-        assert!(rejected.live_player.is_none());
+        assert!(rejected.player_ownership.is_unstarted());
         assert!(rejected.bindings.is_empty());
-        assert_eq!(rejected.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            rejected.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
     }
 
     #[test]
@@ -7743,7 +8202,7 @@ mod tests {
             mode: noon::SubsetDisplayMode::IncreasingFloor,
             options,
         }];
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
         assert!(context
             .ordinary_play_mixed_composition(
                 noon_core::SemanticAnimationCompositionKind::Parallel,
@@ -7752,9 +8211,12 @@ mod tests {
                 AnimationOptions::new(),
             )
             .is_err());
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert!(context.bindings.is_empty());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
 
         let valid = [OrdinaryCompositionChild::FamilySubsetDisplay {
             target: family,
@@ -7900,7 +8362,7 @@ mod tests {
         assert!(context.live_contains_mobject(&fade_target).unwrap());
         assert!(context.live_contains_mobject(&lifecycle_target).unwrap());
 
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
         let foreign = CanonicalAuthoringScene::default();
         let foreign_target = foreign.scene.circle(0.2).unwrap();
         let invalid = [OrdinaryCompositionChild::Add {
@@ -7916,7 +8378,10 @@ mod tests {
                 play,
             )
             .is_err());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
     }
 
     #[test]
@@ -7951,7 +8416,7 @@ mod tests {
             target_state: invalid_target,
             options: transform_options,
         }];
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
         assert!(context
             .ordinary_play_mixed_composition(
                 noon_core::SemanticAnimationCompositionKind::Parallel,
@@ -7960,8 +8425,11 @@ mod tests {
                 AnimationOptions::new(),
             )
             .is_err());
-        assert!(context.live_player.is_none());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert!(context.player_ownership.is_unstarted());
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
 
         let children = [
             OrdinaryCompositionChild::FamilyTransformTo {
@@ -7988,8 +8456,11 @@ mod tests {
                 AnimationOptions::new(),
             )
             .is_err());
-        assert!(context.live_player.is_none());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert!(context.player_ownership.is_unstarted());
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
         // Completion barriers publish the preceding transform before Indicate
         // captures its effective source and shared family center.
         for (index, child) in children.iter().enumerate() {
@@ -8042,7 +8513,7 @@ mod tests {
                 options,
             },
         ];
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
         assert!(context
             .begin_ordinary_mixed_composition(
                 noon_core::SemanticAnimationCompositionKind::Parallel,
@@ -8051,8 +8522,11 @@ mod tests {
                 play,
             )
             .is_err());
-        assert!(context.live_player.is_none());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert!(context.player_ownership.is_unstarted());
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
 
         let valid = [
             OrdinaryCompositionChild::Rotate {
@@ -8167,7 +8641,7 @@ mod tests {
         callbacks.add_updater(left.node_id(), HostCallbackId::new(7), 0.0, None);
         callbacks.add_updater(left.node_id(), HostCallbackId::new(8), 0.0, None);
         callbacks
-            .apply(&mut context.scene.store().borrow_mut())
+            .apply(&mut context.scene.integration_store().borrow_mut())
             .unwrap();
         let child = AnimationOptions::new()
             .run_time(2.0)
@@ -8181,7 +8655,7 @@ mod tests {
             .rate_func(RateFunction::Linear);
         let play = AnimationOptions::new().rate_func(RateFunction::Linear);
 
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
         let endpoint_only_error = context
             .ordinary_play_mixed_composition(
                 noon_core::SemanticAnimationCompositionKind::Parallel,
@@ -8191,8 +8665,11 @@ mod tests {
             )
             .unwrap_err();
         assert!(endpoint_only_error.contains("needs an asynchronous continuation"));
-        assert!(context.live_player.is_none());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert!(context.player_ownership.is_unstarted());
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
 
         let end_time = context
             .begin_ordinary_mixed_composition(
@@ -8289,7 +8766,7 @@ mod tests {
             .lag_ratio(0.0)
             .rate_func(RateFunction::Linear);
         let play = AnimationOptions::new().rate_func(RateFunction::Linear);
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
 
         assert!(context
             .begin_ordinary_mixed_composition(
@@ -8299,8 +8776,11 @@ mod tests {
                 play,
             )
             .is_err());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
-        assert!(context.live_player.is_none());
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+        assert!(context.player_ownership.is_unstarted());
         assert_eq!(context.live_execution_ownership(), "none");
 
         let mut valid_target = source.target_editor().unwrap();
@@ -8354,9 +8834,9 @@ mod tests {
             .lag_ratio(0.0)
             .rate_func(RateFunction::Linear);
         let play = AnimationOptions::new().rate_func(RateFunction::Linear);
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
         let (publication, frame, handoff_duration) = {
-            let player = context.live_player.as_mut().unwrap();
+            let player = context.player_ownership.local_mut().unwrap();
             let handoff_duration = player.live_handoff_duration();
             let session = player.session_mut_for_test();
             (
@@ -8378,8 +8858,11 @@ mod tests {
             )
             .is_err());
         assert_eq!(context.live_execution_ownership(), "returned");
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
-        let player = context.live_player.as_mut().unwrap();
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+        let player = context.player_ownership.local_mut().unwrap();
         assert_eq!(player.live_handoff_duration(), handoff_duration);
         assert!(!player.has_pending_live_segment());
         let session = player.session_mut_for_test();
@@ -8415,7 +8898,7 @@ mod tests {
             )
             .unwrap();
         {
-            let store = context.scene.store().borrow();
+            let store = context.scene.integration_store().borrow();
             let node = store.node(pulse.node_id()).unwrap();
             assert_eq!(node.residency(), noon_core::SemanticNodeResidency::Detached);
             assert!(node.parents().is_empty());
@@ -8445,7 +8928,7 @@ mod tests {
         context.return_execution_player(player).unwrap();
 
         {
-            let store = context.scene.store().borrow();
+            let store = context.scene.integration_store().borrow();
             let node = store.node(pulse.node_id()).unwrap();
             assert_eq!(node.residency(), noon_core::SemanticNodeResidency::Detached);
             assert!(node.parents().is_empty());
@@ -8507,13 +8990,13 @@ mod tests {
             )
             .unwrap_err()
             .contains("another authoring store"));
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
 
         let stale = source.target_editor().unwrap();
         let mut removal = SemanticMutationTransaction::new();
         removal.remove_node(stale.node_id());
         removal
-            .apply(&mut context.scene.store().borrow_mut())
+            .apply(&mut context.scene.integration_store().borrow_mut())
             .unwrap();
         assert!(context
             .validate_ordinary_mixed_composition(
@@ -8525,7 +9008,7 @@ mod tests {
                 play,
             )
             .is_err());
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
     }
 
     #[test]
@@ -8560,10 +9043,17 @@ mod tests {
         );
 
         let player = context.take_execution_player(2.0, 17).unwrap();
-        assert!(context
-            .mobject_layout(&circle)
-            .unwrap_err()
-            .contains("running in the semantic engine"));
+        {
+            let error = context.mobject_layout(&circle).unwrap_err();
+            assert_eq!(
+                (error.category, error.code),
+                ("unclassified", "unclassified")
+            );
+            assert_eq!(
+                error.message,
+                "live execution session is running in the semantic engine"
+            );
+        }
         context.return_execution_player(player).unwrap();
         assert_eq!(
             context.mobject_layout(&circle).unwrap(),
@@ -8622,22 +9112,50 @@ mod tests {
         assert_eq!(line.manim_line_endpoints().unwrap().start, (-1.0, 0.0));
 
         let player = context.take_execution_player(2.0, 17).unwrap();
-        assert!(context
-            .mobject_line_endpoints(&line)
-            .unwrap_err()
-            .contains("running in the semantic engine"));
-        assert!(context
-            .mobject_color(&line)
-            .unwrap_err()
-            .contains("running in the semantic engine"));
-        assert!(context
-            .mobject_fill_opacity(&line)
-            .unwrap_err()
-            .contains("running in the semantic engine"));
-        assert!(context
-            .mobject_stroke_opacity(&line)
-            .unwrap_err()
-            .contains("running in the semantic engine"));
+        {
+            let error = context.mobject_line_endpoints(&line).unwrap_err();
+            assert_eq!(
+                (error.category, error.code),
+                ("unclassified", "unclassified")
+            );
+            assert_eq!(
+                error.message,
+                "live execution session is running in the semantic engine"
+            );
+        }
+        {
+            let error = context.mobject_color(&line).unwrap_err();
+            assert_eq!(
+                (error.category, error.code),
+                ("unclassified", "unclassified")
+            );
+            assert_eq!(
+                error.message,
+                "live execution session is running in the semantic engine"
+            );
+        }
+        {
+            let error = context.mobject_fill_opacity(&line).unwrap_err();
+            assert_eq!(
+                (error.category, error.code),
+                ("unclassified", "unclassified")
+            );
+            assert_eq!(
+                error.message,
+                "live execution session is running in the semantic engine"
+            );
+        }
+        {
+            let error = context.mobject_stroke_opacity(&line).unwrap_err();
+            assert_eq!(
+                (error.category, error.code),
+                ("unclassified", "unclassified")
+            );
+            assert_eq!(
+                error.message,
+                "live execution session is running in the semantic engine"
+            );
+        }
         context.return_execution_player(player).unwrap();
         assert_eq!(context.mobject_line_endpoints(&line).unwrap(), observed);
         assert_eq!(context.mobject_color(&line).unwrap(), color);
@@ -8690,15 +9208,23 @@ mod tests {
         let detached_underline = context.live_create_manim_geometry(options).unwrap();
         assert_eq!(detached_underline.center().unwrap(), (8.0, 6.35));
         let foreign = noon::Scene::new().circle(1.0).unwrap();
-        assert!(context
-            .begin_underline(&foreign, 0.15)
-            .unwrap_err()
-            .contains("another authoring store"));
+        let error = context.begin_underline(&foreign, 0.15).unwrap_err();
+        assert_eq!(
+            (error.category, error.code),
+            ("foreign_handle", "authoring.foreign_store")
+        );
         let _player = context.take_execution_player(2.0, 17).unwrap();
-        assert!(context
-            .begin_underline(&circle, 0.15)
-            .unwrap_err()
-            .contains("running in the semantic engine"));
+        {
+            let error = context.begin_underline(&circle, 0.15).unwrap_err();
+            assert_eq!(
+                (error.category, error.code),
+                ("unclassified", "unclassified")
+            );
+            assert_eq!(
+                error.message,
+                "live execution session is running in the semantic engine"
+            );
+        }
     }
 
     #[test]
@@ -8802,11 +9328,11 @@ mod tests {
             context.mobject_layout(&circle).unwrap(),
             (3.0, -1.0, 4.0, 1.0)
         );
-        assert!(context.live_player.is_some());
+        assert!(context.player_ownership.local().is_some());
 
         // The next registration boundary lowers precisely one fresh runtime.
         context.prepare_execution_run().unwrap();
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
 
         let mut rerun = context.take_execution_player(1.0, 18).unwrap();
         let effective = rerun.live_effective(&circle).unwrap();
@@ -8952,18 +9478,45 @@ mod tests {
         );
 
         let leased = context.take_execution_player(end, 18).unwrap();
-        assert!(context
-            .live_create_text(noon::Text::new("Rejected"))
-            .unwrap_err()
-            .contains("running in the semantic engine"));
-        assert!(context
-            .live_create_typst(noon::Typst::new("Rejected"))
-            .unwrap_err()
-            .contains("running in the semantic engine"));
-        assert!(context
-            .live_create_math_typst(noon::MathTypst::new("Rejected"))
-            .unwrap_err()
-            .contains("running in the semantic engine"));
+        {
+            let error = context
+                .live_create_text(noon::Text::new("Rejected"))
+                .unwrap_err();
+            assert_eq!(
+                (error.category, error.code),
+                ("unclassified", "unclassified")
+            );
+            assert_eq!(
+                error.message,
+                "live execution session is running in the semantic engine"
+            );
+        }
+        {
+            let error = context
+                .live_create_typst(noon::Typst::new("Rejected"))
+                .unwrap_err();
+            assert_eq!(
+                (error.category, error.code),
+                ("unclassified", "unclassified")
+            );
+            assert_eq!(
+                error.message,
+                "live execution session is running in the semantic engine"
+            );
+        }
+        {
+            let error = context
+                .live_create_math_typst(noon::MathTypst::new("Rejected"))
+                .unwrap_err();
+            assert_eq!(
+                (error.category, error.code),
+                ("unclassified", "unclassified")
+            );
+            assert_eq!(
+                error.message,
+                "live execution session is running in the semantic engine"
+            );
+        }
         context.return_execution_player(leased).unwrap();
     }
 
@@ -8975,7 +9528,7 @@ mod tests {
         let mut callbacks = SemanticMutationTransaction::new();
         callbacks.add_updater(circle.node_id(), HostCallbackId::new(7), 0.0, None);
         callbacks
-            .apply(&mut context.scene.store().borrow_mut())
+            .apply(&mut context.scene.integration_store().borrow_mut())
             .unwrap();
 
         context.begin_ordinary_wait(0.25).unwrap();
@@ -9089,18 +9642,19 @@ mod tests {
         circle.shift(3.0, -1.0).unwrap();
 
         let query_error = context.mobject_layout(&circle).unwrap_err();
-        assert!(
-            query_error.contains("has not been published"),
-            "{query_error}"
+        assert_eq!(query_error.category, "stale_publication");
+        assert_eq!(
+            query_error.cause.as_ref().unwrap().code,
+            "publication.stale_scene_revision"
         );
         let run_error = context.prepare_execution_run().unwrap_err();
         assert!(run_error.contains("authored scene changed while live execution is active"));
-        assert!(context.live_player.is_some());
-        assert!(!context.live_player_returned);
+        assert!(context.player_ownership.local().is_some());
+        assert!(!context.player_ownership.is_returned());
     }
 
     #[test]
-    fn callback_occurrences_publish_before_session_lowering_and_reject_late_edits() {
+    fn callback_occurrences_publish_through_the_same_live_session() {
         let mut context = CanonicalAuthoringScene::default();
         let circle = context.scene.circle(1.0).unwrap();
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
@@ -9110,7 +9664,7 @@ mod tests {
             .unwrap();
         let registrations = context
             .scene
-            .store()
+            .integration_store()
             .borrow()
             .semantic_updater_registrations(circle.node_id())
             .unwrap()
@@ -9120,10 +9674,23 @@ mod tests {
         assert_eq!(registrations[0].active_from(), 0.0);
 
         context.live_player(2.0).unwrap();
-        let error = context
+        context
             .add_updater(&circle, HostCallbackId::new(13), 1.0, None)
-            .unwrap_err();
-        assert!(error.contains("before canonical execution begins"));
+            .unwrap();
+        context
+            .remove_updater(&circle, HostCallbackId::new(12), 0.0)
+            .unwrap();
+        context.clear_updaters(&circle, 1.0).unwrap();
+        let registrations = context
+            .scene
+            .integration_store()
+            .borrow()
+            .semantic_updater_registrations(circle.node_id())
+            .unwrap()
+            .to_vec();
+        assert_eq!(registrations.len(), 2);
+        assert_eq!(registrations[0].inactive_from(), Some(0.0));
+        assert_eq!(registrations[1].inactive_from(), Some(1.0));
     }
 
     #[test]
@@ -9194,13 +9761,16 @@ mod tests {
         assert_eq!(context.tracker_value(&tracker).unwrap(), 1.25);
         assert!(context
             .scene
-            .store()
+            .integration_store()
             .borrow()
             .is_semantic_signal_scoped(context.scene.root(), tracker.node_id()));
 
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
         assert!(context.create_value_tracker(f64::MAX).is_err());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
         assert_eq!(context.tracker_value(&tracker).unwrap(), 1.25);
 
         let leased = context.take_execution_player(1.0, 91).unwrap();
@@ -9213,28 +9783,42 @@ mod tests {
     #[test]
     fn detached_tracker_association_uses_authored_and_live_publication_paths() {
         let mut context = CanonicalAuthoringScene::default();
-        let tracker =
-            noon::ValueTracker::detached(std::rc::Rc::clone(context.scene.store()), 1.25).unwrap();
+        let tracker = noon::ValueTracker::detached(
+            std::rc::Rc::clone(context.scene.integration_store()),
+            1.25,
+        )
+        .unwrap();
         context.associate_value_tracker(&tracker).unwrap();
         assert_eq!(context.tracker_value(&tracker).unwrap(), 1.25);
 
         context.live_player(1.0).unwrap();
-        let live_tracker =
-            noon::ValueTracker::detached(std::rc::Rc::clone(context.scene.store()), 2.5).unwrap();
+        let live_tracker = noon::ValueTracker::detached(
+            std::rc::Rc::clone(context.scene.integration_store()),
+            2.5,
+        )
+        .unwrap();
         context.associate_value_tracker(&live_tracker).unwrap();
         assert_eq!(context.tracker_value(&live_tracker).unwrap(), 2.5);
 
-        let invalid =
-            noon::ValueTracker::detached(std::rc::Rc::clone(context.scene.store()), f64::MAX)
-                .unwrap();
-        let revision = context.scene.store().borrow().scene_revision();
+        let invalid = noon::ValueTracker::detached(
+            std::rc::Rc::clone(context.scene.integration_store()),
+            f64::MAX,
+        )
+        .unwrap();
+        let revision = context.scene.integration_store().borrow().scene_revision();
         assert!(context.associate_value_tracker(&invalid).is_err());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
         assert_eq!(invalid.detached_value().unwrap(), f64::MAX);
 
         let foreign = CanonicalAuthoringScene::default();
-        let foreign_tracker =
-            noon::ValueTracker::detached(std::rc::Rc::clone(foreign.scene.store()), 3.0).unwrap();
+        let foreign_tracker = noon::ValueTracker::detached(
+            std::rc::Rc::clone(foreign.scene.integration_store()),
+            3.0,
+        )
+        .unwrap();
         assert!(context.associate_value_tracker(&foreign_tracker).is_err());
         assert_eq!(foreign_tracker.detached_value().unwrap(), 3.0);
     }
@@ -9262,7 +9846,7 @@ mod tests {
         );
         let timeline = context
             .scene
-            .store()
+            .integration_store()
             .borrow()
             .semantic_signal_state(tracker.node_id())
             .unwrap()
@@ -9289,7 +9873,7 @@ mod tests {
             )
             .unwrap();
         context.bind_tracker_position(&circle, &position).unwrap();
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
 
         assert!(begin_request(
             &mut context,
@@ -9302,8 +9886,11 @@ mod tests {
             }
         )
         .is_err());
-        assert!(context.live_player.is_none());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert!(context.player_ownership.is_unstarted());
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
 
         let end = begin_request(
             &mut context,
@@ -9345,7 +9932,7 @@ mod tests {
         assert_eq!(
             context
                 .scene
-                .store()
+                .integration_store()
                 .borrow()
                 .semantic_input_scalar_value_at(tracker.node_id(), 1.0)
                 .unwrap(),
@@ -9367,7 +9954,7 @@ mod tests {
             .rate_func(RateFunction::Linear)
             .run_time(2.0)
             .unwrap();
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
 
         let error = play_request(
             &mut context,
@@ -9381,9 +9968,12 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("cannot follow pre-execution canonical timing"));
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert_eq!(context.authored_duration(), 2.0);
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
     }
 
     #[test]
@@ -9468,7 +10058,7 @@ mod tests {
     fn ordinary_create_is_atomic_and_rejects_foreign_or_second_membership() {
         let mut context = CanonicalAuthoringScene::default();
         let circle = context.scene.circle(0.4).unwrap();
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
         assert!(begin_request(
             &mut context,
             create_request(
@@ -9478,10 +10068,13 @@ mod tests {
             )
         )
         .is_err());
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert!(context.bindings.is_empty());
         assert!(context.identities.is_empty());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
 
         let foreign = CanonicalAuthoringScene::default()
             .scene
@@ -9496,8 +10089,11 @@ mod tests {
             )
         )
         .is_err());
-        assert!(context.live_player.is_none());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert!(context.player_ownership.is_unstarted());
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
 
         let end = begin_request(
             &mut context,
@@ -9626,7 +10222,7 @@ mod tests {
         let mut context = CanonicalAuthoringScene::default();
         let circle = context.scene.circle(0.4).unwrap();
         let square = context.scene.square(0.8).unwrap();
-        let revision = context.scene.store().borrow().scene_revision();
+        let revision = context.scene.integration_store().borrow().scene_revision();
 
         assert!(context
             .begin_ordinary_mixed_composition(
@@ -9647,17 +10243,20 @@ mod tests {
                 AnimationOptions::new().run_time(1.0)
             )
             .is_err());
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert!(context.bindings.is_empty());
         assert!(context.identities.is_empty());
-        assert_eq!(context.scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
     }
 
     #[test]
     fn failed_first_fade_does_not_install_a_player_or_derived_binding() {
         let mut context = CanonicalAuthoringScene::default();
         let circle = context.scene.circle(0.4).unwrap();
-        let before = context.scene.store().borrow().scene_revision();
+        let before = context.scene.integration_store().borrow().scene_revision();
         let id = ObjectId::new(0);
 
         assert!(begin_request(
@@ -9674,12 +10273,15 @@ mod tests {
             )
         )
         .is_err());
-        assert!(context.live_player.is_none());
-        assert!(!context.live_player_returned);
-        assert!(!context.live_player_transferred);
+        assert!(context.player_ownership.is_unstarted());
+        assert!(!context.player_ownership.is_returned());
+        assert!(!context.player_ownership.is_transferred());
         assert!(!context.bindings.contains_key(&id));
         assert!(!context.identities.contains_key(&circle.node_id()));
-        assert_eq!(context.scene.store().borrow().scene_revision(), before);
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            before
+        );
 
         // The failed provisional player did not poison the ordinary path.
         begin_request(
@@ -9695,7 +10297,7 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(context.live_player.is_some());
+        assert!(context.player_ownership.local().is_some());
         assert_eq!(context.bindings.get(&id), Some(&circle.node_id()));
     }
 
@@ -9706,7 +10308,7 @@ mod tests {
             .scene
             .text(noon::Text::new("resource entry"))
             .unwrap();
-        let before = context.scene.store().borrow().scene_revision();
+        let before = context.scene.integration_store().borrow().scene_revision();
         let id = ObjectId::new(0);
 
         assert!(begin_request(
@@ -9722,10 +10324,13 @@ mod tests {
             )
         )
         .is_err());
-        assert!(context.live_player.is_none());
+        assert!(context.player_ownership.is_unstarted());
         assert!(!context.bindings.contains_key(&id));
         assert!(!context.identities.contains_key(&text.node_id()));
-        assert_eq!(context.scene.store().borrow().scene_revision(), before);
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            before
+        );
     }
 
     #[test]

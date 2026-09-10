@@ -7,12 +7,10 @@ from typing import Any
 
 import noon as _base
 import _manim_compat as _compat
-import _manim_phase_b as _phase_b
 import _manim_rate_functions as _rate_functions
 import _manim_typst as _typst
 
 
-_INSTALLED = False
 
 
 def _native_text(value: object) -> bool:
@@ -61,7 +59,7 @@ class Write:
         self.stroke_color = (
             None
             if stroke_color is None
-            else _phase_b._as_color("stroke_color", stroke_color)
+            else _compat._as_color("stroke_color", stroke_color)
         )
         animation_kwargs["rate_func"] = rate_func
         self.anim_args = animation_kwargs
@@ -87,19 +85,3 @@ class Unwrite(Write):
             reverse=reverse,
             **animation_kwargs,
         )
-
-
-
-def install() -> None:
-    """Install inert Write/Unwrite syntax for shared canonical playback."""
-
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-
-    for name, value in {"Write": Write, "Unwrite": Unwrite}.items():
-        setattr(_base, name, value)
-        setattr(_compat, name, value)
-        if name not in _base.__all__:
-            _base.__all__.append(name)

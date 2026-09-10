@@ -23,7 +23,6 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
             import types
 
             fake_js = types.ModuleType("js")
-            fake_js.noonResolveUniformCompositionSchedule = object()
             fake_js.noonResolveAnimationOptions = object()
 
             next_id = 1
@@ -100,6 +99,17 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
                     self.members = []
                     self.calls = []
 
+                def layout(self):
+                    self.calls.append("layout")
+                    return self
+
+                def shiftBy(self, x, y):
+                    # This double observes forwarding, not shared Rust semantics.
+                    self.calls.append(("shiftBy", float(x), float(y)))
+
+                def setFill(self, *arguments):
+                    self.calls.append(("setFill", arguments))
+
                 def identity(self):
                     return ("family", self.semanticSlot, self.semanticGeneration)
 
@@ -115,13 +125,11 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_compat
-            _manim_compat.install()
+
             import _manim_rate_functions
-            _manim_rate_functions.install()
-            import _manim_phase_b  # noqa: F401
             import _manim_geometry  # installs constructor-free custom Group copy
             import _manim_semantic_handles as handles
-            handles.install()
+
             import _manim_animate  # noqa: F401
 
             from noon import ORANGE, RIGHT, Square, VGroup
@@ -165,10 +173,15 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
             builder.shift(RIGHT).set_fill(ORANGE, opacity=0.5)
             assert first._current_raw().to_ir() == source_first
             assert second._current_raw().to_ir() == source_second
-            assert target_first._current_raw().transform["translation"]["x"] == 1.0
-            assert target_second._current_raw().transform["translation"]["x"] == 1.0
-            assert target_first._current_raw().style["fill"]["alpha"] == 0.5
-            assert target_second._current_raw().style["fill"]["alpha"] == 0.5
+            # Shared Rust owns family translation and paint. The test double
+            # records a single family dispatch; no leaf fallback may run here.
+            assert target._semantic_family_handle.calls[:2] == ["layout", ("shiftBy", 1.0, 0.0)]
+            assert not any(isinstance(call, tuple) and call[0] == "shift"
+                           for handle in (target_first._semantic_handle, target_second._semantic_handle)
+                           for call in handle.calls)
+            assert target._semantic_family_handle.calls[-1] == (
+                "setFill", (True, ORANGE.red, ORANGE.green, ORANGE.blue, ORANGE.alpha, 0.5)
+            )
 
             class FakeCanonicalContext:
                 def __init__(self):
@@ -194,7 +207,6 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
             context = FakeCanonicalContext()
             scene = types.SimpleNamespace(
                 _canonical_authoring_context=context,
-                _legacy_geometry_materialized=False,
                 _tracks=[],
             )
             first._scene = scene

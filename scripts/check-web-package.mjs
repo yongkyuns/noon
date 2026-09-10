@@ -162,13 +162,6 @@ const expectedJavascriptSurface = [
   "alignToMobject(",
   "alignToFamily(",
   "targetEditor(",
-  "wireTranslationX",
-  "wireScaleX",
-  "wireRotation",
-  "wireHasFill",
-  "wireFillAlpha",
-  "wireHasStroke",
-  "wireStrokeWidth",
   "setFill(",
   "setTranslation(",
   "setScale(",
@@ -181,17 +174,10 @@ const expectedJavascriptSurface = [
   "manimMoveToPoint(",
   "appendCreate(",
   "appendRotate(",
-  "sceneJson(",
-  "export function verifySceneReplay(",
   "export function resolveAnimationOptions(",
-  "export function resolveCompositionSchedule(",
-  "export function resolveUniformCompositionSchedule(",
-  "export function resolveLifecyclePlan(",
-  "export function validatePresenceTransition(",
 ];
 const expectedTypeSurface = [
   "constructor()",
-  "sceneJson(): string",
   "export class WasmAuthoringStore",
   "createManimCircle(radius: number): WasmAuthoringMobjectHandle",
   "createManimText(source: string, font_family: string, font_size: number, line_spacing: number): WasmAuthoringMobjectHandle",
@@ -370,13 +356,6 @@ const expectedTypeSurface = [
   "alignToFamily(",
   "targetEditor(): WasmAuthoringMobjectHandle",
   "prepareFamilySubsetDisplay(family: WasmAuthoringFamilyHandle): void",
-  "wireTranslationX",
-  "wireScaleX",
-  "wireRotation",
-  "wireHasFill",
-  "wireFillAlpha",
-  "wireHasStroke",
-  "wireStrokeWidth",
   "setFill(red: number, green: number, blue: number, opacity: number): void",
   "setTranslation(x: number, y: number): void",
   "setScale(x: number, y: number): void",
@@ -387,12 +366,7 @@ const expectedTypeSurface = [
   "setObjectOpacity(opacity: number): void",
   "manimMoveToHandle(",
   "manimMoveToPoint(",
-  "export function verifySceneReplay(scene_json: string, targets_json: string, forward_sample_count: number): void",
   "export function resolveAnimationOptions(",
-  "export function resolveCompositionSchedule(",
-  "export function resolveUniformCompositionSchedule(",
-  "export function resolveLifecyclePlan(",
-  "export function validatePresenceTransition(",
 ];
 
 // Direct example factories are compiled only with Rust debug assertions.
@@ -401,6 +375,7 @@ const expectedTypeSurface = [
 if (process.env.NOON_WASM_PROFILE === "dev"
     || javascript.includes("export function createDirectExecutionSmokeRenderer(")) {
   expectedJavascriptSurface.push(
+    "export function verifyDirectExecutionReplay(",
     "export function createDirectTypstTextSmokeRenderer(",
     "export function createDirectMathTypstTextSmokeRenderer(",
     "export function createDirectOrdinaryAffinePlaySmokeRenderer(",
@@ -414,6 +389,10 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectMixedScalarCompositionSmokeRenderer(",
     "export function createDirectFamilyTransformIndicateSmokeRenderer(",
     "export function createDirectFamilyArrangementSmokeRenderer(",
+    "export function createDirectDimensionFittingSmokeRenderer(",
+    "export function createDirectFamilyAffineSmokeRenderer(",
+    "export function createDirectFamilyPaintSmokeRenderer(",
+    "export function createDirectFamilyGridSmokeRenderer(",
     "export function createDirectFamilyPlacementSmokeRenderer(",
     "export function createDirectDrawBorderThenFillSmokeRenderer(",
     "export function createDirectOrdinaryMembershipSmokeRenderer(",
@@ -440,6 +419,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectOrdinaryStylePlaySmokeRenderer(",
   );
   expectedTypeSurface.push(
+    "export function verifyDirectExecutionReplay(",
     "recoverWebGlContext(): Promise<boolean>",
     "export function createDirectTypstTextSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectMathTypstTextSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
@@ -458,6 +438,10 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectMixedScalarCompositionSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyTransformIndicateSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyArrangementSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectDimensionFittingSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectFamilyAffineSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectFamilyPaintSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectFamilyGridSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyPlacementSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectDrawBorderThenFillSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryMembershipSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
@@ -477,6 +461,21 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectOrdinarySuccessionSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryPaintPlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryStylePlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectFilledPathTransformRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectCreateShapesRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectMorphStressRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+
+  );
+}
+
+// Recovery qualification also runs with release optimizations. Its explicit
+// fixture feature does not enable the rest of the debug example surface.
+if (process.env.NOON_RENDERER_SMOKE === "1"
+    || javascript.includes("export function createDirectRecoverySmokeRenderer(")) {
+  expectedJavascriptSurface.push("export function createDirectRecoverySmokeRenderer(");
+  expectedTypeSurface.push(
+    "export function createDirectRecoverySmokeRenderer(canvas: OffscreenCanvas, fixture: string): Promise<ExecutionCanvasRenderer>",
+    "directSceneRevision(): bigint",
   );
 }
 
@@ -490,18 +489,28 @@ for (const fragment of expectedTypeSurface) {
     throw new Error(`Generated declarations are missing: ${fragment}`);
   }
 }
-for (const retired of ["ReactiveScenePlayer", "ReactiveCanvasPlayer",
+for (const retired of ["EngineScenePlayer", "ReactiveScenePlayer", "ReactiveCanvasPlayer",
   "AuthoringSceneCore", "DetachedMobjectCore", "AnimateCore", "PlayBatchCore"]) {
   if (javascript.includes(`export class ${retired}`) || declarations.includes(`export class ${retired}`)) {
     throw new Error(`Deleted browser API returned to the package: ${retired}`);
   }
 }
 for (const retired of [
+  "sceneJson(",
+  "export function verifySceneReplay(",
+  "export function resolveUniformCompositionSchedule(",
+  "export function resolveLifecyclePlan(",
+  "export function validatePresenceTransition(",
+  "export function resolveCompositionSchedule(",
   "export function authoringCircle(", "export function authoringSquare(",
   "export function authoringRectangle(", "export function authoringLine(",
   "createManimDot(", "createManimTriangle(", "createManimElbow(",
   "createManimRoundedRectangle(", "createManimAnnularSector(", "createManimSector(",
   "createManimAnnulus(", "createManimDashedLine(", "createManimUnderline(",
+  "wireTranslationX", "wireTranslationY", "wireScaleX", "wireScaleY", "wireRotation",
+  "wireHasFill", "wireFillRed", "wireFillGreen", "wireFillBlue", "wireFillAlpha",
+  "wireHasStroke", "wireStrokeRed", "wireStrokeGreen", "wireStrokeBlue", "wireStrokeAlpha",
+  "wireStrokeWidth", "wireObjectOpacity",
   "nextToMobject(",
   "nextToFamily(",
   "manimNextToHandle(",

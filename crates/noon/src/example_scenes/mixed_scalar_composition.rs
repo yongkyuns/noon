@@ -89,26 +89,38 @@ impl LiveContinuation for MixedScalarComposition {
 
 pub fn program() -> Result<LiveProgram<MixedScalarComposition>, String> {
     let mut scene = Scene::new();
-    let mut circle = Mobject::manim_circle(Rc::clone(scene.store()), 0.3)?;
-    let mut square = Mobject::manim_square(Rc::clone(scene.store()), 1.0)?;
+    let mut circle = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.3)
+        .map_err(|error| error.to_string())?;
+    let mut square = Mobject::manim_square(Rc::clone(scene.integration_store()), 1.0)
+        .map_err(|error| error.to_string())?;
     for (object, color) in [(&mut circle, Color::BLUE), (&mut square, Color::PINK)] {
-        object.set_fill(
-            f64::from(color.red),
-            f64::from(color.green),
-            f64::from(color.blue),
-            0.7,
-        )?;
+        object
+            .set_fill(
+                f64::from(color.red),
+                f64::from(color.green),
+                f64::from(color.blue),
+                0.7,
+            )
+            .map_err(|error| error.to_string())?;
     }
-    square.set_translation(0.0, -1.0)?;
+    square
+        .set_translation(0.0, -1.0)
+        .map_err(|error| error.to_string())?;
     scene.add(&circle).map_err(|e| e.to_string())?;
     scene.add(&square).map_err(|e| e.to_string())?;
-    let tracker = scene.value_tracker(0.0)?;
-    let position = scene.position_from_tracker(
-        &tracker,
-        SemanticVec3::new(1.0, 0.0, 0.0),
-        SemanticVec3::new(-2.0, 1.0, 0.0),
-    )?;
-    scene.bind_position(&circle, &position)?;
+    let tracker = scene
+        .value_tracker(0.0)
+        .map_err(|error| error.to_string())?;
+    let position = scene
+        .position_from_tracker(
+            &tracker,
+            SemanticVec3::new(1.0, 0.0, 0.0),
+            SemanticVec3::new(-2.0, 1.0, 0.0),
+        )
+        .map_err(|error| error.to_string())?;
+    scene
+        .bind_position(&circle, &position)
+        .map_err(|error| error.to_string())?;
     scene
         .into_live_program(MixedScalarComposition {
             circle,

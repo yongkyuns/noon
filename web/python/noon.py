@@ -1,20 +1,29 @@
 """Public Noon authoring API.
 
-The public surface favors Manim-like semantic vocabulary. Browser authoring installs
-the shared Rust semantic scene facade used for execution and explicit export.
+Public classes and methods delegate to shared Rust semantic operations. Python
+owns authoring syntax, argument conversion, and wrapper identity.
 """
 
 from __future__ import annotations
 
-import copy
-import json
 import math
-from dataclasses import dataclass
-from typing import Any, Iterable, Iterator
+from typing import Any, Callable
 
+from _noon_errors import (
+    NoonError,
+    NoonErrorCause,
+    NoonValueError,
+    NoonForeignHandleError,
+    NoonStaleHandleError,
+    NoonMissingResourceError,
+    NoonUnsupportedError,
+    NoonPendingError,
+    NoonStalePublicationError,
+    NoonCallbackError,
+    NoonOwnershipError,
+)
 import _noon_ir as _ir
 
-FORMAT_VERSION = _ir.FORMAT_VERSION
 VectorPath = _ir.VectorPath
 Color = _ir.Color
 
@@ -86,11 +95,35 @@ class Vec2(tuple):
 
 
 def _as_vec2(value: object) -> Vec2:
+    """Accept Noon's Vec2 plus common Manim 2D/3D vector inputs.
+
+    Manim commonly represents 2D directions as three-component NumPy vectors. Noon
+    remains 2D internally, so z=0 is accepted and non-zero z is rejected explicitly.
+    """
+
     if isinstance(value, Vec2):
         return value
-    if isinstance(value, (tuple, list)) and len(value) == 2:
-        return Vec2(value[0], value[1])
-    raise TypeError("expected a Vec2 or a two-value tuple/list")
+
+    try:
+        length = len(value)  # type: ignore[arg-type]
+    except (TypeError, AttributeError):
+        length = None
+
+    if length in (2, 3):
+        try:
+            x = float(value[0])  # type: ignore[index]
+            y = float(value[1])  # type: ignore[index]
+            if length == 3:
+                z = float(value[2])  # type: ignore[index]
+                if not math.isclose(z, 0.0, abs_tol=1e-12):
+                    raise NotImplementedError(
+                        "Noon currently supports 2D Manim vectors only; z must be 0"
+                    )
+            return Vec2(x, y)
+        except (TypeError, ValueError, IndexError) as error:
+            raise TypeError("expected a two- or three-component numeric vector") from error
+
+    raise TypeError("expected a two- or three-component vector")
 
 
 ORIGIN = Vec2(0.0, 0.0)
@@ -197,109 +230,22 @@ GRAY_E = GREY_E = _hex_color(0x222222)
 GRAY = GREY = GRAY_C
 
 
-def _raw_mobject(raw: _ir.Mobject) -> _ir.Mobject:
-    return _ir.Mobject(
-        geometry=copy.deepcopy(raw.geometry),
-        transform=copy.deepcopy(raw.transform),
-        style=copy.deepcopy(raw.style),
-    )
+def _semantic_operations():
+    import _manim_semantic_handles
+    return _manim_semantic_handles
 
 
-def _bounds(raw: _ir.Mobject) -> tuple[Vec2, Vec2] | None:
-    geometry = raw.geometry
-    points: list[Vec2] = []
-    if "circle" in geometry:
-        radius = float(geometry["circle"]["radius"])
-        points = [Vec2(-radius, -radius), Vec2(radius, radius)]
-    elif "rectangle" in geometry:
-        size = geometry["rectangle"]["size"]
-        half = Vec2(float(size["x"]) / 2.0, float(size["y"]) / 2.0)
-        points = [-half, half]
-    elif "line" in geometry:
-        line = geometry["line"]
-        points = [
-            Vec2(line["start"]["x"], line["start"]["y"]),
-            Vec2(line["end"]["x"], line["end"]["y"]),
-        ]
-    elif "vector_path" in geometry:
-        for command in geometry["vector_path"]["commands"]:
-            if command == "close":
-                continue
-            payload = next(iter(command.values()))
-            for key in ("to", "control", "control1", "control2"):
-                if key in payload:
-                    point = payload[key]
-                    points.append(Vec2(point["x"], point["y"]))
-    if not points:
-        return None
-
-    min_x = min(point.x for point in points)
-    max_x = max(point.x for point in points)
-    min_y = min(point.y for point in points)
-    max_y = max(point.y for point in points)
-    local_corners = (
-        Vec2(min_x, min_y),
-        Vec2(min_x, max_y),
-        Vec2(max_x, min_y),
-        Vec2(max_x, max_y),
-    )
-    transform = raw.transform
-    scale = Vec2(transform["scale"]["x"], transform["scale"]["y"])
-    translation = Vec2(
-        transform["translation"]["x"], transform["translation"]["y"]
-    )
-    rotation = float(transform["rotation"])
-    sine = math.sin(rotation)
-    cosine = math.cos(rotation)
-
-    def world(point: Vec2) -> Vec2:
-        x = point.x * scale.x
-        y = point.y * scale.y
-        return Vec2(
-            x * cosine - y * sine + translation.x,
-            x * sine + y * cosine + translation.y,
-        )
-
-    world_points = [world(point) for point in local_corners]
-    return (
-        Vec2(
-            min(point.x for point in world_points),
-            min(point.y for point in world_points),
-        ),
-        Vec2(
-            max(point.x for point in world_points),
-            max(point.y for point in world_points),
-        ),
-    )
-
-
-def _center(raw: _ir.Mobject) -> Vec2:
-    bounds = _bounds(raw)
-    if bounds is None:
-        translation = raw.transform["translation"]
-        return Vec2(translation["x"], translation["y"])
-    return (bounds[0] + bounds[1]) * 0.5
-
-
-def _critical(raw: _ir.Mobject, direction: Vec2) -> Vec2:
-    bounds = _bounds(raw)
-    if bounds is None:
-        return _center(raw)
-    minimum, maximum = bounds
-    center = (minimum + maximum) * 0.5
-    return Vec2(
-        minimum.x if direction.x < 0 else maximum.x if direction.x > 0 else center.x,
-        minimum.y if direction.y < 0 else maximum.y if direction.y > 0 else center.y,
-    )
+def _callback_operations():
+    # The adapter selects a staged callback view or the normal semantic handle.
+    import _manim_updaters
+    return _manim_updaters
 
 
 class Mobject:
-    """Thin Python handle around one canonical Noon object snapshot."""
+    """Python identity wrapper; shared Rust handles own all semantic state."""
 
-    def __init__(self, raw: _ir.Mobject) -> None:
-        self._raw = _raw_mobject(raw)
-        self._scene: Scene | None = None
-        self._object: _ir.Object | None = None
+    def __init__(self) -> None:
+        raise TypeError("Mobject is a base type; construct a Circle, Rectangle, Line, or Path")
 
     @property
     def geometry(self) -> dict[str, Any]:
@@ -323,7 +269,7 @@ class Mobject:
         return self._current_raw().to_ir()
 
     def copy(self) -> Mobject:
-        return Mobject(self._current_raw())
+        return _semantic_operations()._copy_mobject(self)
 
     def _bind(self, scene: Scene, obj: _ir.Object) -> None:
         if self._scene is not None and self._scene is not scene:
@@ -332,167 +278,185 @@ class Mobject:
         self._object = obj
 
     def _bind_to_scene(self, scene: Scene, *, key: str | None = None) -> _ir.Object:
-        obj = _ir.Scene.add(scene, self._current_raw(), key=key)
-        self._bind(scene, obj)
-        return obj
+        return _scene_operations()._bind_mobject(self, scene, key=key)
 
-    def _scene_lifecycle_state(
-        self, scene: Scene, time: float
-    ) -> tuple[bool, bool, bool]:
-        if self._scene is not scene or self._object is None:
-            raise ValueError("Mobject must belong to this Scene")
-        tracks = scene._presence_tracks(self._object)
-        has_future = any(float(track["timing"]["start_time"]) > time for track in tracks)
-        return bool(tracks), scene._presence_at(self._object, time), has_future
+    def _current_raw(self):
+        return _callback_operations()._canonical_current_raw(self)
 
-    def _record_scene_presence(
-        self,
-        scene: Scene,
-        from_: bool,
-        to: bool,
-        time: float,
-        *,
-        key: str | None = None,
-    ) -> None:
-        if self._scene is not scene or self._object is None:
-            raise ValueError("Mobject must belong to this Scene")
-        scene._add_presence_track(self._object, from_, to, time, key=key)
+    def _apply(self, raw: object) -> Mobject:
+        return _callback_operations()._canonical_apply(self, raw)
 
-    def _is_present_in_scene(self, scene: Scene, time: float) -> bool:
-        if self._scene is not scene or self._object is None:
-            return False
-        return self._scene_lifecycle_state(scene, time)[1]
+    def get_edge_center(self: Mobject, direction: object) -> Vec2:
+        return self.get_critical_point(direction)
 
-    def _current_raw(self) -> _ir.Mobject:
-        if self._scene is None or self._object is None:
-            return self._raw
-        return self._scene._raw_snapshot(self._object)
+    def get_corner(self: Mobject, direction: object) -> Vec2:
+        return self.get_critical_point(direction)
 
-    def _apply(self, raw: _ir.Mobject) -> Mobject:
-        if self._scene is None or self._object is None:
-            self._raw = _raw_mobject(raw)
-        else:
-            self._scene._replace_static_snapshot(self._object, raw)
-        return self
+    def get_left(self: Mobject) -> Vec2:
+        return self.get_critical_point(LEFT)
+
+    def get_right(self: Mobject) -> Vec2:
+        return self.get_critical_point(RIGHT)
+
+    def get_top(self: Mobject) -> Vec2:
+        return self.get_critical_point(UP)
+
+    def get_bottom(self: Mobject) -> Vec2:
+        return self.get_critical_point(DOWN)
+
+    def get_coord(
+        self: Mobject, dim: int, direction: object = ORIGIN
+    ) -> float:
+        if dim not in (0, 1):
+            raise NotImplementedError("Noon currently exposes x/y authoring coordinates only")
+        point = self.get_critical_point(direction)
+        return float(point[dim])
+
+    def get_x(self: Mobject, direction: object = ORIGIN) -> float:
+        return self.get_coord(0, direction)
+
+    def get_y(self: Mobject, direction: object = ORIGIN) -> float:
+        return self.get_coord(1, direction)
+
+    def scale_to_fit_width(self: Mobject, width: float, **kwargs: Any) -> Mobject:
+        return self.rescale_to_fit(width, 0, stretch=False, **kwargs)
+
+    def scale_to_fit_height(self: Mobject, height: float, **kwargs: Any) -> Mobject:
+        return self.rescale_to_fit(height, 1, stretch=False, **kwargs)
+
+    def stretch_to_fit_width(self: Mobject, width: float, **kwargs: Any) -> Mobject:
+        return self.rescale_to_fit(width, 0, stretch=True, **kwargs)
+
+    def stretch_to_fit_height(self: Mobject, height: float, **kwargs: Any) -> Mobject:
+        return self.rescale_to_fit(height, 1, stretch=True, **kwargs)
+
+    def match_width(
+        self: Mobject, mobject: Mobject, **kwargs: Any
+    ) -> Mobject:
+        return self.match_dim_size(mobject, 0, **kwargs)
+
+    def match_height(
+        self: Mobject, mobject: Mobject, **kwargs: Any
+    ) -> Mobject:
+        return self.match_dim_size(mobject, 1, **kwargs)
+
+    def rescale_to_fit(self, length: float, dim: int, stretch: bool = False, **kwargs: Any) -> Mobject:
+        from _manim_semantic_handles import _rescale_to_fit
+        return _rescale_to_fit(self, length, dim, stretch, **kwargs)
+
+    def match_dim_size(self, mobject: Mobject, dim: int, **kwargs: Any) -> Mobject:
+        from _manim_semantic_handles import _match_dim_size
+        return _match_dim_size(self, mobject, dim, **kwargs)
+
+    def generate_target(self, use_deepcopy: bool = False) -> Mobject:
+        from _manim_compat import _mobject_generate_target
+        return _mobject_generate_target(self, use_deepcopy)
+
+    def save_state(self) -> Mobject:
+        from _manim_compat import _mobject_save_state
+        return _mobject_save_state(self)
+
+    def restore(self) -> Mobject:
+        from _manim_compat import _mobject_restore
+        return _mobject_restore(self)
+
+    def get_color(self) -> Color:
+        from _manim_geometry import _mobject_get_color
+        return _mobject_get_color(self)
+
+    def match_points(self, mobject: object) -> Mobject:
+        from _manim_geometry import match_points
+        return match_points(self, mobject)
 
     def get_center(self) -> Vec2:
-        return _center(self._current_raw())
+        return _callback_operations()._canonical_get_center(self)
 
     @property
     def width(self) -> float:
-        bounds = _bounds(self._current_raw())
-        return 0.0 if bounds is None else bounds[1].x - bounds[0].x
+        return _semantic_operations()._width(self)
+
+    @width.setter
+    def width(self, value: float) -> None:
+        _semantic_operations()._set_width_property(self, value)
 
     @property
     def height(self) -> float:
-        bounds = _bounds(self._current_raw())
-        return 0.0 if bounds is None else bounds[1].y - bounds[0].y
+        return _semantic_operations()._height(self)
 
-    def shift(self, direction: Vec2 | tuple[float, float]) -> Mobject:
-        raw = _raw_mobject(self._current_raw())
-        offset = _as_vec2(direction)
-        raw.transform["translation"]["x"] += offset.x
-        raw.transform["translation"]["y"] += offset.y
-        return self._apply(raw)
+    @height.setter
+    def height(self, value: float) -> None:
+        _semantic_operations()._set_height_property(self, value)
 
-    def move_to(self, point: Vec2 | tuple[float, float]) -> Mobject:
-        return self.shift(_as_vec2(point) - self.get_center())
+    def shift(self, direction: object) -> Mobject:
+        return _callback_operations()._canonical_shift(self, direction)
+
+    def move_to(self, point: object, *args: object, **kwargs: object) -> Mobject:
+        return _callback_operations()._canonical_move_to(self, point, *args, **kwargs)
 
     def center(self) -> Mobject:
         return self.move_to(ORIGIN)
 
-    def set_x(self, x: float) -> Mobject:
-        center = self.get_center()
-        return self.shift(Vec2(float(x) - center.x, 0.0))
+    def set_x(self, x: float, direction: object = ORIGIN) -> Mobject:
+        return _callback_operations()._canonical_set_x(self, x, direction)
 
-    def set_y(self, y: float) -> Mobject:
-        center = self.get_center()
-        return self.shift(Vec2(0.0, float(y) - center.y))
+    def set_y(self, y: float, direction: object = ORIGIN) -> Mobject:
+        return _callback_operations()._canonical_set_y(self, y, direction)
 
-    def scale(self, factor: float | tuple[float, float]) -> Mobject:
-        raw = _raw_mobject(self._current_raw())
-        if isinstance(factor, (tuple, list, Vec2)):
-            value = _as_vec2(factor)
-        else:
-            value = Vec2(float(factor), float(factor))
-        raw.transform["scale"]["x"] *= value.x
-        raw.transform["scale"]["y"] *= value.y
-        return self._apply(raw)
+    def set_coord(self, value: float, dim: int, direction: object = ORIGIN) -> Mobject:
+        from _manim_shared_geometry import _set_coord
+        return _set_coord(self, value, dim, direction)
 
-    def rotate(self, angle: float) -> Mobject:
-        raw = _raw_mobject(self._current_raw())
-        raw.transform["rotation"] += float(angle)
-        return self._apply(raw)
+    def match_coord(self, mobject: Mobject, dim: int, direction: object = ORIGIN) -> Mobject:
+        from _manim_shared_geometry import _match_coord
+        return _match_coord(self, mobject, dim, direction)
+
+    def match_x(self, mobject: Mobject, direction: object = ORIGIN) -> Mobject:
+        return self.match_coord(mobject, 0, direction)
+
+    def match_y(self, mobject: Mobject, direction: object = ORIGIN) -> Mobject:
+        return self.match_coord(mobject, 1, direction)
+
+    def rotate_about_origin(
+        self, angle: float, axis: object = (0.0, 0.0, 1.0), **kwargs: Any,
+    ) -> Mobject:
+        return self.rotate(angle, axis=axis, about_point=ORIGIN, **kwargs)
+
+    def scale(self, *args: object, **kwargs: object) -> Mobject:
+        return _callback_operations()._canonical_scale(self, *args, **kwargs)
+
+    def rotate(self, *args: object, **kwargs: object) -> Mobject:
+        return _callback_operations()._canonical_rotate(self, *args, **kwargs)
 
     def set_color(self, color: Color) -> Mobject:
-        raw = _raw_mobject(self._current_raw())
-        if raw.style["fill"] is not None:
-            raw.style["fill"] = color.to_ir()
-        if raw.style["stroke"] is not None:
-            raw.style["stroke"] = color.to_ir()
-        if raw.style["fill"] is None and raw.style["stroke"] is None:
-            raw.style["fill"] = color.to_ir()
-        return self._apply(raw)
+        return _callback_operations()._canonical_set_color(self, color)
 
     def set_fill(self, color: Color | None = None, opacity: float | None = None) -> Mobject:
-        raw = _raw_mobject(self._current_raw())
-        raw.style["fill"] = None if color is None else color.to_ir()
-        if opacity is not None:
-            raw.style["opacity"] = float(opacity)
-        return self._apply(raw)
+        return _callback_operations()._canonical_set_fill(self, color, opacity)
 
-    def set_stroke(
-        self, color: Color | None = None, width: float | None = None
-    ) -> Mobject:
-        raw = _raw_mobject(self._current_raw())
-        raw.style["stroke"] = None if color is None else color.to_ir()
-        if width is not None:
-            raw.style["stroke_width"] = float(width)
-        return self._apply(raw)
+    def set_stroke(self, color: Color | None = None, width: float | None = None) -> Mobject:
+        return _callback_operations()._canonical_set_stroke(self, color, width)
 
     def set_opacity(self, opacity: float) -> Mobject:
-        raw = _raw_mobject(self._current_raw())
-        raw.style["opacity"] = float(opacity)
-        return self._apply(raw)
+        return _callback_operations()._canonical_set_opacity(self, opacity)
 
     def set_object_opacity(self, opacity: float) -> Mobject:
-        """Set Noon's object-composite opacity independently of paint opacity.
-
-        Manim ``VMobject.set_opacity`` controls the enabled fill and stroke paint
-        alpha channels. This explicit Noon operation controls the separate opacity
-        multiplier applied to the complete object through the shared semantic handle.
-        """
-        del opacity
-        raise NotImplementedError(
-            "set_object_opacity requires Noon's shared semantic authoring handle"
-        )
+        """Set whole-object opacity independently of fill/stroke paint alpha."""
+        return _callback_operations()._canonical_set_opacity(self, opacity)
 
     def next_to(
         self,
-        other: Mobject | Vec2 | tuple[float, float],
-        direction: Vec2 | tuple[float, float] = RIGHT,
+        mobject_or_point: object,
+        direction: object = RIGHT,
         buff: float = DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
-    ) -> Mobject:
-        axis = _as_vec2(direction).normalized()
-        self_point = _critical(self._current_raw(), -axis)
-        if isinstance(other, Mobject):
-            target_point = _critical(other._current_raw(), axis)
-        else:
-            target_point = _as_vec2(other)
-        return self.shift(target_point - self_point + axis * float(buff))
+        aligned_edge: object = ORIGIN,
+        submobject_to_align: object | None = None,
+        index_of_submobject_to_align: int | None = None,
+        coor_mask: object = (1.0, 1.0, 1.0),
+    ) -> Mobject | Group:
+        return _semantic_operations()._next_to(self, mobject_or_point, direction, buff, aligned_edge, submobject_to_align, index_of_submobject_to_align, coor_mask)
 
-    def align_to(
-        self,
-        other: Mobject,
-        direction: Vec2 | tuple[float, float] = ORIGIN,
-    ) -> Mobject:
-        axis = _as_vec2(direction)
-        delta = _critical(other._current_raw(), axis) - _critical(
-            self._current_raw(), axis
-        )
-        return self.shift(
-            Vec2(delta.x if axis.x else 0.0, delta.y if axis.y else 0.0)
-        )
+    def align_to(self, mobject_or_point: object, direction: object = ORIGIN) -> Mobject:
+        return _semantic_operations()._align_to(self, mobject_or_point, direction)
 
     def to_edge(
         self,
@@ -509,624 +473,323 @@ class Mobject:
         return self._align_on_frame(_as_vec2(corner), float(buff))
 
     def _align_on_frame(self, direction: Vec2, buff: float) -> Mobject:
-        point = _critical(self._current_raw(), direction)
-        target = Vec2(
-            math.copysign(DEFAULT_FRAME_WIDTH / 2.0, direction.x)
-            if direction.x
-            else point.x,
-            math.copysign(DEFAULT_FRAME_HEIGHT / 2.0, direction.y)
-            if direction.y
-            else point.y,
-        )
-        shift = Vec2(
-            target.x - point.x - (direction.x * buff if direction.x else 0.0),
-            target.y - point.y - (direction.y * buff if direction.y else 0.0),
-        )
-        return self.shift(shift)
+        return _semantic_operations()._align_on_frame(self, direction, buff)
 
     @property
-    def animate(self) -> _AnimationBuilder:
-        return _AnimationBuilder(self)
+    def animate(self):
+        from _manim_animate import _AlignedAnimationBuilder
+        return _AlignedAnimationBuilder(self)
 
 
-class Group:
-    """Lightweight authoring collection; it does not add runtime hierarchy."""
-
-    def __init__(self, *mobjects: Mobject) -> None:
-        if not all(isinstance(mobject, Mobject) for mobject in mobjects):
-            raise TypeError("Group members must be Mobjects")
-        self.submobjects = list(mobjects)
-
-    def __iter__(self) -> Iterator[Mobject]:
-        return iter(self.submobjects)
-
-    def __len__(self) -> int:
-        return len(self.submobjects)
-
-    def __getitem__(self, index: int) -> Mobject:
-        return self.submobjects[index]
-
-    def add(self, *mobjects: Mobject) -> Group:
-        self.submobjects.extend(mobjects)
-        return self
-
-    def get_center(self) -> Vec2:
-        if not self.submobjects:
-            return ORIGIN
-        mins: list[Vec2] = []
-        maxes: list[Vec2] = []
-        for mobject in self.submobjects:
-            bounds = _bounds(mobject._current_raw())
-            if bounds is not None:
-                mins.append(bounds[0])
-                maxes.append(bounds[1])
-        if not mins:
-            return ORIGIN
-        return Vec2(
-            (min(point.x for point in mins) + max(point.x for point in maxes)) / 2.0,
-            (min(point.y for point in mins) + max(point.y for point in maxes)) / 2.0,
-        )
-
-    def shift(self, direction: Vec2 | tuple[float, float]) -> Group:
-        for mobject in self.submobjects:
-            mobject.shift(direction)
-        return self
-
-    def arrange(
+    def add_updater(
         self,
-        direction: Vec2 | tuple[float, float] = RIGHT,
-        buff: float = DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
-        center: bool = True,
-    ) -> Group:
-        if not self.submobjects:
-            return self
-        axis = _as_vec2(direction)
-        for previous, current in zip(self.submobjects, self.submobjects[1:]):
-            current.next_to(previous, axis, buff)
-        if center:
-            self.shift(-self.get_center())
-        return self
+        update_function: Callable[..., Any],
+        index: int | None = None,
+        call_updater: bool = False,
+    ) -> Mobject:
+        return _callback_operations().add_updater(self, update_function, index, call_updater)
 
-    def arrange_in_grid(
+    def remove_updater(self, update_function: Callable[..., Any]) -> Mobject:
+        return _callback_operations().remove_updater(self, update_function)
+
+    def clear_updaters(self, recursive: bool = True) -> Mobject:
+        return _callback_operations().clear_updaters(self, recursive)
+
+    def get_updaters(self) -> list[Callable[..., Any]]:
+        return _callback_operations().get_updaters(self)
+
+    def has_updaters(self) -> bool:
+        return _callback_operations().has_updaters(self)
+
+    def _copy_for_animate_target(self) -> Mobject:
+        return _semantic_operations()._target_mobject(self)
+
+    def get_critical_point(self, direction: object) -> Vec2:
+        return _semantic_operations()._get_critical_point(self, direction)
+
+    def become(
         self,
-        rows: int | None = None,
-        cols: int | None = None,
-        buff: float | tuple[float, float] = MED_SMALL_BUFF,
-    ) -> Group:
-        count = len(self.submobjects)
-        if count == 0:
-            return self
-        if rows is None and cols is None:
-            cols = math.ceil(math.sqrt(count))
-            rows = math.ceil(count / cols)
-        elif rows is None:
-            assert cols is not None
-            rows = math.ceil(count / cols)
-        elif cols is None:
-            cols = math.ceil(count / rows)
-        if rows <= 0 or cols <= 0:
-            raise ValueError("rows and cols must be positive")
-        if isinstance(buff, (tuple, list, Vec2)):
-            gap = _as_vec2(buff)
-        else:
-            gap = Vec2(float(buff), float(buff))
-        cell_width = max((mobject.width for mobject in self.submobjects), default=0.0) + gap.x
-        cell_height = max((mobject.height for mobject in self.submobjects), default=0.0) + gap.y
-        for index, mobject in enumerate(self.submobjects):
-            row = index // cols
-            col = index % cols
-            x = (col - (cols - 1) / 2.0) * cell_width
-            y = ((rows - 1) / 2.0 - row) * cell_height
-            mobject.move_to(Vec2(x, y))
-        return self
+        mobject: Mobject,
+        match_height: bool = False,
+        match_width: bool = False,
+        match_depth: bool = False,
+        match_center: bool = False,
+        stretch: bool = False,
+    ) -> Mobject:
+        return _semantic_operations()._become(self, mobject, match_height, match_width, match_depth, match_center, stretch)
+
+    def replace(self, mobject: Mobject, dim_to_match: int = 0, stretch: bool = False) -> Mobject:
+        return _semantic_operations()._replace(self, mobject, dim_to_match, stretch)
+
+    def __deepcopy__(self, memo):
+        from _manim_compat import deepcopy_semantic_wrapper
+        return deepcopy_semantic_wrapper(self, memo)
 
 
-class VGroup(Group):
-    pass
+def _scene_operations():
+    """Load the shared host adapter lazily, after public wrapper classes exist."""
+    try:
+        import _manim_scene
+    except ModuleNotFoundError as error:
+        if error.name != "js":
+            raise
+        raise RuntimeError("Scene operations require the shared Rust authoring host") from None
+    return _manim_scene
 
 
-def _wrap(raw: _ir.Mobject) -> Mobject:
-    return Mobject(raw)
-
-
-def Circle(radius: float = 1.0, *, color: Color | None = None, **kwargs: Any) -> Mobject:
-    result = _wrap(_ir.Circle(radius, **kwargs))
-    return result if color is None else result.set_color(color)
-
-
-def Rectangle(
-    width: float = 2.0,
-    height: float = 1.0,
-    *,
-    color: Color | None = None,
-    **kwargs: Any,
-) -> Mobject:
-    result = _wrap(_ir.Rectangle(width, height, **kwargs))
-    return result if color is None else result.set_color(color)
-
-
-def Square(
-    side_length: float = 2.0, *, color: Color | None = None, **kwargs: Any
-) -> Mobject:
-    return Rectangle(side_length, side_length, color=color, **kwargs)
-
-
-def Line(
-    start: Vec2 | tuple[float, float] = LEFT,
-    end: Vec2 | tuple[float, float] = RIGHT,
-    *,
-    color: Color | None = None,
-    **kwargs: Any,
-) -> Mobject:
-    result = _wrap(_ir.Line(_as_vec2(start), _as_vec2(end), **kwargs))
-    return result if color is None else result.set_color(color)
-
-
-def Path(path: VectorPath, *, color: Color | None = None, **kwargs: Any) -> Mobject:
-    result = _wrap(_ir.Path(path, **kwargs))
-    return result if color is None else result.set_color(color)
-
-
-@dataclass(frozen=True, slots=True)
-class Transform:
-    source: Mobject | _ir.Object
-    target: Mobject | _ir.Mobject | VectorPath
-    key: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class ReplacementTransform:
-    source: Mobject | _ir.Object
-    target: Mobject | _ir.Object
-    key: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class TransformFromCopy:
-    source: Mobject | _ir.Object
-    target: Mobject | _ir.Object
-    key: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class TransformMatchingShapes:
-    sources: Iterable[Mobject | _ir.Object]
-    targets: Iterable[Mobject | _ir.Object]
-    key: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class Create:
-    """Progressively draw a shape without changing its steady-state geometry."""
-
-    target: Mobject | _ir.Object
-    key: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class Uncreate(Create):
-    """Manim-style Create in reverse, optionally removing the target at completion."""
-
-    reverse_rate_function: bool = True
-    remover: bool = True
-
-
-@dataclass(frozen=True, slots=True)
-class FadeIn:
-    target: Mobject | _ir.Object
-    key: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class FadeOut:
-    target: Mobject | _ir.Object
-    key: str | None = None
-
-
-class _AnimationBuilder:
-    """Transient target-state builder used by ``mobject.animate``."""
-
-    def __init__(self, source: Mobject) -> None:
-        if source._scene is None or source._object is None:
-            raise ValueError("animate requires a Mobject that belongs to a Scene")
-        self.source = source
-        self.target = source.copy()
-
-    def shift(self, direction: Vec2 | tuple[float, float]) -> _AnimationBuilder:
-        self.target.shift(direction)
-        return self
-
-    def move_to(self, point: Vec2 | tuple[float, float]) -> _AnimationBuilder:
-        self.target.move_to(point)
-        return self
-
-    def scale(self, factor: float | tuple[float, float]) -> _AnimationBuilder:
-        self.target.scale(factor)
-        return self
-
-    def rotate(self, angle: float) -> _AnimationBuilder:
-        self.target.rotate(angle)
-        return self
-
-    def set_color(self, color: Color) -> _AnimationBuilder:
-        self.target.set_color(color)
-        return self
-
-    def set_fill(
-        self, color: Color | None = None, opacity: float | None = None
-    ) -> _AnimationBuilder:
-        self.target.set_fill(color, opacity)
-        return self
-
-    def set_stroke(
-        self, color: Color | None = None, width: float | None = None
-    ) -> _AnimationBuilder:
-        self.target.set_stroke(color, width)
-        return self
-
-    def set_opacity(self, opacity: float) -> _AnimationBuilder:
-        self.target.set_opacity(opacity)
-        return self
-
-    def set_object_opacity(self, opacity: float) -> _AnimationBuilder:
-        self.target.set_object_opacity(opacity)
-        return self
-
-
-class Scene(_ir.Scene):
-    """High-level scene facade whose authoritative mixed output is ``SceneSpec``."""
+class Scene:
+    """Python authoring facade; semantic operations require the shared Rust host."""
 
     def __init__(self) -> None:
-        super().__init__()
-        self._cursor = 0.0
+        # Derived wrapper/export identities only. These rows never carry scene
+        # content, painter order, animation tracks, or runtime state.
+        self._owner = object()
+        # Derived host binding IDs map to the authoritative Rust handles.
+        self._binding_handles: dict[int, object] = {}
+        self._object_keys: dict[int, str] = {}
+        self._object_key_ids: dict[str, int] = {}
+        self._next_object_id = 0
+
+    def setup(self) -> None:
+        pass
+
+    def construct(self) -> None:
+        pass
+
+    def tear_down(self) -> None:
+        pass
+
+    def _register_top_level(self, value: object) -> None:
+        _scene_operations()._register_membership_wrappers(self, value)
+
+    @property
+    def mobjects(self) -> list[object]:
+        return _scene_operations()._canonical_scene_mobjects(self)
+
+    def _edit_membership(self, kind: str, values: tuple[object, ...] = (), *, key=None) -> None:
+        _scene_operations()._canonical_edit_membership(self, kind, values, key=key)
+
+    def add(self, *mobjects: object, key: str | None = None) -> Mobject | Scene:
+        if not mobjects:
+            return self
+        self._edit_membership("add", mobjects, key=key)
+
+        # Python returns the wrapper for a single leaf, or the Scene for a batch.
+        from _manim_compat import _leaf_mobjects
+        leaves = [member for value in mobjects for member in _leaf_mobjects(value)]
+        return leaves[0] if len(leaves) == 1 else self
+
+    def remove(self, *mobjects: object) -> Scene:
+        self._edit_membership("remove", mobjects)
+        return self
+
+    def clear(self) -> Scene:
+        self._edit_membership("clear")
+        return self
+
+    def replace(self, old_mobject: object, new_mobject: object) -> Scene:
+        self._edit_membership("replace", (old_mobject, new_mobject))
+        return self
+
+    def _bind_camera_frame(self, mobject: Mobject) -> Any:
+        return _scene_operations()._bind_camera_frame(self, mobject)
+
+    def play(self, *args, **kwargs) -> Any:
+        return _scene_operations()._play(self, *args, **kwargs)
+
+    def wait(self, duration: float = 1.0) -> Any:
+        return _scene_operations()._canonical_wait(self, duration)
+
+    def declare_wait(self, duration: float = 1.0) -> Scene:
+        return _scene_operations()._declare_wait(self, duration)
 
     @property
     def time(self) -> float:
-        return self._cursor
+        return _scene_operations()._canonical_scene_time(self)
 
-    def _raw_object(self, value: Mobject | _ir.Object) -> _ir.Object:
-        if isinstance(value, _ir.Object):
-            return value
-        if not isinstance(value, Mobject) or value._scene is not self or value._object is None:
-            raise ValueError("Mobject must belong to this Scene")
-        return value._object
+    def value_tracker(self, value: float = 0.0) -> Any:
+        return _scene_operations()._canonical_value_tracker(self, value)
 
-    def _raw_target(self, value: Mobject | _ir.Mobject | VectorPath) -> _ir.Mobject | VectorPath:
-        if isinstance(value, Mobject):
-            return value._current_raw()
-        return value
-
-    def _raw_snapshot(self, obj: _ir.Object) -> _ir.Mobject:
-        snapshot = self._snapshot_for_object_at(obj, self._cursor)
-        return _ir.Mobject(
-            geometry=snapshot["geometry"],
-            transform=snapshot["transform"],
-            style=snapshot["style"],
-        )
-
-    def _replace_static_snapshot(self, obj: _ir.Object, raw: _ir.Mobject) -> None:
-        if any(track["object"] == obj.id for track in self._tracks):
-            raise ValueError(
-                "direct Mobject mutation after animation authoring is ambiguous; use mobject.animate"
-            )
-        position = self._object_positions.get(obj.id)
-        if position is None:
-            raise ValueError(f"object {obj.id} is not geometry-backed")
-        stored = self._objects[position]
-        stored["geometry"] = copy.deepcopy(raw.geometry)
-        stored["transform"] = copy.deepcopy(raw.transform)
-        stored["style"] = copy.deepcopy(raw.style)
-
-    def add(self, *mobjects: Mobject | Group, key: str | None = None) -> Mobject | Scene:
-        if not mobjects:
-            return self
-        flattened: list[Mobject] = []
-        for value in mobjects:
-            if isinstance(value, Group):
-                flattened.extend(value.submobjects)
-            elif isinstance(value, Mobject):
-                flattened.append(value)
-            else:
-                raise TypeError("Scene.add expects Mobjects or Groups")
-        if key is not None and len(flattened) != 1:
-            raise ValueError("an explicit key can only be used when adding one Mobject")
-        for index, mobject in enumerate(flattened):
-            if mobject._scene is self:
-                continue
-            mobject._bind_to_scene(self, key=key if index == 0 else None)
-        return flattened[0] if len(flattened) == 1 else self
-
-    def circle(self, radius: float, *, key: str | None = None, **kwargs: Any) -> Mobject:
-        return self.add(Circle(radius, **kwargs), key=key)  # type: ignore[return-value]
-
-    def rectangle(
-        self, width: float, height: float, *, key: str | None = None, **kwargs: Any
-    ) -> Mobject:
-        return self.add(Rectangle(width, height, **kwargs), key=key)  # type: ignore[return-value]
-
-    def square(
-        self, side_length: float = 2.0, *, key: str | None = None, **kwargs: Any
-    ) -> Mobject:
-        return self.add(Square(side_length, **kwargs), key=key)  # type: ignore[return-value]
-
-    def line(
-        self,
-        start: Vec2 | tuple[float, float],
-        end: Vec2 | tuple[float, float],
-        *,
-        key: str | None = None,
-        **kwargs: Any,
-    ) -> Mobject:
-        return self.add(Line(start, end, **kwargs), key=key)  # type: ignore[return-value]
-
-    def path(
-        self, path: VectorPath, *, key: str | None = None, **kwargs: Any
-    ) -> Mobject:
-        return self.add(Path(path, **kwargs), key=key)  # type: ignore[return-value]
-
-    def _schedule_create(
-        self,
-        animation: Create,
-        *,
-        duration: float,
-        start_time: float,
-        easing: str,
-    ) -> None:
-        obj = self._raw_object(animation.target)
-        start = float(start_time)
-        run_duration = float(duration)
-        if not math.isfinite(start) or start < 0.0:
-            raise ValueError("start_time must be finite and non-negative")
-        if not math.isfinite(run_duration) or run_duration <= 0.0:
-            raise ValueError("duration must be finite and positive")
-        end = start + run_duration
-
-        snapshot = self._snapshot_for_object_at(obj, start)
-        geometry = snapshot["geometry"]
-        if not any(name in geometry for name in ("circle", "rectangle", "line", "vector_path")):
-            raise ValueError("Create supports Circle, Rectangle/Square, Line, and VectorPath")
-
-        presence_tracks = self._ensure_lifecycle_timeline_available(obj, start, "Create target")
-        if presence_tracks and self._presence_at(obj, start):
-            raise ValueError("Create target must be absent at animation start")
-
-        for track in self._tracks:
-            if track["object"] != obj.id or track["property"] != "reveal":
-                continue
-            track_start = track["timing"]["start_time"]
-            track_end = track_start + track["timing"]["duration"]
-            if track_start < end and start < track_end:
-                raise ValueError("Create/reveal animations for one object must not overlap")
-
-        object_key = self._object_keys[obj.id]
-        root_key = animation.key or f"@create:{object_key}:{start:g}"
-        self._add_presence_track(
-            obj,
-            False,
-            True,
-            start,
-            key=f"{root_key}.show",
-        )
-        self._add_scalar_track(
-            obj,
-            "reveal",
-            0.0,
-            1.0,
-            start,
-            run_duration,
-            easing,
-            root_key,
-        )
-
-        # Re-creating an object after FadeOut should not inherit appearance=0.
-        # Switching to a new track at the Create start is an intentional exact
-        # reset; ordinary first-time Create needs no appearance track at all.
-        if self._appearance_at(obj, start) != 1.0:
-            self._add_scalar_track(
-                obj,
-                "appearance",
-                1.0,
-                1.0,
-                start,
-                run_duration,
-                "linear",
-                f"{root_key}.appearance",
-            )
-
-    def _schedule_uncreate(
-        self,
-        animation: Uncreate,
-        *,
-        duration: float,
-        start_time: float,
-        easing: str,
-    ) -> None:
-        obj = self._raw_object(animation.target)
-        start = float(start_time)
-        run_duration = float(duration)
-        if not math.isfinite(start) or start < 0.0:
-            raise ValueError("start_time must be finite and non-negative")
-        if not math.isfinite(run_duration) or run_duration <= 0.0:
-            raise ValueError("duration must be finite and positive")
-        end = start + run_duration
-
-        snapshot = self._snapshot_for_object_at(obj, start)
-        geometry = snapshot["geometry"]
-        if not any(name in geometry for name in ("circle", "rectangle", "line", "vector_path")):
-            raise ValueError("Uncreate supports Circle, Rectangle/Square, Line, and VectorPath")
-
-        self._ensure_lifecycle_timeline_available(obj, start, "Uncreate target")
-        if not self._presence_at(obj, start):
-            raise ValueError("Uncreate target must be present at animation start")
-
-        for track in self._tracks:
-            if track["object"] != obj.id or track["property"] != "reveal":
-                continue
-            track_start = track["timing"]["start_time"]
-            track_end = track_start + track["timing"]["duration"]
-            if track_start < end and start < track_end:
-                raise ValueError("Create/reveal animations for one object must not overlap")
-
-        object_key = self._object_keys[obj.id]
-        root_key = animation.key or f"@uncreate:{object_key}:{start:g}"
-        reverse = bool(animation.reverse_rate_function)
-        self._add_scalar_track(
-            obj,
-            "reveal",
-            1.0 if reverse else 0.0,
-            0.0 if reverse else 1.0,
-            start,
-            run_duration,
-            easing,
-            root_key,
-        )
-        if animation.remover:
-            self._add_presence_track(
-                obj,
-                True,
-                False,
-                end,
-                key=f"{root_key}.remove",
-            )
-
-    def play(
-        self,
-        *animations: Any,
-        duration: float | None = None,
-        run_time: float | None = None,
-        start_time: float | None = None,
-        easing: str = "linear",
+    def bind_position(
+        self, mobject: object, tracker: object,
+        direction: object = None, offset: object = None,
     ) -> Scene:
-        if not animations:
-            raise ValueError("play requires at least one animation")
-        if duration is not None and run_time is not None:
-            raise ValueError("use either duration or run_time, not both")
-        actual_duration = 1.0 if duration is None and run_time is None else (
-            float(run_time) if run_time is not None else float(duration)
+        return _scene_operations()._canonical_bind_position(self, mobject, tracker, direction, offset)
+
+    def pointer_position_signal(self) -> Any:
+        return _scene_operations()._canonical_pointer_position_signal(self)
+
+    def pointer_button_signal(self, button: int = 0, initial: bool = False) -> Any:
+        return _scene_operations()._canonical_pointer_button_signal(self, button, initial)
+
+    def key_state_signal(self, code: str, initial: bool = False) -> Any:
+        return _scene_operations()._canonical_key_state_signal(self, code, initial)
+
+    def viewport_size_signal(self) -> Any:
+        return _scene_operations()._canonical_viewport_size_signal(self)
+
+    def wheel_delta_signal(self) -> Any:
+        return _scene_operations()._canonical_wheel_delta_signal(self)
+
+    def gesture_delta_signal(self, name: str) -> Any:
+        return _scene_operations()._canonical_gesture_delta_signal(self, name)
+
+    def control_signal(self, name: str, value: float = 0.0) -> Any:
+        return _scene_operations()._canonical_control_signal(self, name, value)
+
+    def pointer_down_events(self, button: int = 0) -> Any:
+        return _scene_operations()._canonical_pointer_down_events(self, button)
+
+    def pointer_up_events(self, button: int = 0) -> Any:
+        return _scene_operations()._canonical_pointer_up_events(self, button)
+
+    def key_press_events(self, code: str) -> Any:
+        return _scene_operations()._canonical_key_press_events(self, code)
+
+    def key_release_events(self, code: str) -> Any:
+        return _scene_operations()._canonical_key_release_events(self, code)
+
+    def wheel_events(self) -> Any:
+        return _scene_operations()._canonical_wheel_events(self)
+
+    def gesture_events(self, name: str) -> Any:
+        return _scene_operations()._canonical_gesture_events(self, name)
+
+    def control_commit_events(self, name: str) -> Any:
+        return _scene_operations()._canonical_control_commit_events(self, name)
+
+    def bind_rotation(self, mobject: object, tracker: object) -> Any:
+        return _scene_operations()._canonical_bind_rotation_dispatch(self, mobject, tracker)
+
+    def bind_opacity(self, mobject: object, tracker: object) -> Any:
+        return _scene_operations()._canonical_bind_opacity_dispatch(self, mobject, tracker)
+
+    def bind_presence(self, mobject: object, signal: object) -> Any:
+        return _scene_operations()._canonical_bind_presence_dispatch(self, mobject, signal)
+
+    def bind_appearance(self, mobject: object, tracker: object) -> Any:
+        return _scene_operations()._canonical_bind_appearance_dispatch(self, mobject, tracker)
+
+    def bind_reveal(self, mobject: object, tracker: object) -> Any:
+        return _scene_operations()._canonical_bind_reveal_dispatch(self, mobject, tracker)
+
+    def bind_morph(self, mobject: object, tracker: object) -> Any:
+        return _scene_operations()._canonical_bind_morph_dispatch(self, mobject, tracker)
+
+    def live_execution(self, duration: float | None = None) -> Any:
+        return _scene_operations()._live_execution(self, duration)
+
+    def declare_live_transform_to(
+        self, source: Mobject, target: Mobject, *,
+        run_time: float = 1.0, rate_func: object = "smooth",
+    ) -> Any:
+        return _scene_operations()._declare_live_transform_to(
+            self, source, target, run_time=run_time, rate_func=rate_func,
         )
-        actual_start = self._cursor if start_time is None else float(start_time)
-        lowered: list[Any] = []
-        creates: list[Create] = []
-        uncreates: list[Uncreate] = []
-        for animation in animations:
-            if isinstance(animation, _AnimationBuilder):
-                lowered.append(
-                    _ir.Transform(
-                        self._raw_object(animation.source),
-                        animation.target._current_raw(),
-                    )
-                )
-            elif isinstance(animation, Transform):
-                lowered.append(
-                    _ir.Transform(
-                        self._raw_object(animation.source),
-                        self._raw_target(animation.target),
-                        animation.key,
-                    )
-                )
-            elif isinstance(animation, ReplacementTransform):
-                lowered.append(
-                    _ir.ReplacementTransform(
-                        self._raw_object(animation.source),
-                        self._raw_object(animation.target),
-                        animation.key,
-                    )
-                )
-            elif isinstance(animation, TransformFromCopy):
-                lowered.append(
-                    _ir.TransformFromCopy(
-                        self._raw_object(animation.source),
-                        self._raw_object(animation.target),
-                        animation.key,
-                    )
-                )
-            elif isinstance(animation, TransformMatchingShapes):
-                lowered.append(
-                    _ir.TransformMatchingShapes(
-                        [self._raw_object(value) for value in animation.sources],
-                        [self._raw_object(value) for value in animation.targets],
-                        animation.key,
-                    )
-                )
-            elif isinstance(animation, Uncreate):
-                uncreates.append(animation)
-            elif isinstance(animation, Create):
-                creates.append(animation)
-            elif isinstance(animation, FadeIn):
-                lowered.append(_ir.FadeIn(self._raw_object(animation.target), animation.key))
-            elif isinstance(animation, FadeOut):
-                lowered.append(_ir.FadeOut(self._raw_object(animation.target), animation.key))
-            else:
-                # Keep the existing low-level escape hatch available.
-                lowered.append(animation)
-
-        checkpoint = self._authoring_checkpoint()
-        try:
-            if lowered:
-                super().play(
-                    *lowered,
-                    duration=actual_duration,
-                    start_time=actual_start,
-                    easing=easing,
-                )
-            for animation in creates:
-                self._schedule_create(
-                    animation,
-                    duration=actual_duration,
-                    start_time=actual_start,
-                    easing=easing,
-                )
-            for animation in uncreates:
-                self._schedule_uncreate(
-                    animation,
-                    duration=actual_duration,
-                    start_time=actual_start,
-                    easing=easing,
-                )
-        except Exception:
-            self._restore_authoring_checkpoint(checkpoint)
-            raise
-
-        self._cursor = max(self._cursor, actual_start + actual_duration)
-        return self
-
-    def wait(self, duration: float = 1.0) -> Scene:
-        duration = float(duration)
-        if not math.isfinite(duration) or duration < 0.0:
-            raise ValueError("wait duration must be finite and non-negative")
-        self._cursor += duration
-        return self
-
-    def animate_position(self, obj: Mobject | _ir.Object, *args: Any, **kwargs: Any) -> Scene:
-        super().animate_position(self._raw_object(obj), *args, **kwargs)
-        return self
-
-    def animate_rotation(self, obj: Mobject | _ir.Object, *args: Any, **kwargs: Any) -> Scene:
-        super().animate_rotation(self._raw_object(obj), *args, **kwargs)
-        return self
-
-    def animate_opacity(self, obj: Mobject | _ir.Object, *args: Any, **kwargs: Any) -> Scene:
-        super().animate_opacity(self._raw_object(obj), *args, **kwargs)
-        return self
-
-    def animate_appearance(self, obj: Mobject | _ir.Object, *args: Any, **kwargs: Any) -> Scene:
-        super().animate_appearance(self._raw_object(obj), *args, **kwargs)
-        return self
-
-    def animate_reveal(self, obj: Mobject | _ir.Object, *args: Any, **kwargs: Any) -> Scene:
-        super().animate_reveal(self._raw_object(obj), *args, **kwargs)
-        return self
-
-    def animate_morph(
-        self, obj: Mobject | _ir.Object, target: VectorPath, *args: Any, **kwargs: Any
-    ) -> Scene:
-        super().animate_morph(self._raw_object(obj), target, *args, **kwargs)
-        return self
 
 
 Object = Mobject
 
+# Public wrappers resolve from their defining modules without startup mutation.
+_PUBLIC_EXPORTS = {
+    "Transform": "_manim_animate",
+    "ReplacementTransform": "_manim_animate",
+    "TransformFromCopy": "_manim_animate",
+    "TransformMatchingShapes": "_manim_animate",
+    "Create": "_manim_animate",
+    "Uncreate": "_manim_animate",
+    "FadeIn": "_manim_animate",
+    "FadeOut": "_manim_animate",
+    "Indicate": "_manim_animate",
+    "ScaleInPlace": "_manim_animate",
+    "ShrinkToCenter": "_manim_animate",
+
+    "linear": "_manim_rate_functions",
+    "smooth": "_manim_rate_functions",
+    "rush_into": "_manim_rate_functions",
+    "rush_from": "_manim_rate_functions",
+    "there_and_back": "_manim_rate_functions",
+    "Add": "_manim_composition",
+    "AnimationGroup": "_manim_composition",
+    "LaggedStart": "_manim_composition",
+    "LaggedStartMap": "_manim_composition",
+    "Succession": "_manim_composition",
+    "Wait": "_manim_composition",
+    "Rotate": "_manim_rotate",
+    "Rotating": "_manim_rotate",
+    "FocusOn": "_manim_rotate",
+    "ShowIncreasingSubsets": "_manim_lifecycle",
+    "ShowSubmobjectsOneByOne": "_manim_lifecycle",
+    "GrowFromPoint": "_manim_growing",
+    "GrowFromCenter": "_manim_growing",
+    "GrowFromEdge": "_manim_growing",
+    "SpinInFromNothing": "_manim_growing",
+    "DrawBorderThenFill": "_manim_draw_border_then_fill",
+    "ShowPassingFlash": "_manim_indication",
+    "ValueTracker": "_manim_reactive",
+    "NativeVectorSignal": "_manim_reactive",
+    "NativeBoolSignal": "_manim_reactive",
+    "DashedLine": "_manim_dashed_line",
+    "MovingCameraScene": "_manim_camera",
+    "Write": "_manim_family_creation",
+    "Unwrite": "_manim_family_creation",
+    "VMobject": "_manim_compat",
+    "Circle": "_manim_compat",
+    "Rectangle": "_manim_compat",
+    "Square": "_manim_compat",
+    "Line": "_manim_compat",
+    "Path": "_manim_compat",
+    "Group": "_manim_compat",
+    "VGroup": "_manim_compat",
+    "MoveToTarget": "_manim_compat",
+    "OUT": "_manim_compat",
+    "IN": "_manim_compat",
+    "Elbow": "_manim_shared_geometry",
+    "RoundedRectangle": "_manim_shared_geometry",
+    "SurroundingRectangle": "_manim_shared_geometry",
+    "BackgroundRectangle": "_manim_shared_geometry",
+    "Underline": "_manim_shared_geometry",
+    "AnnularSector": "_manim_shared_geometry",
+    "Sector": "_manim_shared_geometry",
+    "Annulus": "_manim_shared_geometry",
+    "Dot": "_manim_geometry",
+    "Ellipse": "_manim_geometry",
+    "Triangle": "_manim_geometry",
+    "Arrow": "_manim_geometry",
+    "ApplyMethod": "_manim_geometry",
+    "DEFAULT_DOT_RADIUS": "_manim_geometry",
+    "PURE_YELLOW": "_manim_geometry",
+    "Text": "_manim_typst",
+    "Typst": "_manim_typst",
+    "MathTypst": "_manim_typst",
+}
+
+
+def __getattr__(name: str):
+    module = _PUBLIC_EXPORTS.get(name)
+    if module is not None:
+        from importlib import import_module
+        return getattr(import_module(module), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
+
+
 __all__ = [
+    "NoonError",
+    "NoonErrorCause",
+    "NoonValueError",
+    "NoonForeignHandleError",
+    "NoonStaleHandleError",
+    "NoonMissingResourceError",
+    "NoonUnsupportedError",
+    "NoonPendingError",
+    "NoonStalePublicationError",
+    "NoonCallbackError",
+    "NoonOwnershipError",
+
     "BLACK",
     "BLUE",
     "BLUE_A",
@@ -1134,10 +797,7 @@ __all__ = [
     "BLUE_C",
     "BLUE_D",
     "BLUE_E",
-    "Circle",
     "Color",
-    "Create",
-    "Uncreate",
     "DEGREES",
     "DEFAULT_FRAME_HEIGHT",
     "DEFAULT_FRAME_WIDTH",
@@ -1146,8 +806,6 @@ __all__ = [
     "DL",
     "DOWN",
     "DR",
-    "FadeIn",
-    "FadeOut",
     "GOLD",
     "GRAY",
     "GRAY_A",
@@ -1161,7 +819,6 @@ __all__ = [
     "GREEN_C",
     "GREEN_D",
     "GREEN_E",
-    "Group",
     "GREY",
     "GREY_A",
     "GREY_B",
@@ -1170,7 +827,6 @@ __all__ = [
     "GREY_E",
     "LEFT",
     "LIGHT_PINK",
-    "Line",
     "MAROON",
     "Mobject",
     "Object",
@@ -1184,7 +840,6 @@ __all__ = [
     "PURPLE_C",
     "PURPLE_D",
     "PURPLE_E",
-    "Path",
     "RED",
     "RED_A",
     "RED_B",
@@ -1192,10 +847,7 @@ __all__ = [
     "RED_D",
     "RED_E",
     "RIGHT",
-    "Rectangle",
-    "ReplacementTransform",
     "Scene",
-    "Square",
     "TAU",
     "TEAL",
     "TEAL_A",
@@ -1203,13 +855,9 @@ __all__ = [
     "TEAL_C",
     "TEAL_D",
     "TEAL_E",
-    "Transform",
-    "TransformFromCopy",
-    "TransformMatchingShapes",
     "UL",
     "UP",
     "UR",
-    "VGroup",
     "Vec2",
     "VectorPath",
     "WHITE",
@@ -1220,4 +868,9 @@ __all__ = [
     "YELLOW_D",
     "YELLOW_E",
     "color_from_hex",
+    "SMALL_BUFF",
+    "MED_SMALL_BUFF",
+    "MED_LARGE_BUFF",
+    "LARGE_BUFF",
+    *_PUBLIC_EXPORTS,
 ]

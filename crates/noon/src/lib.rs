@@ -1,50 +1,119 @@
-//! Ergonomic Rust authoring facade for Noon.
+//! Direct Rust authoring and coherent live execution for Noon.
 //!
-//! `Scene` and `Mobject` author directly into the shared semantic store and
-//! lower through `ExecutionSession` using typed in-process Rust boundaries.
+//! Start with [`Scene`] and [`Mobject`]. Before execution, their edits author the
+//! scene. After lowering, use [`Scene::live`] for edits and effective observations:
+//! it publishes through the existing [`ExecutionSession`], not a second scene.
+//!
+//! # Public surface
+//!
+//! - The crate root and [`prelude`] contain explicit authoring values, handles,
+//!   live operations, logical completion, and their errors.
+//! - [`integration`] contains raw arena access types, host/callback plumbing and
+//!   renderer observations. These are advanced facilities, not ordinary authoring.
+//! - `diagnostics` (feature gated) provides explicit debug/export observations.
+//!
+//! Use [`LiveSession::authored`] for base state and [`LiveSession::effective`] for
+//! the current published value. Complete a segment with
+//! [`LiveSession::complete_segment`] before resuming dependent authoring. Ordinary
+//! completion is not a GPU-retirement fence. See the `shared_authoring` example.
+//!
+//! A glob import cannot accidentally expose raw semantic storage or frame plumbing:
+//!
+//! ```compile_fail,E0433
+//! use noon::*;
+//! let _ = SemanticStore::new();
+//! ```
+//!
+//! ```compile_fail,E0432
+//! use noon::FrameState;
+//! ```
+//!
+//! Implementation modules are not an alternative public facade:
+//!
+//! ```compile_fail,E0603
+//! use noon::semantic_mobject::Mobject;
+//! ```
+//!
+//! Raw mutable storage requires the explicitly named integration accessors:
+//!
+//! ```compile_fail,E0599
+//! let _ = noon::Scene::new().store();
+//! ```
+//!
+//! ```compile_fail,E0599
+//! fn raw(object: &noon::Mobject) { let _ = object.store(); }
+//! ```
+//!
+//! ```compile_fail,E0599
+//! fn raw(family: &noon::MobjectFamily) { let _ = family.store(); }
+//! ```
 
 #![forbid(unsafe_code)]
 
 mod animation_authoring;
 mod arc_authoring;
+mod authoring_error;
 mod camera_authoring;
 mod compact_value_authoring;
 mod dashed_line_authoring;
 #[cfg(feature = "diagnostics")]
 pub mod diagnostics;
+mod dimension_fit;
 mod elbow_authoring;
 pub mod example_scenes;
 mod execution_segment;
 mod execution_session;
+mod family_affine;
 mod family_arrangement;
 mod family_authoring;
-pub use family_arrangement::FamilyArrangeOptions;
+mod family_callback_paint;
+mod family_callback_translation;
 mod family_copy;
-pub use family_copy::FamilyCopy;
 mod family_layout;
-pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor};
+mod family_style;
 mod focus_on_authoring;
-mod rotation_authoring;
-pub use rotation_authoring::ManimRotationPivot;
 mod geometry_authoring;
 mod host_callbacks;
+pub mod integration;
 mod live_program;
 mod live_session;
 mod native_signal_authoring;
+mod rotation_authoring;
 mod rounded_rectangle_authoring;
 mod scalar_authoring;
+mod scene;
+mod scene_membership;
 mod sector_authoring;
-pub mod semantic_mobject;
+mod semantic_mobject;
+#[cfg(any(feature = "native-text", feature = "typst"))]
 mod text_authoring;
 
 pub use animation_authoring::DeclaredAnimation;
-pub use compact_value_authoring::semantic_object_state_from_compact;
-pub use execution_segment::*;
-pub use execution_session::*;
+pub use arc_authoring::ArcAuthoringError;
+pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
+pub use dashed_line_authoring::DashedLineAuthoringError;
+pub use dimension_fit::LayoutDimension;
+pub use elbow_authoring::ElbowAuthoringError;
+pub use execution_segment::{
+    ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentError, ExecutionSegmentState,
+};
+pub use execution_session::{
+    ExecutionSegmentCompletionError, ExecutionSession, ExecutionSessionAnimationError,
+    ExecutionSessionCallbackError, ExecutionSessionCallbackReadError, ExecutionSessionCameraError,
+    ExecutionSessionCreateError, ExecutionSessionFadeError, ExecutionSessionInputError,
+    ExecutionSessionPublicationError, SignalTimelineAppendError,
+};
+pub use family_arrangement::FamilyArrangeOptions;
 pub use family_authoring::{MobjectFamily, MobjectFamilyMember};
+pub use family_callback_paint::{FamilyCallbackPaintError, FamilyPaint};
+pub use family_callback_translation::{CallbackFamilyTranslation, FamilyCallbackTranslationError};
+pub use family_copy::FamilyCopy;
+pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor};
 pub use focus_on_authoring::FocusOnOptions;
-pub use host_callbacks::*;
-pub use live_program::*;
+pub use host_callbacks::{RustHostCallbackContext, RustHostCallbackError, RustHostCallbackTable};
+pub use live_program::{
+    ContinuationStep, LiveContinuation, LiveProgram, LiveProgramError, LiveProgramStatus,
+};
 pub use live_session::{
     AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
     DrawBorderThenFillOptions, EffectiveMobjectLayout, EffectiveMobjectState, FadeEndpoint,
@@ -52,28 +121,48 @@ pub use live_session::{
     SubsetDisplayMode, TransformToRequest,
 };
 pub use native_signal_authoring::{NativeBoolSignal, NativeVectorSignal};
-pub use noon_core::*;
-pub use noon_runtime::{
-    EffectiveObjectProperties, EvaluationError, FrameChanges, FrameObjectState, FrameState,
-    RendererPublication, RuntimeIdentity, RuntimeWakeState, TimelineWakeState,
+pub use noon_core::{
+    AnimationOptions, Bounds2D64, Color, ExecutionRevision, FrameEpoch, GeometryRef, PathCommand,
+    PublicationContext, RateFunction, Rect, SceneRevision, SemanticAnimationCompositionKind,
+    SemanticFadeDirection, SemanticNodeId, SemanticObjectProperty, SemanticObjectState,
+    SemanticPaint, SemanticSignalValue, SemanticStyle, SemanticTransform2_5D,
+    SemanticTransformInterpolation, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin,
+    StrokeWidthMode, Style, Transform2D, Vec2, VectorPath, BLACK, BLUE, BLUE_A, BLUE_B, BLUE_C,
+    BLUE_D, BLUE_E, DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH, DEFAULT_MOBJECT_TO_EDGE_BUFFER,
+    DEFAULT_MOBJECT_TO_MOBJECT_BUFFER, DEGREES, DL, DOWN, DR, GOLD, GRAY, GREEN, GREEN_A, GREEN_B,
+    GREEN_C, GREEN_D, GREEN_E, GREY, LARGE_BUFF, LEFT, LIGHT_PINK, MAROON, MED_LARGE_BUFF,
+    MED_SMALL_BUFF, ORANGE, ORIGIN, PI, PINK, PURPLE, PURPLE_A, PURPLE_B, PURPLE_C, PURPLE_D,
+    PURPLE_E, RED, RED_A, RED_B, RED_C, RED_D, RED_E, RIGHT, SMALL_BUFF, TAU, TEAL, TEAL_A, TEAL_B,
+    TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D,
+    YELLOW_E,
 };
+pub use noon_runtime::EvaluationError;
+pub use rotation_authoring::ManimRotationPivot;
+pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
-pub use semantic_mobject::{ManimBecomeOptions, ManimGeometryOptions, ManimLineEndpoints, Mobject};
-mod scene;
-mod scene_membership;
 pub use scene::Scene;
 pub use scene_membership::SceneMembershipRequest;
-pub use text_authoring::*;
+pub use semantic_mobject::{
+    ManimBecomeOptions, ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject,
+};
+#[cfg(any(feature = "native-text", feature = "typst"))]
+pub use text_authoring::TextAuthoringError;
+#[cfg(feature = "typst")]
+pub use text_authoring::{MathTypst, Typst, TypstBackendError, DEFAULT_TYPST_FONT_SIZE};
+#[cfg(feature = "native-text")]
+pub use text_authoring::{
+    NativeFontFace, Text, DEFAULT_NATIVE_TEXT_FONT_FAMILY, DEFAULT_NATIVE_TEXT_FONT_SIZE,
+};
 
-/// Common imports for direct typed semantic authoring.
+/// Common imports for direct typed semantic authoring and live publication.
+/// Host integration and mutable arena access must be imported explicitly.
 pub mod prelude {
     pub use crate::{
-        ContinuationStep, DeclaredAnimation, DrawBorderThenFillOptions, EffectiveMobjectState,
-        ExecutionSession, FadeEndpoint, FadeTranslation, LiveContinuation, LiveProgram,
-        LiveSession, Mobject, MobjectFamily, MobjectFamilyMember, NativeBoolSignal,
-        NativeVectorSignal, Scene, TrackerPosition, ValueTracker,
-    };
-    pub use noon_core::{
-        Color, SemanticObjectState, SemanticStyle, StoredGeometry, Vec2, VectorPath,
+        AnimationOptions, AuthoringError, Color, ContinuationStep, DeclaredAnimation,
+        DrawBorderThenFillOptions, EffectiveMobjectState, ExecutionSession, FadeEndpoint,
+        FadeTranslation, LiveContinuation, LiveProgram, LiveSession, LiveSessionError, Mobject,
+        MobjectFamily, MobjectFamilyMember, NativeBoolSignal, NativeVectorSignal, RateFunction,
+        Scene, SemanticObjectState, SemanticStyle, StoredGeometry, TrackerPosition, ValueTracker,
+        Vec2, VectorPath,
     };
 }

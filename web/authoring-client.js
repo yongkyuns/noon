@@ -1,7 +1,5 @@
 export const AUTHORING_CHANNEL = "noon.authoring";
-export const AUTHORING_PROTOCOL_VERSION = 6;
-export const NOON_IR_VERSION = 1;
-export const SCENE_SPEC_VERSION = 1;
+export const AUTHORING_PROTOCOL_VERSION = 7;
 
 export class PythonAuthoringClient {
   #worker;
@@ -52,16 +50,13 @@ export class PythonAuthoringClient {
   async run(
     source,
     context = {},
-    { exportDocument = false, onSemanticContinuation = null } = {},
+    { onSemanticContinuation = null } = {},
   ) {
     if (typeof source !== "string" || source.trim() === "") {
       throw new TypeError("Python authoring source must be a non-empty string");
     }
     if (!isRecord(context)) {
       throw new TypeError("Python authoring context must be an object");
-    }
-    if (typeof exportDocument !== "boolean") {
-      throw new TypeError("Python authoring exportDocument must be a boolean");
     }
     if (onSemanticContinuation !== null && typeof onSemanticContinuation !== "function") {
       throw new TypeError("onSemanticContinuation must be a function");
@@ -74,7 +69,6 @@ export class PythonAuthoringClient {
         requestId,
         source,
         context,
-        exportDocument,
       }),
     );
     return result;
@@ -408,33 +402,12 @@ export function parseAuthoringResult(resultJson) {
   if (!isRecord(result)) {
     throw new Error("Python authoring result must be an object");
   }
+  if (result.kind !== "semantic_scene") {
+    throw new Error(`Unknown Python authoring result kind: ${result.kind}`);
+  }
   const semanticExecution = validateSemanticExecutionDescriptor(result.semantic_execution);
-  if (semanticExecution !== null) {
-    if (result.kind !== "scene_document") {
-      throw new Error("semantic execution descriptor requires a scene_document result");
-    }
-    return {
-      kind: result.kind,
-      semanticExecution,
-      duration: validateSceneDuration(result.duration),
-    };
-  }
-  if (result.kind === "scene_document") {
-    const document = validateSceneDocument(result.document);
-    const sceneSpec = validateSceneSpec(result.scene_spec);
-    if (sceneSpec === null) {
-      throw new Error("Python Scene result must include canonical SceneSpec");
-    }
-    const parsed = {
-      kind: result.kind,
-      document,
-      sceneSpec,
-      duration: validateSceneDuration(result.duration),
-      identities: validateSceneIdentities(result.identities, document),
-    };
-    return parsed;
-  }
-  throw new Error(`Unknown Python authoring result kind: ${result.kind}`);
+  if (semanticExecution === null) throw new Error("Python Scene result requires a semantic execution descriptor");
+  return { kind: result.kind, semanticExecution, duration: validateSceneDuration(result.duration) };
 }
 
 export function validateSemanticExecutionDescriptor(descriptor) {
@@ -472,122 +445,11 @@ function validateSemanticExecutionContextId(contextId) {
   return contextId;
 }
 
-export function validateSceneDocument(scene) {
-  if (!isRecord(scene)) {
-    throw new Error("Python authoring result is not a Scene object");
-  }
-  if (scene.version !== NOON_IR_VERSION) {
-    throw new Error(`Unsupported Noon IR version ${scene.version}`);
-  }
-  if (!Array.isArray(scene.objects)) {
-    throw new Error("Python Scene objects must be an array");
-  }
-  if (!Array.isArray(scene.tracks)) {
-    throw new Error("Python Scene tracks must be an array");
-  }
-
-  validateDefinitionIds("object", scene.objects);
-  validateDefinitionIds("track", scene.tracks);
-  return scene;
-}
-
-export function validateSceneSpec(sceneSpec) {
-  if (sceneSpec === null || sceneSpec === undefined) {
-    return null;
-  }
-  if (!isRecord(sceneSpec)) {
-    throw new Error("Python canonical SceneSpec result must be an object");
-  }
-  if (sceneSpec.version !== SCENE_SPEC_VERSION) {
-    throw new Error(`Unsupported canonical SceneSpec version ${sceneSpec.version}`);
-  }
-  if (!Array.isArray(sceneSpec.objects)) {
-    throw new Error("Python canonical SceneSpec objects must be an array");
-  }
-  if (!Array.isArray(sceneSpec.tracks)) {
-    throw new Error("Python canonical SceneSpec tracks must be an array");
-  }
-
-  const objectIds = new Set();
-  for (const object of sceneSpec.objects) {
-    if (!isRecord(object) || !Number.isSafeInteger(object.id) || object.id < 0) {
-      throw new Error("Python canonical SceneSpec object has an invalid object ID");
-    }
-    if (objectIds.has(object.id)) {
-      throw new Error("Python canonical SceneSpec has duplicate object IDs");
-    }
-    objectIds.add(object.id);
-  }
-  if (
-    sceneSpec.camera_object !== null &&
-    sceneSpec.camera_object !== undefined &&
-    (!Number.isSafeInteger(sceneSpec.camera_object) ||
-      sceneSpec.camera_object < 0 ||
-      !objectIds.has(sceneSpec.camera_object))
-  ) {
-    throw new Error("Python canonical SceneSpec has an invalid camera object");
-  }
-  return sceneSpec;
-}
-
 export function validateSceneDuration(duration) {
   if (!Number.isFinite(duration) || duration < 0) {
     throw new Error("Python Scene duration must be finite and non-negative");
   }
   return duration;
-}
-
-export function validateSceneIdentities(identities, scene) {
-  if (!isRecord(identities)) {
-    throw new Error("Python Scene identities must be an object");
-  }
-  validateIdentityEntries("object", identities.objects, scene.objects);
-  validateIdentityEntries("track", identities.tracks, scene.tracks);
-  return identities;
-}
-
-function validateDefinitionIds(kind, definitions) {
-  const ids = new Set();
-  for (const definition of definitions) {
-    if (
-      !isRecord(definition) ||
-      !Number.isSafeInteger(definition.id) ||
-      definition.id < 0
-    ) {
-      throw new Error(`Python Scene has an invalid ${kind} ID`);
-    }
-    if (ids.has(definition.id)) {
-      throw new Error(`Python Scene has duplicate ${kind} IDs`);
-    }
-    ids.add(definition.id);
-  }
-}
-
-function validateIdentityEntries(kind, entries, definitions) {
-  if (!Array.isArray(entries) || entries.length !== definitions.length) {
-    throw new Error(`Python Scene ${kind} identities must match its definitions`);
-  }
-  const definitionIds = new Set(definitions.map(({ id }) => id));
-  const ids = new Set();
-  const keys = new Set();
-  for (const entry of entries) {
-    if (
-      !isRecord(entry) ||
-      !Number.isSafeInteger(entry.id) ||
-      entry.id < 0 ||
-      !definitionIds.has(entry.id)
-    ) {
-      throw new Error(`Python Scene has an invalid ${kind} identity ID`);
-    }
-    if (typeof entry.key !== "string" || entry.key.trim() === "") {
-      throw new Error(`Python Scene has an invalid ${kind} identity key`);
-    }
-    if (ids.has(entry.id) || keys.has(entry.key)) {
-      throw new Error(`Python Scene has duplicate ${kind} identities`);
-    }
-    ids.add(entry.id);
-    keys.add(entry.key);
-  }
 }
 
 function createAuthoringWorker() {

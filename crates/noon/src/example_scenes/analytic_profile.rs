@@ -1,9 +1,12 @@
 //! Analytic workloads for native/direct-WASM profiling, paired with `analytic_profile.py`.
 
 use crate::{
-    AnimationOptions, CompositionTimeMap, ExecutionSession, MobjectFamilyMember, RateFunction,
-    Scene, SemanticAnimationCompositionKind, SemanticAnimationIntent, SemanticMutationTransaction,
-    SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticVec3, TrackTiming,
+    AnimationOptions, ExecutionSession, MobjectFamilyMember, RateFunction, Scene,
+    SemanticAnimationCompositionKind, SemanticVec3,
+};
+use noon_core::{
+    CompositionTimeMap, SemanticAnimationIntent, SemanticMutationTransaction,
+    SemanticObjectTrackProperty, SemanticObjectTrackValues, TrackTiming,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,9 +50,11 @@ pub fn session(
     let rows = (count as f64 / columns).ceil();
     let camera_height = if layout == Layout::Fit { rows } else { 6.0 };
     let mut scene = Scene::new();
-    let mut camera = scene.camera_frame()?;
+    let mut camera = scene.camera_frame().map_err(|error| error.to_string())?;
     let scale = camera_height / noon_core::DEFAULT_FRAME_HEIGHT as f64;
-    camera.set_scale(scale, scale)?;
+    camera
+        .set_scale(scale, scale)
+        .map_err(|error| error.to_string())?;
     let mut circles = Vec::with_capacity(count);
     let mut driver_origin = None;
     for index in 0..count {
@@ -77,23 +82,35 @@ pub fn session(
                 (0.35, angle.cos() * distance, angle.sin() * distance, 0.16)
             }
         };
-        let mut circle = scene.circle(radius)?;
-        circle.set_translation(x, y)?;
-        circle.set_color(0.27, 0.65, 0.96, 1.0)?;
-        circle.set_fill(0.27, 0.65, 0.96, 1.0)?;
-        circle.set_fill_opacity(alpha)?;
-        circle.set_stroke_width(0.0)?;
+        let mut circle = scene.circle(radius).map_err(|error| error.to_string())?;
+        circle
+            .set_translation(x, y)
+            .map_err(|error| error.to_string())?;
+        circle
+            .set_color(0.27, 0.65, 0.96, 1.0)
+            .map_err(|error| error.to_string())?;
+        circle
+            .set_fill(0.27, 0.65, 0.96, 1.0)
+            .map_err(|error| error.to_string())?;
+        circle
+            .set_fill_opacity(alpha)
+            .map_err(|error| error.to_string())?;
+        circle
+            .set_stroke_width(0.0)
+            .map_err(|error| error.to_string())?;
         circles.push(circle);
         if index == 0 {
             driver_origin = Some((x, y));
         }
     }
-    scene.add_many(
-        &circles
-            .iter()
-            .map(MobjectFamilyMember::Mobject)
-            .collect::<Vec<_>>(),
-    )?;
+    scene
+        .add_many(
+            &circles
+                .iter()
+                .map(MobjectFamilyMember::Mobject)
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|error| error.to_string())?;
     let circle = &circles[0];
     let (x, y) = driver_origin.expect("nonempty workload");
     let mut transaction = SemanticMutationTransaction::new();
@@ -108,7 +125,7 @@ pub fn session(
         CompositionTimeMap::identity(),
     );
     let committed = transaction
-        .apply(&mut scene.store().borrow_mut())
+        .apply(&mut scene.integration_store().borrow_mut())
         .map_err(|error| error.to_string())?;
     let root = scene.declare_animation(
         SemanticAnimationIntent::Composition {

@@ -1,6 +1,6 @@
 """Minimal membership hooks for isolated Python adapter tests.
 
-Production installs the shared Rust membership implementation. Tests that load
+Production calls the shared Rust membership implementation directly. Tests that load
 only the Python ergonomics modules use this stand-in to bind wrappers without
 installing another production membership path.
 """
@@ -18,6 +18,8 @@ def install_test_membership(compat: Any) -> None:
         *,
         key: str | None = None,
     ) -> None:
+        if not hasattr(scene, "_test_membership"):
+            scene._test_membership = []
         if kind == "add":
             leaves = [
                 member
@@ -28,7 +30,14 @@ def install_test_membership(compat: Any) -> None:
                 raise ValueError("an explicit key can only be used when adding one Mobject")
             for index, member in enumerate(leaves):
                 if member._scene is None:
-                    member._bind_to_scene(scene, key=key if index == 0 else None)
+                    # Adapter-only fixture identity, without a scene/timeline engine.
+                    object_id = scene._next_object_id
+                    scene._next_object_id += 1
+                    obj = compat._ir.Object(object_id, scene._owner)
+                    handle = getattr(member, "_semantic_handle", None)
+                    if handle is not None:
+                        scene._binding_handles[object_id] = handle
+                    member._bind(scene, obj)
                 elif member._scene is not scene:
                     raise ValueError("Mobject already belongs to another Scene")
             for value in values:
@@ -37,24 +46,29 @@ def install_test_membership(compat: Any) -> None:
 
         if kind == "remove":
             removed = {id(value) for value in values}
-            scene._compat_top_level = [
-                value for value in scene._compat_top_level if id(value) not in removed
+            scene._test_membership = [
+                value for value in scene._test_membership if id(value) not in removed
             ]
             return
         if kind == "clear":
-            scene._compat_top_level.clear()
+            scene._test_membership.clear()
             return
         if kind == "replace":
             old, new = values
-            previous = list(scene._compat_top_level)
+            previous = list(scene._test_membership)
             edit(scene, "add", (new,))
-            scene._compat_top_level = [
+            scene._test_membership = [
                 new if value is old else value for value in previous
             ]
             return
         raise ValueError(f"unknown test membership operation {kind!r}")
 
-    compat._STANDARD_MEMBERSHIP_EDIT = edit
-    compat._STANDARD_MEMBERSHIP_VIEW = lambda scene: [
-        value for value in scene._compat_top_level if scene._is_present(value)
-    ]
+    def register(scene, value):
+        if not hasattr(scene, "_test_membership"):
+            scene._test_membership = []
+        if not any(existing is value for existing in scene._test_membership):
+            scene._test_membership.append(value)
+
+    compat.Scene._edit_membership = edit
+    compat.Scene._register_top_level = register
+    compat.Scene.mobjects = property(lambda scene: list(getattr(scene, "_test_membership", ())))

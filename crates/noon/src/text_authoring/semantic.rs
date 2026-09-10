@@ -1,8 +1,16 @@
 //! Canonical text authoring in the same semantic store as geometry.
-use super::{MathTypst, Text, TextAuthoringError, Typst, NATIVE_POINT_TO_SCENE_SCALE};
-use noon_core::{GeometryResourceArena, Vec2};
-use noon_typst::{compile_typst_resource, TypstMode};
+use super::TextAuthoringError;
+#[cfg(feature = "typst")]
+use super::{MathTypst, Typst};
+#[cfg(feature = "native-text")]
+use super::{Text, NATIVE_POINT_TO_SCENE_SCALE};
+use noon_core::GeometryResourceArena;
+#[cfg(feature = "native-text")]
+use noon_core::Vec2;
+#[cfg(feature = "typst")]
+use noon_typst::TypstMode;
 
+#[cfg(feature = "native-text")]
 pub(crate) fn native_text_state(
     store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     text: Text,
@@ -24,6 +32,7 @@ pub(crate) fn native_text_state(
     )
 }
 
+#[cfg(feature = "typst")]
 pub(crate) fn typst_state(
     store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     text: Typst,
@@ -31,6 +40,7 @@ pub(crate) fn typst_state(
     typst_spec_state(store, text.0, TypstMode::Markup)
 }
 
+#[cfg(feature = "typst")]
 pub(crate) fn math_typst_state(
     store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     text: MathTypst,
@@ -40,24 +50,28 @@ pub(crate) fn math_typst_state(
 
 impl crate::Scene {
     /// Create an ordinary detached native text Mobject in this scene's shared store.
+    #[cfg(feature = "native-text")]
     pub fn text(&self, text: impl Into<Text>) -> Result<crate::Mobject, TextAuthoringError> {
-        crate::Mobject::from_text(std::rc::Rc::clone(self.store()), text)
+        crate::Mobject::from_text(std::rc::Rc::clone(self.integration_store()), text)
     }
 
     /// Create an ordinary detached Typst Mobject in this scene's shared store.
+    #[cfg(feature = "typst")]
     pub fn typst(&self, text: Typst) -> Result<crate::Mobject, TextAuthoringError> {
-        crate::Mobject::from_typst(std::rc::Rc::clone(self.store()), text)
+        crate::Mobject::from_typst(std::rc::Rc::clone(self.integration_store()), text)
     }
 
     /// Create an ordinary detached MathTypst Mobject in this scene's shared store.
+    #[cfg(feature = "typst")]
     pub fn math_typst(&self, text: MathTypst) -> Result<crate::Mobject, TextAuthoringError> {
-        crate::Mobject::from_math_typst(std::rc::Rc::clone(self.store()), text)
+        crate::Mobject::from_math_typst(std::rc::Rc::clone(self.integration_store()), text)
     }
 }
 
 impl crate::Mobject {
     /// Shape native text once and return an ordinary detached semantic Mobject.
     /// Add it to this scene with the same `add` operation used for geometry.
+    #[cfg(feature = "native-text")]
     pub fn from_text(
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
         text: impl Into<Text>,
@@ -67,6 +81,7 @@ impl crate::Mobject {
     }
 
     /// Compile Typst into the shared retained text resource and return its ordinary semantic handle.
+    #[cfg(feature = "typst")]
     pub fn from_typst(
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
         text: Typst,
@@ -76,6 +91,7 @@ impl crate::Mobject {
     }
 
     /// Compile MathTypst into the shared retained text resource and return its ordinary semantic handle.
+    #[cfg(feature = "typst")]
     pub fn from_math_typst(
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
         text: MathTypst,
@@ -85,6 +101,7 @@ impl crate::Mobject {
     }
 }
 
+#[cfg(feature = "typst")]
 fn typst_spec_state(
     store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     text: super::TypstSpec,
@@ -94,7 +111,7 @@ fn typst_spec_state(
         return Err(TextAuthoringError::InvalidFontSize(text.font_size));
     }
     text.presentation.validate()?;
-    let artifact = compile_typst_resource(text.source.as_ref(), mode)?;
+    let artifact = text.compile_artifact(mode)?;
     text_artifact_state(
         store,
         text.authored_transform(),
@@ -133,7 +150,7 @@ fn text_artifact_state(
         || !semantic_transform.rotation_z.is_finite()
     {
         return Err(TextAuthoringError::Semantic(
-            "text transform is not finite".into(),
+            crate::AuthoringError::NonFiniteTransform,
         ));
     }
     let style = noon_core::SemanticStyle {
@@ -146,20 +163,25 @@ fn text_artifact_state(
     };
     if !style.is_finite() {
         return Err(TextAuthoringError::Semantic(
-            "text style is not finite".into(),
+            crate::AuthoringError::NonFiniteStyle,
         ));
     }
     let handle = store
         .borrow_mut()
         .import_text_resource(resource, &fonts, &geometries)
-        .map_err(TextAuthoringError::Semantic)?;
+        .map_err(TextAuthoringError::Import)?;
     let mut state = noon_core::SemanticObjectState::new(handle);
     state.transform = semantic_transform;
     state.style = style;
     Ok(state)
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "native-text",
+    feature = "typst",
+    feature = "bundled-fonts"
+))]
 mod tests {
     use noon_core::{
         AnimationOptions, RateFunction, SemanticFadeDirection, SemanticMutationTransaction,
@@ -183,9 +205,9 @@ mod tests {
         assert!(session.frame().objects[0].geometry().is_some());
         assert!(session.frame().objects[1].text().is_some());
         let resource = label.state().unwrap().content.text().unwrap();
-        let before = scene.store().borrow().text_resources().stats();
+        let before = scene.integration_store().borrow().text_resources().stats();
         assert!(scene
-            .store()
+            .integration_store()
             .borrow()
             .text_resources()
             .get(resource)
@@ -210,7 +232,10 @@ mod tests {
             live.effective(&label).unwrap().style.fill,
             Some(noon_core::RED)
         );
-        assert_eq!(scene.store().borrow().text_resources().stats(), before);
+        assert_eq!(
+            scene.integration_store().borrow().text_resources().stats(),
+            before
+        );
     }
 
     #[test]
@@ -233,7 +258,7 @@ mod tests {
         assert_ne!(label.node_id(), equation.node_id());
         assert_eq!(
             scene
-                .store()
+                .integration_store()
                 .borrow()
                 .text_resources()
                 .get(label_resource)
@@ -243,7 +268,7 @@ mod tests {
         );
         assert_eq!(
             scene
-                .store()
+                .integration_store()
                 .borrow()
                 .text_resources()
                 .get(equation_resource)
@@ -267,16 +292,19 @@ mod tests {
     #[test]
     fn invalid_text_presentation_registers_neither_resources_nor_semantic_nodes() {
         let scene = crate::Scene::new();
-        let before = scene.store().borrow().scene_revision();
-        let resources = scene.store().borrow().text_resources().stats();
+        let before = scene.integration_store().borrow().scene_revision();
+        let resources = scene.integration_store().borrow().text_resources().stats();
         assert!(scene
             .text(super::Text::new("Noon").scale(f32::NAN))
             .is_err());
         assert!(scene
             .text(super::Text::new("Noon").color(noon_core::Color::rgba(f32::NAN, 1.0, 1.0, 1.0)))
             .is_err());
-        assert_eq!(scene.store().borrow().scene_revision(), before);
-        assert_eq!(scene.store().borrow().text_resources().stats(), resources);
+        assert_eq!(scene.integration_store().borrow().scene_revision(), before);
+        assert_eq!(
+            scene.integration_store().borrow().text_resources().stats(),
+            resources
+        );
     }
 
     #[test]
@@ -298,7 +326,7 @@ mod tests {
         assert!(session.take_frame_changes().is_empty());
         assert!(session.text_resources().get(resource).is_none());
         assert_eq!(
-            scene.store().borrow().scene_revision(),
+            scene.integration_store().borrow().scene_revision(),
             session.publication_context().scene_revision()
         );
 
@@ -341,8 +369,8 @@ mod tests {
             live.advance_segment_to(wait, wait.end_time()).unwrap();
             live.complete_segment(wait).unwrap();
         }
-        let revision = scene.store().borrow().scene_revision();
-        let resources = scene.store().borrow().text_resources().stats();
+        let revision = scene.integration_store().borrow().scene_revision();
+        let resources = scene.integration_store().borrow().text_resources().stats();
         let publication = session.publication_context();
         let frame = session.frame().clone();
 
@@ -356,8 +384,14 @@ mod tests {
                 .is_err());
         }
 
-        assert_eq!(scene.store().borrow().scene_revision(), revision);
-        assert_eq!(scene.store().borrow().text_resources().stats(), resources);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+        assert_eq!(
+            scene.integration_store().borrow().text_resources().stats(),
+            resources
+        );
         assert_eq!(session.publication_context(), publication);
         assert_eq!(session.frame(), &frame);
         assert!(session.take_frame_changes().is_empty());
@@ -386,7 +420,7 @@ mod tests {
         assert!(session.text_resources().get(label_resource).is_none());
         assert!(session.text_resources().get(equation_resource).is_none());
         assert_eq!(
-            scene.store().borrow().scene_revision(),
+            scene.integration_store().borrow().scene_revision(),
             session.publication_context().scene_revision()
         );
 
@@ -415,8 +449,8 @@ mod tests {
         let scene = crate::Scene::new();
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
-        let revision = scene.store().borrow().scene_revision();
-        let resources = scene.store().borrow().text_resources().stats();
+        let revision = scene.integration_store().borrow().scene_revision();
+        let resources = scene.integration_store().borrow().text_resources().stats();
         let publication = session.publication_context();
 
         {
@@ -436,8 +470,14 @@ mod tests {
                 .is_err());
         }
 
-        assert_eq!(scene.store().borrow().scene_revision(), revision);
-        assert_eq!(scene.store().borrow().text_resources().stats(), resources);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+        assert_eq!(
+            scene.integration_store().borrow().text_resources().stats(),
+            resources
+        );
         assert_eq!(session.publication_context(), publication);
         assert!(session.frame().objects.is_empty());
         assert!(session.take_frame_changes().is_empty());
@@ -549,7 +589,7 @@ mod tests {
         // Construct the malformed detached state directly so the publication
         // boundary, rather than authoring validation, proves its atomicity.
         let missing = scene
-            .store()
+            .integration_store()
             .borrow_mut()
             .insert_semantic_object(noon_core::SemanticObjectState::new(missing_resource));
         let mut session = scene.execution_session().unwrap();
@@ -557,7 +597,7 @@ mod tests {
         let before = session.publication_context();
 
         let result = session.declare_and_activate_affine_lifecycle(
-            &mut scene.store().borrow_mut(),
+            &mut scene.integration_store().borrow_mut(),
             scene.root(),
             missing,
             noon_core::SemanticAffineLifecycleDirection::RemoveTo,
@@ -572,7 +612,7 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(session.publication_context(), before);
         assert!(!scene
-            .store()
+            .integration_store()
             .borrow()
             .is_direct_member(scene.root(), missing)
             .unwrap());

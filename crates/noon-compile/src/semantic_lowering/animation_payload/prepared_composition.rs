@@ -213,7 +213,19 @@ impl std::fmt::Display for PreparedSemanticAnimationLoweringError {
     }
 }
 
-impl std::error::Error for PreparedSemanticAnimationLoweringError {}
+impl std::error::Error for PreparedSemanticAnimationLoweringError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Schedule(error) => Some(error),
+            Self::TextGlyph(error) => Some(error),
+            Self::Target { error, .. } => Some(error),
+            Self::InvalidSubsetDisplayTimeMap { error, .. } => Some(error),
+            Self::InvalidTargetValue { error, .. } => Some(error),
+            Self::InvalidTargetStyle { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+}
 
 /// Lower one prepared animation graph through the canonical schedule and shared payload paths.
 ///
@@ -347,8 +359,9 @@ where
                     &mut captures,
                     &mut effective_properties,
                 )?;
-                let channels = lower_transform_channels(source, target, from, interpolation)
-                    .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
+                let channels =
+                    lower_transform_channels(prepared.store(), source, target, from, interpolation)
+                        .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
                 for channel in channels {
                     push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
                 }

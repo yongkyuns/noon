@@ -39,7 +39,6 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/build-python-worker.mjs
   node --check scripts/execution-worker-smoke.mjs
   node --check scripts/execution-worker-host-smoke.mjs
-  node --check scripts/retained-execution-worker-smoke.mjs
   node --check scripts/authoring-execution-router-smoke.mjs
   node --check scripts/browser-smoke.mjs
   node --check scripts/browser-backend-visual-parity.mjs
@@ -62,17 +61,21 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/deterministic-replay-smoke.mjs
   node --check scripts/browser-test-server.mjs
   node --check scripts/cross-language-parity.mjs
+  node --check scripts/typed-authoring-errors-smoke.mjs
   node --check scripts/manim-compat-smoke.mjs
   node --check scripts/manim-tutorial-smoke.mjs
+  node --check scripts/python-editor-input-smoke.mjs
   node --check scripts/playground-layout-smoke.mjs
   node --check scripts/composition-authoring-smoke.mjs
   node --check scripts/reactive-authoring-smoke.mjs
   node --check scripts/shared-authoring-smoke.mjs
+  node --check scripts/playground-gallery-runtime-smoke.mjs
   node --check scripts/retained-dynamic-stress-perf.mjs
   node --check scripts/native-input-smoke.mjs
   node --check scripts/updater-callback-smoke.mjs
   node --check scripts/manim-host-updater-diagnostics.mjs
   node --check scripts/pr-risk-classifier.mjs
+  node --test scripts/pyodide-resource-cache.test.mjs
   node --test scripts/manim-raster-support.test.mjs
   node --test scripts/browser-visual-parity-lib.test.mjs
   node --test scripts/manim-reference-inventory.test.mjs
@@ -93,7 +96,6 @@ if [[ "$skip_web_preflight" != "1" ]]; then
     web/python/_manim_compat.py \
     web/python/_manim_typst.py \
     web/python/_manim_rate_functions.py \
-    web/python/_manim_phase_b.py \
     web/python/_manim_shared_geometry.py \
     web/python/_manim_animation_options.py \
     web/python/_manim_animate.py \
@@ -108,9 +110,6 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   PYTHONDONTWRITEBYTECODE=1 python3 -m compileall -q web/python/examples
   PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s web/python -p 'test_*.py'
 
-  if [[ "${NOON_SKIP_PLAYGROUND_TEST:-0}" != "1" ]]; then
-    cargo test -p noon-web --test playground_examples
-  fi
 fi
 
 if [[ "$web_preflight_only" == "1" ]]; then
@@ -129,6 +128,14 @@ esac
 wasm_pack_args=(build crates/noon-web --target web --out-dir ../../web/pkg "--$wasm_profile")
 if [[ "${NOON_WASM_SKIP_OPT:-0}" == "1" ]]; then
   wasm_pack_args+=(--no-opt)
+fi
+
+if [[ "${NOON_RENDERER_SMOKE:-0}" == "1" ]]; then
+  wasm_pack_args+=(--features renderer-smoke)
+fi
+
+if [[ "${NOON_REPLAY_SMOKE:-0}" == "1" ]]; then
+  wasm_pack_args+=(--features replay-smoke)
 fi
 
 worker_pid=""

@@ -346,7 +346,7 @@ export async function attachSemanticEngine(
 
   function callbackReadRequestJson(request) {
     if (!request || typeof request !== "object" ||
-        !["scalar_signal", "object"].includes(request.kind) ||
+        !["scalar_signal", "object", "family"].includes(request.kind) ||
         !request.node || typeof request.node !== "object" ||
         !Number.isSafeInteger(request.node.slot) || request.node.slot < 0 || request.node.slot > 0xffffffff ||
         !Number.isSafeInteger(request.node.generation) || request.node.generation < 0 || request.node.generation > 0xffffffff) {

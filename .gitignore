@@ -9,3 +9,6 @@ __pycache__/
 /web/python-worker.js
 /output/playwright
 /.playwright-cli
+/ci-artifacts
+/web/ci-artifact.json
+/web/ci-Cargo.lock

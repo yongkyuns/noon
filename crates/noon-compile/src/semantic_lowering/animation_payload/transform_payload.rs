@@ -64,7 +64,15 @@ impl std::fmt::Display for SemanticTransformToPayloadError {
     }
 }
 
-impl std::error::Error for SemanticTransformToPayloadError {}
+impl std::error::Error for SemanticTransformToPayloadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Options(error) => Some(error),
+            Self::Target { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl SemanticTransformToPayloadError {
     /// Whether the source and target are valid semantic objects but request a
@@ -142,7 +150,7 @@ pub(super) fn validate_transform_payload_shape(
             introducer: options.introducer,
         });
     }
-    if source.content != target.content && !is_supported_analytic_content_morph(source, target) {
+    if source.content != target.content && !is_supported_content_morph(source, target) {
         return Err(TransformPayloadValidationIssue::ContentChange);
     }
     if source.style.stroke_width != target.style.stroke_width
@@ -171,7 +179,7 @@ pub(super) fn validate_transform_payload_shape(
     Ok(())
 }
 
-pub(super) fn is_supported_analytic_content_morph(
+pub(super) fn is_supported_content_morph(
     source: &noon_core::SemanticObjectState,
     target: &noon_core::SemanticObjectState,
 ) -> bool {
@@ -185,6 +193,9 @@ pub(super) fn is_supported_analytic_content_morph(
         ) | (
             Some(StoredGeometry::Rectangle { .. }),
             Some(StoredGeometry::Circle { .. })
+        ) | (
+            Some(StoredGeometry::Resource(_)),
+            Some(StoredGeometry::Resource(_))
         )
     )
 }

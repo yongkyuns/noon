@@ -3,13 +3,18 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 
-use crate::{
+use crate::execution_session::{
     CallbackAdvance, CallbackPhaseOverlay, CallbackReadRequest, CallbackReadValue,
-    EffectiveObjectProperties, ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSession,
-    ExecutionSessionCallbackError, FrameState, HostCallbackId, SemanticMutationTransaction,
-    SemanticMutationTransactionError, SemanticMutationTransactionResult, SemanticNodeId,
-    SemanticStore, Style, Transform2D, Vec2,
 };
+use crate::{
+    ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSession,
+    ExecutionSessionCallbackError, SemanticNodeId, Style, Transform2D, Vec2,
+};
+use noon_core::{
+    HostCallbackId, SemanticMutationTransaction, SemanticMutationTransactionError,
+    SemanticMutationTransactionResult, SemanticStore,
+};
+use noon_runtime::{EffectiveObjectProperties, FrameState};
 
 type BoxedCallbackError = Box<dyn Error + 'static>;
 type RustHostCallback =
@@ -158,7 +163,7 @@ impl RustHostCallbackContext<'_> {
         &self,
         angle: f64,
         pivot: Vec2,
-    ) -> Result<Transform2D, String> {
+    ) -> Result<Transform2D, crate::AuthoringError> {
         rotate_effective_transform_about_point(self.target_state().transform, angle, pivot)
     }
 
@@ -172,7 +177,7 @@ impl RustHostCallbackContext<'_> {
         green: f64,
         blue: f64,
         alpha: f64,
-    ) -> Result<Style, String> {
+    ) -> Result<Style, crate::AuthoringError> {
         effective_style_with_color(self.target_state().style, red, green, blue, alpha)
     }
 
@@ -183,12 +188,15 @@ impl RustHostCallbackContext<'_> {
         green: f64,
         blue: f64,
         alpha: f64,
-    ) -> Result<Style, String> {
+    ) -> Result<Style, crate::AuthoringError> {
         effective_style_with_fill_color(self.target_state().style, red, green, blue, alpha)
     }
 
     /// Derive an opacity-only fill edit, enabling white fill when absent.
-    pub fn target_style_with_fill_opacity(&self, opacity: f64) -> Result<Style, String> {
+    pub fn target_style_with_fill_opacity(
+        &self,
+        opacity: f64,
+    ) -> Result<Style, crate::AuthoringError> {
         effective_style_with_fill_opacity(self.target_state().style, opacity)
     }
 
@@ -199,7 +207,7 @@ impl RustHostCallbackContext<'_> {
         green: f64,
         blue: f64,
         opacity: f64,
-    ) -> Result<Style, String> {
+    ) -> Result<Style, crate::AuthoringError> {
         effective_style_with_fill(self.target_state().style, red, green, blue, opacity)
     }
 
@@ -210,8 +218,83 @@ impl RustHostCallbackContext<'_> {
         green: f64,
         blue: f64,
         alpha: f64,
-    ) -> Result<Style, String> {
+    ) -> Result<Style, crate::AuthoringError> {
         effective_style_with_stroke_color(self.target_state().style, red, green, blue, alpha)
+    }
+
+    /// Apply one family paint operation atomically to this ordered effective overlay.
+    pub fn paint_family(
+        &mut self,
+        family: &crate::MobjectFamily,
+        operation: crate::FamilyPaint,
+    ) -> Result<(), crate::FamilyCallbackPaintError> {
+        let token = self.overlay.token();
+        let rows = self.session.required_callback_family_read(
+            &family.integration_store().borrow(),
+            token,
+            family.node_id(),
+        )?;
+        for (node, properties) in rows {
+            self.overlay.cache_read_object(node, properties);
+        }
+        let changes = family.prepare_callback_paint(
+            token.publication().scene_revision(),
+            operation,
+            |node| {
+                self.overlay
+                    .object(node)
+                    .map(|p| p.style)
+                    .ok_or(ExecutionSessionCallbackError::UnknownObject(node))
+            },
+        )?;
+        for (node, style) in changes {
+            self.overlay
+                .set_style(node, style)
+                .expect("all family rows were read before writing");
+        }
+        Ok(())
+    }
+
+    /// Translate one semantic family once per leaf in the current ordered phase.
+    /// Read and validate the entire operation before caching rows or appending
+    /// any writes; a caught late rejection preserves preceding overlay edits.
+    pub fn shift_family(
+        &mut self,
+        family: &crate::MobjectFamily,
+        x: f64,
+        y: f64,
+    ) -> Result<(), crate::FamilyCallbackTranslationError> {
+        let token = self.overlay.token();
+        let rows: BTreeMap<_, _> = self
+            .session
+            .required_callback_family_read(
+                &family.integration_store().borrow(),
+                token,
+                family.node_id(),
+            )?
+            .into_iter()
+            .collect();
+        let changes = family.prepare_callback_translation(
+            token.publication().scene_revision(),
+            x,
+            y,
+            |node| {
+                self.overlay
+                    .object(node)
+                    .or_else(|| rows.get(&node))
+                    .map(|row| (row.transform, row.bounds))
+                    .ok_or(ExecutionSessionCallbackError::UnknownObject(node))
+            },
+        )?;
+        for (node, row) in rows {
+            self.overlay.cache_read_object(node, row);
+        }
+        for change in changes {
+            self.overlay
+                .set_transform(change.node, change.transform)
+                .expect("all selected family rows were read and validated before writes");
+        }
+        Ok(())
     }
 
     pub fn set_target_style(&mut self, style: Style) -> Result<(), ExecutionSessionCallbackError> {
@@ -235,9 +318,9 @@ pub fn rotate_effective_transform_about_point(
     transform: Transform2D,
     angle: f64,
     pivot: Vec2,
-) -> Result<Transform2D, String> {
+) -> Result<Transform2D, crate::AuthoringError> {
     if !transform.scale.x.is_finite() || !transform.scale.y.is_finite() {
-        return Err("callback transform scale must be finite".into());
+        return Err(crate::AuthoringError::NonFiniteTransform);
     }
     let ((translation_x, translation_y), rotation) =
         crate::semantic_mobject::rotate_affine_about_point(
@@ -266,7 +349,7 @@ pub fn effective_style_with_color(
     green: f64,
     blue: f64,
     alpha: f64,
-) -> Result<Style, String> {
+) -> Result<Style, crate::AuthoringError> {
     crate::semantic_mobject::edit_color(&mut style, red, green, blue, alpha)?;
     Ok(style)
 }
@@ -278,13 +361,25 @@ pub fn effective_style_with_fill_color(
     green: f64,
     blue: f64,
     alpha: f64,
-) -> Result<Style, String> {
+) -> Result<Style, crate::AuthoringError> {
     crate::semantic_mobject::edit_fill_color(&mut style, red, green, blue, alpha)?;
     Ok(style)
 }
 
+/// Apply shared Manim paint opacity without changing the object-composite multiplier.
+pub fn effective_style_with_paint_opacity(
+    mut style: Style,
+    opacity: f64,
+) -> Result<Style, crate::AuthoringError> {
+    crate::semantic_mobject::edit_manim_opacity(&mut style, opacity)?;
+    Ok(style)
+}
+
 /// Apply shared Manim opacity-only fill semantics to an effective runtime style.
-pub fn effective_style_with_fill_opacity(mut style: Style, opacity: f64) -> Result<Style, String> {
+pub fn effective_style_with_fill_opacity(
+    mut style: Style,
+    opacity: f64,
+) -> Result<Style, crate::AuthoringError> {
     crate::semantic_mobject::edit_fill_opacity(&mut style, opacity)?;
     Ok(style)
 }
@@ -296,7 +391,7 @@ pub fn effective_style_with_fill(
     green: f64,
     blue: f64,
     opacity: f64,
-) -> Result<Style, String> {
+) -> Result<Style, crate::AuthoringError> {
     crate::semantic_mobject::edit_fill(&mut style, red, green, blue, opacity)?;
     Ok(style)
 }
@@ -308,7 +403,7 @@ pub fn effective_style_with_stroke_color(
     green: f64,
     blue: f64,
     alpha: f64,
-) -> Result<Style, String> {
+) -> Result<Style, crate::AuthoringError> {
     crate::semantic_mobject::edit_stroke_color(&mut style, red, green, blue, alpha)?;
     Ok(style)
 }
@@ -654,6 +749,38 @@ mod tests {
     }
 
     #[test]
+    fn callback_paint_opacity_matches_authored_style_and_preserves_composite_domain() {
+        let mut scene = Scene::new();
+        let mut object = scene.circle(0.5).unwrap();
+        object.set_fill(0.1, 0.2, 0.3, 0.25).unwrap();
+        object.set_stroke_color(0.4, 0.5, 0.6, 0.75).unwrap();
+        object.set_stroke_width(3.0).unwrap();
+        object.set_object_opacity(0.6).unwrap();
+        scene.add(&object).unwrap();
+        let before = scene.execution_session().unwrap().frame().objects[0].style;
+        let effective = effective_style_with_paint_opacity(before, 0.4).unwrap();
+        object.set_opacity(0.4).unwrap();
+        let authored = scene.execution_session().unwrap().frame().objects[0].style;
+        assert_eq!(effective, authored);
+        assert_eq!(effective.fill.unwrap().alpha, 0.4);
+        assert_eq!(effective.stroke.unwrap().alpha, 0.4);
+        assert_eq!(effective.opacity, before.opacity);
+        assert_eq!(effective.stroke_width, before.stroke_width);
+        for opacity in [-1.0, 2.0, f64::NAN, f64::INFINITY] {
+            assert!(effective_style_with_paint_opacity(before, opacity).is_err());
+        }
+        let unpainted = Style {
+            fill: None,
+            stroke: None,
+            ..before
+        };
+        assert_eq!(
+            effective_style_with_paint_opacity(unpainted, 0.4).unwrap(),
+            unpainted
+        );
+    }
+
+    #[test]
     fn typed_host_context_reads_scoped_signal_and_non_target_object() {
         let mut scene = Scene::new();
         let active = scene.circle(0.5).unwrap();
@@ -679,7 +806,7 @@ mod tests {
             .unwrap();
         callbacks
             .add_updater(
-                &mut scene.store().borrow_mut(),
+                &mut scene.integration_store().borrow_mut(),
                 active.node_id(),
                 SET_Y,
                 0.0,
@@ -688,7 +815,7 @@ mod tests {
             .unwrap();
         let mut session = scene.execution_session().unwrap();
         callbacks.advance_to(&mut session, 0.0).unwrap();
-        let store = scene.store().borrow();
+        let store = scene.integration_store().borrow();
         let effective = session
             .effective_semantic_object(&store, active.node_id())
             .unwrap();
@@ -754,7 +881,7 @@ mod tests {
             })
             .unwrap();
         {
-            let mut store = scene.store().borrow_mut();
+            let mut store = scene.integration_store().borrow_mut();
             callbacks
                 .add_updater(&mut store, source.node_id(), SET_Y, 0.0, None)
                 .unwrap();
@@ -817,7 +944,7 @@ mod tests {
             .unwrap();
         authoring_table
             .add_updater(
-                &mut scene.store().borrow_mut(),
+                &mut scene.integration_store().borrow_mut(),
                 target.node_id(),
                 SET_Y,
                 0.0,
@@ -856,7 +983,7 @@ mod tests {
             .unwrap();
         callbacks
             .add_updater(
-                &mut scene.store().borrow_mut(),
+                &mut scene.integration_store().borrow_mut(),
                 target.node_id(),
                 SET_Y,
                 0.0,
@@ -898,7 +1025,7 @@ mod tests {
             .unwrap();
         callbacks
             .add_updater(
-                &mut scene.store().borrow_mut(),
+                &mut scene.integration_store().borrow_mut(),
                 target.node_id(),
                 SET_OPACITY,
                 0.0,
@@ -927,7 +1054,7 @@ mod tests {
         source: &crate::Mobject,
         drift: &crate::Mobject,
     ) -> ((Vec2, f32), (Vec2, f32)) {
-        let store = scene.store().borrow();
+        let store = scene.integration_store().borrow();
         let source = session
             .effective_semantic_object(&store, source.node_id())
             .unwrap()

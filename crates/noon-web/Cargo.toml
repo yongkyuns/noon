@@ -10,9 +10,12 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["renderer"]
+# Explicit release-profile qualification only; production builds omit the fixtures.
+renderer-smoke = ["renderer"]
+# Opt-in typed replay fixtures for optimized qualification, not production exports.
+replay-smoke = []
 renderer = [
     "dep:noon-render-wgpu",
-    "dep:noon-text-render-wgpu",
     "dep:wgpu",
 ]
 
@@ -22,14 +25,13 @@ noon = { path = "../noon", features = ["diagnostics"] }
 noon-compile = { path = "../noon-compile" }
 noon-core = { path = "../noon-core" }
 noon-geometry = { path = "../noon-geometry" }
-noon-ir = { path = "../noon-ir" }
 noon-runtime = { path = "../noon-runtime" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
 noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["web"], optional = true }
-noon-text-render-wgpu = { path = "../noon-text-render-wgpu", default-features = false, features = ["web"], optional = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["Event", "EventTarget", "HtmlCanvasElement", "OffscreenCanvas", "Performance", "Window"] }

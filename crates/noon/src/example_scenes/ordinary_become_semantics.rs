@@ -82,8 +82,11 @@ impl LiveContinuation for OrdinaryBecomeSemantics {
                     ELLIPSE_HULL_WIDTH,
                     ELLIPSE_HULL_HEIGHT,
                 )?;
-                let ellipse_state = self.ellipse.state()?;
-                let ellipse_target_state = self.ellipse_target.state()?;
+                let ellipse_state = self.ellipse.state().map_err(|error| error.to_string())?;
+                let ellipse_target_state = self
+                    .ellipse_target
+                    .state()
+                    .map_err(|error| error.to_string())?;
                 if ellipse_state.content != ellipse_target_state.content
                     || ellipse_state.style != ellipse_target_state.style
                 {
@@ -149,11 +152,17 @@ fn rectangle(
     green: f64,
     blue: f64,
 ) -> Result<Mobject, String> {
-    let mut options = ManimGeometryOptions::rectangle(width, height)?;
-    options.set_translation(x, 0.0)?;
-    options.set_fill(red, green, blue, 1.0)?;
+    let mut options =
+        ManimGeometryOptions::rectangle(width, height).map_err(|error| error.to_string())?;
+    options
+        .set_translation(x, 0.0)
+        .map_err(|error| error.to_string())?;
+    options
+        .set_fill(red, green, blue, 1.0)
+        .map_err(|error| error.to_string())?;
     options.disable_stroke();
-    Mobject::from_manim_geometry(Rc::clone(scene.store()), options)
+    Mobject::from_manim_geometry(Rc::clone(scene.integration_store()), options)
+        .map_err(|error| error.to_string())
 }
 
 pub fn program() -> Result<LiveProgram<OrdinaryBecomeSemantics>, String> {
@@ -161,23 +170,42 @@ pub fn program() -> Result<LiveProgram<OrdinaryBecomeSemantics>, String> {
     let fitted = rectangle(&scene, 3.0, 1.0, -2.0, 0.0, 0.0, 1.0)?;
     let stretched = rectangle(&scene, 3.0, 1.0, 2.0, 0.0, 0.0, 1.0)?;
     let mut ellipse = rectangle(&scene, 0.4, 0.4, 0.0, 0.0, 0.0, 1.0)?;
-    ellipse.set_translation(0.0, -2.5)?;
+    ellipse
+        .set_translation(0.0, -2.5)
+        .map_err(|error| error.to_string())?;
     let fitted_target = rectangle(&scene, 1.0, 2.0, 3.5, 1.0, 1.0, 0.0)?;
-    let mut stretched_target_options = ManimGeometryOptions::circle(0.5)?;
-    stretched_target_options.set_translation(-3.5, 0.0)?;
-    stretched_target_options.set_fill(1.0, 0.0, 1.0, 1.0)?;
+    let mut stretched_target_options =
+        ManimGeometryOptions::circle(0.5).map_err(|error| error.to_string())?;
+    stretched_target_options
+        .set_translation(-3.5, 0.0)
+        .map_err(|error| error.to_string())?;
+    stretched_target_options
+        .set_fill(1.0, 0.0, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
     stretched_target_options.disable_stroke();
-    let stretched_target =
-        Mobject::from_manim_geometry(Rc::clone(scene.store()), stretched_target_options)?;
-    let mut ellipse_target_options = ManimGeometryOptions::ellipse(4.0, 1.5)?;
-    ellipse_target_options.set_translation(0.0, 2.5)?;
-    ellipse_target_options.set_rotation(std::f64::consts::PI / 6.0)?;
-    ellipse_target_options.set_fill(0.0, 1.0, 1.0, 1.0)?;
+    let stretched_target = Mobject::from_manim_geometry(
+        Rc::clone(scene.integration_store()),
+        stretched_target_options,
+    )
+    .map_err(|error| error.to_string())?;
+    let mut ellipse_target_options =
+        ManimGeometryOptions::ellipse(4.0, 1.5).map_err(|error| error.to_string())?;
+    ellipse_target_options
+        .set_translation(0.0, 2.5)
+        .map_err(|error| error.to_string())?;
+    ellipse_target_options
+        .set_rotation(std::f64::consts::PI / 6.0)
+        .map_err(|error| error.to_string())?;
+    ellipse_target_options
+        .set_fill(0.0, 1.0, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
     ellipse_target_options.disable_stroke();
     let ellipse_target =
-        Mobject::from_manim_geometry(Rc::clone(scene.store()), ellipse_target_options)?;
+        Mobject::from_manim_geometry(Rc::clone(scene.integration_store()), ellipse_target_options)
+            .map_err(|error| error.to_string())?;
     let ellipse_target_bounds = ellipse_target
-        .layout_bounds()?
+        .layout_bounds()
+        .map_err(|error| error.to_string())?
         .ok_or("ellipse target has no authored layout bounds")?;
     for (actual, expected, label) in [
         (
@@ -203,11 +231,13 @@ pub fn program() -> Result<LiveProgram<OrdinaryBecomeSemantics>, String> {
             ));
         }
     }
-    scene.add_many(&[
-        MobjectFamilyMember::Mobject(&fitted),
-        MobjectFamilyMember::Mobject(&stretched),
-        MobjectFamilyMember::Mobject(&ellipse),
-    ])?;
+    scene
+        .add_many(&[
+            MobjectFamilyMember::Mobject(&fitted),
+            MobjectFamilyMember::Mobject(&stretched),
+            MobjectFamilyMember::Mobject(&ellipse),
+        ])
+        .map_err(|error| error.to_string())?;
     scene
         .into_live_program(OrdinaryBecomeSemantics {
             fitted,

@@ -127,6 +127,27 @@ class FakePort {
   postMessage(message) { this.messages.push(message); }
 }
 
+test("retired geometry mode is rejected before canvas or port admission", async () => {
+  const messages = [];
+  const port = new FakePort();
+  const context = vm.createContext({
+    port,
+    messages,
+    MessagePort: FakePort,
+    init: () => { throw new Error("invalid mode must not initialize WASM"); },
+  });
+  vm.runInContext(executableSource, context);
+  await vm.runInContext(`
+    controller = createAuthoringRenderController({ postMessage: message => messages.push(message) });
+    controller.dispatch({ channel: "noon.render", protocolVersion: 1, type: "init", port, mode: "legacy" });
+  `, context);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, "error");
+  assert.match(messages[0].message, /unsupported authoring render mode legacy/);
+  assert.equal(port.closed, false);
+  assert.equal(port.messages.length, 0);
+});
+
 test("shutdown during asynchronous initialization cannot revive a controller", async () => {
   const initialization = deferred();
   const closed = [];
@@ -162,7 +183,7 @@ test("shutdown during asynchronous initialization cannot revive a controller", a
       port,
       canvas,
       transportMode:"transferable",
-      mode:"legacy",
+      mode:"retained",
     });`,
     context,
   );
@@ -315,7 +336,6 @@ function createWorkerHarness(renderResults = [false, true]) {
     clearTimeout,
     OffscreenCanvas: class {},
     MessagePort: FakePort,
-    ExecutionCanvasRenderer: { create: async () => createRenderer([true]) },
     RetainedExecutionCanvasRenderer: { create: () => creation.promise },
     SharedExecutionDeltaReader: class { drain() { return 0; } },
     TransferableExecutionDeltaReceiver: class { drain() {} },
@@ -348,7 +368,7 @@ function createWorkerHarness(renderResults = [false, true]) {
     `
 canvas = {};
 transportMode = EXECUTION_TRANSPORT_TRANSFERABLE;
-mode = MODE_LEGACY;
+mode = MODE_RETAINED;
 renderer = oldRenderer;
 renderPort = oldPort;
 running = true;
@@ -660,4 +680,31 @@ test("renderer startup reports browser surface creation diagnostics", async () =
   await flushTasks();
   assert.ok(harness.mainMessages.some((message) =>
     message.type === "error" && message.message.includes("GPU surface unavailable")));
+});
+
+
+test("clamped zero-to-one resize stays idle and later real resizes still present", () => {
+  const sizes = [];
+  let presents = 0;
+  const context = vm.createContext({
+    rendererStub: {
+      resize: (width, height) => sizes.push([width, height]),
+      render: () => { presents += 1; return true; },
+    },
+    drainRendererGpuDiagnostics: () => true,
+    formatGpuDiagnostic: String,
+  });
+  vm.runInContext(harnessSource, context);
+  vm.runInContext(`renderer = rendererStub; width = 640; height = 360;
+    resize({width:0, height:0});`, context);
+  assert.equal(presents, 1);
+  vm.runInContext("resize({width:1, height:1});", context);
+  assert.equal(presents, 1, "equivalent 1px backing size must not force another frame");
+  assert.equal(vm.runInContext("needsPresent", context), false);
+  assert.equal(vm.runInContext("scheduledFrame", context), null);
+  vm.runInContext("resize({width:2, height:2}); resize({width:640, height:360});", context);
+  assert.equal(presents, 3, "changed backing dimensions must remain drawable after the no-op");
+  assert.deepEqual(sizes, [[1,1], [1,1], [2,2], [640,360]]);
+  assert.equal(vm.runInContext("needsPresent", context), false);
+  assert.equal(vm.runInContext("scheduledFrame", context), null);
 });

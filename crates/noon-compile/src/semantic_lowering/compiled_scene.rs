@@ -68,7 +68,14 @@ impl std::fmt::Display for SemanticCompiledSceneError {
     }
 }
 
-impl std::error::Error for SemanticCompiledSceneError {}
+impl std::error::Error for SemanticCompiledSceneError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resource { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl CompiledScene {
     /// Materialize the already value-lowered semantic object projection into the

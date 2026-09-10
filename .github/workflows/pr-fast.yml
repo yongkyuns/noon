@@ -87,11 +87,13 @@ jobs:
     name: Web static and unit checks
     runs-on: ubuntu-latest
     env:
-      NOON_SKIP_PLAYGROUND_TEST: "1"
       NOON_WEB_PREFLIGHT_ONLY: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Test CI cache and artifact contracts
+        run: node --test .github/ci/*.test.mjs
 
       - name: Run web preflight
         run: bash scripts/build-web-demo.sh
@@ -128,57 +130,11 @@ jobs:
           printf '%s\n' "$changed_paths" | node scripts/pr-risk-classifier.mjs >> "$GITHUB_OUTPUT"
           printf '%s\n' "$changed_paths" | node scripts/cold-start-risk-classifier.mjs >> "$GITHUB_OUTPUT"
 
-      - name: Use stable Rust and WASM target
-        run: |
-          rustup default stable
-          rustup target add wasm32-unknown-unknown
-
-      - name: Cache Cargo sources
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-sources-
-
-      - name: Restore trusted WASM build cache
-        uses: actions/cache/restore@v6
-        with:
-          path: |
-            /home/runner/.cache/noon-sccache-wasm
-            ~/.cache/.wasm-pack
-          key: ${{ runner.os }}-wasm-build-v1-${{ github.event.pull_request.base.sha }}
-          restore-keys: |
-            ${{ runner.os }}-wasm-build-v1-
-
-      - name: Use sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.16.0
-
-      - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
-        with:
-          tool: wasm-pack@0.15.0
-          fallback: none
-
       - name: Build browser package once
         id: browser-package
-        env:
-          NOON_SKIP_WEB_PREFLIGHT: "1"
-          NOON_SKIP_PLAYGROUND_TEST: "1"
-          NOON_WASM_PROFILE: "dev"
-          NOON_WASM_SKIP_OPT: "1"
-        run: |
-          SECONDS=0
-          set +e
-          bash scripts/build-web-demo.sh
-          status=$?
-          set -e
-          echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
-          exit "$status"
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          cache-ref: ${{ github.event.pull_request.base.sha }}
 
       - name: Cache Playwright Chromium
         uses: actions/cache@v6
@@ -190,6 +146,9 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
+
+      - name: Check editor input and Reset without engine startup
+        run: node scripts/python-editor-input-smoke.mjs
 
       - name: Check preloaded cold-start footprint
         if: steps.browser-risk.outputs.cold_start == 'true'
@@ -232,6 +191,9 @@ jobs:
           echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
           exit "$status"
 
+      - name: Check typed WASM/Python error boundary
+        run: node scripts/typed-authoring-errors-smoke.mjs
+
       - name: Check Manim-style authoring
         id: manim-authoring
         run: |
@@ -249,7 +211,7 @@ jobs:
         run: |
           SECONDS=0
           set +e
-          timeout --signal=TERM 120s node scripts/retained-execution-worker-smoke.mjs
+          timeout --signal=TERM 120s node scripts/execution-worker-smoke.mjs
           status=$?
           set -e
           echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"

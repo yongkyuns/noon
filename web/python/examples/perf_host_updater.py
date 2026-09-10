@@ -14,7 +14,7 @@ class HostUpdaterPerfScene(Scene):
             # style work. The unrelated anchor must never enter the sparse phase.
             center = mobject.get_center()
             mobject.move_to((center.x, dt, 0.0))
-            mobject.set_opacity(0.5 + dt)
+            mobject.set_object_opacity(0.5 + dt)
 
         follower.add_updater(removed)
         follower.remove_updater(removed)
@@ -29,13 +29,15 @@ class HostUpdaterPerfScene(Scene):
         live = self.live_execution()
         assert live.wait(1.0) == 1.0
 
-        def unsupported_late_registration(mobject):
+        # Live registration is supported after completion, never while this
+        # callback-bearing segment is still pending. Rejection must roll back.
+        def during_pending_segment(mobject):
             mobject.shift(RIGHT * 100)
 
         try:
-            follower.add_updater(unsupported_late_registration)
+            follower.add_updater(during_pending_segment)
         except Exception as error:
-            assert "before canonical execution begins" in str(error)
+            assert "complete the current live segment before continuing" in str(error)
         else:
-            raise AssertionError("live callback registration was silently accepted")
+            raise AssertionError("registration during a pending segment was silently accepted")
         assert follower.get_updaters() == [follow]

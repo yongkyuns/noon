@@ -104,11 +104,10 @@ class ManimSharedGeometryTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_compat
-            _manim_compat.install()
-            import _manim_phase_b
+
             import _manim_geometry
             import _manim_semantic_handles as handles
-            handles.install()
+
 
             _manim_compat._ir.Circle = lambda *args, **kwargs: (_ for _ in ()).throw(
                 AssertionError("Python Circle geometry constructor was called")
@@ -117,8 +116,12 @@ class ManimSharedGeometryTests(unittest.TestCase):
                 AssertionError("Python Path geometry constructor was called")
             )
 
+            constructors = tuple(cls.__init__ for cls in
+                                 (_manim_geometry.Dot, _manim_geometry.Ellipse, _manim_geometry.Triangle))
             import _manim_shared_geometry
-            _manim_shared_geometry.install()
+            assert constructors == tuple(cls.__init__ for cls in
+                                         (_manim_geometry.Dot, _manim_geometry.Ellipse, _manim_geometry.Triangle))
+            assert not any(name.startswith("_ORIGINAL_") for name in vars(_manim_shared_geometry))
             from noon import Dot, Triangle
 
             dot_obj = Dot((2.0, -3.0, 0.0), radius=0.2)

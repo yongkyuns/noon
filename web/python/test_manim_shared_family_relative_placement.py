@@ -24,8 +24,7 @@ class ManimSharedFamilyRelativePlacementTests(unittest.TestCase):
             import json
 
             import _manim_compat
-            _manim_compat.install()
-            import _manim_phase_b  # noqa: F401
+
             import _manim_semantic_handles as handles
 
 
@@ -95,6 +94,9 @@ class ManimSharedFamilyRelativePlacementTests(unittest.TestCase):
                     assert len(target.members) == 1
                     return self._apply(-2.0, 0.0)
 
+                def alignOnFrame(self, *args):
+                    self.store.frame_calls.append(tuple(float(value) for value in args))
+
                 def criticalX(self, direction_x, direction_y):
                     raise AssertionError("Python must not derive family relative-placement deltas")
 
@@ -124,6 +126,7 @@ class ManimSharedFamilyRelativePlacementTests(unittest.TestCase):
                 def __init__(self):
                     self.next_identity = 0
                     self.entities = {}
+                    self.frame_calls = []
                     self.next_to_point = []
                     self.next_to_family = []
                     self.align_to_point = []
@@ -148,7 +151,7 @@ class ManimSharedFamilyRelativePlacementTests(unittest.TestCase):
             _geometry_test.install_module_bridge(handles, store.createMobject)
             import _typed_family_test_support as _family_test
             _family_test.install_bridge(handles, store.createFamily, FakeFamilyHandle, FakeObjectHandle)
-            handles.install()
+
 
             from noon import Circle, RIGHT, Square, UP, VGroup
 
@@ -182,6 +185,32 @@ class ManimSharedFamilyRelativePlacementTests(unittest.TestCase):
             assert store.applied[before:] == ids
             assert first._semantic_handle.shift_calls[-1] == (-2.0, 0.0)
             assert store.finishes == 4
+
+            # Frame semantics must be delegated without Python bounds or shifts.
+            assert not hasattr(_manim_compat, "_critical_for")
+            assert not hasattr(_manim_compat, "_bounds_for")
+            family.to_edge(2 * RIGHT, buff=0.25)
+            family.to_corner(RIGHT + UP, buff=0.5)
+            assert store.frame_calls == [(2.0, 0.0, 0.25), (1.0, 1.0, 0.5)]
+            assert store.finishes == 4
+
+            # A stale member must not leave a partially translated family.
+            first._semantic_handle_fresh = False
+            before = list(store.applied)
+            for operation in (
+                lambda: family.move_to((1, 2)),
+                lambda: family.align_to((1, 2)),
+                lambda: family.next_to((1, 2)),
+                lambda: family.arrange(),
+                lambda: family.to_edge(),
+            ):
+                try:
+                    operation()
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError("invalid family placement must reject")
+            assert store.applied == before
             """
         )
         completed = subprocess.run(

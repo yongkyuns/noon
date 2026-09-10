@@ -71,14 +71,19 @@ impl LiveContinuation for AffineFade {
 
 pub fn program() -> Result<LiveProgram<AffineFade>, String> {
     let scene = Scene::new();
-    let mut circle = Mobject::manim_circle(Rc::clone(scene.store()), 0.4)?;
-    circle.set_fill(
-        f64::from(Color::BLUE.red),
-        f64::from(Color::BLUE.green),
-        f64::from(Color::BLUE.blue),
-        1.0,
-    )?;
-    circle.set_stroke_opacity(0.0)?;
+    let mut circle = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.4)
+        .map_err(|error| error.to_string())?;
+    circle
+        .set_fill(
+            f64::from(Color::BLUE.red),
+            f64::from(Color::BLUE.green),
+            f64::from(Color::BLUE.blue),
+            1.0,
+        )
+        .map_err(|error| error.to_string())?;
+    circle
+        .set_stroke_opacity(0.0)
+        .map_err(|error| error.to_string())?;
     scene
         .into_live_program(AffineFade { circle, stage: 0 })
         .map_err(|error| error.to_string())

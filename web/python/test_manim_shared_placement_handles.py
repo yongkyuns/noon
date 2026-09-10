@@ -87,12 +87,11 @@ class ManimSharedPlacementHandleTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_compat
-            _manim_compat.install()
-            import _manim_phase_b  # noqa: F401
+
             import _manim_semantic_handles as handles
             import _typed_geometry_test_support as _geometry_test
             _geometry_test.install_module_bridge(handles, FakeHandle)
-            handles.install()
+
 
             from noon import LEFT, RIGHT, Square, UP, UR
 
@@ -117,6 +116,31 @@ class ManimSharedPlacementHandleTests(unittest.TestCase):
             assert aligned._semantic_handle.calls[-1] == "alignToHandle"
             assert abs(aligned.get_right().x - reference.get_right().x) < 1e-12
             assert abs(aligned.get_center().y + 1.0) < 1e-12
+
+            # Invalid identities must reject before any Python-derived edit.
+            invalid = Square(1.0)
+            invalid._semantic_handle_fresh = False
+            def unexpected(*args, **kwargs):
+                raise AssertionError("placement fallback must not query or shift in Python")
+            for item in (invalid, moved):
+                item.get_critical_point = unexpected
+                item.shift = unexpected
+            before = json.dumps(moved._semantic_handle.snapshot, sort_keys=True)
+            for operation in (
+                lambda: invalid.move_to(reference),
+                lambda: invalid.align_to(reference, RIGHT),
+                lambda: invalid.next_to(reference),
+                lambda: moved.move_to(invalid),
+                lambda: moved.align_to(invalid, RIGHT),
+                lambda: moved.next_to(invalid),
+            ):
+                try:
+                    operation()
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError("invalid placement must reject")
+            assert json.dumps(moved._semantic_handle.snapshot, sort_keys=True) == before
             """
         )
         completed = subprocess.run(

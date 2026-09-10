@@ -3,6 +3,7 @@
 //! Handles retain only their originating store and generational identity. All
 //! durable edits use the canonical transaction vocabulary; snapshots are explicit
 //! migration/export adapters owned for deletion by #958/#959.
+use crate::AuthoringError;
 use noon_core::{
     Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticGeometryContent,
     SemanticGeometryLayout, SemanticMutationImpact, SemanticMutationTransaction,
@@ -20,9 +21,9 @@ use bounds::{layout_for_content, transform_layout_xy};
 pub(crate) use style::{
     edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
     edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
-    edit_stroke_opacity, manim_color_from_effective,
+    edit_stroke_opacity, edit_stroke_width, manim_color_from_effective, PaintStyleEdit,
 };
-use style::{edit_stroke_width, parse_stroke_cap, parse_stroke_join, parse_stroke_width_mode};
+use style::{parse_stroke_cap, parse_stroke_join, parse_stroke_width_mode};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ManimNextToArgs {
@@ -63,18 +64,18 @@ pub struct ManimGeometryOptions {
 }
 
 impl ManimGeometryOptions {
-    pub fn circle(radius: f64) -> Result<Self, String> {
+    pub fn circle(radius: f64) -> Result<Self, AuthoringError> {
         Ok(Self::new(
             GeometryRef::circle(positive_f32("radius", radius)?),
             manim_style(Color::RED),
         ))
     }
 
-    pub fn ellipse(width: f64, height: f64) -> Result<Self, String> {
+    pub fn ellipse(width: f64, height: f64) -> Result<Self, AuthoringError> {
         let width = authoring_render_f64("width", width)?;
         let height = authoring_render_f64("height", height)?;
         if width <= 0.0 || height <= 0.0 {
-            return Err("Ellipse width and height must be positive".into());
+            return Err(AuthoringError::InvalidEllipseDimensions { width, height });
         }
         let mut options = Self::new(GeometryRef::circle(1.0), manim_style(Color::RED));
         options.layout = SemanticGeometryLayout::ManimEllipseControlHull;
@@ -82,11 +83,11 @@ impl ManimGeometryOptions {
         Ok(options)
     }
 
-    pub fn square(side: f64) -> Result<Self, String> {
+    pub fn square(side: f64) -> Result<Self, AuthoringError> {
         Self::rectangle(side, side)
     }
 
-    pub fn rectangle(width: f64, height: f64) -> Result<Self, String> {
+    pub fn rectangle(width: f64, height: f64) -> Result<Self, AuthoringError> {
         Ok(Self::new(
             GeometryRef::rectangle(
                 positive_f32("width", width)?,
@@ -96,16 +97,16 @@ impl ManimGeometryOptions {
         ))
     }
 
-    pub fn line(x1: f64, y1: f64, x2: f64, y2: f64) -> Result<Self, String> {
+    pub fn line(x1: f64, y1: f64, x2: f64, y2: f64) -> Result<Self, AuthoringError> {
         Ok(Self::new(
             GeometryRef::line(semantic_xy(x1, y1)?, semantic_xy(x2, y2)?),
             manim_style(Color::WHITE),
         ))
     }
 
-    pub fn path(path: VectorPath) -> Result<Self, String> {
+    pub fn path(path: VectorPath) -> Result<Self, AuthoringError> {
         if !path.is_finite() {
-            return Err("geometry must be finite".into());
+            return Err(AuthoringError::NonFiniteGeometry);
         }
         Ok(Self::new(
             GeometryRef::path(path),
@@ -118,7 +119,7 @@ impl ManimGeometryOptions {
         buff_x: f64,
         buff_y: f64,
         corner_radius: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         let mut options = Self::matcher_rectangle(bounds, buff_x, buff_y, corner_radius)?;
         options.style = manim_style(Color::from_hex(0xFFFF00));
         options.set_translation(
@@ -134,7 +135,7 @@ impl ManimGeometryOptions {
         buff_y: f64,
         corner_radius: f64,
         fill_opacity: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         let mut options = Self::matcher_rectangle(bounds, buff_x, buff_y, corner_radius)?;
         options.style = manim_style(Color::BLACK);
         edit_fill(&mut options.style, 0.0, 0.0, 0.0, fill_opacity)?;
@@ -161,7 +162,7 @@ impl ManimGeometryOptions {
         buff_x: f64,
         buff_y: f64,
         corner_radius: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         for (name, value) in [
             ("bounds.min_x", bounds.min_x),
             ("bounds.min_y", bounds.min_y),
@@ -173,52 +174,58 @@ impl ManimGeometryOptions {
             authoring_render_f64(name, value)?;
         }
         if bounds.max_x < bounds.min_x || bounds.max_y < bounds.min_y {
-            return Err("shape matcher bounds must be ordered".into());
+            return Err(AuthoringError::UnorderedBounds(bounds));
         }
         let path = crate::rounded_rectangle_authoring::manim_rounded_rectangle_path(
             positive_f32("width", bounds.width() + 2.0 * buff_x)?,
             positive_f32("height", bounds.height() + 2.0 * buff_y)?,
             [finite_f32("corner_radius", corner_radius)?; 4],
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(AuthoringError::from)?;
         Ok(Self::new(
             GeometryRef::path(path),
             manim_style(Color::WHITE),
         ))
     }
 
-    pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), String> {
+    pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
         let value = authoring_xy_f64(x, y)?;
         self.transform.translation.x = value.x;
         self.transform.translation.y = value.y;
         Ok(())
     }
 
-    pub fn set_scale(&mut self, x: f64, y: f64) -> Result<(), String> {
+    pub fn set_scale(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
         let value = authoring_xy_f64(x, y)?;
         self.transform.scale.x = value.x;
         self.transform.scale.y = value.y;
         Ok(())
     }
 
-    pub fn scale_by(&mut self, x: f64, y: f64) -> Result<(), String> {
+    pub fn scale_by(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
         let value = authoring_xy_f64(x, y)?;
         let next_x = self.transform.scale.x * value.x;
         let next_y = self.transform.scale.y * value.y;
         SemanticVec3::new(next_x, next_y, self.transform.scale.z)
             .lower_xy_f32()
-            .map_err(|error| error.to_string())?;
+            .map_err(AuthoringError::from)?;
         self.transform.scale.x = next_x;
         self.transform.scale.y = next_y;
         Ok(())
     }
 
-    pub fn set_rotation(&mut self, angle: f64) -> Result<(), String> {
+    pub fn set_rotation(&mut self, angle: f64) -> Result<(), AuthoringError> {
         self.transform.rotation_z = authoring_render_f64("rotation", angle)?;
         Ok(())
     }
 
-    pub fn set_color(&mut self, red: f64, green: f64, blue: f64, alpha: f64) -> Result<(), String> {
+    pub fn set_color(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), AuthoringError> {
         edit_color(&mut self.style, red, green, blue, alpha)
     }
 
@@ -232,7 +239,7 @@ impl ManimGeometryOptions {
         green: f64,
         blue: f64,
         opacity: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         edit_fill(&mut self.style, red, green, blue, opacity)
     }
 
@@ -242,11 +249,11 @@ impl ManimGeometryOptions {
         green: f64,
         blue: f64,
         alpha: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         edit_fill_color(&mut self.style, red, green, blue, alpha)
     }
 
-    pub fn set_fill_opacity(&mut self, opacity: f64) -> Result<(), String> {
+    pub fn set_fill_opacity(&mut self, opacity: f64) -> Result<(), AuthoringError> {
         edit_fill_opacity(&mut self.style, opacity)
     }
 
@@ -260,7 +267,7 @@ impl ManimGeometryOptions {
         green: f64,
         blue: f64,
         opacity: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         edit_stroke(&mut self.style, red, green, blue, opacity)
     }
 
@@ -270,52 +277,52 @@ impl ManimGeometryOptions {
         green: f64,
         blue: f64,
         alpha: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         edit_stroke_color(&mut self.style, red, green, blue, alpha)
     }
 
-    pub fn set_stroke_opacity(&mut self, opacity: f64) -> Result<(), String> {
+    pub fn set_stroke_opacity(&mut self, opacity: f64) -> Result<(), AuthoringError> {
         edit_stroke_opacity(&mut self.style, opacity)
     }
 
-    pub fn set_stroke_width(&mut self, width: f64) -> Result<(), String> {
+    pub fn set_stroke_width(&mut self, width: f64) -> Result<(), AuthoringError> {
         edit_stroke_width(&mut self.style, width)
     }
 
-    pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), String> {
+    pub fn set_stroke_width_mode(&mut self, mode: &str) -> Result<(), AuthoringError> {
         self.style.stroke_width_mode = parse_stroke_width_mode(mode)?;
         Ok(())
     }
 
-    pub fn set_stroke_join(&mut self, join: &str) -> Result<(), String> {
+    pub fn set_stroke_join(&mut self, join: &str) -> Result<(), AuthoringError> {
         self.style.stroke_join = parse_stroke_join(join)?;
         Ok(())
     }
 
-    pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), String> {
+    pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), AuthoringError> {
         self.style.stroke_cap = parse_stroke_cap(cap)?;
         Ok(())
     }
 
-    pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), String> {
+    pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), AuthoringError> {
         edit_object_opacity(&mut self.style, opacity)
     }
 
     pub(crate) fn into_state(
         self,
         store: &mut SemanticStore,
-    ) -> Result<SemanticObjectState, String> {
+    ) -> Result<SemanticObjectState, AuthoringError> {
         if !self.geometry.is_finite()
             || !self.transform.translation.is_finite()
             || !self.transform.scale.is_finite()
             || !self.transform.rotation_z.is_finite()
             || !self.style.is_finite()
         {
-            return Err("geometry, transform, and style must be finite".into());
+            return Err(AuthoringError::NonFiniteObjectState);
         }
         let geometry = import_geometry(store, self.geometry)?;
         let content = SemanticGeometryContent::with_layout(geometry, self.layout)
-            .map_err(|error| error.to_owned())?;
+            .map_err(AuthoringError::from)?;
         let mut state = SemanticObjectState::new(content);
         state.transform = self.transform;
         state.style = self.style;
@@ -340,13 +347,13 @@ impl Mobject {
     pub fn new(
         store: Rc<RefCell<SemanticStore>>,
         state: SemanticObjectState,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         validate_content(&store.borrow(), state.content)?;
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_node(SemanticNodeCreation::object(state));
         let result = transaction
             .apply(&mut store.borrow_mut())
-            .map_err(|error| error.to_string())?;
+            .map_err(AuthoringError::from)?;
         let [SemanticMutationImpact::NodeAdded { node: id }] = result.impacts() else {
             unreachable!("one object creation produces one identity")
         };
@@ -356,37 +363,42 @@ impl Mobject {
     pub fn from_node(
         store: Rc<RefCell<SemanticStore>>,
         id: SemanticNodeId,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         let handle = Self { store, id };
         handle.validate()?;
         Ok(handle)
     }
 
-    pub fn store(&self) -> &Rc<RefCell<SemanticStore>> {
+    /// Raw shared arena access for explicit integration, not live mutation.
+    ///
+    /// External edits can invalidate generational handles and leave an existing
+    /// execution session on a stale scene revision. Use `Scene::live` and its
+    /// coherent publication operations for edits after lowering. No revision
+    /// validation is bypassed by this accessor; see [`crate::integration`].
+    pub fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
         &self.store
     }
     pub fn node_id(&self) -> SemanticNodeId {
         self.id
     }
-    pub fn state(&self) -> Result<SemanticObjectState, String> {
+    pub fn state(&self) -> Result<SemanticObjectState, AuthoringError> {
         self.validate()?;
         self.store
             .borrow()
             .semantic_object_state_checked(self.id)
             .cloned()
-            .map_err(|error| error.to_string())
+            .map_err(AuthoringError::from)
     }
-    pub fn validate(&self) -> Result<(), String> {
+    /// Validate this handle without mutation, preserving typed identity/resource errors.
+    pub fn validate(&self) -> Result<(), AuthoringError> {
         let store = self.store.borrow();
-        let state = store
-            .semantic_object_state_checked(self.id)
-            .map_err(|error| error.to_string())?;
+        let state = store.semantic_object_state_checked(self.id)?;
         validate_content(&store, state.content)?;
         Ok(())
     }
-    pub fn require_same_store(&self, other: &Self) -> Result<(), String> {
+    pub fn require_same_store(&self, other: &Self) -> Result<(), AuthoringError> {
         if !Rc::ptr_eq(&self.store, &other.store) {
-            return Err("mobjects belong to different authoring stores".into());
+            return Err(AuthoringError::ForeignStore);
         }
         self.validate()?;
         other.validate()
@@ -394,7 +406,7 @@ impl Mobject {
 
     /// Commit presentation changes atomically while retaining node-owned identity,
     /// source/painter metadata, role, bindings, and family membership.
-    pub fn commit_state(&mut self, state: SemanticObjectState) -> Result<(), String> {
+    pub fn commit_state(&mut self, state: SemanticObjectState) -> Result<(), AuthoringError> {
         validate_content(&self.store.borrow(), state.content)?;
         let previous = self.state()?;
         let mut transaction = SemanticMutationTransaction::new();
@@ -402,13 +414,13 @@ impl Mobject {
         transaction
             .apply(&mut self.store.borrow_mut())
             .map(|_| ())
-            .map_err(|error| error.to_string())
+            .map_err(AuthoringError::from)
     }
 
-    pub fn copy_handle(&self) -> Result<Self, String> {
+    pub fn copy_handle(&self) -> Result<Self, AuthoringError> {
         Self::new(Rc::clone(&self.store), self.state()?)
     }
-    pub fn target_editor(&self) -> Result<Self, String> {
+    pub fn target_editor(&self) -> Result<Self, AuthoringError> {
         self.copy_handle()
     }
 
@@ -416,13 +428,13 @@ impl Mobject {
         store: Rc<RefCell<SemanticStore>>,
         geometry: GeometryRef,
         style: SemanticStyle,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         Self::from_geometry_state(store, geometry, SemanticTransform2_5D::default(), style)
     }
     pub fn from_manim_geometry(
         store: Rc<RefCell<SemanticStore>>,
         options: ManimGeometryOptions,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         let state = options.into_state(&mut store.borrow_mut())?;
         Self::new(store, state)
     }
@@ -432,7 +444,7 @@ impl Mobject {
         geometry: GeometryRef,
         transform: SemanticTransform2_5D,
         style: SemanticStyle,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         Self::from_manim_geometry(
             store,
             ManimGeometryOptions {
@@ -443,24 +455,30 @@ impl Mobject {
             },
         )
     }
-    pub fn manim_circle(store: Rc<RefCell<SemanticStore>>, radius: f64) -> Result<Self, String> {
+    pub fn manim_circle(
+        store: Rc<RefCell<SemanticStore>>,
+        radius: f64,
+    ) -> Result<Self, AuthoringError> {
         Self::from_manim_geometry(store, ManimGeometryOptions::circle(radius)?)
     }
     pub fn manim_ellipse(
         store: Rc<RefCell<SemanticStore>>,
         width: f64,
         height: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         Self::from_manim_geometry(store, ManimGeometryOptions::ellipse(width, height)?)
     }
-    pub fn manim_square(store: Rc<RefCell<SemanticStore>>, side: f64) -> Result<Self, String> {
+    pub fn manim_square(
+        store: Rc<RefCell<SemanticStore>>,
+        side: f64,
+    ) -> Result<Self, AuthoringError> {
         Self::from_manim_geometry(store, ManimGeometryOptions::square(side)?)
     }
     pub fn manim_rectangle(
         store: Rc<RefCell<SemanticStore>>,
         width: f64,
         height: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         Self::from_manim_geometry(store, ManimGeometryOptions::rectangle(width, height)?)
     }
     pub fn manim_line(
@@ -469,61 +487,61 @@ impl Mobject {
         y1: f64,
         x2: f64,
         y2: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         Self::from_manim_geometry(store, ManimGeometryOptions::line(x1, y1, x2, y2)?)
     }
 
-    pub fn wire_translation(&self) -> Result<(f64, f64), String> {
+    pub fn wire_translation(&self) -> Result<(f64, f64), AuthoringError> {
         let t = self
             .state()?
             .transform
             .translation
             .lower_xy_f32()
-            .map_err(|e| e.to_string())?;
+            .map_err(AuthoringError::from)?;
         Ok((t.x as f64, t.y as f64))
     }
-    pub fn wire_scale(&self) -> Result<(f64, f64), String> {
+    pub fn wire_scale(&self) -> Result<(f64, f64), AuthoringError> {
         let t = self
             .state()?
             .transform
             .scale
             .lower_xy_f32()
-            .map_err(|e| e.to_string())?;
+            .map_err(AuthoringError::from)?;
         Ok((t.x as f64, t.y as f64))
     }
-    pub fn wire_rotation(&self) -> Result<f64, String> {
+    pub fn wire_rotation(&self) -> Result<f64, AuthoringError> {
         Ok(finite_f32("rotation", self.state()?.transform.rotation_z)? as f64)
     }
-    pub fn wire_fill(&self) -> Result<Option<(f64, f64, f64, f64)>, String> {
+    pub fn wire_fill(&self) -> Result<Option<(f64, f64, f64, f64)>, AuthoringError> {
         let s = self.state()?.style;
         Ok(solid_color_with_opacity(s.fill.as_ref(), s.fill_opacity).map(color_tuple))
     }
-    pub fn wire_stroke(&self) -> Result<Option<(f64, f64, f64, f64)>, String> {
+    pub fn wire_stroke(&self) -> Result<Option<(f64, f64, f64, f64)>, AuthoringError> {
         let s = self.state()?.style;
         Ok(solid_color_with_opacity(s.stroke.as_ref(), s.stroke_opacity).map(color_tuple))
     }
-    pub fn wire_stroke_width(&self) -> Result<f64, String> {
+    pub fn wire_stroke_width(&self) -> Result<f64, AuthoringError> {
         Ok(finite_f32("stroke width", self.state()?.style.stroke_width)? as f64)
     }
-    pub fn wire_object_opacity(&self) -> Result<f64, String> {
+    pub fn wire_object_opacity(&self) -> Result<f64, AuthoringError> {
         Ok(self.state()?.style.object_opacity as f32 as f64)
     }
 
     /// Return this analytic Line's authored endpoints in world space.
-    pub fn manim_line_endpoints(&self) -> Result<ManimLineEndpoints, String> {
+    pub fn manim_line_endpoints(&self) -> Result<ManimLineEndpoints, AuthoringError> {
         let state = self.state()?;
         line_endpoints_for_state(&state, state.transform)
     }
 
     /// Return Manim's stroke-first color without applying object opacity.
-    pub fn manim_color(&self) -> Result<Color, String> {
+    pub fn manim_color(&self) -> Result<Color, AuthoringError> {
         style::manim_color_from_semantic(&self.state()?.style)
     }
 
     pub(crate) fn manim_line_endpoints_at(
         &self,
         transform: Transform2D,
-    ) -> Result<ManimLineEndpoints, String> {
+    ) -> Result<ManimLineEndpoints, AuthoringError> {
         let state = self.state()?;
         line_endpoints_for_state(
             &state,
@@ -531,11 +549,11 @@ impl Mobject {
         )
     }
 
-    pub fn layout_bounds(&self) -> Result<Option<Bounds2D64>, String> {
+    pub fn layout_bounds(&self) -> Result<Option<Bounds2D64>, AuthoringError> {
         let store = self.store.borrow();
         let state = store
             .semantic_object_state_checked(self.id)
-            .map_err(|e| e.to_string())?;
+            .map_err(AuthoringError::from)?;
         layout_for_content(&store, state.content, state.transform)
     }
 
@@ -545,17 +563,17 @@ impl Mobject {
     pub(crate) fn layout_bounds_at(
         &self,
         transform: Transform2D,
-    ) -> Result<Option<Bounds2D64>, String> {
+    ) -> Result<Option<Bounds2D64>, AuthoringError> {
         let store = self.store.borrow();
         let state = store
             .semantic_object_state_checked(self.id)
-            .map_err(|error| error.to_string())?;
+            .map_err(AuthoringError::from)?;
         let semantic_transform =
             semantic_transform_with_effective_affine(state.transform, transform);
         layout_for_content(&store, state.content, semantic_transform)
     }
 
-    pub fn center(&self) -> Result<(f64, f64), String> {
+    pub fn center(&self) -> Result<(f64, f64), AuthoringError> {
         if let Some(b) = self.layout_bounds()? {
             Ok(((b.min_x + b.max_x) * 0.5, (b.min_y + b.max_y) * 0.5))
         } else {
@@ -563,10 +581,10 @@ impl Mobject {
             Ok((t.x, t.y))
         }
     }
-    pub fn width(&self) -> Result<f64, String> {
+    pub fn width(&self) -> Result<f64, AuthoringError> {
         Ok(self.layout_bounds()?.map_or(0.0, Bounds2D64::width))
     }
-    pub fn height(&self) -> Result<f64, String> {
+    pub fn height(&self) -> Result<f64, AuthoringError> {
         Ok(self.layout_bounds()?.map_or(0.0, Bounds2D64::height))
     }
 
@@ -574,7 +592,7 @@ impl Mobject {
         &mut self,
         other: &Self,
         options: ManimBecomeOptions,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         self.require_same_store(other)?;
         let source = self.state()?;
         let target = other.state()?;
@@ -585,18 +603,25 @@ impl Mobject {
     /// Match this analytic Line's immutable local endpoints to another analytic
     /// Line's world endpoints using one rotation, translation, and uniform scale.
     /// Content and paint remain owned by this object.
-    pub fn match_line_handle(&mut self, other: &Self) -> Result<(), String> {
+    pub fn match_line_handle(&mut self, other: &Self) -> Result<(), AuthoringError> {
         self.require_same_store(other)?;
         let target = other.state()?;
         if target.transform.scale.x != target.transform.scale.y {
-            return Err("Line.match_points target has unsupported nonuniform scaling".into());
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::LineMatchNonuniformScale,
+            ));
         }
-        let StoredGeometry::Line { start, end } = target
-            .content
-            .geometry()
-            .ok_or("Line.match_points requires an analytic Line target")?
+        let StoredGeometry::Line { start, end } =
+            target
+                .content
+                .geometry()
+                .ok_or(AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::LineMatchTargetContent,
+                ))?
         else {
-            return Err("Line.match_points requires an analytic Line target".into());
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::LineMatchTargetContent,
+            ));
         };
         let target_start = semantic_transform_point(target.transform, start)?;
         let target_end = semantic_transform_point(target.transform, end)?;
@@ -618,23 +643,30 @@ impl Mobject {
         &self,
         target_start: Vec2,
         target_end: Vec2,
-    ) -> Result<Transform2D, String> {
+    ) -> Result<Transform2D, AuthoringError> {
         let state = self.state()?;
-        let StoredGeometry::Line { start, end } = state
-            .content
-            .geometry()
-            .ok_or("Line.match_points requires an analytic Line source")?
+        let StoredGeometry::Line { start, end } =
+            state.content.geometry().ok_or(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::LineMatchSourceContent,
+            ))?
         else {
-            return Err("Line.match_points requires an analytic Line source".into());
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::LineMatchSourceContent,
+            ));
         };
         line_match_transform(start, end, target_start, target_end)
     }
-    pub fn manim_scale(&mut self, x: f64, y: f64) -> Result<(), String> {
+    pub fn manim_scale(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
         self.validate()?;
         let center = self.center()?;
         self.scale_about_center(x, y, center)
     }
-    fn scale_about_center(&mut self, x: f64, y: f64, center: (f64, f64)) -> Result<(), String> {
+    fn scale_about_center(
+        &mut self,
+        x: f64,
+        y: f64,
+        center: (f64, f64),
+    ) -> Result<(), AuthoringError> {
         let mut state = self.state()?;
         scale_state_about_center(&self.store.borrow(), &mut state, x, y, center)?;
         self.commit_state(state)
@@ -644,35 +676,39 @@ impl Mobject {
         other: &Self,
         dim_to_match: u32,
         stretch: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         self.require_same_store(other)?;
         if dim_to_match > 1 {
-            return Err("replace supports width (0) or height (1)".into());
+            return Err(AuthoringError::InvalidDimension(dim_to_match));
         }
         let (w, h) = (self.width()?, self.height()?);
         let (tw, th) = (other.width()?, other.height()?);
         let (x, y) = if stretch {
             if w == 0.0 || h == 0.0 {
-                return Err("cannot stretch-replace an object with zero width or height".into());
+                return Err(AuthoringError::ZeroReplaceExtent);
             }
             (tw / w, th / h)
         } else {
             let (a, b) = if dim_to_match == 0 { (w, tw) } else { (h, th) };
             if a == 0.0 {
-                return Err("cannot replace along a zero-length dimension".into());
+                return Err(AuthoringError::ZeroReplaceExtent);
             }
             (b / a, b / a)
         };
         self.scale_about_center(x, y, other.center()?)
     }
-    pub fn move_to(&mut self, x: f64, y: f64) -> Result<(), String> {
+    pub fn move_to(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
         self.validate()?;
         semantic_xy(x, y)?;
         let center = self.center()?;
         self.shift(x - center.0, y - center.1)
     }
 
-    pub fn critical_point(&self, direction_x: f64, direction_y: f64) -> Result<(f64, f64), String> {
+    pub fn critical_point(
+        &self,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringError> {
         let Some(bounds) = self.layout_bounds()? else {
             return self.center();
         };
@@ -695,7 +731,7 @@ impl Mobject {
         ))
     }
 
-    pub fn shift(&mut self, x: f64, y: f64) -> Result<(), String> {
+    pub fn shift(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
         self.validate()?;
         let mut state = self.state()?;
         let offset = authoring_xy_f64(x, y)?;
@@ -704,14 +740,12 @@ impl Mobject {
             state.transform.translation.y + offset.y,
             state.transform.translation.z,
         );
-        translation
-            .lower_xy_f32()
-            .map_err(|error| error.to_string())?;
+        translation.lower_xy_f32().map_err(AuthoringError::from)?;
         state.transform.translation = translation;
         self.commit_state(state)
     }
 
-    pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), String> {
+    pub fn set_translation(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
         self.validate()?;
         let mut state = self.state()?;
         let value = authoring_xy_f64(x, y)?;
@@ -720,7 +754,7 @@ impl Mobject {
         self.commit_state(state)
     }
 
-    pub fn set_scale(&mut self, x: f64, y: f64) -> Result<(), String> {
+    pub fn set_scale(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
         self.validate()?;
         let mut state = self.state()?;
         let value = authoring_xy_f64(x, y)?;
@@ -729,14 +763,14 @@ impl Mobject {
         self.commit_state(state)
     }
 
-    pub fn set_rotation(&mut self, angle: f64) -> Result<(), String> {
+    pub fn set_rotation(&mut self, angle: f64) -> Result<(), AuthoringError> {
         self.validate()?;
         let mut state = self.state()?;
         state.transform.rotation_z = authoring_render_f64("rotation", angle)?;
         self.commit_state(state)
     }
 
-    pub fn scale(&mut self, x: f64, y: f64) -> Result<(), String> {
+    pub fn scale(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
         self.validate()?;
         let mut state = self.state()?;
         let x = authoring_render_f64("scale.x", x)?;
@@ -746,12 +780,12 @@ impl Mobject {
             state.transform.scale.y * y,
             state.transform.scale.z,
         );
-        scale.lower_xy_f32().map_err(|error| error.to_string())?;
+        scale.lower_xy_f32().map_err(AuthoringError::from)?;
         state.transform.scale = scale;
         self.commit_state(state)
     }
 
-    pub fn rotate(&mut self, angle: f64) -> Result<(), String> {
+    pub fn rotate(&mut self, angle: f64) -> Result<(), AuthoringError> {
         self.validate()?;
         let mut state = self.state()?;
         let angle = authoring_render_f64("rotation", angle)?;
@@ -766,7 +800,7 @@ impl Mobject {
         angle: f64,
         point_x: f64,
         point_y: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         self.validate()?;
         let mut state = self.state()?;
         let ((translation_x, translation_y), rotation) = rotate_affine_about_point(
@@ -785,13 +819,14 @@ impl Mobject {
 fn line_endpoints_for_state(
     state: &SemanticObjectState,
     transform: SemanticTransform2_5D,
-) -> Result<ManimLineEndpoints, String> {
-    let StoredGeometry::Line { start, end } = state
-        .content
-        .geometry()
-        .ok_or("Line endpoint queries require an analytic Line")?
+) -> Result<ManimLineEndpoints, AuthoringError> {
+    let StoredGeometry::Line { start, end } = state.content.geometry().ok_or(
+        AuthoringError::Unsupported(crate::UnsupportedAuthoringOperation::LineEndpointContent),
+    )?
     else {
-        return Err("Line endpoint queries require an analytic Line".into());
+        return Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::LineEndpointContent,
+        ));
     };
     Ok(ManimLineEndpoints {
         start: transform_layout_xy(transform, f64::from(start.x), f64::from(start.y)),
@@ -847,7 +882,7 @@ pub(crate) fn prepare_become_state(
     source: &SemanticObjectState,
     mut target: SemanticObjectState,
     options: ManimBecomeOptions,
-) -> Result<SemanticObjectState, String> {
+) -> Result<SemanticObjectState, AuthoringError> {
     validate_content(store, source.content)?;
     validate_content(store, target.content)?;
 
@@ -857,7 +892,7 @@ pub(crate) fn prepare_become_state(
         let target_width = state_dimension(store, &target, true)?;
         let target_height = state_dimension(store, &target, false)?;
         if target_width == 0.0 || target_height == 0.0 {
-            return Err("cannot stretch a zero-width or zero-height target".into());
+            return Err(AuthoringError::ZeroStretchTarget);
         }
         let center = state_center(store, &target)?;
         scale_state_about_center(
@@ -872,7 +907,7 @@ pub(crate) fn prepare_become_state(
             let source_height = state_dimension(store, source, false)?;
             let target_height = state_dimension(store, &target, false)?;
             if target_height == 0.0 {
-                return Err("cannot match height from a zero-height target".into());
+                return Err(AuthoringError::ZeroMatchHeight);
             }
             let center = state_center(store, &target)?;
             let factor = source_height / target_height;
@@ -882,7 +917,7 @@ pub(crate) fn prepare_become_state(
             let source_width = state_dimension(store, source, true)?;
             let target_width = state_dimension(store, &target, true)?;
             if target_width == 0.0 {
-                return Err("cannot match width from a zero-width target".into());
+                return Err(AuthoringError::ZeroMatchWidth);
             }
             let center = state_center(store, &target)?;
             let factor = source_width / target_width;
@@ -898,7 +933,7 @@ pub(crate) fn prepare_become_state(
             .transform
             .translation
             .lower_xy_f32()
-            .map_err(|error| error.to_string())?;
+            .map_err(AuthoringError::from)?;
     }
     Ok(target)
 }
@@ -907,7 +942,7 @@ fn state_dimension(
     store: &SemanticStore,
     state: &SemanticObjectState,
     horizontal: bool,
-) -> Result<f64, String> {
+) -> Result<f64, AuthoringError> {
     Ok(
         layout_for_content(store, state.content, state.transform)?.map_or(0.0, |bounds| {
             if horizontal {
@@ -919,7 +954,10 @@ fn state_dimension(
     )
 }
 
-fn state_center(store: &SemanticStore, state: &SemanticObjectState) -> Result<(f64, f64), String> {
+pub(crate) fn state_center(
+    store: &SemanticStore,
+    state: &SemanticObjectState,
+) -> Result<(f64, f64), AuthoringError> {
     Ok(layout_for_content(store, state.content, state.transform)?
         .map(|bounds| {
             (
@@ -930,20 +968,20 @@ fn state_center(store: &SemanticStore, state: &SemanticObjectState) -> Result<(f
         .unwrap_or((state.transform.translation.x, state.transform.translation.y)))
 }
 
-fn scale_state_about_center(
+pub(crate) fn scale_state_about_center(
     store: &SemanticStore,
     state: &mut SemanticObjectState,
     x: f64,
     y: f64,
     center: (f64, f64),
-) -> Result<(), String> {
+) -> Result<(), AuthoringError> {
     state.transform.scale.x *= authoring_render_f64("scale.x", x)?;
     state.transform.scale.y *= authoring_render_f64("scale.y", y)?;
     state
         .transform
         .scale
         .lower_xy_f32()
-        .map_err(|error| error.to_string())?;
+        .map_err(AuthoringError::from)?;
     let scaled_center = state_center(store, state)?;
     state.transform.translation.x += center.0 - scaled_center.0;
     state.transform.translation.y += center.1 - scaled_center.1;
@@ -951,7 +989,7 @@ fn scale_state_about_center(
         .transform
         .translation
         .lower_xy_f32()
-        .map_err(|error| error.to_string())?;
+        .map_err(AuthoringError::from)?;
     Ok(())
 }
 
@@ -960,7 +998,7 @@ pub(crate) fn rotate_affine_about_point(
     rotation: f64,
     angle: f64,
     pivot: (f64, f64),
-) -> Result<((f64, f64), f64), String> {
+) -> Result<((f64, f64), f64), AuthoringError> {
     let angle = authoring_render_f64("rotation", angle)?;
     let pivot_x = authoring_render_f64("rotation pivot.x", pivot.0)?;
     let pivot_y = authoring_render_f64("rotation pivot.y", pivot.1)?;
@@ -986,9 +1024,14 @@ pub(crate) fn rotate_affine_about_point(
     ))
 }
 
-fn semantic_transform_point(transform: SemanticTransform2_5D, point: Vec2) -> Result<Vec2, String> {
+fn semantic_transform_point(
+    transform: SemanticTransform2_5D,
+    point: Vec2,
+) -> Result<Vec2, AuthoringError> {
     if transform.scale.x != transform.scale.y {
-        return Err("Line.match_points target has unsupported nonuniform scaling".into());
+        return Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::LineMatchNonuniformScale,
+        ));
     }
     let scale = authoring_render_f64("Line.match_points target scale", transform.scale.x)?;
     let rotation = authoring_render_f64("Line.match_points target rotation", transform.rotation_z)?;
@@ -1015,11 +1058,11 @@ pub fn line_match_transform(
     source_end: Vec2,
     target_start: Vec2,
     target_end: Vec2,
-) -> Result<Transform2D, String> {
+) -> Result<Transform2D, AuthoringError> {
     let finite = |point: Vec2| point.x.is_finite() && point.y.is_finite();
     if !finite(source_start) || !finite(source_end) || !finite(target_start) || !finite(target_end)
     {
-        return Err("Line.match_points endpoints must be finite".into());
+        return Err(AuthoringError::NonFiniteLineEndpoints);
     }
     let source_x = f64::from(source_end.x - source_start.x);
     let source_y = f64::from(source_end.y - source_start.y);
@@ -1028,7 +1071,7 @@ pub fn line_match_transform(
     let source_length = source_x.hypot(source_y);
     let target_length = target_x.hypot(target_y);
     if source_length == 0.0 || target_length == 0.0 {
-        return Err("Line.match_points requires nondegenerate source and target Lines".into());
+        return Err(AuthoringError::DegenerateLine);
     }
     let scale = target_length / source_length;
     let rotation = target_y.atan2(target_x) - source_y.atan2(source_x);
@@ -1050,26 +1093,32 @@ pub fn line_match_transform(
     })
 }
 
-fn finite_f32(name: &str, value: f64) -> Result<f32, String> {
+fn finite_f32(name: &str, value: f64) -> Result<f32, AuthoringError> {
     authoring_render_f64(name, value).map(|value| value as f32)
 }
 
-pub fn authoring_render_f64(name: &str, value: f64) -> Result<f64, String> {
+pub fn authoring_render_f64(name: &str, value: f64) -> Result<f64, AuthoringError> {
     if !value.is_finite() || value.abs() > f64::from(f32::MAX) {
-        return Err(format!("{name} must be a finite f32-compatible number"));
+        return Err(AuthoringError::InvalidRenderNumber {
+            name: name.to_owned(),
+            value,
+        });
     }
     Ok(value)
 }
 
-fn unit_opacity(name: &str, value: f64) -> Result<f64, String> {
+fn unit_opacity(name: &str, value: f64) -> Result<f64, AuthoringError> {
     let value = authoring_render_f64(name, value)?;
     if !(0.0..=1.0).contains(&value) {
-        return Err(format!("{name} must be between 0 and 1"));
+        return Err(AuthoringError::InvalidOpacity {
+            name: name.to_owned(),
+            value,
+        });
     }
     Ok(value)
 }
 
-fn opaque_color(name: &str, red: f64, green: f64, blue: f64) -> Result<Color, String> {
+fn opaque_color(name: &str, red: f64, green: f64, blue: f64) -> Result<Color, AuthoringError> {
     Ok(Color::rgba(
         finite_f32(&format!("{name}.red"), red)?,
         finite_f32(&format!("{name}.green"), green)?,
@@ -1091,35 +1140,38 @@ pub(crate) fn solid_color_with_opacity(
     })
 }
 
-fn semantic_xy(x: f64, y: f64) -> Result<Vec2, String> {
+fn semantic_xy(x: f64, y: f64) -> Result<Vec2, AuthoringError> {
     authoring_xy_f64(x, y)?
         .lower_xy_f32()
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringError::from)
 }
 
-pub fn authoring_xy_f64(x: f64, y: f64) -> Result<SemanticVec3, String> {
+pub fn authoring_xy_f64(x: f64, y: f64) -> Result<SemanticVec3, AuthoringError> {
     let value = SemanticVec3::new(x, y, 0.0);
-    value.lower_xy_f32().map_err(|error| error.to_string())?;
+    value.lower_xy_f32().map_err(AuthoringError::from)?;
     Ok(value)
 }
 
-fn normalized_direction(x: f64, y: f64) -> Result<(f64, f64), String> {
+fn normalized_direction(x: f64, y: f64) -> Result<(f64, f64), AuthoringError> {
     if !x.is_finite() || !y.is_finite() {
-        return Err("direction must be finite".to_owned());
+        return Err(AuthoringError::NonFiniteDirection);
     }
     let length = x.hypot(y);
     if length == 0.0 {
-        return Err("direction must be non-zero".to_owned());
+        return Err(AuthoringError::ZeroDirection);
     }
     Ok((x / length, y / length))
 }
 
-fn positive_f32(name: &str, value: f64) -> Result<f32, String> {
-    let value = finite_f32(name, value)?;
-    if value <= 0.0 {
-        return Err(format!("{name} must be positive"));
+fn positive_f32(name: &str, value: f64) -> Result<f32, AuthoringError> {
+    let lowered = finite_f32(name, value)?;
+    if lowered <= 0.0 {
+        return Err(AuthoringError::NonPositiveNumber {
+            name: name.to_owned(),
+            value,
+        });
     }
-    Ok(value)
+    Ok(lowered)
 }
 fn manim_style(color: Color) -> SemanticStyle {
     SemanticStyle {
@@ -1147,9 +1199,9 @@ fn color_tuple(color: Color) -> (f64, f64, f64, f64) {
 pub(crate) fn import_geometry(
     store: &mut SemanticStore,
     geometry: GeometryRef,
-) -> Result<StoredGeometry, String> {
+) -> Result<StoredGeometry, AuthoringError> {
     if !geometry.is_finite() {
-        return Err("geometry must be finite".into());
+        return Err(AuthoringError::NonFiniteGeometry);
     }
     match geometry {
         GeometryRef::Circle { radius } => Ok(StoredGeometry::Circle { radius }),
@@ -1158,30 +1210,33 @@ pub(crate) fn import_geometry(
         GeometryRef::VectorPath(path) => {
             Ok(StoredGeometry::Resource(store.insert_geometry_path(path)?))
         }
-        GeometryRef::External(_) => {
-            Err("external geometry must resolve to an immutable semantic resource".into())
-        }
+        GeometryRef::External(_) => Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::ExternalGeometry,
+        )),
     }
 }
 
 #[cfg(test)]
 mod tests;
 
-fn validate_content(store: &SemanticStore, content: SemanticObjectContent) -> Result<(), String> {
+fn validate_content(
+    store: &SemanticStore,
+    content: SemanticObjectContent,
+) -> Result<(), AuthoringError> {
     match content {
         SemanticObjectContent::Geometry(content) => {
             if let StoredGeometry::Resource(handle) = content.geometry() {
                 store
                     .geometry_resources()
                     .get(handle)
-                    .ok_or("unknown or stale geometry resource")?;
+                    .ok_or(AuthoringError::MissingGeometryResource(handle))?;
             }
         }
         SemanticObjectContent::Text(handle) => {
             store
                 .text_resources()
                 .get(handle)
-                .ok_or("unknown or stale text resource")?;
+                .ok_or(AuthoringError::MissingTextResource(handle))?;
         }
     }
     Ok(())

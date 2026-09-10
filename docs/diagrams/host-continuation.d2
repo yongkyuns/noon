@@ -1,0 +1,20 @@
+# Host execution differs; all frontends converge on the same semantic operations.
+# Editor/hot-reload inputs are target integration, not a shipped source interpreter.
+...@_style
+
+direction: down
+rust: "Rust source → rustc\ncompiled application control flow" {class: node}
+python: "Python source → Pyodide\ninterpreter-driven continuation" {class: node}
+editor: "Future editor / hot reload\ndeclarations · diffs · commands\nNot a Rust source interpreter" {class: future}
+operations: "Shared Rust semantic operations\nauthor intent · query · mutate" {class: node}
+segment: "Stage and coherently publish a segment\nexisting scene + derived execution revision" {class: authority}
+run: "Advance the same runtime\ntimeline / reactive work + required callback barriers" {class: node}
+complete: "Logical segment completion\nendpoint and required writes coherently published\neffective state ready for continuation queries" {class: authority}
+resume: "Resume host continuation\nRust drive / await · Python suspend / resume\nDirect browser code yields; no GPU fence required" {class: node}
+rust -> operations
+python -> operations
+editor -> operations: {style.stroke-dash: 4}
+operations -> segment: "play / wait / live intent"
+segment -> run
+run -> complete
+complete -> resume

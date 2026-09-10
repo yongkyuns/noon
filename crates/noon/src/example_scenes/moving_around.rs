@@ -54,14 +54,18 @@ impl LiveContinuation for MovingAround {
 
 pub fn program() -> Result<LiveProgram<MovingAround>, String> {
     let scene = Scene::new();
-    let mut square = scene.square(2.0)?;
-    square.set_color(
-        f64::from(Color::BLUE.red),
-        f64::from(Color::BLUE.green),
-        f64::from(Color::BLUE.blue),
-        1.0,
-    )?;
-    square.set_fill_opacity(1.0)?;
+    let mut square = scene.square(2.0).map_err(|error| error.to_string())?;
+    square
+        .set_color(
+            f64::from(Color::BLUE.red),
+            f64::from(Color::BLUE.green),
+            f64::from(Color::BLUE.blue),
+            1.0,
+        )
+        .map_err(|error| error.to_string())?;
+    square
+        .set_fill_opacity(1.0)
+        .map_err(|error| error.to_string())?;
     scene
         .into_live_program(MovingAround { square, stage: 0 })
         .map_err(|e| e.to_string())

@@ -1,0 +1,24 @@
+# Native and direct Rust/WASM use the same typed engine; only the platform shell changes.
+...@_style
+
+direction: down
+app: "Compiled Rust application\nnative binary or Rust/WASM" {class: node}
+engine: "SHARED TYPED RUST ENGINE" {
+  grid-columns: 4
+  horizontal-gap: 54
+  scene: "Semantic Scene\nSemanticStore" {class: authority}
+  plan: "Execution Plan\nnoon-compile" {class: authority}
+  runtime: "Runtime\nnoon-runtime" {class: authority}
+  renderer: "Renderer\nnoon-render-wgpu" {class: authority}
+  scene -> plan: "typed lowering"
+  plan -> runtime: "typed execution"
+  runtime -> renderer: "FrameEpoch"
+}
+hosts: "PLATFORM EDGE" {
+  grid-columns: 2
+  horizontal-gap: 120
+  native: "Native host\nnoon-native" {class: host}
+  web: "Browser host\nnoon-web" {class: host}
+}
+app -> engine.scene: "author / mutate"
+engine.renderer -> hosts: "surface / presentation"

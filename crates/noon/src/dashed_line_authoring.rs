@@ -1,5 +1,6 @@
 //! Pure dash segmentation for the shared straight-line semantic constructor.
 use crate::arc_authoring::authored_f32;
+use crate::AuthoringError;
 use noon_core::{GeometryRef, Vec2, VectorPath};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -108,7 +109,7 @@ pub(crate) fn dashed_line_geometry(
     end_y: f64,
     dash_length: f64,
     dashed_ratio: f64,
-) -> Result<GeometryRef, String> {
+) -> Result<GeometryRef, AuthoringError> {
     let (path, _) = dashed_line_path(
         Vec2::new(
             authored_f32(start_x, "dashed line start x")?,
@@ -121,7 +122,7 @@ pub(crate) fn dashed_line_geometry(
         dash_length,
         dashed_ratio,
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(AuthoringError::from)?;
     Ok(GeometryRef::VectorPath(path))
 }
 

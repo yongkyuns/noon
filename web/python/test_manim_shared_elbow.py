@@ -109,18 +109,16 @@ class ManimSharedElbowTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_compat
-            _manim_compat.install()
-            import _manim_phase_b
+
             import _manim_geometry
             import _manim_semantic_handles as handles
-            handles.install()
+
 
             _manim_compat._ir.Path = lambda *args, **kwargs: (_ for _ in ()).throw(
                 AssertionError("Python Path geometry constructor was called")
             )
 
             import _manim_shared_geometry
-            _manim_shared_geometry.install()
             from noon import BLUE, Elbow, VMobject
 
             shape = Elbow(width=-0.5, angle=math.pi / 3.0, color=BLUE, stroke_width=2.0)

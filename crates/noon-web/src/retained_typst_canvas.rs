@@ -1,10 +1,11 @@
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use noon::{MathTypst, RetainedScene, Typst};
+    use noon::integration::RetainedScene;
+    use noon::{MathTypst, Typst};
     use noon_core::Vec2;
+    use noon_render_wgpu::text::TextDeviceMetrics;
     use noon_render_wgpu::{Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState};
     use noon_runtime::SceneInstance;
-    use noon_text_render_wgpu::TextDeviceMetrics;
     use wasm_bindgen::prelude::*;
     use web_sys::OffscreenCanvas;
 
@@ -159,7 +160,14 @@ mod wasm {
                 });
             let draw = self
                 .renderer
-                .encode_retained(&mut encoder, &view, &prepared, &self.text_gpu, CLEAR_COLOR)
+                .encode_retained(
+                    &mut encoder,
+                    &view,
+                    &prepared,
+                    &self.text_gpu,
+                    CLEAR_COLOR,
+                    None,
+                )
                 .map_err(js_error)?;
             self.queue.submit(Some(encoder.finish()));
             self.queue.present(surface_texture);

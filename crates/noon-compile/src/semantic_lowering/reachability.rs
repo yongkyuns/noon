@@ -330,9 +330,7 @@ impl SemanticExecutionReachability {
             SemanticStoreError::UnknownNode(id),
         ))?;
         let kind = match node.kind() {
-            SemanticNodeKind::Object(_) | SemanticNodeKind::AuthoringObject => {
-                ReachabilityKind::Object
-            }
+            SemanticNodeKind::AuthoringObject => ReachabilityKind::Object,
             SemanticNodeKind::Family => ReachabilityKind::Family {
                 members: HashSet::new(),
             },

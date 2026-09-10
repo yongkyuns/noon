@@ -147,7 +147,6 @@ try {
     );
     window.__noonValidationHarness = {
       renderWorker,
-      engineWorker: null,
       renderMessages: [],
       engineMessages: [],
     };
@@ -159,56 +158,33 @@ try {
 
   await installWebGpuDeviceCaptureInWorker(renderWorker);
 
-  const engineWorkerPromise = page.waitForEvent("worker", {
-    predicate: (worker) => worker.url().endsWith("/web/execution-engine-worker.js"),
-    timeout: 10_000,
-  });
   await page.evaluate(async () => {
-    const { loadExecutionTransportFixture } = await import(
-      "../scripts/explicit-transport-scene-fixture.js"
-    );
-    const sceneJson = await loadExecutionTransportFixture("four_animated");
+    const { PythonAuthoringClient } = await import("./authoring-client.js");
+    const authoring = new PythonAuthoringClient();
+    const authored = await authoring.run("from noon import *\nscene = Scene()\nscene.add(Circle(0.6), Square(0.5).shift(2*RIGHT), Rectangle().shift(2*LEFT), Line(LEFT, RIGHT).shift(DOWN))\nresult = scene", {});
     const canvas = document.querySelector("#scene");
     const offscreen = canvas.transferControlToOffscreen();
     const channel = new MessageChannel();
+    const control = new MessageChannel();
     const harness = window.__noonValidationHarness;
-    const engineWorker = new Worker(
-      new URL("./execution-engine-worker.js", window.location.href),
-      { type: "module", name: "noon-validation-engine" },
-    );
-    harness.engineWorker = engineWorker;
-    engineWorker.addEventListener("message", (event) => {
+    harness.authoring = authoring;
+    harness.enginePort = control.port1;
+    control.port1.addEventListener("message", (event) => {
       harness.engineMessages.push(event.data);
     });
+    control.port1.start();
     harness.renderWorker.postMessage(
       {
-        channel: "noon.render",
-        protocolVersion: 1,
-        type: "init",
-        canvas: offscreen,
-        port: channel.port2,
-        transportMode: "transferable",
-        width: 640,
-        height: 360,
+        channel: "noon.render", protocolVersion: 1, type: "init",
+        canvas: offscreen, port: channel.port2, transportMode: "transferable",
+        mode: "retained", width: 640, height: 360,
       },
       [offscreen, channel.port2],
     );
-    engineWorker.postMessage(
-      {
-        channel: "noon.engine",
-        protocolVersion: 1,
-        type: "init",
-        port: channel.port1,
-        sceneJson,
-        loopDurationSeconds: 4,
-        transportMode: "transferable",
-        sharedSlotCapacity: 1024 * 1024,
-        session: 1,
-      },
-      [channel.port1],
-    );
+    await authoring.attachSemanticExecution(authored.semanticExecution.contextId, control.port2, channel.port1, {
+      loopDurationSeconds: 4, transportMode: "transferable", sharedSlotCapacity: 1024 * 1024, session: 1,
+    });
   });
-  await engineWorkerPromise;
 
   await page.waitForFunction(
     () =>
@@ -238,6 +214,17 @@ try {
   diagnostics.captureBefore = capturedBefore;
   assert.equal(capturedBefore.deviceCount, 1, "renderer must own exactly one initial GPU device");
   assert.equal(capturedBefore.lost[0], null, "initial renderer device must be healthy");
+
+  // A static semantic scene may sleep after its first frame. Drive a real
+  // viewport change before each presentation assertion instead of requiring
+  // meaningless continuous redraws from an obsolete timeline fixture.
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if ((await renderMetrics(page, 50 + attempt)).presentedFrames >= 1) break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  await page.evaluate(() => window.__noonValidationHarness.renderWorker.postMessage({
+    channel: "noon.render", protocolVersion: 1, type: "resize", width: 641, height: 360,
+  }));
 
   let baseline = null;
   for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -310,6 +297,9 @@ try {
   assert.equal(diagnostic.severity, "recoverable");
   assert.match(diagnostic.message, /validation|buffer|usage/i);
 
+  await page.evaluate(() => window.__noonValidationHarness.renderWorker.postMessage({
+    channel: "noon.render", protocolVersion: 1, type: "resize", width: 642, height: 360,
+  }));
   let continued = null;
   for (let attempt = 0; attempt < 40; attempt += 1) {
     continued = await renderMetrics(page, 200 + attempt);

@@ -57,7 +57,7 @@ impl LiveContinuation for TextFamilyFade {
                     return Err("Text Write did not admit its direct scene root".into());
                 }
                 {
-                    let store = self.family.store().borrow();
+                    let store = self.family.integration_store().borrow();
                     let family = store
                         .node(self.family.node_id())
                         .ok_or("Text family identity disappeared after FadeIn")?;
@@ -95,7 +95,7 @@ impl LiveContinuation for TextFamilyFade {
                     );
                 }
                 {
-                    let store = self.family.store().borrow();
+                    let store = self.family.integration_store().borrow();
                     let family = store
                         .node(self.family.node_id())
                         .ok_or("Text family identity disappeared after FadeOut")?;
@@ -126,12 +126,19 @@ impl LiveContinuation for TextFamilyFade {
 pub fn program() -> Result<LiveProgram<TextFamilyFade>, String> {
     let scene = Scene::new();
     let mut left = scene.text("LEFT").map_err(|error| error.to_string())?;
-    left.set_translation(-2.0, 0.5)?;
+    left.set_translation(-2.0, 0.5)
+        .map_err(|error| error.to_string())?;
     let mut right = scene.text("RIGHT").map_err(|error| error.to_string())?;
-    right.set_translation(1.0, 0.5)?;
+    right
+        .set_translation(1.0, 0.5)
+        .map_err(|error| error.to_string())?;
     let mut writing = scene.text("WRITE").map_err(|error| error.to_string())?;
-    writing.set_translation(-1.0, -1.0)?;
-    let family = scene.family(&[(&left).into(), (&right).into()])?;
+    writing
+        .set_translation(-1.0, -1.0)
+        .map_err(|error| error.to_string())?;
+    let family = scene
+        .family(&[(&left).into(), (&right).into()])
+        .map_err(|error| error.to_string())?;
     scene
         .into_live_program(TextFamilyFade {
             left,

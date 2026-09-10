@@ -51,7 +51,7 @@ test("semantic continuation control bypasses the blocked interpreter request que
   assert.match(source, /requestQueue\s*=\s*requestQueue\.then\(\(\)\s*=>\s*handleRequest/);
   assert.match(
     source,
-    /await\s+execute_construct\(\s*__noon_result,\s*export_document=bool\(__noon_export_document\),\s*portable_constructs=__noon_portable_constructs,\s*\)/,
+    /await\s+execute_construct\(\s*__noon_result,\s*portable_constructs=__noon_portable_constructs,\s*\)/,
   );
   assert.match(source, /continuation\.endpoint\.startContinuation\(continuation\.generation\)/);
   assert.match(source, /continuation\.runRequestId\s*!==\s*request\.continuationRunRequestId/);
@@ -102,9 +102,10 @@ test("worker delegates every Scene construct lifecycle to the canonical adapter"
   );
   assert.match(
     authoring,
-    /await\s+execute_construct\(\s*__noon_result,\s*export_document=bool\(__noon_export_document\),\s*portable_constructs=__noon_portable_constructs,\s*\)/,
+    /await\s+execute_construct\(\s*__noon_result,\s*portable_constructs=__noon_portable_constructs,\s*\)/,
   );
   assert.doesNotMatch(authoring, /__noon_result\.(?:setup|construct|tear_down)\(/);
+  assert.doesNotMatch(authoring, /exportDocument|to_document|to_scene_spec|materialize_legacy_geometry/);
   assert.doesNotMatch(authoring, /_(?:begin|finish)_(?:async|synchronous)_continuation_construct/);
 });
 
@@ -162,8 +163,9 @@ test("fatal interpreter rejection is forwarded once and closes the dead worker",
 });
 
 test("source compilation never replays module effects or changes fixtures", () => {
-  assert.match(source, /compile_authoring_source\(\s*__noon_source, portable=not bool\(__noon_export_document\)\s*\)/);
-  assert.match(source, /exec\(__noon_code, __noon_namespace\)/);
+  assert.match(source, /compile_authoring_source\(\s*__noon_source\s*\)/);
+  assert.match(source, /await execute_authoring_module\(__noon_code, __noon_namespace\)/);
+  assert.match(source, /__noon_namespace\[MODULE_BARRIER_GLOBAL\] = await_module_source_barrier/);
   assert.doesNotMatch(source, /exec\(__noon_source,|source\.replace/);
   assert.match(source, /__noon_namespace\[BARRIER_GLOBAL\] = await_source_barrier/);
 });

@@ -1,0 +1,151 @@
+name: Provider feature isolation
+
+on:
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+      - '**/rustfmt.toml'
+      - '**/.rustfmt.toml'
+      - '**/clippy.toml'
+      - '**/.clippy.toml'
+      # Include examples, tests, build inputs and transitive path dependencies.
+      # Do not make provider selection depend on historical internal crate names.
+      - 'crates/**'
+      - 'fixtures/provider-consumer/**'
+      - 'scripts/provider-features.py'
+      - 'scripts/provider_features_test.py'
+      - 'web/ci-workflow-topology.test.mjs'
+      - '.github/workflows/provider-features.yml'
+  workflow_dispatch:
+    inputs:
+      measure:
+        description: 'Run explicit cold/warm measurements instead of cached correctness checks'
+        type: boolean
+        default: false
+      baseline_ref:
+        description: 'Baseline commit/ref for an explicit measurement run'
+        type: string
+        default: master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provider-features-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_BUILD_JOBS: '2'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTC_WRAPPER: ${{ !inputs.measure && 'sccache' || '' }}
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+  NOON_PROVIDER_TEST_FONT: /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+
+jobs:
+  consumers:
+    name: ${{ matrix.config }} / ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [minimal, native-text, native-bundled, typst, product]
+        target: [x86_64-unknown-linux-gnu, wasm32-unknown-unknown]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the repository Rust toolchain and host test fonts
+        run: |
+          rustup show
+          rustup target add wasm32-unknown-unknown
+          rustup component add rustfmt clippy
+          sudo apt-get update -qq
+          sudo apt-get install -y fonts-dejavu-core
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: provider-sources-${{ runner.os }}-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: provider-sources-${{ runner.os }}-
+      - name: Use the shared read-only compiler cache for correctness
+        if: ${{ !inputs.measure }}
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+      - name: Test graph and cache-mode assertions and fixture formatting
+        run: |
+          python3 scripts/provider_features_test.py
+          cargo fmt --manifest-path fixtures/provider-consumer/Cargo.toml -- --check
+      - name: Qualify isolated consumer (cold/warm builds only when explicitly selected)
+        run: >-
+          python3 scripts/provider-features.py
+          ${{ inputs.measure && '--measure' || '' }}
+          --config '${{ matrix.config }}'
+          --target '${{ matrix.target }}'
+          --output '${{ runner.temp }}/provider-results'
+      - name: Qualify the minimal public facade documentation and example
+        if: matrix.config == 'minimal' && matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          cargo test -p noon --no-default-features --doc
+          cargo run -p noon --no-default-features --example shared_authoring
+      - name: Prove provider-dependent examples require feature guards
+        if: matrix.config == 'minimal' && matrix.target == 'x86_64-unknown-linux-gnu'
+        env:
+          NOON_PROVIDER_COMPILE_TESTS: '1'
+        run: python3 scripts/provider_features_test.py ProviderExampleTests
+      - name: Publish evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: provider-${{ matrix.config }}-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/provider-results/*.json
+            ${{ runner.temp }}/provider-results/*.txt
+            ${{ runner.temp }}/provider-results/Cargo.lock
+          if-no-files-found: error
+          retention-days: 14
+
+  baseline:
+    name: Base geometry costs / ${{ matrix.target }}
+    if: github.event_name == 'workflow_dispatch' && inputs.measure
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-gnu, wasm32-unknown-unknown]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.baseline_ref }}
+          path: .provider-baseline
+      - name: Install the repository Rust toolchain
+        run: |
+          rustup show
+          rustup target add wasm32-unknown-unknown
+      - name: Measure identical defaults-disabled geometry on selected base
+        run: >-
+          python3 scripts/provider-features.py
+          --measure --config minimal --baseline .provider-baseline
+          --target '${{ matrix.target }}'
+          --output '${{ runner.temp }}/provider-baseline-results'
+      - name: Publish baseline evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: provider-baseline-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/provider-baseline-results/*.json
+            ${{ runner.temp }}/provider-baseline-results/*.txt
+            ${{ runner.temp }}/provider-baseline-results/Cargo.lock
+          if-no-files-found: error
+          retention-days: 14

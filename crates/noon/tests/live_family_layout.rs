@@ -1,4 +1,4 @@
-use noon::semantic_mobject::ManimNextToArgs;
+use noon::ManimNextToArgs;
 use noon::{AnimationOptions, LiveLayoutTarget as Target, RateFunction, Scene};
 
 fn close(actual: f64, expected: f64) {
@@ -34,7 +34,7 @@ fn family_queries_mix_effective_and_detached_bounds_without_mutation() {
     let mut live = scene.live(&mut execution);
     let segment = live.play_animation(&animation).unwrap();
     live.advance_segment_to(segment, 1.0).unwrap();
-    let revision = scene.store().borrow().scene_revision();
+    let revision = scene.integration_store().borrow().scene_revision();
     let halfway = live.effective_family_layout(&aliases).unwrap();
     close(halfway.center.0, 6.0);
     close(halfway.width, 9.0);
@@ -43,7 +43,10 @@ fn family_queries_mix_effective_and_detached_bounds_without_mutation() {
         live.effective_family_layout(&empty).unwrap().center,
         (0.0, 0.0)
     );
-    assert_eq!(scene.store().borrow().scene_revision(), revision);
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        revision
+    );
     assert!(live
         .move_family_to(&aliases, Target::Point(0.0, 0.0), (0.0, 0.0), (1.0, 1.0))
         .is_err());
@@ -74,13 +77,13 @@ fn relative_placement_uses_shared_masks_targets_and_one_local_publication() {
     execution.take_frame_changes();
     {
         let mut live = scene.live(&mut execution);
-        let before = scene.store().borrow().scene_revision();
+        let before = scene.integration_store().borrow().scene_revision();
         let result = live
             .move_family_to(&family, Target::Point(4.0, 9.0), (1.0, 0.0), (1.0, 0.0))
             .unwrap();
         assert_eq!(result.impacts().len(), 2);
         assert_eq!(
-            scene.store().borrow().scene_revision(),
+            scene.integration_store().borrow().scene_revision(),
             before.checked_next().unwrap()
         );
         live.next_family_to(
@@ -112,7 +115,7 @@ fn empty_foreign_stale_and_unpublished_families_obey_query_and_mutation_validati
     let foreign = other.family(&[]).unwrap();
     let stale = scene.family(&[]).unwrap();
     scene
-        .store()
+        .integration_store()
         .borrow_mut()
         .remove_node(stale.node_id())
         .unwrap();
@@ -130,4 +133,95 @@ fn empty_foreign_stale_and_unpublished_families_obey_query_and_mutation_validati
     assert_eq!(live.effective_family_layout(&empty).unwrap(), before);
     let _unpublished = scene.family(&[]).unwrap();
     assert!(live.effective_family_layout(&empty).is_err());
+}
+
+#[test]
+fn object_move_to_family_anchor_reads_effective_bounds_and_stays_local() {
+    let mut scene = Scene::new();
+    let source = scene.square(1.0).unwrap();
+    let reference = scene.square(2.0).unwrap();
+    let family = scene.family(&[(&reference).into()]).unwrap();
+    let target = noon::LayoutAnchor::from(&family);
+    let mut editor = reference.target_editor().unwrap();
+    editor.shift(6.0, 4.0).unwrap();
+    scene.add(&source).unwrap();
+    scene.add(&reference).unwrap();
+    let animation = scene
+        .declare_transform_to(
+            &reference,
+            &editor,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    let mut execution = scene.execution_session().unwrap();
+    {
+        let mut live = scene.live(&mut execution);
+        let segment = live.play_animation(&animation).unwrap();
+        live.advance_segment_to(segment, 2.0).unwrap();
+        live.complete_segment(segment).unwrap();
+    }
+    execution.take_frame_changes();
+    {
+        let mut live = scene.live(&mut execution);
+        let result = live
+            .move_to(&source, Target::Anchor(&target), (0.0, 1.0), (1.0, 0.5))
+            .unwrap();
+        assert_eq!(result.impacts().len(), 1);
+        let center = live.effective_layout(&source).unwrap().center;
+        close(center.0, 6.0);
+        close(center.1, 2.25);
+    }
+    assert_eq!(execution.take_frame_changes().object_indices(), &[0]);
+}
+
+#[test]
+fn live_frame_alignment_keeps_aliases_local_and_rejects_active_drivers() {
+    let mut scene = Scene::new();
+    let first = scene.square(1.0).unwrap();
+    let mut second = scene.square(1.0).unwrap();
+    second.shift(2.0, 0.0).unwrap();
+    let unrelated = scene.square(1.0).unwrap();
+    let nested = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+    let family = scene.family(&[(&first).into(), (&nested).into()]).unwrap();
+    for object in [&first, &second, &unrelated] {
+        scene.add(object).unwrap();
+    }
+    let mut target = first.target_editor().unwrap();
+    target.shift(1.0, 0.0).unwrap();
+    let animation = scene
+        .declare_transform_to(&first, &target, AnimationOptions::new().run_time(1.0))
+        .unwrap();
+    let mut execution = scene.execution_session().unwrap();
+    execution.take_frame_changes();
+    {
+        let mut live = scene.live(&mut execution);
+        let result = live
+            .align_family_on_frame(&family, (0.0, 1.0), 0.25)
+            .unwrap();
+        assert_eq!(result.impacts().len(), 2);
+        let layout = live.effective_family_layout(&family).unwrap();
+        close(layout.center.1 + layout.height * 0.5, 3.75);
+        close(second.center().unwrap().0 - first.center().unwrap().0, 2.0);
+        assert_eq!(unrelated.center().unwrap(), (0.0, 0.0));
+    }
+    assert_eq!(execution.take_frame_changes().object_indices(), &[0, 1]);
+    let mut live = scene.live(&mut execution);
+    let segment = live.play_animation(&animation).unwrap();
+    live.advance_segment_to(segment, 0.5).unwrap();
+    let before = live.effective_family_layout(&family).unwrap();
+    let revision = scene.integration_store().borrow().scene_revision();
+    assert!(live
+        .align_family_on_frame(&family, (1.0, 0.0), 0.25)
+        .is_err());
+    assert_eq!(live.effective_family_layout(&family).unwrap(), before);
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        revision
+    );
+    live.advance_segment_to(segment, 1.0).unwrap();
+    live.complete_segment(segment).unwrap();
+    live.align_family_on_frame(&family, (1.0, 0.0), 0.25)
+        .unwrap();
 }

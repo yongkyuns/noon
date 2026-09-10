@@ -48,12 +48,22 @@ impl LiveContinuation for OrdinaryRotating {
 
 pub fn program() -> Result<LiveProgram<OrdinaryRotating>, String> {
     let mut scene = Scene::new();
-    let mut rectangle = scene.rectangle(3.0, 0.6)?;
-    rectangle.set_translation(2.0, 1.0)?;
-    rectangle.set_fill_color(0.0, 1.0, 1.0, 1.0)?;
-    rectangle.set_fill_opacity(1.0)?;
-    rectangle.disable_stroke()?;
-    scene.add(&rectangle)?;
+    let mut rectangle = scene
+        .rectangle(3.0, 0.6)
+        .map_err(|error| error.to_string())?;
+    rectangle
+        .set_translation(2.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    rectangle
+        .set_fill_color(0.0, 1.0, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    rectangle
+        .set_fill_opacity(1.0)
+        .map_err(|error| error.to_string())?;
+    rectangle
+        .disable_stroke()
+        .map_err(|error| error.to_string())?;
+    scene.add(&rectangle).map_err(|error| error.to_string())?;
     scene
         .into_live_program(OrdinaryRotating {
             rectangle,

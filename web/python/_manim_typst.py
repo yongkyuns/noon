@@ -8,6 +8,8 @@ store rather than from a Python-owned text document.
 
 from __future__ import annotations
 
+from _noon_errors import engine_call
+
 import math
 from typing import Any
 
@@ -26,7 +28,6 @@ except ImportError:  # Import remains possible for source-only CPython tests.
 
 
 _DEFAULT_NATIVE_FONT = "DejaVu Sans Mono"
-_INSTALLED = False
 
 
 def _validated_font_size(value: float) -> float:
@@ -57,7 +58,7 @@ def _new_typst_handle(source: str, math_mode: bool, font_size: float):
     font_size = _validated_font_size(font_size)
     if _create_authoring_typst_handle is None:
         raise RuntimeError("Typst requires Noon's shared Rust authoring runtime")
-    return _create_authoring_typst_handle(source, bool(math_mode), font_size)
+    return engine_call(_create_authoring_typst_handle, source, bool(math_mode), font_size)
 
 
 def _validated_native_text_options(
@@ -88,7 +89,7 @@ def _new_native_text_handle(
     )
     if _create_authoring_text_handle is None:
         raise RuntimeError("Text requires Noon's shared Rust authoring runtime")
-    return _create_authoring_text_handle(source, font_family, font_size, line_spacing)
+    return engine_call(_create_authoring_text_handle, source, font_family, font_size, line_spacing)
 
 
 def _as_color(value: object) -> _base.Color:
@@ -118,6 +119,11 @@ def _in_canonical_callback_phase(mobject: _base.Mobject) -> bool:
 
 class _RetainedTextMobject(_base.Mobject):
     """Python wrapper for one shared semantic resource-backed text object."""
+
+    def _bind_to_scene(self, scene: _base.Scene, *, key: str | None = None) -> object:
+        if self._scene is scene and self._object is not None:
+            return self._object
+        return super()._bind_to_scene(scene, key=key)
 
     def _initialize_text(
         self,
@@ -251,7 +257,7 @@ class _RetainedTypstMobject(_RetainedTextMobject):
         if live_context is None:
             handle = _new_typst_handle(source, self._math_mode, font_size)
         else:
-            handle = live_context.liveCreateManimTypst(
+            handle = engine_call(live_context.liveCreateManimTypst,
                 source, bool(self._math_mode), font_size, float(color.red),
                 float(color.green), float(color.blue), float(color.alpha), opacity,
             )
@@ -295,7 +301,7 @@ class Text(_RetainedTextMobject):
         if live_context is None:
             handle = _new_native_text_handle(text, font, font_size, line_spacing)
         else:
-            handle = live_context.liveCreateManimText(
+            handle = engine_call(live_context.liveCreateManimText,
                 text,
                 font,
                 font_size,
@@ -371,28 +377,9 @@ class Text(_RetainedTextMobject):
         self.scale(target / current)
 
     def get_critical_point(self, direction: object) -> _base.Vec2:
-        axis = _compat._as_vec2(direction)
+        axis = _base._as_vec2(direction)
         handle = _native_layout_handle(self._semantic_handle)
         return _base.Vec2(
-            float(handle.criticalX(float(axis.x), float(axis.y))),
-            float(handle.criticalY(float(axis.x), float(axis.y))),
+            float(engine_call(handle.criticalX, float(axis.x), float(axis.y))),
+            float(engine_call(handle.criticalY, float(axis.x), float(axis.y))),
         )
-
-def install() -> None:
-    """Install shared semantic Text and Typst wrappers."""
-
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _INSTALLED = True
-
-    _base.Scene = _compat.Scene
-
-    public = {"Text": Text, "Typst": Typst, "MathTypst": MathTypst}
-    for name, value in public.items():
-        setattr(_base, name, value)
-    exports = list(_base.__all__)
-    for name in public:
-        if name not in exports:
-            exports.append(name)
-    _base.__all__ = exports

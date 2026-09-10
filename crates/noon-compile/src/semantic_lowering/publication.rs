@@ -21,6 +21,12 @@ pub enum SemanticPublicationLoweringError {
     UnsupportedMutation {
         index: usize,
     },
+    UpdaterTargetNotIndexed {
+        target: SemanticNodeId,
+    },
+    RetroactiveUpdaterMutation {
+        index: usize,
+    },
     UnsupportedReactiveMembership {
         object: SemanticTransactionNodeRef,
     },
@@ -61,6 +67,12 @@ impl std::fmt::Display for SemanticPublicationLoweringError {
                 f,
                 "semantic mutation {index} has no incremental live publication contract"
             ),
+            Self::UpdaterTargetNotIndexed { target } => write!(
+                f, "live updater target {target:?} requires callback preorder enrollment before execution"
+            ),
+            Self::RetroactiveUpdaterMutation { index } => write!(
+                f, "updater mutation {index} precedes the current live frame"
+            ),
             Self::UnsupportedReactiveMembership { object } => write!(
                 f,
                 "semantic object {object:?} has reactive bindings that require incremental reactive lowering"
@@ -98,7 +110,18 @@ impl std::fmt::Display for SemanticPublicationLoweringError {
         }
     }
 }
-impl std::error::Error for SemanticPublicationLoweringError {}
+impl std::error::Error for SemanticPublicationLoweringError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::PreparedValue { error, .. } => Some(error),
+            Self::PreparedGeometry { error, .. } => Some(error),
+            Self::PreparedContent { error, .. } => Some(error),
+            Self::Read(error) => Some(error),
+            Self::Value(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 impl From<SemanticLoweringError> for SemanticPublicationLoweringError {
     fn from(error: SemanticLoweringError) -> Self {
         Self::Value(error)
@@ -230,6 +253,47 @@ impl BoundSemanticPublication {
     }
 }
 
+/// Registration-only batches use callback-plan lowering, not the property lane.
+/// Mixed structural/registration transactions remain unsupported until their
+/// proposed target preorder can be preflighted together.
+pub fn is_semantic_updater_publication(mutations: &[SemanticMutation]) -> bool {
+    !mutations.is_empty()
+        && mutations.iter().all(|mutation| {
+            matches!(
+                mutation,
+                SemanticMutation::AddUpdater { .. }
+                    | SemanticMutation::RemoveUpdater { .. }
+                    | SemanticMutation::ClearUpdaters { .. }
+            )
+        })
+}
+
+/// Prepare the callback-plan revision and the empty geometry projection together.
+/// The caller must commit both after all semantic/runtime preflight succeeds.
+pub fn prepare_semantic_updater_publication(
+    prepared: &PreparedSemanticMutationTransaction<'_>,
+    callbacks: &super::SemanticHostCallbackPlan,
+    current_time: f64,
+) -> Result<
+    (
+        PreparedSemanticPublication,
+        Option<super::SemanticHostCallbackRevision>,
+    ),
+    SemanticPublicationLoweringError,
+> {
+    let revised = callbacks.prepare_registration_revision(prepared, current_time)?;
+    Ok((
+        PreparedSemanticPublication {
+            values: ExecutionMutationTransaction::from_mutations(Vec::new()),
+            resource_additions: CompiledResources::default(),
+            entries: Vec::new(),
+            possible_exits: Vec::new(),
+            stats: SemanticPublicationPreparationStats::default(),
+        },
+        revised,
+    ))
+}
+
 pub fn validate_semantic_publication(
     transaction: &SemanticMutationTransaction,
 ) -> Result<(), SemanticPublicationLoweringError> {
@@ -346,9 +410,7 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
                     );
                     if !matches!(
                         kind.kind(),
-                        SemanticNodeKind::Object(_)
-                            | SemanticNodeKind::AuthoringObject
-                            | SemanticNodeKind::Family
+                        SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family
                     ) {
                         return Err(SemanticPublicationLoweringError::UnsupportedNodeRemoval {
                             node,
@@ -439,7 +501,7 @@ fn collect_existing_exit_leaves(
         SemanticLoweringError::Store(noon_core::SemanticStoreError::UnknownNode(node))
     })?;
     match semantic.kind() {
-        SemanticNodeKind::Object(_) | SemanticNodeKind::AuthoringObject => {
+        SemanticNodeKind::AuthoringObject => {
             let state = semantic.semantic_object_state();
             if state.is_some_and(|state| {
                 matches!(state.role(), noon_core::SemanticObjectRole::Camera2D)

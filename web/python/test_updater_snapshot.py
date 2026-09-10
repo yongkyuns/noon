@@ -6,6 +6,7 @@ import _manim_compat as compat
 import _manim_typst as typst
 import _manim_updaters as updaters
 from _test_manim_membership import install_test_membership
+from _typed_geometry_test_support import identity_only_wrapper
 
 
 def _object(index: int) -> dict:
@@ -29,6 +30,26 @@ def _object(index: int) -> dict:
 
 
 class CanonicalCallbackPropertyRowTests(unittest.TestCase):
+    def test_geometry_adapter_keeps_coordinate_writes_in_callback_phase(self) -> None:
+        import _manim_shared_geometry as geometry
+
+        scene, mobject, context = self._mobject_and_context()
+        public_set_x = updaters._base.Mobject.set_x
+        public_set_y = updaters._base.Mobject.set_y
+        public_set_color = updaters._base.Mobject.set_color
+        import _manim_rate_functions as rates
+        self.assertFalse(hasattr(geometry, "install"))
+        self.assertIs(updaters._base.Mobject.set_color, public_set_color)
+        self.assertIs(updaters._base.Mobject.set_x, public_set_x)
+        self.assertIs(updaters._base.Mobject.set_y, public_set_y)
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            self.assertIs(mobject.set_x(5.0).set_y(4.0), mobject)
+            self.assertEqual(mobject.get_center(), updaters._base.Vec2(5.0, 4.0))
+            self.assertTrue(context.effective_batch()["writes"])
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+
     def test_style_wire_uses_rust_default_and_preserves_explicit_mode(self) -> None:
         omitted_default = _object(0)["style"]
         self.assertNotIn("stroke_width_mode", omitted_default)
@@ -49,18 +70,14 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
 
     @staticmethod
     def _mobject_and_context() -> tuple[object, object, object]:
-        compat.install()
+
         install_test_membership(compat)
-        import _manim_semantic_handles as semantic_handles
+        # Public paint methods always enter the phase dispatcher; no final
+        # installer is needed to reclaim VMobject's overrides.
+        assert not hasattr(updaters, "install")
 
-        if not updaters._INSTALLED:
-            # Mirror the production final method that otherwise bypasses the
-            # base Mobject patch. Updater installation must reclaim it.
-
-            compat.VMobject.set_opacity = semantic_handles._set_opacity
-            updaters.install()
         scene = updaters._base.Scene()
-        mobject = compat.Circle(1.0)
+        mobject = identity_only_wrapper(compat.Circle)
         scene.add(mobject)
         mobject._semantic_handle = type(
             "SemanticHandle", (), {"semanticSlot": 11, "semanticGeneration": 3}
@@ -157,6 +174,16 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
                 stroke = (*color[:3], stroke[3] if has_stroke else color[3])
                 return self._paint_result(fill, stroke, has_fill, True)
 
+            def callbackPaintSetOpacity(self, *values: object):
+                self.paint_edits.append(("opacity", values))
+                fill, stroke, opacity = values[:4], values[4:8], values[8]
+                has_fill, has_stroke = fill[0] is not None, stroke[0] is not None
+                if has_fill:
+                    fill = (*fill[:3], opacity)
+                if has_stroke:
+                    stroke = (*stroke[:3], opacity)
+                return self._paint_result(fill, stroke, has_fill, has_stroke)
+
             @staticmethod
             def _paint_result(fill, stroke, has_fill: bool, has_stroke: bool):
                 return SimpleNamespace(
@@ -193,7 +220,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             self.assertEqual(row.style.fill, (0.8, 0.4, 0.2, 0.4))
             self.assertEqual(row.style.stroke, (0.8, 0.4, 0.2, 0.75))
             self.assertEqual(row.style.opacity, 1.0)
-            mobject.set_opacity(0.5)
+            mobject.set_object_opacity(0.5)
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
 
@@ -205,6 +232,31 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             [kind for kind, _ in context._operations.paint_edits],
             ["color", "fill"],
         )
+
+    def test_vmobject_callback_opacity_uses_shared_paint_and_preserves_composite(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            mobject.set_fill(opacity=0.25)
+            mobject.set_object_opacity(0.6)
+            mobject.set_opacity(0.4)
+            _, row = context.row(mobject)
+            self.assertEqual(row.style.fill[3], 0.4)
+            self.assertEqual(row.style.stroke[3], 0.4)
+            self.assertEqual(row.style.opacity, 0.6)
+            self.assertEqual(context._operations.paint_edits[-1][0], "opacity")
+            before, writes = row.style, list(context.effective_batch()["writes"])
+            failure = RuntimeError("shared paint rejected")
+            def reject(*_args):
+                raise failure
+            context._operations.callbackPaintSetOpacity = reject
+            with self.assertRaises(RuntimeError) as caught:
+                mobject.set_opacity(0.2)
+            self.assertIs(caught.exception, failure)
+            self.assertEqual(row.style, before)
+            self.assertEqual(context.effective_batch()["writes"], writes)
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
 
     def test_unsupported_callback_stroke_opacity_fails_before_row_mutation(self) -> None:
         scene, mobject, context = self._mobject_and_context()
@@ -274,7 +326,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             self.assertEqual(updaters._canonical_callback_time(mobject), 0.5)
             self.assertEqual(mobject.get_center(), updaters._base.Vec2(2.0, -1.0))
             mobject.move_to((4.0, 3.0))
-            mobject.set_opacity(0.5)
+            mobject.set_object_opacity(0.5)
             mobject.set_color(updaters._base.BLUE)
             self.assertEqual(mobject.get_center(), updaters._base.Vec2(4.0, 3.0))
             mobject.shift((1.0, 0.0))
@@ -286,7 +338,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             updaters._canonical_callback_time(mobject)
 
-        self.assertIs(compat.VMobject.set_opacity, updaters._canonical_vmobject_set_opacity)
+        self.assertEqual(compat.VMobject.set_opacity.__module__, "_manim_compat")
         self.assertEqual(
             [write["kind"] for write in writes],
             ["transform", "style", "style", "transform"],
@@ -301,11 +353,11 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
     def test_callback_bound_copy_uses_canonical_target_editor_without_copying_callbacks(
         self,
     ) -> None:
-        compat.install()
+
         import _manim_semantic_handles as semantic_handles
 
         scene = updaters._base.Scene()
-        circle = compat.Circle(1.0)
+        circle = identity_only_wrapper(compat.Circle)
         scene.add(circle)
         source_handle = object()
         target_handle = object()
@@ -346,6 +398,46 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         self.assertFalse(hasattr(target, "_noon_updater_registration_history"))
         self.assertIs(circle._noon_updater_registrations[0], registration)
 
+    def test_copy_before_live_bootstrap_does_not_traverse_registration_backreferences(self):
+        import _manim_semantic_handles as semantic_handles
+
+        circle = identity_only_wrapper(compat.Circle)
+        scene = updaters._base.Scene()
+        scene.add(circle)
+        target_handle = object()
+        class Handle:
+            def cloneHandle(self):
+                return target_handle
+        circle._semantic_handle = Handle()
+        circle._semantic_handle_fresh = True
+        registration = updaters._UpdaterRegistration(circle, lambda m: None, None)
+        circle._noon_updaters = [registration.callback]
+        circle._noon_updater_registrations = [registration]
+        circle._noon_updater_registration_history = [registration]
+        self.assertIsNone(semantic_handles._live_mutation_context(circle))
+        copied = semantic_handles._copy_mobject(circle)
+        self.assertIs(copied._semantic_handle, target_handle)
+        self.assertFalse(hasattr(copied, "_noon_updaters"))
+        self.assertFalse(hasattr(copied, "_noon_updater_registrations"))
+        self.assertFalse(hasattr(copied, "_noon_updater_registration_history"))
+        self.assertIs(registration.mobject, circle)
+
+    def test_only_active_callback_phase_masks_the_shared_handle(self) -> None:
+        scene, mobject, context = self._mobject_and_context()
+        import _manim_semantic_handles as semantic_handles
+
+        handle = object()
+        mobject._semantic_handle = handle
+        mobject._semantic_handle_fresh = True
+        # Captured objects without their own updater still belong to the overlay.
+        self.assertIs(semantic_handles._handle_for(mobject), handle)
+        updaters._ACTIVE_CONTEXTS[id(scene)] = context
+        try:
+            self.assertIsNone(semantic_handles._handle_for(mobject))
+        finally:
+            updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
+        self.assertIs(semantic_handles._handle_for(mobject), handle)
+
     def test_callback_bound_copy_rejects_inside_the_active_phase(self) -> None:
         scene, mobject, context = self._mobject_and_context()
         import _manim_semantic_handles as semantic_handles
@@ -370,11 +462,11 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
                 mobject.rotate(0.5)
             with self.assertRaises(NotImplementedError):
                 mobject.scale(2.0)
-            with self.assertRaises(NotImplementedError):
+            with self.assertRaisesRegex(RuntimeError, "shared Rust"):
                 mobject.width
             with self.assertRaises(NotImplementedError):
                 mobject.geometry
-            with self.assertRaises(NotImplementedError):
+            with self.assertRaisesRegex(RuntimeError, "shared Rust semantic handle"):
                 mobject.copy()
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
@@ -407,7 +499,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         import _manim_shared_geometry
 
         scene, _, context = self._mobject_and_context()
-        line = compat.Line((0.0, 0.0, 0.0), (1.0, 0.0, 0.0))
+        line = identity_only_wrapper(compat.Line)
         scene.add(line)
         line._semantic_handle = type(
             "SemanticHandle", (), {"semanticSlot": 11, "semanticGeneration": 3}
@@ -419,7 +511,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         line._noon_updaters = []
         updaters._ACTIVE_CONTEXTS[id(scene)] = context
         try:
-            _manim_shared_geometry._rotate_about_origin(line, math.pi / 2.0)
+            line.rotate_about_origin(math.pi / 2.0)
             writes = context.effective_batch()["writes"]
         finally:
             updaters._ACTIVE_CONTEXTS.pop(id(scene), None)
@@ -489,3 +581,88 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PortableCapturedScalarTests(unittest.IsolatedAsyncioTestCase):
+    class Tracker:
+        def __init__(self, owner, slot):
+            self._canonical_context = owner
+            self._canonical_handle = SimpleNamespace(semanticSlot=slot, semanticGeneration=3)
+            self.authored_value = 999
+
+    def context(self, owner):
+        return updaters._CanonicalCallbackContext(
+            {"time": 1.0, "delta_time": 0.25, "token": {"generation": 5}, "objects": []}, owner
+        )
+
+    async def test_capture_reads_are_deduplicated_pinned_and_do_not_invoke_or_replay(self):
+        owner = object()
+        context = self.context(owner)
+        tracker = self.Tracker(owner, 7)
+        calls, reads = [], []
+        def callback(mobject, captured=tracker):
+            calls.append(context.scalar((captured._canonical_handle.semanticSlot, 3)))
+        async def read(key):
+            reads.append(key)
+            return 0.0
+        context._read_scalar_async = read
+        await context.prefetch_captured_scalars([callback, callback], self.Tracker)
+        self.assertEqual(calls, [])
+        self.assertEqual(reads, [(7, 3)])
+        self.assertEqual(context.effective_batch()["writes"], [])
+        callback(None)
+        self.assertEqual(calls, [0.0])
+        self.assertNotEqual(calls[0], tracker.authored_value)
+
+    async def test_unused_invalid_capture_defers_failure_until_actual_read(self):
+        owner = object()
+        context = self.context(owner)
+        tracker = self.Tracker(owner, 8)
+        calls = []
+        def callback(mobject):
+            if False:
+                mobject = tracker
+            calls.append("once")
+        failure = ValueError("stale phase scalar")
+        async def read(key):
+            raise failure
+        context._read_scalar_async = read
+        await context.prefetch_captured_scalars([callback], self.Tracker)
+        callback(None)
+        self.assertEqual(calls, ["once"])
+        with self.assertRaises(ValueError) as caught:
+            context.scalar((8, 3))
+        self.assertIs(caught.exception, failure)
+
+    async def test_foreign_values_and_authored_descriptors_are_not_evaluated(self):
+        owner = object()
+        context = self.context(owner)
+        foreign = self.Tracker(object(), 1)
+        class DescriptorTracker:
+            _canonical_context = owner
+            @property
+            def _canonical_handle(self):
+                raise AssertionError("authored descriptor invoked")
+        descriptor = DescriptorTracker()
+        reads = []
+        async def read(key):
+            reads.append(key)
+            return 1.0
+        context._read_scalar_async = read
+        await context.prefetch_captured_scalars([lambda m: foreign], self.Tracker)
+        await context.prefetch_captured_scalars([lambda m: descriptor], DescriptorTracker)
+        self.assertEqual(reads, [])
+
+    async def test_capture_cache_does_not_cross_phase_contexts(self):
+        owner = object()
+        tracker = self.Tracker(owner, 2)
+        first, second = self.context(owner), self.context(owner)
+        callback = lambda m: tracker
+        async def earlier(key): return 2.0
+        async def later(key): return 5.0
+        first._read_scalar_async = earlier
+        second._read_scalar_async = later
+        await first.prefetch_captured_scalars([callback], self.Tracker)
+        await second.prefetch_captured_scalars([callback], self.Tracker)
+        self.assertEqual(first.scalar((2, 3)), 2.0)
+        self.assertEqual(second.scalar((2, 3)), 5.0)

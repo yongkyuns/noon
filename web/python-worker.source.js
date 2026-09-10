@@ -4,17 +4,13 @@ import initNoonWeb, {
   WasmManimGeometryOptions,
   WasmSceneMembershipBatch,
   resolveAnimationOptions,
-  resolveCompositionSchedule,
-  resolveLifecyclePlan,
-  resolveUniformCompositionSchedule,
-  validatePresenceTransition,
 } from "./pkg/noon_web.js";
 import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
 import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
 
 const AUTHORING_CHANNEL = "noon.authoring";
-const AUTHORING_PROTOCOL_VERSION = 6;
+const AUTHORING_PROTOCOL_VERSION = 7;
 const AUTHORING_STARTUP_METRICS_VERSION = 1;
 const moduleGraphReadyAt = performance.now();
 
@@ -134,10 +130,6 @@ async function initializePyodide() {
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
   self.noonCreateAuthoringFamilyHandle = (batch) => authoringStore.createFamily(batch);
   self.noonResolveAnimationOptions = resolveAnimationOptionsPlain;
-  self.noonResolveCompositionSchedule = resolveCompositionSchedulePlain;
-  self.noonResolveUniformCompositionSchedule = resolveUniformCompositionSchedulePlain;
-  self.noonResolveLifecyclePlan = resolveLifecyclePlanPlain;
-  self.noonValidatePresenceTransition = validatePresenceTransitionPlain;
   const bindingsReadyAt = performance.now();
 
   for (const [index, descriptor] of PYTHON_COMPAT_MODULES.entries()) {
@@ -150,43 +142,7 @@ async function initializePyodide() {
   pyodide.runPython(`
 import sys
 sys.path.insert(0, "/tmp")
-import _manim_compat
-_manim_compat.install()
-import _manim_rate_functions
-_manim_rate_functions.install()
-import _manim_phase_b
-import _manim_geometry
-import _manim_semantic_handles
-_manim_semantic_handles.install()
-import _manim_shared_geometry
-_manim_shared_geometry.install()
-import _manim_dashed_line
-_manim_dashed_line.install()
-import _manim_animate
-import _manim_rotate
-_manim_rotate.install()
-import _manim_composition
-_manim_composition.install()
-import _manim_lifecycle
-# Text and Typst bind ordinary shared semantic Mobjects below the lifecycle-owned
-# Scene.add path; content binding does not replace scene membership semantics.
-import _manim_typst
-_manim_typst.install()
-import _manim_growing
-_manim_growing.install()
-import _manim_draw_border_then_fill
-_manim_draw_border_then_fill.install()
-import _manim_indication
-_manim_indication.install()
-import _manim_reactive
-import _manim_updaters
-_manim_updaters.install()
-import _manim_camera
-_manim_camera.install()
-# Final production SceneSpec ownership: after all content/lifecycle adapters have
-# installed, bind their events into one per-scene Rust canonical authoring context.
-import _manim_canonical_scene
-_manim_canonical_scene.install()
+import noon
 `);
   const importsReadyAt = performance.now();
   self.__noonAuthoringStartupMetrics = Object.freeze({
@@ -256,80 +212,15 @@ function resolveAnimationOptionsPlain(...args) {
   const result = resolveAnimationOptions(...args);
   try {
     return {
-      ok: result.ok,
       runTime: result.runTime,
       rateFunc: result.rateFunc,
       lagRatio: result.lagRatio,
       pathArc: result.pathArc,
       reverseRateFunction: result.reverseRateFunction,
-      errorKind: result.errorKind ?? "",
-      message: result.message ?? "",
     };
   } finally {
     result.free();
   }
-}
-
-function compositionResultPlain(result) {
-  try {
-    const intervals = [];
-    for (let index = 0; index < result.length; index += 1) {
-      intervals.push({
-        startTime: result.startTime(index),
-        duration: result.duration(index),
-        endTime: result.endTime(index),
-      });
-    }
-    return {
-      ok: result.ok,
-      runTime: result.runTime,
-      intrinsicRunTime: result.intrinsicRunTime,
-      intervals,
-      errorKind: result.errorKind ?? "",
-      message: result.message ?? "",
-    };
-  } finally {
-    result.free();
-  }
-}
-
-function resolveCompositionSchedulePlain(childRunTimesJson, lagRatio, runTime) {
-  const childRunTimes = JSON.parse(childRunTimesJson);
-  if (!Array.isArray(childRunTimes)) {
-    throw new TypeError("child runtimes must decode to an array");
-  }
-  return compositionResultPlain(
-    resolveCompositionSchedule(new Float64Array(childRunTimes), lagRatio, runTime),
-  );
-}
-
-function resolveUniformCompositionSchedulePlain(...args) {
-  return compositionResultPlain(resolveUniformCompositionSchedule(...args));
-}
-
-function lifecycleResultPlain(result) {
-  try {
-    return {
-      ok: result.ok,
-      bind: result.bind,
-      showNow: result.showNow,
-      hideNow: result.hideNow,
-      showAtStart: result.showAtStart,
-      hideAtEnd: result.hideAtEnd,
-      errorKind: result.errorKind ?? "",
-      message: result.message ?? "",
-    };
-  } finally {
-    result.free();
-  }
-}
-
-function resolveLifecyclePlanPlain(...args) {
-  return lifecycleResultPlain(resolveLifecyclePlan(...args));
-}
-
-function validatePresenceTransitionPlain(...args) {
-  return lifecycleResultPlain(validatePresenceTransition(...args));
 }
 
 function registerContinuationContext(context) {
@@ -459,7 +350,7 @@ function parseContinuationCallbackReadRequest(requestJson) {
   }
   if (!isRecord(request) ||
       !Number.isSafeInteger(request.request_id) || request.request_id < 0 ||
-      !["scalar_signal", "object"].includes(request.kind) || !isRecord(request.node) ||
+      !["scalar_signal", "object", "family"].includes(request.kind) || !isRecord(request.node) ||
       !Number.isSafeInteger(request.node.slot) || request.node.slot < 0 || request.node.slot > 0xffffffff ||
       !Number.isSafeInteger(request.node.generation) || request.node.generation < 0 || request.node.generation > 0xffffffff) {
     throw new TypeError("canonical callback read request must contain a request ID, typed kind, and semantic node");
@@ -629,7 +520,6 @@ async function handleRequest(request) {
           pyodide,
           request.source,
           request.context,
-          request.exportDocument ?? false,
         );
         if (run.continuation !== null) {
           await run.continuation.endpoint.publishContinuationResult(run.continuation.generation);
@@ -747,27 +637,27 @@ function retireSemanticContext(token, entry) {
   }
 }
 
-async function runAuthoringSource(pyodide, source, context, exportDocument = false) {
+async function runAuthoringSource(pyodide, source, context) {
   const dictConstructor = pyodide.globals.get("dict");
   const globals = dictConstructor();
   dictConstructor.destroy();
   globals.set("__noon_source", source);
   globals.set("__noon_context_json", JSON.stringify(context));
-  globals.set("__noon_export_document", exportDocument);
 
   try {
     const resultJson = await pyodide.runPythonAsync(
       `
 import json
 import _manim_updaters
-from _manim_canonical_scene import (
+from _manim_scene import (
     execute_construct,
     await_source_barrier,
+    await_module_source_barrier,
     execution_context,
-    materialize_legacy_geometry,
 )
 from _manim_source_execution import (
-    BARRIER_GLOBAL, compile_authoring_source, authoring_source_scope,
+    BARRIER_GLOBAL, MODULE_BARRIER_GLOBAL, compile_authoring_source,
+    authoring_source_scope, execute_authoring_module,
 )
 from noon import Scene
 
@@ -776,12 +666,14 @@ __noon_namespace = {
     "__name__": "__main__",
 }
 __noon_code, __noon_portable_constructs = compile_authoring_source(
-    __noon_source, portable=not bool(__noon_export_document)
+    __noon_source
 )
 if __noon_portable_constructs:
     __noon_namespace[BARRIER_GLOBAL] = await_source_barrier
-with authoring_source_scope(export_document=bool(__noon_export_document)):
-    exec(__noon_code, __noon_namespace)
+if MODULE_BARRIER_GLOBAL in __noon_code.co_names:
+    __noon_namespace[MODULE_BARRIER_GLOBAL] = await_module_source_barrier
+with authoring_source_scope():
+    await execute_authoring_module(__noon_code, __noon_namespace)
 
 if "result" in __noon_namespace:
     __noon_result = __noon_namespace["result"]
@@ -806,63 +698,30 @@ else:
         )
     __noon_result = __noon_scene_classes[0]()
     await execute_construct(
-        __noon_result, export_document=bool(__noon_export_document),
+        __noon_result,
         portable_constructs=__noon_portable_constructs,
     )
 
 if isinstance(__noon_result, Scene):
-    __noon_kind = "scene_document"
     from js import noonRegisterSemanticExecution, noonSemanticContinuationGeneration
-    __noon_context = (None if __noon_export_document else
-        execution_context(__noon_result))
-    __noon_semantic = None
-    __noon_live_duration = None
-    __noon_authored_duration = None
-    if __noon_context is not None:
-        __noon_live_duration = __noon_context.liveHandoffDuration()
-        __noon_authored_duration = __noon_context.authoredDuration()
-        __noon_callback_session = _manim_updaters.canonical_callback_session_id(__noon_result)
-        __noon_semantic = {
-            "context_id": str(noonRegisterSemanticExecution(__noon_context)),
-            "callback_session_id": __noon_callback_session,
-        }
-        __noon_continuation_generation = noonSemanticContinuationGeneration(__noon_context)
-        if __noon_continuation_generation is not None:
-            __noon_semantic["continuation_generation"] = int(__noon_continuation_generation)
-        __noon_scene_spec = None
-        __noon_document = None
-        __noon_identities = None
-    else:
-        if not __noon_export_document:
-            raise RuntimeError(
-                "shared Scene cannot fall back to scene-document execution; "
-                "remove incompatible legacy declarations or request exportDocument explicitly"
-            )
-        # A native Text timeline/export remains in the canonical context so its
-        # temporary #959 codec is derived from the Rust store at finalization.
-        # Explicit geometry-only export retains the existing materialization.
-        if not getattr(__noon_result, "_semantic_text_handles", {}):
-            materialize_legacy_geometry(__noon_result)
-        __noon_scene_spec = __noon_result.to_scene_spec()
-        __noon_document = __noon_result.to_document()
-        __noon_identities = __noon_result.identity_document()
-    __noon_duration = (
-        float(__noon_live_duration)
-        if __noon_live_duration is not None
-        else float(__noon_authored_duration)
-        if __noon_authored_duration is not None
-        else float(__noon_result.time)
-    )
+    __noon_context = execution_context(__noon_result)
+    __noon_live_duration = __noon_context.liveHandoffDuration()
+    __noon_semantic = {
+        "context_id": str(noonRegisterSemanticExecution(__noon_context)),
+        "callback_session_id": _manim_updaters.canonical_callback_session_id(__noon_result),
+    }
+    __noon_continuation_generation = noonSemanticContinuationGeneration(__noon_context)
+    if __noon_continuation_generation is not None:
+        __noon_semantic["continuation_generation"] = int(__noon_continuation_generation)
+    __noon_duration = float(__noon_live_duration if __noon_live_duration is not None else __noon_context.authoredDuration())
+
 else:
     raise TypeError("Python authoring result must be a noon.Scene")
 json.dumps(
     {
-        "kind": __noon_kind,
+        "kind": "semantic_scene",
         "semantic_execution": __noon_semantic,
-        "document": __noon_document,
-        "scene_spec": __noon_scene_spec,
         "duration": __noon_duration,
-        "identities": __noon_identities,
     },
     separators=(",", ":"),
     allow_nan=False,
@@ -930,10 +789,6 @@ function validateRequest(request) {
     throw new Error("Python authoring request has an invalid request ID");
   }
   if (request.type === "run") {
-    if (request.exportDocument !== undefined && typeof request.exportDocument !== "boolean") {
-      throw new Error("exportDocument must be boolean");
-    }
-
     if (typeof request.source !== "string" || request.source.trim() === "") {
       throw new Error("Python authoring source must be a non-empty string");
     }

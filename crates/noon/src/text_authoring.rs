@@ -6,31 +6,49 @@
 //! SVG payload, or frontend-owned glyph state is introduced at the authoring boundary.
 
 mod semantic;
-pub(crate) use semantic::{math_typst_state, native_text_state, typst_state};
+#[cfg(feature = "native-text")]
+pub(crate) use semantic::native_text_state;
+#[cfg(feature = "typst")]
+pub(crate) use semantic::{math_typst_state, typst_state};
 
 use std::sync::Arc;
 
 use noon_compile::{CompileError, CompiledObject, CompiledScene};
+#[cfg(feature = "typst")]
+use noon_core::GeometryResource;
 use noon_core::{
-    Color, FontResourceArena, FontResourceError, GeometryResource, GeometryResourceArena, ObjectId,
-    Rect, Style, TextResource, TextResourceArena, TextResourceValidationError, TextSourceKind,
-    Transform2D, Vec2, WHITE,
+    Color, FontResourceArena, FontResourceError, GeometryResourceArena, ObjectId, Rect, Style,
+    TextResource, TextResourceArena, TextResourceValidationError, TextSourceKind, Transform2D,
+    Vec2, WHITE,
 };
-use noon_text_native::{
-    NativeFontFace, NativeTextCompiler, NativeTextError, NativeTextOptions,
-    NativeTextResourceArtifact,
+#[cfg(feature = "native-text")]
+pub use noon_text::shaping::NativeFontFace;
+#[cfg(feature = "native-text")]
+use noon_text::shaping::{
+    NativeTextCompiler, NativeTextError, NativeTextOptions, NativeTextResourceArtifact,
 };
-use noon_typst::{compile_typst_resource, TypstBackendError, TypstMode, TypstResourceArtifact};
+#[cfg(feature = "typst")]
+pub use noon_typst::TypstBackendError;
+#[cfg(feature = "typst")]
+use noon_typst::{
+    compile_typst_resource, compile_typst_resource_with_fonts, TypstMode, TypstResourceArtifact,
+};
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 use swash::{FontRef, StringId};
 
 /// Typst's retained artifact is authored at 10pt, so its public Manim-style font size
 /// remains an object transform and does not alter glyph/cluster identity.
+#[cfg(feature = "typst")]
 pub const SCALE_FACTOR_PER_FONT_POINT: f32 = 1.0 / 960.0;
 /// Native text is shaped at its requested point size, so only the point-to-scene
 /// conversion belongs in the object transform.
+#[cfg(feature = "native-text")]
 pub const NATIVE_POINT_TO_SCENE_SCALE: f32 = 1.0 / 96.0;
+#[cfg(feature = "typst")]
 pub const DEFAULT_TYPST_FONT_SIZE: f32 = 48.0;
+#[cfg(feature = "native-text")]
 pub const DEFAULT_NATIVE_TEXT_FONT_SIZE: f32 = 48.0;
+#[cfg(feature = "native-text")]
 pub const DEFAULT_NATIVE_TEXT_FONT_FAMILY: &str = "DejaVu Sans Mono";
 
 /// Stable handle to one semantic object in a [`RetainedScene`].
@@ -82,18 +100,36 @@ impl TextPresentation {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg(feature = "typst")]
 struct TypstSpec {
     source: Arc<str>,
+    fonts: Option<Arc<[Arc<[u8]>]>>,
     font_size: f32,
     presentation: TextPresentation,
 }
 
+#[cfg(feature = "typst")]
 impl TypstSpec {
     fn new(source: impl Into<Arc<str>>) -> Self {
         Self {
             source: source.into(),
             font_size: DEFAULT_TYPST_FONT_SIZE,
+            fonts: None,
             presentation: TextPresentation::default(),
+        }
+    }
+
+    fn compile_artifact(
+        &self,
+        mode: TypstMode,
+    ) -> Result<TypstResourceArtifact, TextAuthoringError> {
+        match &self.fonts {
+            Some(fonts) => Ok(compile_typst_resource_with_fonts(
+                self.source.as_ref(),
+                mode,
+                fonts.iter(),
+            )?),
+            None => Ok(compile_typst_resource(self.source.as_ref(), mode)?),
         }
     }
 
@@ -107,6 +143,7 @@ impl TypstSpec {
     }
 }
 
+#[cfg(feature = "typst")]
 macro_rules! typst_object {
     ($name:ident, $mode:expr, $kind:expr) => {
         #[derive(Clone, Debug, PartialEq)]
@@ -115,6 +152,13 @@ macro_rules! typst_object {
         impl $name {
             pub fn new(source: impl Into<Arc<str>>) -> Self {
                 Self(TypstSpec::new(source))
+            }
+
+            /// Use only these font buffers instead of bundled fonts. An empty or
+            /// invalid set fails explicitly; it never falls back to bundled assets.
+            pub fn with_fonts(mut self, fonts: impl IntoIterator<Item = Arc<[u8]>>) -> Self {
+                self.0.fonts = Some(fonts.into_iter().collect::<Vec<_>>().into());
+                self
             }
 
             pub fn source(&self) -> &str {
@@ -181,7 +225,7 @@ macro_rules! typst_object {
                 scene: &mut RetainedScene,
             ) -> Result<CompiledObject, TextAuthoringError> {
                 self.validate()?;
-                let artifact = compile_typst_resource(self.0.source.as_ref(), $mode)?;
+                let artifact = self.0.compile_artifact($mode)?;
                 debug_assert_eq!(artifact.resource.kind, $kind);
                 let bounds = artifact.resource.bounds;
                 let handle = scene.import_typst_artifact(artifact)?;
@@ -208,7 +252,9 @@ macro_rules! typst_object {
     };
 }
 
+#[cfg(feature = "typst")]
 typst_object!(Typst, TypstMode::Markup, TextSourceKind::Typst);
+#[cfg(feature = "typst")]
 typst_object!(MathTypst, TypstMode::Math, TextSourceKind::MathTypst);
 
 /// Native plain text authored through the same retained resource contract as Typst.
@@ -217,19 +263,23 @@ typst_object!(MathTypst, TypstMode::Math, TextSourceKind::MathTypst);
 /// Styled spans, fallback chains, bidi/script itemization, and MarkupText remain
 /// backend follow-ups rather than being approximated in frontend wrappers.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg(feature = "native-text")]
 pub struct Text {
     source: Arc<str>,
     font_family: Arc<str>,
+    font_face: Option<NativeFontFace>,
     font_size: f32,
     line_spacing: f32,
     presentation: TextPresentation,
 }
 
+#[cfg(feature = "native-text")]
 impl Text {
     pub fn new(source: impl Into<Arc<str>>) -> Self {
         Self {
             source: source.into(),
             font_family: Arc::from(DEFAULT_NATIVE_TEXT_FONT_FAMILY),
+            font_face: None,
             font_size: DEFAULT_NATIVE_TEXT_FONT_SIZE,
             line_spacing: -1.0,
             presentation: TextPresentation::default(),
@@ -254,6 +304,15 @@ impl Text {
 
     pub fn with_font(mut self, family: impl Into<Arc<str>>) -> Self {
         self.font_family = family.into();
+        self.font_face = None;
+        self
+    }
+
+    /// Supply an immutable font face without requiring bundled font assets.
+    /// A subsequent `with_font` call deliberately returns to family lookup.
+    pub fn with_font_face(mut self, font: NativeFontFace) -> Self {
+        self.font_family = Arc::clone(&font.family);
+        self.font_face = Some(font);
         self
     }
 
@@ -321,7 +380,10 @@ impl Text {
         fill: Option<Color>,
     ) -> Result<NativeTextResourceArtifact, TextAuthoringError> {
         self.validate()?;
-        let font = bundled_native_font(self.font_family.as_ref())?;
+        let font = match &self.font_face {
+            Some(font) => font.clone(),
+            None => bundled_native_font(self.font_family.as_ref())?,
+        };
         let mut options = NativeTextOptions::new(self.font_size);
         options.line_spacing = self.line_spacing;
         options.fill = fill;
@@ -356,7 +418,9 @@ impl Text {
     }
 }
 
+#[cfg(feature = "native-text")]
 fn bundled_native_font(family: &str) -> Result<NativeFontFace, TextAuthoringError> {
+    #[cfg(feature = "bundled-fonts")]
     for data in typst_assets::fonts() {
         let Some(font) = FontRef::from_index(data, 0) else {
             continue;
@@ -384,12 +448,15 @@ pub enum TextAuthoringError {
     MissingFontResource,
     DuplicateObject(ObjectId),
     ObjectIdSpaceExhausted,
+    #[cfg(feature = "native-text")]
     NativeText(NativeTextError),
+    #[cfg(feature = "typst")]
     Typst(TypstBackendError),
     Font(FontResourceError),
     Text(TextResourceValidationError),
     Compile(CompileError),
-    Semantic(String),
+    Semantic(crate::AuthoringError),
+    Import(noon_core::SemanticTextImportError),
 }
 
 impl std::fmt::Display for TextAuthoringError {
@@ -415,24 +482,44 @@ impl std::fmt::Display for TextAuthoringError {
             Self::ObjectIdSpaceExhausted => {
                 formatter.write_str("retained object ID space is exhausted")
             }
+            #[cfg(feature = "native-text")]
             Self::NativeText(error) => error.fmt(formatter),
+            #[cfg(feature = "typst")]
             Self::Typst(error) => error.fmt(formatter),
             Self::Font(error) => error.fmt(formatter),
             Self::Text(error) => error.fmt(formatter),
             Self::Compile(error) => error.fmt(formatter),
             Self::Semantic(error) => error.fmt(formatter),
+            Self::Import(error) => error.fmt(formatter),
         }
     }
 }
 
-impl std::error::Error for TextAuthoringError {}
+impl std::error::Error for TextAuthoringError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            #[cfg(feature = "native-text")]
+            Self::NativeText(error) => Some(error),
+            #[cfg(feature = "typst")]
+            Self::Typst(error) => Some(error),
+            Self::Font(error) => Some(error),
+            Self::Text(error) => Some(error),
+            Self::Compile(error) => Some(error),
+            Self::Semantic(error) => Some(error),
+            Self::Import(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
+#[cfg(feature = "native-text")]
 impl From<NativeTextError> for TextAuthoringError {
     fn from(value: NativeTextError) -> Self {
         Self::NativeText(value)
     }
 }
 
+#[cfg(feature = "typst")]
 impl From<TypstBackendError> for TextAuthoringError {
     fn from(value: TypstBackendError) -> Self {
         Self::Typst(value)
@@ -457,11 +544,13 @@ impl From<CompileError> for TextAuthoringError {
     }
 }
 
+#[cfg(feature = "native-text")]
 impl From<&str> for Text {
     fn from(source: &str) -> Self {
         Self::new(source)
     }
 }
+#[cfg(feature = "native-text")]
 impl From<String> for Text {
     fn from(source: String) -> Self {
         Self::new(source)
@@ -483,16 +572,19 @@ impl RetainedScene {
         Self::default()
     }
 
+    #[cfg(feature = "native-text")]
     pub fn add_text(&mut self, object: Text) -> Result<RetainedMobject, TextAuthoringError> {
         let object = object.compile(self)?;
         Ok(self.push_object(object))
     }
 
+    #[cfg(feature = "typst")]
     pub fn add_typst(&mut self, object: Typst) -> Result<RetainedMobject, TextAuthoringError> {
         let object = object.compile(self)?;
         Ok(self.push_object(object))
     }
 
+    #[cfg(feature = "typst")]
     pub fn add_math_typst(
         &mut self,
         object: MathTypst,
@@ -539,6 +631,7 @@ impl RetainedScene {
         Ok(id)
     }
 
+    #[cfg(feature = "native-text")]
     fn import_native_text_artifact(
         &mut self,
         artifact: NativeTextResourceArtifact,
@@ -547,6 +640,7 @@ impl RetainedScene {
         Ok(self.texts.insert(artifact.resource)?)
     }
 
+    #[cfg(feature = "typst")]
     fn import_typst_artifact(
         &mut self,
         artifact: TypstResourceArtifact,
@@ -583,7 +677,12 @@ impl RetainedScene {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "native-text",
+    feature = "typst",
+    feature = "bundled-fonts"
+))]
 mod tests {
     use super::*;
     use noon_core::ObjectContentRef;

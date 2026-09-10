@@ -2,11 +2,11 @@ use noon_core::{
     FontResourceArena, GeometryId, GeometryRef, GeometryResourceArena, ObjectContentRef, ObjectId,
     Style, TextResourceArena, Transform2D,
 };
+use noon_render_wgpu::text::TextDeviceMetrics;
 use noon_render_wgpu::{
     RetainedFrameIncrementalStats, RetainedFramePreparer, RetainedPrepareError,
 };
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
-use noon_text_render_wgpu::TextDeviceMetrics;
 
 fn geometry_frame(geometry: GeometryRef) -> FrameState {
     FrameState {

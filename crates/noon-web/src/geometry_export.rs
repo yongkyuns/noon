@@ -8,7 +8,7 @@ use serde::Serialize;
 pub(crate) fn mobject_fields(
     object: &Mobject,
 ) -> Result<(GeometryRef, Transform2D, Style), String> {
-    let state = object.state()?;
+    let state = object.state().map_err(|error| error.to_string())?;
     let geometry = match state
         .content
         .geometry()
@@ -18,7 +18,7 @@ pub(crate) fn mobject_fields(
         StoredGeometry::Rectangle { size } => GeometryRef::Rectangle { size },
         StoredGeometry::Line { start, end } => GeometryRef::Line { start, end },
         StoredGeometry::Resource(handle) => match object
-            .store()
+            .integration_store()
             .borrow()
             .geometry_resources()
             .get(handle)
@@ -29,23 +29,35 @@ pub(crate) fn mobject_fields(
     };
     // These synchronous observations use the existing shared scalar projections.
     // They cannot interleave with another mutation of this single-threaded store.
-    let translation = object.wire_translation()?;
-    let scale = object.wire_scale()?;
+    let translation = object
+        .wire_translation()
+        .map_err(|error| error.to_string())?;
+    let scale = object.wire_scale().map_err(|error| error.to_string())?;
     let transform = Transform2D {
         translation: Vec2::new(translation.0 as f32, translation.1 as f32),
         scale: Vec2::new(scale.0 as f32, scale.1 as f32),
-        rotation: object.wire_rotation()? as f32,
+        rotation: object.wire_rotation().map_err(|error| error.to_string())? as f32,
     };
     let color =
         |(r, g, b, a): (f64, f64, f64, f64)| Color::rgba(r as f32, g as f32, b as f32, a as f32);
     let style = Style {
-        fill: object.wire_fill()?.map(color),
-        stroke: object.wire_stroke()?.map(color),
-        stroke_width: object.wire_stroke_width()? as f32,
+        fill: object
+            .wire_fill()
+            .map_err(|error| error.to_string())?
+            .map(color),
+        stroke: object
+            .wire_stroke()
+            .map_err(|error| error.to_string())?
+            .map(color),
+        stroke_width: object
+            .wire_stroke_width()
+            .map_err(|error| error.to_string())? as f32,
         stroke_width_mode: state.style.stroke_width_mode,
         stroke_join: state.style.stroke_join,
         stroke_cap: state.style.stroke_cap,
-        opacity: object.wire_object_opacity()? as f32,
+        opacity: object
+            .wire_object_opacity()
+            .map_err(|error| error.to_string())? as f32,
     };
     Ok((geometry, transform, style))
 }
@@ -77,7 +89,7 @@ mod tests {
         let scene = noon::Scene::new();
         let object = scene.circle(1.0).unwrap();
         scene
-            .store()
+            .integration_store()
             .borrow_mut()
             .remove_node(object.node_id())
             .unwrap();

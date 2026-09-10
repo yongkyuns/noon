@@ -1,0 +1,39 @@
+# Domain projection, not a Rust call graph. Each row follows one kind of data.
+vars: {d2-config: {layout-engine: elk; theme-id: 0}}
+style.fill: "#FFFFFF"
+classes: {
+  item: {width: 260; height: 76; style: {font-size: 21; bold: false; font-color: "#263445"; fill: "#FFFFFF"; stroke: "#AEBBCB"; border-radius: 5; stroke-width: 1}}
+  column: {grid-columns: 1; grid-gap: 26; style: {font-size: 23; bold: true; font-color: "#263445"; fill: "#F1F5F9"; stroke: "#AEBBCB"; border-radius: 7; stroke-width: 1}}
+  flow: {style: {stroke: "#6B7F94"; stroke-width: 2}}
+}
+grid-columns: 3
+horizontal-gap: 64
+source: "Authored declarations" {
+  class: column
+  objects: "Objects & families\nvalues · membership" {class: item}
+  animation: "Animation trees\ncomposition · targets" {class: item}
+  signals: "Signals & bindings" {class: item}
+  content: "Geometry · text · fonts" {class: item}
+}
+compiled: "noon-compile output" {
+  class: column
+  objects: "Slots & painter order\nNodeId → execution slot" {class: item}
+  animation: "Property channels\ncompiled tracks" {class: item}
+  signals: "ReactiveProgram\nordered dependencies" {class: item}
+  content: "CompiledResources\nimmutable references" {class: item}
+}
+consumer: "Runtime / rendering" {
+  class: column
+  objects: "FrameState\n+ spatial queries" {class: item}
+  animation: "Timeline evaluation" {class: item}
+  signals: "ReactiveRuntime\naffected dependencies" {class: item}
+  content: "Meshes & glyph atlas\nretained GPU resources" {class: item}
+}
+source.objects -> compiled.objects: {class: flow}
+compiled.objects -> consumer.objects: {class: flow}
+source.animation -> compiled.animation: {class: flow}
+compiled.animation -> consumer.animation: {class: flow}
+source.signals -> compiled.signals: {class: flow}
+compiled.signals -> consumer.signals: {class: flow}
+source.content -> compiled.content: {class: flow}
+compiled.content -> consumer.content: {class: flow}

@@ -5,12 +5,10 @@ from __future__ import annotations
 import math
 from typing import Any
 
-import noon as _base
 import _manim_compat as _compat
 import _manim_semantic_handles as _semantic_handles
 
 
-_INSTALLED = False
 
 
 class ShowPassingFlash:
@@ -28,13 +26,7 @@ class ShowPassingFlash:
             )
         if not isinstance(mobject, _compat.VMobject):
             raise TypeError("ShowPassingFlash only works for VMobjects")
-        if not _semantic_handles._require_typed_manim_line(mobject):
-            raw = mobject._current_raw()
-            if "line" not in raw.geometry:
-                raise NotImplementedError(
-                    "ShowPassingFlash currently qualifies the exact Line subset; "
-                    "general VMobject path windows remain partial"
-                )
+        _semantic_handles._require_typed_manim_line(mobject)
         width = float(time_width)
         if not math.isfinite(width) or width <= 0.0:
             raise NotImplementedError(
@@ -63,14 +55,3 @@ class ShowPassingFlash:
         self.remover = True
         self.introducer = True
         self.anim_args = dict(kwargs)
-
-
-def install() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _base.ShowPassingFlash = ShowPassingFlash
-    _compat.ShowPassingFlash = ShowPassingFlash
-    if "ShowPassingFlash" not in _base.__all__:
-        _base.__all__.append("ShowPassingFlash")
-    _INSTALLED = True

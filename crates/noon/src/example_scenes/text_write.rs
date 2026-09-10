@@ -85,11 +85,15 @@ impl LiveContinuation for TextWrite {
 pub fn program() -> Result<LiveProgram<TextWrite>, String> {
     let scene = Scene::new();
     let mut moving = scene.text("MOVE").map_err(|error| error.to_string())?;
-    moving.set_translation(-2.0, -1.0)?;
+    moving
+        .set_translation(-2.0, -1.0)
+        .map_err(|error| error.to_string())?;
     let mut writing = scene.text("WRITE").map_err(|error| error.to_string())?;
-    writing.set_translation(-1.0, 1.0)?;
-    let mut target = moving.target_editor()?;
-    target.shift(2.0, 0.0)?;
+    writing
+        .set_translation(-1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    let mut target = moving.target_editor().map_err(|error| error.to_string())?;
+    target.shift(2.0, 0.0).map_err(|error| error.to_string())?;
     scene
         .into_live_program(TextWrite {
             moving,

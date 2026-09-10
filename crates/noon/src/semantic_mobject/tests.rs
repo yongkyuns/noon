@@ -9,14 +9,17 @@ fn aliases_and_copies_share_the_arena_but_only_aliases_share_state() {
     let mut copy = circle.copy_handle().unwrap();
     assert_eq!(circle.node_id(), alias.node_id());
     assert_ne!(circle.node_id(), copy.node_id());
-    assert!(Rc::ptr_eq(circle.store(), copy.store()));
+    assert!(Rc::ptr_eq(
+        circle.integration_store(),
+        copy.integration_store()
+    ));
     circle.shift(3.0, 1.0).unwrap();
     assert_eq!(alias.center().unwrap(), (3.0, 1.0));
     assert_eq!(copy.center().unwrap(), (0.0, 0.0));
     copy.set_fill_opacity(0.25).unwrap();
     assert_eq!(circle.fill_opacity().unwrap(), 0.0);
     let state = scene
-        .store()
+        .integration_store()
         .borrow()
         .semantic_object_state_checked(circle.node_id())
         .unwrap()
@@ -35,17 +38,23 @@ fn aliases_and_copies_share_the_arena_but_only_aliases_share_state() {
 fn no_op_edits_do_not_publish_and_invalid_compound_edits_roll_back() {
     let scene = Scene::new();
     let mut circle = scene.circle(1.0).unwrap();
-    let revision = scene.store().borrow().scene_revision();
+    let revision = scene.integration_store().borrow().scene_revision();
     circle.shift(0.0, 0.0).unwrap();
     circle.set_fill_opacity(0.0).unwrap();
-    assert_eq!(scene.store().borrow().scene_revision(), revision);
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        revision
+    );
     let before = circle.state().unwrap();
     let mut invalid = before.clone();
     invalid.transform.translation.x = 9.0;
     invalid.style.stroke_width = f64::NAN;
     assert!(circle.commit_state(invalid).is_err());
     assert_eq!(circle.state().unwrap(), before);
-    assert_eq!(scene.store().borrow().scene_revision(), revision);
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        revision
+    );
 }
 
 #[test]
@@ -62,7 +71,11 @@ fn become_matches_dimensions_in_manim_order_and_reuses_target_content() {
     let target_state = target.state().unwrap();
     let target_content = target_state.content;
     let source_id = source.node_id();
-    let resources = scene.store().borrow().geometry_resources().len();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
 
     source
         .become_handle(
@@ -83,13 +96,21 @@ fn become_matches_dimensions_in_manim_order_and_reuses_target_content() {
     assert!((source.width().unwrap() - 4.0).abs() < 1e-9);
     // Height matching occurs first; subsequent uniform width matching scales it again.
     assert!((source.height().unwrap() - 12.0).abs() < 1e-9);
-    assert_eq!(scene.store().borrow().geometry_resources().len(), resources);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
 }
 
 #[test]
 fn ellipse_layout_is_shared_by_queries_live_admission_and_become() {
     let mut scene = Scene::new();
-    let mut ellipse = Mobject::manim_ellipse(Rc::clone(scene.store()), 4.0, 1.5).unwrap();
+    let mut ellipse =
+        Mobject::manim_ellipse(Rc::clone(scene.integration_store()), 4.0, 1.5).unwrap();
     ellipse.rotate(std::f64::consts::PI / 6.0).unwrap();
     let expected_width = 3.663_013_982_517_412_6;
     let expected_height = 2.464_228_071_008_26;
@@ -106,7 +127,11 @@ fn ellipse_layout_is_shared_by_queries_live_admission_and_become() {
     );
 
     let mut source = scene.rectangle(6.0, 2.0).unwrap();
-    let resource_count = scene.store().borrow().geometry_resources().len();
+    let resource_count = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
     source
         .become_handle(
             &ellipse,
@@ -126,7 +151,11 @@ fn ellipse_layout_is_shared_by_queries_live_admission_and_become() {
         SemanticGeometryLayout::ManimEllipseControlHull
     );
     assert_eq!(
-        scene.store().borrow().geometry_resources().len(),
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
         resource_count
     );
 
@@ -152,8 +181,12 @@ fn become_stretch_is_atomic_for_zero_dimension_targets() {
         .path(VectorPath::new(), SemanticStyle::default())
         .unwrap();
     let before = source.state().unwrap();
-    let revision = scene.store().borrow().scene_revision();
-    let resources = scene.store().borrow().geometry_resources().len();
+    let revision = scene.integration_store().borrow().scene_revision();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
 
     assert!(source
         .become_handle(
@@ -165,8 +198,18 @@ fn become_stretch_is_atomic_for_zero_dimension_targets() {
         )
         .is_err());
     assert_eq!(source.state().unwrap(), before);
-    assert_eq!(scene.store().borrow().scene_revision(), revision);
-    assert_eq!(scene.store().borrow().geometry_resources().len(), resources);
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        revision
+    );
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
 }
 
 #[test]
@@ -183,7 +226,7 @@ fn foreign_operands_and_stale_handles_fail_without_mutation_or_query_panics() {
     assert!(circle.next_to_handle(&foreign, 1.0, 0.0, 0.25).is_err());
     assert_eq!(circle.state().unwrap(), before);
     scene
-        .store()
+        .integration_store()
         .borrow_mut()
         .remove_node(circle.node_id())
         .unwrap();
@@ -225,14 +268,18 @@ fn resource_geometry_is_store_owned_and_lowers_from_the_same_node() {
     assert!(session.execution_object_id(object.node_id()).is_some());
     assert_eq!(session.frame().objects.len(), 1);
     let foreign_scene = Scene::new();
-    assert!(Mobject::new(Rc::clone(foreign_scene.store()), object.state().unwrap()).is_err());
+    assert!(Mobject::new(
+        Rc::clone(foreign_scene.integration_store()),
+        object.state().unwrap()
+    )
+    .is_err());
 }
 
 #[test]
 fn typed_manim_geometry_preserves_semantic_precision_and_matcher_defaults() {
     let scene = Scene::new();
-    let before_revision = scene.store().borrow().scene_revision();
-    let before_nodes = scene.store().borrow().len();
+    let before_revision = scene.integration_store().borrow().scene_revision();
+    let before_nodes = scene.integration_store().borrow().len();
     let precise_x = 0.123_456_789_012_345;
     let mut path = ManimGeometryOptions::path(
         VectorPath::new()
@@ -242,11 +289,11 @@ fn typed_manim_geometry_preserves_semantic_precision_and_matcher_defaults() {
     .unwrap();
     path.set_translation(precise_x, -2.0).unwrap();
     path.set_fill(0.2, 0.4, 0.6, 0.75).unwrap();
-    let object = Mobject::from_manim_geometry(Rc::clone(scene.store()), path).unwrap();
+    let object = Mobject::from_manim_geometry(Rc::clone(scene.integration_store()), path).unwrap();
 
-    assert_eq!(scene.store().borrow().len(), before_nodes + 1);
+    assert_eq!(scene.integration_store().borrow().len(), before_nodes + 1);
     assert_eq!(
-        scene.store().borrow().scene_revision(),
+        scene.integration_store().borrow().scene_revision(),
         before_revision.checked_next().unwrap()
     );
     assert_eq!(object.state().unwrap().transform.translation.x, precise_x);
@@ -257,7 +304,7 @@ fn typed_manim_geometry_preserves_semantic_precision_and_matcher_defaults() {
 
     let point = Bounds2D64::point(3.0, -1.0);
     let surround = Mobject::from_manim_geometry(
-        Rc::clone(scene.store()),
+        Rc::clone(scene.integration_store()),
         ManimGeometryOptions::surrounding_rectangle(point, 0.25, 0.5, 0.1).unwrap(),
     )
     .unwrap();
@@ -267,7 +314,7 @@ fn typed_manim_geometry_preserves_semantic_precision_and_matcher_defaults() {
     assert_eq!(surround.fill_opacity().unwrap(), 0.0);
 
     let background = Mobject::from_manim_geometry(
-        Rc::clone(scene.store()),
+        Rc::clone(scene.integration_store()),
         ManimGeometryOptions::background_rectangle(point, 0.25, 0.5, 0.0, 0.4).unwrap(),
     )
     .unwrap();
@@ -280,9 +327,13 @@ fn typed_manim_geometry_preserves_semantic_precision_and_matcher_defaults() {
 #[test]
 fn invalid_typed_geometry_and_matcher_bounds_are_inert() {
     let scene = Scene::new();
-    let revision = scene.store().borrow().scene_revision();
-    let nodes = scene.store().borrow().len();
-    let resources = scene.store().borrow().geometry_resources().len();
+    let revision = scene.integration_store().borrow().scene_revision();
+    let nodes = scene.integration_store().borrow().len();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
 
     assert!(
         ManimGeometryOptions::path(VectorPath::new().move_to(Vec2::new(f32::NAN, 0.0))).is_err()
@@ -315,19 +366,35 @@ fn invalid_typed_geometry_and_matcher_bounds_are_inert() {
     )
     .unwrap();
     invalid_style.style.stroke_width = f64::NAN;
-    assert!(Mobject::from_manim_geometry(Rc::clone(scene.store()), invalid_style).is_err());
+    assert!(
+        Mobject::from_manim_geometry(Rc::clone(scene.integration_store()), invalid_style).is_err()
+    );
 
-    assert_eq!(scene.store().borrow().scene_revision(), revision);
-    assert_eq!(scene.store().borrow().len(), nodes);
-    assert_eq!(scene.store().borrow().geometry_resources().len(), resources);
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        revision
+    );
+    assert_eq!(scene.integration_store().borrow().len(), nodes);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
 }
 
 #[test]
 fn invalid_geometry_or_paint_does_not_allocate_or_publish() {
     let scene = Scene::new();
-    let revision = scene.store().borrow().scene_revision();
-    let nodes = scene.store().borrow().len();
-    let resources = scene.store().borrow().geometry_resources().len();
+    let revision = scene.integration_store().borrow().scene_revision();
+    let nodes = scene.integration_store().borrow().len();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
     let invalid_path = VectorPath::new().move_to(Vec2::new(f32::NAN, 0.0));
     assert!(scene.path(invalid_path, SemanticStyle::default()).is_err());
     let morph = VectorPath::new()
@@ -340,7 +407,7 @@ fn invalid_geometry_or_paint_does_not_allocate_or_publish() {
         GeometryRef::line(Vec2::ZERO, Vec2::new(f32::NAN, 0.0)),
     ] {
         assert!(Mobject::from_geometry(
-            Rc::clone(scene.store()),
+            Rc::clone(scene.integration_store()),
             geometry,
             SemanticStyle::default()
         )
@@ -356,9 +423,11 @@ fn invalid_geometry_or_paint_does_not_allocate_or_publish() {
             end: Vec2::new(f32::NAN, 0.0),
         },
     ] {
-        assert!(
-            Mobject::new(Rc::clone(scene.store()), SemanticObjectState::new(geometry)).is_err()
-        );
+        assert!(Mobject::new(
+            Rc::clone(scene.integration_store()),
+            SemanticObjectState::new(geometry)
+        )
+        .is_err());
     }
     let invalid_style = SemanticStyle {
         fill: Some(SemanticPaint::Solid(Color::rgba(f32::NAN, 1.0, 1.0, 1.0))),
@@ -369,10 +438,20 @@ fn invalid_geometry_or_paint_does_not_allocate_or_publish() {
         .is_err());
     let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
     state.style = invalid_style;
-    assert!(Mobject::new(Rc::clone(scene.store()), state).is_err());
-    assert_eq!(scene.store().borrow().scene_revision(), revision);
-    assert_eq!(scene.store().borrow().len(), nodes);
-    assert_eq!(scene.store().borrow().geometry_resources().len(), resources);
+    assert!(Mobject::new(Rc::clone(scene.integration_store()), state).is_err());
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        revision
+    );
+    assert_eq!(scene.integration_store().borrow().len(), nodes);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
 }
 
 #[test]
@@ -486,17 +565,22 @@ fn analytic_line_match_rejects_invalid_operands_before_mutation() {
 #[test]
 fn specialized_manim_geometry_uses_one_semantic_identity_per_constructor() {
     let scene = Scene::new();
-    let before = scene.store().borrow().scene_revision();
-    let before_nodes = scene.store().borrow().len();
+    let before = scene.integration_store().borrow().scene_revision();
+    let before_nodes = scene.integration_store().borrow().len();
 
-    let dot = Mobject::manim_dot(Rc::clone(scene.store()), 1.25, -0.75, 0.08).unwrap();
-    let triangle = Mobject::manim_triangle(Rc::clone(scene.store())).unwrap();
-    let elbow =
-        Mobject::manim_elbow(Rc::clone(scene.store()), 0.2, std::f64::consts::FRAC_PI_4).unwrap();
+    let dot = Mobject::manim_dot(Rc::clone(scene.integration_store()), 1.25, -0.75, 0.08).unwrap();
+    let triangle = Mobject::manim_triangle(Rc::clone(scene.integration_store())).unwrap();
+    let elbow = Mobject::manim_elbow(
+        Rc::clone(scene.integration_store()),
+        0.2,
+        std::f64::consts::FRAC_PI_4,
+    )
+    .unwrap();
     let rounded =
-        Mobject::manim_rounded_rectangle(Rc::clone(scene.store()), 4.0, 2.0, 0.5).unwrap();
+        Mobject::manim_rounded_rectangle(Rc::clone(scene.integration_store()), 4.0, 2.0, 0.5)
+            .unwrap();
     let annular = Mobject::manim_annular_sector(
-        Rc::clone(scene.store()),
+        Rc::clone(scene.integration_store()),
         1.0,
         2.0,
         std::f64::consts::FRAC_PI_2,
@@ -507,7 +591,7 @@ fn specialized_manim_geometry_uses_one_semantic_identity_per_constructor() {
     )
     .unwrap();
     let sector = Mobject::manim_sector(
-        Rc::clone(scene.store()),
+        Rc::clone(scene.integration_store()),
         1.0,
         std::f64::consts::FRAC_PI_2,
         0.0,
@@ -516,10 +600,19 @@ fn specialized_manim_geometry_uses_one_semantic_identity_per_constructor() {
         0.0,
     )
     .unwrap();
-    let annulus = Mobject::manim_annulus(Rc::clone(scene.store()), 1.0, 2.0, 9, 0.0, 0.0).unwrap();
-    let dashed =
-        Mobject::manim_dashed_line(Rc::clone(scene.store()), -1.0, 0.0, 1.0, 0.0, 0.05, 0.5)
+    let annulus =
+        Mobject::manim_annulus(Rc::clone(scene.integration_store()), 1.0, 2.0, 9, 0.0, 0.0)
             .unwrap();
+    let dashed = Mobject::manim_dashed_line(
+        Rc::clone(scene.integration_store()),
+        -1.0,
+        0.0,
+        1.0,
+        0.0,
+        0.05,
+        0.5,
+    )
+    .unwrap();
     let underline = Mobject::manim_underline(&rounded, 0.25).unwrap();
 
     assert_eq!(dot.center().unwrap(), (1.25, -0.75));
@@ -538,9 +631,9 @@ fn specialized_manim_geometry_uses_one_semantic_identity_per_constructor() {
             Some(StoredGeometry::Resource(_))
         ));
     }
-    assert_eq!(scene.store().borrow().len(), before_nodes + 9);
+    assert_eq!(scene.integration_store().borrow().len(), before_nodes + 9);
     assert_eq!(
-        scene.store().borrow().scene_revision().get(),
+        scene.integration_store().borrow().scene_revision().get(),
         before.get() + 9
     );
 }
@@ -602,9 +695,13 @@ fn specialized_options_admit_through_one_live_geometry_path_after_wait() {
 #[test]
 fn invalid_specialized_geometry_does_not_allocate_or_publish() {
     let scene = Scene::new();
-    let before_revision = scene.store().borrow().scene_revision();
-    let before_nodes = scene.store().borrow().len();
-    let before_resources = scene.store().borrow().geometry_resources().len();
+    let before_revision = scene.integration_store().borrow().scene_revision();
+    let before_nodes = scene.integration_store().borrow().len();
+    let before_resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
 
     assert!(ManimGeometryOptions::rounded_rectangle(0.0, 2.0, 0.5).is_err());
     assert!(ManimGeometryOptions::sector(1.0, 1.0, 0.0, 1, 0.0, 0.0).is_err());
@@ -620,8 +717,35 @@ fn invalid_specialized_geometry_does_not_allocate_or_publish() {
     )
     .is_err());
 
-    let store = scene.store().borrow();
+    let store = scene.integration_store().borrow();
     assert_eq!(store.scene_revision(), before_revision);
     assert_eq!(store.len(), before_nodes);
     assert_eq!(store.geometry_resources().len(), before_resources);
+}
+
+#[test]
+fn content_validation_retains_missing_resource_identity_without_mutation() {
+    let store = SemanticStore::new();
+    let geometry = noon_core::GeometryResourceHandle {
+        arena: 0,
+        id: noon_core::GeometryId::new(42),
+        version: 7,
+    };
+    let text = noon_core::TextResourceHandle {
+        arena: 0,
+        id: noon_core::TextResourceId::new(43),
+        version: 8,
+    };
+    let before = store.scene_revision();
+    assert_eq!(
+        validate_content(&store, StoredGeometry::Resource(geometry).into()),
+        Err(AuthoringError::MissingGeometryResource(geometry))
+    );
+    assert_eq!(
+        validate_content(&store, SemanticObjectContent::Text(text)),
+        Err(AuthoringError::MissingTextResource(text))
+    );
+    assert_eq!(store.scene_revision(), before);
+    assert!(store.geometry_resources().is_empty());
+    assert!(store.text_resources().is_empty());
 }

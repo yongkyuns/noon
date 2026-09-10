@@ -1118,23 +1118,26 @@ const fn type_bug(owner: SignalId, operation: &'static str) -> ReactiveError {
 
 #[cfg(test)]
 mod tests {
-    use crate::{GeometryRef, Property, SemanticScene};
+    use crate::{ObjectId, Property, ReactiveGraphDefinition};
 
     use super::*;
 
     #[test]
     fn lowers_scalar_vector_expression_to_typed_flat_ir() {
-        let mut scene = SemanticScene::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let scalar = scene.add_input(2.0_f32);
-        let vector = scene.add_input(Vec2::new(3.0, 4.0));
-        let result = scene.add_derived(ReactiveExpr::Mul(
+        let mut graph = ReactiveGraphDefinition::new();
+        let object = ObjectId::new(0);
+        let scalar = graph.add_input(2.0_f32);
+        let vector = graph.add_input(Vec2::new(3.0, 4.0));
+        let result = graph.add_derived(ReactiveExpr::Mul(
             Box::new(ReactiveExpr::signal(scalar)),
             Box::new(ReactiveExpr::signal(vector)),
         ));
-        scene.bind(result, object, Property::Position);
+        graph.bind(result, object, Property::Position);
 
-        let program = scene.compile_reactive().unwrap().into_compute().unwrap();
+        let program = ReactiveProgram::compile_for_execution_domain([object], [], &graph)
+            .unwrap()
+            .into_compute()
+            .unwrap();
         let kernel = program.kernel(result).expect("derived signal has a kernel");
         assert_eq!(kernel.output_kind(), ComputeValueKind::Vec2);
         assert_eq!(kernel.instructions().len(), 3);
@@ -1160,10 +1163,10 @@ mod tests {
     fn dense_vm_matches_reference_interpreter_on_generated_graphs() {
         for seed in 1_u64..=24 {
             let mut random = seed;
-            let mut scene = SemanticScene::new();
-            let object = scene.add(GeometryRef::circle(1.0));
-            let first = scene.add_input(0.25_f32);
-            let second = scene.add_input(-0.75_f32);
+            let mut graph = ReactiveGraphDefinition::new();
+            let object = ObjectId::new(0);
+            let first = graph.add_input(0.25_f32);
+            let second = graph.add_input(-0.75_f32);
             let mut signals = vec![first, second];
 
             for _ in 0..32 {
@@ -1186,11 +1189,12 @@ mod tests {
                     4 => ReactiveExpr::Sin(Box::new(ReactiveExpr::signal(lhs))),
                     _ => ReactiveExpr::Cos(Box::new(ReactiveExpr::signal(lhs))),
                 };
-                signals.push(scene.add_derived(expression));
+                signals.push(graph.add_derived(expression));
             }
-            scene.bind(*signals.last().unwrap(), object, Property::Rotation);
+            graph.bind(*signals.last().unwrap(), object, Property::Rotation);
 
-            let program = scene.compile_reactive().expect("generated graph compiles");
+            let program = ReactiveProgram::compile_for_execution_domain([object], [], &graph)
+                .expect("generated graph compiles");
             let mut reference = program.instantiate();
             let mut compute = program.into_compute().unwrap().instantiate();
 
@@ -1214,21 +1218,20 @@ mod tests {
 
     #[test]
     fn dense_vm_preserves_change_stopping() {
-        let mut scene = SemanticScene::new();
-        let object = scene.add(GeometryRef::circle(1.0));
-        let input = scene.add_input(1.0_f32);
-        let zero = scene.add_derived(ReactiveExpr::Mul(
+        let mut graph = ReactiveGraphDefinition::new();
+        let object = ObjectId::new(0);
+        let input = graph.add_input(1.0_f32);
+        let zero = graph.add_derived(ReactiveExpr::Mul(
             Box::new(ReactiveExpr::signal(input)),
             Box::new(ReactiveExpr::scalar(0.0)),
         ));
-        let downstream = scene.add_derived(ReactiveExpr::Add(
+        let downstream = graph.add_derived(ReactiveExpr::Add(
             Box::new(ReactiveExpr::signal(zero)),
             Box::new(ReactiveExpr::scalar(1.0)),
         ));
-        scene.bind(downstream, object, Property::Opacity);
+        graph.bind(downstream, object, Property::Opacity);
 
-        let mut state = scene
-            .compile_reactive()
+        let mut state = ReactiveProgram::compile_for_execution_domain([object], [], &graph)
             .unwrap()
             .into_compute()
             .unwrap()
@@ -1241,15 +1244,14 @@ mod tests {
 
     #[test]
     fn prepared_batch_stages_all_inputs_before_one_shared_closure_evaluation() {
-        let mut scene = SemanticScene::new();
-        let first = scene.add_input(0.0_f32);
-        let second = scene.add_input(0.0_f32);
-        let sum = scene.add_derived(ReactiveExpr::Add(
+        let mut graph = ReactiveGraphDefinition::new();
+        let first = graph.add_input(0.0_f32);
+        let second = graph.add_input(0.0_f32);
+        let sum = graph.add_derived(ReactiveExpr::Add(
             Box::new(ReactiveExpr::signal(first)),
             Box::new(ReactiveExpr::signal(second)),
         ));
-        let mut state = scene
-            .compile_reactive()
+        let mut state = ReactiveProgram::compile_for_execution_domain([], [], &graph)
             .unwrap()
             .into_compute()
             .unwrap()
@@ -1269,21 +1271,20 @@ mod tests {
 
     #[test]
     fn prepared_batch_failure_restores_values_and_scheduler_scratch() {
-        let mut scene = SemanticScene::new();
-        let first = scene.add_input(1.0_f32);
-        let second = scene.add_input(1.0_f32);
-        let sum = scene.add_derived(ReactiveExpr::Add(
+        let mut graph = ReactiveGraphDefinition::new();
+        let first = graph.add_input(1.0_f32);
+        let second = graph.add_input(1.0_f32);
+        let sum = graph.add_derived(ReactiveExpr::Add(
             Box::new(ReactiveExpr::signal(first)),
             Box::new(ReactiveExpr::signal(second)),
         ));
-        let square = scene.add_derived(ReactiveExpr::Mul(
+        let square = graph.add_derived(ReactiveExpr::Mul(
             Box::new(ReactiveExpr::signal(sum)),
             Box::new(ReactiveExpr::signal(sum)),
         ));
         let downstream =
-            scene.add_derived(ReactiveExpr::Sin(Box::new(ReactiveExpr::signal(square))));
-        let mut state = scene
-            .compile_reactive()
+            graph.add_derived(ReactiveExpr::Sin(Box::new(ReactiveExpr::signal(square))));
+        let mut state = ReactiveProgram::compile_for_execution_domain([], [], &graph)
             .unwrap()
             .into_compute()
             .unwrap()
@@ -1319,9 +1320,12 @@ mod tests {
 
     #[test]
     fn prepared_batches_are_bound_to_one_compute_incarnation_and_revision() {
-        let mut scene = SemanticScene::new();
-        let input = scene.add_input(0.0_f32);
-        let program = scene.compile_reactive().unwrap().into_compute().unwrap();
+        let mut graph = ReactiveGraphDefinition::new();
+        let input = graph.add_input(0.0_f32);
+        let program = ReactiveProgram::compile_for_execution_domain([], [], &graph)
+            .unwrap()
+            .into_compute()
+            .unwrap();
         let mut first = program.clone().instantiate();
         let mut second = program.instantiate();
         let foreign = first
@@ -1347,9 +1351,8 @@ mod tests {
 
     #[test]
     fn prepared_enrollment_rejects_a_different_signal_without_mutation() {
-        let scene = SemanticScene::new();
-        let mut state = scene
-            .compile_reactive()
+        let graph = ReactiveGraphDefinition::new();
+        let mut state = ReactiveProgram::compile_for_execution_domain([], [], &graph)
             .unwrap()
             .into_compute()
             .unwrap()
@@ -1370,10 +1373,9 @@ mod tests {
 
     #[test]
     fn prepared_enrollment_rejects_an_existing_signal_without_mutation() {
-        let mut scene = SemanticScene::new();
-        let existing = scene.add_input(1.0_f32);
-        let mut state = scene
-            .compile_reactive()
+        let mut graph = ReactiveGraphDefinition::new();
+        let existing = graph.add_input(1.0_f32);
+        let mut state = ReactiveProgram::compile_for_execution_domain([], [], &graph)
             .unwrap()
             .into_compute()
             .unwrap()
@@ -1391,9 +1393,8 @@ mod tests {
 
     #[test]
     fn prepared_enrollment_batch_commits_two_inputs_at_one_revision() {
-        let scene = SemanticScene::new();
-        let mut state = scene
-            .compile_reactive()
+        let graph = ReactiveGraphDefinition::new();
+        let mut state = ReactiveProgram::compile_for_execution_domain([], [], &graph)
             .unwrap()
             .into_compute()
             .unwrap()
@@ -1416,9 +1417,8 @@ mod tests {
 
     #[test]
     fn enrollment_batch_rejects_duplicates_and_stale_preflight_without_mutation() {
-        let scene = SemanticScene::new();
-        let mut state = scene
-            .compile_reactive()
+        let graph = ReactiveGraphDefinition::new();
+        let mut state = ReactiveProgram::compile_for_execution_domain([], [], &graph)
             .unwrap()
             .into_compute()
             .unwrap()

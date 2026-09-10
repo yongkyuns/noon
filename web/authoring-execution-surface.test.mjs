@@ -12,7 +12,7 @@ test("authoring execution exposes only shared session attachment", () => {
 });
 
 test("explicit transport diagnostics cannot regain the deleted split retained surface", () => {
-  for (const method of ["startRetained", "switchToRetained", "rebuildRetained"]) {
+  for (const method of ["start", "applyPatchBatch", "startRetained", "switchToRetained", "rebuildRetained"]) {
     assert.equal(method in ExecutionWorkerClient.prototype, false, method);
   }
 });

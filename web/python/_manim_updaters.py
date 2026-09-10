@@ -15,8 +15,8 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 import noon as _base
+from _noon_errors import engine_await, raise_engine_error
 
-_INSTALLED = False
 _NEXT_SESSION_ID = 0
 _TRACKED_MOBJECTS: list[_base.Mobject] = []
 _CANONICAL_SESSIONS: dict[int, "_CanonicalCallbackSession"] = {}
@@ -25,23 +25,11 @@ _ACTIVE_CANONICAL_CONTEXT: ContextVar["_CanonicalCallbackContext | None"] = Cont
     "noon_active_canonical_callback", default=None
 )
 
-_ORIGINAL_CURRENT_RAW = _base.Mobject._current_raw
-_ORIGINAL_APPLY = _base.Mobject._apply
-_ORIGINAL_GET_CENTER = _base.Mobject.get_center
-_ORIGINAL_SHIFT = _base.Mobject.shift
-_ORIGINAL_MOVE_TO = _base.Mobject.move_to
-_ORIGINAL_SET_X = _base.Mobject.set_x
-_ORIGINAL_SET_Y = _base.Mobject.set_y
-_ORIGINAL_SCALE = _base.Mobject.scale
-_ORIGINAL_ROTATE = _base.Mobject.rotate
-_ORIGINAL_SET_COLOR = _base.Mobject.set_color
-_ORIGINAL_SET_FILL = _base.Mobject.set_fill
-_ORIGINAL_SET_STROKE = _base.Mobject.set_stroke
-_ORIGINAL_SET_OPACITY = _base.Mobject.set_opacity
-_ORIGINAL_VMOBJECT_SET_COLOR: Callable[..., _base.Mobject] | None = None
-_ORIGINAL_VMOBJECT_SET_FILL: Callable[..., _base.Mobject] | None = None
-_ORIGINAL_VMOBJECT_SET_STROKE: Callable[..., _base.Mobject] | None = None
-_ORIGINAL_VMOBJECT_SET_OPACITY: Callable[..., _base.Mobject] | None = None
+
+
+def _coordinate_operations():
+    import _manim_shared_geometry
+    return _manim_shared_geometry
 
 
 def _track(mobject: _base.Mobject) -> None:
@@ -106,7 +94,7 @@ def _registration_end_time(
 
 def _canonical_context(mobject: _base.Mobject) -> object | None:
     scene = getattr(mobject, "_scene", None)
-    if scene is None or getattr(scene, "_legacy_geometry_materialized", False):
+    if scene is None:
         return None
     return getattr(scene, "_canonical_authoring_context", None)
 
@@ -547,6 +535,7 @@ class _CanonicalCallbackContext:
         }
         self._rows: dict[tuple[int, int], _PhasePropertyRow] = {}
         self._signals: dict[tuple[int, int], float] = {}
+        self._prefetch_errors: dict[tuple[int, int], Exception] = {}
         self._next_read_request_id = 0
         self._writes: list[dict[str, Any]] = []
 
@@ -587,11 +576,70 @@ class _CanonicalCallbackContext:
             )
             result = json.loads(str(result_json))
         except Exception as error:
-            raise RuntimeError(f"canonical callback sparse read failed: {error}") from None
-        expected_kind = "scalar" if kind == "scalar_signal" else "object"
+            raise_engine_error(error, operation="callback.read")
+        expected_kind = "scalar" if kind == "scalar_signal" else kind
         if not isinstance(result, dict) or result.get("kind") != expected_kind:
             raise RuntimeError("canonical callback sparse read returned the wrong typed value")
         return result
+
+    async def _read_scalar_async(self, key: tuple[int, int]) -> float:
+        """Read the same Rust-pinned phase without suspending a Python stack."""
+        from js import noonReadSemanticContinuationCallback
+
+        request_id = self._next_read_request_id
+        self._next_read_request_id += 1
+        request = {"request_id": request_id, "kind": "scalar_signal", "node": _phase_node_json(key)}
+        raw = await engine_await(noonReadSemanticContinuationCallback(
+            self._authoring_context,
+            json.dumps(self.token, separators=(",", ":")),
+            json.dumps(request, separators=(",", ":")),
+        ), operation="callback.read")
+        result = json.loads(str(raw))
+        if not isinstance(result, dict) or result.get("kind") != "scalar":
+            raise RuntimeError("canonical callback scalar prefetch returned the wrong typed value")
+        return _phase_number("scalar callback read", result.get("value"))
+
+    async def prefetch_captured_scalars(self, callbacks, tracker_type) -> None:
+        """Resolve direct Python captures, never invoke callbacks or user getters.
+
+        These are optional phase-local read hints, not authored signal values or
+        a callback dependency graph. Rust validates every read against the pinned
+        token. Unused/invalid speculative reads must not change callback behavior;
+        defer their errors until an actual scalar read. Dynamic misses keep the
+        existing suspended-read contract instead of replaying callback effects.
+        """
+        from types import FunctionType, MethodType
+
+        seen_functions = set()
+        for callback in callbacks:
+            function = callback.__func__ if isinstance(callback, MethodType) else callback
+            if not isinstance(function, FunctionType) or id(function) in seen_functions:
+                continue
+            seen_functions.add(id(function))
+            values = list(function.__defaults__ or ())
+            values.extend((function.__kwdefaults__ or {}).values())
+            for cell in function.__closure__ or ():
+                try:
+                    values.append(cell.cell_contents)
+                except ValueError:
+                    pass
+            values.extend(function.__globals__[name] for name in function.__code__.co_names
+                          if name in function.__globals__)
+            for value in values:
+                if type(value) is not tracker_type:
+                    continue
+                if inspect.getattr_static(value, "_canonical_context", None) is not self._authoring_context:
+                    continue
+                handle = inspect.getattr_static(value, "_canonical_handle", None)
+                if handle is None or isinstance(handle, property):
+                    continue
+                key = (int(handle.semanticSlot), int(handle.semanticGeneration))
+                if key in self._signals or key in self._prefetch_errors:
+                    continue
+                try:
+                    self._signals[key] = await self._read_scalar_async(key)
+                except Exception as error:
+                    self._prefetch_errors[key] = error
 
     def _object_item(self, key: tuple[int, int]) -> dict[str, Any]:
         try:
@@ -608,6 +656,8 @@ class _CanonicalCallbackContext:
         cached = self._signals.get(key)
         if cached is not None:
             return cached
+        if key in self._prefetch_errors:
+            raise_engine_error(self._prefetch_errors[key], operation="callback.read")
         result = self._read("scalar_signal", key)
         value = _phase_number("scalar callback read", result.get("value"))
         self._signals[key] = value
@@ -621,6 +671,93 @@ class _CanonicalCallbackContext:
         row = _PhasePropertyRow.from_wire(self._object_item(key))
         self._rows[key] = row
         return key, row
+
+    def _family_rows(self, family):
+        # Rust selects the unique leaves and reads them against this phase token
+        # in one request. Python only retains the permitted callback read view.
+        from _noon_errors import engine_call
+        revision = str(self.token["publication"]["scene_revision"])
+        keys = [tuple(int(part) for part in str(key).split(":")) for key in
+                engine_call(self._operations.callbackFamilyKeys, family, revision)]
+        if any(node not in self._rows and node not in self._frame_items for node in keys):
+            family_key = (int(family.semanticSlot), int(family.semanticGeneration))
+            result = self._read("family", family_key)
+            items = result.get("objects")
+            if not isinstance(items, list):
+                raise RuntimeError("family callback read did not return object rows")
+            received = {_phase_node_key(item["node"]): item for item in items}
+            if set(received) != set(keys):
+                raise RuntimeError("family callback read returned different membership")
+        else:
+            received = self._frame_items
+        rows = {node: self._rows.get(node) or _PhasePropertyRow.from_wire(received[node])
+                for node in keys}
+        return rows
+
+    def paint_family(self, family, operation, arguments):
+        from _noon_errors import engine_call
+        rows = self._family_rows(family)
+        # Row selection preserves preceding writes, including scalar leaf edits.
+        styles = [[*node, row.style.to_wire()] for node, row in rows.items()]
+        if operation == "Color":
+            paint = (True, *arguments, None, None)
+        elif operation == "Fill":
+            paint = (*arguments[:5], None, arguments[5])
+        elif operation == "Stroke":
+            paint = arguments
+        else:
+            paint = (False, 0.0, 0.0, 0.0, 1.0, None, arguments[0])
+        raw = engine_call(self._operations.callbackFamilyPaint, family,
+            str(self.token["publication"]["scene_revision"]), operation,
+            json.dumps(styles, separators=(",", ":")), *paint)
+        # Decode and validate every returned row before exposing any writes, so
+        # user code may catch a failure without a partially changed family.
+        changes = []
+        for slot, generation, style in json.loads(str(raw)):
+            node = (slot, generation)
+            if node not in rows:
+                raise RuntimeError("family paint returned an unread semantic node")
+            changes.append((node, _PhaseStyle.from_wire(style)))
+        self._rows.update(rows)
+        for node, style in changes:
+            row = rows[node]
+            before = row.style
+            row.style = style
+            if ((style.stroke is None) != (before.stroke is None) or
+                    (style.stroke is not None and style.stroke_width != before.stroke_width)):
+                row.invalidate_bounds()
+            self.style_changed(node, before, row)
+
+    def shift_family(self, family, offset):
+        from _noon_errors import engine_call
+        rows = self._family_rows(family)
+        def bounds_wire(row):
+            if row.bounds is None or not row.bounds_translation_only:
+                return None
+            x0, y0, x1, y1 = row.bounds
+            return {"min": {"x": x0, "y": y0}, "max": {"x": x1, "y": y1}}
+        wire = [[*node, row.transform.to_wire(), bounds_wire(row)] for node, row in rows.items()]
+        raw = engine_call(self._operations.callbackFamilyShift, family,
+            str(self.token["publication"]["scene_revision"]),
+            json.dumps(wire, separators=(",", ":")), offset.x, offset.y,
+            operation="Group.shift")
+        # Decode the complete Rust result before exposing any property/write.
+        changes = []
+        for slot, generation, transform, bounds in json.loads(str(raw)):
+            node = (slot, generation)
+            if node not in rows:
+                raise RuntimeError("family translation returned an unread semantic node")
+            translated = _PhasePropertyRow.from_wire({"transform": transform,
+                "style": rows[node].style.to_wire(), "bounds": bounds})
+            changes.append((node, translated))
+        self._rows.update(rows)
+        for node, translated in changes:
+            row = rows[node]
+            before = row.transform
+            row.transform = translated.transform
+            row.bounds = translated.bounds
+            row.bounds_translation_only = translated.bounds_translation_only
+            self.transform_changed(node, before, row)
 
     def transform_changed(
         self, key: tuple[int, int], before: _PhaseTransform, row: _PhasePropertyRow
@@ -675,6 +812,15 @@ class _CanonicalCallbackContext:
             _phase_callback_paint_color(result, "fill"),
             _phase_callback_paint_color(result, "stroke"),
         )
+
+    def paint_set_opacity(self, style: _PhaseStyle, opacity: float):
+        from _noon_errors import engine_call
+        result = engine_call(self._operations.callbackPaintSetOpacity,
+            *_phase_optional_color_args(style.fill),
+            *_phase_optional_color_args(style.stroke), opacity,
+            operation="VMobject.set_opacity")
+        return (_phase_callback_paint_color(result, "fill"),
+                _phase_callback_paint_color(result, "stroke"))
 
     def paint_set_fill(
         self,
@@ -765,6 +911,11 @@ def canonical_line_match(source: _base.Mobject, target: object) -> bool:
     row.invalidate_bounds()
     context.transform_changed(key, before, row)
     return True
+
+
+def canonical_callback_phase_active() -> bool:
+    """Whether this invocation is inside the existing ordered callback phase."""
+    return _ACTIVE_CANONICAL_CONTEXT.get() is not None
 
 
 def canonical_callback_scalar_value(scene: _base.Scene, handle: object) -> float:
@@ -886,7 +1037,7 @@ def _canonical_current_raw(self: _base.Mobject):
         raise NotImplementedError(
             "canonical callback raw geometry access is not supported; use property operations"
         )
-    return _ORIGINAL_CURRENT_RAW(self)
+    return _base._semantic_operations()._current_raw(self)
 
 
 def _canonical_apply(self: _base.Mobject, raw: object) -> _base.Mobject:
@@ -894,13 +1045,13 @@ def _canonical_apply(self: _base.Mobject, raw: object) -> _base.Mobject:
         raise NotImplementedError(
             "canonical callbacks support property operations only; raw replacement is unsupported"
         )
-    return _ORIGINAL_APPLY(self, raw)
+    return _base._semantic_operations()._apply(self, raw)
 
 
 def _canonical_get_center(self: _base.Mobject) -> _base.Vec2:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_GET_CENTER(self)
+        return _base._semantic_operations()._get_center(self)
     _, _, row = value
     return row.center()
 
@@ -908,7 +1059,7 @@ def _canonical_get_center(self: _base.Mobject) -> _base.Vec2:
 def _canonical_shift(self: _base.Mobject, direction: object) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_SHIFT(self, direction)
+        return _base._semantic_operations()._shift(self, direction)
     context, key, row = value
     before = row.transform
     row.shift(_base._as_vec2(direction))
@@ -919,25 +1070,29 @@ def _canonical_shift(self: _base.Mobject, direction: object) -> _base.Mobject:
 def _canonical_move_to(self: _base.Mobject, point: object, *args: object, **kwargs: object) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_MOVE_TO(self, point, *args, **kwargs)
+        return _base._semantic_operations()._move_to(self, point, *args, **kwargs)
     if args or kwargs:
         raise NotImplementedError("callback move_to currently supports center point placement only")
     _, _, row = value
     return _canonical_shift(self, _base._as_vec2(point) - row.center())
 
 
-def _canonical_set_x(self: _base.Mobject, x: float) -> _base.Mobject:
+def _canonical_set_x(self: _base.Mobject, x: float, direction: object = _base.ORIGIN) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_SET_X(self, x)
+        return _coordinate_operations()._set_x(self, x, direction)
+    if _base._as_vec2(direction) != _base.ORIGIN:
+        raise NotImplementedError("callback coordinate placement supports center coordinates only")
     _, _, row = value
     return _canonical_shift(self, _base.Vec2(float(x) - row.center().x, 0.0))
 
 
-def _canonical_set_y(self: _base.Mobject, y: float) -> _base.Mobject:
+def _canonical_set_y(self: _base.Mobject, y: float, direction: object = _base.ORIGIN) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_SET_Y(self, y)
+        return _coordinate_operations()._set_y(self, y, direction)
+    if _base._as_vec2(direction) != _base.ORIGIN:
+        raise NotImplementedError("callback coordinate placement supports center coordinates only")
     _, _, row = value
     return _canonical_shift(self, _base.Vec2(0.0, float(y) - row.center().y))
 
@@ -947,13 +1102,13 @@ def _canonical_scale(self: _base.Mobject, *args: object, **kwargs: object) -> _b
         raise NotImplementedError(
             "canonical callback scale is not supported; use shared semantic operations"
         )
-    return _ORIGINAL_SCALE(self, *args, **kwargs)
+    return _base._semantic_operations()._scale(self, *args, **kwargs)
 
 
 def _canonical_rotate(self: _base.Mobject, *args: object, **kwargs: object) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_ROTATE(self, *args, **kwargs)
+        return _base._semantic_operations()._rotate(self, *args, **kwargs)
     context, key, row = value
     if not args or len(args) > 2:
         raise TypeError("canonical callback rotate expects angle and optional axis")
@@ -975,7 +1130,7 @@ def _canonical_rotate(self: _base.Mobject, *args: object, **kwargs: object) -> _
     import _manim_compat as compat
 
     angle = compat._rotation_angle_2d(args[0], axis)
-    pivot = compat._as_vec2(about_point)
+    pivot = _base._as_vec2(about_point)
     before = row.transform
     row.transform = context.rotate_transform_about_point(before, angle, pivot)
     row.invalidate_bounds()
@@ -985,7 +1140,7 @@ def _canonical_rotate(self: _base.Mobject, *args: object, **kwargs: object) -> _
 def _canonical_set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_SET_COLOR(self, color)
+        return _base._semantic_operations()._set_color(self, color)
     context, key, row = value
     color_value = _phase_color("set_color", color.to_ir())
     assert color_value is not None
@@ -1001,7 +1156,7 @@ def _canonical_set_fill(
 ) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_SET_FILL(self, color, opacity)
+        return _base._semantic_operations()._set_fill(self, color, opacity)
     context, key, row = value
     before = row.style
     fill = None if color is None else _phase_color("set_fill", color.to_ir())
@@ -1018,7 +1173,7 @@ def _canonical_set_stroke(
 ) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_SET_STROKE(self, color, width)
+        return _base._semantic_operations()._set_stroke(self, color, width)
     context, key, row = value
     if width is not None:
         raise NotImplementedError(
@@ -1042,7 +1197,7 @@ def _canonical_set_stroke(
 def _canonical_set_opacity(self: _base.Mobject, opacity: float) -> _base.Mobject:
     value = _canonical_row(self)
     if value is None:
-        return _ORIGINAL_SET_OPACITY(self, opacity)
+        return _base._semantic_operations()._set_object_opacity(self, opacity)
     context, key, row = value
     before = row.style
     row.style = replace(row.style, opacity=float(opacity))
@@ -1057,11 +1212,10 @@ def _canonical_vmobject_set_color(
 ) -> _base.Mobject:
     if _canonical_phase_context(self) is not None:
         del family
-        from _manim_phase_b import _as_color
+        from _manim_compat import _as_color
 
         return _canonical_set_color(self, _as_color("color", color))
-    assert _ORIGINAL_VMOBJECT_SET_COLOR is not None
-    return _ORIGINAL_VMOBJECT_SET_COLOR(self, color, family=family)
+    return _base._semantic_operations()._set_vmobject_color(self, color, family=family)
 
 
 def _canonical_vmobject_set_fill(
@@ -1073,12 +1227,11 @@ def _canonical_vmobject_set_fill(
     if _canonical_phase_context(self) is not None:
         del family
         if color is not None:
-            from _manim_phase_b import _as_color
+            from _manim_compat import _as_color
 
             color = _as_color("fill color", color)
         return _canonical_set_fill(self, color, opacity)
-    assert _ORIGINAL_VMOBJECT_SET_FILL is not None
-    return _ORIGINAL_VMOBJECT_SET_FILL(self, color=color, opacity=opacity, family=family)
+    return _base._semantic_operations()._set_fill(self, color=color, opacity=opacity, family=family)
 
 
 def _canonical_vmobject_set_stroke(
@@ -1095,12 +1248,11 @@ def _canonical_vmobject_set_stroke(
                 "canonical callback stroke opacity is not supported; use set_opacity"
             )
         if color is not None:
-            from _manim_phase_b import _as_color
+            from _manim_compat import _as_color
 
             color = _as_color("stroke color", color)
         return _canonical_set_stroke(self, color, width)
-    assert _ORIGINAL_VMOBJECT_SET_STROKE is not None
-    return _ORIGINAL_VMOBJECT_SET_STROKE(
+    return _base._semantic_operations()._set_stroke(
         self, color=color, width=width, opacity=opacity, family=family
     )
 
@@ -1110,16 +1262,35 @@ def _canonical_vmobject_set_opacity(
     opacity: float,
     family: bool = True,
 ) -> _base.Mobject:
-    if _canonical_phase_context(self) is not None:
+    context = _canonical_phase_context(self)
+    if context is not None:
         del family
-        from _manim_phase_b import _opacity
+        from _manim_compat import _opacity
 
-        return _canonical_set_opacity(self, _opacity("opacity", opacity))
-    assert _ORIGINAL_VMOBJECT_SET_OPACITY is not None
-    return _ORIGINAL_VMOBJECT_SET_OPACITY(self, opacity, family=family)
+        opacity = _opacity("opacity", opacity)
+        key, row = context.row(self)
+        before = row.style
+        fill, stroke = context.paint_set_opacity(before, opacity)
+        row.style = replace(before, fill=fill, stroke=stroke)
+        context.style_changed(key, before, row)
+        return self
+    return _base._semantic_operations()._set_opacity(self, opacity, family=family)
 
 
-def run_canonical_callback_phase(session_id: int, frame: dict[str, Any]) -> str:
+async def prepare_canonical_callback_phase(session_id: int, frame: dict[str, Any]):
+    """Prepare bounded capture reads before executing this callback phase once."""
+    session = _CANONICAL_SESSIONS[int(session_id)]
+    context = _CanonicalCallbackContext(frame, session.context)
+    from _manim_reactive import ValueTracker
+
+    callbacks = [session.callbacks[int(item["callback_id"])] for item in frame.get("invocations", [])]
+    await context.prefetch_captured_scalars(callbacks, ValueTracker)
+    return context
+
+
+def run_canonical_callback_phase(
+    session_id: int, frame: dict[str, Any], *, prepared_context=None
+) -> str:
     """Invoke one Rust-selected callback phase and return only effective writes.
 
     The compiler supplies invocation order and semantic targets. Python neither
@@ -1133,18 +1304,14 @@ def run_canonical_callback_phase(session_id: int, frame: dict[str, Any]) -> str:
     except KeyError as error:
         raise ValueError(f"unknown canonical Noon updater session {session_id}") from error
 
-    context = _CanonicalCallbackContext(frame, session.context)
+    context = prepared_context or _CanonicalCallbackContext(frame, session.context)
+    if context.token != frame["token"] or context._authoring_context is not session.context:
+        raise RuntimeError("prepared canonical callback reads belong to a different phase")
     scene_key = id(session.scene)
     if scene_key in _ACTIVE_CONTEXTS:
         raise RuntimeError("nested Noon callback phases are not supported")
     _ACTIVE_CONTEXTS[scene_key] = context
     context_token = _ACTIVE_CANONICAL_CONTEXT.set(context)
-    # A canonical phase currently has no typed signal read-set. Enter an empty
-    # signal scope so ValueTracker reads fail explicitly instead of falling back
-    # to the wrapper's authored scalar value.
-    import _manim_reactive as reactive
-
-    reactive._enter_callback_signal_values({"signals": []})
     try:
         for invocation in frame.get("invocations", []):
             if not isinstance(invocation, dict):
@@ -1175,7 +1342,6 @@ def run_canonical_callback_phase(session_id: int, frame: dict[str, Any]) -> str:
                 ) from error
             _invoke(callback, mobject, context.delta_time)
     finally:
-        reactive._leave_callback_signal_values()
         _ACTIVE_CANONICAL_CONTEXT.reset(context_token)
         _ACTIVE_CONTEXTS.pop(scene_key, None)
 
@@ -1193,51 +1359,3 @@ def _json_phase(value: object) -> str:
 
 def release_session(session_id: int) -> None:
     _CANONICAL_SESSIONS.pop(int(session_id), None)
-
-
-def install() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _base.Mobject.add_updater = add_updater
-    _base.Mobject.remove_updater = remove_updater
-    _base.Mobject.clear_updaters = clear_updaters
-    _base.Mobject.get_updaters = get_updaters
-    _base.Mobject.has_updaters = has_updaters
-    _base.Mobject._current_raw = _canonical_current_raw
-    _base.Mobject._apply = _canonical_apply
-    _base.Mobject.get_center = _canonical_get_center
-    _base.Mobject.shift = _canonical_shift
-    _base.Mobject.move_to = _canonical_move_to
-    _base.Mobject.set_x = _canonical_set_x
-    _base.Mobject.set_y = _canonical_set_y
-    _base.Mobject.scale = _canonical_scale
-    _base.Mobject.rotate = _canonical_rotate
-    _base.Mobject.set_color = _canonical_set_color
-    _base.Mobject.set_fill = _canonical_set_fill
-    _base.Mobject.set_stroke = _canonical_set_stroke
-    _base.Mobject.set_opacity = _canonical_set_opacity
-    # Semantic-handle installation gives VMobject its own final public style
-    # methods. Reinstall the phase dispatch at that public boundary so it cannot
-    # fall through to raw snapshot mutation while a canonical callback is active.
-    import _manim_compat as _compat
-
-    global _ORIGINAL_VMOBJECT_SET_COLOR
-    global _ORIGINAL_VMOBJECT_SET_FILL
-    global _ORIGINAL_VMOBJECT_SET_STROKE
-    global _ORIGINAL_VMOBJECT_SET_OPACITY
-    # Inherited methods already use the Mobject phase dispatcher above. Wrap
-    # only VMobject's own overrides, preserving the inherited base signatures.
-    if "set_color" in _compat.VMobject.__dict__:
-        _ORIGINAL_VMOBJECT_SET_COLOR = _compat.VMobject.set_color
-        _compat.VMobject.set_color = _canonical_vmobject_set_color
-    if "set_fill" in _compat.VMobject.__dict__:
-        _ORIGINAL_VMOBJECT_SET_FILL = _compat.VMobject.set_fill
-        _compat.VMobject.set_fill = _canonical_vmobject_set_fill
-    if "set_stroke" in _compat.VMobject.__dict__:
-        _ORIGINAL_VMOBJECT_SET_STROKE = _compat.VMobject.set_stroke
-        _compat.VMobject.set_stroke = _canonical_vmobject_set_stroke
-    if "set_opacity" in _compat.VMobject.__dict__:
-        _ORIGINAL_VMOBJECT_SET_OPACITY = _compat.VMobject.set_opacity
-        _compat.VMobject.set_opacity = _canonical_vmobject_set_opacity
-    _INSTALLED = True

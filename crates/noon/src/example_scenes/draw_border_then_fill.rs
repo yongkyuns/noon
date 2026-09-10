@@ -50,32 +50,48 @@ impl LiveContinuation for DrawBorderThenFill {
 
 pub fn program() -> Result<LiveProgram<DrawBorderThenFill>, String> {
     let scene = Scene::new();
-    let mut square = Mobject::manim_square(Rc::clone(scene.store()), 0.8)?;
-    square.set_fill(
-        f64::from(Color::ORANGE.red),
-        f64::from(Color::ORANGE.green),
-        f64::from(Color::ORANGE.blue),
-        1.0,
-    )?;
-    square.set_stroke_color(
-        f64::from(Color::BLUE.red),
-        f64::from(Color::BLUE.green),
-        f64::from(Color::BLUE.blue),
-        1.0,
-    )?;
-    square.set_stroke_width(0.06)?;
-    let mut circle = Mobject::manim_circle(Rc::clone(scene.store()), 0.4)?;
-    circle.set_fill(
-        f64::from(Color::PINK.red),
-        f64::from(Color::PINK.green),
-        f64::from(Color::PINK.blue),
-        1.0,
-    )?;
+    let mut square = Mobject::manim_square(Rc::clone(scene.integration_store()), 0.8)
+        .map_err(|error| error.to_string())?;
+    square
+        .set_fill(
+            f64::from(Color::ORANGE.red),
+            f64::from(Color::ORANGE.green),
+            f64::from(Color::ORANGE.blue),
+            1.0,
+        )
+        .map_err(|error| error.to_string())?;
+    square
+        .set_stroke_color(
+            f64::from(Color::BLUE.red),
+            f64::from(Color::BLUE.green),
+            f64::from(Color::BLUE.blue),
+            1.0,
+        )
+        .map_err(|error| error.to_string())?;
+    square
+        .set_stroke_width(0.06)
+        .map_err(|error| error.to_string())?;
+    let mut circle = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.4)
+        .map_err(|error| error.to_string())?;
+    circle
+        .set_fill(
+            f64::from(Color::PINK.red),
+            f64::from(Color::PINK.green),
+            f64::from(Color::PINK.blue),
+            1.0,
+        )
+        .map_err(|error| error.to_string())?;
     // A zero-width visible stroke proves the outline override appears, then
     // returns to a no-stroke final style during the fill phase.
-    circle.set_stroke_width(0.0)?;
-    let family = scene.family(&[(&square).into(), (&circle).into()])?;
-    family.arrange(1.0, 0.0, 1.2, true)?;
+    circle
+        .set_stroke_width(0.0)
+        .map_err(|error| error.to_string())?;
+    let family = scene
+        .family(&[(&square).into(), (&circle).into()])
+        .map_err(|error| error.to_string())?;
+    family
+        .arrange(1.0, 0.0, 1.2, true)
+        .map_err(|error| error.to_string())?;
     scene
         .into_live_program(DrawBorderThenFill { family, stage: 0 })
         .map_err(|error| error.to_string())

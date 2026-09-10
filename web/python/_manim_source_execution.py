@@ -1,6 +1,11 @@
 """Compile portable host continuations, without changing scene semantics.
 
-The original module is executed once. A second, never-executed module compilation
+The module namespace and all definition effects execute exactly once. Direct
+module-level play/wait statements use top-level await without an async-function
+wrapper that would turn globals into locals. The deferred callbacks themselves
+stay synchronous and are never rewritten.
+
+The original construct definitions are retained. A second, never-executed module compilation
 supplies coroutine code for ordinary ``construct`` methods with direct, statement-
 position ``self.play``/``self.wait`` calls. Binding that code reuses the original
 function's globals, defaults and closure; class/decorator/module effects are not
@@ -21,12 +26,23 @@ from dataclasses import dataclass
 from types import CodeType, FunctionType, MethodType
 
 BARRIER_GLOBAL = "_noon_await_source_barrier"
+MODULE_BARRIER_GLOBAL = "_noon_await_module_barrier"
 
 
 @dataclass
 class _SourceInvocation:
-    export_document: bool
     cleanup: ExitStack
+    authoring_scene_selected: bool = False
+
+    def select_authoring_scene(self, scene):
+        # Module source between barriers needs the same host routing context as
+        # a construct body. Restore the enclosing context once when source exits.
+        from _manim_reactive import _enter_authoring_scene, _leave_authoring_scene
+
+        token = _enter_authoring_scene(scene)
+        if not self.authoring_scene_selected:
+            self.authoring_scene_selected = True
+            self.cleanup.callback(_leave_authoring_scene, token)
 
 
 _SOURCE_INVOCATION: ContextVar[_SourceInvocation | None] = ContextVar(
@@ -39,14 +55,14 @@ def current_source_invocation():
 
 
 @contextmanager
-def authoring_source_scope(*, export_document: bool = False):
+def authoring_source_scope():
     """Scope top-level host execution and restore continuation flags on exit.
 
-    Scene state and timing stay in Rust. The scope carries invocation mode and
-    host cleanup only; construct dispatch retains its portable/async handling.
+    Scene state and timing stay in Rust. The scope carries host context and
+    cleanup only; construct dispatch retains its portable/async handling.
     """
     with ExitStack() as cleanup:
-        token = _SOURCE_INVOCATION.set(_SourceInvocation(export_document, cleanup))
+        token = _SOURCE_INVOCATION.set(_SourceInvocation(cleanup))
         cleanup.callback(_SOURCE_INVOCATION.reset, token)
         yield
 
@@ -117,16 +133,30 @@ class _ConstructBody(ast.NodeTransformer):
             self.unsupported = True
         return node
 
-    def visit_Lambda(self, node):
+    def _visit_callback(self, node):
+        # Deferred callback code stays synchronous, with its original closure,
+        # defaults and identity. Never insert awaits into the callback itself.
+        # Reject access to the scene or hidden barriers/introspection rather
+        # than pretending an arbitrary synchronous helper can suspend.
+        for child in ast.walk(node):
+            if (isinstance(child, ast.Name) and child.id == self.receiver
+                    or isinstance(child, ast.Attribute) and child.attr in {"play", "wait"}
+                    or isinstance(child, (ast.Await, ast.Yield, ast.YieldFrom, ast.AsyncFunctionDef, ast.ClassDef))
+                    or isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+                    and child.func.id in {"super", "locals", "globals", "vars", "eval", "exec"}
+                    or isinstance(child, ast.FunctionDef) and child.decorator_list):
+                self.unsupported = True
+                break
+        return node
+
+    visit_Lambda = _visit_callback
+    visit_FunctionDef = _visit_callback
+
+    def visit_AsyncFunctionDef(self, node):
         self.unsupported = True
         return node
 
-    def visit_FunctionDef(self, node):
-        self.unsupported = True
-        return node
-
-    visit_AsyncFunctionDef = visit_FunctionDef
-    visit_ClassDef = visit_FunctionDef
+    visit_ClassDef = visit_AsyncFunctionDef
 
     def visit_Yield(self, node):
         self.unsupported = True
@@ -165,34 +195,80 @@ def _function_codes(code: CodeType):
             yield from _function_codes(value)
 
 
+class _ModuleBarriers(ast.NodeTransformer):
+    """Yield at direct module statements, never inside deferred function code.
+
+    Runtime dispatch invokes noncanonical methods normally and only consumes
+    the engine's own continuation awaitable. An arbitrary awaitable returned by
+    user code must not acquire new await semantics.
+    """
+    def __init__(self):
+        self.barriers = 0
+
+    def visit_Expr(self, node):
+        call = node.value
+        if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                and isinstance(call.func.value, ast.Name)
+                and call.func.attr in {"play", "wait"}):
+            self.barriers += 1
+            wrapped = ast.Call(
+                func=ast.Name(id=MODULE_BARRIER_GLOBAL, ctx=ast.Load()),
+                args=[call.func, *call.args], keywords=call.keywords,
+            )
+            return ast.copy_location(
+                ast.Expr(value=ast.copy_location(ast.Await(value=wrapped), call)), node
+            )
+        return node
+
+    def visit_FunctionDef(self, node):
+        return node
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+    visit_ClassDef = visit_FunctionDef
+    visit_Lambda = visit_FunctionDef
+
+
 def compile_authoring_source(
     source: str, filename: str = "<string>", *, portable: bool = True
 ) -> tuple[CodeType, dict[CodeType, CodeType]]:
-    """Return original module code and optional portable construct code pairs."""
+    """Return executable module code and optional portable construct code pairs."""
     original = compile(source, filename, "exec", dont_inherit=True)
-    # Static, explicitly async and export-only source takes the original compiler
-    # path. Inspect immutable code metadata before allocating any Python AST.
-    if not portable or BARRIER_GLOBAL in source:
+    if not portable or any(name in source for name in (BARRIER_GLOBAL, MODULE_BARRIER_GLOBAL)):
         return original, {}
     originals = list(_function_codes(original))
-    if not any(
+    has_construct = any(
         code.co_name == "construct"
         and not code.co_flags & (inspect.CO_COROUTINE | inspect.CO_GENERATOR)
         and {"play", "wait"}.intersection(code.co_names)
         for code in originals
-    ):
+    )
+    has_module_barrier = bool({"play", "wait"}.intersection(original.co_names))
+    # Static, explicit-async and export-only source retains the fast path.
+    if not has_construct and not has_module_barrier:
         return original, {}
     tree = ast.parse(source, filename=filename, mode="exec")
+    module_code = original
+    if has_module_barrier:
+        module_compiler = _ModuleBarriers()
+        module_tree = module_compiler.visit(tree)
+        if module_compiler.barriers:
+            module_code = compile(
+                ast.fix_missing_locations(module_tree), filename, "exec",
+                flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT, dont_inherit=True,
+            )
+    if not has_construct:
+        return module_code, {}
     compiler = _ConstructCompiler()
-    # The original code has already been compiled. Only candidate construct
-    # bodies need copying for conservative rejection; never clone the module.
     candidate = compiler.visit(tree)
     if not compiler.locations:
-        return original, {}
-    portable = compile(ast.fix_missing_locations(candidate), filename, "exec", dont_inherit=True)
+        return module_code, {}
+    portable_code = compile(
+        ast.fix_missing_locations(candidate), filename, "exec",
+        flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT, dont_inherit=True,
+    )
     portable_codes = {
         (code.co_qualname, code.co_firstlineno): code
-        for code in _function_codes(portable)
+        for code in _function_codes(portable_code)
         if code.co_flags & inspect.CO_COROUTINE
     }
     pairs = {}
@@ -202,7 +278,15 @@ def compile_authoring_source(
         replacement = portable_codes.get((code.co_qualname, code.co_firstlineno))
         if replacement is not None and replacement.co_freevars == code.co_freevars:
             pairs[code] = replacement
-    return original, pairs
+    return module_code, pairs
+
+
+async def execute_authoring_module(code: CodeType, namespace: dict) -> None:
+    """Execute the module once in its original namespace, awaiting only module code."""
+    if code.co_flags & inspect.CO_COROUTINE:
+        await eval(code, namespace)
+    else:
+        exec(code, namespace)
 
 
 def bind_portable_construct(

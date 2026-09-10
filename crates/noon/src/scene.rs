@@ -1,6 +1,6 @@
 //! Direct authoring scope over one family in the shared semantic store.
 use crate::{
-    ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectFamilyMember,
+    AuthoringError, ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectFamilyMember,
     SceneMembershipRequest,
 };
 use noon_core::{
@@ -26,10 +26,13 @@ impl Default for Scene {
 }
 impl Scene {
     pub fn new() -> Self {
-        Self::with_store(Rc::new(RefCell::new(SemanticStore::new())))
+        Self::with_integration_store(Rc::new(RefCell::new(SemanticStore::new())))
     }
     /// Integration entry point for language wrappers sharing one semantic arena.
-    pub fn with_store(store: Rc<RefCell<SemanticStore>>) -> Self {
+    ///
+    /// Creates a new root in the existing arena. It does not attach an existing
+    /// session or publish changes into one; see [`crate::integration`].
+    pub fn with_integration_store(store: Rc<RefCell<SemanticStore>>) -> Self {
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_node(SemanticNodeCreation::family());
         let result = transaction
@@ -44,10 +47,29 @@ impl Scene {
             cursor: 0.0,
         }
     }
-    /// Integration access; handles reject stale identities after external edits.
-    pub fn store(&self) -> &Rc<RefCell<SemanticStore>> {
+    /// Raw shared arena access for explicit integration, not live mutation.
+    ///
+    /// External edits can invalidate generational handles and leave an existing
+    /// execution session on a stale scene revision. Use `Scene::live` and its
+    /// coherent publication operations for edits after lowering. No revision
+    /// validation is bypassed by this accessor; see [`crate::integration`].
+    pub fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
         &self.store
     }
+    /// Current authored revision without exposing mutable arena access.
+    pub fn revision(&self) -> noon_core::SceneRevision {
+        self.store.borrow().scene_revision()
+    }
+
+    /// Construct detached geometry through the shared authoring implementation.
+    /// Use `LiveSession::create_manim_geometry` after initial lowering instead.
+    pub fn geometry(
+        &self,
+        options: crate::ManimGeometryOptions,
+    ) -> Result<Mobject, crate::AuthoringError> {
+        Mobject::from_manim_geometry(Rc::clone(&self.store), options)
+    }
+
     pub fn root(&self) -> SemanticNodeId {
         self.root
     }
@@ -61,32 +83,45 @@ impl Scene {
         self.cursor += duration;
         Ok(())
     }
-    pub fn circle(&self, radius: f64) -> Result<Mobject, String> {
+    pub fn circle(&self, radius: f64) -> Result<Mobject, crate::AuthoringError> {
         Mobject::manim_circle(Rc::clone(&self.store), radius)
     }
-    pub fn square(&self, side: f64) -> Result<Mobject, String> {
+    pub fn square(&self, side: f64) -> Result<Mobject, crate::AuthoringError> {
         Mobject::manim_square(Rc::clone(&self.store), side)
     }
-    pub fn rectangle(&self, width: f64, height: f64) -> Result<Mobject, String> {
+    pub fn rectangle(&self, width: f64, height: f64) -> Result<Mobject, crate::AuthoringError> {
         Mobject::manim_rectangle(Rc::clone(&self.store), width, height)
     }
-    pub fn line(&self, start: (f64, f64), end: (f64, f64)) -> Result<Mobject, String> {
+    pub fn line(
+        &self,
+        start: (f64, f64),
+        end: (f64, f64),
+    ) -> Result<Mobject, crate::AuthoringError> {
         Mobject::manim_line(Rc::clone(&self.store), start.0, start.1, end.0, end.1)
     }
-    pub fn path(&self, path: VectorPath, style: SemanticStyle) -> Result<Mobject, String> {
+    pub fn path(
+        &self,
+        path: VectorPath,
+        style: SemanticStyle,
+    ) -> Result<Mobject, crate::AuthoringError> {
         Mobject::from_geometry(Rc::clone(&self.store), GeometryRef::path(path), style)
     }
-    pub fn add(&mut self, object: &Mobject) -> Result<(), String> {
+    pub fn add(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Add(&[
             MobjectFamilyMember::Mobject(object),
         ]))
         .map(|_| ())
     }
 
+    /// Prepare and apply one atomic authored membership edit.
+    ///
+    /// Errors preserve semantic identities and causes in [`AuthoringError`].
+    /// After execution bootstrap, use [`LiveSession::edit_membership`] instead:
+    /// direct authored edits invalidate that session's publication revision.
     pub fn edit_membership(
         &mut self,
         request: SceneMembershipRequest<'_>,
-    ) -> Result<noon_core::SemanticMutationTransactionResult, String> {
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
         let transaction =
             crate::scene_membership::prepare_scene_membership(&self.store, self.root, request)?;
         crate::scene_membership::apply_scene_membership(&self.store, transaction)
@@ -95,18 +130,20 @@ impl Scene {
     pub fn add_many(
         &mut self,
         members: &[MobjectFamilyMember<'_>],
-    ) -> Result<noon_core::SemanticMutationTransactionResult, String> {
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Add(members))
     }
 
     pub fn remove_many(
         &mut self,
         members: &[MobjectFamilyMember<'_>],
-    ) -> Result<noon_core::SemanticMutationTransactionResult, String> {
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Remove(members))
     }
 
-    pub fn clear(&mut self) -> Result<noon_core::SemanticMutationTransactionResult, String> {
+    pub fn clear(
+        &mut self,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Clear)
     }
 
@@ -114,23 +151,26 @@ impl Scene {
         &mut self,
         old: MobjectFamilyMember<'_>,
         new: MobjectFamilyMember<'_>,
-    ) -> Result<noon_core::SemanticMutationTransactionResult, String> {
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Replace { old, new })
     }
 
     /// Create one detached semantic family with authoritative ordered members.
-    pub fn family(&self, members: &[MobjectFamilyMember<'_>]) -> Result<MobjectFamily, String> {
+    pub fn family(
+        &self,
+        members: &[MobjectFamilyMember<'_>],
+    ) -> Result<MobjectFamily, crate::AuthoringError> {
         MobjectFamily::create(Rc::clone(&self.store), members)
     }
-    pub fn remove(&mut self, object: &Mobject) -> Result<(), String> {
+    pub fn remove(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Remove(&[
             MobjectFamilyMember::Mobject(object),
         ]))
         .map(|_| ())
     }
-    pub(crate) fn require_object(&self, object: &Mobject) -> Result<(), String> {
-        if !Rc::ptr_eq(&self.store, object.store()) {
-            return Err("mobject belongs to another scene store".into());
+    pub(crate) fn require_object(&self, object: &Mobject) -> Result<(), crate::AuthoringError> {
+        if !Rc::ptr_eq(&self.store, object.integration_store()) {
+            return Err(crate::AuthoringError::ForeignStore);
         }
         object.validate()
     }
@@ -142,8 +182,10 @@ impl Scene {
         target: &Mobject,
         options: AnimationOptions,
     ) -> Result<bool, String> {
-        self.require_object(source)?;
-        self.require_object(target)?;
+        self.require_object(source)
+            .map_err(|error| error.to_string())?;
+        self.require_object(target)
+            .map_err(|error| error.to_string())?;
         match noon_compile::validate_semantic_transform_to_payload(
             &self.store.borrow(),
             source.node_id(),

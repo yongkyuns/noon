@@ -84,8 +84,8 @@ test("renderer transitions suspend ticks until delayed bootstrap publishes ready
   assert.match(bootstrap, /if \(resumeFrameLoop\) \{\s*running = true;\s*scheduleFrame\(bootstrapGeneration\);\s*\} else \{\s*running = false;/s);
   assert.equal(
     (bootstrap.match(/if \(stopped\) \{\s*createdRenderer\.free\?\.\(\);\s*return;/gs) ?? []).length,
-    2,
-    "stopping either delayed renderer creation path must dispose the unpublished renderer",
+    1,
+    "stopping delayed renderer creation must dispose the unpublished renderer",
   );
 });
 

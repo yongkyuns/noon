@@ -29,10 +29,16 @@ class OrdinaryTrackerScopeTests(unittest.TestCase):
 
 
             bridge = ModuleType("js")
-            bridge.noonResolveAnimationOptions = object()
             bridge.noonCreateAuthoringValueTrackerHandle = Handle
+            import noon
+            import _noon_ir
+            scene_play = noon.Scene.play
+            scene_init = noon.Scene.__init__
             with patch.dict("sys.modules", {"js": bridge}):
                 import _manim_reactive as reactive
+            assert noon.Scene.play is scene_play
+            assert noon.Scene.__init__ is scene_init
+            assert not hasattr(_noon_ir, "Scene")
             ValueTracker = reactive.ValueTracker
 
 
@@ -66,6 +72,15 @@ class OrdinaryTrackerScopeTests(unittest.TestCase):
 
 
             class OrdinaryTrackerScopeTests(unittest.IsolatedAsyncioTestCase):
+                async def test_missing_engine_cannot_create_python_tracker_state(self):
+                    with patch.object(reactive, "_create_tracker_handle", None):
+                        with self.assertRaisesRegex(RuntimeError, "shared Rust authoring context"):
+                            ValueTracker(2)
+                    with self.assertRaises(TypeError):
+                        reactive.NativeVectorSignal()
+                    with self.assertRaises(TypeError):
+                        reactive.NativeBoolSignal()
+
                 async def test_detached_tracker_adopts_only_after_shared_commit(self):
                     tracker = ValueTracker(1.25)
                     self.assertIsNone(tracker._scene)
@@ -76,7 +91,7 @@ class OrdinaryTrackerScopeTests(unittest.TestCase):
                     self.assertEqual(tracker.get_value(), 2.0)
 
                     rejected = Scene(Context(reject=True))
-                    with self.assertRaisesRegex(ValueError, "association rejected"):
+                    with self.assertRaisesRegex(RuntimeError, "association rejected"):
                         tracker._associate_canonical(rejected, rejected.context)
                     self.assertIsNone(tracker._scene)
                     self.assertIsNone(tracker._canonical_context)

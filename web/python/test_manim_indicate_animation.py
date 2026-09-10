@@ -61,45 +61,20 @@ class ManimIndicateAnimationTests(unittest.TestCase):
                 result.reverseRateFunction = reverse_rate_function == 1
                 return result
 
-            def resolve_uniform_schedule(child_count, lag_ratio, run_time):
-                result = Result()
-                result.intervals = []
-                return result
-
             fake_js.noonResolveAnimationOptions = resolve_animation_options
-            fake_js.noonResolveUniformCompositionSchedule = resolve_uniform_schedule
             sys.modules["js"] = fake_js
 
             import _manim_compat
-            _manim_compat.install()
+
             from _test_manim_membership import install_test_membership
             install_test_membership(_manim_compat)
             import _manim_rate_functions
-            _manim_rate_functions.install()
-            import _manim_phase_b  # noqa: F401
             import _manim_animate  # noqa: F401
 
             from noon import BLUE, GREEN, Indicate, RIGHT, Scene, Square, VGroup, linear
 
-            # Manim set_color changes RGB without changing independent fill/stroke opacity.
-            style_probe = Square(
-                fill_color=BLUE,
-                fill_opacity=0.35,
-                stroke_color=BLUE,
-                stroke_opacity=0.65,
-            )
-            style_probe.set_color(GREEN)
-            assert abs(style_probe.style["fill"]["alpha"] - 0.35) < 1e-12
-            assert abs(style_probe.style["stroke"]["alpha"] - 0.65) < 1e-12
-
-            scene = Scene()
-            square = Square(
-                side_length=1.5,
-                fill_color=BLUE,
-                fill_opacity=1.0,
-                stroke_opacity=0.0,
-            )
-            scene.add(square)
+            from _typed_geometry_test_support import identity_only_wrapper as identity
+            square = identity(Square)
             animation = Indicate(square)
             assert abs(animation.scale_factor - 1.2) < 1e-12
             assert animation.anim_args["rate_func"].__name__ == "there_and_back"
@@ -107,22 +82,10 @@ class ManimIndicateAnimationTests(unittest.TestCase):
             # Compatibility construction stays inert. Playback must be claimed by
             # the canonical shared semantic path rather than expanding snapshots
             # and two Python-authored intervals.
-            try:
-                import _manim_animate as animate
-                animate._expanded_schedule(
-                    scene,
-                    animation,
-                    start_time=0.0,
-                    run_time=1.0,
-                    easing="there_and_back",
-                    lag_ratio=0.0,
-                )
-            except NotImplementedError:
-                pass
-            else:
-                raise AssertionError("Indicate must not use Python schedule expansion")
+            import _manim_animate as animate
+            assert not hasattr(animate, "_expanded_schedule")
 
-            family = Indicate(VGroup(Square(), Square()))
+            family = Indicate(identity(VGroup, submobjects=[]))
             assert abs(family.scale_factor - 1.2) < 1e-12
             assert family.anim_args["rate_func"].__name__ == "there_and_back"
             """

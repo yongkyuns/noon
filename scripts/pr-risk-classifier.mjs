@@ -8,8 +8,7 @@ const retainedExecutionWebPaths = new Set([
   "web/authoring-client.js",
   "web/python-worker.source.js",
   "web/semantic-engine-endpoint.js",
-  "web/execution-engine-worker.js",
-  "scripts/retained-execution-worker-smoke.mjs",
+  "scripts/execution-worker-smoke.mjs",
   "web/authoring-execution-client.js",
   "web/authoring-render-worker.js",
   "web/execution-canvas.js",
@@ -29,8 +28,8 @@ const retainedExecutionRustPaths = new Set([
 const hostUpdaterDiagnosticPaths = new Set([
   ".github/workflows/pr-fast.yml",
   "crates/noon-render-wgpu/src/gpu/retained_text.rs",
-  "crates/noon-text-render-wgpu/src/gpu.rs",
-  "crates/noon-text-render-wgpu/src/preparation.rs",
+  "crates/noon-render-wgpu/src/text/gpu.rs",
+  "crates/noon-render-wgpu/src/text/preparation.rs",
   "crates/noon-web/src/renderer_observation.rs",
   "crates/noon-web/src/renderer_observation/retained.rs",
   "crates/noon-web/src/retained_execution_canvas.rs",
@@ -45,7 +44,6 @@ const hostUpdaterDiagnosticPaths = new Set([
 
 const rendererCriticalPrefixes = Object.freeze([
   "crates/noon-render-wgpu/",
-  "crates/noon-text-render-wgpu/",
   "crates/noon-web/",
 ]);
 

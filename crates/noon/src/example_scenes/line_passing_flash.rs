@@ -84,14 +84,26 @@ impl LiveContinuation for LinePassingFlash {
 
 pub fn program() -> Result<LiveProgram<LinePassingFlash>, String> {
     let scene = Scene::new();
-    let mut options = ManimGeometryOptions::line(-2.0, 0.0, 2.0, 0.0)?;
-    options.set_scale(1.25, 0.75)?;
-    options.set_rotation(std::f64::consts::PI / 6.0)?;
-    options.set_translation(0.5, -0.5)?;
+    let mut options =
+        ManimGeometryOptions::line(-2.0, 0.0, 2.0, 0.0).map_err(|error| error.to_string())?;
+    options
+        .set_scale(1.25, 0.75)
+        .map_err(|error| error.to_string())?;
+    options
+        .set_rotation(std::f64::consts::PI / 6.0)
+        .map_err(|error| error.to_string())?;
+    options
+        .set_translation(0.5, -0.5)
+        .map_err(|error| error.to_string())?;
     options.disable_fill();
-    options.set_stroke_color(0.0, 1.0, 1.0, 1.0)?;
-    options.set_stroke_width(0.08)?;
-    let line = Mobject::from_manim_geometry(Rc::clone(scene.store()), options)?;
+    options
+        .set_stroke_color(0.0, 1.0, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    options
+        .set_stroke_width(0.08)
+        .map_err(|error| error.to_string())?;
+    let line = Mobject::from_manim_geometry(Rc::clone(scene.integration_store()), options)
+        .map_err(|error| error.to_string())?;
     let identity = line.node_id();
     scene
         .into_live_program(LinePassingFlash {

@@ -2,9 +2,10 @@
 """Differential semantic probes against a pinned ManimCE reference.
 
 This suite intentionally compares small, renderer-independent observables.  It is
-not a screenshot test and it does not require constructing a Manim Scene.  Each
-fixture runs the equivalent operation through Noon and ManimCE, normalizes the
-result to JSON-like data, and reports a structural diff on mismatch.
+not a screenshot test and it does not require constructing a Manim Scene.  Noon probes run in Pyodide with the shared Rust/WASM host; this CPython
+comparison reads their observations and executes the equivalent pinned ManimCE
+probes. It reports a structural diff on mismatch. Serialized observations are a
+test boundary, never engine input.
 
 Add new probes only for behavior Noon claims to support.  Unsupported behavior
 belongs in ``UNSUPPORTED`` below until an implementation PR promotes it to a
@@ -30,20 +31,16 @@ if str(WEB_PYTHON) not in sys.path:
 
 # Import Noon before Manim so the local module is unambiguous.
 import noon as noon  # noqa: E402
-import _manim_compat as _manim_compat  # noqa: E402
 
-# The browser worker installs this facade before user code runs. Differential
-# fixtures must exercise that same public Manim-compatible surface rather than
-# the lower-level authoring primitives that happen to back it.
-_manim_compat.install()
 
 try:
     import manim as manim  # noqa: E402
-except ImportError as exc:  # pragma: no cover - exercised by the CI environment
-    raise SystemExit(
-        "ManimCE is required for the differential suite. "
-        "Install the version pinned by .github/workflows/manim-differential.yml."
-    ) from exc
+except ModuleNotFoundError as exc:
+    if exc.name != "manim":
+        raise
+    # Noon probes run in Pyodide with the real Rust host; the pinned reference
+    # runs separately in CPython. Neither host emulates the other engine.
+    manim = None
 
 PINNED_MANIM_VERSION = "0.21.0"
 
@@ -600,11 +597,29 @@ def _compare(expected: Any, actual: Any, tolerance: float, path: str = "$") -> l
     return errors
 
 
+def noon_observations() -> dict[str, Any]:
+    """Observe the existing probes in a host with shared Rust authoring installed."""
+    return {fixture.name: fixture.noon_probe() for fixture in FIXTURES}
+
+
+def load_noon_observations(path: Path) -> dict[str, Any]:
+    observations = json.loads(path.read_text())
+    expected = {fixture.name for fixture in FIXTURES}
+    if not isinstance(observations, dict) or set(observations) != expected:
+        raise ValueError("Noon observations must contain exactly the supported fixture names")
+    return observations
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--json", action="store_true", help="emit machine-readable results")
+    parser.add_argument("--noon-observations", type=Path, required=True,
+                        help="observations from manim-differential-noon.mjs")
     args = parser.parse_args()
+    observations = load_noon_observations(args.noon_observations)
 
+    if manim is None:
+        raise SystemExit("Install the pinned ManimCE reference to compare observations")
     if manim.__version__ != PINNED_MANIM_VERSION:
         raise SystemExit(
             f"expected ManimCE {PINNED_MANIM_VERSION}, found {manim.__version__}; "
@@ -614,7 +629,7 @@ def main() -> int:
     results: list[dict[str, Any]] = []
     failures = 0
     for fixture in FIXTURES:
-        noon_value = fixture.noon_probe()
+        noon_value = observations[fixture.name]
         manim_value = fixture.manim_probe()
         differences = _compare(noon_value, manim_value, fixture.tolerance)
         status = "pass" if not differences else "mismatch"

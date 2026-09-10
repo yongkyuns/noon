@@ -1,0 +1,14 @@
+[package]
+name = "noon-text"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "CPU text shaping and glyph raster services for Noon"
+
+[dependencies]
+noon-core = { path = "../noon-core" }
+swash = "=0.2.10"
+
+[dev-dependencies]
+noon-typst = { path = "../noon-typst" }
+typst-assets = { version = "=0.15.1", features = ["fonts"] }

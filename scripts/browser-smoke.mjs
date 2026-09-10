@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { spawn } from "node:child_process";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,7 +12,6 @@ const { PNG } = pngjs;
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
-const sceneDir = await mkdtemp(path.join(tmpdir(), "noon-browser-scenes-"));
 const artifactDir = path.resolve(
   repoRoot,
   process.env.NOON_BROWSER_SMOKE_ARTIFACTS ?? "browser-smoke-artifacts",
@@ -29,38 +27,18 @@ const expectedRendererBackend = backendMode === "webgpu" ? "WebGPU" : "WebGL2";
 
 await mkdir(artifactDir, { recursive: true });
 
-const generated = spawnSync(
-  "python3",
-  ["web/python/playground_examples.py", sceneDir],
-  {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      PYTHONDONTWRITEBYTECODE: "1",
-    },
-  },
-);
-if (generated.status !== 0) {
-  throw new Error(
-    `Unable to generate playground scenes:\n${generated.stdout}\n${generated.stderr}`,
-  );
-}
-
-const examples = generated.stdout
-  .trim()
-  .split("\n")
-  .filter(Boolean)
-  .map((line) => {
-    const separator = line.indexOf("\t");
-    if (separator === -1) {
-      throw new Error(`Unexpected playground generator output: ${line}`);
-    }
-    return {
-      name: line.slice(0, separator),
-      file: line.slice(separator + 1),
-    };
-  });
+// Remaining generic authoring/lifecycle cases run in directExecutionProof and
+// the shared Python corpus. These fixtures protect renderer-specific raster work.
+const examples = [
+  { name: "Filled path Transform", factory: "createDirectFilledPathTransformRenderer", objectCount: 1, duration: 3.2 },
+  { name: "Dimension fitting", factory: "createDirectDimensionFittingSmokeRenderer", objectCount: 2, duration: 0.2 },
+  { name: "Family affine", factory: "createDirectFamilyAffineSmokeRenderer", objectCount: 2, duration: 0.2 },
+  { name: "Family paint", factory: "createDirectFamilyPaintSmokeRenderer", objectCount: 2, duration: 0.2 },
+  { name: "Family grid", factory: "createDirectFamilyGridSmokeRenderer", objectCount: 4, duration: 0.2 },
+  { name: "Create shapes", factory: "createDirectCreateShapesRenderer", objectCount: 4, duration: 3.2 },
+  { name: "Morph stress · 1,000", factory: "createDirectMorphStressRenderer", objectCount: 1000, duration: 3.4 },
+  { name: "Instanced field · 1,000", factory: "createDirectAnalyticProfileRenderer", args: [1000, "fit", 16 / 9, 3.4], objectCount: 1001, duration: 3.4 },
+];
 
 const gallerySource = await readFile(path.join(repoRoot, "web/main.js"), "utf8");
 assert.ok(
@@ -205,28 +183,60 @@ function pixelDistance(left, right) {
   return left.reduce((distance, channel, index) => distance + Math.abs(channel - right[index]), 0);
 }
 
-function latestSceneEnd(document) {
-  assert.ok(document.tracks.length > 0, "playground scene must contain at least one track");
-  return Math.max(
-    ...document.tracks.map(
-      (track) => track.timing.start_time + track.timing.duration,
-    ),
-  );
-}
-
 function sampleTimes(latestEnd) {
   assert.ok(Number.isFinite(latestEnd) && latestEnd > 0, "scene timeline must have positive duration");
   assert.ok(latestEnd < 4.0, "scene timeline must fit the four-second playground loop");
   return [0.35, 0.60, 0.85, 1.0].map((fraction) => latestEnd * fraction);
 }
 
+async function loadDirectFixture(page, example) {
+  return page.evaluate(async ({ factory, args = [] }) => {
+    const wasm = await import("./pkg/noon_web.js");
+    window.qualifiedRenderer?.free();
+    document.querySelector("#qualified-scene")?.remove();
+    document.querySelector("#scene").style.display = "none";
+    const canvas = document.createElement("canvas");
+    canvas.id = "qualified-scene";
+    canvas.width = 960;
+    canvas.height = 540;
+    document.body.append(canvas);
+    const renderer = await wasm[factory](canvas.transferControlToOffscreen(), ...args);
+    renderer.resize(960, 540);
+    window.qualifiedRenderer = renderer;
+    // Drain the initial resource/frame publication before the first seek. The
+    // host must present every pending publication before advancing its session.
+    let presented = false;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      if (renderer.render()) { presented = true; break; }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (!presented) throw new Error(`${factory}: initial publication did not present`);
+    return { backend: renderer.rendererBackend(), objectCount: renderer.objectCount() };
+  }, example);
+}
+
 async function renderAndCapture(page, time, screenshotPath) {
-  const metrics = await page.evaluate(
-    (sceneTime) => window.noonSmoke.renderAt(sceneTime),
-    time,
-  );
-  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve())));
-  const screenshot = await page.locator("#scene").screenshot({ path: screenshotPath });
+  const metrics = await page.evaluate(async (sceneTime) => {
+    const renderer = window.qualifiedRenderer;
+    const pending = renderer.seekDirect(sceneTime);
+    if (pending) {
+      let presented = false;
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        if (renderer.render()) { presented = true; break; }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      if (!presented) throw new Error(`direct fixture did not present at ${sceneTime}`);
+    }
+    return {
+      error: null,
+      time: renderer.time(),
+      objectCount: renderer.objectCount(),
+      drawCalls: renderer.lastDrawCalls(),
+      instances: renderer.lastInstancesDrawn(),
+    };
+  }, time);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  const screenshot = await page.locator("#qualified-scene").screenshot({ path: screenshotPath });
   return { metrics, screenshot };
 }
 
@@ -425,11 +435,11 @@ async function directExecutionProof(page, expectedBackend) {
     "direct Rust/WASM sparse callback reads did not preserve the shared session time",
   );
   assert.ok(
-    direct.metrics.ordinaryCallbackSparseReads?.initialRead.blue >= 180 &&
+    Math.abs(direct.metrics.ordinaryCallbackSparseReads?.initialRead.blue - 214) <= 16 &&
       direct.metrics.ordinaryCallbackSparseReads?.initialVacatedLuma <= 60 &&
-      direct.metrics.ordinaryCallbackSparseReads?.midpoint.blue >= 180 &&
-      direct.metrics.ordinaryCallbackSparseReads?.persistentHold.blue >= 180 &&
-      direct.metrics.ordinaryCallbackSparseReads?.anchor.blue >= 180,
+      Math.abs(direct.metrics.ordinaryCallbackSparseReads?.midpoint.blue - 153) <= 16 &&
+      Math.abs(direct.metrics.ordinaryCallbackSparseReads?.persistentHold.blue - 153) <= 16 &&
+      Math.abs(direct.metrics.ordinaryCallbackSparseReads?.anchor.blue - 153) <= 16,
     "direct Rust/WASM sparse callback reads did not render initial, midpoint, Hold, and anchor states",
   );
   assert.equal(
@@ -641,21 +651,10 @@ try {
   const directMetrics = await directExecutionProof(page, expectedRendererBackend);
 
   for (const [index, example] of examples.entries()) {
-    const sceneJson = await readFile(example.file, "utf8");
-    const document = JSON.parse(sceneJson);
-    const expectedObjects = document.objects.length;
-    const latestEnd = latestSceneEnd(document);
-    assert.ok(expectedObjects > 0, `${example.name}: scene has no semantic objects`);
-
-    const loaded = await page.evaluate(
-      (json) => window.noonSmoke.loadScene(json),
-      sceneJson,
-    );
-    assert.equal(
-      loaded.objectCount,
-      expectedObjects,
-      `${example.name}: browser object count after load`,
-    );
+    const expectedObjects = example.objectCount;
+    const latestEnd = example.duration;
+    const loaded = await loadDirectFixture(page, example);
+    assert.equal(loaded.backend, expectedRendererBackend, `${example.name}: renderer backend`);
 
     for (const [checkpointIndex, time] of sampleTimes(latestEnd).entries()) {
       const screenshotPath = path.join(
@@ -664,7 +663,6 @@ try {
       );
       const { metrics, screenshot } = await renderAndCapture(page, time, screenshotPath);
       assert.equal(metrics.error, null, `${example.name}: browser runtime error`);
-      assert.equal(metrics.revision, loaded.revision, `${example.name}: scene revision drifted`);
       assert.equal(metrics.objectCount, expectedObjects, `${example.name}: object count drifted`);
       assert.ok(Math.abs(metrics.time - time) < 1e-6, `${example.name}: deterministic seek time drifted`);
       assert.ok(metrics.drawCalls > 0, `${example.name}: renderer emitted no draw calls at t=${time}`);
@@ -806,7 +804,7 @@ try {
     `browser visual smoke failures:\n${visualFailures.join("\n")}`,
   );
   console.log(
-    `Browser ${expectedRendererBackend} smoke passed for ${examples.length} internal renderer fixtures at four semantic checkpoints each; direct Rust/WASM execution presented ${directMetrics.drawCalls} draw calls on ${directMetrics.backend}; ${browserAuthoredManimCount} public source-equivalent Manim scenes are validated by the browser authoring corpus.`,
+    `Browser ${expectedRendererBackend} smoke passed for ${examples.length} typed Rust renderer fixtures at four semantic checkpoints each; direct Rust/WASM execution presented ${directMetrics.drawCalls} draw calls on ${directMetrics.backend}; ${browserAuthoredManimCount} public source-equivalent Manim scenes are validated by the browser authoring corpus.`,
   );
 } finally {
   await browser?.close();

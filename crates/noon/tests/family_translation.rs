@@ -13,7 +13,7 @@ fn nested_family() -> (Scene, MobjectFamily, [Mobject; 3]) {
 #[test]
 fn nested_translation_commits_all_authoritative_leaves_once() {
     let (scene, root, members) = nested_family();
-    let store = scene.store();
+    let store = scene.integration_store();
     assert_eq!(
         store.borrow().ordered_leaf_nodes(root.node_id()).unwrap(),
         members.iter().map(Mobject::node_id).collect::<Vec<_>>()
@@ -32,7 +32,7 @@ fn nested_translation_commits_all_authoritative_leaves_once() {
 #[test]
 fn stale_late_leaf_rejects_the_entire_translation() {
     let (scene, root, members) = nested_family();
-    let store = scene.store();
+    let store = scene.integration_store();
     let observation = root.layout().unwrap();
     store
         .borrow_mut()
@@ -50,7 +50,7 @@ fn stale_late_leaf_rejects_the_entire_translation() {
 #[test]
 fn aliased_references_shift_one_identity_once_without_touching_other_objects() {
     let (scene, root, members) = nested_family();
-    let store = scene.store();
+    let store = scene.integration_store();
     store
         .borrow_mut()
         .add_member(root.node_id(), members[2].node_id())

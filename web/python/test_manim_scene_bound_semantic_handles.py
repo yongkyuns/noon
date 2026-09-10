@@ -33,7 +33,6 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                 message = ""
 
             fake_js.noonResolveAnimationOptions = lambda *args: Result()
-            fake_js.noonResolveUniformCompositionSchedule = lambda *args: None
 
             class FakeHandle:
                 def __init__(self, snapshot_json):
@@ -227,16 +226,14 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_compat
-            _manim_compat.install()
+
             from _test_manim_membership import install_test_membership
             install_test_membership(_manim_compat)
             import _manim_rate_functions
-            _manim_rate_functions.install()
-            import _manim_phase_b  # noqa: F401
             import _manim_semantic_handles as handles
             import _typed_geometry_test_support as _geometry_test
             _geometry_test.install_module_bridge(handles, FakeHandle)
-            handles.install()
+
             import _manim_animate as animate
 
             from noon import BLUE, GREEN, RIGHT, Circle, Scene, Square
@@ -249,12 +246,13 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             handle.calls.clear()
 
             # Binding does not discard the stable semantic identity. A direct static
-            # mutation executes in the shared handle and mirrors only typed wire fields.
+            # mutation executes in the shared handle without refreshing a Python mirror.
             square.shift(RIGHT)
             assert handle.calls == [("shift", 1.0, 0.0)], handle.calls
             assert handle.snapshot_requests == 0
-            stored = scene._objects[square.id]
-            assert stored["transform"]["translation"] == {"x": 1.0, "y": 0.0}
+            assert scene._binding_handles[square.id] is handle
+            assert not hasattr(scene, "_objects"), "binding must not recreate object snapshots"
+            assert not hasattr(scene, "_object_positions"), "Rust owns execution positions"
             assert square.get_center().x == 1.0
 
             class EffectiveLayout:
@@ -271,6 +269,9 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
 
                 def liveExecutionOwnership(self):
                     return "transferred" if self.transferred else "returned"
+
+                def liveShift(self, source, x, y):
+                    self.live_calls.append(("shift", source, x, y))
 
                 def liveBecomeMobject(self, source, target, *flags):
                     if self.transferred:
@@ -295,18 +296,16 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             # the canonical runtime through the fresh raw semantic handle.
             square._noon_updaters = [lambda mobject: mobject]
             context.queries.clear()
-            assert handles._handle_for(square) is None
+            assert handles._handle_for(square) is handle
+            square.shift(RIGHT)
+            assert context.live_calls[-1] == ("shift", handle, 1.0, 0.0)
             assert square.get_center() == (2.5, -1.5)
             assert square.width == 6.0
             assert square.height == 4.0
             assert context.queries == [handle, handle, handle]
 
-            # The explicit legacy materialization boundary keeps its existing raw
-            # fallback rather than consulting an unrelated canonical runtime.
-            scene._legacy_geometry_materialized = True
-            assert square.get_center() == (1.0, 0.0)
-            del scene._legacy_geometry_materialized
             del square._noon_updaters
+            context.live_calls.clear()
 
             context.transferred = True
             try:
@@ -401,26 +400,45 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             else:
                 raise AssertionError("half-typed become fell back through raw geometry")
 
+            # Unsupported operands must fail before copying/scaling a target.
+            for operand in (half_typed, detached_source):
+                operand._semantic_handle_fresh = False
+                operand.copy = lambda: (_ for _ in ()).throw(AssertionError("untyped target was copied"))
+                operand.scale = lambda *args: (_ for _ in ()).throw(AssertionError("untyped target was scaled"))
+            for operation in ("become", "replace"):
+                try:
+                    getattr(detached_source, operation)(half_typed, stretch=True)
+                except NotImplementedError as error:
+                    assert "both Mobjects" in str(error)
+                else:
+                    raise AssertionError(operation + " admitted untyped operands")
+
+            bindings_before = dict(scene._binding_handles)
             square.set_fill(GREEN, opacity=0.25)
             assert handle.snapshot_requests == 0
-            assert abs(stored["style"]["fill"]["alpha"] - 0.25) < 1e-12
+            assert abs(handle.snapshot["style"]["fill"]["alpha"] - 0.25) < 1e-12
             square.set_object_opacity(0.4)
             assert handle.calls[-1] == ("setObjectOpacity", 0.4)
             assert handle.snapshot_requests == 0
-            assert abs(stored["style"]["opacity"] - 0.4) < 1e-12
+            assert abs(handle.snapshot["style"]["opacity"] - 0.4) < 1e-12
+
+            assert scene._binding_handles == bindings_before
 
             first = animate._AlignedAnimationBuilder(square)
             first_target = first.target
             assert handle.calls[-1] == "targetEditor"
             assert handle.snapshot_requests == 0
             first.shift(RIGHT)
-            scene.play(first, run_time=1.0)
-            assert handle.calls[-1] == "becomeHandle", handle.calls
+            assert first_target.get_center().x == 2.0
+            assert square.get_center().x == 1.0
+            # This double proves target isolation and shared mutation/copy dispatch.
+            # Actual animation completion belongs to the shared continuation proofs;
+            # Python must not commit a target snapshot after playback.
+            square.shift(RIGHT)
             assert handle.snapshot_requests == 0
             assert square.get_center().x == 2.0
 
-            # The second builder starts directly from the committed shared final state;
-            # no evaluated Python snapshot or source JSON seed is needed.
+            # The next builder reads the updated shared source without JSON seeding.
             before = handle.snapshot_requests
             second = animate._AlignedAnimationBuilder(square)
             second_target = second.target
@@ -442,11 +460,12 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             updater_scene.add(detached_updater)
             assert detached_updater._scene is updater_scene
 
-            # Once bound, host-dynamic state deliberately opts out until runtime evaluated
-            # handles are shared. This is a correctness fallback, not a second deterministic path.
-            assert handles._handle_for(detached_updater) is None
+            # Binding and updater registration preserve the ordinary typed path.
+            assert handles._handle_for(detached_updater) is detached_handle
+            detached_updater.shift(RIGHT)
+            assert detached_updater.get_center().x == 1.0
             square._noon_updaters = []
-            assert handles._handle_for(square) is None
+            assert handles._handle_for(square) is handle
             '''
         )
         completed = subprocess.run(

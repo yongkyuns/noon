@@ -26,31 +26,6 @@ assert.ok(
 );
 await mkdir(artifactDir, { recursive: true });
 
-const sceneJson = JSON.stringify({
-  version: 1,
-  objects: [
-    {
-      id: 0,
-      geometry: { rectangle: { size: { x: 2.0, y: 1.0 } } },
-      transform: {
-        translation: { x: 1.25, y: -0.75 },
-        rotation: Math.PI / 6,
-        scale: { x: 1.0, y: 1.0 },
-      },
-      style: {
-        fill: { red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0 },
-        stroke: null,
-        stroke_width: 0.0,
-        stroke_width_mode: "screen_space",
-        stroke_join: "miter",
-        stroke_cap: "butt",
-        opacity: 1.0,
-      },
-    },
-  ],
-  tracks: [],
-});
-
 let serverOutput = "";
 const server = spawn(
   "python3",
@@ -156,15 +131,16 @@ try {
     if (message.type() === "error") browserErrors.push(`console: ${message.text()}`);
   });
 
-  await page.goto(`${baseUrl}/web/browser-smoke.html`, { waitUntil: "load" });
+  await page.goto(`${baseUrl}/web/browser-smoke.html?fixture=camera-density`, { waitUntil: "load" });
   await page.waitForFunction(() => window.noonSmoke?.state.ready === true, null, {
     timeout: 30_000,
   });
   const initial = await page.evaluate(() => window.noonSmoke.metrics());
   assert.equal(initial.error, null, `${backendMode}: browser smoke initialization`);
   assert.equal(initial.rendererBackend, expectedBackend, `${backendMode}: renderer backend`);
-  const loaded = await page.evaluate((json) => window.noonSmoke.loadScene(json), sceneJson);
-  assert.equal(loaded.objectCount, 1, "density scene object count");
+  assert.equal(initial.objectCount, 1, "density scene object count");
+  const baselineFrame = await page.evaluate(() => window.noonSmoke.renderAt(1.0));
+  assert.equal(baselineFrame.presented, true, "initial direct frame must present");
 
   const profiles = [
     { label: "1x", width: 960, height: 540 },
@@ -182,9 +158,13 @@ try {
     assert.equal(resized.cssWidth, 960, `${profile.label}: CSS width remains composition viewport`);
     assert.equal(resized.cssHeight, 540, `${profile.label}: CSS height remains composition viewport`);
 
-    const metrics = await page.evaluate(() => window.noonSmoke.renderAt(1.0));
+    const metrics = resized;
     assert.equal(metrics.error, null, `${profile.label}: render error`);
-    assert.equal(metrics.presented, true, `${profile.label}: frame presentation`);
+    assert.equal(metrics.presented, profile.label !== "1x", `${profile.label}: only a changed surface requests presentation`);
+    assert.equal(metrics.time, baselineFrame.time, "resize must not advance authored time");
+    assert.equal(metrics.revision, baselineFrame.revision, "resize must not change scene revision");
+    const repeated = await page.evaluate(({width, height}) => window.noonSmoke.resizeBacking(width, height), profile);
+    assert.equal(repeated.presented, false, "unchanged dimensions must preserve a clean frame");
     assert.ok(metrics.drawCalls > 0, `${profile.label}: expected draw calls`);
 
     const screenshot = await page.locator("#scene").screenshot({

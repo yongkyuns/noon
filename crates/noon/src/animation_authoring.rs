@@ -69,12 +69,15 @@ impl crate::Scene {
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_animation(SemanticAnimationState::new(intent, options));
         let result = transaction
-            .apply(&mut self.store().borrow_mut())
+            .apply(&mut self.integration_store().borrow_mut())
             .map_err(|error| error.to_string())?;
         let [SemanticMutationImpact::AnimationAdded { animation }] = result.impacts() else {
             return Err("animation declaration did not produce one animation identity".into());
         };
-        Ok(DeclaredAnimation::new(Rc::clone(self.store()), *animation))
+        Ok(DeclaredAnimation::new(
+            Rc::clone(self.integration_store()),
+            *animation,
+        ))
     }
 
     /// Declare a shared affine transform between two store-scoped mobjects.
@@ -84,8 +87,10 @@ impl crate::Scene {
         target: &Mobject,
         options: AnimationOptions,
     ) -> Result<DeclaredAnimation, String> {
-        self.require_object(source)?;
-        self.require_object(target)?;
+        self.require_object(source)
+            .map_err(|error| error.to_string())?;
+        self.require_object(target)
+            .map_err(|error| error.to_string())?;
         self.declare_animation(
             SemanticAnimationIntent::TransformTo {
                 target: source.node_id(),
@@ -103,7 +108,8 @@ impl crate::Scene {
         time_width: f64,
         options: AnimationOptions,
     ) -> Result<DeclaredAnimation, String> {
-        self.require_object(target)?;
+        self.require_object(target)
+            .map_err(|error| error.to_string())?;
         let options = normalized_passing_flash_options(options)?;
         self.declare_animation(
             SemanticAnimationIntent::PassingFlash {
@@ -188,12 +194,15 @@ mod tests {
         let circle = scene.circle(1.0).unwrap();
         scene.add(&circle).unwrap();
         let foreign = crate::Scene::new().circle(1.0).unwrap();
-        let revision = scene.store().borrow().scene_revision();
+        let revision = scene.integration_store().borrow().scene_revision();
 
         assert!(scene
             .declare_transform_to(&circle, &foreign, AnimationOptions::new())
             .is_err());
-        assert_eq!(scene.store().borrow().scene_revision(), revision);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
     }
 
     #[test]

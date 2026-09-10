@@ -19,16 +19,13 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
         source = textwrap.dedent(
             r"""
             import json
+            from test_noon_errors import diagnostic, js_exception
             from types import SimpleNamespace
             import sys
             import types
 
             fake_js = types.ModuleType("js")
             fake_js.noonResolveAnimationOptions = lambda *args: None
-            fake_js.noonResolveCompositionSchedule = lambda *args: None
-            fake_js.noonResolveUniformCompositionSchedule = lambda *args: None
-            fake_js.noonResolveLifecyclePlan = lambda *args: None
-            fake_js.noonValidatePresenceTransition = lambda *args: None
 
             class Handle:
                 def __init__(self, snapshot_json):
@@ -39,7 +36,9 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
 
                 def manimLineEndpoints(self):
                     if "line" not in self.snapshot["geometry"]:
-                        raise ValueError("mobject content is not an analytic Line")
+                        raise js_exception(diagnostic("unsupported_operation", "authoring.unsupported",
+                            "Line endpoint queries require an analytic Line",
+                            cause=diagnostic("unsupported_operation", "authoring.unsupported_operation")))
                     return SimpleNamespace(startX=1.25, startY=-2.5, endX=4.5, endY=3.75)
 
                 @property
@@ -55,13 +54,11 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_compat
-            _manim_compat.install()
+
             import _manim_rate_functions as rate_functions
-            rate_functions.install()
-            import _manim_phase_b
             import _manim_geometry
             import _manim_semantic_handles as handles
-            handles.install()
+
 
             from noon import BLUE, Line, Square
 
@@ -99,7 +96,8 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
             try:
                 _manim_indication.ShowPassingFlash(Square())
             except NotImplementedError as error:
-                assert "exact Line subset" in str(error)
+                assert error.category == "unsupported_operation"
+                assert error.code == "authoring.unsupported"
             else:
                 raise AssertionError("typed non-Line passed ShowPassingFlash admission")
 
@@ -177,7 +175,7 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
             original_set_color = handles._set_color
             handles._set_color = lambda target, color: calls.append((target, color)) or target
             try:
-                assert rate_functions._set_color_preserving_opacity(line, BLUE) is line
+                assert line.set_color(BLUE) is line
             finally:
                 handles._set_color = original_set_color
             assert calls == [(line, BLUE)]

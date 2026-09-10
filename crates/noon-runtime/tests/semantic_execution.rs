@@ -1,6 +1,6 @@
 use noon_compile::{CompiledScene, SemanticExecutionIndex};
 use noon_core::{SemanticObjectState, SemanticStore, StoredGeometry};
-use noon_runtime::SlottedSceneInstance;
+use noon_runtime::{ExecutionSlotTable, SceneInstance};
 
 #[test]
 fn semantic_projection_reaches_stable_execution_slots() {
@@ -22,12 +22,13 @@ fn semantic_projection_reaches_stable_execution_slots() {
 
     let first_object = index.execution_object_id(first).unwrap();
     let second_object = index.execution_object_id(second).unwrap();
-    let instance = SlottedSceneInstance::new(compiled);
+    let slots = ExecutionSlotTable::from_compiled(&compiled);
+    let instance = SceneInstance::new(compiled);
 
-    let first_slot = instance.slot_for_object(first_object).unwrap();
-    let second_slot = instance.slot_for_object(second_object).unwrap();
+    let first_slot = slots.slot_for_object(first_object).unwrap();
+    let second_slot = slots.slot_for_object(second_object).unwrap();
     assert_ne!(first_slot, second_slot);
-    assert_eq!(instance.live_object_count(), 2);
-    assert_eq!(instance.frame_index_for_slot(second_slot), Some(0));
-    assert_eq!(instance.frame_index_for_slot(first_slot), Some(1));
+    assert_eq!(slots.len(), 2);
+    assert_eq!(instance.frame_index_for_object(second_object), Some(0));
+    assert_eq!(instance.frame_index_for_object(first_object), Some(1));
 }

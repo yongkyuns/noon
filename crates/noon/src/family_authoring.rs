@@ -1,6 +1,7 @@
 //! Typed handle for authoritative semantic family membership.
 
 use crate::semantic_mobject::authoring_xy_f64 as semantic_xy_f64;
+use crate::AuthoringError;
 use noon_core::{
     Bounds2D64, SemanticMutationTransaction, SemanticNodeId, SemanticObjectProperty, SemanticStore,
     SemanticVec3,
@@ -29,10 +30,10 @@ impl FamilyTranslation {
         source: SemanticNodeId,
         delta_x: f64,
         delta_y: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         let source_members = store
             .ordered_leaf_nodes(source)
-            .map_err(|e| e.to_string())?;
+            .map_err(AuthoringError::from)?;
         Self::from_members(source_members, delta_x, delta_y)
     }
 
@@ -40,7 +41,7 @@ impl FamilyTranslation {
         source_members: Vec<SemanticNodeId>,
         delta_x: f64,
         delta_y: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         let delta = semantic_xy_f64(delta_x, delta_y)?;
         Ok(Self {
             source_members,
@@ -49,22 +50,22 @@ impl FamilyTranslation {
     }
 
     /// Apply each selected semantic leaf in one transaction.
-    pub fn apply(self, store: &mut SemanticStore) -> Result<(), String> {
+    pub fn apply(self, store: &mut SemanticStore) -> Result<(), AuthoringError> {
         self.transaction(store)?
             .apply(store)
             .map(|_| ())
-            .map_err(|error| error.to_string())
+            .map_err(AuthoringError::from)
     }
 
     pub(crate) fn transaction(
         self,
         store: &SemanticStore,
-    ) -> Result<SemanticMutationTransaction, String> {
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
         translation_transaction(self.into_shifts(), |leaf| {
             store
                 .semantic_object_state_checked(leaf)
                 .map(|state| state.transform.translation)
-                .map_err(|error| error.to_string())
+                .map_err(AuthoringError::from)
         })
     }
 
@@ -76,12 +77,12 @@ impl FamilyTranslation {
     }
 }
 
-pub(crate) fn translation_transaction<F>(
+pub(crate) fn translation_transaction<F, E>(
     shifts: impl IntoIterator<Item = (SemanticNodeId, f64, f64)>,
     mut authored_translation: F,
-) -> Result<SemanticMutationTransaction, String>
+) -> Result<SemanticMutationTransaction, E>
 where
-    F: FnMut(SemanticNodeId) -> Result<SemanticVec3, String>,
+    F: FnMut(SemanticNodeId) -> Result<SemanticVec3, E>,
 {
     // Accumulate staged operations before publishing one final property per
     // identity. A single family translation supplies each semantic leaf once.
@@ -131,17 +132,17 @@ impl<'a> From<&'a MobjectFamily> for MobjectFamilyMember<'a> {
 }
 
 impl MobjectFamilyMember<'_> {
-    fn require_store(&self, store: &Rc<RefCell<SemanticStore>>) -> Result<(), String> {
-        if !Rc::ptr_eq(self.store(), store) {
-            return Err("family members belong to different authoring stores".into());
+    fn require_store(&self, store: &Rc<RefCell<SemanticStore>>) -> Result<(), AuthoringError> {
+        if !Rc::ptr_eq(self.integration_store(), store) {
+            return Err(AuthoringError::ForeignStore);
         }
         self.validate()
     }
 
-    pub(crate) fn store(&self) -> &Rc<RefCell<SemanticStore>> {
+    pub(crate) fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
         match self {
-            Self::Mobject(member) => member.store(),
-            Self::Family(member) => member.store(),
+            Self::Mobject(member) => member.integration_store(),
+            Self::Family(member) => member.integration_store(),
         }
     }
 
@@ -152,7 +153,7 @@ impl MobjectFamilyMember<'_> {
         }
     }
 
-    pub(crate) fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), AuthoringError> {
         match self {
             Self::Mobject(member) => member.validate(),
             Self::Family(member) => member.validate(),
@@ -169,7 +170,7 @@ pub(crate) fn family_creation_transaction(
         SemanticMutationTransaction,
         noon_core::SemanticLocalNodeToken,
     ),
-    String,
+    AuthoringError,
 > {
     for member in members {
         member.require_store(store)?;
@@ -190,15 +191,15 @@ pub(crate) fn family_membership_transaction(
     family: &MobjectFamily,
     members: &[MobjectFamilyMember<'_>],
     adding: bool,
-) -> Result<(SemanticMutationTransaction, Vec<bool>), String> {
+) -> Result<(SemanticMutationTransaction, Vec<bool>), AuthoringError> {
     family.validate()?;
     for member in members {
-        member.require_store(family.store())?;
+        member.require_store(family.integration_store())?;
     }
-    let store = family.store().borrow();
+    let store = family.integration_store().borrow();
     let node = store
         .semantic_family_checked(family.node_id())
-        .map_err(|e| e.to_string())?;
+        .map_err(AuthoringError::from)?;
     let mut seen = BTreeSet::new();
     let mut transaction = SemanticMutationTransaction::new();
     let changed = members
@@ -224,11 +225,11 @@ impl MobjectFamily {
     pub fn create(
         store: Rc<RefCell<SemanticStore>>,
         members: &[MobjectFamilyMember<'_>],
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         let (transaction, family) = family_creation_transaction(&store, members)?;
         let result = transaction
             .apply(&mut store.borrow_mut())
-            .map_err(|e| e.to_string())?;
+            .map_err(AuthoringError::from)?;
         let node = result
             .resolve(family)
             .expect("committed family token resolves");
@@ -236,21 +237,27 @@ impl MobjectFamily {
     }
 
     /// Add one direct member; repeated additions preserve its existing order.
-    pub fn add(&self, member: MobjectFamilyMember<'_>) -> Result<bool, String> {
+    pub fn add(&self, member: MobjectFamilyMember<'_>) -> Result<bool, AuthoringError> {
         Ok(self.add_many(&[member])?[0])
     }
 
     /// Remove one direct member without changing that member's semantic identity.
-    pub fn remove(&self, member: MobjectFamilyMember<'_>) -> Result<bool, String> {
+    pub fn remove(&self, member: MobjectFamilyMember<'_>) -> Result<bool, AuthoringError> {
         Ok(self.remove_many(&[member])?[0])
     }
 
     /// Commit a whole direct-member addition before returning per-input decisions.
-    pub fn add_many(&self, members: &[MobjectFamilyMember<'_>]) -> Result<Vec<bool>, String> {
+    pub fn add_many(
+        &self,
+        members: &[MobjectFamilyMember<'_>],
+    ) -> Result<Vec<bool>, AuthoringError> {
         self.edit_members(members, true)
     }
 
-    pub fn remove_many(&self, members: &[MobjectFamilyMember<'_>]) -> Result<Vec<bool>, String> {
+    pub fn remove_many(
+        &self,
+        members: &[MobjectFamilyMember<'_>],
+    ) -> Result<Vec<bool>, AuthoringError> {
         self.edit_members(members, false)
     }
 
@@ -258,26 +265,32 @@ impl MobjectFamily {
         &self,
         members: &[MobjectFamilyMember<'_>],
         adding: bool,
-    ) -> Result<Vec<bool>, String> {
+    ) -> Result<Vec<bool>, AuthoringError> {
         let (transaction, changed) = family_membership_transaction(self, members, adding)?;
         transaction
             .apply(&mut self.store.borrow_mut())
-            .map_err(|e| e.to_string())?;
+            .map_err(AuthoringError::from)?;
         Ok(changed)
     }
 
     pub fn from_node(
         store: Rc<RefCell<SemanticStore>>,
         node: SemanticNodeId,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AuthoringError> {
         store
             .borrow()
             .semantic_family_checked(node)
-            .map_err(|error| error.to_string())?;
+            .map_err(AuthoringError::from)?;
         Ok(Self { store, node })
     }
 
-    pub fn store(&self) -> &Rc<RefCell<SemanticStore>> {
+    /// Raw shared arena access for explicit integration, not live mutation.
+    ///
+    /// External edits can invalidate generational handles and leave an existing
+    /// execution session on a stale scene revision. Use `Scene::live` and its
+    /// coherent publication operations for edits after lowering. No revision
+    /// validation is bypassed by this accessor; see [`crate::integration`].
+    pub fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
         &self.store
     }
 
@@ -285,16 +298,17 @@ impl MobjectFamily {
         self.node
     }
 
-    pub fn validate(&self) -> Result<(), String> {
+    /// Validate this handle without mutation, preserving typed identity/resource errors.
+    pub fn validate(&self) -> Result<(), AuthoringError> {
         self.store
             .borrow()
             .semantic_family_checked(self.node)
             .map(|_| ())
-            .map_err(|error| error.to_string())
+            .map_err(Into::into)
     }
 
     /// Aggregate the current layout bounds of this family's authoritative leaves.
-    pub fn layout_bounds(&self) -> Result<Option<Bounds2D64>, String> {
+    pub fn layout_bounds(&self) -> Result<Option<Bounds2D64>, AuthoringError> {
         Ok(self.layout()?.bounds())
     }
 
@@ -328,7 +342,8 @@ pub(crate) fn prepare_subset_display_transaction(
             .map_err(|_| "subset display supports direct object members, not nested families")?
             .style
             .clone();
-        crate::semantic_mobject::edit_manim_opacity(&mut style, 0.0)?;
+        crate::semantic_mobject::edit_manim_opacity(&mut style, 0.0)
+            .map_err(|error| error.to_string())?;
         transaction.replace_style(member, style);
     }
     Ok(transaction)
@@ -345,14 +360,14 @@ mod tests {
         let first = scene.square(0.4).unwrap();
         let second = scene.circle(0.2).unwrap();
         let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
-        let before = scene.store().borrow().scene_revision();
+        let before = scene.integration_store().borrow().scene_revision();
 
         family.arrange(1.0, 0.0, 0.2, true).unwrap();
 
         let first_center = first.center().unwrap();
         let second_center = second.center().unwrap();
         assert_eq!(
-            scene.store().borrow().scene_revision(),
+            scene.integration_store().borrow().scene_revision(),
             before.checked_next().unwrap()
         );
         assert!((second_center.0 - first_center.0 - 0.6).abs() < 1e-6);
@@ -370,20 +385,20 @@ mod tests {
         let nested = scene.family(&[(&first).into(), (&second).into()]).unwrap();
         let outer = scene.family(&[(&first).into()]).unwrap();
         scene
-            .store()
+            .integration_store()
             .borrow_mut()
             .add_member(outer.node_id(), nested.node_id())
             .unwrap();
-        let before = scene.store().borrow().scene_revision();
+        let before = scene.integration_store().borrow().scene_revision();
 
         assert!(outer.arrange(1.0, 0.0, f64::NAN, true).is_err());
-        assert_eq!(scene.store().borrow().scene_revision(), before);
+        assert_eq!(scene.integration_store().borrow().scene_revision(), before);
         assert_eq!(first.center().unwrap(), (0.0, 0.0));
         assert_eq!(second.center().unwrap(), (2.0, 0.0));
 
         outer.arrange(1.0, 0.0, 0.2, true).unwrap();
         assert_eq!(
-            scene.store().borrow().scene_revision(),
+            scene.integration_store().borrow().scene_revision(),
             before.checked_next().unwrap()
         );
         assert!((first.center().unwrap().0 + 1.0).abs() < 1e-6);
@@ -400,7 +415,7 @@ mod tests {
         second.shift(2.0, 1.0).unwrap();
 
         let outer = {
-            let mut store = scene.store().borrow_mut();
+            let mut store = scene.integration_store().borrow_mut();
             let nested = store.insert_family();
             store.add_member(nested, first.node_id()).unwrap();
             store.add_member(nested, second.node_id()).unwrap();
@@ -409,7 +424,7 @@ mod tests {
             store.add_member(outer, nested).unwrap();
             outer
         };
-        let family = MobjectFamily::from_node(Rc::clone(scene.store()), outer).unwrap();
+        let family = MobjectFamily::from_node(Rc::clone(scene.integration_store()), outer).unwrap();
 
         assert_eq!(
             family.layout_bounds().unwrap(),

@@ -84,7 +84,7 @@ mod tests {
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
         let before = session.publication_context();
-        let nodes = square.store().borrow().len();
+        let nodes = square.integration_store().borrow().len();
         for (target, pivot) in [
             (&square, ManimRotationPivot::Point(captured.0, captured.1)),
             (&square, ManimRotationPivot::Edge(1.0, 0.0)),
@@ -102,7 +102,7 @@ mod tests {
             );
             assert!(result.is_err(), "unsupported pivot accepted");
             assert_eq!(session.publication_context(), before);
-            assert_eq!(square.store().borrow().len(), nodes);
+            assert_eq!(square.integration_store().borrow().len(), nodes);
             assert!(session.frame().objects.is_empty());
             assert!(session.take_frame_changes().is_empty());
         }
@@ -163,7 +163,7 @@ mod tests {
             session.take_frame_changes();
             let before = session.publication_context();
             let before_frame = session.frame().clone();
-            let nodes = square.store().borrow().len();
+            let nodes = square.integration_store().borrow().len();
             let mut children = vec![
                 Request::ManimRotate {
                     target: &square,
@@ -200,7 +200,7 @@ mod tests {
                 "unexpected rejection: {result:?}"
             );
             assert_eq!(session.publication_context(), before);
-            assert_eq!(square.store().borrow().len(), nodes);
+            assert_eq!(square.integration_store().borrow().len(), nodes);
             assert_eq!(session.frame(), &before_frame);
             assert!(session.take_frame_changes().is_empty());
         }

@@ -53,3 +53,36 @@ fn authored_and_animated_fill_keep_stroke_and_object_opacity_independent() {
     assert_eq!(session.frame().objects[0].id, id);
     assert_paint(session.frame().objects[0].style, pink, 0.5);
 }
+
+#[test]
+fn partial_fill_edits_preserve_other_authored_paint_layers() {
+    for mode in 0..3 {
+        let scene = Scene::new();
+        let mut object = scene.square(1.0).unwrap();
+        object.set_fill(1.0, 0.0, 0.0, 0.25).unwrap();
+        object.set_stroke_color(0.0, 1.0, 0.0, 1.0).unwrap();
+        object.set_stroke_opacity(0.75).unwrap();
+        object.set_object_opacity(0.8).unwrap();
+        let before = object.state().unwrap().style;
+        match mode {
+            0 => object.set_fill_color(0.0, 0.0, 1.0, 1.0).unwrap(),
+            1 => object.set_fill_opacity(0.5).unwrap(),
+            _ => object.set_fill(0.0, 0.0, 1.0, 0.4).unwrap(),
+        }
+        let after = object.state().unwrap().style;
+        assert_eq!(after.stroke, before.stroke);
+        assert_eq!(after.stroke_opacity, before.stroke_opacity);
+        assert_eq!(after.object_opacity, before.object_opacity);
+        let expected_opacity = [0.25, 0.5, 0.4][mode];
+        assert_eq!(object.fill_opacity().unwrap(), expected_opacity);
+        if mode == 1 {
+            assert_eq!(after.fill, before.fill);
+        } else {
+            assert_ne!(after.fill, before.fill);
+            let mut expected = before.clone();
+            expected.fill = after.fill.clone();
+            expected.fill_opacity = expected_opacity;
+            assert_eq!(after, expected);
+        }
+    }
+}

@@ -90,20 +90,22 @@ impl LiveContinuation for UncreateOptions {
 
 pub fn program() -> Result<LiveProgram<UncreateOptions>, String> {
     let scene = Scene::new();
-    let mut first = scene.square(0.6)?;
-    let mut kept = scene.circle(0.25)?;
-    let mut forward = scene.square(0.4)?;
+    let mut first = scene.square(0.6).map_err(|error| error.to_string())?;
+    let mut kept = scene.circle(0.25).map_err(|error| error.to_string())?;
+    let mut forward = scene.square(0.4).map_err(|error| error.to_string())?;
     for (object, color) in [
         (&mut first, Color::BLUE),
         (&mut kept, Color::PINK),
         (&mut forward, Color::GREEN),
     ] {
-        object.set_color(
-            f64::from(color.red),
-            f64::from(color.green),
-            f64::from(color.blue),
-            1.0,
-        )?;
+        object
+            .set_color(
+                f64::from(color.red),
+                f64::from(color.green),
+                f64::from(color.blue),
+                1.0,
+            )
+            .map_err(|error| error.to_string())?;
     }
     scene
         .into_live_program(UncreateOptions {

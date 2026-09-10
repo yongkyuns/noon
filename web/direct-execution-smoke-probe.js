@@ -1,5 +1,6 @@
 const {
   createDirectAffineCallbackSmokeRenderer,
+  createDirectLiveUpdaterLifecycleSmokeRenderer,
   createDirectCallbackPaintSmokeRenderer,
   createDirectLineMatchSmokeRenderer,
   createDirectAffineCompletionSmokeRenderer,
@@ -134,6 +135,43 @@ async function directLiveGeometryConstructionProof(expectedBackend) {
         dot.red <= dot.green + 30 || annulus.red <= annulus.blue + 30 ||
         annulus.green <= annulus.blue + 30 || Math.min(underline.red, underline.green, underline.blue) <= 150) {
       throw new Error(`typed live geometry did not publish coherent initial/final frames: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
+async function directLiveUpdaterLifecycleProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectLiveUpdaterLifecycleSmokeRenderer(canvas);
+  const samples = [];
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await settleDirectPublication(renderer, 0);
+    let final;
+    for (const milliseconds of [1000, 2000, 3000, 4000, 4500]) {
+      renderer.advanceDirectRealtime(milliseconds);
+      final = await settleDirectPublication(renderer, milliseconds);
+      const expectedAngle = milliseconds <= 2000 ? milliseconds / 1000
+        : milliseconds <= 4000 ? (4000 - milliseconds) / 1000 : 0;
+      const color = await sampleRenderedColor(canvas,
+        -0.6 * Math.cos(expectedAngle), -0.6 * Math.sin(expectedAngle));
+      const time = renderer.time();
+      samples.push({ time, expectedAngle, color });
+      if (Math.abs(time - milliseconds / 1000) > 1e-6 ||
+          Math.min(color.red, color.green) <= color.blue + 30) {
+        throw new Error(`live updater reversal/freeze pixel mismatch: ${JSON.stringify(samples)}`);
+      }
+    }
+    const metrics = { backend: renderer.rendererBackend(), time: renderer.time(),
+      objects: renderer.objectCount(), cadence: final.cadence, samples };
+    if (metrics.backend !== expectedBackend || metrics.objects !== 2 ||
+        metrics.time !== 4.5 || metrics.cadence !== "idle") {
+      throw new Error(`live updater lifecycle did not settle: ${JSON.stringify(metrics)}`);
     }
     return metrics;
   } finally {
@@ -1367,7 +1405,7 @@ async function directFamilyPlacementProof(expectedBackend) {
   try {
     renderer.resize(canvas.width, canvas.height);
     const wake = await settleDirectPublication(renderer, 0);
-    const blue = await sampleRenderedColor(canvas, -0.4, 1);
+    const blue = await sampleRenderedColor(canvas, -0.4, 0.7);
     const yellow = await sampleRenderedColor(canvas, 0.4, 1);
     const red = await sampleRenderedColor(canvas, 0, 0);
     const metrics = { backend: renderer.rendererBackend(), objects: renderer.objectCount(), blue, yellow, red };
@@ -1998,8 +2036,12 @@ async function directOrdinaryCallbackSparseReadsProof(expectedBackend) {
     throw new Error(`direct sparse-read lifecycle is invalid ${JSON.stringify(metrics)}`);
   }
   for (const [label, color] of Object.entries({ initialRead, midpoint, persistentHold, anchor })) {
-    if (color.blue < 180 || color.green < 60) {
-      throw new Error(`direct sparse-read ${label} is not visibly blue: ${JSON.stringify(metrics)}`);
+    // Both leaves have shared fill alpha 0.6. At the initial anchor they
+    // overlap: 1 - (1 - 0.6)^2 = 0.84. Later samples contain one leaf.
+    const expectedBlue = 255 * (label === "initialRead" ? 0.84 : 0.6);
+    if (Math.abs(color.blue - expectedBlue) > 16 ||
+        Math.abs(color.green - expectedBlue * 0.4) > 16 || color.red > 16) {
+      throw new Error(`direct sparse-read ${label} lost shared paint alpha: ${JSON.stringify(metrics)}`);
     }
   }
   return metrics;
@@ -2458,6 +2500,7 @@ async function start() {
   metrics.focusOn = await directFocusOnProof(expectedBackend);
   metrics.rotating = await directRotatingProof(expectedBackend);
   metrics.scaleInPlace = await directScaleInPlaceProof(expectedBackend);
+  metrics.liveUpdaterLifecycle = await directLiveUpdaterLifecycleProof(expectedBackend);
   metrics.linePassingFlash = await directLinePassingFlashProof(expectedBackend);
   metrics.ordinaryBecomeSemantics = await directOrdinaryBecomeSemanticsProof(expectedBackend);
   metrics.automaticWaitText = await directAutomaticWaitTextProof(expectedBackend);

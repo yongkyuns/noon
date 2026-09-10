@@ -23,8 +23,7 @@ class ManimSharedFamilyArrangeTests(unittest.TestCase):
             import json
 
             import _manim_compat
-            _manim_compat.install()
-            import _manim_phase_b  # noqa: F401
+
             import _manim_semantic_handles as handles
 
 
@@ -103,7 +102,7 @@ class ManimSharedFamilyArrangeTests(unittest.TestCase):
             _geometry_test.install_module_bridge(handles, store.createMobject)
             import _typed_family_test_support as _family_test
             _family_test.install_bridge(handles, store.createFamily, FakeFamilyHandle, FakeObjectHandle)
-            handles.install()
+
 
             def forbidden_fallback(*args, **kwargs):
                 raise AssertionError(\"Python arrange fallback must not run on shared path\")
@@ -129,7 +128,7 @@ class ManimSharedFamilyArrangeTests(unittest.TestCase):
             try:
                 family.arrange()
                 raise AssertionError("shared rejection was swallowed")
-            except ValueError as error:
+            except RuntimeError as error:
                 assert str(error) == "invalid shared arrangement"
             store.reject_arrange = False
 

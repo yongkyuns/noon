@@ -19,16 +19,13 @@ class ManimShowPassingFlashTests(unittest.TestCase):
         source = textwrap.dedent(
             r"""
             import json
+            from test_noon_errors import diagnostic, js_exception
             from types import SimpleNamespace
             import sys
             import types
 
             fake_js = types.ModuleType("js")
             fake_js.noonResolveAnimationOptions = lambda *args: None
-            fake_js.noonResolveCompositionSchedule = lambda *args: None
-            fake_js.noonResolveUniformCompositionSchedule = lambda *args: None
-            fake_js.noonResolveLifecyclePlan = lambda *args: None
-            fake_js.noonValidatePresenceTransition = lambda *args: None
 
             class Handle:
                 def __init__(self, snapshot_json):
@@ -39,7 +36,9 @@ class ManimShowPassingFlashTests(unittest.TestCase):
 
                 def manimLineEndpoints(self):
                     if "line" not in self.snapshot["geometry"]:
-                        raise ValueError("mobject content is not an analytic Line")
+                        raise js_exception(diagnostic("unsupported_operation", "authoring.unsupported",
+                            "Line endpoint queries require an analytic Line",
+                            cause=diagnostic("unsupported_operation", "authoring.unsupported_operation")))
                     line = self.snapshot["geometry"]["line"]
                     return SimpleNamespace(
                         startX=line["start"]["x"], startY=line["start"]["y"],
@@ -51,19 +50,17 @@ class ManimShowPassingFlashTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_compat
-            _manim_compat.install()
+
             import _manim_rate_functions
-            _manim_rate_functions.install()
-            import _manim_phase_b  # noqa: F401
             import _manim_animate  # noqa: F401
             import _manim_composition
-            _manim_composition.install()
+            play_before_composition = _manim_compat.Scene.play
+            assert _manim_compat.Scene.play is play_before_composition
             import _manim_semantic_handles as handles
-            handles.install()
+
             import _manim_indication
 
             play_before = _manim_compat.Scene.play
-            _manim_indication.install()
             assert _manim_compat.Scene.play is play_before
 
             from noon import Line, ShowPassingFlash, Square, linear

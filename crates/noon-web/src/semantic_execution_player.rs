@@ -1,10 +1,12 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
-#[cfg(any(target_arch = "wasm32", test))]
-use noon::TimelineWakeState;
-use noon::{
-    CallbackAdvance, CallbackPhaseToken, CallbackReadRequest, CallbackReadValue,
-    EffectivePropertyBatch, EffectiveSemanticPropertyWrite, ExecutionSession, RuntimeIdentity,
+use crate::authoring_error::AuthoringFailure;
+use noon::integration::{
+    CallbackAdvance, CallbackPhaseToken, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
+    RuntimeIdentity,
 };
+#[cfg(any(target_arch = "wasm32", test))]
+use noon::integration::{CallbackReadRequest, CallbackReadValue, TimelineWakeState};
+use noon::ExecutionSession;
 use noon_core::{
     ExecutionRevision, FrameEpoch, PublicationContext, Rect, SceneRevision, SemanticNodeId, Style,
     Transform2D,
@@ -151,7 +153,37 @@ impl LiveSegmentReceipt {
     }
 }
 
+/// Existing runtime and transport identities, observed at an ownership handoff.
+/// This is not a new identity allocator, runtime, or continuation state machine.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ExecutionPlayerIdentity {
+    runtime: RuntimeIdentity,
+    transport_session: u32,
+}
+
 impl SemanticExecutionPlayer {
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn ownership_identity(&self) -> ExecutionPlayerIdentity {
+        ExecutionPlayerIdentity {
+            runtime: self.session.runtime_identity(),
+            transport_session: self.encoder.session(),
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn belongs_to_authoring_scene(
+        &self,
+        store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        root: noon_core::SemanticNodeId,
+    ) -> bool {
+        self.semantic_root == Some(root)
+            && self
+                .semantics
+                .as_ref()
+                .is_some_and(|owned| std::rc::Rc::ptr_eq(owned, store))
+    }
+
     fn playback_clock(session: &ExecutionSession, duration: f64) -> Result<PlaybackClock, String> {
         if session.has_required_callbacks() {
             Ok(PlaybackClock::once())
@@ -162,8 +194,8 @@ impl SemanticExecutionPlayer {
 
     fn retain_callback_phase(
         &mut self,
-        invocations: Vec<noon::RequiredCallbackInvocation>,
-        overlay: noon::CallbackPhaseOverlay,
+        invocations: Vec<noon::integration::RequiredCallbackInvocation>,
+        overlay: noon::integration::CallbackPhaseOverlay,
     ) -> Result<String, String> {
         let token = overlay.token();
         let phase_time = overlay.time();
@@ -365,7 +397,7 @@ impl SemanticExecutionPlayer {
         mobject: &noon::Mobject,
         x: f64,
         y: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -378,7 +410,7 @@ impl SemanticExecutionPlayer {
         )
         .set_translation(mobject, x, y)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -388,7 +420,7 @@ impl SemanticExecutionPlayer {
         target: noon::LiveLayoutTarget<'_>,
         edge: (f64, f64),
         mask: (f64, f64),
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.move_to(mobject, target, edge, mask))
             .map(|_| ())
     }
@@ -399,7 +431,7 @@ impl SemanticExecutionPlayer {
         target: &noon::Mobject,
         other: &noon::Mobject,
         options: noon::ManimBecomeOptions,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -412,14 +444,14 @@ impl SemanticExecutionPlayer {
         )
         .become_mobject(target, other, options)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_create_manim_geometry(
         &mut self,
         options: noon::ManimGeometryOptions,
-    ) -> Result<noon::Mobject, String> {
+    ) -> Result<noon::Mobject, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -431,11 +463,14 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .create_manim_geometry(options)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_create_text(&mut self, text: noon::Text) -> Result<noon::Mobject, String> {
+    pub(crate) fn live_create_text(
+        &mut self,
+        text: noon::Text,
+    ) -> Result<noon::Mobject, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -447,11 +482,14 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .create_text(text)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_create_typst(&mut self, text: noon::Typst) -> Result<noon::Mobject, String> {
+    pub(crate) fn live_create_typst(
+        &mut self,
+        text: noon::Typst,
+    ) -> Result<noon::Mobject, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -463,14 +501,14 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .create_typst(text)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_create_math_typst(
         &mut self,
         text: noon::MathTypst,
-    ) -> Result<noon::Mobject, String> {
+    ) -> Result<noon::Mobject, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -482,7 +520,53 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .create_math_typst(text)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_color(
+        &mut self,
+        family: &noon::MobjectFamily,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_family_color(family, red, green, blue, alpha))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_fill(
+        &mut self,
+        family: &noon::MobjectFamily,
+        color: Option<noon::Color>,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_family_fill(family, color, opacity))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_stroke(
+        &mut self,
+        family: &noon::MobjectFamily,
+        color: Option<noon::Color>,
+        width: Option<f64>,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_family_stroke(family, color, width, opacity))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_opacity(
+        &mut self,
+        family: &noon::MobjectFamily,
+        opacity: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_family_opacity(family, opacity))
+            .map(|_| ())
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -493,7 +577,7 @@ impl SemanticExecutionPlayer {
         green: f64,
         blue: f64,
         opacity: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_fill(mobject, red, green, blue, opacity))
             .map(|_| ())
     }
@@ -506,13 +590,16 @@ impl SemanticExecutionPlayer {
         green: f64,
         blue: f64,
         alpha: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_fill_color(mobject, red, green, blue, alpha))
             .map(|_| ())
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_disable_fill(&mut self, mobject: &noon::Mobject) -> Result<(), String> {
+    pub(crate) fn live_disable_fill(
+        &mut self,
+        mobject: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.disable_fill(mobject))
             .map(|_| ())
     }
@@ -522,7 +609,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         mobject: &noon::Mobject,
         opacity: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_fill_opacity(mobject, opacity))
             .map(|_| ())
     }
@@ -535,7 +622,7 @@ impl SemanticExecutionPlayer {
         green: f64,
         blue: f64,
         alpha: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_color(mobject, red, green, blue, alpha))
             .map(|_| ())
     }
@@ -548,7 +635,7 @@ impl SemanticExecutionPlayer {
         green: f64,
         blue: f64,
         opacity: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_stroke(mobject, red, green, blue, opacity))
             .map(|_| ())
     }
@@ -561,13 +648,16 @@ impl SemanticExecutionPlayer {
         green: f64,
         blue: f64,
         alpha: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_stroke_color(mobject, red, green, blue, alpha))
             .map(|_| ())
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_disable_stroke(&mut self, mobject: &noon::Mobject) -> Result<(), String> {
+    pub(crate) fn live_disable_stroke(
+        &mut self,
+        mobject: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.disable_stroke(mobject))
             .map(|_| ())
     }
@@ -577,7 +667,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         mobject: &noon::Mobject,
         opacity: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_stroke_opacity(mobject, opacity))
             .map(|_| ())
     }
@@ -587,7 +677,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         mobject: &noon::Mobject,
         opacity: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_opacity(mobject, opacity))
             .map(|_| ())
     }
@@ -597,7 +687,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         mobject: &noon::Mobject,
         opacity: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_object_opacity(mobject, opacity))
             .map(|_| ())
     }
@@ -606,7 +696,7 @@ impl SemanticExecutionPlayer {
     fn with_live_session<T>(
         &mut self,
         operation: impl FnOnce(&mut noon::LiveSession<'_>) -> Result<T, noon::LiveSessionError>,
-    ) -> Result<T, String> {
+    ) -> Result<T, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -617,7 +707,7 @@ impl SemanticExecutionPlayer {
                 .expect("live semantic store has one scene root"),
             &mut self.session,
         ))
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -625,7 +715,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         target: &noon::Mobject,
         source: &noon::Mobject,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -638,7 +728,7 @@ impl SemanticExecutionPlayer {
         )
         .replace_content(target, source)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -647,7 +737,7 @@ impl SemanticExecutionPlayer {
         mobject: &noon::Mobject,
         x: f64,
         y: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -660,7 +750,7 @@ impl SemanticExecutionPlayer {
         )
         .shift(mobject, x, y)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -669,8 +759,67 @@ impl SemanticExecutionPlayer {
         family: &noon::MobjectFamily,
         x: f64,
         y: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|session| session.shift_family(family, x, y))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_arrange_family_in_grid(
+        &mut self,
+        family: &noon::MobjectFamily,
+        rows: Option<usize>,
+        columns: Option<usize>,
+        gap_x: f64,
+        gap_y: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| {
+            live.arrange_family_in_grid(family, rows, columns, gap_x, gap_y)
+        })
+        .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_rescale_to_fit(
+        &mut self,
+        source: &noon::LayoutAnchor,
+        length: f64,
+        dimension: noon::LayoutDimension,
+        stretch: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.rescale_to_fit(source, length, dimension, stretch))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_match_dim_size(
+        &mut self,
+        source: &noon::LayoutAnchor,
+        target: &noon::LayoutAnchor,
+        dimension: noon::LayoutDimension,
+        stretch: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.match_dim_size(source, target, dimension, stretch))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_scale_family(
+        &mut self,
+        family: &noon::MobjectFamily,
+        x: f64,
+        y: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|session| session.scale_family(family, x, y))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_rotate_family(
+        &mut self,
+        family: &noon::MobjectFamily,
+        angle: f64,
+        pivot: noon::ManimRotationPivot,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|session| session.rotate_family(family, angle, pivot))
             .map(|_| ())
     }
 
@@ -679,7 +828,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         family: &noon::MobjectFamily,
         options: &noon::FamilyArrangeOptions,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|session| session.arrange_family_with_options(family, options))
             .map(|_| ())
     }
@@ -689,7 +838,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         source: &noon::MobjectFamily,
         references: &[noon::MobjectFamilyMember<'_>],
-    ) -> Result<noon::FamilyCopy, String> {
+    ) -> Result<noon::FamilyCopy, AuthoringFailure> {
         self.with_live_session(|live| live.copy_family_with_references(source, references))
     }
 
@@ -697,7 +846,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_family_layout(
         &mut self,
         family: &noon::MobjectFamily,
-    ) -> Result<noon::EffectiveMobjectLayout, String> {
+    ) -> Result<noon::EffectiveMobjectLayout, AuthoringFailure> {
         self.with_live_session(|live| live.effective_family_layout(family))
     }
 
@@ -708,7 +857,7 @@ impl SemanticExecutionPlayer {
         target: noon::LiveLayoutTarget<'_>,
         edge: (f64, f64),
         mask: (f64, f64),
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.move_family_to(family, target, edge, mask))
             .map(|_| ())
     }
@@ -719,9 +868,20 @@ impl SemanticExecutionPlayer {
         source: &noon::LayoutAnchor,
         target: noon::LiveLayoutTarget<'_>,
         aligner: &noon::LayoutAnchor,
-        args: noon::semantic_mobject::ManimNextToArgs,
-    ) -> Result<(), String> {
+        args: noon::ManimNextToArgs,
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.next_layout_to_aligned(source, target, aligner, args))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_align_family_on_frame(
+        &mut self,
+        family: &noon::MobjectFamily,
+        direction: (f64, f64),
+        buff: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.align_family_on_frame(family, direction, buff))
             .map(|_| ())
     }
 
@@ -731,18 +891,18 @@ impl SemanticExecutionPlayer {
         family: &noon::MobjectFamily,
         target: noon::LiveLayoutTarget<'_>,
         axis: (f64, f64),
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.align_family_to(family, target, axis))
             .map(|_| ())
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_set_scale(
         &mut self,
         mobject: &noon::Mobject,
         x: f64,
         y: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -755,7 +915,7 @@ impl SemanticExecutionPlayer {
         )
         .set_scale(mobject, x, y)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -764,7 +924,7 @@ impl SemanticExecutionPlayer {
         mobject: &noon::Mobject,
         x: f64,
         y: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -777,15 +937,15 @@ impl SemanticExecutionPlayer {
         )
         .scale(mobject, x, y)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_set_rotation(
         &mut self,
         mobject: &noon::Mobject,
         angle: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -798,7 +958,7 @@ impl SemanticExecutionPlayer {
         )
         .set_rotation(mobject, angle)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -806,7 +966,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         mobject: &noon::Mobject,
         angle: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -819,14 +979,14 @@ impl SemanticExecutionPlayer {
         )
         .rotate(mobject, angle)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective(
         &mut self,
         mobject: &noon::Mobject,
-    ) -> Result<noon::EffectiveMobjectState, String> {
+    ) -> Result<noon::EffectiveMobjectState, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -838,14 +998,14 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .effective(mobject)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective_layout(
         &mut self,
         mobject: &noon::Mobject,
-    ) -> Result<noon::EffectiveMobjectLayout, String> {
+    ) -> Result<noon::EffectiveMobjectLayout, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -857,14 +1017,14 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .effective_layout(mobject)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective_line_endpoints(
         &mut self,
         mobject: &noon::Mobject,
-    ) -> Result<noon::ManimLineEndpoints, String> {
+    ) -> Result<noon::ManimLineEndpoints, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -876,14 +1036,14 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .effective_line_endpoints(mobject)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective_manim_color(
         &mut self,
         mobject: &noon::Mobject,
-    ) -> Result<noon_core::Color, String> {
+    ) -> Result<noon_core::Color, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -895,7 +1055,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .effective_manim_color(mobject)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     /// Publish one already validated scene-membership batch through the active
@@ -904,7 +1064,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_edit_membership(
         &mut self,
         request: noon::SceneMembershipRequest<'_>,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.require_completed_live_segment()?;
         let semantics = self
             .semantics
@@ -918,28 +1078,61 @@ impl SemanticExecutionPlayer {
         )
         .edit_membership(request)
         .map(|_| ())
+        .map_err(AuthoringFailure::from)
+    }
+
+    /// Route callback declarations through the same shared semantic publication
+    /// as native authoring. The browser host owns no callback schedule mirror.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_edit_updaters(
+        &mut self,
+        transaction: noon_core::SemanticMutationTransaction,
+    ) -> Result<(), String> {
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .apply(transaction)
+        .map(|_| ())
         .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn require_completed_live_segment(&self) -> Result<(), String> {
+    fn require_completed_live_segment(&self) -> Result<(), AuthoringFailure> {
         self.require_callback_progression_available()?;
         if self.has_pending_live_segment() {
-            return Err("complete the current live segment before continuing".into());
+            return Err(AuthoringFailure::from(
+                noon::ExecutionSessionPublicationError::SegmentCompletionPending,
+            )
+            .with_message("complete the current live segment before continuing"));
         }
         Ok(())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn require_callback_progression_available(&self) -> Result<(), String> {
+    pub(crate) fn require_callback_progression_available(&self) -> Result<(), AuthoringFailure> {
         if let Some(termination) = self.session.callback_termination() {
-            return Err(format!(
+            return Err(AuthoringFailure::from(
+                noon::ExecutionSegmentCompletionError::CallbackTerminated(termination),
+            )
+            .with_message(format!(
                 "required callback progression terminated: {:?}",
                 termination.kind()
-            ));
+            )));
         }
         if self.pending_callback_phase.is_some() {
-            return Err("a required callback phase is pending host completion".into());
+            return Err(AuthoringFailure::from(
+                noon::ExecutionSessionPublicationError::RequiredCallbackPending,
+            )
+            .with_message("a required callback phase is pending host completion"));
         }
         Ok(())
     }
@@ -949,7 +1142,8 @@ impl SemanticExecutionPlayer {
         &mut self,
         animation: &noon::DeclaredAnimation,
     ) -> Result<f64, String> {
-        self.require_completed_live_segment()?;
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
         let semantics = self
             .semantics
             .clone()
@@ -980,7 +1174,8 @@ impl SemanticExecutionPlayer {
         endpoint: noon::AffineLifecycleEndpoint,
         options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
-        self.require_completed_live_segment()?;
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
         let semantics = self
             .semantics
             .clone()
@@ -1005,7 +1200,10 @@ impl SemanticExecutionPlayer {
     /// Query root membership from the exact shared live session. This is a
     /// derived wrapper observation, never a frontend lifecycle authority.
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_contains(&mut self, target: &noon::Mobject) -> Result<bool, String> {
+    pub(crate) fn live_contains(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<bool, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -1017,7 +1215,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .contains(target)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     /// Atomically admit and activate one recursive composition request through the shared
@@ -1029,7 +1227,8 @@ impl SemanticExecutionPlayer {
         request: &noon::AnimationCompositionRequest<'_>,
         play_options: noon_core::AnimationOptions,
     ) -> Result<f64, String> {
-        self.require_completed_live_segment()?;
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
         let semantics = self
             .semantics
             .clone()
@@ -1056,7 +1255,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_value_tracker(
         &mut self,
         initial: f64,
-    ) -> Result<noon::ValueTracker, String> {
+    ) -> Result<noon::ValueTracker, AuthoringFailure> {
         self.require_completed_live_segment()?;
         let semantics = self
             .semantics
@@ -1069,7 +1268,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .value_tracker(initial)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     /// Associate and sparsely enroll one pre-existing tracker in this live root.
@@ -1077,7 +1276,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_associate_value_tracker(
         &mut self,
         tracker: &noon::ValueTracker,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         self.require_completed_live_segment()?;
         let semantics = self
             .semantics
@@ -1090,7 +1289,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .associate_value_tracker(tracker)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     /// Create a detached target through the retained session so its semantic
@@ -1100,7 +1299,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_target_editor(
         &mut self,
         source: &noon::Mobject,
-    ) -> Result<noon::Mobject, String> {
+    ) -> Result<noon::Mobject, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -1112,7 +1311,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .target_editor(source)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1121,7 +1320,7 @@ impl SemanticExecutionPlayer {
         family: &noon::MobjectFamily,
         members: &[noon::MobjectFamilyMember<'_>],
         adding: bool,
-    ) -> Result<Vec<bool>, String> {
+    ) -> Result<Vec<bool>, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -1136,7 +1335,7 @@ impl SemanticExecutionPlayer {
         } else {
             live.remove_family_members(family, members)
         }
-        .map_err(|e| e.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     /// Create one detached family through the retained session so its node and
@@ -1145,7 +1344,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_family(
         &mut self,
         members: &[noon::MobjectFamilyMember<'_>],
-    ) -> Result<noon::MobjectFamily, String> {
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         let semantics = self
             .semantics
             .clone()
@@ -1157,7 +1356,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .family(members)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     /// Apply subset-display constructor preparation through the active retained
@@ -1167,7 +1366,8 @@ impl SemanticExecutionPlayer {
         &mut self,
         family: &noon::MobjectFamily,
     ) -> Result<(), String> {
-        self.require_completed_live_segment()?;
+        self.require_completed_live_segment()
+            .map_err(|error| error.to_string())?;
         let semantics = self
             .semantics
             .clone()
@@ -1184,7 +1384,7 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_wait(&mut self, duration: f64) -> Result<f64, String> {
+    pub(crate) fn live_wait(&mut self, duration: f64) -> Result<f64, AuthoringFailure> {
         self.require_completed_live_segment()?;
         let semantics = self
             .semantics
@@ -1197,7 +1397,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .wait_segment(duration)
-        .map_err(|error| error.to_string())?;
+        .map_err(AuthoringFailure::from)?;
         let end_time = segment.end_time();
         self.clock = self
             .live_clock_at(self.session.frame().time, end_time, true)
@@ -1236,7 +1436,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_segment_wake(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmExecutionWake, String> {
+    ) -> Result<WasmExecutionWake, AuthoringFailure> {
         self.require_callback_progression_available()?;
         let segment = self.live_segment()?;
         let plan = BrowserExecutionWakePlan::from_pending_segment(&self.session, segment);
@@ -1304,7 +1504,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn reanchor_live_segment_wake(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmExecutionWake, String> {
+    ) -> Result<WasmExecutionWake, AuthoringFailure> {
         self.require_callback_progression_available()?;
         self.live_segment()?;
         self.live_wake_clock
@@ -1322,7 +1522,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_drive_segment_from_wall_time(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmLiveSegmentDrive, String> {
+    ) -> Result<WasmLiveSegmentDrive, AuthoringFailure> {
         self.require_callback_progression_available()?;
         let segment = self.live_segment()?;
         let requested_time = self
@@ -1343,13 +1543,13 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_drive_segment_to_authored_time(
         &mut self,
         requested_time: f64,
-    ) -> Result<WasmLiveSegmentDrive, String> {
+    ) -> Result<WasmLiveSegmentDrive, AuthoringFailure> {
         self.require_callback_progression_available()?;
         let current = self.session.frame().time;
         if !requested_time.is_finite() || requested_time < current {
             return Err(format!(
                 "external continuation sample requires time at or after {current}, got {requested_time}"
-            ));
+            ).into());
         }
         let segment = self.live_segment()?;
         self.live_drive_segment_to(segment, requested_time)
@@ -1360,13 +1560,13 @@ impl SemanticExecutionPlayer {
         &mut self,
         segment: noon::ExecutionSegment,
         requested_time: f64,
-    ) -> Result<WasmLiveSegmentDrive, String> {
+    ) -> Result<WasmLiveSegmentDrive, AuthoringFailure> {
         let current_time = self.session.frame().time;
         let mut clock = self.live_clock_at(current_time, segment.end_time(), false)?;
         match self
             .session
             .advance_segment_to_callback_barrier(segment, requested_time)
-            .map_err(|error| error.to_string())?
+            .map_err(AuthoringFailure::from)?
         {
             CallbackAdvance::Ready(_) => {
                 clock.seek(self.session.frame().time).expect(
@@ -1392,7 +1592,10 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_advance_segment_to(&mut self, requested_time: f64) -> Result<bool, String> {
+    pub(crate) fn live_advance_segment_to(
+        &mut self,
+        requested_time: f64,
+    ) -> Result<bool, AuthoringFailure> {
         self.reject_required_callback_segment()?;
         let segment = self.live_segment()?;
         let drive = self.live_drive_segment_to(segment, requested_time)?;
@@ -1405,7 +1608,7 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_complete_segment(&mut self) -> Result<(), String> {
+    pub(crate) fn live_complete_segment(&mut self) -> Result<(), AuthoringFailure> {
         let segment = self.live_segment()?;
         let semantics = self
             .semantics
@@ -1419,7 +1622,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .complete_segment(segment)
-        .map_err(|error| error.to_string())?;
+        .map_err(AuthoringFailure::from)?;
         self.clock = clock;
         self.live_segment = Some(LiveSegmentReceipt::Completed(segment));
         self.live_wake_clock = BrowserExecutionWakeClock::default();
@@ -1429,13 +1632,13 @@ impl SemanticExecutionPlayer {
     /// Evaluate scalar tracks through the one execution session, then align the
     /// hold presentation at that same absolute time for a later handoff.
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_evaluate(&mut self, time: f64) -> Result<(), String> {
+    pub(crate) fn live_evaluate(&mut self, time: f64) -> Result<(), AuthoringFailure> {
         let mut clock = self.clock.clone();
-        clock.seek(time).map_err(|error| error.to_string())?;
+        clock.seek(time).map_err(AuthoringFailure::from)?;
         clock.pause();
         self.session
             .advance_to(time)
-            .map_err(|error| error.to_string())?;
+            .map_err(AuthoringFailure::from)?;
         self.clock = clock;
         Ok(())
     }
@@ -1444,7 +1647,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_effective_signal(
         &self,
         tracker: &noon::ValueTracker,
-    ) -> Result<f64, String> {
+    ) -> Result<f64, AuthoringFailure> {
         match self
             .session
             .effective_signal_value(tracker.node_id())
@@ -1460,7 +1663,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         tracker: &noon::ValueTracker,
         value: f64,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         if !value.is_finite() {
             return Err("ValueTracker value must be finite".into());
         }
@@ -1475,7 +1678,7 @@ impl SemanticExecutionPlayer {
             &mut self.session,
         )
         .set_value(tracker, value)
-        .map_err(|error| error.to_string())
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1687,7 +1890,7 @@ impl TryFrom<CallbackTokenWire> for CallbackPhaseToken {
                 )?),
                 FrameEpoch::new(parse("frame epoch", token.publication.frame_epoch)?),
             ),
-            noon::CallbackSequence::new(parse("sequence", token.sequence)?),
+            noon::integration::CallbackSequence::new(parse("sequence", token.sequence)?),
         ))
     }
 }
@@ -1725,27 +1928,28 @@ struct CallbackPhaseTokenEnvelope {
     token: CallbackTokenWire,
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum CallbackReadRequestWire {
     ScalarSignal { node: CallbackNodeWire },
     Object { node: CallbackNodeWire },
+    Family { node: CallbackNodeWire },
 }
 
-impl From<CallbackReadRequestWire> for CallbackReadRequest {
-    fn from(value: CallbackReadRequestWire) -> Self {
-        match value {
-            CallbackReadRequestWire::ScalarSignal { node } => Self::ScalarSignal(node.into()),
-            CallbackReadRequestWire::Object { node } => Self::Object(node.into()),
-        }
-    }
-}
-
+#[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum CallbackReadValueWire {
-    Scalar { value: f32 },
-    Object { object: CallbackPhaseObjectWire },
+    Scalar {
+        value: f32,
+    },
+    Object {
+        object: CallbackPhaseObjectWire,
+    },
+    Family {
+        objects: Vec<CallbackPhaseObjectWire>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1872,11 +2076,123 @@ fn decode_callback_batch(json: &str) -> Result<EffectivePropertyBatch, String> {
     Ok(EffectivePropertyBatch::new(token, writes))
 }
 
+// Keep the shared callback failures typed until the actual JS boundary. The
+// decoding and preflight/commit order below are the existing worker protocol.
+impl SemanticExecutionPlayer {
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub fn required_callback_read_json(
+        &mut self,
+        token_json: &str,
+        request_json: &str,
+    ) -> Result<String, AuthoringFailure> {
+        let token = Self::callback_token_from_json(token_json)?;
+        self.pending_callback_phase
+            .filter(|(pending, _)| *pending == token)
+            .ok_or("callback read does not match the player pending phase")?;
+        let request_wire: CallbackReadRequestWire = serde_json::from_str(request_json)
+            .map_err(|error| format!("invalid callback read request JSON: {error}"))?;
+        let requested_object = match &request_wire {
+            CallbackReadRequestWire::Object { node } => Some(node.clone()),
+            CallbackReadRequestWire::ScalarSignal { .. }
+            | CallbackReadRequestWire::Family { .. } => None,
+        };
+        let request = match request_wire {
+            CallbackReadRequestWire::Family { node } => {
+                let store = self
+                    .semantics
+                    .as_ref()
+                    .ok_or("family callback reads require a live semantic store")?;
+                let rows = self
+                    .session
+                    .required_callback_family_read(&store.borrow(), token, node.into())
+                    .map_err(AuthoringFailure::from)?;
+                let objects = rows
+                    .into_iter()
+                    .map(|(node, properties)| CallbackPhaseObjectWire {
+                        node: node.into(),
+                        transform: properties.transform,
+                        style: properties.style,
+                        appearance: properties.appearance,
+                        presence: properties.presence,
+                        reveal: properties.reveal,
+                        morph: properties.morph,
+                        bounds: properties.bounds,
+                    })
+                    .collect();
+                return serde_json::to_string(&CallbackReadValueWire::Family { objects })
+                    .map_err(|error| AuthoringFailure::from(error.to_string()));
+            }
+            CallbackReadRequestWire::Object { node } => CallbackReadRequest::Object(node.into()),
+            CallbackReadRequestWire::ScalarSignal { node } => {
+                CallbackReadRequest::ScalarSignal(node.into())
+            }
+        };
+        let value = self
+            .session
+            .required_callback_read(token, request)
+            .map_err(AuthoringFailure::from)?;
+        let wire = match value {
+            CallbackReadValue::Scalar(value) => CallbackReadValueWire::Scalar { value },
+            CallbackReadValue::Object(properties) => CallbackReadValueWire::Object {
+                object: CallbackPhaseObjectWire {
+                    node: requested_object.ok_or("scalar callback read returned an object")?,
+                    transform: properties.transform,
+                    style: properties.style,
+                    appearance: properties.appearance,
+                    presence: properties.presence,
+                    reveal: properties.reveal,
+                    morph: properties.morph,
+                    bounds: properties.bounds,
+                },
+            },
+        };
+        serde_json::to_string(&wire).map_err(|error| AuthoringFailure::from(error.to_string()))
+    }
+
+    pub fn commit_callback_phase_json(&mut self, batch_json: &str) -> Result<(), AuthoringFailure> {
+        let batch = decode_callback_batch(batch_json)?;
+        let token = batch.token();
+        let (_, time) = self
+            .pending_callback_phase
+            .filter(|(pending, _)| *pending == token)
+            .ok_or("callback batch does not match the player pending phase")?;
+        self.session
+            .commit_required_callback_phase(batch)
+            .map_err(AuthoringFailure::from)?;
+        // The callback phase time is session-owned. Re-anchoring presentation
+        // only after its commit avoids a host-side progression cursor.
+        self.clock.seek(time).map_err(|error| error.to_string())?;
+        self.pending_callback_phase = None;
+        Ok(())
+    }
+
+    pub fn fail_callback_phase_json(&mut self, phase_json: &str) -> Result<(), AuthoringFailure> {
+        let token = Self::phase_token_from_json(phase_json)?;
+        self.session
+            .fail_required_callback_phase(token)
+            .map_err(AuthoringFailure::from)?;
+        self.pending_callback_phase = None;
+        Ok(())
+    }
+
+    pub fn interrupt_callback_phase_json(
+        &mut self,
+        phase_json: &str,
+    ) -> Result<(), AuthoringFailure> {
+        let token = Self::phase_token_from_json(phase_json)?;
+        self.session
+            .interrupt_required_callback_phase(token)
+            .map_err(AuthoringFailure::from)?;
+        self.pending_callback_phase = None;
+        Ok(())
+    }
+}
+
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 impl SemanticExecutionPlayer {
     fn callback_phase_json(
-        overlay: &noon::CallbackPhaseOverlay,
-        invocations: &[noon::RequiredCallbackInvocation],
+        overlay: &noon::integration::CallbackPhaseOverlay,
+        invocations: &[noon::integration::RequiredCallbackInvocation],
     ) -> Result<String, String> {
         let phase = CallbackPhaseWire {
             token: overlay.token().into(),
@@ -1925,6 +2241,7 @@ impl SemanticExecutionPlayer {
         }
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     fn callback_token_from_json(token_json: &str) -> Result<CallbackPhaseToken, String> {
         let token: CallbackTokenWire = serde_json::from_str(token_json)
             .map_err(|error| format!("invalid callback token JSON: {error}"))?;
@@ -1991,13 +2308,14 @@ impl SemanticExecutionPlayer {
     /// Derive one browser wake directive for the active ordinary continuation segment.
     ///
     /// This is deliberately a typed WASM value rather than a host-authored duration.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = liveSegmentWake))]
     pub fn live_segment_wake_wasm(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmExecutionWake, String> {
+    ) -> Result<WasmExecutionWake, wasm_bindgen::JsValue> {
         self.live_segment_wake(wall_time_ms)
+            .map_err(crate::authoring_error::js_error)
     }
 
     /// Derive the next generic browser wake from the canonical runtime/session.
@@ -2008,13 +2326,14 @@ impl SemanticExecutionPlayer {
     }
 
     /// Reanchor the next browser interval after a required callback completes.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = reanchorLiveSegmentWake))]
     pub fn reanchor_live_segment_wake_wasm(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmExecutionWake, String> {
+    ) -> Result<WasmExecutionWake, wasm_bindgen::JsValue> {
         self.reanchor_live_segment_wake(wall_time_ms)
+            .map_err(crate::authoring_error::js_error)
     }
 
     /// Advance one active ordinary continuation segment from an anchored browser timestamp.
@@ -2022,109 +2341,77 @@ impl SemanticExecutionPlayer {
     /// A callback phase must be committed before this is retried with the same wall
     /// timestamp. `reachedEndpoint` means shared completion is now permitted but
     /// remains a separate operation so authored reconciliation cannot be skipped.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = driveLiveSegmentFromWallTime))]
     pub fn drive_live_segment_from_wall_time_wasm(
         &mut self,
         wall_time_ms: f64,
-    ) -> Result<WasmLiveSegmentDrive, String> {
+    ) -> Result<WasmLiveSegmentDrive, wasm_bindgen::JsValue> {
         self.live_drive_segment_from_wall_time(wall_time_ms)
+            .map_err(crate::authoring_error::js_error)
     }
 
     /// Advance one active continuation segment toward an absolute authored-time
     /// sample without involving a browser clock.
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = driveLiveSegmentToAuthoredTime))]
     pub fn drive_live_segment_to_authored_time_wasm(
         &mut self,
         requested_time: f64,
-    ) -> Result<WasmLiveSegmentDrive, String> {
+    ) -> Result<WasmLiveSegmentDrive, wasm_bindgen::JsValue> {
         self.live_drive_segment_to_authored_time(requested_time)
+            .map_err(crate::authoring_error::js_error)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = completeLiveSegment))]
-    pub fn complete_live_segment_wasm(&mut self) -> Result<(), String> {
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = completeLiveSegment)]
+    pub fn complete_live_segment_wasm(&mut self) -> Result<(), wasm_bindgen::JsValue> {
         self.live_complete_segment()
+            .map_err(crate::authoring_error::js_error)
     }
 
     /// Read one typed value from the exact pending callback phase without
     /// committing it. This is the real Python-worker boundary; direct Rust
     /// callbacks call the session API without JSON.
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = requiredCallbackReadJson))]
-    pub fn required_callback_read_json(
+    pub fn required_callback_read_json_wasm(
         &mut self,
         token_json: &str,
         request_json: &str,
-    ) -> Result<String, String> {
-        let token = Self::callback_token_from_json(token_json)?;
-        self.pending_callback_phase
-            .filter(|(pending, _)| *pending == token)
-            .ok_or("callback read does not match the player pending phase")?;
-        let request_wire: CallbackReadRequestWire = serde_json::from_str(request_json)
-            .map_err(|error| format!("invalid callback read request JSON: {error}"))?;
-        let requested_object = match &request_wire {
-            CallbackReadRequestWire::Object { node } => Some(node.clone()),
-            CallbackReadRequestWire::ScalarSignal { .. } => None,
-        };
-        let value = self
-            .session
-            .required_callback_read(token, request_wire.into())
-            .map_err(|error| error.to_string())?;
-        let wire = match value {
-            CallbackReadValue::Scalar(value) => CallbackReadValueWire::Scalar { value },
-            CallbackReadValue::Object(properties) => CallbackReadValueWire::Object {
-                object: CallbackPhaseObjectWire {
-                    node: requested_object.ok_or("scalar callback read returned an object")?,
-                    transform: properties.transform,
-                    style: properties.style,
-                    appearance: properties.appearance,
-                    presence: properties.presence,
-                    reveal: properties.reveal,
-                    morph: properties.morph,
-                    bounds: properties.bounds,
-                },
-            },
-        };
-        serde_json::to_string(&wire).map_err(|error| error.to_string())
+    ) -> Result<String, wasm_bindgen::JsValue> {
+        self.required_callback_read_json(token_json, request_json)
+            .map_err(crate::authoring_error::js_error)
     }
 
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = commitCallbackPhaseJson))]
-    pub fn commit_callback_phase_json(&mut self, batch_json: &str) -> Result<(), String> {
-        let batch = decode_callback_batch(batch_json)?;
-        let token = batch.token();
-        let (_, time) = self
-            .pending_callback_phase
-            .filter(|(pending, _)| *pending == token)
-            .ok_or("callback batch does not match the player pending phase")?;
-        self.session
-            .commit_required_callback_phase(batch)
-            .map_err(|error| error.to_string())?;
-        // The callback phase time is session-owned. Re-anchoring presentation
-        // only after its commit avoids a host-side progression cursor.
-        self.clock.seek(time).map_err(|error| error.to_string())?;
-        self.pending_callback_phase = None;
-        Ok(())
+    pub fn commit_callback_phase_json_wasm(
+        &mut self,
+        batch_json: &str,
+    ) -> Result<(), wasm_bindgen::JsValue> {
+        self.commit_callback_phase_json(batch_json)
+            .map_err(crate::authoring_error::js_error)
     }
 
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = failCallbackPhaseJson))]
-    pub fn fail_callback_phase_json(&mut self, phase_json: &str) -> Result<(), String> {
-        let token = Self::phase_token_from_json(phase_json)?;
-        self.session
-            .fail_required_callback_phase(token)
-            .map_err(|error| error.to_string())?;
-        self.pending_callback_phase = None;
-        Ok(())
+    pub fn fail_callback_phase_json_wasm(
+        &mut self,
+        phase_json: &str,
+    ) -> Result<(), wasm_bindgen::JsValue> {
+        self.fail_callback_phase_json(phase_json)
+            .map_err(crate::authoring_error::js_error)
     }
 
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = interruptCallbackPhaseJson))]
-    pub fn interrupt_callback_phase_json(&mut self, phase_json: &str) -> Result<(), String> {
-        let token = Self::phase_token_from_json(phase_json)?;
-        self.session
-            .interrupt_required_callback_phase(token)
-            .map_err(|error| error.to_string())?;
-        self.pending_callback_phase = None;
-        Ok(())
+    pub fn interrupt_callback_phase_json_wasm(
+        &mut self,
+        phase_json: &str,
+    ) -> Result<(), wasm_bindgen::JsValue> {
+        self.interrupt_callback_phase_json(phase_json)
+            .map_err(crate::authoring_error::js_error)
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = callbackTerminationJson))]
@@ -2133,8 +2420,8 @@ impl SemanticExecutionPlayer {
             .callback_termination()
             .map(|termination| {
                 let kind = match termination.kind() {
-                    noon::CallbackTerminationKind::Failed => "failed",
-                    noon::CallbackTerminationKind::Interrupted => "interrupted",
+                    noon::integration::CallbackTerminationKind::Failed => "failed",
+                    noon::integration::CallbackTerminationKind::Interrupted => "interrupted",
                 };
                 serde_json::to_string(&CallbackTerminationWire {
                     token: termination.token().into(),
@@ -2187,14 +2474,16 @@ impl SemanticExecutionPlayer {
             .session
             .committed_callback_renderer_observation(token, target)
         {
-            noon::CallbackRendererObservationOutcome::Committed(observation) => observation,
-            noon::CallbackRendererObservationOutcome::StaleCallback { .. } => {
+            noon::integration::CallbackRendererObservationOutcome::Committed(observation) => {
+                observation
+            }
+            noon::integration::CallbackRendererObservationOutcome::StaleCallback { .. } => {
                 return Err("callback renderer observation token is stale".into());
             }
-            noon::CallbackRendererObservationOutcome::StalePublication { .. } => {
+            noon::integration::CallbackRendererObservationOutcome::StalePublication { .. } => {
                 return Err("callback renderer observation publication is stale".into());
             }
-            noon::CallbackRendererObservationOutcome::Absent { .. } => {
+            noon::integration::CallbackRendererObservationOutcome::Absent { .. } => {
                 return Err("callback renderer observation target is absent".into());
             }
         };
@@ -2286,7 +2575,8 @@ mod tests {
     use crate::{RetainedExecutionFrameMirror, TransportObjectContent};
     use noon_core::{
         AnimationOptions, HostCallbackId, RateFunction, SemanticMutationTransaction,
-        SemanticObjectProperty, SemanticObjectState, SemanticStore, StoredGeometry,
+        SemanticMutationTransactionError, SemanticObjectProperty, SemanticObjectState,
+        SemanticStore, StoredGeometry,
     };
 
     fn callback_batch_with_y_and_opacity(phase: &serde_json::Value) -> String {
@@ -2314,6 +2604,278 @@ mod tests {
     }
 
     #[test]
+    fn live_advance_projection_preserves_clock_frame_and_retry() {
+        let mut scene = noon::Scene::new();
+        let object = scene.circle(0.5).unwrap();
+        scene.add(&object).unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            scene.execution_session().unwrap(),
+            std::rc::Rc::clone(scene.integration_store()),
+            scene.root(),
+            1.0,
+            41,
+        )
+        .unwrap();
+        player.live_wait(0.25).unwrap();
+        player.delta(true).unwrap().unwrap();
+        let frame = player.debug_frame_json();
+        let publication = player.session.publication_context();
+        let resources = player.resource_bundle_bytes();
+        let authored = object.state().unwrap();
+        let clock = player.clock.clone();
+        for time in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let error = player.live_advance_segment_to(time).unwrap_err();
+            assert_eq!(error.category, "invalid_input");
+            assert_eq!(error.code, "advance.evaluation");
+            let cause = error.cause.as_ref().unwrap();
+            assert_eq!(cause.code, "evaluation.invalid_time");
+            assert_eq!(
+                cause.message,
+                noon_runtime::EvaluationError::InvalidTime(time).to_string()
+            );
+            assert!(cause.cause.is_none());
+            let error = player.live_evaluate(time).unwrap_err();
+            assert_eq!(error.category, "invalid_input");
+            assert_eq!(error.code, "clock.invalid_scene_time");
+            assert_eq!(player.clock, clock);
+            assert_eq!(player.debug_frame_json(), frame);
+            assert_eq!(player.session.publication_context(), publication);
+            assert_eq!(player.resource_bundle_bytes(), resources);
+            assert_eq!(object.state().unwrap(), authored);
+            assert!(player.delta(false).unwrap().is_none());
+        }
+        for (time, code) in [
+            (-0.25, "clock.invalid_scene_time"),
+            (2.0, "clock.time_outside_loop"),
+        ] {
+            let error = player.live_evaluate(time).unwrap_err();
+            assert_eq!(error.category, "invalid_input");
+            assert_eq!(error.code, code);
+            assert_eq!(player.clock, clock);
+            assert_eq!(player.debug_frame_json(), frame);
+            assert_eq!(player.session.publication_context(), publication);
+            assert!(player.delta(false).unwrap().is_none());
+        }
+        // Segment advancement clamps, deterministic evaluation can seek backward.
+        player.live_advance_segment_to(-1.0).unwrap();
+        assert_eq!(player.time(), 0.0);
+        player.live_advance_segment_to(0.125).unwrap();
+        player.live_advance_segment_to(0.0625).unwrap();
+        assert_eq!(player.time(), 0.125);
+        player.live_evaluate(0.0625).unwrap();
+        assert_eq!(player.time(), 0.0625);
+        player.live_advance_segment_to(9.0).unwrap();
+        assert_eq!(player.time(), 0.25);
+        player.live_complete_segment().unwrap();
+        assert_eq!(object.state().unwrap(), authored);
+        assert_eq!(player.resource_bundle_bytes(), resources);
+    }
+
+    #[test]
+    fn live_advance_projection_preserves_callback_guard_and_recovery() {
+        let mut scene = noon::Scene::new();
+        let object = scene.circle(0.5).unwrap();
+        scene.add(&object).unwrap();
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_updater(object.node_id(), HostCallbackId::new(1), 0.0, None);
+        transaction
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            scene.execution_session().unwrap(),
+            std::rc::Rc::clone(scene.integration_store()),
+            scene.root(),
+            1.0,
+            41,
+        )
+        .unwrap();
+        player.live_wait(0.25).unwrap();
+        player.delta(true).unwrap().unwrap();
+        let resources = player.resource_bundle_bytes();
+        let error = player.live_evaluate(0.125).unwrap_err();
+        assert_eq!(error.category, "unsupported_operation");
+        assert_eq!(error.code, "evaluation.callback_barrier");
+        let phase = player.initial_callback_phase_json().unwrap().unwrap();
+        let frame = player.debug_frame_json();
+        let clock = player.clock.clone();
+        let pending = player.pending_callback_phase;
+        let publication = player.session.publication_context();
+        let error = player.live_evaluate(0.125).unwrap_err();
+        assert_eq!(error.category, "pending_work");
+        assert_eq!(error.code, "evaluation.callback_pending");
+        // Clock admission still precedes the runtime callback guard.
+        assert_eq!(
+            player.live_evaluate(f64::NAN).unwrap_err().code,
+            "clock.invalid_scene_time"
+        );
+        assert_eq!(player.pending_callback_phase, pending);
+        assert_eq!(player.clock, clock);
+        assert_eq!(player.debug_frame_json(), frame);
+        assert_eq!(player.session.publication_context(), publication);
+        assert_eq!(player.resource_bundle_bytes(), resources);
+        assert!(player.delta(false).unwrap().is_none());
+        let acknowledge = |player: &mut SemanticExecutionPlayer, phase: &str| {
+            let phase: serde_json::Value = serde_json::from_str(phase).unwrap();
+            player
+                .commit_callback_phase_json(
+                    &serde_json::json!({
+                        "token": phase["token"], "writes": [],
+                    })
+                    .to_string(),
+                )
+                .unwrap();
+        };
+        acknowledge(&mut player, &phase);
+        let drive = player.live_drive_segment_to_authored_time(0.25).unwrap();
+        acknowledge(&mut player, drive.callback_phase_json.as_ref().unwrap());
+        assert!(player
+            .live_drive_segment_to_authored_time(0.25)
+            .unwrap()
+            .reached_endpoint());
+        player.live_complete_segment().unwrap();
+        assert_eq!(player.time(), 0.25);
+        assert_eq!(player.resource_bundle_bytes(), resources);
+    }
+
+    #[test]
+    fn live_transform_projection_preserves_atomic_rejection_and_local_retry() {
+        type Edit =
+            fn(&mut SemanticExecutionPlayer, &noon::Mobject, f64) -> Result<(), AuthoringFailure>;
+        let edits: [(Edit, SemanticObjectProperty); 4] = [
+            (
+                |player, object, value| player.live_set_translation(object, value, -1.0),
+                SemanticObjectProperty::Translation,
+            ),
+            (
+                |player, object, value| player.live_shift(object, value, -1.0),
+                SemanticObjectProperty::Translation,
+            ),
+            (
+                |player, object, value| player.live_set_scale(object, value, 0.5),
+                SemanticObjectProperty::Scale,
+            ),
+            (
+                |player, object, value| player.live_set_rotation(object, value),
+                SemanticObjectProperty::RotationZ,
+            ),
+        ];
+        for (edit, property) in edits {
+            let mut scene = noon::Scene::new();
+            let object = scene.circle(0.5).unwrap();
+            scene.add(&object).unwrap();
+            let session = scene.execution_session().unwrap();
+            let mut player = SemanticExecutionPlayer::from_live_session(
+                session,
+                std::rc::Rc::clone(scene.integration_store()),
+                scene.root(),
+                1.0,
+                41,
+            )
+            .unwrap();
+            player.delta(true).unwrap().unwrap();
+            let authored = object.state().unwrap();
+            let publication = player.session.publication_context();
+            let frame = player.debug_frame_json();
+            let resources = player.resource_bundle_bytes();
+            for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                let error = edit(&mut player, &object, value).unwrap_err();
+                assert_eq!(error.category, "invalid_input");
+                assert_eq!(error.code, "live.publication");
+                let cause = error.cause.as_ref().unwrap();
+                assert_eq!(cause.category, "invalid_input");
+                assert_eq!(cause.code, "publication.semantic");
+                let leaf = cause.cause.as_ref().unwrap();
+                assert_eq!(leaf.code, "transaction.non_finite_property_value");
+                assert!(leaf.cause.is_none());
+                let expected = SemanticMutationTransactionError::NonFinitePropertyValue {
+                    index: 0,
+                    object: object.node_id(),
+                    property,
+                };
+                assert_eq!(leaf.message, expected.to_string());
+                assert_eq!(object.state().unwrap(), authored);
+                assert_eq!(player.session.publication_context(), publication);
+                assert_eq!(player.debug_frame_json(), frame);
+                assert_eq!(player.resource_bundle_bytes(), resources);
+                assert!(player.delta(false).unwrap().is_none());
+            }
+            edit(&mut player, &object, 2.0).unwrap();
+            let delta = player.delta(false).unwrap().unwrap();
+            assert!(!delta.retained.snapshot);
+            assert_eq!(delta.retained.objects.len(), 1);
+            assert!(delta.retained.removed_slots.is_empty());
+            assert!(player.delta(false).unwrap().is_none());
+            assert_eq!(player.resource_bundle_bytes(), resources);
+            assert_ne!(object.state().unwrap(), authored);
+            assert_ne!(player.session.publication_context(), publication);
+        }
+    }
+
+    #[test]
+    fn live_content_and_observation_errors_keep_atomicity_and_local_retry() {
+        let mut scene = noon::Scene::new();
+        let target = scene.circle(0.5).unwrap();
+        let source = scene.circle(0.75).unwrap();
+        let other = noon::Scene::new();
+        let foreign = other.circle(0.5).unwrap();
+        scene.add(&target).unwrap();
+        let session = scene.execution_session().unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            session,
+            std::rc::Rc::clone(scene.integration_store()),
+            scene.root(),
+            1.0,
+            41,
+        )
+        .unwrap();
+        player.delta(true).unwrap().unwrap();
+        let authored = target.state().unwrap();
+        let original_source = source.state().unwrap();
+        let publication = player.session.publication_context();
+        let frame = player.debug_frame_json();
+        let resources = player.resource_bundle_bytes();
+        for (invalid_target, invalid_source) in [(&foreign, &source), (&target, &foreign)] {
+            let error = player
+                .live_replace_content(invalid_target, invalid_source)
+                .unwrap_err();
+            assert_eq!(error.category, "foreign_handle");
+            assert_eq!(error.code, "live.foreign_store");
+            assert_eq!(target.state().unwrap(), authored);
+            assert_eq!(source.state().unwrap(), original_source);
+            assert_eq!(player.session.publication_context(), publication);
+            assert_eq!(player.debug_frame_json(), frame);
+            assert_eq!(player.resource_bundle_bytes(), resources);
+            assert!(player.delta(false).unwrap().is_none());
+        }
+        // A valid detached semantic object is not an effective execution row.
+        let error = player.live_effective(&source).unwrap_err();
+        assert_eq!(error.category, "stale_handle");
+        assert_eq!(error.code, "live.publication");
+        let cause = error.cause.as_ref().unwrap();
+        assert_eq!(cause.code, "publication.unknown_object");
+        assert!(cause.cause.is_none());
+        assert_eq!(player.session.publication_context(), publication);
+        assert_eq!(player.debug_frame_json(), frame);
+        assert_eq!(player.resource_bundle_bytes(), resources);
+        assert!(player.delta(false).unwrap().is_none());
+
+        player.live_replace_content(&target, &source).unwrap();
+        let after = target.state().unwrap();
+        assert_eq!(after.content, original_source.content);
+        assert_ne!(after.content, authored.content);
+        assert_eq!(after.transform, authored.transform);
+        assert_eq!(after.style, authored.style);
+        assert_eq!(source.state().unwrap(), original_source);
+        player.live_effective(&target).unwrap();
+        let delta = player.delta(false).unwrap().unwrap();
+        assert!(!delta.retained.snapshot);
+        assert_eq!(delta.retained.objects.len(), 1);
+        assert!(delta.retained.removed_slots.is_empty());
+        assert!(player.delta(false).unwrap().is_none());
+        assert_eq!(player.resource_bundle_bytes(), resources);
+    }
+
+    #[test]
     fn membership_deltas_omit_unchanged_rows_and_preserve_incremental_order() {
         let mut scene = noon::Scene::new();
         let anchor = scene.circle(0.5).unwrap();
@@ -2323,7 +2885,7 @@ mod tests {
         let session = scene.execution_session().unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
             session,
-            std::rc::Rc::clone(scene.store()),
+            std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             1.0,
             1,
@@ -2376,7 +2938,7 @@ mod tests {
         let mut target = circle.target_editor().unwrap();
         target.shift(4.0, 0.0).unwrap();
         let animation = scene
-            .store()
+            .integration_store()
             .borrow_mut()
             .insert_semantic_transform_animation(
                 circle.node_id(),
@@ -2387,7 +2949,7 @@ mod tests {
         let mut session = scene.execution_session().unwrap();
         session
             .activate_animation(
-                &scene.store().borrow(),
+                &scene.integration_store().borrow(),
                 animation,
                 AnimationOptions::new()
                     .run_time(1.0)
@@ -2482,7 +3044,7 @@ mod tests {
         let session = scene.execution_session().unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
             session,
-            std::rc::Rc::clone(scene.store()),
+            std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             2.0,
             63,
@@ -2562,7 +3124,7 @@ mod tests {
         let session = scene.execution_session().unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
             session,
-            std::rc::Rc::clone(scene.store()),
+            std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             4.0,
             67,
@@ -2587,10 +3149,14 @@ mod tests {
         assert_eq!(player.time(), 1.25);
 
         let frame = player.session.frame().clone();
-        assert!(player
-            .live_drive_segment_to_authored_time(1.0)
-            .unwrap_err()
-            .contains("time at or after 1.25"));
+        let error = player.live_drive_segment_to_authored_time(1.0).unwrap_err();
+        // This legacy guard is not a settled R2 producer yet.
+        assert_eq!(error.category, "unclassified");
+        assert_eq!(error.code, "unclassified");
+        assert_eq!(
+            error.message,
+            "external continuation sample requires time at or after 1.25, got 1"
+        );
         assert_eq!(player.session.frame(), &frame);
 
         assert!(player
@@ -2623,11 +3189,13 @@ mod tests {
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_updater(circle.node_id(), HostCallbackId::new(7), 0.0, None);
         transaction.add_updater(circle.node_id(), HostCallbackId::new(8), 0.0, None);
-        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        transaction
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let session = scene.execution_session().unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
             session,
-            std::rc::Rc::clone(scene.store()),
+            std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             1.0,
             64,
@@ -2790,11 +3358,13 @@ mod tests {
         transaction.add_updater(source.node_id(), HostCallbackId::new(9), 0.0, None);
         transaction.add_updater(source.node_id(), HostCallbackId::new(4), 0.0, None);
         transaction.add_updater(drift.node_id(), HostCallbackId::new(2), 0.0, None);
-        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        transaction
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let session = scene.execution_session().unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
             session,
-            std::rc::Rc::clone(scene.store()),
+            std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             2.0,
             12,
@@ -2897,11 +3467,13 @@ mod tests {
         scene.add(&circle).unwrap();
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, None);
-        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        transaction
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let session = scene.execution_session().unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
             session,
-            std::rc::Rc::clone(scene.store()),
+            std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             1.0,
             13,
@@ -2947,11 +3519,13 @@ mod tests {
         scene.add(&circle).unwrap();
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, None);
-        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        transaction
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let session = scene.execution_session().unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
             session,
-            std::rc::Rc::clone(scene.store()),
+            std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             2.0,
             13,
@@ -2972,11 +3546,13 @@ mod tests {
         scene.add(&circle).unwrap();
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, None);
-        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        transaction
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let session = scene.execution_session().unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
             session,
-            std::rc::Rc::clone(scene.store()),
+            std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             2.0,
             14,
@@ -3101,7 +3677,9 @@ mod tests {
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_updater(circle.node_id(), HostCallbackId::new(1), 0.0, None);
         transaction.remove_updater(circle.node_id(), HostCallbackId::new(1), 0.5);
-        transaction.apply(&mut scene.store().borrow_mut()).unwrap();
+        transaction
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let mut player =
             SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 7)
                 .unwrap();
@@ -3127,12 +3705,12 @@ mod tests {
     }
 
     fn assert_late_text_resource_admission(
-        create: impl FnOnce(&mut SemanticExecutionPlayer) -> Result<noon::Mobject, String>,
+        create: impl FnOnce(&mut SemanticExecutionPlayer) -> Result<noon::Mobject, AuthoringFailure>,
     ) {
         let scene = noon::Scene::new();
         let mut player = SemanticExecutionPlayer::from_live_session(
             scene.execution_session().unwrap(),
-            std::rc::Rc::clone(scene.store()),
+            std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             2.0,
             81,
@@ -3221,3 +3799,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod callback_error_tests;

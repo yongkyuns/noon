@@ -166,10 +166,9 @@ mod tests {
     use noon_core::{
         FamilyAnimationState, FontFaceIdentity, GeometryRef, GlyphRun, ObjectContentRef, ObjectId,
         PositionedGlyph, RateFunction, Rect, RetainedFamilyAnimationPlan,
-        RetainedFamilyAnimationPlanBuilder, RetainedObjectDefinition, SemanticNodeId,
-        SemanticStore, Style, TextAffineTransform, TextClusterIdentity, TextDirection,
-        TextRenderItem, TextResource, TextResourceArena, TextSourceKind, TextSourceSpan,
-        Transform2D, Vec2,
+        RetainedFamilyAnimationPlanBuilder, SemanticNodeId, SemanticStore, Style,
+        TextAffineTransform, TextClusterIdentity, TextDirection, TextRenderItem, TextResource,
+        TextResourceArena, TextSourceKind, TextSourceSpan, Transform2D, Vec2,
     };
     use noon_runtime::{FrameObjectState, FrameState};
 
@@ -230,12 +229,29 @@ mod tests {
 
         let mut texts = TextResourceArena::new();
         let text_handle = texts.insert(text_resource()).unwrap();
-        let text = RetainedObjectDefinition::text(ObjectId::new(10), text_handle);
-        let circle =
-            RetainedObjectDefinition::geometry(ObjectId::new(11), GeometryRef::circle(1.0));
+        let text = noon_runtime::FrameObjectState {
+            id: ObjectId::new(10),
+            content: noon_core::ObjectContentRef::Text(text_handle),
+            transform: noon_core::Transform2D::IDENTITY,
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
+        let circle = noon_runtime::FrameObjectState {
+            id: ObjectId::new(11),
+            content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+            transform: noon_core::Transform2D::IDENTITY,
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&store, family).unwrap();
-        builder.accept_leaf(text_leaf, &text, &texts).unwrap();
-        builder.accept_leaf(circle_leaf, &circle, &texts).unwrap();
+        builder
+            .accept_leaf(text_leaf, text.id, &text.content, &texts)
+            .unwrap();
+        builder
+            .accept_leaf(circle_leaf, circle.id, &circle.content, &texts)
+            .unwrap();
         (builder.finish().unwrap(), text_leaf, circle_leaf)
     }
 
@@ -251,14 +267,30 @@ mod tests {
         store.add_member(family, first).unwrap();
         store.add_member(family, second).unwrap();
 
-        let first_object =
-            RetainedObjectDefinition::geometry(ObjectId::new(20), GeometryRef::circle(1.0));
-        let second_object =
-            RetainedObjectDefinition::geometry(ObjectId::new(21), GeometryRef::circle(2.0));
+        let first_object = noon_runtime::FrameObjectState {
+            id: ObjectId::new(20),
+            content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+            transform: noon_core::Transform2D::IDENTITY,
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
+        let second_object = noon_runtime::FrameObjectState {
+            id: ObjectId::new(21),
+            content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
+            transform: noon_core::Transform2D::IDENTITY,
+            style: noon_core::Style::default(),
+            appearance: 1.0,
+            text_bounds: None,
+        };
         let texts = TextResourceArena::new();
         let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&store, family).unwrap();
-        builder.accept_leaf(first, &first_object, &texts).unwrap();
-        builder.accept_leaf(second, &second_object, &texts).unwrap();
+        builder
+            .accept_leaf(first, first_object.id, &first_object.content, &texts)
+            .unwrap();
+        builder
+            .accept_leaf(second, second_object.id, &second_object.content, &texts)
+            .unwrap();
         let plan = builder.finish().unwrap();
 
         let frame = FrameState {

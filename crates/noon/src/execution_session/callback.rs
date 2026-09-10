@@ -133,9 +133,10 @@ impl CallbackPublicationReceipt {
 #[derive(Clone, Debug)]
 pub(super) struct CallbackSchedule {
     plan: SemanticHostCallbackPlan,
-    event_cursor: usize,
-    next_required_activation_event: Option<usize>,
-    active_occurrences: Vec<usize>,
+    processed_through: Option<f64>,
+    // Semantic target preorder, then registration order. Derived occurrence IDs
+    // remain stable for unrelated targets when a local target is revised.
+    active_occurrences: BTreeSet<(usize, usize)>,
     completed_time: Option<f64>,
     completed_publication: Option<PublicationContext>,
 }
@@ -143,95 +144,89 @@ pub(super) struct CallbackSchedule {
 #[derive(Clone, Debug)]
 struct CallbackSchedulePreview {
     time: f64,
-    event_cursor: usize,
-    active_occurrences: Vec<usize>,
+    active_occurrences: BTreeSet<(usize, usize)>,
 }
 
 impl CallbackSchedule {
     pub(super) fn new(plan: SemanticHostCallbackPlan) -> Self {
-        let next_required_activation_event = plan
-            .events()
-            .iter()
-            .position(|event| Self::event_requires_phase(&plan, *event));
         Self {
             plan,
-            event_cursor: 0,
-            next_required_activation_event,
-            active_occurrences: Vec::new(),
+            processed_through: None,
+            active_occurrences: BTreeSet::new(),
             completed_time: None,
             completed_publication: None,
         }
+    }
+
+    pub(super) fn plan(&self) -> &SemanticHostCallbackPlan {
+        &self.plan
+    }
+
+    /// Commit a target-local compiler delta after semantic/runtime preflight.
+    /// Only changed targets are reconciled at the current time; no history replay.
+    pub(super) fn apply_revision(
+        &mut self,
+        revision: noon_compile::SemanticHostCallbackRevision,
+        time: f64,
+    ) {
+        let targets = revision.targets().collect::<Vec<_>>();
+        for &target in &targets {
+            for index in self.plan.target_occurrences(target) {
+                self.active_occurrences
+                    .remove(&(self.plan.occurrence(index).order(), index));
+            }
+        }
+        self.plan.apply_revision(revision);
+        for target in targets {
+            for index in self.plan.target_occurrences(target) {
+                let occurrence = self.plan.occurrence(index);
+                let activation = occurrence.activation();
+                if activation.active_from() <= time
+                    && activation.inactive_from().is_none_or(|end| time < end)
+                {
+                    self.active_occurrences.insert((occurrence.order(), index));
+                }
+            }
+        }
+        self.completed_time = None;
+        self.completed_publication = None;
     }
 
     pub(super) fn is_empty(&self) -> bool {
         self.plan.is_empty()
     }
 
-    fn event_requires_phase(
-        plan: &SemanticHostCallbackPlan,
-        event: noon_compile::SemanticHostCallbackEvent,
-    ) -> bool {
-        matches!(event.kind(), SemanticHostCallbackEventKind::Activate)
-            && plan.occurrences()[event.occurrence_index()]
-                .activation()
-                .inactive_from()
-                .is_none_or(|end| end > event.time())
-    }
-
     fn preview(&self, requested: f64, current: f64) -> CallbackSchedulePreview {
-        let include_current_boundary = self.completed_time.is_none();
         let barrier = self
-            .next_required_activation_event
-            .map(|index| self.plan.events()[index])
-            .filter(|event| {
-                if include_current_boundary {
-                    event.time() >= current
-                } else {
-                    event.time() > current
-                }
-            })
-            .filter(|event| event.time() <= requested)
-            .map(|event| event.time());
+            .plan
+            .next_activation_after(self.processed_through)
+            .filter(|&time| time >= current && time <= requested);
         let time = barrier.unwrap_or(requested);
-        let mut event_cursor = self.event_cursor;
         let mut active_occurrences = self.active_occurrences.clone();
-        while let Some(event) = self.plan.events().get(event_cursor).copied() {
-            if event.time() > time {
-                break;
-            }
+        for event in self
+            .plan
+            .events_after(self.processed_through)
+            .take_while(|event| event.time() <= time)
+        {
+            let index = event.occurrence_index();
+            let key = (self.plan.occurrence(index).order(), index);
             match event.kind() {
                 SemanticHostCallbackEventKind::Activate => {
-                    if let Err(index) = active_occurrences.binary_search(&event.occurrence_index())
-                    {
-                        active_occurrences.insert(index, event.occurrence_index());
-                    }
+                    active_occurrences.insert(key);
                 }
                 SemanticHostCallbackEventKind::Deactivate => {
-                    if let Ok(index) = active_occurrences.binary_search(&event.occurrence_index()) {
-                        active_occurrences.remove(index);
-                    }
+                    active_occurrences.remove(&key);
                 }
             }
-            event_cursor += 1;
         }
         CallbackSchedulePreview {
             time,
-            event_cursor,
             active_occurrences,
         }
     }
 
     fn commit(&mut self, preview: CallbackSchedulePreview, publication: PublicationContext) {
-        self.event_cursor = preview.event_cursor;
-        if self
-            .next_required_activation_event
-            .is_none_or(|index| index < self.event_cursor)
-        {
-            self.next_required_activation_event = self.plan.events()[self.event_cursor..]
-                .iter()
-                .position(|event| Self::event_requires_phase(&self.plan, *event))
-                .map(|offset| self.event_cursor + offset);
-        }
+        self.processed_through = Some(preview.time);
         self.active_occurrences = preview.active_occurrences;
         self.completed_time = Some(preview.time);
         self.completed_publication = Some(publication);
@@ -245,18 +240,19 @@ impl CallbackSchedule {
         if !self.active_occurrences.is_empty() {
             return noon_runtime::TimelineWakeState::Continuous;
         }
-        self.next_required_activation_event
-            .map_or(noon_runtime::TimelineWakeState::Quiescent, |index| {
-                noon_runtime::TimelineWakeState::Deadline(self.plan.events()[index].time())
-            })
+        self.plan
+            .next_activation_after(self.processed_through)
+            .map_or(
+                noon_runtime::TimelineWakeState::Quiescent,
+                noon_runtime::TimelineWakeState::Deadline,
+            )
     }
 
     pub(super) fn continues_for_target(&self, target: SemanticNodeId) -> bool {
         self.active_occurrences
             .iter()
-            .any(|&index| self.plan.occurrences()[index].target() == target)
+            .any(|&(_, index)| self.plan.occurrence(index).target() == target)
     }
-
     pub(super) fn carry_completed_publication(
         &mut self,
         time: f64,
@@ -690,6 +686,52 @@ impl PendingCallbackPhase {
 impl ExecutionSession {
     /// Read through the exact unpublished evaluation pinned by `token`.
     /// This does not advance, commit, or mutate callback/runtime state.
+    /// Read unique family leaves through the existing pinned object read path.
+    pub fn required_callback_family_read(
+        &self,
+        store: &noon_core::SemanticStore,
+        token: CallbackPhaseToken,
+        family: SemanticNodeId,
+    ) -> Result<Vec<(SemanticNodeId, EffectiveObjectProperties)>, crate::FamilyCallbackPaintError>
+    {
+        use crate::FamilyCallbackPaintError as Error;
+        let pending = self.pending_callback.as_ref().ok_or(Error::Callback(
+            ExecutionSessionCallbackError::NoPendingPhase,
+        ))?;
+        if pending.token != token {
+            return Err(Error::Callback(ExecutionSessionCallbackError::StaleToken {
+                expected: pending.token,
+                actual: token,
+            }));
+        }
+        if store.identity() != self.store_identity {
+            return Err(Error::Authoring(crate::AuthoringError::ForeignStore));
+        }
+        if store.scene_revision() != token.publication().scene_revision() {
+            return Err(Error::StaleRevision {
+                expected: token.publication().scene_revision(),
+                actual: store.scene_revision(),
+            });
+        }
+        store
+            .semantic_family_checked(family)
+            .map_err(|e| Error::Authoring(e.into()))?;
+        store
+            .ordered_leaf_nodes(family)
+            .map_err(Error::Store)?
+            .into_iter()
+            .map(|node| {
+                match self
+                    .required_callback_read(token, CallbackReadRequest::Object(node))
+                    .map_err(|e| Error::Callback(e.into()))?
+                {
+                    CallbackReadValue::Object(properties) => Ok((node, properties)),
+                    CallbackReadValue::Scalar(_) => unreachable!("object request returns object"),
+                }
+            })
+            .collect()
+    }
+
     pub fn required_callback_read(
         &self,
         token: CallbackPhaseToken,
@@ -887,8 +929,8 @@ impl ExecutionSession {
         let invocations = preview
             .active_occurrences
             .iter()
-            .map(|&occurrence_index| {
-                let occurrence = self.callback_schedule.plan.occurrences()[occurrence_index];
+            .map(|&(_, occurrence_index)| {
+                let occurrence = self.callback_schedule.plan.occurrence(occurrence_index);
                 RequiredCallbackInvocation {
                     occurrence_index,
                     callback_id: occurrence.callback_id(),
@@ -1166,10 +1208,13 @@ mod tests {
             .unwrap();
         let mut hold = SemanticMutationTransaction::new();
         hold.set_scalar_signal_at(tracker.node_id(), 3.0, 1.0);
-        hold.apply(&mut scene.store().borrow_mut()).unwrap();
+        hold.apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let mut callbacks = SemanticMutationTransaction::new();
         callbacks.add_updater(active.node_id(), HostCallbackId::new(7), 0.0, None);
-        callbacks.apply(&mut scene.store().borrow_mut()).unwrap();
+        callbacks
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let mut session = scene.execution_session().unwrap();
 
         let CallbackAdvance::HostRequired { overlay, .. } =

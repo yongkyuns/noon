@@ -52,12 +52,18 @@ impl LiveContinuation for OrdinaryFocusOn {
 
 pub fn program() -> Result<LiveProgram<OrdinaryFocusOn>, String> {
     let mut scene = Scene::new();
-    let mut square = scene.square(1.0)?;
-    square.set_translation(-3.0, -2.0)?;
-    square.set_fill_color(0.0, 0.0, 1.0, 1.0)?;
-    square.set_fill_opacity(1.0)?;
-    square.disable_stroke()?;
-    scene.add(&square)?;
+    let mut square = scene.square(1.0).map_err(|error| error.to_string())?;
+    square
+        .set_translation(-3.0, -2.0)
+        .map_err(|error| error.to_string())?;
+    square
+        .set_fill_color(0.0, 0.0, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    square
+        .set_fill_opacity(1.0)
+        .map_err(|error| error.to_string())?;
+    square.disable_stroke().map_err(|error| error.to_string())?;
+    scene.add(&square).map_err(|error| error.to_string())?;
     scene
         .into_live_program(OrdinaryFocusOn { square, stage: 0 })
         .map_err(|error| error.to_string())

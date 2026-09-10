@@ -53,12 +53,8 @@ class Demo(Scene):
         assert abs(there_and_back(0.25) - smooth(0.5)) < 1e-12
 
         import _manim_compat as _compat_impl
-        original_circle_ir = _compat_impl._ir.Circle
-        _compat_impl._ir.Circle = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("shared Circle constructor must bypass Python IR"))
-        try:
-            shared_constructed = Circle(radius=0.33)
-        finally:
-            _compat_impl._ir.Circle = original_circle_ir
+        assert not hasattr(_compat_impl._ir, "Circle")
+        shared_constructed = Circle(radius=0.33)
         assert abs(shared_constructed.radius - 0.33) < 1e-12
 
         circle = Circle(radius=0.6, color=BLUE)
@@ -417,21 +413,41 @@ try {
     const copy = circle.cloneHandle();
     const target = circle.targetEditor();
     const identity = (handle) => `${handle.semanticSlot}:${handle.semanticGeneration}`;
-    const rejectsForeign = (operation) => {
+    // These public operations share the Rust foreign-store cause. Check the
+    // structured boundary while preserving the atomicity and lifetime evidence.
+    const rejectsForeignAuthoring = (operation) => {
       try { operation(); } catch (error) {
-        return /different authoring stores/.test(String(error));
+        if (!(error instanceof Error) || error.noonErrorVersion !== 1 ||
+            error.category !== "foreign_handle" || error.code !== "authoring.foreign_store") {
+          throw error;
+        }
+        return true;
       }
       return false;
     };
     const sameNumericId = identity(circle) === identity(foreign);
-    const foreignAddRejected = rejectsForeign(() => family.editMembership(batch(circle, foreign)));
+    const foreignAddRejected = rejectsForeignAuthoring(() => family.editMembership(batch(circle, foreign)));
     if (family.memberCount !== 0) throw new Error("failed authored batch partially committed");
     family.editMembership(batch(circle, copy, target));
     const layout = family.layout();
     const foreignFamily = otherStore.createFamily(batch(foreign));
     const foreignLayout = foreignFamily.layout();
-    const foreignObjectPlacementRejected = rejectsForeign(() => layout.moveToMobject(foreign, 0, 0, 1, 1));
-    const foreignFamilyPlacementRejected = rejectsForeign(() => layout.moveToFamily(foreignLayout, 0, 0, 1, 1));
+    const layoutBefore = [circle.centerX, copy.centerX, target.centerX, family.memberCount];
+    const requireUnchangedLayout = () => {
+      const after = [circle.centerX, copy.centerX, target.centerX, family.memberCount];
+      if (!after.every((value, index) => Object.is(value, layoutBefore[index]))) {
+        throw new Error("rejected foreign placement changed local state");
+      }
+    };
+    const foreignObjectPlacementRejected = rejectsForeignAuthoring(() => layout.moveToMobject(foreign, 0, 0, 1, 1));
+    requireUnchangedLayout();
+    const foreignFamilyPlacementRejected = rejectsForeignAuthoring(() => layout.moveToFamily(foreignLayout, 0, 0, 1, 1));
+    requireUnchangedLayout();
+    // Retry both exact placement entrypoints with valid local targets. The
+    // copies start at the same center, so these controls preserve the layout.
+    layout.moveToMobject(copy, 0, 0, 1, 1);
+    layout.moveToFamily(layout, 0, 0, 1, 1);
+    requireUnchangedLayout();
     store.free();
     otherStore.free();
     // Observations retain their semantic store; one operation applies all members.
@@ -460,6 +476,49 @@ try {
   assert.equal(new Set(handleOwnership.identities).size, 3, "copy/target allocate fresh identities");
   assert.deepEqual(handleOwnership.centers, [1, 3, 0], "copies/targets retain independent state");
   assert.equal(handleOwnership.memberCount, 3, "failed cross-store operations leave membership intact");
+
+  // #1272 R1: the real WASM consuming boundary must preserve a rejected player,
+  // not just the receiving context. Test foreign stores and roots with equal
+  // transport session numbers, then return each recovered player to its owner.
+  const playerOwnership = await page.evaluate(async () => {
+    const wasm = await import("./pkg/noon_web.js");
+    await wasm.default();
+    const store = new wasm.WasmAuthoringStore();
+    const foreignStore = new wasm.WasmAuthoringStore();
+    const contexts = [store.createSceneContext(), store.createSceneContext(), foreignStore.createSceneContext()];
+    const players = contexts.map(context => context.createExecutionPlayer(1, 41));
+    const phases = () => contexts.map(context => context.liveExecutionOwnership());
+    const before = phases();
+    const messages = [];
+    for (const index of [1, 2]) {
+      let rejected = false;
+      try {
+        contexts[0].returnExecutionPlayer(players[index]);
+      } catch (error) {
+        if (!(error instanceof Error) || error.noonErrorVersion !== 1 ||
+            error.category !== "ownership" || error.code !== "ownership.foreign_scene" ||
+            typeof error.takePlayer !== "function") throw error;
+        messages.push(error.message);
+        players[index] = error.takePlayer();
+        rejected = true;
+      }
+      if (!rejected) throw new Error("foreign execution player return was accepted");
+    }
+    const afterFailures = phases();
+    const snapshots = players.map(player => JSON.parse(player.initialDeltaJson()));
+    contexts.forEach((context, index) => context.returnExecutionPlayer(players[index]));
+    const afterReturns = phases();
+    for (const context of contexts) context.free();
+    store.free();
+    foreignStore.free();
+    return { before, afterFailures, afterReturns, messages, sessions: snapshots.map(snapshot => snapshot.session) };
+  });
+  assert.deepEqual(playerOwnership.before, ["transferred", "transferred", "transferred"]);
+  assert.deepEqual(playerOwnership.afterFailures, playerOwnership.before);
+  assert.deepEqual(playerOwnership.afterReturns, ["returned", "returned", "returned"]);
+  assert.deepEqual(playerOwnership.sessions, [41, 41, 41]);
+  assert.equal(playerOwnership.messages.length, 2);
+  assert.ok(playerOwnership.messages.every(message => typeof message === "string" && message.length > 0));
 
   const foundation = await page.evaluate(
     (pythonSource) => window.noonManimCompat.runLive(pythonSource),

@@ -1,39 +1,80 @@
-use noon_compile::CompiledScene;
+use noon_compile::{CompiledObject, CompiledScene};
 use noon_core::{
-    Easing, GeometryRef, ObjectSnapshot, SceneDefinition, TrackTiming, Transform2D, Vec2,
+    CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, Style, TrackDefinition,
+    TrackId, TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint, Vec2,
 };
 use noon_runtime::SceneInstance;
 
 fn replacement_scene() -> (CompiledScene, noon_core::ObjectId, noon_core::ObjectId) {
-    let mut scene = SceneDefinition::new();
-    let source = scene.add(GeometryRef::circle(1.0));
-    let target = scene.add(GeometryRef::circle(3.0));
+    let mut objects = Vec::new();
+    let mut tracks = Vec::new();
+    let source = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        source,
+        GeometryRef::circle(1.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
+    let target = ObjectId::new(objects.len() as u64);
+    objects.push(CompiledObject::new(
+        target,
+        GeometryRef::circle(3.0),
+        Transform2D::IDENTITY,
+        Style::default(),
+    ));
 
-    scene.object_mut(target).expect("target exists").transform = Transform2D {
+    objects[target.get() as usize].base_transform = Transform2D {
         translation: Vec2::new(4.0, -2.0),
         ..Transform2D::IDENTITY
     };
 
-    let source_snapshot = ObjectSnapshot::from(scene.object(source).expect("source exists"));
-    let target_snapshot = ObjectSnapshot::from(scene.object(target).expect("target exists"));
+    let source_snapshot = TransformTrackEndpoint {
+        geometry: objects[source.get() as usize].geometry().unwrap().clone(),
+        transform: objects[source.get() as usize].base_transform,
+        style: objects[source.get() as usize].base_style,
+    };
+    let target_snapshot = TransformTrackEndpoint {
+        geometry: objects[target.get() as usize].geometry().unwrap().clone(),
+        transform: objects[target.get() as usize].base_transform,
+        style: objects[target.get() as usize].base_style,
+    };
 
-    scene
-        .animate_transform(
-            source,
-            source_snapshot,
-            target_snapshot,
-            TrackTiming::new(0.0, 2.0, Easing::Linear),
-        )
-        .expect("replacement transform must be valid");
-    scene
-        .set_presence_at(source, true, false, 2.0)
-        .expect("source handoff must be valid");
-    scene
-        .set_presence_at(target, false, true, 2.0)
-        .expect("target handoff must be valid");
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object: source,
+        property: Property::Transform,
+        values: TrackValues::Object {
+            from: source_snapshot,
+            to: target_snapshot,
+        },
+        timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object: source,
+        property: Property::Presence,
+        values: TrackValues::Bool {
+            from: true,
+            to: false,
+        },
+        timing: TrackTiming::instant(2.0),
+        time_map: CompositionTimeMap::identity(),
+    });
+    tracks.push(TrackDefinition {
+        id: TrackId::new(tracks.len() as u64),
+        object: target,
+        property: Property::Presence,
+        values: TrackValues::Bool {
+            from: false,
+            to: true,
+        },
+        timing: TrackTiming::instant(2.0),
+        time_map: CompositionTimeMap::identity(),
+    });
 
     (
-        CompiledScene::compile(&scene).expect("replacement scene must compile"),
+        CompiledScene::compile_objects(objects, &tracks).expect("replacement scene must compile"),
         source,
         target,
     )

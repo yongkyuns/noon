@@ -44,20 +44,7 @@ function workerMessage(type, payload = {}) {
 }
 
 function sceneResultJson(objectId) {
-  return JSON.stringify({
-    kind: "scene_document",
-    document: { version: 1, objects: [{ id: objectId }], tracks: [] },
-    scene_spec: {
-      version: 1,
-      objects: [{ id: objectId, content: { kind: "geometry" } }],
-      tracks: [],
-    },
-    duration: 0,
-    identities: {
-      objects: [{ id: objectId, key: `@object:${objectId}` }],
-      tracks: [],
-    },
-  });
+  return JSON.stringify({ kind: "semantic_scene", semantic_execution: { context_id: String(objectId) }, duration: 0 });
 }
 
 function emitSceneResult(worker, requestId, objectId) {
@@ -89,8 +76,8 @@ test("correlates concurrent Python runs when worker results complete out of orde
   emitSceneResult(worker, 0, 100);
 
   const [olderResult, newerResult] = await Promise.all([older, newer]);
-  assert.equal(olderResult.document.objects[0].id, 100);
-  assert.equal(newerResult.document.objects[0].id, 101);
+  assert.equal(Number(olderResult.semanticExecution.contextId), 100);
+  assert.equal(Number(newerResult.semanticExecution.contextId), 101);
   assert.equal(client.diagnostics.pendingRequests, 0);
   assert.equal(client.terminated, false);
 });
@@ -122,7 +109,7 @@ test("playground freshness admits only the newest result under seeded out-of-ord
           generations.recordStale(token, "after-authoring");
           return false;
         }
-        commits.push(authored.document.objects[0].id);
+        commits.push(Number(authored.semanticExecution.contextId));
         return true;
       });
     requests.push(promise);
@@ -164,7 +151,7 @@ test("playground freshness admits only the newest result under seeded out-of-ord
   assert.equal(worker.messages.at(-1).requestId, requestCount);
   emitSceneResult(worker, requestCount, requestCount);
   const postStressResult = await postStress;
-  assert.equal(postStressResult.document.objects[0].id, requestCount);
+  assert.equal(Number(postStressResult.semanticExecution.contextId), requestCount);
   assert.deepEqual(client.diagnostics, {
     nextRequestId: requestCount + 1,
     pendingRequests: 0,

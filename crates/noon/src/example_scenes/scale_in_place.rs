@@ -52,12 +52,18 @@ impl LiveContinuation for ScaleInPlace {
 
 pub fn program() -> Result<LiveProgram<ScaleInPlace>, String> {
     let mut scene = Scene::new();
-    let mut square = scene.square(1.0)?;
-    square.set_translation(-0.5, 0.25)?;
-    square.set_fill_color(0.0, 0.0, 1.0, 1.0)?;
-    square.set_fill_opacity(1.0)?;
-    square.disable_stroke()?;
-    scene.add(&square)?;
+    let mut square = scene.square(1.0).map_err(|error| error.to_string())?;
+    square
+        .set_translation(-0.5, 0.25)
+        .map_err(|error| error.to_string())?;
+    square
+        .set_fill_color(0.0, 0.0, 1.0, 1.0)
+        .map_err(|error| error.to_string())?;
+    square
+        .set_fill_opacity(1.0)
+        .map_err(|error| error.to_string())?;
+    square.disable_stroke().map_err(|error| error.to_string())?;
+    scene.add(&square).map_err(|error| error.to_string())?;
     scene
         .into_live_program(ScaleInPlace { square, stage: 0 })
         .map_err(|e| e.to_string())

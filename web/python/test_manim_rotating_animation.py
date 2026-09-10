@@ -26,17 +26,13 @@ class ManimRotatingAnimationTests(unittest.TestCase):
             fake_js = types.ModuleType("js")
 
             fake_js.noonResolveAnimationOptions = lambda *args: None
-            fake_js.noonResolveUniformCompositionSchedule = lambda *args: None
             sys.modules["js"] = fake_js
 
             import _manim_compat
-            _manim_compat.install()
+
             import _manim_rate_functions
-            _manim_rate_functions.install()
-            import _manim_phase_b  # noqa: F401
             import _manim_animate  # noqa: F401
             import _manim_rotate
-            _manim_rotate.install()
 
             from noon import Rotating, Mobject, RIGHT, TAU, linear
             target = Mobject.__new__(Mobject)
@@ -52,7 +48,7 @@ class ManimRotatingAnimationTests(unittest.TestCase):
             assert edge.about_point is None and edge.about_edge is RIGHT
             assert edge.anim_args["run_time"] == 2.0
             import _manim_updaters
-            _manim_updaters.install()
+
             import noon
             assert noon.Rotating is Rotating
             from noon import Group, Rotate

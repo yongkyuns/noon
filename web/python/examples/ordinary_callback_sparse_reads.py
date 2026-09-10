@@ -7,7 +7,8 @@ restarted to fill either row.
 """
 
 import _manim_updaters
-from noon import Circle, Color, Scene, ValueTracker, linear
+from _noon_errors import NoonStaleHandleError
+from noon import Circle, Color, Scene, ValueTracker, VGroup, linear
 
 
 class OrdinaryCallbackSparseReads(Scene):
@@ -18,6 +19,8 @@ class OrdinaryCallbackSparseReads(Scene):
             .shift((-1.0, 1.0, 0.0))
         )
         circle = Circle(radius=0.4).set_fill(Color(0.0, 0.4, 1.0), opacity=1.0)
+        family = VGroup(VGroup(circle, anchor), circle)
+        invalid_family = VGroup(circle, Circle(radius=0.1))
         tracker = ValueTracker(0.0)
         phase_counts: dict[float, int] = {}
 
@@ -25,6 +28,39 @@ class OrdinaryCallbackSparseReads(Scene):
             phase_time = _manim_updaters._canonical_callback_time(mobject)
             phase_counts[phase_time] = phase_counts.get(phase_time, 0) + 1
             assert phase_counts[phase_time] == 1
+            # Nested aliases must move once, retaining the preceding leaf edit.
+            mobject.shift((0.25, 0.0))
+            prior_x = mobject.get_center().x
+            family.shift((1.0, 0.0))
+            assert abs(mobject.get_center().x - (prior_x + 1.0)) < 1e-5
+            shifted = mobject.get_center()
+            try:
+                invalid_family.shift((1.0, 0.0))
+            except (RuntimeError, ReferenceError):
+                pass
+            else:
+                raise AssertionError("family translation accepted a non-live member")
+            assert mobject.get_center() == shifted
+            family.shift((-1.0, 0.0))
+            assert abs(mobject.get_center().x - prior_x) < 1e-5
+            # One Rust-selected family read fetches the missing anchor row.
+            # Recolor must observe the preceding family alpha edit, not authored alpha.
+            family.set_fill(opacity=0.6)
+            family.set_color(Color(0.0, 0.4, 1.0, 0.9))
+            assert abs(anchor.get_fill_opacity() - 0.6) < 1e-6
+            assert abs(mobject.get_fill_opacity() - 0.6) < 1e-6
+            try:
+                invalid_family.set_fill(opacity=0.1)
+            except NoonStaleHandleError as error:
+                assert error.category == "stale_handle"
+                assert error.code == "callback.family.read"
+                assert error.operation == "callback.read"
+                assert error.rust_cause.code == "callback.read"
+                assert error.rust_cause.cause.code == "callback_read.unknown_object"
+                assert error.__cause__ is not None
+            else:
+                raise AssertionError("family paint accepted a non-live member")
+            assert abs(mobject.get_fill_opacity() - 0.6) < 1e-6
             anchor_center = anchor.get_center()
             mobject.move_to((anchor_center.x + tracker.get_value(), anchor_center.y, 0.0))
 
@@ -35,7 +71,8 @@ class OrdinaryCallbackSparseReads(Scene):
         # track exists. This proves callback reads do not depend on active or
         # touched signal rows.
         await self.wait(0.25)
-        assert circle.get_center() == (-1.0, 1.0)
+        center = circle.get_center()
+        assert abs(center.x + 1.0) < 1e-5 and abs(center.y - 1.0) < 1e-5, center
         await self.play(tracker.animate.set_value(2.0), run_time=1.0, rate_func=linear)
 
         # The timed track has completed. Rust appends the persistent hold, and
@@ -46,4 +83,5 @@ class OrdinaryCallbackSparseReads(Scene):
 
         assert phase_counts.get(0.0) == 1
         assert self.time == 1.5
-        assert circle.get_center() == (2.0, 1.0)
+        center = circle.get_center()
+        assert abs(center.x - 2.0) < 1e-5 and abs(center.y - 1.0) < 1e-5, center

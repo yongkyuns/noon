@@ -3,6 +3,7 @@
 //! These handles retain only their owning store and one `SemanticNodeId`.
 //! Routing and effective values are lowered into the canonical `ExecutionSession`.
 
+use crate::AuthoringError;
 use std::{cell::RefCell, rc::Rc};
 
 use noon_core::{
@@ -27,15 +28,15 @@ impl NativeSignalHandle {
         Rc::ptr_eq(&self.store, store)
     }
 
-    fn require_store(&self, store: &Rc<RefCell<SemanticStore>>) -> Result<(), String> {
+    fn require_store(&self, store: &Rc<RefCell<SemanticStore>>) -> Result<(), AuthoringError> {
         if !self.is_in_store(store) {
-            return Err("native signal belongs to another scene store".into());
+            return Err(AuthoringError::ForeignStore);
         }
         self.store
             .borrow()
             .semantic_signal_state(self.node)
             .map(|_| ())
-            .map_err(|error| error.to_string())
+            .map_err(AuthoringError::from)
     }
 }
 
@@ -68,15 +69,15 @@ impl NativeBoolSignal {
 }
 
 impl Scene {
-    pub fn pointer_position_signal(&self) -> Result<NativeVectorSignal, String> {
+    pub fn pointer_position_signal(&self) -> Result<NativeVectorSignal, AuthoringError> {
         self.native_vector_signal(NativeStateSource::PointerPosition)
     }
 
-    pub fn viewport_size_signal(&self) -> Result<NativeVectorSignal, String> {
+    pub fn viewport_size_signal(&self) -> Result<NativeVectorSignal, AuthoringError> {
         self.native_vector_signal(NativeStateSource::ViewportSize)
     }
 
-    pub fn wheel_delta_signal(&self) -> Result<NativeVectorSignal, String> {
+    pub fn wheel_delta_signal(&self) -> Result<NativeVectorSignal, AuthoringError> {
         self.native_vector_signal(NativeStateSource::WheelDelta)
     }
 
@@ -84,7 +85,7 @@ impl Scene {
         &self,
         code: impl Into<String>,
         initial: bool,
-    ) -> Result<NativeBoolSignal, String> {
+    ) -> Result<NativeBoolSignal, AuthoringError> {
         let code = nonempty_name("key code", code.into())?;
         self.native_bool_signal(NativeStateSource::Key { code }, initial)
     }
@@ -93,7 +94,7 @@ impl Scene {
         &self,
         name: impl Into<String>,
         initial: f64,
-    ) -> Result<ValueTracker, String> {
+    ) -> Result<ValueTracker, AuthoringError> {
         let name = nonempty_name("control name", name.into())?;
         let (store, node) = self.native_signal(
             SemanticSignalValue::Scalar(initial),
@@ -102,7 +103,7 @@ impl Scene {
         Ok(ValueTracker::from_semantic_node(store, node))
     }
 
-    pub fn pointer_down_events(&self, button: u8) -> Result<ValueTracker, String> {
+    pub fn pointer_down_events(&self, button: u8) -> Result<ValueTracker, AuthoringError> {
         let (store, node) = self.native_signal(
             SemanticSignalValue::Scalar(0.0),
             SemanticNativeInputSource::Event(NativeEventSource::PointerDown { button }),
@@ -110,7 +111,7 @@ impl Scene {
         Ok(ValueTracker::from_semantic_node(store, node))
     }
 
-    pub fn wheel_events(&self) -> Result<ValueTracker, String> {
+    pub fn wheel_events(&self) -> Result<ValueTracker, AuthoringError> {
         let (store, node) = self.native_signal(
             SemanticSignalValue::Scalar(0.0),
             SemanticNativeInputSource::Event(NativeEventSource::Wheel),
@@ -118,7 +119,10 @@ impl Scene {
         Ok(ValueTracker::from_semantic_node(store, node))
     }
 
-    pub fn control_commit_events(&self, name: impl Into<String>) -> Result<ValueTracker, String> {
+    pub fn control_commit_events(
+        &self,
+        name: impl Into<String>,
+    ) -> Result<ValueTracker, AuthoringError> {
         let name = nonempty_name("control name", name.into())?;
         let (store, node) = self.native_signal(
             SemanticSignalValue::Scalar(0.0),
@@ -132,9 +136,9 @@ impl Scene {
         &self,
         object: &Mobject,
         signal: &NativeVectorSignal,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         self.require_object(object)?;
-        signal.0.require_store(self.store())?;
+        signal.0.require_store(self.integration_store())?;
         self.bind_signal(
             object,
             signal.node_id(),
@@ -143,15 +147,23 @@ impl Scene {
     }
 
     /// Bind a scalar input/event counter to rotation around the semantic z axis.
-    pub fn bind_rotation(&self, object: &Mobject, signal: &ValueTracker) -> Result<(), String> {
-        signal.require_store(self.store())?;
+    pub fn bind_rotation(
+        &self,
+        object: &Mobject,
+        signal: &ValueTracker,
+    ) -> Result<(), AuthoringError> {
+        signal.require_store(self.integration_store())?;
         self.require_object(object)?;
         self.bind_signal(object, signal.node_id(), SemanticObjectProperty::RotationZ)
     }
 
     /// Bind a scalar input to the object's composed opacity.
-    pub fn bind_opacity(&self, object: &Mobject, signal: &ValueTracker) -> Result<(), String> {
-        signal.require_store(self.store())?;
+    pub fn bind_opacity(
+        &self,
+        object: &Mobject,
+        signal: &ValueTracker,
+    ) -> Result<(), AuthoringError> {
+        signal.require_store(self.integration_store())?;
         self.require_object(object)?;
         self.bind_signal(
             object,
@@ -161,8 +173,12 @@ impl Scene {
     }
 
     /// Bind a native bool state to whether the object participates in rendering.
-    pub fn bind_presence(&self, object: &Mobject, signal: &NativeBoolSignal) -> Result<(), String> {
-        signal.0.require_store(self.store())?;
+    pub fn bind_presence(
+        &self,
+        object: &Mobject,
+        signal: &NativeBoolSignal,
+    ) -> Result<(), AuthoringError> {
+        signal.0.require_store(self.integration_store())?;
         self.require_object(object)?;
         self.bind_signal(object, signal.node_id(), SemanticObjectProperty::Presence)
     }
@@ -170,7 +186,7 @@ impl Scene {
     fn native_vector_signal(
         &self,
         source: NativeStateSource,
-    ) -> Result<NativeVectorSignal, String> {
+    ) -> Result<NativeVectorSignal, AuthoringError> {
         let (store, node) = self.native_signal(
             SemanticSignalValue::Vec3(SemanticVec3::ZERO),
             SemanticNativeInputSource::State(source),
@@ -182,7 +198,7 @@ impl Scene {
         &self,
         source: NativeStateSource,
         initial: bool,
-    ) -> Result<NativeBoolSignal, String> {
+    ) -> Result<NativeBoolSignal, AuthoringError> {
         let (store, node) = self.native_signal(
             SemanticSignalValue::Bool(initial),
             SemanticNativeInputSource::State(source),
@@ -194,16 +210,16 @@ impl Scene {
         &self,
         initial: SemanticSignalValue,
         source: SemanticNativeInputSource,
-    ) -> Result<(Rc<RefCell<SemanticStore>>, SemanticNodeId), String> {
-        let store = Rc::clone(self.store());
+    ) -> Result<(Rc<RefCell<SemanticStore>>, SemanticNodeId), AuthoringError> {
+        let store = Rc::clone(self.integration_store());
         let creation = noon_core::SemanticNodeCreation::native_input_signal(initial, source)
-            .map_err(|error| error.to_string())?;
+            .map_err(AuthoringError::from)?;
         let mut transaction = SemanticMutationTransaction::new();
         let pending = transaction.create_node(creation);
         transaction.scope_signal(self.root(), pending);
         let result = transaction
             .apply(&mut store.borrow_mut())
-            .map_err(|error| error.to_string())?;
+            .map_err(AuthoringError::from)?;
         let node = result
             .resolve(pending)
             .expect("committed native input resolves its transaction-local identity");
@@ -215,18 +231,20 @@ impl Scene {
         object: &Mobject,
         signal: SemanticNodeId,
         property: SemanticObjectProperty,
-    ) -> Result<(), String> {
-        self.store()
+    ) -> Result<(), AuthoringError> {
+        self.integration_store()
             .borrow_mut()
             .bind_semantic_signal(signal, object.node_id(), property)
             .map(|_| ())
-            .map_err(|error| error.to_string())
+            .map_err(AuthoringError::from)
     }
 }
 
-fn nonempty_name(kind: &str, value: String) -> Result<String, String> {
+fn nonempty_name(kind: &str, value: String) -> Result<String, AuthoringError> {
     if value.trim().is_empty() {
-        Err(format!("native input {kind} must not be empty"))
+        Err(AuthoringError::EmptyInputName {
+            kind: kind.to_owned(),
+        })
     } else {
         Ok(value)
     }
@@ -244,16 +262,16 @@ mod tests {
     fn stale_scene_rejects_native_input_creation_without_allocating_a_signal() {
         let scene = Scene::new();
         scene
-            .store()
+            .integration_store()
             .borrow_mut()
             .remove_node(scene.root())
             .unwrap();
         let before = {
-            let store = scene.store().borrow();
+            let store = scene.integration_store().borrow();
             (store.len(), store.scene_revision())
         };
         assert!(scene.control_signal("gain", 1.0).is_err());
-        let store = scene.store().borrow();
+        let store = scene.integration_store().borrow();
         assert_eq!((store.len(), store.scene_revision()), before);
     }
 
@@ -277,7 +295,7 @@ mod tests {
         let wheel = scene.wheel_events().unwrap();
         let commit = scene.control_commit_events("opacity").unwrap();
 
-        let store = scene.store().borrow();
+        let store = scene.integration_store().borrow();
         assert_eq!(
             store
                 .semantic_signal_state(key.node_id())
@@ -348,11 +366,11 @@ mod tests {
     #[test]
     fn invalid_names_and_foreign_handles_fail_before_semantic_mutation() {
         let scene = Scene::new();
-        let before = scene.store().borrow().slot_capacity();
+        let before = scene.integration_store().borrow().slot_capacity();
         assert!(scene.key_state_signal(" ", false).is_err());
         assert!(scene.control_signal("", 1.0).is_err());
         assert!(scene.control_commit_events("\t").is_err());
-        assert_eq!(scene.store().borrow().slot_capacity(), before);
+        assert_eq!(scene.integration_store().borrow().slot_capacity(), before);
 
         let mut foreign = Scene::new();
         let object = foreign.square(1.0).unwrap();
@@ -360,7 +378,7 @@ mod tests {
         let pointer = scene.pointer_position_signal().unwrap();
         assert!(foreign.bind_native_translation(&object, &pointer).is_err());
         assert!(foreign
-            .store()
+            .integration_store()
             .borrow()
             .semantic_object_signal_bindings(object.node_id())
             .unwrap()

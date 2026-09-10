@@ -28,7 +28,7 @@ class ManimSemanticHandleColorTests(unittest.TestCase):
             class FakeSemanticHandle:
                 def __init__(self, snapshot_json):
                     self.snapshot = json.loads(snapshot_json)
-                    self.broad_set_color_calls = 0
+                    self.set_color_calls = 0
 
                 def snapshotJson(self):
                     return json.dumps(self.snapshot, separators=(",", ":"))
@@ -56,17 +56,15 @@ class ManimSemanticHandleColorTests(unittest.TestCase):
                         self.snapshot["style"]["stroke"]["alpha"] = float(opacity)
 
                 def setColor(self, red, green, blue, alpha):
-                    # Mirrors the broad Rust handle operation that exposed the regression:
-                    # one alpha is applied to both channels.
-                    self.broad_set_color_calls += 1
-                    for channel in ("fill", "stroke"):
-                        if self.snapshot["style"][channel] is not None:
-                            self.snapshot["style"][channel] = {
-                                "red": float(red),
-                                "green": float(green),
-                                "blue": float(blue),
-                                "alpha": float(alpha),
-                            }
+                    # Model the current shared Rust paint operation: existing
+                    # channels retain their independent opacities.
+                    self.set_color_calls += 1
+                    had_fill = self.snapshot["style"]["fill"] is not None
+                    had_stroke = self.snapshot["style"]["stroke"] is not None
+                    if had_fill or not had_stroke:
+                        self.setFillColor(red, green, blue, alpha)
+                    if had_stroke:
+                        self.setStrokeColor(red, green, blue, alpha)
 
                 def setFillColor(self, red, green, blue, alpha):
                     current = self.snapshot["style"]["fill"]
@@ -96,33 +94,26 @@ class ManimSemanticHandleColorTests(unittest.TestCase):
             _geometry_test.install_js_bridge(fake_js, create_handle)
             sys.modules["js"] = fake_js
 
-            # Match the relevant python-worker bootstrap order exactly: the rate-function
-            # adapter installs first, then semantic handles take ownership of detached
-            # authoring objects.
+            # Exercise the public facade over the typed geometry bridge.
             import _manim_compat
-            _manim_compat.install()
-            import _manim_rate_functions
-            _manim_rate_functions.install()
-            import _manim_phase_b  # noqa: F401
-            import _manim_semantic_handles
-            _manim_semantic_handles.install()
 
-            import _noon_ir as _ir
+            import _manim_rate_functions
+            import _manim_semantic_handles
+
+
             import noon as _base
 
-            raw = _ir.Rectangle(
-                1.0,
-                1.0,
-                fill=_ir.Color(0.0, 0.0, 1.0, 0.35),
-                stroke=_ir.Color(0.0, 0.0, 1.0, 0.0),
+            mobject = _base.Rectangle(
+                width=1.0, height=1.0,
+                fill=_base.Color(0.0, 0.0, 1.0, 0.35),
+                stroke=_base.Color(0.0, 0.0, 1.0, 0.0),
                 stroke_width=4.0,
             )
-            mobject = _base.Mobject(raw)
             handle = mobject._semantic_handle
             mobject.set_color(_base.GREEN)
 
             style = mobject.style
-            assert handle.broad_set_color_calls == 0
+            assert handle.set_color_calls == 1
             assert abs(style["fill"]["red"] - _base.GREEN.red) < 1e-12
             assert abs(style["fill"]["green"] - _base.GREEN.green) < 1e-12
             assert abs(style["fill"]["blue"] - _base.GREEN.blue) < 1e-12
@@ -132,11 +123,8 @@ class ManimSemanticHandleColorTests(unittest.TestCase):
             assert abs(style["stroke"]["blue"] - _base.GREEN.blue) < 1e-12
             assert abs(style["stroke"]["alpha"] - 0.0) < 1e-12
 
-            # Preserve the base Mobject fallback: if neither channel exists, set_color
-            # creates a fill using the requested color alpha.
-            empty = _base.Mobject(
-                _ir.Rectangle(1.0, 1.0, fill=None, stroke=None, stroke_width=0.0)
-            )
+            # Shared recoloring enables fill when neither paint channel exists.
+            empty = _base.Rectangle(width=1.0, height=1.0, fill=None, stroke=None, stroke_width=0.0)
             empty.set_color(_base.GREEN)
             empty_style = empty.style
             assert empty_style["fill"] is not None

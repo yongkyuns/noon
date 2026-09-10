@@ -2,37 +2,53 @@
 
 pub mod affine_fade;
 pub mod analytic_profile;
+#[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
 pub mod automatic_wait_text;
+pub mod dimension_fitting;
 pub mod draw_border_then_fill;
 pub mod exact_property_tracks;
+pub mod family_affine;
 pub mod family_arrangement;
+pub mod family_grid;
+pub mod family_paint;
 pub mod family_placement;
 pub mod family_transform_indicate;
 pub mod line_passing_flash;
 pub mod live_geometry_construction;
+pub mod live_updater_lifecycle;
 pub mod mixed_scalar_composition;
 pub mod moving_around;
 pub mod ordinary_become_semantics;
 pub mod ordinary_membership;
 pub mod ordinary_subset_display;
 pub mod ordinary_uncreate_options;
+pub mod painter_order_overlap;
+pub mod renderer_fixtures;
+pub mod renderer_recovery;
 pub mod specialized_geometry;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_family_fade;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_family_reveal;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_family_write;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_write;
 pub mod timed_composition;
 
+#[cfg(all(feature = "typst", feature = "bundled-fonts"))]
+use crate::{MathTypst, Typst};
 use std::{error::Error, rc::Rc};
 
 use crate::{
     AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
-    AnimationOptions, Color, ExecutionSession, HostCallbackId, LiveContinuation, LiveProgram,
-    LiveSession, MathTypst, Mobject, RateFunction, RustHostCallbackTable, Scene,
-    SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
-    SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3, StoredGeometry, StrokeCap,
-    StrokeJoin, StrokeWidthMode, TransformToRequest, Typst, ValueTracker, Vec2, VectorPath,
+    AnimationOptions, Color, ExecutionSession, LiveContinuation, LiveProgram, LiveSession, Mobject,
+    RateFunction, RustHostCallbackTable, Scene, SemanticAnimationCompositionKind,
+    SemanticFadeDirection, SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3,
+    StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, TransformToRequest, ValueTracker, Vec2,
+    VectorPath,
 };
+use noon_core::HostCallbackId;
 
 /// Direct counterpart of Manim's DifferentRotations example.
 pub struct OrdinaryDifferentRotations {
@@ -105,36 +121,47 @@ impl LiveContinuation for OrdinaryDifferentRotations {
 pub fn ordinary_different_rotations_program(
 ) -> Result<LiveProgram<OrdinaryDifferentRotations>, String> {
     let scene = Scene::new();
-    let mut left = scene.square(2.0)?;
-    left.set_translation(-2.0, 0.0)?;
+    let mut left = scene.square(2.0).map_err(|error| error.to_string())?;
+    left.set_translation(-2.0, 0.0)
+        .map_err(|error| error.to_string())?;
     left.set_color(
         f64::from(Color::BLUE.red),
         f64::from(Color::BLUE.green),
         f64::from(Color::BLUE.blue),
         1.0,
-    )?;
+    )
+    .map_err(|error| error.to_string())?;
     left.set_fill(
         f64::from(Color::BLUE.red),
         f64::from(Color::BLUE.green),
         f64::from(Color::BLUE.blue),
         0.7,
-    )?;
-    let mut left_target = left.target_editor()?;
-    left_target.rotate(std::f64::consts::PI)?;
-    let mut right = scene.square(2.0)?;
-    right.set_translation(2.0, 0.0)?;
-    right.set_color(
-        f64::from(Color::GREEN.red),
-        f64::from(Color::GREEN.green),
-        f64::from(Color::GREEN.blue),
-        1.0,
-    )?;
-    right.set_fill(
-        f64::from(Color::GREEN.red),
-        f64::from(Color::GREEN.green),
-        f64::from(Color::GREEN.blue),
-        0.7,
-    )?;
+    )
+    .map_err(|error| error.to_string())?;
+    let mut left_target = left.target_editor().map_err(|error| error.to_string())?;
+    left_target
+        .rotate(std::f64::consts::PI)
+        .map_err(|error| error.to_string())?;
+    let mut right = scene.square(2.0).map_err(|error| error.to_string())?;
+    right
+        .set_translation(2.0, 0.0)
+        .map_err(|error| error.to_string())?;
+    right
+        .set_color(
+            f64::from(Color::GREEN.red),
+            f64::from(Color::GREEN.green),
+            f64::from(Color::GREEN.blue),
+            1.0,
+        )
+        .map_err(|error| error.to_string())?;
+    right
+        .set_fill(
+            f64::from(Color::GREEN.red),
+            f64::from(Color::GREEN.green),
+            f64::from(Color::GREEN.blue),
+            0.7,
+        )
+        .map_err(|error| error.to_string())?;
     scene
         .into_live_program(OrdinaryDifferentRotations {
             left,
@@ -147,9 +174,13 @@ pub fn ordinary_different_rotations_program(
 
 const SET_Y: HostCallbackId = HostCallbackId::new(1);
 const SET_OPACITY: HostCallbackId = HostCallbackId::new(2);
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 const ACCUMULATE_DT: HostCallbackId = HostCallbackId::new(3);
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 const ACCUMULATE_TEXT_DT: HostCallbackId = HostCallbackId::new(4);
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 const ROTATE_LINE_FORWARD: HostCallbackId = HostCallbackId::new(5);
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 const ROTATE_LINE_BACKWARD: HostCallbackId = HostCallbackId::new(6);
 const FOLLOW_SPARSE_READS: HostCallbackId = HostCallbackId::new(7);
 const RECOLOR_PAINT: HostCallbackId = HostCallbackId::new(8);
@@ -184,6 +215,7 @@ fn ordered_affine_callbacks(
 /// Both native and direct single-context Rust/WASM examples consume these typed
 /// values. The execution schedule remains owned by [`ExecutionSession`], while
 /// the callable table contains only host-owned Rust closures.
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub fn live_affine_callbacks() -> Result<(ExecutionSession, RustHostCallbackTable), Box<dyn Error>>
 {
     let mut scene = Scene::new();
@@ -194,9 +226,9 @@ pub fn live_affine_callbacks() -> Result<(ExecutionSession, RustHostCallbackTabl
     let mut drift = scene.circle(0.5)?;
     drift.set_fill(1.0, 1.0, 1.0, 1.0)?;
     drift.set_translation(-3.0, 0.0)?;
-    scene.add(&label)?;
-    scene.add(&source)?;
-    scene.add(&drift)?;
+    scene.add(&label).map_err(|error| error.to_string())?;
+    scene.add(&source).map_err(|error| error.to_string())?;
+    scene.add(&drift).map_err(|error| error.to_string())?;
 
     let mut target = source.target_editor()?;
     target.set_translation(2.0, 0.0)?;
@@ -221,7 +253,7 @@ pub fn live_affine_callbacks() -> Result<(ExecutionSession, RustHostCallbackTabl
     })?;
 
     {
-        let mut store = scene.store().borrow_mut();
+        let mut store = scene.integration_store().borrow_mut();
         callbacks.add_updater(&mut store, label.node_id(), ACCUMULATE_TEXT_DT, 0.0, None)?;
         callbacks.add_updater(&mut store, source.node_id(), SET_Y, 0.0, None)?;
         callbacks.add_updater(&mut store, source.node_id(), SET_OPACITY, 0.0, None)?;
@@ -250,8 +282,10 @@ pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable)
     source.set_stroke_width(0.12)?;
     assert_eq!(source.fill_opacity()?, 0.25);
     assert_eq!(source.stroke_opacity()?, 0.75);
-    scene.add(&source)?;
+    scene.add(&source).map_err(|error| error.to_string())?;
 
+    let nested = scene.family(&[(&source).into()])?;
+    let family = scene.family(&[(&nested).into(), (&source).into()])?;
     let mut target = source.target_editor()?;
     target.set_translation(2.0, 0.0)?;
     let animation = scene.declare_transform_to(
@@ -271,26 +305,40 @@ pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable)
             .set_target_style(style)
             .map_err(|error| std::io::Error::other(error.to_string()))
     })?;
-    callbacks.insert(FILL_AND_COMPOSITE_OPACITY, |context| {
+    callbacks.insert(FILL_AND_COMPOSITE_OPACITY, move |context| {
         let before = context.target_state().style;
         let expected_fill_alpha = if context.time() == 0.0 { 0.25 } else { 0.4 };
+        let expected_stroke_alpha = if context.time() == 0.0 { 0.75 } else { 0.4 };
         if before.fill.map(|color| color.alpha) != Some(expected_fill_alpha)
-            || before.stroke.map(|color| color.alpha) != Some(0.75)
+            || before.stroke.map(|color| color.alpha) != Some(expected_stroke_alpha)
         {
             return Err(std::io::Error::other(
                 "ordered paint callback did not observe preserved layer alpha",
             ));
         }
-        let mut style = context
-            .target_style_with_fill_opacity(0.4)
+        context
+            .paint_family(
+                &family,
+                crate::FamilyPaint::Fill {
+                    color: None,
+                    opacity: Some(0.4),
+                },
+            )
             .map_err(std::io::Error::other)?;
+        let mut style = crate::integration::effective_style_with_paint_opacity(
+            context.target_state().style,
+            0.4,
+        )
+        .map_err(std::io::Error::other)?;
+        assert_eq!(style.fill.map(|color| color.alpha), Some(0.4));
+        assert_eq!(style.stroke.map(|color| color.alpha), Some(0.4));
         style.opacity = 0.5;
         context
             .set_target_style(style)
             .map_err(|error| std::io::Error::other(error.to_string()))
     })?;
     {
-        let mut store = scene.store().borrow_mut();
+        let mut store = scene.integration_store().borrow_mut();
         callbacks.add_updater(&mut store, source.node_id(), RECOLOR_PAINT, 0.0, None)?;
         callbacks.add_updater(
             &mut store,
@@ -311,6 +359,7 @@ pub fn live_callback_paint() -> Result<(ExecutionSession, RustHostCallbackTable)
 /// The compiler owns the adjacent forward and reverse callback windows. Circle,
 /// reference-Line, and Text siblings stay resident while only the moving Line's
 /// one effective transform changes.
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub fn live_line_callback_rotation(
 ) -> Result<(ExecutionSession, RustHostCallbackTable), Box<dyn Error>> {
     let mut scene = Scene::new();
@@ -323,10 +372,10 @@ pub fn live_line_callback_rotation(
     moving.set_color(1.0, 0.8, 0.0, 1.0)?;
     let mut label = scene.text("Noon")?;
     label.set_translation(0.0, -2.0)?;
-    scene.add(&marker)?;
-    scene.add(&reference)?;
-    scene.add(&moving)?;
-    scene.add(&label)?;
+    scene.add(&marker).map_err(|error| error.to_string())?;
+    scene.add(&reference).map_err(|error| error.to_string())?;
+    scene.add(&moving).map_err(|error| error.to_string())?;
+    scene.add(&label).map_err(|error| error.to_string())?;
 
     let mut callbacks = RustHostCallbackTable::new();
     callbacks.insert(ROTATE_LINE_FORWARD, |context| {
@@ -346,7 +395,7 @@ pub fn live_line_callback_rotation(
             .map_err(|error| std::io::Error::other(error.to_string()))
     })?;
     {
-        let mut store = scene.store().borrow_mut();
+        let mut store = scene.integration_store().borrow_mut();
         callbacks.add_updater(&mut store, moving.node_id(), ROTATE_LINE_FORWARD, 0.0, None)?;
         callbacks.add_updater(
             &mut store,
@@ -355,7 +404,7 @@ pub fn live_line_callback_rotation(
             2.0,
             None,
         )?;
-        let mut close_windows = SemanticMutationTransaction::new();
+        let mut close_windows = noon_core::SemanticMutationTransaction::new();
         close_windows.remove_updater(moving.node_id(), ROTATE_LINE_FORWARD, 2.0);
         close_windows.remove_updater(moving.node_id(), ROTATE_LINE_BACKWARD, 4.0);
         close_windows.apply(&mut store)?;
@@ -384,9 +433,9 @@ pub fn live_line_match_callback(
         red.blue.into(),
         red.alpha.into(),
     )?;
-    scene.add(&left)?;
-    scene.add(&right)?;
-    scene.add(&line)?;
+    scene.add(&left).map_err(|error| error.to_string())?;
+    scene.add(&right).map_err(|error| error.to_string())?;
+    scene.add(&line).map_err(|error| error.to_string())?;
 
     let left_id = left.node_id();
     let right_id = right.node_id();
@@ -420,7 +469,7 @@ pub fn live_line_match_callback(
             .map_err(|error| std::io::Error::other(error.to_string()))
     })?;
     {
-        let mut store = scene.store().borrow_mut();
+        let mut store = scene.integration_store().borrow_mut();
         callbacks.add_updater(&mut store, left_id, MOVE_MATCH_DOT, 0.0, None)?;
         callbacks.add_updater(&mut store, line.node_id(), MATCH_LINE_ENDPOINTS, 0.0, None)?;
     }
@@ -428,6 +477,7 @@ pub fn live_line_match_callback(
 }
 
 /// Build the static Typst reference scene through the shared semantic text resource path.
+#[cfg(all(feature = "typst", feature = "bundled-fonts"))]
 pub fn typst_text_reference() -> Result<ExecutionSession, Box<dyn Error>> {
     let mut scene = Scene::new();
     let label = scene.typst(
@@ -440,16 +490,17 @@ pub fn typst_text_reference() -> Result<ExecutionSession, Box<dyn Error>> {
                 1.0,
             )),
     )?;
-    scene.add(&label)?;
+    scene.add(&label).map_err(|error| error.to_string())?;
     Ok(scene.execution_session()?)
 }
 
 /// Build the static MathTypst reference scene through the shared semantic text resource path.
+#[cfg(all(feature = "typst", feature = "bundled-fonts"))]
 pub fn math_typst_text_reference() -> Result<ExecutionSession, Box<dyn Error>> {
     let mut scene = Scene::new();
     let equation = scene
         .math_typst(MathTypst::new("sum_(k=1)^n k = frac(n(n + 1), 2)").with_font_size(72.0))?;
-    scene.add(&equation)?;
+    scene.add(&equation).map_err(|error| error.to_string())?;
     Ok(scene.execution_session()?)
 }
 
@@ -461,7 +512,7 @@ pub fn math_typst_text_reference() -> Result<ExecutionSession, Box<dyn Error>> {
 pub fn live_affine_completion() -> Result<ExecutionSession, Box<dyn Error>> {
     let mut scene = Scene::new();
     let circle = scene.circle(1.0)?;
-    scene.add(&circle)?;
+    scene.add(&circle).map_err(|error| error.to_string())?;
 
     let mut first_target = circle.target_editor()?;
     first_target.set_translation(2.0, -2.0)?;
@@ -543,7 +594,7 @@ pub fn ordinary_affine_play() -> Result<ExecutionSession, Box<dyn Error>> {
     let mut scene = Scene::new();
     let mut circle = scene.circle(0.4)?;
     circle.set_fill(0.0, 0.4, 1.0, 1.0)?;
-    scene.add(&circle)?;
+    scene.add(&circle).map_err(|error| error.to_string())?;
 
     let mut first_target = circle.target_editor()?;
     first_target.set_translation(2.0, -1.0)?;
@@ -855,7 +906,8 @@ pub fn ordinary_value_tracker_continuation_program(
     // Model a host-language tracker constructed before its eventual Scene body:
     // the shared store owns its identity/value while it is detached. The first
     // continuation step enrolls this same handle through LiveSession.
-    let tracker = ValueTracker::detached(Rc::clone(scene.store()), 0.0)?;
+    let tracker = ValueTracker::detached(Rc::clone(scene.integration_store()), 0.0)
+        .map_err(|error| error.to_string())?;
     let position = scene
         .position_from_tracker(
             &tracker,
@@ -1104,18 +1156,40 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                     .map_err(|error| error.to_string())?;
                 live.set_color(&copied, 1.0, 0.0, 0.0, 1.0)
                     .map_err(|error| error.to_string())?;
-                assert_eq!(copied.fill_opacity()?, 0.75);
+                assert_eq!(
+                    copied.fill_opacity().map_err(|error| error.to_string())?,
+                    0.75
+                );
                 live.set_fill_opacity(&copied, 0.5)
                     .map_err(|error| error.to_string())?;
-                assert_eq!(copied.fill_opacity()?, 0.5);
+                assert_eq!(
+                    copied.fill_opacity().map_err(|error| error.to_string())?,
+                    0.5
+                );
                 live.set_stroke_opacity(&copied, 0.25)
                     .map_err(|error| error.to_string())?;
-                assert_eq!(copied.stroke_opacity()?, 0.25);
+                assert_eq!(
+                    copied.stroke_opacity().map_err(|error| error.to_string())?,
+                    0.25
+                );
                 live.set_opacity(&copied, 0.4)
                     .map_err(|error| error.to_string())?;
-                assert_eq!(copied.fill_opacity()?, 0.4);
-                assert_eq!(copied.stroke_opacity()?, 0.4);
-                assert_eq!(copied.state()?.style.object_opacity, 0.5);
+                assert_eq!(
+                    copied.fill_opacity().map_err(|error| error.to_string())?,
+                    0.4
+                );
+                assert_eq!(
+                    copied.stroke_opacity().map_err(|error| error.to_string())?,
+                    0.4
+                );
+                assert_eq!(
+                    copied
+                        .state()
+                        .map_err(|error| error.to_string())?
+                        .style
+                        .object_opacity,
+                    0.5
+                );
                 let layout = live
                     .effective_family_layout(&self.family)
                     .map_err(|error| error.to_string())?;
@@ -1124,7 +1198,10 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                 assert!((layout.width - 0.8).abs() < 1e-6);
                 assert!((layout.height - 0.8).abs() < 1e-6);
                 let probe = live
-                    .create_manim_geometry(crate::ManimGeometryOptions::square(0.2)?)
+                    .create_manim_geometry(
+                        crate::ManimGeometryOptions::square(0.2)
+                            .map_err(|error| error.to_string())?,
+                    )
                     .map_err(|error| error.to_string())?;
                 let source = crate::LayoutAnchor::from(&probe);
                 let args = crate::semantic_mobject::ManimNextToArgs {
@@ -1140,7 +1217,7 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                     args,
                 )
                 .map_err(|error| error.to_string())?;
-                let center = probe.center()?;
+                let center = probe.center().map_err(|error| error.to_string())?;
                 assert!((center.0 - 2.6).abs() < 1e-6);
                 assert!((center.1 - 1.0).abs() < 1e-6);
                 let before = live
@@ -1155,7 +1232,12 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                         args,
                     )
                     .unwrap_err();
-                assert!(error.to_string().contains("active effective affine driver"));
+                assert!(matches!(
+                    error,
+                    crate::LiveSessionError::Authoring(crate::AuthoringError::Unsupported(
+                        crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver
+                    ))
+                ));
                 assert_eq!(
                     live.effective(&self.circle)
                         .map_err(|error| error.to_string())?,
@@ -1194,7 +1276,7 @@ pub fn ordinary_callback_continuation_program() -> Result<
 
     let callbacks = ordered_affine_callbacks(Some(0.75)).map_err(|error| error.to_string())?;
     {
-        let mut store = scene.store().borrow_mut();
+        let mut store = scene.integration_store().borrow_mut();
         callbacks
             .add_updater(&mut store, circle.node_id(), SET_Y, 0.0, None)
             .map_err(|error| error.to_string())?;
@@ -1312,6 +1394,16 @@ pub fn ordinary_callback_sparse_reads_program() -> Result<
         .value_tracker(0.0)
         .map_err(|error| error.to_string())?;
 
+    let nested = scene
+        .family(&[(&circle).into(), (&anchor).into()])
+        .map_err(|error| error.to_string())?;
+    let family = scene
+        .family(&[(&nested).into(), (&circle).into()])
+        .map_err(|error| error.to_string())?;
+    let missing = scene.circle(0.1).map_err(|error| error.to_string())?;
+    let invalid_family = scene
+        .family(&[(&circle).into(), (&missing).into()])
+        .map_err(|error| error.to_string())?;
     let tracker_id = tracker.node_id();
     let anchor_id = anchor.node_id();
     let mut observed_phase_times = Vec::new();
@@ -1325,6 +1417,56 @@ pub fn ordinary_callback_sparse_reads_program() -> Result<
                 )));
             }
             observed_phase_times.push(context.time());
+            // Same operation as the paired Python callback: a preceding leaf
+            // edit, nested alias translation, caught late failure, then retry.
+            let mut prior = context.target_state().transform;
+            prior.translation.x += 0.25;
+            context
+                .set_target_transform(prior)
+                .map_err(|error| SparseReadExampleError(error.to_string()))?;
+            context
+                .shift_family(&family, 1.0, 0.0)
+                .map_err(|error| SparseReadExampleError(error.to_string()))?;
+            assert!(
+                (context.target_state().transform.translation.x - (prior.translation.x + 1.0))
+                    .abs()
+                    < 1e-5
+            );
+            let shifted = *context.target_state();
+            assert!(context.shift_family(&invalid_family, 1.0, 0.0).is_err());
+            assert_eq!(*context.target_state(), shifted);
+            context
+                .shift_family(&family, -1.0, 0.0)
+                .map_err(|error| SparseReadExampleError(error.to_string()))?;
+            assert!(
+                (context.target_state().transform.translation.x - prior.translation.x).abs() < 1e-5
+            );
+            context
+                .paint_family(
+                    &family,
+                    crate::FamilyPaint::Fill {
+                        color: None,
+                        opacity: Some(0.6),
+                    },
+                )
+                .map_err(|error| SparseReadExampleError(error.to_string()))?;
+            context
+                .paint_family(
+                    &family,
+                    crate::FamilyPaint::Color(Color::rgba(0.0, 0.4, 1.0, 0.9)),
+                )
+                .map_err(|error| SparseReadExampleError(error.to_string()))?;
+            assert!((context.target_state().style.fill.unwrap().alpha - 0.6).abs() < 1e-6);
+            assert!(context
+                .paint_family(
+                    &invalid_family,
+                    crate::FamilyPaint::Fill {
+                        color: None,
+                        opacity: Some(0.1)
+                    }
+                )
+                .is_err());
+            assert!((context.target_state().style.fill.unwrap().alpha - 0.6).abs() < 1e-6);
             let scalar = context
                 .scalar_signal(tracker_id)
                 .map_err(|error| SparseReadExampleError(error.to_string()))?;
@@ -1344,7 +1486,7 @@ pub fn ordinary_callback_sparse_reads_program() -> Result<
         .map_err(|error| error.to_string())?;
     callbacks
         .add_updater(
-            &mut scene.store().borrow_mut(),
+            &mut scene.integration_store().borrow_mut(),
             circle.node_id(),
             FOLLOW_SPARSE_READS,
             0.0,
@@ -1646,15 +1788,18 @@ impl LiveContinuation for OrdinaryAffineLifecycleContinuation {
 pub fn ordinary_affine_lifecycle_program(
 ) -> Result<LiveProgram<OrdinaryAffineLifecycleContinuation>, String> {
     let scene = Scene::new();
-    let mut square = Mobject::manim_square(Rc::clone(scene.store()), 1.0)?;
-    square.set_fill(
-        f64::from(Color::BLUE.red),
-        f64::from(Color::BLUE.green),
-        f64::from(Color::BLUE.blue),
-        0.7,
-    )?;
+    let mut square = Mobject::manim_square(Rc::clone(scene.integration_store()), 1.0)
+        .map_err(|error| error.to_string())?;
+    square
+        .set_fill(
+            f64::from(Color::BLUE.red),
+            f64::from(Color::BLUE.green),
+            f64::from(Color::BLUE.blue),
+            0.7,
+        )
+        .map_err(|error| error.to_string())?;
     let semantic_id = square.node_id();
-    let authored_style = square.state()?.style;
+    let authored_style = square.state().map_err(|error| error.to_string())?.style;
     scene
         .into_live_program(OrdinaryAffineLifecycleContinuation {
             square,
@@ -2022,27 +2167,37 @@ impl LiveContinuation for OrdinaryMovingCameraCenter {
 pub fn ordinary_moving_camera_center_program(
 ) -> Result<LiveProgram<OrdinaryMovingCameraCenter>, String> {
     let mut scene = Scene::new();
-    let frame = scene.camera_frame()?;
-    let mut left_target = frame.target_editor()?;
-    left_target.set_translation(-2.0, 0.0)?;
-    let mut right_target = frame.target_editor()?;
-    right_target.set_translation(2.0, 0.0)?;
+    let frame = scene.camera_frame().map_err(|error| error.to_string())?;
+    let mut left_target = frame.target_editor().map_err(|error| error.to_string())?;
+    left_target
+        .set_translation(-2.0, 0.0)
+        .map_err(|error| error.to_string())?;
+    let mut right_target = frame.target_editor().map_err(|error| error.to_string())?;
+    right_target
+        .set_translation(2.0, 0.0)
+        .map_err(|error| error.to_string())?;
 
-    let mut square = scene.square(2.0)?;
+    let mut square = scene.square(2.0).map_err(|error| error.to_string())?;
     let red = Color::RED;
-    square.set_color(
-        f64::from(red.red),
-        f64::from(red.green),
-        f64::from(red.blue),
-        1.0,
-    )?;
-    square.set_fill(
-        f64::from(red.red),
-        f64::from(red.green),
-        f64::from(red.blue),
-        0.5,
-    )?;
-    square.set_translation(-2.0, 0.0)?;
+    square
+        .set_color(
+            f64::from(red.red),
+            f64::from(red.green),
+            f64::from(red.blue),
+            1.0,
+        )
+        .map_err(|error| error.to_string())?;
+    square
+        .set_fill(
+            f64::from(red.red),
+            f64::from(red.green),
+            f64::from(red.blue),
+            0.5,
+        )
+        .map_err(|error| error.to_string())?;
+    square
+        .set_translation(-2.0, 0.0)
+        .map_err(|error| error.to_string())?;
     let triangle_path = VectorPath::new()
         .move_to(Vec2::new(0.0, 1.0))
         .line_to(Vec2::new(-0.866_025_4, -0.5))
@@ -2059,8 +2214,12 @@ pub fn ordinary_moving_camera_center_program(
         stroke_cap: StrokeCap::Butt,
         object_opacity: 1.0,
     };
-    let mut triangle = scene.path(triangle_path, triangle_style)?;
-    triangle.move_to(2.0, 0.0)?;
+    let mut triangle = scene
+        .path(triangle_path, triangle_style)
+        .map_err(|error| error.to_string())?;
+    triangle
+        .move_to(2.0, 0.0)
+        .map_err(|error| error.to_string())?;
 
     scene
         .into_live_program(OrdinaryMovingCameraCenter {
@@ -2091,8 +2250,8 @@ pub fn ordinary_composition_play() -> Result<ExecutionSession, Box<dyn Error>> {
     left_position.set_translation(-2.0, 1.0)?;
     let mut right_position = right.target_editor()?;
     right_position.set_translation(2.0, -1.0)?;
-    scene.add(&left)?;
-    scene.add(&right)?;
+    scene.add(&left).map_err(|error| error.to_string())?;
+    scene.add(&right).map_err(|error| error.to_string())?;
     let linear = |duration| {
         AnimationOptions::new()
             .run_time(duration)
@@ -2177,7 +2336,7 @@ pub fn ordinary_style_play() -> Result<ExecutionSession, Box<dyn Error>> {
     let mut circle = scene.circle(0.4)?;
     circle.set_fill(0.0, 0.4, 1.0, 1.0)?;
     circle.set_object_opacity(1.0)?;
-    scene.add(&circle)?;
+    scene.add(&circle).map_err(|error| error.to_string())?;
 
     let mut session = scene.execution_session()?;
     {
@@ -2237,7 +2396,7 @@ pub fn ordinary_paint_play() -> Result<ExecutionSession, Box<dyn Error>> {
     let mut circle = scene.circle(0.4)?;
     circle.set_fill(0.0, 0.0, 1.0, 1.0)?;
     circle.set_stroke_color(1.0, 1.0, 1.0, 1.0)?;
-    scene.add(&circle)?;
+    scene.add(&circle).map_err(|error| error.to_string())?;
 
     let mut session = scene.execution_session()?;
     {
@@ -2349,7 +2508,7 @@ pub fn live_native_signals() -> Result<ExecutionSession, Box<dyn Error>> {
     let mut scene = Scene::new();
     let mut square = scene.square(0.9)?;
     square.set_fill(0.0, 0.4, 1.0, 1.0)?;
-    scene.add(&square)?;
+    scene.add(&square).map_err(|error| error.to_string())?;
 
     let pointer = scene.pointer_position_signal()?;
     scene.bind_native_translation(&square, &pointer)?;
@@ -2373,7 +2532,8 @@ pub fn live_native_signals() -> Result<ExecutionSession, Box<dyn Error>> {
 #[cfg(test)]
 mod continuation_tests {
     use super::*;
-    use crate::{LiveProgramStatus, TimelineWakeState};
+    use crate::LiveProgramStatus;
+    use noon_runtime::TimelineWakeState;
 
     #[test]
     fn different_rotations_keeps_point_transform_distinct_from_angular_path() {
@@ -3031,7 +3191,7 @@ mod callback_paint_tests {
         let initial_style = initial.style;
         assert_eq!(initial.transform.translation, Vec2::ZERO);
         assert_eq!(initial.style.fill, Some(Color::rgba(0.8, 0.4, 0.2, 0.4)));
-        assert_eq!(initial.style.stroke, Some(Color::rgba(0.8, 0.4, 0.2, 0.75)));
+        assert_eq!(initial.style.stroke, Some(Color::rgba(0.8, 0.4, 0.2, 0.4)));
         assert_eq!(initial.style.stroke_width, 0.12);
         assert_eq!(initial.style.opacity, 0.5);
 
@@ -3049,6 +3209,7 @@ mod callback_paint_tests {
 mod line_callback_tests {
     use super::*;
 
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn line_callback_windows_reverse_one_local_effective_transform() {
         let (mut session, mut callbacks) = live_line_callback_rotation().unwrap();

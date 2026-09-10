@@ -36,9 +36,10 @@ jobs:
             pkg-config
       - name: Install pinned ManimCE reference
         run: python -m pip install --disable-pip-version-check "manim==0.21.0"
-      - name: Compare supported Noon semantics with ManimCE
+      # Public Python semantic probes run in manim-raster-differential.yml,
+      # reusing its Rust/WASM package and browser host.
+      - name: Compare native geometry and frame sampling with ManimCE
         run: |
-          python scripts/manim-differential.py
           python scripts/manim-dot-ellipse-differential.py
           python scripts/manim-sector-differential.py
           python scripts/manim-elbow-differential.py

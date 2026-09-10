@@ -1,11 +1,13 @@
 //! Immutable authored family observations and atomic relative placement.
+use crate::AuthoringError;
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     family_authoring::FamilyTranslation,
     semantic_mobject::{authoring_render_f64, authoring_xy_f64, ManimNextToArgs},
-    Bounds2D64, Mobject, MobjectFamily, SemanticNodeId, SemanticStore,
+    Bounds2D64, Mobject, MobjectFamily, SemanticNodeId,
 };
+use noon_core::SemanticStore;
 
 /// Bounds and ordered leaf identities observed at one authored point in time.
 ///
@@ -41,7 +43,7 @@ pub struct LayoutAnchor {
 impl From<&Mobject> for LayoutAnchor {
     fn from(object: &Mobject) -> Self {
         Self {
-            store: Rc::clone(object.store()),
+            store: Rc::clone(object.integration_store()),
             node: object.node_id(),
             index: None,
         }
@@ -51,7 +53,7 @@ impl From<&Mobject> for LayoutAnchor {
 impl From<&MobjectFamily> for LayoutAnchor {
     fn from(family: &MobjectFamily) -> Self {
         Self {
-            store: Rc::clone(family.store()),
+            store: Rc::clone(family.integration_store()),
             node: family.node_id(),
             index: None,
         }
@@ -73,38 +75,47 @@ impl LayoutAnchor {
         }
     }
 
-    pub(crate) fn store(&self) -> &Rc<RefCell<SemanticStore>> {
+    pub(crate) fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
         &self.store
     }
 
-    pub(crate) fn resolve(&self) -> Result<SemanticNodeId, String> {
+    pub(crate) fn resolve(&self) -> Result<SemanticNodeId, AuthoringError> {
         let store = self.store.borrow();
-        let node = store
-            .node(self.node)
-            .ok_or_else(|| format!("stale layout anchor {:?}", self.node))?;
+        let node =
+            store
+                .node(self.node)
+                .ok_or(noon_core::SemanticSceneOperationError::UnknownNode(
+                    self.node,
+                ))?;
         let Some(index) = self.index else {
             return Ok(self.node);
         };
-        if !matches!(node.kind(), crate::SemanticNodeKind::Family) {
-            return Err("alignment submobject index requires a semantic family".into());
+        if !matches!(node.kind(), noon_core::SemanticNodeKind::Family) {
+            return Err(
+                noon_core::SemanticSceneOperationError::NotSemanticFamily(self.node).into(),
+            );
         }
         let members = node.members();
+        let requested_index = index;
         let index = if index < 0 {
             members.len().checked_add_signed(index)
         } else {
             Some(index as usize)
         };
-        index
-            .and_then(|index| members.get(index).copied())
-            .ok_or_else(|| "alignment submobject index is unavailable".into())
+        index.and_then(|index| members.get(index).copied()).ok_or(
+            AuthoringError::InvalidSubmobjectIndex {
+                family: self.node,
+                index: requested_index,
+            },
+        )
     }
 
     /// Observe the selected object/family through the shared authored layout path.
-    pub fn layout(&self) -> Result<FamilyLayout, String> {
+    pub fn layout(&self) -> Result<FamilyLayout, AuthoringError> {
         let node = self.resolve()?;
         if matches!(
             self.store.borrow().node(node).map(|n| n.kind()),
-            Some(crate::SemanticNodeKind::Family)
+            Some(noon_core::SemanticNodeKind::Family)
         ) {
             MobjectFamily::from_node(Rc::clone(&self.store), node)?.layout()
         } else {
@@ -130,9 +141,9 @@ impl LayoutAnchor {
         target: FamilyLayoutTarget<'_>,
         aligner: &LayoutAnchor,
         args: ManimNextToArgs,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         if !Rc::ptr_eq(&self.store, &aligner.store) {
-            return Err("layout anchors belong to different authoring stores".into());
+            return Err(AuthoringError::ForeignStore);
         }
         let source = self.layout()?;
         let alignment = aligner.layout()?;
@@ -144,16 +155,17 @@ impl LayoutAnchor {
 
 impl MobjectFamily {
     /// Observe only this family's layout and ordered semantic leaves.
-    pub fn layout(&self) -> Result<FamilyLayout, String> {
+    pub fn layout(&self) -> Result<FamilyLayout, AuthoringError> {
         self.validate()?;
         let leaves = self
-            .store()
+            .integration_store()
             .borrow()
             .ordered_leaf_nodes(self.node_id())
-            .map_err(|e| e.to_string())?;
+            .map_err(AuthoringError::from)?;
         let mut bounds: Option<Bounds2D64> = None;
         for &leaf in &leaves {
-            let Some(next) = Mobject::from_node(Rc::clone(self.store()), leaf)?.layout_bounds()?
+            let Some(next) =
+                Mobject::from_node(Rc::clone(self.integration_store()), leaf)?.layout_bounds()?
             else {
                 continue;
             };
@@ -165,20 +177,25 @@ impl MobjectFamily {
             }
         }
         Ok(FamilyLayout {
-            store: Rc::clone(self.store()),
+            store: Rc::clone(self.integration_store()),
             leaves,
             bounds,
         })
     }
 
     /// Shift each semantic leaf once without querying its geometry.
-    pub fn shift(&self, x: f64, y: f64) -> Result<(), String> {
-        let translation = FamilyTranslation::begin(&self.store().borrow(), self.node_id(), x, y)?;
-        translation.apply(&mut self.store().borrow_mut())
+    pub fn shift(&self, x: f64, y: f64) -> Result<(), AuthoringError> {
+        let translation =
+            FamilyTranslation::begin(&self.integration_store().borrow(), self.node_id(), x, y)?;
+        translation.apply(&mut self.integration_store().borrow_mut())
     }
 }
 
 impl FamilyLayout {
+    pub(crate) fn leaves(&self) -> &[SemanticNodeId] {
+        &self.leaves
+    }
+
     pub fn bounds(&self) -> Option<Bounds2D64> {
         self.bounds
     }
@@ -202,9 +219,16 @@ impl FamilyLayout {
         bounds_critical_point(self.bounds, x, y)
     }
 
-    pub fn shift(&self, x: f64, y: f64) -> Result<(), String> {
+    pub fn shift(&self, x: f64, y: f64) -> Result<(), AuthoringError> {
         FamilyTranslation::from_members(self.leaves.clone(), x, y)?
             .apply(&mut self.store.borrow_mut())
+    }
+
+    /// Align selected family edges to the default frame in one transaction.
+    /// Direction magnitude scales the buffer, as with object frame alignment.
+    pub fn align_on_frame(&self, direction: (f64, f64), buff: f64) -> Result<(), AuthoringError> {
+        let target = frame_alignment_target(direction, buff)?;
+        self.align_to(FamilyLayoutTarget::Point(target.0, target.1), direction)
     }
 
     pub fn move_to(
@@ -212,7 +236,7 @@ impl FamilyLayout {
         target: FamilyLayoutTarget<'_>,
         edge: (f64, f64),
         mask: (f64, f64),
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         self.place(target, RelativePlacement::Move { edge, mask })
     }
 
@@ -221,11 +245,15 @@ impl FamilyLayout {
         &self,
         target: FamilyLayoutTarget<'_>,
         args: ManimNextToArgs,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         self.place(target, RelativePlacement::Next(args))
     }
 
-    pub fn align_to(&self, target: FamilyLayoutTarget<'_>, axis: (f64, f64)) -> Result<(), String> {
+    pub fn align_to(
+        &self,
+        target: FamilyLayoutTarget<'_>,
+        axis: (f64, f64),
+    ) -> Result<(), AuthoringError> {
         self.place(target, RelativePlacement::Align(axis))
     }
 
@@ -233,7 +261,7 @@ impl FamilyLayout {
         &self,
         target: FamilyLayoutTarget<'_>,
         placement: RelativePlacement,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringError> {
         let delta = placement.delta(self.bounds, |x, y| self.target_point(target, x, y))?;
         self.shift(delta.0, delta.1)
     }
@@ -243,20 +271,18 @@ impl FamilyLayout {
         target: FamilyLayoutTarget<'_>,
         x: f64,
         y: f64,
-    ) -> Result<(f64, f64), String> {
+    ) -> Result<(f64, f64), AuthoringError> {
         let target_store = match target {
             FamilyLayoutTarget::Point(px, py) => {
                 let point = authoring_xy_f64(px, py)?;
                 return Ok((point.x, point.y));
             }
-            FamilyLayoutTarget::Mobject(object) => object.store(),
+            FamilyLayoutTarget::Mobject(object) => object.integration_store(),
             FamilyLayoutTarget::Family(family) => &family.store,
-            FamilyLayoutTarget::Anchor(anchor) => anchor.store(),
+            FamilyLayoutTarget::Anchor(anchor) => anchor.integration_store(),
         };
         if !Rc::ptr_eq(&self.store, target_store) {
-            return Err(
-                "family placement source and target belong to different authoring stores".into(),
-            );
+            return Err(AuthoringError::ForeignStore);
         }
         match target {
             FamilyLayoutTarget::Mobject(object) => object.critical_point(x, y),
@@ -275,11 +301,11 @@ pub(crate) enum RelativePlacement {
 }
 
 impl RelativePlacement {
-    pub(crate) fn delta(
+    pub(crate) fn delta<E: From<AuthoringError>>(
         self,
         bounds: Option<Bounds2D64>,
-        target: impl FnOnce(f64, f64) -> Result<(f64, f64), String>,
-    ) -> Result<(f64, f64), String> {
+        target: impl FnOnce(f64, f64) -> Result<(f64, f64), E>,
+    ) -> Result<(f64, f64), E> {
         let (source_axis, target_axis, offset, mask) = match self {
             Self::Move { edge, mask } => {
                 let edge = authoring_xy_f64(edge.0, edge.1)?;
@@ -343,4 +369,24 @@ pub(crate) fn bounds_critical_point(bounds: Option<Bounds2D64>, x: f64, y: f64) 
             (b.min_y + b.max_y) * 0.5
         },
     )
+}
+
+/// Shared frame target; placement owns bounds, alias selection and publication.
+pub(crate) fn frame_alignment_target(
+    direction: (f64, f64),
+    buff: f64,
+) -> Result<(f64, f64), AuthoringError> {
+    let direction = authoring_xy_f64(direction.0, direction.1)?;
+    let buff = authoring_render_f64("buffer", buff)?;
+    let coordinate = |direction: f64, extent: f32| {
+        if direction == 0.0 {
+            0.0
+        } else {
+            direction.signum() * f64::from(extent) * 0.5 - direction * buff
+        }
+    };
+    Ok((
+        coordinate(direction.x, noon_core::DEFAULT_FRAME_WIDTH),
+        coordinate(direction.y, noon_core::DEFAULT_FRAME_HEIGHT),
+    ))
 }

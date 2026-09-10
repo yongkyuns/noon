@@ -7,7 +7,7 @@ when the segment has completed and its player lease was returned.
 """
 
 import _manim_updaters
-from noon import Circle, Color, RIGHT, Scene, Square, Transform, VGroup, linear
+from noon import Circle, Color, NoonUnsupportedError, RIGHT, Scene, Square, Transform, VGroup, linear
 
 
 class OrdinaryAffineCallbackContinuation(Scene):
@@ -35,7 +35,7 @@ class OrdinaryAffineCallbackContinuation(Scene):
         def dim_after_lift(mobject, _dt):
             assert mobject.get_center().y == 1.0
             mobject.set_fill(opacity=0.75)
-            mobject.set_opacity(0.5)
+            mobject.set_object_opacity(0.5)
 
         circle.add_updater(lift)
         circle.add_updater(dim_after_lift)
@@ -79,8 +79,13 @@ class OrdinaryAffineCallbackContinuation(Scene):
         before = circle.get_center()
         try:
             circle.next_to(probe, RIGHT, buff=0.1)
-        except ValueError as error:
-            assert "active effective affine driver" in str(error)
+        except NoonUnsupportedError as error:
+            assert error.category == "unsupported_operation"
+            cause = error.rust_cause
+            assert cause is not None
+            while cause.cause is not None:
+                cause = cause.cause
+            assert cause.code == "authoring.unsupported_operation"
         else:
             raise AssertionError("placement bypassed the active affine driver")
         assert circle.get_center() == before

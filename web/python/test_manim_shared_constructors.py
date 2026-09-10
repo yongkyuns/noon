@@ -98,12 +98,21 @@ class ManimSharedConstructorTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_compat
-            _manim_compat.install()
-            import _manim_phase_b
-            import _manim_semantic_handles as handles
-            handles.install()
 
-            for name in ("Circle", "Rectangle", "Line"):
+            public_methods = tuple(getattr(_manim_compat._base.Mobject, name)
+                                   for name in ("__init__", "copy", "next_to", "width"))
+            group_shift = _manim_compat.Group.shift
+            group_center = _manim_compat.Group.get_center
+            import _manim_geometry
+            assert _manim_compat.Group.get_center is group_center
+            import _manim_semantic_handles as handles
+            assert not hasattr(handles, "install")
+            assert public_methods == tuple(getattr(_manim_compat._base.Mobject, name)
+                                           for name in ("__init__", "copy", "next_to", "width"))
+            assert group_shift is _manim_compat.Group.shift
+
+
+            for name in ("Circle", "Rectangle", "Line", "Path"):
                 setattr(_manim_compat._ir, name, lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Python IR constructor was called")))
 
             from noon import BLUE, Circle, Line, Path, Rectangle, Square, VectorPath

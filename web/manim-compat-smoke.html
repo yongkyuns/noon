@@ -12,7 +12,6 @@
       import { PythonAuthoringClient } from "./authoring-client.js";
 
       const client = new PythonAuthoringClient();
-      const runForExport = (source) => client.run(source, {}, { exportDocument: true });
       async function runLiveSources(sources) {
         const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
         const canvas = document.createElement("canvas");
@@ -109,38 +108,6 @@ class RetainedSequentialFamilySmoke(Scene):
       let readyPromise = null;
       let writeResult = null;
       let writeRenderResult = null;
-
-      function retainedTextView(result, label = "retained text") {
-        if (result.kind !== "scene_document") {
-          throw new Error(`${label} returned ${result.kind}`);
-        }
-        if (result.retainedDocument != null) {
-          throw new Error(`${label} must export mixed content through SceneSpec only`);
-        }
-        const sceneSpec = result.sceneSpec;
-        if (!sceneSpec || sceneSpec.version !== 1 || !Array.isArray(sceneSpec.objects)) {
-          throw new Error(`${label} did not produce SceneSpec v1 objects`);
-        }
-        const textEntries = sceneSpec.objects
-          .map((object, order) => ({ object, order }))
-          .filter(({ object }) => object.content?.kind === "text");
-        if (textEntries.length === 0) return null;
-        const ids = new Set(textEntries.map(({ object }) => object.id));
-        return {
-          channel: "noon.authoring.retained",
-          protocol_version: 2,
-          objects: textEntries.map(({ object, order }) => ({
-            object: object.id,
-            order,
-            text: {
-              ...object.content.value,
-              transform: object.transform,
-              style: object.style,
-            },
-          })),
-          tracks: (sceneSpec.tracks ?? []).filter((track) => ids.has(track.object)),
-        };
-      }
 
       async function waitForRenderedState(
         execution,
@@ -293,8 +260,6 @@ class RetainedSequentialFamilySmoke(Scene):
           await ready();
           return writeRenderResult;
         },
-        retainedTextView,
-        run: runForExport,
         runLive,
         runLiveSources,
       };

@@ -111,18 +111,16 @@ class ManimSharedSectorTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_compat
-            _manim_compat.install()
-            import _manim_phase_b
+
             import _manim_geometry
             import _manim_semantic_handles as handles
-            handles.install()
+
 
             _manim_compat._ir.Path = lambda *args, **kwargs: (_ for _ in ()).throw(
                 AssertionError("Python Path geometry constructor was called")
             )
 
             import _manim_shared_geometry
-            _manim_shared_geometry.install()
             from noon import AnnularSector, Annulus, BLUE, Sector
 
             annular = AnnularSector(
@@ -162,7 +160,7 @@ class ManimSharedSectorTests(unittest.TestCase):
             assert annular.arc_center.x == 2.0 and annular.arc_center.y == -1.0
             assert math.isclose(annular.style["fill"]["alpha"], 0.4)
             assert math.isclose(annular.style["stroke_width"], 0.02)
-            parsed_blue = _manim_phase_b._as_color("color", BLUE)
+            parsed_blue = _manim_compat._as_color("color", BLUE)
             assert math.isclose(annular.style["fill"]["red"], parsed_blue.red)
             assert math.isclose(annular.style["stroke"]["blue"], parsed_blue.blue)
             assert circle_sector.inner_radius == 0.0

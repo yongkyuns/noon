@@ -97,11 +97,13 @@ class SharedAuthoringSmoke(Scene):
 
         # These compatibility views are deliberately corrupt after the typed scene
         # is complete. Semantic finalization must neither inspect nor export them.
-        self._objects[:] = [{"poison": object()}]
+        assert not hasattr(self, "_objects")
+        self._objects = [{"poison": object()}]
         def reject_export(*_args, **_kwargs):
             raise AssertionError("semantic execution must not export legacy scene state")
         self.to_document = reject_export
-        self.to_scene_spec = reject_export
+        assert not hasattr(self, "to_scene_spec")
+        assert not hasattr(self._canonical_authoring_context, "sceneSpecJson")
 `;
 
 const persistedSceneSource = `from noon import *
@@ -110,6 +112,50 @@ import builtins
 scene = Scene()
 circle = Circle(radius=1.0)
 scene.add(circle)
+# Empty/cleared updater metadata must not disable ordinary typed mutations.
+circle.clear_updaters()
+circle.shift(RIGHT)
+assert circle.get_center() == (1.0, 0.0)
+circle.shift(LEFT)
+# A handle-less wrapper must fail before binding can project existing geometry
+# into Python state. The same scene must remain usable afterward.
+# Unsupported native bindings cannot append legacy declarations on an empty Scene.
+unsupported = Scene()
+for operation in ("bind_rotation", "bind_opacity", "bind_presence", "bind_position",
+                  "bind_appearance", "bind_reveal", "bind_morph"):
+    try:
+        getattr(unsupported, operation)(None, object())
+    except NotImplementedError:
+        pass
+    else:
+        raise AssertionError(operation + " admitted a legacy binding")
+assert not hasattr(unsupported, "_tracks")
+color_probe = Circle().set_fill(BLUE, opacity=0.35).set_stroke(BLUE, opacity=0.2)
+color_probe.set_color(GREEN)
+assert abs(color_probe.get_fill_opacity() - 0.35) < 1e-6
+assert abs(color_probe.get_stroke_opacity() - 0.2) < 1e-6
+assert not hasattr(circle._semantic_handle, "wireTranslationX")
+assert not hasattr(circle._semantic_handle, "wireFillRed")
+assert not hasattr(circle._semantic_handle, "wireRotation")
+rotation_probe = Circle()
+angle = 0.123456789012345
+rotation_probe._semantic_handle.setRotation(angle)
+assert float(rotation_probe._semantic_handle.rotation) == angle
+bindings_before = dict(scene._binding_handles)
+next_id = scene._next_object_id
+untyped = Circle(radius=0.2)
+untyped._semantic_handle = None
+try:
+    untyped._bind_to_scene(scene)
+except NotImplementedError as error:
+    assert "requires a typed semantic Mobject" in str(error)
+else:
+    raise AssertionError("shared binding admitted a handle-less wrapper")
+assert untyped._scene is None
+assert scene._binding_handles == bindings_before
+assert scene._next_object_id == next_id
+assert len(scene._binding_handles) == 1
+assert circle.get_center() == (0.0, 0.0)
 builtins.__noon_persisted_scene = scene
 builtins.__noon_persisted_circle = circle
 result = scene
@@ -724,6 +770,14 @@ try {
       expectedDuration: 4,
       endpointTime: null,
     },
+    { filename: "ordinary_filled_path_transform.py", objectCount: 1, expectedDuration: 3.2, endpointTime: null },
+    { filename: "ordinary_family_placement.py", objectCount: 3, expectedDuration: 1, endpointTime: null },
+    { filename: "ordinary_dimension_fitting.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_family_affine.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_family_paint.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_family_grid.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_create_shapes.py", objectCount: 4, expectedDuration: 3.2, endpointTime: null },
+    { filename: "ordinary_morph_stress.py", objectCount: 96, expectedDuration: 3.4, endpointTime: null },
     {
       filename: "ordinary_composition_play.py",
       objectCount: 2,
@@ -965,115 +1019,25 @@ try {
     }
   }
 
-  // `exportDocument` is the explicit #959 codec boundary. It still runs the
-  // shared endpoint authoring operations, but it must never lease a renderer
-  // continuation from a normal def construct. Async source cannot satisfy that
-  // boundary and rejects before `Scene.setup` mutates the worker-resident scene.
-  const exportBoundary = await page.evaluate(async ({
-    ordinarySource,
-    asyncSource,
-    sentinelSource,
-  }) => {
-    const harness = window.sharedAuthoringSmoke;
-    let continuationRegistrations = 0;
-    const ordinary = await harness.authoring.run(ordinarySource, {}, {
-      exportDocument: true,
-      onSemanticContinuation() {
-        continuationRegistrations += 1;
-        throw new Error("document export must not register a continuation");
-      },
-    });
-    let asyncError = null;
-    try {
-      await harness.authoring.run(asyncSource, {}, { exportDocument: true });
-    } catch (error) {
-      asyncError = String(error);
-    }
-    const sentinel = await harness.authoring.run(sentinelSource, {}, { exportDocument: true });
-    return {
-      ordinary: {
-        duration: ordinary.duration,
-        objectCount: ordinary.document.objects.length,
-        translation: ordinary.document.objects[0].transform.translation,
-        animationTracks: ordinary.document.tracks,
-        hasSemanticExecution: Object.hasOwn(ordinary, "semanticExecution"),
-      },
-      continuationRegistrations,
-      asyncError,
-      sentinelObjectCount: sentinel.document.objects.length,
-    };
-  }, {
-    ordinarySource: ordinaryExportBoundarySource,
-    asyncSource: asyncExportBoundarySource,
-    sentinelSource: exportBoundarySentinelSource,
-  });
-  assert.equal(exportBoundary.ordinary.duration, 3);
-  assert.equal(exportBoundary.ordinary.objectCount, 1);
-  // Explicit exports retain authored base state and animation tracks rather
-  // than baking the live segment endpoint into a static document.
-  assert.deepEqual(exportBoundary.ordinary.translation, { x: 0, y: 0 });
-  const exportedMotion = exportBoundary.ordinary.animationTracks.find(
-    (track) => track.property === "position" || track.property === "transform",
-  );
-  assert.ok(exportedMotion, JSON.stringify(exportBoundary.ordinary.animationTracks));
-  const translation = exportedMotion.values.vec2 ?? {
-    from: exportedMotion.values.object.from.transform.translation,
-    to: exportedMotion.values.object.to.transform.translation,
-  };
-  assert.deepEqual(translation, { from: { x: 0, y: 0 }, to: { x: 2, y: 0 } });
-  assert.equal(exportedMotion.timing.start_time, 0);
-  assert.equal(exportedMotion.timing.duration, 2);
-  assert.equal(exportBoundary.ordinary.hasSemanticExecution, false);
-  assert.equal(exportBoundary.continuationRegistrations, 0);
-  assert.match(
-    exportBoundary.asyncError ?? "",
-    /exportDocument cannot run an async Scene construct/,
-  );
-  assert.equal(exportBoundary.sentinelObjectCount, 0);
-
-  // Normal Scene execution must never silently select the Python document
-  // engine, including before a Rust context exists. Explicit
-  // export above is the codec boundary; each rejected run uses the same worker.
-  const rejectedFinalizations = await page.evaluate(async () => {
-    const failures = [];
-    const corruptions = [
-      'scene._legacy_geometry_materialized = True',
-      'scene._reactive_signals.append({"legacy": True})',
-      'scene._semantic_geometry_handles.clear()',
-      'scene._tracks.append({"property": "position"})',
-      'scene = Scene()\nassert getattr(scene, "_canonical_authoring_context", None) is None\nscene._legacy_geometry_materialized = True',
-      'scene = Scene()\nassert getattr(scene, "_canonical_authoring_context", None) is None\nscene._reactive_signals.append({"legacy": True})',
-    ];
-    for (const corruption of corruptions) {
-      const source = `from noon import Circle, Scene
+  // Derived Python bookkeeping cannot become finalization authority or force
+  // the shared scene into a document/export path.
+  const typedFinalization = await page.evaluate(async () => {
+    const result = await window.sharedAuthoringSmoke.authoring.run(`from noon import Circle, Scene
 scene = Scene()
 scene.add(Circle(radius=0.4))
 assert scene._canonical_authoring_context is not None
-${corruption}
+assert not hasattr(scene._canonical_authoring_context, "checkpoint")
+assert not hasattr(scene._canonical_authoring_context, "restore")
+scene._binding_handles.clear()
 def reject_export(*args, **kwargs):
     raise AssertionError("normal shared finalization invoked the document exporter")
 scene.to_document = reject_export
-scene.to_scene_spec = reject_export
+assert not hasattr(scene, "to_scene_spec")
 result = scene
-`;
-      try {
-        await window.sharedAuthoringSmoke.authoring.run(source, {});
-        failures.push("unexpected success");
-      } catch (error) {
-        failures.push(String(error));
-      }
-    }
-    const recovered = await window.sharedAuthoringSmoke.authoring.run(
-      'from noon import Circle, Scene\nscene = Scene()\nscene.add(Circle(radius=0.4))\nresult = scene',
-      {},
-    );
-    return { failures, recovered: Object.hasOwn(recovered, "semanticExecution") };
+`, {});
+    return Object.hasOwn(result, "semanticExecution");
   });
-  for (const failure of rejectedFinalizations.failures) {
-    assert.match(failure, /shared Scene cannot fall back to scene-document execution/u);
-    assert.doesNotMatch(failure, /invoked the document exporter/u);
-  }
-  assert.equal(rejectedFinalizations.recovered, true);
+  assert.equal(typedFinalization, true);
 
   // Top-level source and helper calls share the existing wait/play continuation.
   // Selecting result must not implicitly run its construct again.
@@ -1082,6 +1046,11 @@ class SelectedScene(Scene):
     def construct(self):
         raise AssertionError("prebuilt result construct ran twice")
 result = SelectedScene()
+for retired_state in ("_reactive_signals", "_reactive_bindings", "_reactive_signal_tracks", "_native_inputs"):
+    assert not hasattr(result, retired_state), retired_state
+# An obsolete Python cursor must never participate in shared time or admission.
+result._cursor = object()
+assert result.time == 0.0
 def author(scene):
     scene.wait(0.25)
     assert scene.time == 0.25
@@ -1121,18 +1090,6 @@ author(result)
   } finally {
     await stopSampledSource(page);
   }
-
-  const topLevelExport = await page.evaluate(async () => {
-    const result = await window.sharedAuthoringSmoke.authoring.run(
-      "from noon import *\nresult = Scene()\ncircle = Circle(0.4)\nresult.add(circle)\nresult.wait(0.25)\nresult.play(circle.animate.shift(RIGHT), run_time=0.5, rate_func=linear)\nresult.wait(0.25)",
-      {}, { exportDocument: true, onSemanticContinuation() {
-        throw new Error("top-level export leased a continuation");
-      } },
-    );
-    return { duration: result.duration, objects: result.document.objects.length,
-      semantic: Object.hasOwn(result, "semanticExecution") };
-  });
-  assert.deepEqual(topLevelExport, { duration: 1, objects: 1, semantic: false });
 
   // A supported ordinary segment must fail at its JSPI capability gate instead
   // of silently using endpoint-only execution. The restore request verifies the
@@ -1646,8 +1603,9 @@ class ArrangedOptions(Scene):
         self.wait(0.1)
         try:
             invalid.arrange(center=False, index_of_submobject_to_align=0)
-        except IndexError:
-            pass
+        except NoonValueError as error:
+            assert error.category == "invalid_input"
+            assert (error.rust_cause or error).code == "authoring.invalid_submobject_index"
         else:
             raise AssertionError("late invalid arrangement index was accepted")
         assert abs(first.get_center().x + 1) < 1e-6
@@ -1694,8 +1652,9 @@ class SelectedAlignment(Scene):
         assert abs(second.get_center().x - 0.75) < 1e-6
         try:
             family.next_to(ORIGIN, index_of_submobject_to_align=-3)
-        except IndexError:
-            pass
+        except NoonValueError as error:
+            assert error.category == "invalid_input"
+            assert (error.rust_cause or error).code == "authoring.invalid_submobject_index"
         else:
             raise AssertionError("invalid family index was accepted")
         assert abs(first.get_center().x + 1.25) < 1e-6
@@ -3217,7 +3176,7 @@ result = scene
   assert.equal(paintResult.observation.outcome, "presented");
   const paintStyle = paintResult.observation.committed.style;
   assert.ok(Math.abs(paintStyle.fill.alpha - 0.4) < 1e-6);
-  assert.ok(Math.abs(paintStyle.stroke.alpha - 0.75) < 1e-6);
+  assert.ok(Math.abs(paintStyle.stroke.alpha - 0.4) < 1e-6);
   assert.equal(paintStyle.opacity, 0.5);
   const paintPixel = renderedWorldPixel(
     await page.locator(`#${paintResult.canvasId}`).screenshot(), 1, 0,
@@ -3387,7 +3346,6 @@ class RejectedAdmission(Scene):
         except NotImplementedError:
             pass
         assert entering not in self.mobjects
-        assert not getattr(self, "_legacy_geometry_materialized", False)
         self.play(Create(entering), run_time=0.1)
         self.play(Uncreate(entering), run_time=0.1)
         assert entering not in self.mobjects

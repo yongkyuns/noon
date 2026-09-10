@@ -14,11 +14,10 @@ use crate::TransportSlotId;
 
 /// Resource-aware execution channel for the retained geometry/text runtime.
 ///
-/// The legacy `noon.execution` v1 channel stays geometry-only. This channel makes
-/// object content explicit so text can occupy the same identity/order stream as
-/// geometry without a fake `GeometryRef` variant or placeholder object.
+/// Object content and family-plan semantic bindings are explicit so geometry and
+/// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 2;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportTextResourceHandle {
@@ -251,6 +250,12 @@ pub struct RetainedExecutionDeltaEncoder {
 }
 
 impl RetainedExecutionDeltaEncoder {
+    /// Observe the current transport incarnation without advancing its sequence.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) const fn session(&self) -> u32 {
+        self.session
+    }
+
     pub const fn new(session: u32) -> Self {
         Self {
             session,

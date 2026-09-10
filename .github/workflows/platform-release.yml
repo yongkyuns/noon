@@ -14,6 +14,19 @@ on:
       - 'scripts/check-web-package.mjs'
       - 'scripts/deterministic-replay-smoke.mjs'
       - 'web/**'
+      - '.github/ci/wasm-build.mjs'
+      - '.github/ci/optimized-replay-artifact.mjs'
+      - '.github/workflows/platform-release.yml'
+  pull_request:
+    paths:
+      - 'crates/noon-web/Cargo.toml'
+      - 'crates/noon-web/src/determinism.rs'
+      - 'scripts/build-web-demo.sh'
+      - 'scripts/check-web-package.mjs'
+      - 'scripts/deterministic-replay-smoke.mjs'
+      - '.github/ci/wasm-build.mjs'
+      - '.github/ci/optimized-replay-artifact.mjs'
+      - 'web/optimized-replay-contract.test.mjs'
       - '.github/workflows/platform-release.yml'
   workflow_dispatch:
 
@@ -26,6 +39,7 @@ concurrency:
 
 jobs:
   native-platform:
+    if: github.event_name != 'pull_request'
     name: Native ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -55,6 +69,7 @@ jobs:
         run: cargo test --workspace --all-features --lib --tests
 
   release-native:
+    if: github.event_name != 'pull_request'
     name: Native release-mode core
     runs-on: ubuntu-latest
     env:
@@ -77,10 +92,14 @@ jobs:
         run: cargo test --release -p noon-core -p noon-geometry -p noon-runtime --all-features
 
   optimized-wasm:
-    name: Optimized browser artifact
+    name: Optimized production and replay packages
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: '0'
+      NOON_WASM_PROFILE: 'release'
+      NOON_WASM_SKIP_OPT: '0'
+      NOON_RENDERER_SMOKE: '0'
+      NOON_REPLAY_SMOKE: '0'
       BINARYEN_VERSION: '132'
       BINARYEN_LINUX_SHA256: '195ddc94f9bc89f45abdabb0b9eea86023d727ba90eac8b35b80f2544fc30572'
     steps:
@@ -115,10 +134,15 @@ jobs:
           binaryen_dir="$RUNNER_TEMP/binaryen-version_${BINARYEN_VERSION}"
           echo "$binaryen_dir/bin" >> "$GITHUB_PATH"
           "$binaryen_dir/bin/wasm-opt" --version
+      - name: Test optimized replay build contract
+        run: node --test web/optimized-replay-contract.test.mjs .github/ci/wasm-build.test.mjs
+      - name: Resolve one dependency lock for both packages
+        run: cargo generate-lockfile
       - name: Build and validate optimized browser package
-        env:
-          NOON_SKIP_PLAYGROUND_TEST: '1'
-        run: bash scripts/build-web-demo.sh
+        run: |
+          node .github/ci/optimized-replay-artifact.mjs prepare production .
+          bash scripts/build-web-demo.sh
+          node .github/ci/optimized-replay-artifact.mjs stamp production .
       - name: Record optimized WASM size
         shell: bash
         run: |
@@ -132,16 +156,58 @@ jobs:
             echo '- wasm-pack: 0.15.0'
             echo "- Binaryen/wasm-opt: version ${BINARYEN_VERSION}"
           } >> "$GITHUB_STEP_SUMMARY"
+      # Retain production before replacing web/pkg with the diagnostic build.
+      - name: Upload optimized production package
+        uses: actions/upload-artifact@v7
+        with:
+          name: optimized-web-pkg
+          path: |
+            web/pkg
+            web/python-worker.js
+            web/python/compat-bundle.*.json
+            web/ci-artifact.json
+            web/ci-Cargo.lock
+          if-no-files-found: error
+          retention-days: 3
+      - name: Build optimized replay qualification package
+        env:
+          NOON_SKIP_WEB_PREFLIGHT: '1'
+          NOON_REPLAY_SMOKE: '1'
+        run: |
+          node .github/ci/optimized-replay-artifact.mjs prepare replay .
+          bash scripts/build-web-demo.sh
+          node .github/ci/optimized-replay-artifact.mjs stamp replay .
+      - name: Upload optimized replay qualification package
+        uses: actions/upload-artifact@v7
+        with:
+          name: optimized-replay-pkg
+          path: |
+            web/pkg
+            web/python-worker.js
+            web/python/compat-bundle.*.json
+            web/ci-artifact.json
+            web/ci-Cargo.lock
+          if-no-files-found: error
+          retention-days: 3
+
+  optimized-replay:
+    name: Optimized typed replay in Chromium
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: optimized-wasm
+    steps:
+      - name: Checkout exact workflow source
+        uses: actions/checkout@v7
+      - name: Download optimized replay qualification package
+        uses: actions/download-artifact@v8
+        with:
+          name: optimized-replay-pkg
+          path: web
+      - name: Verify source and replay artifact provenance
+        run: node .github/ci/optimized-replay-artifact.mjs verify replay .
       - name: Install Chromium smoke dependency
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1
           npx playwright install chromium
-      - name: Exercise optimized WASM in Chromium
+      - name: Exercise optimized typed replay in Chromium
         run: node scripts/deterministic-replay-smoke.mjs
-      - name: Upload optimized browser package
-        uses: actions/upload-artifact@v7
-        with:
-          name: optimized-web-pkg
-          path: web/pkg
-          if-no-files-found: error
-          retention-days: 3

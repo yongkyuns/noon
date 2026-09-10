@@ -6,6 +6,12 @@ license = "MIT"
 description = "Ergonomic language-neutral authoring facade for Noon"
 
 [features]
+# Convenience product configuration. Geometry-only consumers disable defaults.
+default = ["native-text", "typst", "bundled-fonts"]
+native-text = ["dep:noon-text", "dep:swash"]
+typst = ["dep:noon-typst"]
+# Weak forwarding does not activate the Typst compiler for native-text consumers.
+bundled-fonts = ["dep:typst-assets", "noon-typst?/bundled-fonts"]
 diagnostics = ["dep:serde_json"]
 
 [[example]]
@@ -16,12 +22,16 @@ required-features = ["diagnostics"]
 name = "manim_elbow_oracle"
 required-features = ["diagnostics"]
 
+[[example]]
+name = "manim_dot_ellipse_oracle"
+required-features = ["diagnostics"]
+
 [dependencies]
 serde_json = { version = "1", optional = true }
 noon-compile = { path = "../noon-compile" }
 noon-core = { path = "../noon-core" }
 noon-runtime = { path = "../noon-runtime" }
-noon-text-native = { path = "../noon-text-native" }
-noon-typst = { path = "../noon-typst" }
-swash = "=0.2.10"
-typst-assets = { version = "=0.15.1", features = ["fonts"] }
+noon-text = { path = "../noon-text", optional = true }
+noon-typst = { path = "../noon-typst", optional = true, default-features = false }
+swash = { version = "=0.2.10", optional = true }
+typst-assets = { version = "=0.15.1", features = ["fonts"], optional = true }

@@ -102,7 +102,7 @@ def collect() -> dict[str, object]:
     python_sources = sorted(
         path
         for path in ROOT.glob(PY_SOURCE)
-        if not path.name.startswith("test_") and path.name != "playground_examples.py"
+        if not path.name.startswith("test_")
     )
     python_tests_paths = sorted(ROOT.glob(PY_TEST))
     browser_tests = sorted(ROOT.glob(BROWSER_TEST))

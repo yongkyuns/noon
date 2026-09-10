@@ -9,6 +9,7 @@
 mod family_layout;
 pub use family_layout::LiveLayoutTarget;
 
+use crate::execution_session::EffectiveSemanticObject;
 use crate::{
     family_arrangement::FamilyArrangePlan,
     semantic_mobject::{authoring_render_f64, prepare_become_state, stage_state_changes},
@@ -17,7 +18,7 @@ use crate::{
         edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
         edit_stroke_opacity,
     },
-    DeclaredAnimation, EffectiveSemanticObject, ExecutionSegment, ExecutionSegmentAdvanceError,
+    DeclaredAnimation, ExecutionSegment, ExecutionSegmentAdvanceError,
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError,
     ManimBecomeOptions, ManimLineEndpoints, Mobject, MobjectFamily, MobjectFamilyMember,
@@ -185,9 +186,9 @@ pub(crate) fn target_style_from_effective(
         authored.stroke.as_ref(),
         Some(noon_core::SemanticPaint::Resource(_))
     ) {
-        return Err(LiveSessionError::Mobject(
-            "target editor cannot capture a runtime style backed by a paint resource".into(),
-        ));
+        return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::CaptureResourcePaint,
+        )));
     }
     let (fill, fill_opacity) =
         if lowered_solid_color(authored.fill.as_ref(), authored.fill_opacity) == effective.fill {
@@ -414,8 +415,14 @@ impl<'a> TransformToRequest<'a> {
 /// Errors while a semantic handle is used through a live execution session.
 #[derive(Debug)]
 pub enum LiveSessionError {
+    /// Shared authoring preflight failed before publication.
+    Authoring(crate::AuthoringError),
     ForeignMobjectStore,
+    // The remaining animation-specific shape checks are migrated in R2b.
     Mobject(String),
+    Callback(crate::ExecutionSessionCallbackError),
+    #[cfg(any(feature = "native-text", feature = "typst"))]
+    Text(crate::TextAuthoringError),
     Animation(String),
     Activation(ExecutionSessionAnimationError),
     Segment(ExecutionSegmentError),
@@ -430,7 +437,11 @@ impl std::fmt::Display for LiveSessionError {
             Self::ForeignMobjectStore => {
                 formatter.write_str("mobject belongs to another semantic store")
             }
+            Self::Authoring(error) => error.fmt(formatter),
             Self::Mobject(error) => error.fmt(formatter),
+            Self::Callback(error) => error.fmt(formatter),
+            #[cfg(any(feature = "native-text", feature = "typst"))]
+            Self::Text(error) => error.fmt(formatter),
             Self::Animation(error) => error.fmt(formatter),
             Self::Activation(error) => error.fmt(formatter),
             Self::Segment(error) => error.fmt(formatter),
@@ -441,7 +452,32 @@ impl std::fmt::Display for LiveSessionError {
     }
 }
 
-impl std::error::Error for LiveSessionError {}
+impl std::error::Error for LiveSessionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Authoring(error) => Some(error),
+            Self::Callback(error) => Some(error),
+            #[cfg(any(feature = "native-text", feature = "typst"))]
+            Self::Text(error) => Some(error),
+            Self::Activation(error) => Some(error),
+            Self::Segment(error) => Some(error),
+            Self::Advance(error) => Some(error),
+            Self::Completion(error) => Some(error),
+            Self::Publication(error) => Some(error),
+            Self::ForeignMobjectStore | Self::Mobject(_) | Self::Animation(_) => None,
+        }
+    }
+}
+
+impl From<crate::AuthoringError> for LiveSessionError {
+    fn from(error: crate::AuthoringError) -> Self {
+        match error {
+            // Retain the existing live error category for all foreign-handle paths.
+            crate::AuthoringError::ForeignStore => Self::ForeignMobjectStore,
+            other => Self::Authoring(other),
+        }
+    }
+}
 
 impl From<ExecutionSessionPublicationError> for LiveSessionError {
     fn from(value: ExecutionSessionPublicationError) -> Self {
@@ -505,7 +541,7 @@ impl<'a> LiveSession<'a> {
     ) -> Result<(), LiveSessionError> {
         tracker
             .require_store(self.store)
-            .map_err(LiveSessionError::Animation)?;
+            .map_err(LiveSessionError::from)?;
         let mut store = self.store.borrow_mut();
         self.session
             .associate_value_tracker(&mut store, self.root, tracker.node_id())
@@ -564,8 +600,7 @@ impl<'a> LiveSession<'a> {
         request: SceneMembershipRequest<'_>,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         let transaction =
-            crate::scene_membership::prepare_scene_membership(self.store, self.root, request)
-                .map_err(LiveSessionError::Mobject)?;
+            crate::scene_membership::prepare_scene_membership(self.store, self.root, request)?;
         self.apply(transaction)
     }
 
@@ -601,7 +636,10 @@ impl<'a> LiveSession<'a> {
         self.store
             .borrow()
             .is_direct_member(self.root, mobject.node_id())
-            .map_err(|error| LiveSessionError::Mobject(error.to_string()))
+            .map_err(|error| {
+                crate::AuthoringError::from(noon_core::SemanticSceneOperationError::from(error))
+                    .into()
+            })
     }
 
     /// Replace one live object's content with content already authored in this store.
@@ -613,7 +651,7 @@ impl<'a> LiveSession<'a> {
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_mobject(target)?;
         self.require_mobject(source)?;
-        let content = source.state().map_err(LiveSessionError::Mobject)?.content;
+        let content = source.state().map_err(LiveSessionError::from)?.content;
         let mut transaction = SemanticMutationTransaction::new();
         transaction.replace_content(target.node_id(), content);
         self.apply(transaction)
@@ -622,7 +660,7 @@ impl<'a> LiveSession<'a> {
     /// Inspect authored/base state explicitly, separate from [`Self::effective`].
     pub fn authored(&self, mobject: &Mobject) -> Result<SemanticObjectState, LiveSessionError> {
         self.require_mobject(mobject)?;
-        mobject.state().map_err(LiveSessionError::Mobject)
+        mobject.state().map_err(LiveSessionError::from)
     }
 
     /// Create a detached, session-coherent target copy for subsequent live authoring.
@@ -642,19 +680,19 @@ impl<'a> LiveSession<'a> {
         let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
             unreachable!("one prepared target copy has one exact semantic impact")
         };
-        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::Mobject)
+        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
     }
 
     fn require_target_capture(&self) -> Result<(), LiveSessionError> {
         self.session.require_published_store(&self.store.borrow())?;
-        if self.session.pending_callback_token().is_some() {
-            return Err(LiveSessionError::Mobject(
-                "cannot create a target while a required callback phase is pending".into(),
+        if let Some(token) = self.session.pending_callback_token() {
+            return Err(LiveSessionError::Callback(
+                crate::ExecutionSessionCallbackError::Pending(token),
             ));
         }
-        if self.session.callback_termination().is_some() {
-            return Err(LiveSessionError::Mobject(
-                "cannot create a target from a terminated callback session".into(),
+        if let Some(termination) = self.session.callback_termination() {
+            return Err(LiveSessionError::Callback(
+                crate::ExecutionSessionCallbackError::Terminated(termination),
             ));
         }
 
@@ -680,11 +718,9 @@ impl<'a> LiveSession<'a> {
         let (transaction, pending) =
             crate::family_copy::prepare_family_copy(source, references, |mobject| {
                 self.capture_mobject_state(mobject)
-                    .map_err(|e| e.to_string())
-            })
-            .map_err(LiveSessionError::Mobject)?;
+            })?;
         let result = self.apply(transaction)?;
-        pending.resolve(&result).map_err(LiveSessionError::Mobject)
+        pending.resolve(&result).map_err(LiveSessionError::from)
     }
 
     /// Replace one object's presentation with another object's effective state while
@@ -697,11 +733,11 @@ impl<'a> LiveSession<'a> {
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_mobject(target)?;
         self.require_mobject(other)?;
-        let authored = target.state().map_err(LiveSessionError::Mobject)?;
+        let authored = target.state().map_err(LiveSessionError::from)?;
         let source = self.capture_mobject_state(target)?;
         let candidate = self.capture_mobject_state(other)?;
         let next = prepare_become_state(&self.store.borrow(), &source, candidate, options)
-            .map_err(LiveSessionError::Mobject)?;
+            .map_err(LiveSessionError::from)?;
         let mut transaction = SemanticMutationTransaction::new();
         stage_state_changes(&mut transaction, target.node_id(), &authored, &next);
         self.apply(transaction)
@@ -715,11 +751,11 @@ impl<'a> LiveSession<'a> {
         // an authored base superseded by a driver. A detached object has no row,
         // so its authored state is the exact capture. Immutable content remains
         // authored because effective render-content overrides are rejected.
-        let mut state = source.state().map_err(LiveSessionError::Mobject)?;
+        let mut state = source.state().map_err(LiveSessionError::from)?;
         if !state.signal_bindings().is_empty() {
-            return Err(LiveSessionError::Mobject(
-                "cannot capture a reactive binding into object state".into(),
-            ));
+            return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::CaptureReactiveBinding,
+            )));
         }
         if self.session.semantic_object_is_reachable(source.node_id()) {
             let store = self.store.borrow();
@@ -727,15 +763,14 @@ impl<'a> LiveSession<'a> {
                 .session
                 .effective_semantic_object(&store, source.node_id())?;
             if !observed.authored_content_layout_applicable() {
-                return Err(LiveSessionError::Mobject(
-                    "object state capture requires effective authored content without reveal or morph overrides"
-                        .into(),
-                ));
+                return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::CaptureRenderOverride,
+                )));
             }
             if observed.object.appearance != 1.0 {
-                return Err(LiveSessionError::Mobject(
-                    "object state capture cannot represent a non-unit effective appearance".into(),
-                ));
+                return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::CaptureNonUnitAppearance,
+                )));
             }
             preserve_or_capture_f32(
                 &mut state.transform.translation.x,
@@ -769,12 +804,12 @@ impl<'a> LiveSession<'a> {
     ) -> Result<MobjectFamily, LiveSessionError> {
         let (transaction, family) =
             crate::family_authoring::family_creation_transaction(self.store, members)
-                .map_err(LiveSessionError::Mobject)?;
+                .map_err(LiveSessionError::from)?;
         let result = self.apply(transaction)?;
         let node = result
             .resolve(family)
             .expect("committed family token resolves to one semantic identity");
-        MobjectFamily::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::Mobject)
+        MobjectFamily::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::from)
     }
 
     /// Publish one atomic batch of direct family additions.
@@ -803,7 +838,7 @@ impl<'a> LiveSession<'a> {
         self.require_family(family)?;
         let (transaction, changed) =
             crate::family_authoring::family_membership_transaction(family, members, adding)
-                .map_err(LiveSessionError::Mobject)?;
+                .map_err(LiveSessionError::from)?;
         self.apply(transaction)?;
         Ok(changed)
     }
@@ -816,13 +851,11 @@ impl<'a> LiveSession<'a> {
         &mut self,
         options: crate::ManimGeometryOptions,
     ) -> Result<Mobject, LiveSessionError> {
-        {
-            let store = self.store.borrow();
-            self.session.require_published_store(&store)?;
-        }
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
         let state = options
             .into_state(&mut self.store.borrow_mut())
-            .map_err(LiveSessionError::Mobject)?;
+            .map_err(LiveSessionError::from)?;
         self.create_detached_mobject(state)
     }
 
@@ -830,26 +863,35 @@ impl<'a> LiveSession<'a> {
     ///
     /// The object receives semantic identity and immutable text resources, but no
     /// scene membership or execution row until a later Add, FadeIn, or Create.
+    #[cfg(feature = "native-text")]
     pub fn create_text(&mut self, text: crate::Text) -> Result<Mobject, LiveSessionError> {
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
         let state = crate::text_authoring::native_text_state(self.store, text)
-            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?;
+            .map_err(LiveSessionError::Text)?;
         self.create_detached_mobject(state)
     }
 
     /// Compile and publish one detached Typst object through this live session.
+    #[cfg(feature = "typst")]
     pub fn create_typst(&mut self, text: crate::Typst) -> Result<Mobject, LiveSessionError> {
-        let state = crate::text_authoring::typst_state(self.store, text)
-            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?;
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        let state =
+            crate::text_authoring::typst_state(self.store, text).map_err(LiveSessionError::Text)?;
         self.create_detached_mobject(state)
     }
 
     /// Compile and publish one detached MathTypst object through this live session.
+    #[cfg(feature = "typst")]
     pub fn create_math_typst(
         &mut self,
         text: crate::MathTypst,
     ) -> Result<Mobject, LiveSessionError> {
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
         let state = crate::text_authoring::math_typst_state(self.store, text)
-            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?;
+            .map_err(LiveSessionError::Text)?;
         self.create_detached_mobject(state)
     }
 
@@ -863,7 +905,7 @@ impl<'a> LiveSession<'a> {
         let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
             unreachable!("one detached primitive creation has one exact semantic impact")
         };
-        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::Mobject)
+        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
     }
 
     /// Read the current effective runtime value at the session's publication.
@@ -897,9 +939,9 @@ impl<'a> LiveSession<'a> {
             .session
             .effective_semantic_object(&store, mobject.node_id())?;
         if !observed.authored_content_layout_applicable() {
-            return Err(LiveSessionError::Mobject(
-                "effective layout queries currently support affine and style drivers only".into(),
-            ));
+            return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::EffectiveLayoutRenderOverride,
+            )));
         }
         let transform = observed.object.transform;
         let publication = observed.publication;
@@ -930,14 +972,14 @@ impl<'a> LiveSession<'a> {
                 ),
             )
         } else {
-            let state = target.state().map_err(LiveSessionError::Mobject)?;
+            let state = target.state().map_err(LiveSessionError::from)?;
             (
                 target.layout_bounds(),
                 (state.transform.translation.x, state.transform.translation.y),
             )
         };
         pivot
-            .validate(bounds.map_err(LiveSessionError::Mobject)?, origin)
+            .validate(bounds.map_err(LiveSessionError::from)?, origin)
             .map_err(LiveSessionError::Mobject)
     }
 
@@ -952,23 +994,22 @@ impl<'a> LiveSession<'a> {
             .session
             .effective_semantic_object(&store, mobject.node_id())?;
         if !observed.authored_content_layout_applicable() {
-            return Err(LiveSessionError::Mobject(
-                "effective Line endpoint queries currently support affine and style drivers only"
-                    .into(),
-            ));
+            return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::EffectiveLineRenderOverride,
+            )));
         }
         let transform = observed.object.transform;
         drop(store);
         mobject
             .manim_line_endpoints_at(transform)
-            .map_err(LiveSessionError::Mobject)
+            .map_err(LiveSessionError::from)
     }
 
     /// Read Manim's stroke-first color at the current publication.
     pub fn effective_manim_color(&self, mobject: &Mobject) -> Result<Color, LiveSessionError> {
         // Resource paints do not have a scalar Manim color representation. Check
         // the selected authored channel before observing its lowered runtime style.
-        mobject.manim_color().map_err(LiveSessionError::Mobject)?;
+        mobject.manim_color().map_err(LiveSessionError::from)?;
         let effective = self.effective(mobject)?;
         Ok(crate::semantic_mobject::manim_color_from_effective(
             &effective.style,
@@ -983,7 +1024,7 @@ impl<'a> LiveSession<'a> {
     ) -> Result<EffectiveMobjectLayout, LiveSessionError> {
         let bounds = mobject
             .layout_bounds_at(transform)
-            .map_err(LiveSessionError::Mobject)?;
+            .map_err(LiveSessionError::from)?;
         let (center, width, height) = if let Some(Bounds2D64 {
             min_x,
             min_y,
@@ -1302,7 +1343,7 @@ impl<'a> LiveSession<'a> {
     ) -> Result<(), LiveSessionError> {
         tracker
             .require_store(self.store)
-            .map_err(LiveSessionError::Animation)?;
+            .map_err(LiveSessionError::from)?;
         let mut store = self.store.borrow_mut();
         self.session
             .set_scalar_signal_value(&mut store, tracker.node_id(), value)
@@ -1501,7 +1542,7 @@ impl<'a> LiveSession<'a> {
                 let center = if self.contains(target)? {
                     self.effective_layout(target)?.center
                 } else {
-                    target.center().map_err(LiveSessionError::Mobject)?
+                    target.center().map_err(LiveSessionError::from)?
                 };
                 Ok(SemanticAffineLifecycleEndpoint {
                     point: SemanticVec3::new(center.0, center.1, 0.0),
@@ -1717,7 +1758,7 @@ impl<'a> LiveSession<'a> {
             } => {
                 tracker
                     .require_store(self.store)
-                    .map_err(LiveSessionError::Animation)?;
+                    .map_err(LiveSessionError::from)?;
                 Request::ValueTracker {
                     signal: tracker.node_id(),
                     target: *target,
@@ -1803,7 +1844,7 @@ impl<'a> LiveSession<'a> {
             Some(if self.contains(target)? {
                 self.effective_layout(target)?.center
             } else {
-                target.center().map_err(LiveSessionError::Mobject)?
+                target.center().map_err(LiveSessionError::from)?
             })
         } else {
             None
@@ -1837,14 +1878,14 @@ impl<'a> LiveSession<'a> {
             .store
             .borrow()
             .ordered_family_leaf_pairs(family.node_id(), family.node_id())
-            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?
+            .map_err(crate::AuthoringError::from)?
             .into_iter()
             .map(|(leaf, _)| leaf)
             .collect::<Vec<_>>();
         let mut bounds: Option<Bounds2D64> = None;
         for leaf in leaves {
-            let leaf = Mobject::from_node(Rc::clone(self.store), leaf)
-                .map_err(LiveSessionError::Mobject)?;
+            let leaf =
+                Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
             let layout = self.effective_layout(&leaf)?;
             let leaf_bounds = Bounds2D64 {
                 min_x: layout.center.0 - layout.width * 0.5,
@@ -1959,14 +2000,14 @@ impl<'a> LiveSession<'a> {
             .store
             .borrow()
             .ordered_family_leaf_pairs(family.node_id(), family.node_id())
-            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?
+            .map_err(crate::AuthoringError::from)?
             .into_iter()
             .map(|(leaf, _)| leaf)
             .collect::<Vec<_>>();
         let mut transaction = SemanticMutationTransaction::new();
         for leaf in leaves {
-            let mobject = Mobject::from_node(Rc::clone(self.store), leaf)
-                .map_err(LiveSessionError::Mobject)?;
+            let mobject =
+                Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
             let mut translation = self.authored(&mobject)?.transform.translation;
             translation.x += x;
             translation.y += y;
@@ -1999,24 +2040,39 @@ impl<'a> LiveSession<'a> {
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_family(family)?;
         self.session.require_published_store(&self.store.borrow())?;
-        let mut plan =
-            FamilyArrangePlan::begin(family, options).map_err(LiveSessionError::Mobject)?;
+        let plan = FamilyArrangePlan::begin(family, options).map_err(LiveSessionError::from)?;
+        self.publish_family_arrangement(plan)
+    }
+
+    /// Arrange a family using coherent live bounds and one shared translation transaction.
+    pub fn arrange_family_in_grid(
+        &mut self,
+        family: &MobjectFamily,
+        rows: Option<usize>,
+        columns: Option<usize>,
+        gap_x: f64,
+        gap_y: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        let plan = FamilyArrangePlan::grid(family, rows, columns, gap_x, gap_y)
+            .map_err(LiveSessionError::from)?;
+        self.publish_family_arrangement(plan)
+    }
+
+    fn publish_family_arrangement(
+        &mut self,
+        mut plan: FamilyArrangePlan,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         plan.observe_leaf_bounds(|leaf| {
             let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
             self.family_member_bounds(&mobject)
-                .map_err(|e| e.to_string())
-        })
-        .map_err(LiveSessionError::Mobject)?;
-        let transaction = plan
-            .transaction(|leaf| {
-                let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
-                self.placement_authored_transform(&mobject)
-                    .map_err(|e| e.to_string())?;
-                self.authored(&mobject)
-                    .map(|s| s.transform.translation)
-                    .map_err(|e| e.to_string())
-            })
-            .map_err(LiveSessionError::Mobject)?;
+        })?;
+        let transaction = plan.transaction(|leaf| {
+            let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
+            self.placement_authored_transform(&mobject)?;
+            self.authored(&mobject).map(|s| s.transform.translation)
+        })?;
         self.apply(transaction)
     }
 
@@ -2047,17 +2103,17 @@ impl<'a> LiveSession<'a> {
                 .transform
                 .translation
                 .lower_xy_f32()
-                .map_err(|error| LiveSessionError::Mobject(error.to_string()))?,
+                .map_err(crate::AuthoringError::from)?,
             rotation: authoring_render_f64(
                 "move_to authored rotation",
                 authored.transform.rotation_z,
             )
-            .map_err(LiveSessionError::Mobject)? as f32,
+            .map_err(LiveSessionError::from)? as f32,
             scale: authored
                 .transform
                 .scale
                 .lower_xy_f32()
-                .map_err(|error| LiveSessionError::Mobject(error.to_string()))?,
+                .map_err(crate::AuthoringError::from)?,
         };
         let store = self.store.borrow();
         match self
@@ -2065,14 +2121,14 @@ impl<'a> LiveSession<'a> {
             .effective_semantic_object(&store, mobject.node_id())
         {
             Ok(observed) if !observed.authored_content_layout_applicable() => {
-                return Err(LiveSessionError::Mobject(
-                    "move_to cannot use an effective layout with render-content overrides".into(),
-                ));
+                return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::PlacementRenderOverride,
+                )));
             }
             Ok(observed) if observed.object.transform != authored_transform => {
-                return Err(LiveSessionError::Mobject(
-                    "move_to cannot compose with an active effective affine driver".into(),
-                ));
+                return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver,
+                )));
             }
             Ok(_) | Err(ExecutionSessionPublicationError::UnknownObject(_)) => {}
             Err(error) => return Err(error.into()),
@@ -2090,14 +2146,12 @@ impl<'a> LiveSession<'a> {
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let x = authoring_render_f64("scale.x", x).map_err(LiveSessionError::Mobject)?;
-        let y = authoring_render_f64("scale.y", y).map_err(LiveSessionError::Mobject)?;
+        let x = authoring_render_f64("scale.x", x).map_err(LiveSessionError::from)?;
+        let y = authoring_render_f64("scale.y", y).map_err(LiveSessionError::from)?;
         let mut scale = self.authored(mobject)?.transform.scale;
         scale.x *= x;
         scale.y *= y;
-        scale
-            .lower_xy_f32()
-            .map_err(|error| LiveSessionError::Mobject(error.to_string()))?;
+        scale.lower_xy_f32().map_err(crate::AuthoringError::from)?;
         self.set_property(mobject, SemanticObjectProperty::Scale, scale)
     }
 
@@ -2109,10 +2163,10 @@ impl<'a> LiveSession<'a> {
         mobject: &Mobject,
         angle: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let angle = authoring_render_f64("rotation", angle).map_err(LiveSessionError::Mobject)?;
+        let angle = authoring_render_f64("rotation", angle).map_err(LiveSessionError::from)?;
         let rotation = self.authored(mobject)?.transform.rotation_z + angle;
         let rotation =
-            authoring_render_f64("rotation result", rotation).map_err(LiveSessionError::Mobject)?;
+            authoring_render_f64("rotation result", rotation).map_err(LiveSessionError::from)?;
         self.set_property(mobject, SemanticObjectProperty::RotationZ, rotation)
     }
 
@@ -2265,36 +2319,93 @@ impl<'a> LiveSession<'a> {
         self.edit_style(mobject, |style| edit_object_opacity(style, opacity))
     }
 
+    /// Recolor a family's unique leaves through one coherent authored publication.
+    pub fn set_family_color(
+        &mut self,
+        family: &MobjectFamily,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_family_style(family, |style| edit_color(style, red, green, blue, alpha))
+    }
+
+    pub fn set_family_fill(
+        &mut self,
+        family: &MobjectFamily,
+        color: Option<Color>,
+        opacity: Option<f64>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_family_style(family, |style| {
+            crate::family_style::fill(style, color, opacity)
+        })
+    }
+
+    pub fn set_family_stroke(
+        &mut self,
+        family: &MobjectFamily,
+        color: Option<Color>,
+        width: Option<f64>,
+        opacity: Option<f64>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_family_style(family, |style| {
+            crate::family_style::stroke(style, color, width, opacity)
+        })
+    }
+
+    pub fn set_family_opacity(
+        &mut self,
+        family: &MobjectFamily,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_family_style(family, |style| edit_manim_opacity(style, opacity))
+    }
+
+    fn edit_family_style(
+        &mut self,
+        family: &MobjectFamily,
+        edit: impl Fn(&mut SemanticStyle) -> Result<(), crate::AuthoringError>,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        let transaction = family
+            .style_transaction(edit)
+            .map_err(LiveSessionError::from)?;
+        self.apply(transaction)
+    }
+
     fn edit_style(
         &mut self,
         mobject: &Mobject,
-        edit: impl FnOnce(&mut SemanticStyle) -> Result<(), String>,
+        edit: impl FnOnce(&mut SemanticStyle) -> Result<(), crate::AuthoringError>,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_mobject(mobject)?;
-        let mut style = mobject.state().map_err(LiveSessionError::Mobject)?.style;
-        edit(&mut style).map_err(LiveSessionError::Mobject)?;
+        let mut style = mobject.state().map_err(LiveSessionError::from)?.style;
+        edit(&mut style).map_err(LiveSessionError::from)?;
         self.replace_style(mobject, style)
     }
 
     fn require_mobject(&self, mobject: &Mobject) -> Result<(), LiveSessionError> {
-        if !Rc::ptr_eq(self.store, mobject.store()) {
+        if !Rc::ptr_eq(self.store, mobject.integration_store()) {
             return Err(LiveSessionError::ForeignMobjectStore);
         }
-        mobject.validate().map_err(LiveSessionError::Mobject)
+        mobject.validate().map_err(Into::into)
     }
 
     fn require_family(&self, family: &MobjectFamily) -> Result<(), LiveSessionError> {
-        if !Rc::ptr_eq(self.store, family.store()) {
+        if !Rc::ptr_eq(self.store, family.integration_store()) {
             return Err(LiveSessionError::ForeignMobjectStore);
         }
-        family.validate().map_err(LiveSessionError::Mobject)
+        family.validate().map_err(Into::into)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CallbackAdvance, ExecutionSessionCreateError, Scene};
+    use crate::execution_session::CallbackAdvance;
+    use crate::{ExecutionSessionCreateError, Scene};
     use noon_core::{
         AnimationOptions, Color, HostCallbackId, RateFunction, SemanticPaint, SemanticVec3,
     };
@@ -2395,7 +2506,9 @@ mod tests {
         scene.add(&circle).unwrap();
         let mut callbacks = SemanticMutationTransaction::new();
         callbacks.add_updater(circle.node_id(), HostCallbackId::new(9), 0.0, None);
-        callbacks.apply(&mut scene.store().borrow_mut()).unwrap();
+        callbacks
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
 
         let mut session = scene.execution_session().unwrap();
         let mut live = scene.live(&mut session);
@@ -2406,7 +2519,9 @@ mod tests {
         };
         assert!(matches!(
             live.target_editor(&circle),
-            Err(LiveSessionError::Mobject(_))
+            Err(LiveSessionError::Callback(
+                crate::ExecutionSessionCallbackError::Pending(_)
+            ))
         ));
         assert_eq!(
             live.session.publication_context().scene_revision(),
@@ -2809,7 +2924,11 @@ mod tests {
 
         assert!(matches!(
             live.move_to_point(&circle, 3.0, 0.0),
-            Err(LiveSessionError::Mobject(_))
+            Err(LiveSessionError::Authoring(
+                crate::AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver
+                )
+            ))
         ));
         assert_eq!(live.session.publication_context(), before);
         assert_eq!(
@@ -2897,7 +3016,11 @@ mod tests {
         let anchor = scene.circle(0.5).unwrap();
         scene.add(&anchor).unwrap();
         let mut session = scene.execution_session().unwrap();
-        let before_resources = scene.store().borrow().geometry_resources().len();
+        let before_resources = scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len();
         let path = crate::ManimGeometryOptions::path(
             VectorPath::new()
                 .move_to(Vec2::ZERO)
@@ -2905,7 +3028,7 @@ mod tests {
         )
         .unwrap();
 
-        Mobject::manim_circle(Rc::clone(scene.store()), 0.1).unwrap();
+        Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.1).unwrap();
         let mut live = scene.live(&mut session);
         assert!(matches!(
             live.create_manim_geometry(path),
@@ -2914,7 +3037,11 @@ mod tests {
             ))
         ));
         assert_eq!(
-            scene.store().borrow().geometry_resources().len(),
+            scene
+                .integration_store()
+                .borrow()
+                .geometry_resources()
+                .len(),
             before_resources
         );
     }
@@ -3157,7 +3284,7 @@ mod tests {
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
         let before = session.publication_context();
-        let before_nodes = circle.store().borrow().len();
+        let before_nodes = circle.integration_store().borrow().len();
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Smooth);
@@ -3179,7 +3306,7 @@ mod tests {
             before.scene_revision().checked_next().unwrap()
         );
         // Two Create leaves and one Parallel root share one semantic publication.
-        assert_eq!(circle.store().borrow().len(), before_nodes + 3);
+        assert_eq!(circle.integration_store().borrow().len(), before_nodes + 3);
         assert!(live.contains(&circle).unwrap());
         assert!(live.contains(&square).unwrap());
         assert_eq!(live.session.frame().objects.len(), 2);
@@ -3199,7 +3326,7 @@ mod tests {
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
         let before = session.publication_context();
-        let before_nodes = circle.store().borrow().len();
+        let before_nodes = circle.integration_store().borrow().len();
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear);
@@ -3221,7 +3348,7 @@ mod tests {
             ))
         ));
         assert_eq!(session.publication_context(), before);
-        assert_eq!(circle.store().borrow().len(), before_nodes);
+        assert_eq!(circle.integration_store().borrow().len(), before_nodes);
         assert!(session.frame().objects.is_empty());
         assert!(session.take_frame_changes().is_empty());
     }
@@ -3280,7 +3407,7 @@ mod tests {
         let mut square = scene.square(1.0).unwrap();
         square.set_translation(2.0, -1.0).unwrap();
         let detached_family = {
-            let mut store = scene.store().borrow_mut();
+            let mut store = scene.integration_store().borrow_mut();
             let family = store.insert_family();
             store.add_member(family, square.node_id()).unwrap();
             family
@@ -3317,7 +3444,7 @@ mod tests {
         assert!(!live.contains(&square).unwrap());
         assert_eq!(square.node_id(), semantic_id);
         assert_eq!(square.state().unwrap(), authored);
-        let store = square.store().borrow();
+        let store = square.integration_store().borrow();
         let parents = store.node(square.node_id()).unwrap().parents();
         assert_eq!(parents.len(), 1);
         assert!(parents.contains(&detached_family));
@@ -3328,7 +3455,7 @@ mod tests {
         let scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let detached_family = {
-            let mut store = scene.store().borrow_mut();
+            let mut store = scene.integration_store().borrow_mut();
             let family = store.insert_family();
             store.add_member(family, square.node_id()).unwrap();
             family
@@ -3360,7 +3487,7 @@ mod tests {
         live.complete_segment(segment).unwrap();
         assert_eq!(square.node_id(), semantic_id);
         {
-            let store = square.store().borrow();
+            let store = square.integration_store().borrow();
             let parents = store.node(square.node_id()).unwrap().parents();
             assert_eq!(parents.len(), 2);
             assert!(parents.contains(&detached_family));
@@ -3408,7 +3535,7 @@ mod tests {
         live.advance_segment_to(shrink, shrink.end_time()).unwrap();
         live.complete_segment(shrink).unwrap();
         assert!(!live.contains(&square).unwrap());
-        let store = square.store().borrow();
+        let store = square.integration_store().borrow();
         let parents = store.node(square.node_id()).unwrap().parents();
         assert_eq!(parents.len(), 1);
         assert!(parents.contains(&detached_family));
@@ -3419,7 +3546,7 @@ mod tests {
         let scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let live_family = {
-            let mut store = scene.store().borrow_mut();
+            let mut store = scene.integration_store().borrow_mut();
             let family = store.insert_family();
             store.add_member(family, square.node_id()).unwrap();
             family
@@ -3429,7 +3556,9 @@ mod tests {
         let mut membership = SemanticMutationTransaction::new();
         membership.add_member(scene.root(), live_family);
         membership.add_member(scene.root(), square.node_id());
-        membership.apply(&mut scene.store().borrow_mut()).unwrap();
+        membership
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
         let before = session.publication_context();
@@ -3461,7 +3590,7 @@ mod tests {
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
         let before = session.publication_context();
-        let before_nodes = square.store().borrow().len();
+        let before_nodes = square.integration_store().borrow().len();
 
         let result = scene
             .live(&mut session)
@@ -3479,7 +3608,7 @@ mod tests {
 
         assert!(matches!(result, Err(LiveSessionError::Activation(_))));
         assert_eq!(session.publication_context(), before);
-        assert_eq!(square.store().borrow().len(), before_nodes);
+        assert_eq!(square.integration_store().borrow().len(), before_nodes);
         assert!(session.frame().objects.is_empty());
         assert!(session.take_frame_changes().is_empty());
     }
@@ -3609,7 +3738,7 @@ mod tests {
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
         let before = session.publication_context();
-        let before_nodes = left.store().borrow().len();
+        let before_nodes = left.integration_store().borrow().len();
 
         let children = [
             TransformToRequest::new(
@@ -3642,7 +3771,7 @@ mod tests {
             before.scene_revision().checked_next().unwrap()
         );
         // Two immutable target snapshots, two leaves, and one root share that commit.
-        assert_eq!(left.store().borrow().len(), before_nodes + 5);
+        assert_eq!(left.integration_store().borrow().len(), before_nodes + 5);
         let publication = live.session.last_structural_publication_stats();
         assert_eq!(publication.preparation.object_states_lowered, 0);
         assert_eq!(publication.entered_objects, 0);
@@ -3790,7 +3919,7 @@ mod tests {
         session.take_frame_changes();
         let before = session.publication_context();
         let before_frame = session.frame().clone();
-        let before_nodes = circle.store().borrow().len();
+        let before_nodes = circle.integration_store().borrow().len();
         let children = [
             TransformToRequest::new(&circle, &first_target, AnimationOptions::new()),
             TransformToRequest::new(&circle, &second_target, AnimationOptions::new()),
@@ -3815,7 +3944,7 @@ mod tests {
         ));
         assert_eq!(session.publication_context(), before);
         assert_eq!(session.frame(), &before_frame);
-        assert_eq!(circle.store().borrow().len(), before_nodes);
+        assert_eq!(circle.integration_store().borrow().len(), before_nodes);
         assert!(session.take_frame_changes().is_empty());
     }
 
@@ -3830,7 +3959,7 @@ mod tests {
         session.take_frame_changes();
         let before = session.publication_context();
         let before_frame = session.frame().clone();
-        let before_nodes = square.store().borrow().len();
+        let before_nodes = square.integration_store().borrow().len();
         let children = [
             AnimationCompositionRequest::TransformTo(TransformToRequest::new(
                 &square,
@@ -3856,7 +3985,7 @@ mod tests {
         assert!(matches!(result, Err(LiveSessionError::ForeignMobjectStore)));
         assert_eq!(session.publication_context(), before);
         assert_eq!(session.frame(), &before_frame);
-        assert_eq!(square.store().borrow().len(), before_nodes);
+        assert_eq!(square.integration_store().borrow().len(), before_nodes);
         assert!(session.take_frame_changes().is_empty());
     }
 
@@ -3869,7 +3998,7 @@ mod tests {
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
         let before = session.publication_context();
-        let before_nodes = line.store().borrow().len();
+        let before_nodes = line.integration_store().borrow().len();
 
         let result = scene
             .live(&mut session)
@@ -3895,7 +4024,7 @@ mod tests {
             ))
         ), "unexpected rejection: {result:?}");
         assert_eq!(session.publication_context(), before);
-        assert_eq!(line.store().borrow().len(), before_nodes);
+        assert_eq!(line.integration_store().borrow().len(), before_nodes);
         assert!(session.frame().objects.is_empty());
         assert!(session.take_frame_changes().is_empty());
     }
@@ -4206,7 +4335,7 @@ mod tests {
             live.complete_segment(segment).unwrap();
             assert_eq!(live.effective(&shape).unwrap().appearance, 1.0);
             assert!(!scene
-                .store()
+                .integration_store()
                 .borrow()
                 .semantic_family_members_checked(scene.root())
                 .unwrap()
@@ -4384,7 +4513,7 @@ mod recursive_composition_tests {
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
         let before = session.publication_context();
-        let before_nodes = first.store().borrow().len();
+        let before_nodes = first.integration_store().borrow().len();
         let request = AnimationCompositionRequest::Composition {
             kind: SemanticAnimationCompositionKind::Sequence,
             options: AnimationOptions::new().rate_func(RateFunction::Smooth),
@@ -4416,7 +4545,7 @@ mod recursive_composition_tests {
             live.session.publication_context().scene_revision(),
             before.scene_revision().checked_next().unwrap()
         );
-        assert_eq!(first.store().borrow().len(), before_nodes + 5);
+        assert_eq!(first.integration_store().borrow().len(), before_nodes + 5);
         assert!(live.contains(&first).unwrap());
         assert!(live.contains(&second).unwrap());
         live.advance_segment_to(segment, segment.end_time())
@@ -4539,7 +4668,7 @@ mod recursive_composition_tests {
         assert!(!live.contains(&fading).unwrap());
         assert!(!live.contains(&companion).unwrap());
         assert!(fading
-            .store()
+            .integration_store()
             .borrow()
             .node(fading.node_id())
             .unwrap()
@@ -4654,7 +4783,7 @@ mod recursive_composition_tests {
         );
         assert_eq!(
             scene
-                .store()
+                .integration_store()
                 .borrow()
                 .semantic_signal_state(tracker.node_id())
                 .unwrap()
@@ -4692,7 +4821,7 @@ mod recursive_composition_tests {
         );
         assert_eq!(
             scene
-                .store()
+                .integration_store()
                 .borrow()
                 .semantic_signal_state(tracker.node_id())
                 .unwrap()
@@ -4702,7 +4831,7 @@ mod recursive_composition_tests {
         );
         assert_eq!(
             scene
-                .store()
+                .integration_store()
                 .borrow()
                 .semantic_input_scalar_value_at(tracker.node_id(), segment.end_time()),
             Ok(4.0)
@@ -4722,10 +4851,10 @@ mod recursive_composition_tests {
     fn invalid_mixed_sibling_rolls_back_tracker_scope_and_object_admission() {
         let scene = Scene::new();
         let square = scene.square(1.0).unwrap();
-        let tracker = ValueTracker::detached(Rc::clone(scene.store()), 0.0).unwrap();
+        let tracker = ValueTracker::detached(Rc::clone(scene.integration_store()), 0.0).unwrap();
         let mut session = scene.execution_session().unwrap();
         let before = session.publication_context();
-        let before_nodes = scene.store().borrow().len();
+        let before_nodes = scene.integration_store().borrow().len();
         let request = AnimationCompositionRequest::Composition {
             kind: SemanticAnimationCompositionKind::Parallel,
             options: AnimationOptions::new(),
@@ -4747,9 +4876,9 @@ mod recursive_composition_tests {
             .declare_and_activate_composition(&request, AnimationOptions::new())
             .is_err());
         assert_eq!(session.publication_context(), before);
-        assert_eq!(scene.store().borrow().len(), before_nodes);
+        assert_eq!(scene.integration_store().borrow().len(), before_nodes);
         assert!(!scene
-            .store()
+            .integration_store()
             .borrow()
             .has_semantic_signal_scope(tracker.node_id()));
         assert!(session.frame().objects.is_empty());
@@ -4758,8 +4887,8 @@ mod recursive_composition_tests {
     #[test]
     fn two_detached_trackers_enroll_in_one_mixed_publication() {
         let scene = Scene::new();
-        let first = ValueTracker::detached(Rc::clone(scene.store()), 1.0).unwrap();
-        let second = ValueTracker::detached(Rc::clone(scene.store()), -2.0).unwrap();
+        let first = ValueTracker::detached(Rc::clone(scene.integration_store()), 1.0).unwrap();
+        let second = ValueTracker::detached(Rc::clone(scene.integration_store()), -2.0).unwrap();
         let mut session = scene.execution_session().unwrap();
         let before = session.publication_context();
         let request = AnimationCompositionRequest::Composition {
@@ -4790,11 +4919,11 @@ mod recursive_composition_tests {
             before.scene_revision().checked_next().unwrap()
         );
         assert!(scene
-            .store()
+            .integration_store()
             .borrow()
             .has_semantic_signal_scope(first.node_id()));
         assert!(scene
-            .store()
+            .integration_store()
             .borrow()
             .has_semantic_signal_scope(second.node_id()));
         assert_eq!(
@@ -4810,8 +4939,8 @@ mod recursive_composition_tests {
     #[test]
     fn invalid_second_detached_tracker_rolls_back_both_enrollments() {
         let scene = Scene::new();
-        let first = ValueTracker::detached(Rc::clone(scene.store()), 1.0).unwrap();
-        let second = ValueTracker::detached(Rc::clone(scene.store()), -2.0).unwrap();
+        let first = ValueTracker::detached(Rc::clone(scene.integration_store()), 1.0).unwrap();
+        let second = ValueTracker::detached(Rc::clone(scene.integration_store()), -2.0).unwrap();
         let mut session = scene.execution_session().unwrap();
         let before = session.publication_context();
         let request = AnimationCompositionRequest::Composition {
@@ -4837,11 +4966,11 @@ mod recursive_composition_tests {
             .is_err());
         assert_eq!(session.publication_context(), before);
         assert!(!scene
-            .store()
+            .integration_store()
             .borrow()
             .has_semantic_signal_scope(first.node_id()));
         assert!(!scene
-            .store()
+            .integration_store()
             .borrow()
             .has_semantic_signal_scope(second.node_id()));
         assert_eq!(session.effective_signal_value(first.node_id()), None);
@@ -4920,7 +5049,7 @@ mod recursive_composition_tests {
             let nested = scene.family(&[(&first).into(), (&second).into()]).unwrap();
             let outer = scene.family(&[(&first).into()]).unwrap();
             scene
-                .store()
+                .integration_store()
                 .borrow_mut()
                 .add_member(outer.node_id(), nested.node_id())
                 .unwrap();
@@ -4963,6 +5092,7 @@ mod recursive_composition_tests {
         }
     }
 
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn family_fade_preserves_family_membership_and_ordered_lifecycle() {
         let scene = Scene::new();
@@ -4980,7 +5110,7 @@ mod recursive_composition_tests {
             .unwrap();
         assert_eq!(
             scene
-                .store()
+                .integration_store()
                 .borrow()
                 .semantic_family_members_checked(scene.root())
                 .unwrap(),
@@ -5013,7 +5143,7 @@ mod recursive_composition_tests {
             .unwrap();
         live.complete_segment(segment).unwrap();
 
-        let store = scene.store().borrow();
+        let store = scene.integration_store().borrow();
         assert!(store
             .semantic_family_members_checked(scene.root())
             .unwrap()
@@ -5026,6 +5156,7 @@ mod recursive_composition_tests {
         );
     }
 
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn family_fade_and_disjoint_text_write_share_one_atomic_composition() {
         let mut scene = Scene::new();
@@ -5063,13 +5194,14 @@ mod recursive_composition_tests {
             .unwrap();
         live.complete_segment(segment).unwrap();
 
-        let store = scene.store().borrow();
+        let store = scene.integration_store().borrow();
         assert_eq!(
             store.semantic_family_members_checked(scene.root()).unwrap(),
             [written.node_id()]
         );
     }
 
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn family_fade_rejects_overlapping_text_write_before_publication() {
         let mut scene = Scene::new();
@@ -5104,7 +5236,7 @@ mod recursive_composition_tests {
         assert_eq!(session.publication_context(), before);
         assert_eq!(
             scene
-                .store()
+                .integration_store()
                 .borrow()
                 .semantic_family_members_checked(scene.root())
                 .unwrap(),
@@ -5127,20 +5259,25 @@ mod recursive_composition_tests {
             transaction.add_member(inner, target.node_id());
             let outer = transaction.create_node(noon_core::SemanticNodeCreation::family());
             transaction.add_member(outer, inner);
-            let result = transaction.apply(&mut scene.store().borrow_mut()).unwrap();
-            MobjectFamily::from_node(Rc::clone(scene.store()), result.resolve(outer).unwrap())
-                .unwrap()
+            let result = transaction
+                .apply(&mut scene.integration_store().borrow_mut())
+                .unwrap();
+            MobjectFamily::from_node(
+                Rc::clone(scene.integration_store()),
+                result.resolve(outer).unwrap(),
+            )
+            .unwrap()
         };
         let mut session = scene.execution_session().unwrap();
         let before = session.publication_context();
-        let before_nodes = scene.store().borrow().len();
+        let before_nodes = scene.integration_store().borrow().len();
 
         assert!(scene
             .live(&mut session)
             .declare_and_activate_family_transform_to(&source, &nested, AnimationOptions::new(),)
             .is_err());
         assert_eq!(session.publication_context(), before);
-        assert_eq!(scene.store().borrow().len(), before_nodes);
+        assert_eq!(scene.integration_store().borrow().len(), before_nodes);
     }
 
     #[test]
@@ -5644,10 +5781,14 @@ mod recursive_composition_tests {
         let outer = transaction.create_node(noon_core::SemanticNodeCreation::family());
         transaction.add_member(outer, first.node_id());
         transaction.add_member(outer, nested.node_id());
-        let result = transaction.apply(&mut scene.store().borrow_mut()).unwrap();
-        let outer =
-            MobjectFamily::from_node(Rc::clone(scene.store()), result.resolve(outer).unwrap())
-                .unwrap();
+        let result = transaction
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
+        let outer = MobjectFamily::from_node(
+            Rc::clone(scene.integration_store()),
+            result.resolve(outer).unwrap(),
+        )
+        .unwrap();
 
         assert!(outer.prepare_subset_display().is_err());
         assert_eq!(first.state().unwrap().style.fill_opacity, 1.0);
@@ -5664,13 +5805,14 @@ mod recursive_composition_tests {
             .is_err());
         assert_eq!(session.publication_context(), before);
         assert!(scene
-            .store()
+            .integration_store()
             .borrow()
             .semantic_family_members_checked(scene.root())
             .unwrap()
             .is_empty());
     }
 
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn family_text_write_admits_and_unwrite_removes_one_family_root_atomically() {
         let scene = Scene::new();
@@ -5702,7 +5844,7 @@ mod recursive_composition_tests {
             .is_err());
         assert_eq!(session.publication_context(), before);
         assert!(scene
-            .store()
+            .integration_store()
             .borrow()
             .node(family.node_id())
             .unwrap()
@@ -5717,7 +5859,7 @@ mod recursive_composition_tests {
         live.complete_segment(write).unwrap();
         for member in [&left, &right] {
             assert!(noon_core::semantic_scene_root_contains(
-                &scene.store().borrow(),
+                &scene.integration_store().borrow(),
                 scene.root(),
                 member.node_id(),
             )
@@ -5736,13 +5878,13 @@ mod recursive_composition_tests {
         live.complete_segment(unwrite).unwrap();
         for member in [&left, &right] {
             assert!(!noon_core::semantic_scene_root_contains(
-                &scene.store().borrow(),
+                &scene.integration_store().borrow(),
                 scene.root(),
                 member.node_id(),
             )
             .unwrap());
         }
-        let store = family.store().borrow();
+        let store = family.integration_store().borrow();
         assert!(store.node(family.node_id()).is_some());
         assert_eq!(
             store
