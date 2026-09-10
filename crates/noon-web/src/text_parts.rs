@@ -12,11 +12,9 @@ use crate::{AuthoringFailure, WasmAuthoringMobjectHandle};
 fn text_part_js_error(error: noon::TextPartAuthoringError) -> JsValue {
     let failure = match error {
         noon::TextPartAuthoringError::Authoring(cause) => AuthoringFailure::from(cause),
-        noon::TextPartAuthoringError::NotText(_) => AuthoringFailure::new(
-            "unsupported_operation",
-            "text_parts.not_text",
-            error,
-        ),
+        noon::TextPartAuthoringError::NotText(_) => {
+            AuthoringFailure::new("unsupported_operation", "text_parts.not_text", error)
+        }
         noon::TextPartAuthoringError::Query(noon::TextPartQueryError::InvalidSourceSpan) => {
             AuthoringFailure::new("invalid_input", "text_parts.invalid_source_span", error)
         }
@@ -84,10 +82,7 @@ impl WasmTextPart {
 
     #[wasm_bindgen(getter, js_name = semanticKey)]
     pub fn semantic_key(&self) -> Option<String> {
-        self.part
-            .semantic_key
-            .as_deref()
-            .map(ToOwned::to_owned)
+        self.part.semantic_key.as_deref().map(ToOwned::to_owned)
     }
 }
 
