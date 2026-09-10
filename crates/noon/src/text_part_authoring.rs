@@ -63,9 +63,13 @@ impl Mobject {
             .text()
             .ok_or(TextPartAuthoringError::NotText(self.node_id()))?;
         let store = self.integration_store().borrow();
-        let resource = store.text_resources().get(handle).ok_or(
-            TextPartAuthoringError::Authoring(AuthoringError::MissingTextResource(handle)),
-        )?;
+        let resource =
+            store
+                .text_resources()
+                .get(handle)
+                .ok_or(TextPartAuthoringError::Authoring(
+                    AuthoringError::MissingTextResource(handle),
+                ))?;
         Ok(resource.source_part(source_span)?)
     }
 
@@ -80,9 +84,13 @@ impl Mobject {
             .text()
             .ok_or(TextPartAuthoringError::NotText(self.node_id()))?;
         let store = self.integration_store().borrow();
-        let resource = store.text_resources().get(handle).ok_or(
-            TextPartAuthoringError::Authoring(AuthoringError::MissingTextResource(handle)),
-        )?;
+        let resource =
+            store
+                .text_resources()
+                .get(handle)
+                .ok_or(TextPartAuthoringError::Authoring(
+                    AuthoringError::MissingTextResource(handle),
+                ))?;
         Ok(resource.source_parts_for(needle)?)
     }
 }
