@@ -536,7 +536,58 @@ def _group_coordinate_dimensions(api, group_class):
     return observations
 
 
+def _style_operations(api):
+    a = api.Square(side_length=1).shift(api.LEFT)
+    b = api.Circle(radius=0.5).shift(api.RIGHT)
+    family = api.VGroup(a, api.VGroup(a, b))
+    palette = family.copy().set_style(fill_color="#FF0000", fill_opacity=0.3,
+                                     stroke_color="#0000FF", stroke_width=6, stroke_opacity=0.6)
+    family.match_style(palette)
+    family.set_fill().set_stroke().match_style(family)
+    a.match_style(a)
+    observations = [[m.get_fill_opacity(), m.get_stroke_opacity(), _object_observation(m)] for m in [a, b]]
+    a.set_style(fill_opacity=0.7)
+    family.match_style(api.VGroup(b, api.VGroup(b, a)))
+    observations.append([a.get_fill_opacity(), b.get_fill_opacity()])
+    return observations
+
+
+def _family_replace(api, source_family, target_family, stretch):
+    first = api.Rectangle(width=2.0, height=1.0).shift(2 * api.LEFT)
+    second = api.Square(side_length=1.0).shift(2 * api.RIGHT)
+    target = api.Rectangle(width=3.0, height=2.0).shift(api.RIGHT + api.UP)
+    source = api.VGroup(first, api.VGroup(first, second)) if source_family else first
+    target = api.Group(target) if target_family else target
+    source.replace(target, stretch=stretch)
+    return {"source": _object_observation(source), "target": _object_observation(target),
+            "first": _object_observation(first), "second": _object_observation(second)}
+
+
+def _shared_target_replace(api):
+    first = api.Square(side_length=1).shift(api.LEFT)
+    second = api.Square(side_length=1).shift(api.RIGHT)
+    family = api.VGroup(first, second)
+    family.replace(first)
+    return {"family": _object_observation(family), "first": _object_observation(first),
+            "second": _object_observation(second)}
+
+
+def _zero_extent_replace(api):
+    source = api.Line(api.ORIGIN, 2 * api.UP)
+    target = api.Rectangle(width=4, height=6).shift(3 * api.RIGHT + 2 * api.UP)
+    source.replace(target, stretch=True)
+    return _object_observation(source)
+
+
 FIXTURES = [
+    Fixture("style_operations", lambda: _style_operations(noon), lambda: _style_operations(manim)),
+    *[Fixture(f"replace_family_{source_family}_{target_family}_{stretch}",
+              lambda sf=source_family, tf=target_family, st=stretch: _family_replace(noon, sf, tf, st),
+              lambda sf=source_family, tf=target_family, st=stretch: _family_replace(manim, sf, tf, st))
+      for source_family, target_family, stretch in ((True, False, False), (False, True, True), (True, True, True))],
+    Fixture("replace_shared_target", lambda: _shared_target_replace(noon), lambda: _shared_target_replace(manim)),
+    Fixture("replace_zero_extent", lambda: _zero_extent_replace(noon), lambda: _zero_extent_replace(manim)),
+
     Fixture("group_coordinate_dimensions",
             lambda: _group_coordinate_dimensions(noon, noon.Group),
             lambda: _group_coordinate_dimensions(manim, manim.Group)),

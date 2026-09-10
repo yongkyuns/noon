@@ -1,4 +1,36 @@
 #[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn style_update(
+    fill_enabled: bool,
+    fill_red: f64,
+    fill_green: f64,
+    fill_blue: f64,
+    fill_alpha: f64,
+    fill_opacity: Option<f64>,
+    stroke_enabled: bool,
+    stroke_red: f64,
+    stroke_green: f64,
+    stroke_blue: f64,
+    stroke_alpha: f64,
+    stroke_width: Option<f64>,
+    stroke_opacity: Option<f64>,
+) -> Result<noon::StyleUpdate, String> {
+    Ok(noon::StyleUpdate {
+        fill_color: family_color(fill_enabled, fill_red, fill_green, fill_blue, fill_alpha)?,
+        fill_opacity,
+        stroke_color: family_color(
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+        )?,
+        stroke_width,
+        stroke_opacity,
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
 use noon::integration::authoring_render_f64 as render_f64;
 pub use noon::{ManimNextToArgs, Mobject};
 #[cfg(target_arch = "wasm32")]
@@ -288,6 +320,22 @@ mod wasm {
         ) -> Result<(), JsValue> {
             self.anchor
                 .rescale_to_fit(length, dimension.try_into().map_err(js_error)?, stretch)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = replaceLayout)]
+        pub fn replace_layout(
+            &self,
+            target: &WasmLayoutAnchor,
+            dimension: u32,
+            stretch: bool,
+        ) -> Result<(), JsValue> {
+            self.anchor
+                .replace_layout(
+                    &target.anchor,
+                    dimension.try_into().map_err(js_error)?,
+                    stretch,
+                )
                 .map_err(js_error)
         }
 
@@ -595,6 +643,50 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = setStyle)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_style(
+            &mut self,
+            fill_enabled: bool,
+            fill_red: f64,
+            fill_green: f64,
+            fill_blue: f64,
+            fill_alpha: f64,
+            fill_opacity: Option<f64>,
+            stroke_enabled: bool,
+            stroke_red: f64,
+            stroke_green: f64,
+            stroke_blue: f64,
+            stroke_alpha: f64,
+            stroke_width: Option<f64>,
+            stroke_opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let update = super::style_update(
+                fill_enabled,
+                fill_red,
+                fill_green,
+                fill_blue,
+                fill_alpha,
+                fill_opacity,
+                stroke_enabled,
+                stroke_red,
+                stroke_green,
+                stroke_blue,
+                stroke_alpha,
+                stroke_width,
+                stroke_opacity,
+            )
+            .map_err(js_error)?;
+            self.semantic_family()?.set_style(update).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = matchStyle)]
+        pub fn match_style(&self, target: &WasmAuthoringFamilyHandle) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .match_style(&target.semantic_family()?)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setColor)]
         #[allow(clippy::too_many_arguments)]
         pub fn set_color(
@@ -916,6 +1008,48 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
+        #[wasm_bindgen(js_name = setStyle)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_style(
+            &mut self,
+            fill_enabled: bool,
+            fill_red: f64,
+            fill_green: f64,
+            fill_blue: f64,
+            fill_alpha: f64,
+            fill_opacity: Option<f64>,
+            stroke_enabled: bool,
+            stroke_red: f64,
+            stroke_green: f64,
+            stroke_blue: f64,
+            stroke_alpha: f64,
+            stroke_width: Option<f64>,
+            stroke_opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let update = super::style_update(
+                fill_enabled,
+                fill_red,
+                fill_green,
+                fill_blue,
+                fill_alpha,
+                fill_opacity,
+                stroke_enabled,
+                stroke_red,
+                stroke_green,
+                stroke_blue,
+                stroke_alpha,
+                stroke_width,
+                stroke_opacity,
+            )
+            .map_err(js_error)?;
+            self.handle.set_style(update).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = matchStyle)]
+        pub fn match_style(&self, target: &WasmAuthoringMobjectHandle) -> Result<(), JsValue> {
+            self.handle.match_style(&target.handle).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = layoutAnchor)]
         pub fn layout_anchor(&self, index: Option<i32>) -> Result<WasmLayoutAnchor, JsValue> {
             let anchor = noon::LayoutAnchor::from(&self.handle);
@@ -1240,18 +1374,6 @@ mod wasm {
                         stretch,
                     },
                 )
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = replaceHandle)]
-        pub fn replace_handle(
-            &mut self,
-            other: &WasmAuthoringMobjectHandle,
-            dim_to_match: u32,
-            stretch: bool,
-        ) -> Result<(), JsValue> {
-            self.handle
-                .replace_handle(&other.handle, dim_to_match, stretch)
                 .map_err(js_error)
         }
 

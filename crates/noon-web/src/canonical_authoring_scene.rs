@@ -5139,6 +5139,26 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveReplaceLayout)]
+        pub fn live_replace_layout(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            target: &crate::authoring_mobject::WasmLayoutAnchor,
+            dimension: u32,
+            stretch: bool,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_replace_layout(
+                    &source.anchor,
+                    &target.anchor,
+                    dimension.try_into().map_err(typed_js_error)?,
+                    stretch,
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveMatchDimSize)]
         pub fn live_match_dim_size(
             &mut self,
@@ -6151,6 +6171,112 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetStyle)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_set_style(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            fill_enabled: bool,
+            fill_red: f64,
+            fill_green: f64,
+            fill_blue: f64,
+            fill_alpha: f64,
+            fill_opacity: Option<f64>,
+            stroke_enabled: bool,
+            stroke_red: f64,
+            stroke_green: f64,
+            stroke_blue: f64,
+            stroke_alpha: f64,
+            stroke_width: Option<f64>,
+            stroke_opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let update = crate::authoring_mobject::style_update(
+                fill_enabled,
+                fill_red,
+                fill_green,
+                fill_blue,
+                fill_alpha,
+                fill_opacity,
+                stroke_enabled,
+                stroke_red,
+                stroke_green,
+                stroke_blue,
+                stroke_alpha,
+                stroke_width,
+                stroke_opacity,
+            )
+            .map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_style(&source.semantic_mobject(), update)
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveMatchStyle)]
+        pub fn live_match_style(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_match_style(&source.semantic_mobject(), &target.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveSetFamilyStyle)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_set_family_style(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            fill_enabled: bool,
+            fill_red: f64,
+            fill_green: f64,
+            fill_blue: f64,
+            fill_alpha: f64,
+            fill_opacity: Option<f64>,
+            stroke_enabled: bool,
+            stroke_red: f64,
+            stroke_green: f64,
+            stroke_blue: f64,
+            stroke_alpha: f64,
+            stroke_width: Option<f64>,
+            stroke_opacity: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let update = crate::authoring_mobject::style_update(
+                fill_enabled,
+                fill_red,
+                fill_green,
+                fill_blue,
+                fill_alpha,
+                fill_opacity,
+                stroke_enabled,
+                stroke_red,
+                stroke_green,
+                stroke_blue,
+                stroke_alpha,
+                stroke_width,
+                stroke_opacity,
+            )
+            .map_err(typed_js_error)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_family_style(&source.semantic_family()?, update)
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveMatchFamilyStyle)]
+        pub fn live_match_family_style(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            target: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_match_family_style(&source.semantic_family()?, &target.semantic_family()?)
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = liveSetFamilyColor)]
         #[allow(clippy::too_many_arguments)]
         pub fn live_set_family_color(

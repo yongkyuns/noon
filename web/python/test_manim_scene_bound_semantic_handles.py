@@ -406,10 +406,12 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                 operand.copy = lambda: (_ for _ in ()).throw(AssertionError("untyped target was copied"))
                 operand.scale = lambda *args: (_ for _ in ()).throw(AssertionError("untyped target was scaled"))
             for operation in ("become", "replace"):
+                expected_error = NotImplementedError if operation == "become" else RuntimeError
+                expected_message = "both Mobjects" if operation == "become" else "shared Rust layout handle"
                 try:
                     getattr(detached_source, operation)(half_typed, stretch=True)
-                except NotImplementedError as error:
-                    assert "both Mobjects" in str(error)
+                except expected_error as error:
+                    assert expected_message in str(error)
                 else:
                     raise AssertionError(operation + " admitted untyped operands")
 

@@ -199,9 +199,6 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::InvalidDimension(_) => {
                 Self::new("invalid_input", "authoring.invalid_dimension", message)
             }
-            AuthoringError::ZeroReplaceExtent => {
-                Self::new("invalid_input", "authoring.zero_replace_extent", message)
-            }
             AuthoringError::ZeroStretchTarget => {
                 Self::new("invalid_input", "authoring.zero_stretch_target", message)
             }

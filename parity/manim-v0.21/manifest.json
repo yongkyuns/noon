@@ -332,6 +332,28 @@
         "max_differing_ratio": 0.003,
         "max_mean_absolute_channel_error": 0.1
       }
+    },
+    {
+      "id": "style-operations",
+      "scene": "StyleOperations",
+      "source": "parity/manim-v0.21/core-examples/style_operations.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
+      "id": "family-replacement",
+      "scene": "FamilyReplacement",
+      "source": "parity/manim-v0.21/core-examples/family_replacement.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
     }
   ],
   "sample_fractions": [

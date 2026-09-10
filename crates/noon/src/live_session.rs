@@ -2319,6 +2319,52 @@ impl<'a> LiveSession<'a> {
         self.edit_style(mobject, |style| edit_object_opacity(style, opacity))
     }
 
+    /// Update supplied paint fields through one semantic publication.
+    pub fn set_style(
+        &mut self,
+        object: &Mobject,
+        update: crate::StyleUpdate,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_style(object, |style| update.apply(style))
+    }
+
+    pub fn set_family_style(
+        &mut self,
+        family: &MobjectFamily,
+        update: crate::StyleUpdate,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.edit_family_style(family, |style| update.apply(style))
+    }
+
+    /// Match coherent effective paint, preserving non-paint source presentation.
+    pub fn match_style(
+        &mut self,
+        source: &Mobject,
+        target: &Mobject,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_mobject(source)?;
+        self.require_mobject(target)?;
+        self.require_target_capture()?;
+        let mut style = self.capture_mobject_state(source)?.style;
+        let target = self.capture_mobject_state(target)?.style;
+        crate::family_style::match_paint(&mut style, &target);
+        self.replace_style(source, style)
+    }
+
+    pub fn match_family_style(
+        &mut self,
+        source: &MobjectFamily,
+        target: &MobjectFamily,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(source)?;
+        self.require_family(target)?;
+        self.require_target_capture()?;
+        let transaction = source.match_style_transaction(target, |object| {
+            self.capture_mobject_state(object).map(|state| state.style)
+        })?;
+        self.apply(transaction)
+    }
+
     /// Recolor a family's unique leaves through one coherent authored publication.
     pub fn set_family_color(
         &mut self,

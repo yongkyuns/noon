@@ -524,6 +524,42 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_style(
+        &mut self,
+        source: &noon::Mobject,
+        update: noon::StyleUpdate,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_style(source, update))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_match_style(
+        &mut self,
+        source: &noon::Mobject,
+        target: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.match_style(source, target))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_style(
+        &mut self,
+        source: &noon::MobjectFamily,
+        update: noon::StyleUpdate,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_family_style(source, update))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_match_family_style(
+        &mut self,
+        source: &noon::MobjectFamily,
+        target: &noon::MobjectFamily,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.match_family_style(source, target))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_family_color(
         &mut self,
         family: &noon::MobjectFamily,
@@ -788,6 +824,17 @@ impl SemanticExecutionPlayer {
         stretch: bool,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.rescale_to_fit(source, length, dimension, stretch))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_replace_layout(
+        &mut self,
+        source: &noon::LayoutAnchor,
+        target: &noon::LayoutAnchor,
+        dimension: noon::LayoutDimension,
+        stretch: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.replace_layout(source, target, dimension, stretch))
     }
 
     #[cfg(target_arch = "wasm32")]
