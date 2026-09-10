@@ -724,3 +724,11 @@ pub async fn create_direct_dimension_fitting_smoke_renderer(
     let session = noon::example_scenes::dimension_fitting::session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
+
+#[wasm_bindgen(js_name = createDirectStyleOperationsSmokeRenderer)]
+pub async fn create_direct_style_operations_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::style_operations::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}

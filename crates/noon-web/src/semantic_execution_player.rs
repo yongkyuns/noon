@@ -524,6 +524,42 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_style(
+        &mut self,
+        source: &noon::Mobject,
+        update: noon::StyleUpdate,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_style(source, update))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_match_style(
+        &mut self,
+        source: &noon::Mobject,
+        target: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.match_style(source, target))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_style(
+        &mut self,
+        source: &noon::MobjectFamily,
+        update: noon::StyleUpdate,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_family_style(source, update))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_match_family_style(
+        &mut self,
+        source: &noon::MobjectFamily,
+        target: &noon::MobjectFamily,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.match_family_style(source, target))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_family_color(
         &mut self,
         family: &noon::MobjectFamily,
