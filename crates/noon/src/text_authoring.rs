@@ -34,7 +34,7 @@ use noon_typst::{
     compile_typst_resource, compile_typst_resource_with_fonts, TypstMode, TypstResourceArtifact,
 };
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
-use swash::{FontRef, StringId, Stretch, Style as FontStyle, Weight};
+use swash::{FontRef, Stretch, StringId, Style as FontStyle, Weight};
 
 /// Typst's retained artifact is authored at 10pt, so its public Manim-style font size
 /// remains an object transform and does not alter glyph/cluster identity.
@@ -444,12 +444,8 @@ fn bundled_native_font(family: &str) -> Result<NativeFontFace, TextAuthoringErro
                 && attributes.style() == FontStyle::Normal
                 && attributes.stretch() == Stretch::NORMAL
             {
-                return NativeFontFace::new(
-                    Arc::<str>::from(family),
-                    Arc::<[u8]>::from(data),
-                    0,
-                )
-                .map_err(TextAuthoringError::NativeText);
+                return NativeFontFace::new(Arc::<str>::from(family), Arc::<[u8]>::from(data), 0)
+                    .map_err(TextAuthoringError::NativeText);
             }
         }
 
