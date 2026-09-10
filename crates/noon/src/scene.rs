@@ -70,6 +70,15 @@ impl Scene {
         Mobject::from_manim_geometry(Rc::clone(&self.store), options)
     }
 
+    /// Construct one detached Arrow-family object through the shared Rust
+    /// transaction. The options select Arrow, Vector, or DoubleArrow semantics.
+    pub fn manim_arrow(
+        &self,
+        options: crate::ManimArrowOptions,
+    ) -> Result<crate::ManimArrow, crate::AuthoringError> {
+        crate::ManimArrow::create(Rc::clone(&self.store), options)
+    }
+
     pub fn root(&self) -> SemanticNodeId {
         self.root
     }
