@@ -1,0 +1,21 @@
+name: codex b3 family transform intent mac runner
+
+on:
+  push:
+    branches: [codex/b3-family-transform-intent-runner]
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/b3-family-transform-intent
+      - name: Execute guarded target-branch patch
+        shell: bash
+        run: |
+          ruby -e 'require "yaml"; y=YAML.load_file(".github/workflows/_codex_b3_family_intent_patch.yml"); puts y.fetch("jobs").fetch("patch").fetch("steps").last.fetch("run")' > /tmp/family-intent-patch.sh
+          bash /tmp/family-intent-patch.sh
