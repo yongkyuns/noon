@@ -18,7 +18,12 @@ pub fn session() -> Result<ExecutionSession, String> {
         let mut polygon = scene.square(1.)?;
         polygon.shift(7., 3.)?;
         polygon.rotate(0.6)?;
-        polygon.set_fill(1., 1., 0., 0.3)?;
+        polygon.set_fill(
+            f64::from(noon_core::YELLOW.red),
+            f64::from(noon_core::YELLOW.green),
+            f64::from(noon_core::YELLOW.blue),
+            0.3,
+        )?;
         polygon.set_points_as_corners(&[
             Vec2::new(1., -1.),
             Vec2::new(3., -1.),
