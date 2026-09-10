@@ -24,7 +24,7 @@ use crate::{
         edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
         edit_stroke_opacity,
     },
-    state_replacement::prepare_become_state,
+    state_replacement::prepare_become,
     DeclaredAnimation, ExecutionSegment, ExecutionSegmentAdvanceError,
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError,
@@ -751,14 +751,16 @@ impl<'a> LiveSession<'a> {
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.require_mobject(target)?;
         self.require_mobject(other)?;
-        let authored = target.state().map_err(LiveSessionError::from)?;
         let source = self.capture_mobject_state(target)?;
         let candidate = self.capture_mobject_state(other)?;
-        let next = prepare_become_state(&self.store.borrow(), &source, candidate, options)
-            .map_err(LiveSessionError::from)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        stage_state_changes(&mut transaction, target.node_id(), &authored, &next);
-        self.apply(transaction)
+        let prepared = prepare_become(
+            &self.store.borrow(),
+            target.node_id(),
+            &source,
+            candidate,
+            options,
+        )?;
+        self.publish_path_edits(prepared)
     }
 
     /// Replace a matching family's presentation from one coherent capture.
@@ -772,13 +774,11 @@ impl<'a> LiveSession<'a> {
         self.require_family(source)?;
         self.require_family(target)?;
         self.require_target_capture()?;
-        let transaction = crate::state_replacement::family_become_transaction(
-            source,
-            target,
-            options,
-            |object| self.capture_mobject_state(object),
-        )?;
-        self.apply(transaction)
+        let prepared =
+            crate::state_replacement::prepare_family_become(source, target, options, |object| {
+                self.capture_mobject_state(object)
+            })?;
+        self.publish_path_edits(prepared)
     }
 
     fn capture_mobject_state(

@@ -96,7 +96,7 @@ fn dimension_matching_uses_aggregate_bounds_and_center_not_individual_leaf_sizes
 }
 
 #[test]
-fn topology_alias_foreign_and_rotated_stretch_rejections_are_atomic() {
+fn invalid_family_become_is_atomic_and_rotated_stretch_preserves_dimensions() {
     let scene = Scene::new();
     let source = family(&scene);
     let different = scene.family(&[]).unwrap();
@@ -112,16 +112,20 @@ fn topology_alias_foreign_and_rotated_stretch_rejections_are_atomic() {
     target
         .rotate(0.3, noon::ManimRotationPivot::Center)
         .unwrap();
-    assert!(source
+    source
         .become_family(
             &target,
             ManimBecomeOptions {
                 stretch: true,
+                match_center: true,
                 ..Default::default()
-            }
+            },
         )
-        .is_err());
-    assert_eq!(source.layout_bounds().unwrap(), saved);
+        .unwrap();
+    let after = source.layout_bounds().unwrap().unwrap();
+    let before = saved.unwrap();
+    close(after.width(), before.width());
+    close(after.height(), before.height());
     different
         .become_family(&different, Default::default())
         .unwrap();

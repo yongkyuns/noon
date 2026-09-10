@@ -2,6 +2,22 @@ use super::*;
 use crate::path_editing::{path_is_unchanged, path_replacement_state, path_transaction, PathEdit};
 
 impl LiveSession<'_> {
+    pub(super) fn publish_path_edits(
+        &mut self,
+        prepared: crate::path_editing::PreparedPathEdits,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let mut store = self.store.borrow_mut();
+        if prepared.creates_resources() {
+            self.session
+                .require_resource_creation_at_root(&store, self.root)?;
+        }
+        prepared.publish(&mut store, |store, transaction| {
+            self.session
+                .apply_semantic_transaction_at_root(store, self.root, transaction)
+                .map_err(LiveSessionError::from)
+        })
+    }
+
     /// Copy a selected interval from one coherent effective publication.
     pub fn subcurve(
         &mut self,
