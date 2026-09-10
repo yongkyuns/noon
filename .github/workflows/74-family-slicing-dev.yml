@@ -22,7 +22,8 @@ jobs:
       - name: Assemble exact product candidate
         run: |
           mkdir -p /tmp/b1-slicing
-          base=7edd6b41feee02355943868d48754bf0e23a706b
+          base=$(git rev-parse origin/master)
+          printf '%s\n' "$base" > /tmp/b1-slicing/base.txt
           git checkout --detach "$base"
           git apply --recount --index <(git show codex/74-family-slicing-prep:.github/74-family-slicing.patch)
           python3 -m py_compile web/python/_manim_compat.py scripts/manim-differential.py
@@ -63,6 +64,8 @@ jobs:
           key: ${{ runner.os }}-playwright-chromium-1.62.1
       - name: Install pinned browser and Manim reference
         run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libcairo2-dev libpango1.0-dev pkg-config ffmpeg
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
           python3 -m pip install --disable-pip-version-check 'manim==0.21.0'
@@ -118,7 +121,7 @@ jobs:
           cp /tmp/b1-slicing/manifest.json parity/manim-v0.21/manifest.json
           git diff --exit-code
       - name: Publish same tested candidate
-        run: git push origin HEAD:refs/heads/codex/74-family-slicing
+        run: git push --force-with-lease origin HEAD:refs/heads/codex/74-family-slicing
       - name: Retain exact evidence
         if: always()
         run: |
