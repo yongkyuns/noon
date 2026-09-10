@@ -10,6 +10,7 @@ export class SemanticPreviewSession {
   #sourceState = "not_started";
   #duration = null;
   #frame = null;
+  #buildIdentity = null;
   #lastRequestedTime = 0;
   #samples = 0;
   #busy = false;
@@ -49,6 +50,7 @@ export class SemanticPreviewSession {
       frame: this.#frame === null ? null : { ...this.#frame },
       error: this.#failure?.message ?? null,
       cleanupErrors: [...this.#cleanupErrors],
+      ...(this.#buildIdentity === null ? {} : { buildIdentity: this.#buildIdentity }),
       capabilities: { forwardSampling: this.#state === "ready", seek: false, sceneInspection: false },
     };
   }
@@ -68,7 +70,8 @@ export class SemanticPreviewSession {
     return this.#perform(async () => {
       this.#authoring = this.#makeAuthoring();
       this.#assertActive();
-      await this.#authoring.ready();
+      const buildIdentity = await this.#authoring.ready();
+      this.#buildIdentity = buildIdentity ?? null;
       this.#assertActive();
       this.#sourceState = "running";
       let resolveAttached;
