@@ -350,7 +350,7 @@ function parseContinuationCallbackReadRequest(requestJson) {
   try {
     request = JSON.parse(requestJson);
   } catch (error) {
-    throw new TypeError(`canonical callback read request is not valid JSON: ${error}`));
+    throw new TypeError(`canonical callback read request is not valid JSON: ${error}`);
   }
   if (!isRecord(request) ||
       !Number.isSafeInteger(request.request_id) || request.request_id < 0 ||
