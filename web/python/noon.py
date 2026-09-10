@@ -765,6 +765,11 @@ _PUBLIC_EXPORTS = {
     "SurroundingRectangle": "_manim_shared_geometry",
     "BackgroundRectangle": "_manim_shared_geometry",
     "Underline": "_manim_shared_geometry",
+    "Union": "_manim_shared_geometry",
+    "Intersection": "_manim_shared_geometry",
+    "Difference": "_manim_shared_geometry",
+    "Exclusion": "_manim_shared_geometry",
+
     "AnnularSector": "_manim_shared_geometry",
     "Sector": "_manim_shared_geometry",
     "Annulus": "_manim_shared_geometry",

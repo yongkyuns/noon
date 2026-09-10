@@ -6,6 +6,7 @@ license = "MIT"
 description = "Vector geometry compilation and tessellation for Noon"
 
 [dependencies]
+i_overlay = { version = "8.1", default-features = false }
 lyon_path = "1"
 lyon_tessellation = "1"
 noon-core = { path = "../noon-core" }

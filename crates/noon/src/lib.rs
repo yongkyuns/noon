@@ -53,6 +53,7 @@
 mod animation_authoring;
 mod arc_authoring;
 mod authoring_error;
+mod boolean_authoring;
 mod camera_authoring;
 mod compact_value_authoring;
 mod dashed_line_authoring;
@@ -101,6 +102,7 @@ mod z_index;
 pub use animation_authoring::DeclaredAnimation;
 pub use arc_authoring::ArcAuthoringError;
 pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
+pub use boolean_authoring::{BooleanOperation, BooleanPathError};
 pub use dashed_line_authoring::DashedLineAuthoringError;
 pub use dimension_fit::LayoutDimension;
 pub use elbow_authoring::ElbowAuthoringError;
@@ -172,12 +174,12 @@ pub use text_part_authoring::TextPartAuthoringError;
 /// Host integration and mutable arena access must be imported explicitly.
 pub mod prelude {
     pub use crate::{
-        AnimationOptions, AuthoringError, Color, ContinuationStep, DeclaredAnimation,
-        DrawBorderThenFillOptions, EffectiveMobjectState, ExecutionSession, FadeEndpoint,
-        FadeTranslation, LiveContinuation, LiveProgram, LiveSession, LiveSessionError, Mobject,
-        MobjectFamily, MobjectFamilyMember, NativeBoolSignal, NativeVectorSignal, RateFunction,
-        Scene, SemanticObjectState, SemanticStyle, StoredGeometry, TrackerPosition, ValueTracker,
-        Vec2, VectorPath,
+        AnimationOptions, AuthoringError, BooleanOperation, Color, ContinuationStep,
+        DeclaredAnimation, DrawBorderThenFillOptions, EffectiveMobjectState, ExecutionSession,
+        FadeEndpoint, FadeTranslation, LiveContinuation, LiveProgram, LiveSession,
+        LiveSessionError, Mobject, MobjectFamily, MobjectFamilyMember, NativeBoolSignal,
+        NativeVectorSignal, RateFunction, Scene, SemanticObjectState, SemanticStyle,
+        StoredGeometry, TrackerPosition, ValueTracker, Vec2, VectorPath,
     };
 }
 

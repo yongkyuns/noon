@@ -493,3 +493,60 @@ class Annulus(_compat.VMobject):
         self.mark_paths_closed = bool(mark_paths_closed)
         self.num_components = component_count
         self.arc_center = center
+
+
+def _boolean_init(self, operation: str, mobjects: tuple, options: dict) -> None:
+    if _shared._geometry_options is None:
+        raise RuntimeError("Boolean geometry requires the shared Rust authoring host")
+    handles = []
+    for value in mobjects:
+        if not isinstance(value, _compat.VMobject):
+            raise TypeError(f"{operation} operands must be VMobjects")
+        handle = _shared._handle_for(value)
+        if handle is None:
+            raise TypeError(f"{operation} operands must have retained vector geometry")
+        handles.append(handle)
+    operands = engine_call(_shared._geometry_options.booleanOperands)
+    try:
+        for handle in handles:
+            engine_call(operands.push, handle)
+        context = _shared._live_constructor_context(operation)
+        candidate = (
+            engine_call(_shared._geometry_options.booleanGeometry, operation, operands)
+            if context is None
+            else engine_call(context.beginBooleanGeometry, operation, operands)
+        )
+    finally:
+        operands.free()
+    color = options.pop("color", None)
+    try:
+        _shared._apply_shared_constructor_options(candidate, options)
+        _apply_candidate_color(candidate, color)
+    except Exception:
+        candidate.free()
+        raise
+    _shared._attach_geometry_options(self, candidate, operation)
+
+
+class Union(_compat.VMobject):
+    """Union of filled regions, prepared once by shared Rust geometry."""
+    def __init__(self, *vmobjects: _compat.VMobject, **kwargs: Any) -> None:
+        _boolean_init(self, "Union", vmobjects, kwargs)
+
+
+class Intersection(_compat.VMobject):
+    """Intersection of two or more filled regions."""
+    def __init__(self, *vmobjects: _compat.VMobject, **kwargs: Any) -> None:
+        _boolean_init(self, "Intersection", vmobjects, kwargs)
+
+
+class Difference(_compat.VMobject):
+    """Subtract the second filled region from the first."""
+    def __init__(self, subject: _compat.VMobject, clip: _compat.VMobject, **kwargs: Any) -> None:
+        _boolean_init(self, "Difference", (subject, clip), kwargs)
+
+
+class Exclusion(_compat.VMobject):
+    """Filled points belonging to exactly one of the two operands."""
+    def __init__(self, subject: _compat.VMobject, clip: _compat.VMobject, **kwargs: Any) -> None:
+        _boolean_init(self, "Exclusion", (subject, clip), kwargs)

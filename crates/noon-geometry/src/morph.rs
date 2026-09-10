@@ -1,8 +1,10 @@
-use noon_core::{PathCommand, Vec2, VectorPath};
+use noon_core::{Vec2, VectorPath};
 
-use crate::GeometryError;
+use crate::{
+    flatten::{flatten_path, FlattenedContour},
+    GeometryError,
+};
 
-const MAX_FLATTEN_DEPTH: u32 = 16;
 const DEGENERATE_LENGTH_EPSILON: f32 = 1.0e-6;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -163,13 +165,6 @@ impl From<GeometryError> for MorphError {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-struct FlattenedContour {
-    points: Vec<Vec2>,
-    feature_indices: Vec<usize>,
-    closed: bool,
-}
-
 pub fn plan_morph(
     source: &VectorPath,
     target: &VectorPath,
@@ -250,133 +245,6 @@ fn validate_options(options: MorphOptions) -> Result<(), MorphError> {
         ));
     }
     Ok(())
-}
-
-fn flatten_path(path: &VectorPath, tolerance: f32) -> Result<Vec<FlattenedContour>, GeometryError> {
-    let mut contours = Vec::new();
-    let mut points = Vec::new();
-    let mut feature_indices = Vec::new();
-    let mut current = Vec2::ZERO;
-    let mut start = Vec2::ZERO;
-    let mut active = false;
-
-    for command in path.commands() {
-        match *command {
-            PathCommand::MoveTo { to } => {
-                finite(to)?;
-                if active {
-                    contours.push(FlattenedContour {
-                        points: std::mem::take(&mut points),
-                        feature_indices: std::mem::take(&mut feature_indices),
-                        closed: false,
-                    });
-                }
-                points.push(to);
-                feature_indices.push(0);
-                current = to;
-                start = to;
-                active = true;
-            }
-            PathCommand::LineTo { to } => {
-                require_active(active)?;
-                finite(to)?;
-                push_distinct(&mut points, to);
-                mark_feature(&mut feature_indices, points.len() - 1);
-                current = to;
-            }
-            PathCommand::QuadraticTo { control, to } => {
-                require_active(active)?;
-                finite(control)?;
-                finite(to)?;
-                flatten_quadratic(current, control, to, tolerance, 0, &mut points);
-                mark_feature(&mut feature_indices, points.len() - 1);
-                current = to;
-            }
-            PathCommand::CubicTo {
-                control1,
-                control2,
-                to,
-            } => {
-                require_active(active)?;
-                finite(control1)?;
-                finite(control2)?;
-                finite(to)?;
-                flatten_cubic(current, control1, control2, to, tolerance, 0, &mut points);
-                mark_feature(&mut feature_indices, points.len() - 1);
-                current = to;
-            }
-            PathCommand::Close => {
-                if !active {
-                    return Err(GeometryError::CloseBeforeMove);
-                }
-                if points.last().copied() == Some(start) {
-                    let removed = points.len() - 1;
-                    points.pop();
-                    feature_indices.retain(|index| *index != removed);
-                }
-                contours.push(FlattenedContour {
-                    points: std::mem::take(&mut points),
-                    feature_indices: std::mem::take(&mut feature_indices),
-                    closed: true,
-                });
-                current = start;
-                active = false;
-            }
-        }
-    }
-    if active {
-        contours.push(FlattenedContour {
-            points,
-            feature_indices,
-            closed: false,
-        });
-    }
-    Ok(contours)
-}
-
-fn flatten_quadratic(
-    from: Vec2,
-    control: Vec2,
-    to: Vec2,
-    tolerance: f32,
-    depth: u32,
-    points: &mut Vec<Vec2>,
-) {
-    if depth >= MAX_FLATTEN_DEPTH || point_line_distance(control, from, to) <= tolerance {
-        push_distinct(points, to);
-        return;
-    }
-    let from_control = midpoint(from, control);
-    let control_to = midpoint(control, to);
-    let middle = midpoint(from_control, control_to);
-    flatten_quadratic(from, from_control, middle, tolerance, depth + 1, points);
-    flatten_quadratic(middle, control_to, to, tolerance, depth + 1, points);
-}
-
-#[allow(clippy::too_many_arguments)]
-fn flatten_cubic(
-    from: Vec2,
-    control1: Vec2,
-    control2: Vec2,
-    to: Vec2,
-    tolerance: f32,
-    depth: u32,
-    points: &mut Vec<Vec2>,
-) {
-    let flatness =
-        point_line_distance(control1, from, to).max(point_line_distance(control2, from, to));
-    if depth >= MAX_FLATTEN_DEPTH || flatness <= tolerance {
-        push_distinct(points, to);
-        return;
-    }
-    let a = midpoint(from, control1);
-    let b = midpoint(control1, control2);
-    let c = midpoint(control2, to);
-    let d = midpoint(a, b);
-    let e = midpoint(b, c);
-    let middle = midpoint(d, e);
-    flatten_cubic(from, a, d, middle, tolerance, depth + 1, points);
-    flatten_cubic(middle, e, c, to, tolerance, depth + 1, points);
 }
 
 fn resample_contour(
@@ -553,33 +421,6 @@ fn correspondence_index(index: usize, shift: usize, count: usize, reversed: bool
     }
 }
 
-fn mark_feature(features: &mut Vec<usize>, index: usize) {
-    if features.last().copied() != Some(index) {
-        features.push(index);
-    }
-}
-
-fn push_distinct(points: &mut Vec<Vec2>, point: Vec2) {
-    if points.last().copied() != Some(point) {
-        points.push(point);
-    }
-}
-
-fn midpoint(a: Vec2, b: Vec2) -> Vec2 {
-    Vec2::new((a.x + b.x) * 0.5, (a.y + b.y) * 0.5)
-}
-
-fn point_line_distance(point: Vec2, start: Vec2, end: Vec2) -> f32 {
-    let dx = end.x - start.x;
-    let dy = end.y - start.y;
-    let length_squared = dx * dx + dy * dy;
-    if length_squared <= f32::EPSILON {
-        return distance(point, start);
-    }
-    let cross = ((point.x - start.x) * dy - (point.y - start.y) * dx).abs();
-    cross / length_squared.sqrt()
-}
-
 fn distance(a: Vec2, b: Vec2) -> f32 {
     squared_distance(a, b).sqrt()
 }
@@ -601,22 +442,6 @@ fn lerp_vec2(from: Vec2, to: Vec2, progress: f32) -> Vec2 {
         from.x + (to.x - from.x) * progress,
         from.y + (to.y - from.y) * progress,
     )
-}
-
-fn finite(value: Vec2) -> Result<(), GeometryError> {
-    if value.x.is_finite() && value.y.is_finite() {
-        Ok(())
-    } else {
-        Err(GeometryError::NonFinitePoint)
-    }
-}
-
-fn require_active(active: bool) -> Result<(), GeometryError> {
-    if active {
-        Ok(())
-    } else {
-        Err(GeometryError::DrawingBeforeMove)
-    }
 }
 
 fn cross(a: Vec2, b: Vec2) -> f32 {

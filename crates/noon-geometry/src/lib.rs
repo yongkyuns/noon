@@ -2,6 +2,9 @@
 
 #![forbid(unsafe_code)]
 
+mod boolean;
+mod flatten;
+pub use boolean::{boolean_paths, BooleanOperation, BooleanPathError, BOOLEAN_FLATTEN_TOLERANCE};
 mod geometry_proportion;
 mod morph;
 mod outline;
