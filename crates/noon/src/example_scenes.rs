@@ -3265,3 +3265,5 @@ pub mod scale_pivots;
 pub mod z_index;
 
 pub mod arc_geometry;
+
+pub mod path_arrangement;

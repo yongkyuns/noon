@@ -801,3 +801,11 @@ pub async fn create_direct_arc_geometry_smoke_renderer(
     let session = noon::example_scenes::arc_geometry::session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
+
+#[wasm_bindgen(js_name = createDirectPathArrangementSmokeRenderer)]
+pub async fn create_direct_path_arrangement_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::path_arrangement::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
