@@ -139,12 +139,7 @@ fn arc_between_points_maps_endpoints_and_radius_sign_without_frontend_geometry()
 #[test]
 fn arc_between_points_metadata_matches_manim_radius_and_resolved_angle() {
     let (implicit_radius, implicit_angle) = Options::arc_between_points_metadata(
-        -1.0,
-        0.0,
-        1.0,
-        0.0,
-        std::f64::consts::FRAC_PI_2,
-        None,
+        -1.0, 0.0, 1.0, 0.0, std::f64::consts::FRAC_PI_2, None,
     )
     .unwrap();
     close64(implicit_radius, 2.0_f64.sqrt());
