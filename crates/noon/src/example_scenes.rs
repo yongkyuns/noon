@@ -3291,3 +3291,5 @@ pub mod path_smoothing;
 pub mod boolean_geometry;
 
 pub mod path_alignment;
+
+pub mod animated_priority;

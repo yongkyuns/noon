@@ -18,6 +18,7 @@ on:
       - "crates/noon-text/**"
       - "scripts/build-web-demo.sh"
       - "scripts/build-python-worker.mjs"
+      - "scripts/build-runtime-identity.mjs"
       - "scripts/manim-tutorial-smoke.mjs"
       - "scripts/playground-layout-smoke.mjs"
       - "scripts/playground-product-e2e.mjs"
@@ -149,6 +150,7 @@ jobs:
           path: |
             baseline/web/pkg
             baseline/web/python-worker.js
+            baseline/web/runtime-build-identity.json
             baseline/web/python/compat-bundle.*.json
             baseline/web/ci-artifact.json
             baseline/web/ci-Cargo.lock
@@ -163,6 +165,7 @@ jobs:
           path: |
             candidate/web/pkg
             candidate/web/python-worker.js
+            candidate/web/runtime-build-identity.json
             candidate/web/python/compat-bundle.*.json
             candidate/web/ci-artifact.json
             candidate/web/ci-Cargo.lock

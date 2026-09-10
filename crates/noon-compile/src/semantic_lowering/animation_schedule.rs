@@ -66,6 +66,8 @@ pub enum SemanticScheduledAnimationPayload {
     TransformTo {
         target_state: SemanticNodeId,
         interpolation: SemanticTransformInterpolation,
+
+        complete_priority: bool,
     },
     Indicate {
         scale_factor: f64,
@@ -109,6 +111,8 @@ pub enum SemanticScheduledAnimationPayload {
 /// One scheduled semantic animation leaf ready for payload-specific track lowering.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticScheduledAnimationLeaf {
+    /// Root-normalized deadline at which the containing composition calls finish.
+    pub finish_time_map: CompositionTimeMap,
     pub animation: SemanticNodeId,
     pub target: SemanticNodeId,
     pub execution_object_id: ObjectId,
@@ -182,6 +186,8 @@ pub enum PreparedSemanticScheduledAnimationPayload {
     TransformTo {
         target_state: SemanticTransactionNodeRef,
         interpolation: SemanticTransformInterpolation,
+
+        complete_priority: bool,
     },
     Indicate {
         scale_factor: f64,
@@ -225,6 +231,8 @@ pub enum PreparedSemanticScheduledAnimationPayload {
 /// One scheduled leaf whose authored identities are still transaction-local.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreparedSemanticScheduledAnimationLeaf {
+    /// Root-normalized deadline at which the containing composition calls finish.
+    pub finish_time_map: CompositionTimeMap,
     pub animation: SemanticTransactionNodeRef,
     pub target: SemanticTransactionNodeRef,
     pub execution_object_id: ObjectId,
@@ -539,6 +547,7 @@ pub fn lower_semantic_animation_schedule(
     for leaf in projection.leaves {
         match leaf {
             ScheduledAnimationLeaf::Object {
+                finish_time_map,
                 animation,
                 target,
                 execution_object_id,
@@ -547,6 +556,7 @@ pub fn lower_semantic_animation_schedule(
                 time_map,
                 options,
             } => leaves.push(SemanticScheduledAnimationLeaf {
+                finish_time_map,
                 animation,
                 target,
                 execution_object_id,
@@ -605,6 +615,7 @@ pub fn lower_prepared_semantic_animation_schedule(
     for leaf in projection.leaves {
         match leaf {
             ScheduledAnimationLeaf::Object {
+                finish_time_map,
                 animation,
                 target,
                 execution_object_id,
@@ -613,6 +624,7 @@ pub fn lower_prepared_semantic_animation_schedule(
                 time_map,
                 options,
             } => leaves.push(PreparedSemanticScheduledAnimationLeaf {
+                finish_time_map,
                 animation,
                 target,
                 execution_object_id,
@@ -654,9 +666,13 @@ fn published_payload(
         ScheduledAnimationPayload::TransformTo {
             target_state,
             interpolation,
+
+            complete_priority,
         } => SemanticScheduledAnimationPayload::TransformTo {
             target_state,
             interpolation,
+
+            complete_priority,
         },
         ScheduledAnimationPayload::PassingFlash { time_width } => {
             SemanticScheduledAnimationPayload::PassingFlash { time_width }
@@ -720,9 +736,13 @@ fn prepared_payload(
         ScheduledAnimationPayload::TransformTo {
             target_state,
             interpolation,
+
+            complete_priority,
         } => PreparedSemanticScheduledAnimationPayload::TransformTo {
             target_state,
             interpolation,
+
+            complete_priority,
         },
         ScheduledAnimationPayload::PassingFlash { time_width } => {
             PreparedSemanticScheduledAnimationPayload::PassingFlash { time_width }
@@ -791,6 +811,8 @@ enum AnimationDeclarationIntent<R> {
         target: R,
         target_state: R,
         interpolation: SemanticTransformInterpolation,
+
+        complete_priority: bool,
     },
     Indicate {
         target: R,
@@ -940,6 +962,8 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                 target,
                 target_state,
                 interpolation,
+
+                complete_priority,
             } => {
                 self.store
                     .semantic_object_state_checked(*target)
@@ -951,6 +975,8 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                     target: *target,
                     target_state: *target_state,
                     interpolation: *interpolation,
+
+                    complete_priority: *complete_priority,
                 }
             }
             SemanticAnimationIntent::Indicate {
@@ -1176,10 +1202,14 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                         target,
                         target_state,
                         interpolation,
+
+                        complete_priority,
                     } => AnimationDeclarationIntent::TransformTo {
                         target: (*target).into(),
                         target_state: (*target_state).into(),
                         interpolation: *interpolation,
+
+                        complete_priority: *complete_priority,
                     },
                     SemanticAnimationIntent::Indicate {
                         target,
@@ -1297,10 +1327,14 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                         target,
                         target_state,
                         interpolation,
+
+                        complete_priority,
                     } => AnimationDeclarationIntent::TransformTo {
                         target: *target,
                         target_state: *target_state,
                         interpolation: *interpolation,
+
+                        complete_priority: *complete_priority,
                     },
                     SemanticTransactionAnimationIntent::Indicate {
                         target,
@@ -1501,6 +1535,7 @@ struct AnimationScheduleProjection<R> {
 #[derive(Clone, Debug)]
 enum ScheduledAnimationLeaf<R> {
     Object {
+        finish_time_map: CompositionTimeMap,
         animation: R,
         target: R,
         execution_object_id: ObjectId,
@@ -1524,6 +1559,8 @@ enum ScheduledAnimationPayload<R> {
     TransformTo {
         target_state: R,
         interpolation: SemanticTransformInterpolation,
+
+        complete_priority: bool,
     },
     Indicate {
         scale_factor: f64,
@@ -1624,6 +1661,7 @@ where
         &plan,
         start_time,
         plan.run_time,
+        &CompositionTimeMap::identity(),
         &mut Vec::new(),
         &mut leaves,
     );
@@ -1656,6 +1694,7 @@ enum PlannedAnimationKind<R> {
         options: ResolvedAnimationOptions,
     },
     Composition {
+        kind: SemanticAnimationCompositionKind,
         rate_func: RateFunction,
         children: Vec<PlannedCompositionChild<R>>,
     },
@@ -1684,6 +1723,8 @@ where
             target,
             target_state,
             interpolation,
+
+            complete_priority,
         } => {
             let execution_object_id = lookup
                 .execution_object_id(target)
@@ -1702,6 +1743,8 @@ where
                     payload: ScheduledAnimationPayload::TransformTo {
                         target_state,
                         interpolation,
+
+                        complete_priority,
                     },
                     options,
                 },
@@ -2255,6 +2298,7 @@ where
                 animation,
                 run_time: schedule.run_time,
                 kind: PlannedAnimationKind::Composition {
+                    kind,
                     rate_func: options.rate_func,
                     children,
                 },
@@ -2279,6 +2323,7 @@ fn collect_leaves<R: Copy>(
     plan: &PlannedAnimation<R>,
     root_start_time: f64,
     root_run_time: f64,
+    finish_time_map: &CompositionTimeMap,
     steps: &mut Vec<CompositionTimeMapStep>,
     leaves: &mut Vec<ScheduledAnimationLeaf<R>>,
 ) {
@@ -2293,6 +2338,7 @@ fn collect_leaves<R: Copy>(
             let instant_add =
                 matches!(payload, ScheduledAnimationPayload::Add) && root_run_time == 0.0;
             leaves.push(ScheduledAnimationLeaf::Object {
+                finish_time_map: finish_time_map.clone(),
                 animation: plan.animation,
                 target: *target,
                 execution_object_id: *execution_object_id,
@@ -2323,6 +2369,7 @@ fn collect_leaves<R: Copy>(
             options: *options,
         }),
         PlannedAnimationKind::Composition {
+            kind,
             rate_func,
             children,
         } => {
@@ -2332,10 +2379,18 @@ fn collect_leaves<R: Copy>(
                     child.interval.duration / plan.run_time,
                     *rate_func,
                 ));
+                // Parallel/LaggedStart children finish with their containing
+                // group. Succession explicitly finishes each child as it advances.
+                let child_finish = if *kind == SemanticAnimationCompositionKind::Sequence {
+                    CompositionTimeMap::from_steps(steps.clone())
+                } else {
+                    finish_time_map.clone()
+                };
                 collect_leaves(
                     &child.animation,
                     root_start_time,
                     root_run_time,
+                    &child_finish,
                     steps,
                     leaves,
                 );
@@ -2491,6 +2546,8 @@ mod tests {
             SemanticScheduledAnimationPayload::TransformTo {
                 target_state,
                 interpolation: SemanticTransformInterpolation::Affine,
+
+                complete_priority: false,
             }
         );
         assert_eq!(

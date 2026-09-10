@@ -37,6 +37,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   done < <(find web/js -type f -name '*.js' -print | sort)
 
   node --check scripts/build-python-worker.mjs
+  node --check scripts/build-runtime-identity.mjs
   node --check scripts/execution-worker-smoke.mjs
   node --check scripts/execution-worker-host-smoke.mjs
   node --check scripts/authoring-execution-router-smoke.mjs
@@ -75,6 +76,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/updater-callback-smoke.mjs
   node --check scripts/manim-host-updater-diagnostics.mjs
   node --check scripts/pr-risk-classifier.mjs
+  node --test scripts/build-runtime-identity.test.mjs
   node --test scripts/pyodide-resource-cache.test.mjs
   node --test scripts/manim-raster-support.test.mjs
   node --test scripts/browser-visual-parity-lib.test.mjs
@@ -159,4 +161,5 @@ if (( worker_status != 0 )); then
   exit "$worker_status"
 fi
 
+node scripts/build-runtime-identity.mjs
 node scripts/check-web-package.mjs

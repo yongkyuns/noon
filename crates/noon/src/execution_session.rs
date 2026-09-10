@@ -99,6 +99,7 @@ pub(crate) enum SemanticCompositionRequest {
         source: SemanticNodeId,
         target_state: SemanticNodeId,
         interpolation: noon_core::SemanticTransformInterpolation,
+        complete_priority: bool,
         options: AnimationOptions,
     },
     FamilyTransformTo {
@@ -1188,6 +1189,7 @@ impl ExecutionSession {
             let frame = self.runtime.frame();
             let row = frame.objects.get(index)?;
             Some(EffectiveAnimationProperties {
+                z_index: row.z_index,
                 transform: row.transform,
                 style: row.style,
                 appearance: row.appearance,
@@ -1644,6 +1646,7 @@ impl ExecutionSession {
                     source: *source,
                     target_state: *target_state,
                     interpolation: noon_core::SemanticTransformInterpolation::Affine,
+                    complete_priority: false,
                     options: *options,
                 },
             )
@@ -1740,6 +1743,7 @@ impl ExecutionSession {
                 source,
                 target_state,
                 interpolation,
+                complete_priority,
                 options,
             } => {
                 admit(*source, declaration, admitted)?;
@@ -1749,6 +1753,7 @@ impl ExecutionSession {
                     *source,
                     target_state,
                     *interpolation,
+                    *complete_priority,
                     *options,
                 );
                 Ok(animation)
@@ -1772,6 +1777,7 @@ impl ExecutionSession {
                                 source,
                                 target_state,
                                 interpolation: noon_core::SemanticTransformInterpolation::Affine,
+                                complete_priority: false,
                                 // The family composition applies authored easing once.
                                 options: AnimationOptions::new().rate_func(RateFunction::Linear),
                             },
@@ -2233,12 +2239,12 @@ impl ExecutionSession {
         declaration: &mut SemanticMutationTransaction,
     ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
         match request {
-            SemanticCompositionRequest::TransformTo { source, target_state, interpolation, options } => {
+            SemanticCompositionRequest::TransformTo { source, target_state, interpolation, complete_priority, options } => {
                 if !self.reachability.is_object_reachable(*source) {
                     return Err(ExecutionSessionAnimationError::CreateTarget { target: *source, error: ExecutionSessionCreateError::TargetIsNotDetached });
                 }
                 let target_state = self.stage_animation_target_state(store, declaration, *target_state)?;
-                Ok(declaration.create_transform_animation_with_interpolation(*source, target_state, *interpolation, *options))
+                Ok(declaration.create_transform_animation_with_interpolation(*source, target_state, *interpolation, *complete_priority, *options))
             }
             SemanticCompositionRequest::Rotate { target, angle, hold_origin, options } => {
                 if !self.reachability.is_object_reachable(*target) {
@@ -3121,6 +3127,7 @@ impl ExecutionSession {
                 let frame = self.runtime.frame();
                 let row = frame.objects.get(index)?;
                 Some(EffectiveAnimationProperties {
+                    z_index: row.z_index,
                     transform: row.transform,
                     style: row.style,
                     appearance: row.appearance,

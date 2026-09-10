@@ -833,6 +833,20 @@ def _canonical_curve_layout(api):
     return [_object_observation(obj) for obj in (circle, ellipse, circle.copy(), family)]
 
 
+def _world_stretch(api):
+    shape = api.Square(side_length=2).rotate(.37).shift(api.RIGHT - api.UP)
+    shape.stretch(-1.5, 0, about_point=2 * api.RIGHT)
+    result = {"shape": _object_observation(shape),
+              "corners": [_point_observation(shape.get_nth_curve_points(i)[0]) for i in range(4)]}
+    shape.stretch_to_fit_height(3, about_edge=api.UP)
+    result["fit"] = _object_observation(shape)
+    target = api.Rectangle(width=4, height=1).shift(api.LEFT)
+    shape.rotate(.21)
+    shape.replace(target, stretch=True)
+    result["replace"] = _object_observation(shape)
+    return result
+
+
 def _path_alignment(api):
     point = lambda x, y: api.RIGHT * x + api.UP * y
     a = api.Line(point(0, 0), point(3, 0)).shift(api.UP)
@@ -960,6 +974,7 @@ def _point_matching(api):
 
 
 FIXTURES = [
+    Fixture("world_stretch", lambda: _world_stretch(noon), lambda: _world_stretch(manim), 1e-5),
     Fixture("path_alignment", lambda: _path_alignment(noon), lambda: _path_alignment(manim), 1e-5),
     Fixture("boolean_geometry", lambda: _boolean_geometry(noon), lambda: _boolean_geometry(manim), 1e-5),
     Fixture("path_smoothing", lambda: _path_smoothing(noon), lambda: _path_smoothing(manim), 1e-5),

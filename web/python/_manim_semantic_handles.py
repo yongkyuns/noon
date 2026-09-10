@@ -710,6 +710,13 @@ def _dimension_fit_source(self, dim):
     return anchor, context
 
 
+def _stretch(self, factor, dim, *, about_point=None, about_edge=None):
+    _dimension_fit_source(self, dim)
+    factor = float(factor)
+    factors = (factor, 1.0) if dim == 0 else (1.0, factor)
+    return _planar_affine(self, "scale", factors, about_point, about_edge)
+
+
 def _rescale_to_fit(self, length, dim, stretch=False, *, about_point=None, about_edge=None):
     anchor, context = _dimension_fit_source(self, dim)
     pivot = _pivot_arguments(about_point, about_edge)
@@ -818,6 +825,10 @@ def _get_z_index(self):
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("painter priority requires the shared Rust authoring host")
+    context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
+               else _live_mutation_context(self))
+    if context is not None:
+        return float(engine_call(context.liveZIndex, anchor))
     return float(engine_call(anchor.zIndex))
 
 

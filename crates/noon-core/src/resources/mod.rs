@@ -1,4 +1,4 @@
-//! Immutable geometry, font and text resources and their versioned storage.
+//! Immutable geometry, font, image and text resources and their versioned storage.
 //!
 //! Semantic authoring and compiled snapshots share these resource contracts.
 //! Lookup and atomic replacement operate on resource handles; they do not own
@@ -9,6 +9,9 @@ pub use font::*;
 
 mod geometry;
 pub use geometry::*;
+
+mod image;
+pub use image::*;
 
 mod lookup;
 pub use lookup::*;

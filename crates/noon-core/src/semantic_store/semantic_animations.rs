@@ -8,6 +8,7 @@ use crate::{Color, CompositionTimeMap, FamilyAnimationMode, RateFunction, TrackT
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SemanticObjectTrackProperty {
     Presence,
+    ZIndex,
     Transform,
     Position,
     Rotation,
@@ -65,7 +66,8 @@ impl SemanticObjectTrackProperty {
             Self::Transform => SemanticObjectTrackValueKind::Object,
             Self::Position | Self::Scale => SemanticObjectTrackValueKind::Vec3,
             Self::Fill | Self::Stroke => SemanticObjectTrackValueKind::Color,
-            Self::Rotation
+            Self::ZIndex
+            | Self::Rotation
             | Self::StrokeWidth
             | Self::Opacity
             | Self::Appearance
@@ -75,7 +77,7 @@ impl SemanticObjectTrackProperty {
     }
 
     const fn is_instant(self) -> bool {
-        matches!(self, Self::Presence)
+        matches!(self, Self::Presence | Self::ZIndex)
     }
 }
 
@@ -272,6 +274,10 @@ pub enum SemanticAnimationIntent {
         target: SemanticNodeId,
         target_state: SemanticNodeId,
         interpolation: SemanticTransformInterpolation,
+
+        /// Animated method targets copy priority when their containing animation finishes.
+        /// Ordinary Transform leaves source priority unchanged.
+        complete_priority: bool,
     },
     /// Temporarily scale and recolor one object around a shared activation center.
     /// The compiler captures the effective source and lowers a restoring track.
@@ -743,6 +749,7 @@ impl SemanticStore {
             target,
             target_state,
             SemanticTransformInterpolation::Affine,
+            false,
             options,
         )
     }
@@ -753,6 +760,7 @@ impl SemanticStore {
         target: SemanticNodeId,
         target_state: SemanticNodeId,
         interpolation: SemanticTransformInterpolation,
+        complete_priority: bool,
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
@@ -769,6 +777,8 @@ impl SemanticStore {
                     target,
                     target_state,
                     interpolation,
+
+                    complete_priority,
                 },
                 options,
             )),
@@ -1224,6 +1234,8 @@ mod tests {
                 target,
                 target_state,
                 interpolation: SemanticTransformInterpolation::Affine,
+
+                complete_priority: false,
             }
         );
         assert_eq!(state.options(), options);

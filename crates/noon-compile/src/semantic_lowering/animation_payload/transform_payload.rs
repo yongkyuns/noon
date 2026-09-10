@@ -26,7 +26,6 @@ impl std::fmt::Display for SemanticAffineAnimationField {
 pub(super) enum TransformPayloadValidationIssue {
     ContentChange,
     StyleChange,
-    PainterOrderChange,
     BindingChange,
     DepthChange(SemanticAffineAnimationField),
     Lifecycle { remover: bool, introducer: bool },
@@ -46,7 +45,6 @@ pub enum SemanticTransformToPayloadError {
     },
     UnsupportedContentChange,
     UnsupportedStyleChange,
-    UnsupportedPainterOrderChange,
     UnsupportedBindingChange,
     UnsupportedDepthChange(SemanticAffineAnimationField),
     UnsupportedLifecycle {
@@ -82,7 +80,6 @@ impl SemanticTransformToPayloadError {
             self,
             Self::UnsupportedContentChange
                 | Self::UnsupportedStyleChange
-                | Self::UnsupportedPainterOrderChange
                 | Self::UnsupportedBindingChange
                 | Self::UnsupportedDepthChange(_)
                 | Self::UnsupportedLifecycle { .. }
@@ -95,9 +92,6 @@ impl From<TransformPayloadValidationIssue> for SemanticTransformToPayloadError {
         match value {
             TransformPayloadValidationIssue::ContentChange => Self::UnsupportedContentChange,
             TransformPayloadValidationIssue::StyleChange => Self::UnsupportedStyleChange,
-            TransformPayloadValidationIssue::PainterOrderChange => {
-                Self::UnsupportedPainterOrderChange
-            }
             TransformPayloadValidationIssue::BindingChange => Self::UnsupportedBindingChange,
             TransformPayloadValidationIssue::DepthChange(field) => {
                 Self::UnsupportedDepthChange(field)
@@ -159,9 +153,6 @@ pub(super) fn validate_transform_payload_shape(
     {
         return Err(TransformPayloadValidationIssue::StyleChange);
     }
-    if source.z_index() != target.z_index() {
-        return Err(TransformPayloadValidationIssue::PainterOrderChange);
-    }
     if source.signal_bindings() != target.signal_bindings() {
         return Err(TransformPayloadValidationIssue::BindingChange);
     }
@@ -192,9 +183,7 @@ pub(super) fn is_supported_content_morph(
         ) | (
             Some(StoredGeometry::Rectangle { .. }),
             Some(StoredGeometry::Circle { .. })
-        ) | (
-            Some(StoredGeometry::Resource(_)),
-            Some(StoredGeometry::Resource(_))
-        )
+        ) | (Some(StoredGeometry::Resource(_)), Some(_))
+            | (Some(_), Some(StoredGeometry::Resource(_)))
     )
 }

@@ -252,6 +252,7 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let text_handle = texts.insert(text_resource()).unwrap();
         let object = noon_runtime::FrameObjectState {
+            z_index: 0.0,
             id: ObjectId::new(10),
             content: noon_core::ObjectContentRef::Text(text_handle),
             transform: noon_core::Transform2D::IDENTITY,
@@ -269,6 +270,7 @@ mod tests {
             family_animation_plan_indices: Vec::new(),
             time: 1.0,
             objects: vec![FrameObjectState {
+                z_index: 0.0,
                 id: ObjectId::new(10),
                 content: ObjectContentRef::Text(text_handle),
                 text_bounds: None,
@@ -370,6 +372,7 @@ mod tests {
         let family_id = store.insert_family();
         store.add_member(family_id, leaf).unwrap();
         let object = noon_runtime::FrameObjectState {
+            z_index: 0.0,
             id: ObjectId::new(20),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
             transform: noon_core::Transform2D::IDENTITY,
@@ -388,6 +391,7 @@ mod tests {
             family_animation_plan_indices: Vec::new(),
             time: 1.0,
             objects: vec![FrameObjectState {
+                z_index: 0.0,
                 id: ObjectId::new(20),
                 content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
                 text_bounds: None,

@@ -29,6 +29,8 @@ fn transform_state(
             target,
             target_state,
             interpolation: SemanticTransformInterpolation::Affine,
+
+            complete_priority: false,
         },
         options,
     )
@@ -560,6 +562,8 @@ fn pending_animation_tree_reads_and_commits_through_one_identity_map() {
             target: source,
             target_state: first_target,
             interpolation: SemanticTransformInterpolation::Affine,
+
+            complete_priority: false,
         }
     );
     assert_eq!(
@@ -568,6 +572,8 @@ fn pending_animation_tree_reads_and_commits_through_one_identity_map() {
             target: source,
             target_state: second_target,
             interpolation: SemanticTransformInterpolation::Affine,
+
+            complete_priority: false,
         }
     );
     assert_eq!(

@@ -137,6 +137,8 @@ pub struct SceneInstance {
     identity: RuntimeIdentity,
     compiled: CompiledScene,
     frame: FrameState,
+    painter_order: Vec<u32>,
+    painter_ranks: Vec<Option<u32>>,
     groups: BTreeMap<CompiledChannelKey, TrackGroup>,
     timeline_scheduler: TimelineEventScheduler,
     last_stats: EvaluationStats,
@@ -157,6 +159,8 @@ impl Clone for SceneInstance {
             identity: RuntimeIdentity::fresh(),
             compiled: self.compiled.clone(),
             frame: self.frame.clone(),
+            painter_order: self.painter_order.clone(),
+            painter_ranks: self.painter_ranks.clone(),
             groups: self.groups.clone(),
             timeline_scheduler: self.timeline_scheduler.clone(),
             last_stats: self.last_stats,
@@ -187,6 +191,10 @@ impl SceneInstance {
         let timeline_scheduler = TimelineEventScheduler::from_compiled(&compiled);
         let mut instance = Self {
             identity: RuntimeIdentity::fresh(),
+            painter_order: compiled.painter_order().to_vec(),
+            painter_ranks: (0..compiled.objects().len())
+                .map(|index| compiled.painter_rank(index as u32))
+                .collect(),
             compiled,
             frame,
             groups,
@@ -272,7 +280,7 @@ impl SceneInstance {
             self.compiled.geometry_resources(),
             self.compiled.family_animation_plans(),
             &self.active_family_animation_indices,
-            self.compiled.painter_order(),
+            &self.painter_order,
         )
     }
 
@@ -315,11 +323,11 @@ impl SceneInstance {
     }
 
     pub fn painter_order(&self) -> &[u32] {
-        self.compiled.painter_order()
+        &self.painter_order
     }
 
     pub fn painter_rank(&self, object_index: usize) -> Option<u32> {
-        self.compiled.painter_rank(object_index as u32)
+        self.painter_ranks.get(object_index).copied().flatten()
     }
 
     pub fn object_has_effective_driver(&self, id: ObjectId) -> bool {
@@ -441,11 +449,15 @@ impl SceneInstance {
     }
 
     fn apply_structural_patch(&mut self, patch: &ExecutionPatch) -> Result<(), CompilePatchError> {
-        let previous_order_len = self.compiled.painter_order().len();
+        let previous_order_len = self.painter_order.len();
         let previous_order_position = match patch {
             ExecutionPatch::RemoveObject(object)
             | ExecutionPatch::ReorderObject { object, .. }
-            | ExecutionPatch::SetZIndex { object, .. } => self.compiled.painter_position(*object),
+            | ExecutionPatch::SetZIndex { object, .. } => self
+                .compiled
+                .object_index(*object)
+                .and_then(|index| self.painter_rank(index as usize))
+                .map(|rank| rank as usize),
             ExecutionPatch::CreateObject(_) => None,
             _ => unreachable!("structural patch helper accepts only create/remove/reorder"),
         };
@@ -488,6 +500,10 @@ impl SceneInstance {
                     append_object_frame(&self.compiled, &mut self.frame, object_index);
                     self.mark_added(object_index);
                 }
+                self.painter_ranks.resize(self.frame.objects.len(), None);
+                self.painter_ranks[object_index] = Some(self.painter_order.len() as u32);
+                self.painter_order.push(object_index as u32);
+                self.reposition_painter_row(object_index);
                 self.rebind_reactive_object(object.id, object_index);
                 self.reapply_reactive_for_object(object_index);
             }
@@ -505,35 +521,64 @@ impl SceneInstance {
                 self.frame.render_geometries[object_index] = None;
                 self.frame.render_transforms[object_index] = None;
                 self.clear_family_animation_runtime_state(object_index);
+                let position = self.painter_ranks[object_index]
+                    .take()
+                    .expect("removed row was live") as usize;
+                self.painter_order.remove(position);
+                for rank in position..self.painter_order.len() {
+                    self.painter_ranks[self.painter_order[rank] as usize] = Some(rank as u32);
+                }
                 self.mark_removed(object_index);
             }
-            ExecutionPatch::ReorderObject { .. } | ExecutionPatch::SetZIndex { .. } => {}
+            ExecutionPatch::ReorderObject { object, .. } => {
+                let index = self
+                    .compiled
+                    .object_index(*object)
+                    .expect("live reordered row") as usize;
+                self.reposition_painter_row(index);
+            }
+            ExecutionPatch::SetZIndex { object, .. } => {
+                let index = self
+                    .compiled
+                    .object_index(*object)
+                    .expect("live priority row") as usize;
+                self.frame.objects[index].z_index = initial_z_index(&self.compiled, index);
+                self.reapply_properties(index, &[Property::ZIndex]);
+            }
             _ => unreachable!("structural patch helper accepts only create/remove"),
         }
 
         let next_position = match patch {
-            ExecutionPatch::CreateObject(object) => self.compiled.painter_position(object.id),
+            ExecutionPatch::CreateObject(object) => self
+                .compiled
+                .object_index(object.id)
+                .and_then(|index| self.painter_rank(index as usize))
+                .map(|rank| rank as usize),
             ExecutionPatch::ReorderObject { object, .. }
-            | ExecutionPatch::SetZIndex { object, .. } => self.compiled.painter_position(*object),
+            | ExecutionPatch::SetZIndex { object, .. } => self
+                .compiled
+                .object_index(*object)
+                .and_then(|index| self.painter_rank(index as usize))
+                .map(|rank| rank as usize),
             ExecutionPatch::RemoveObject(_) => None,
             _ => unreachable!("structural patch helper accepts only create/remove/reorder"),
         };
         if previous_order_position != next_position
-            || previous_order_len != self.compiled.painter_order().len()
+            || previous_order_len != self.painter_order.len()
         {
             let first = previous_order_position
                 .into_iter()
                 .chain(next_position)
                 .min()
-                .unwrap_or(previous_order_len.min(self.compiled.painter_order().len()));
-            let end = if previous_order_len == self.compiled.painter_order().len() {
+                .unwrap_or(previous_order_len.min(self.painter_order.len()));
+            let end = if previous_order_len == self.painter_order.len() {
                 previous_order_position
                     .into_iter()
                     .chain(next_position)
                     .max()
                     .map_or(first, |position| position + 1)
             } else {
-                previous_order_len.max(self.compiled.painter_order().len())
+                previous_order_len.max(self.painter_order.len())
             };
             self.mark_painter_order_changed(first..end);
         }
@@ -737,6 +782,9 @@ impl SceneInstance {
             );
             stats.groups_evaluated += 1;
         }
+        if properties.contains(&Property::ZIndex) {
+            self.reposition_painter_row(object_index);
+        }
         self.last_stats = stats;
     }
 
@@ -760,6 +808,49 @@ impl SceneInstance {
                 object.base_style,
             );
             stats.groups_evaluated += 1;
+        }
+        self.reposition_painter_row(object_index);
+    }
+
+    fn rebuild_painter_order(&mut self) {
+        self.painter_order = self.compiled.painter_order().to_vec();
+        self.painter_order.sort_by(|&a, &b| {
+            self.frame.objects[a as usize]
+                .z_index
+                .partial_cmp(&self.frame.objects[b as usize].z_index)
+                .expect("finite priorities")
+                .then_with(|| {
+                    self.compiled
+                        .family_rank(a)
+                        .cmp(&self.compiled.family_rank(b))
+                })
+        });
+        self.painter_ranks.resize(self.frame.objects.len(), None);
+        self.painter_ranks.fill(None);
+        for (rank, &index) in self.painter_order.iter().enumerate() {
+            self.painter_ranks[index as usize] = Some(rank as u32);
+        }
+    }
+
+    fn reposition_painter_row(&mut self, index: usize) {
+        let range = noon_compile::order_index::reposition_order_row(
+            &mut self.painter_order,
+            &mut self.painter_ranks,
+            index as u32,
+            |a, b| {
+                self.frame.objects[a as usize]
+                    .z_index
+                    .partial_cmp(&self.frame.objects[b as usize].z_index)
+                    .expect("finite priorities")
+                    .then_with(|| {
+                        self.compiled
+                            .family_rank(a)
+                            .cmp(&self.compiled.family_rank(b))
+                    })
+            },
+        );
+        if !range.is_empty() {
+            self.mark_painter_order_changed(range);
         }
     }
 
@@ -786,6 +877,7 @@ impl SceneInstance {
             );
             stats.groups_evaluated += 1;
         }
+        self.rebuild_painter_order();
         self.timeline_scheduler.seek(time);
         for animation_index in 0..self.compiled.family_animations().len() {
             self.update_family_animation(animation_index, time);
@@ -833,6 +925,9 @@ impl SceneInstance {
                 object.base_transform,
                 object.base_style,
             ) {
+                if channel.property == Property::ZIndex {
+                    self.reposition_painter_row(channel.object_index as usize);
+                }
                 self.mark_changed(channel.object_index as usize);
             }
             stats.groups_evaluated += 1;
@@ -969,6 +1064,7 @@ fn base_frame(compiled: &CompiledScene, time: f64) -> FrameState {
         .iter()
         .enumerate()
         .map(|(index, object)| FrameObjectState {
+            z_index: initial_z_index(compiled, index),
             id: object.id,
             content: object.content.clone(),
             text_bounds: object.text_bounds,
@@ -1048,8 +1144,9 @@ fn initial_scalar_property(
     values
 }
 
-const PROPERTY_ORDER: [Property; 12] = [
+const PROPERTY_ORDER: [Property; 13] = [
     Property::Presence,
+    Property::ZIndex,
     Property::Transform,
     Property::Position,
     Property::Rotation,
@@ -1114,6 +1211,7 @@ fn append_object_frame(compiled: &CompiledScene, frame: &mut FrameState, object_
     let object = &compiled.objects()[object_index];
     debug_assert!(object.live);
     frame.objects.push(FrameObjectState {
+        z_index: initial_z_index(compiled, object_index),
         id: object.id,
         content: object.content.clone(),
         text_bounds: object.text_bounds,
@@ -1153,6 +1251,7 @@ fn reset_object_frame(
 ) {
     let object = &compiled.objects()[object_index];
     frame.objects[object_index] = FrameObjectState {
+        z_index: initial_z_index(compiled, object_index),
         id: object.id,
         content: object.content.clone(),
         text_bounds: object.text_bounds,
@@ -1168,6 +1267,19 @@ fn reset_object_frame(
         initial_channel_scalar(compiled, object_index, Property::Morph, 0.0);
     frame.render_geometries[object_index] = None;
     frame.render_transforms[object_index] = None;
+}
+
+fn initial_z_index(compiled: &CompiledScene, object_index: usize) -> f64 {
+    let channel = CompiledChannelKey::new(object_index as u32, Property::ZIndex);
+    match compiled
+        .channel_tracks(channel)
+        .first()
+        .map(|track| &track.values)
+    {
+        Some(TrackValues::ZIndex { from, .. }) => *from,
+        None => compiled.objects()[object_index].base_z_index,
+        _ => unreachable!("priority channel must contain exact priority values"),
+    }
 }
 
 fn initial_channel_bool(
@@ -1279,6 +1391,19 @@ fn apply_group_to_row(
     if group.cursor == 0 {
         return false;
     }
+    if group.channel.property == Property::ZIndex {
+        let TrackValues::ZIndex { to, .. } = &tracks[group.cursor - 1].values else {
+            unreachable!("priority channel must contain exact priority values");
+        };
+        let value = if group.cursor == tracks.len() && tracks[group.cursor - 1].reconciled {
+            compiled.objects()[group.channel.object_index as usize].base_z_index
+        } else {
+            *to
+        };
+        let changed = *row.z_index != value;
+        *row.z_index = value;
+        return changed;
+    }
     if group.channel.property == Property::Presence {
         let track = &tracks[group.cursor - 1];
         let TrackValues::Bool { to, .. } = &track.values else {
@@ -1328,7 +1453,7 @@ fn apply_group_to_row(
             Property::Opacity => Some(EvaluatedValue::Scalar(base_style.opacity)),
             Property::Appearance | Property::Reveal => Some(EvaluatedValue::Scalar(1.0)),
             Property::Morph => Some(EvaluatedValue::Scalar(0.0)),
-            Property::Presence | Property::Transform => None,
+            Property::Presence | Property::ZIndex | Property::Transform => None,
         };
         return base.is_some_and(|value| {
             apply_evaluated_value(
@@ -1915,8 +2040,8 @@ fn interpolate(track: &CompiledTrack, progress: f32) -> EvaluatedValue {
         TrackValues::Color { from, to } => {
             EvaluatedValue::Color(interpolate_optional_color(*from, *to, progress))
         }
-        TrackValues::Bool { .. } => {
-            unreachable!("Presence tracks are evaluated as discrete events")
+        TrackValues::Bool { .. } | TrackValues::ZIndex { .. } => {
+            unreachable!("instant tracks are evaluated as discrete events")
         }
         TrackValues::Object { .. } => {
             unreachable!("Transform tracks are evaluated atomically")

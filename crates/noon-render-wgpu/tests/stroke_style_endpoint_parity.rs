@@ -29,6 +29,7 @@ fn frame(geometry: GeometryRef, style: Style) -> FrameState {
         family_animation_plan_indices: Vec::new(),
         time: 0.0,
         objects: vec![FrameObjectState {
+            z_index: 0.0,
             id: ObjectId::new(0),
             content: noon_core::ObjectContentRef::Geometry(geometry),
             text_bounds: None,

@@ -105,25 +105,47 @@ try {
     { name: "automatic-no-jspi", host: null, disableJspi: true },
   ]) {
     const context = await browser.newContext({ ...devices["iPhone 13"] });
-    // Hold only the worker module response while recording the empty canvas.
-    // This preserves the real startup autoplay while making its first execution
-    // observable; clicking Run after preload would measure a replacement whose
-    // metrics wait for the previous Python context to retire.
+    // Hold authoring startup while recording the empty canvas. Normal variants
+    // delay the production worker response directly. The no-JSPI variant delays
+    // a test-only bootstrap module, which disables JSPI before dynamically
+    // importing the untouched, attested production worker.
     let releaseStartup;
     const startup = new Promise((resolve) => { releaseStartup = resolve; });
     releasePendingStartup = releaseStartup;
-    await context.route("**/python-worker.js", async (route) => {
-      const response = await route.fetch();
-      await startup;
-      if (!variant.disableJspi) {
-        await route.fulfill({ response });
-        return;
-      }
-      await route.fulfill({ response, body:
-        "delete WebAssembly.promising; delete WebAssembly.Suspending;\n" +
-        "if (typeof WebAssembly.promising !== 'undefined' || typeof WebAssembly.Suspending !== 'undefined') throw new Error('JSPI test precondition failed');\n" + await response.text(),
+    if (variant.disableJspi) {
+      await context.addInitScript(() => {
+        window.Worker = new Proxy(window.Worker, {
+          construct(target, args, newTarget) {
+            const workerArgs = [...args];
+            const workerUrl = new URL(workerArgs[0], window.location.href);
+            if (workerUrl.pathname.endsWith("/python-worker.js")) {
+              workerArgs[0] = new URL("./python-worker-no-jspi-test.js", workerUrl);
+              window.__mobileNoJspiWorkerWrapped = true;
+            }
+            return Reflect.construct(target, workerArgs, newTarget);
+          },
+        });
       });
-    });
+      await context.route("**/python-worker-no-jspi-test.js", async (route) => {
+        await startup;
+        await route.fulfill({
+          status: 200,
+          contentType: "text/javascript",
+          body: [
+            "delete WebAssembly.promising;",
+            "delete WebAssembly.Suspending;",
+            "if ('promising' in WebAssembly || 'Suspending' in WebAssembly) throw new Error('JSPI test precondition failed');",
+            "await import('./python-worker.js');",
+          ].join("\n"),
+        });
+      });
+    } else {
+      await context.route("**/python-worker.js", async (route) => {
+        const response = await route.fetch();
+        await startup;
+        await route.fulfill({ response });
+      });
+    }
     const page = await context.newPage();
     activePage = page;
     const pageErrors = [];
@@ -152,7 +174,7 @@ try {
     const background = await page.locator("#scene").screenshot();
     await writeFile(path.join(artifactDir, `${variant.name}-background.png`), background);
 
-    // Release the unchanged worker and observe automatic initial playback.
+    // Release authoring startup and observe automatic initial playback.
     releaseStartup();
     releasePendingStartup = null;
     let metrics;
@@ -184,6 +206,13 @@ try {
     }
     await writeFile(path.join(artifactDir, `${variant.name}-samples.json`), JSON.stringify(samples, null, 2));
     assert.ok(observation, "mobile source did not publish its intermediate transformation");
+    if (variant.disableJspi) {
+      assert.equal(
+        await page.evaluate(() => window.__mobileNoJspiWorkerWrapped),
+        true,
+        "mobile no-JSPI smoke did not wrap the production authoring worker",
+      );
+    }
     const intermediate = await page.locator("#scene").screenshot();
     await writeFile(path.join(artifactDir, `${variant.name}-intermediate.png`), intermediate);
     assert.ok(changedPixels(intermediate, background) > 20, "mobile intermediate frame is blank");
@@ -234,51 +263,10 @@ try {
     // Exercise the public source loader, not a mocked legacy module. Ineligible
     // callables must retain their Python behavior on both JSPI and no-JSPI hosts.
     for (const [name, source] of [
-      ["instance overrides", `from noon import *
-events = []
-class InstanceOverride(Scene):
-    def setup(self):
-        self.wait = lambda d: events.append(('wait', d))
-        self.play = lambda x: events.append(('play', x))
-    def construct(self):
-        self.wait(0.5)
-        self.play(2)
-        assert events == [('wait', 0.5), ('play', 2)], events
-        self.add(Circle())
-`],
-      ["descriptor lookup", `from noon import *
-events = []
-class DescriptorOverride(Scene):
-    @property
-    def wait(self):
-        events.append('get')
-        return lambda d: events.append(d)
-    def construct(self):
-        self.wait(0.5)
-        assert events == ['get', 0.5], events
-        self.add(Circle())
-`],
-      ["dynamic lookup", `from noon import *
-events = []
-class DynamicOverride(Scene):
-    def __getattribute__(self, name):
-        if name == 'wait':
-            events.append('get')
-            return lambda d: events.append(d)
-        return super().__getattribute__(name)
-    def construct(self):
-        self.wait(0.5)
-        assert events == ['get', 0.5], events
-        self.add(Circle())
-`],
-      ["explicit async", `from noon import *
-class ExplicitAsync(Scene):
-    async def construct(self):
-        circle = Circle()
-        await self.play(Create(circle), run_time=0.1)
-        await self.wait(0.1)
-        assert abs(self.time - 0.2) < 1e-8
-`],
+      ["instance overrides", `from noon import *\nevents = []\nclass InstanceOverride(Scene):\n    def setup(self):\n        self.wait = lambda d: events.append(('wait', d))\n        self.play = lambda x: events.append(('play', x))\n    def construct(self):\n        self.wait(0.5)\n        self.play(2)\n        assert events == [('wait', 0.5), ('play', 2)], events\n        self.add(Circle())\n`],
+      ["descriptor lookup", `from noon import *\nevents = []\nclass DescriptorOverride(Scene):\n    @property\n    def wait(self):\n        events.append('get')\n        return lambda d: events.append(d)\n    def construct(self):\n        self.wait(0.5)\n        assert events == ['get', 0.5], events\n        self.add(Circle())\n`],
+      ["dynamic lookup", `from noon import *\nevents = []\nclass DynamicOverride(Scene):\n    def __getattribute__(self, name):\n        if name == 'wait':\n            events.append('get')\n            return lambda d: events.append(d)\n        return super().__getattribute__(name)\n    def construct(self):\n        self.wait(0.5)\n        assert events == ['get', 0.5], events\n        self.add(Circle())\n`],
+      ["explicit async", `from noon import *\nclass ExplicitAsync(Scene):\n    async def construct(self):\n        circle = Circle()\n        await self.play(Create(circle), run_time=0.1)\n        await self.wait(0.1)\n        assert abs(self.time - 0.2) < 1e-8\n`],
     ]) {
       await page.evaluate((source) => {
         const editor = document.querySelector("#python-scene-source");

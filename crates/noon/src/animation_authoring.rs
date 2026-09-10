@@ -96,6 +96,8 @@ impl crate::Scene {
                 target: source.node_id(),
                 target_state: target.node_id(),
                 interpolation: noon_core::SemanticTransformInterpolation::Affine,
+
+                complete_priority: false,
             },
             options,
         )

@@ -323,8 +323,24 @@ impl ExecutionSession {
                 _ => None,
             })
             .collect::<HashMap<_, _>>();
+        let final_priority_entries = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                matches!(
+                    entry.completion,
+                    SemanticAnimationCompletion::Priority { .. }
+                )
+                .then_some((entry.semantic_object, index))
+            })
+            .collect::<HashMap<_, _>>();
         for (index, entry) in entries.iter().enumerate() {
             match &entry.completion {
+                SemanticAnimationCompletion::Priority { value } => {
+                    if final_priority_entries.get(&entry.semantic_object) == Some(&index) {
+                        semantic.set_z_index(entry.semantic_object, *value);
+                    }
+                }
                 SemanticAnimationCompletion::Property { property, value } => {
                     if !matches!(
                         property,
@@ -344,11 +360,12 @@ impl ExecutionSession {
                 | SemanticAnimationCompletion::RevealLifecycle { .. }
                 | SemanticAnimationCompletion::Release => {}
             }
-            // Discrete channels have no active driver to release or endpoint to
-            // bake into authored state. A kept reveal lifecycle likewise has no
+            // Priority events reconcile into authored state so later direct edits
+            // can replace their completed value. Other discrete channels retain
+            // their execution history. A kept reveal lifecycle likewise has no
             // semantic reveal field to receive its endpoint, so its completed
             // execution track remains the authoritative persistent reveal history.
-            if !entry.property.is_instant()
+            if (!entry.property.is_instant() || entry.property == noon_core::Property::ZIndex)
                 && !matches!(
                     &entry.completion,
                     SemanticAnimationCompletion::RevealLifecycle { remove: false }

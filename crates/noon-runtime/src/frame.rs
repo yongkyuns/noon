@@ -10,6 +10,7 @@ use crate::release_render_transform;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameObjectState {
+    pub z_index: f64,
     pub id: ObjectId,
     pub content: ObjectContentRef,
     pub text_bounds: Option<noon_core::Rect>,
@@ -86,6 +87,7 @@ impl FrameState {
 /// copying immutable geometry or text payloads out of the retained frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EffectiveObjectProperties {
+    pub z_index: f64,
     pub transform: Transform2D,
     pub style: Style,
     pub appearance: f32,
@@ -103,6 +105,7 @@ impl EffectiveObjectProperties {
         bounds: Option<noon_core::Rect>,
     ) -> Self {
         Self {
+            z_index: frame.objects[object_index].z_index,
             transform: frame.objects[object_index].transform,
             style: frame.objects[object_index].style,
             appearance: frame.objects[object_index].appearance,
@@ -158,6 +161,7 @@ mod effective_object_properties_tests {
 
     fn cached_path_properties() -> EffectiveObjectProperties {
         EffectiveObjectProperties {
+            z_index: 0.0,
             transform: Transform2D::IDENTITY,
             style: Style::default(),
             appearance: 1.0,
@@ -274,6 +278,7 @@ impl EffectiveBoundsBasis {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FrameRowState {
+    pub(super) z_index: f64,
     pub(super) transform: Transform2D,
     pub(super) style: Style,
     pub(super) appearance: f32,
@@ -288,6 +293,7 @@ pub(crate) struct FrameRowState {
 impl FrameRowState {
     pub(crate) fn from_frame(frame: &FrameState, object_index: usize) -> Self {
         Self {
+            z_index: frame.objects[object_index].z_index,
             transform: frame.objects[object_index].transform,
             style: frame.objects[object_index].style,
             appearance: frame.objects[object_index].appearance,
@@ -302,6 +308,7 @@ impl FrameRowState {
 
     pub(super) fn write_to_frame(self, frame: &mut FrameState, object_index: usize) {
         let object = &mut frame.objects[object_index];
+        object.z_index = self.z_index;
         object.transform = self.transform;
         object.style = self.style;
         object.appearance = self.appearance;
@@ -317,7 +324,8 @@ impl FrameRowState {
 
     pub(crate) fn differs_from_frame(&self, frame: &FrameState, object_index: usize) -> bool {
         let object = &frame.objects[object_index];
-        self.transform != object.transform
+        self.z_index != object.z_index
+            || self.transform != object.transform
             || self.style != object.style
             || self.appearance != object.appearance
             || self.presence != frame.presences[object_index]
@@ -337,6 +345,7 @@ impl FrameRowState {
         bounds_basis: Option<EffectiveBoundsBasis>,
     ) -> EffectiveObjectProperties {
         EffectiveObjectProperties {
+            z_index: self.z_index,
             transform: self.transform,
             style: self.style,
             appearance: self.appearance,
@@ -368,6 +377,7 @@ impl FrameRowState {
                 base: base_content,
                 content_override: &mut self.content_override,
             },
+            z_index: &mut self.z_index,
             transform: &mut self.transform,
             style: &mut self.style,
             appearance: &mut self.appearance,
@@ -405,6 +415,7 @@ impl FrameContentMut<'_> {
 }
 
 pub(super) struct FrameRowMut<'a> {
+    pub(super) z_index: &'a mut f64,
     pub(super) content: FrameContentMut<'a>,
     pub(super) transform: &'a mut Transform2D,
     pub(super) style: &'a mut Style,
@@ -420,6 +431,7 @@ pub(super) fn frame_row_mut(frame: &mut FrameState, object_index: usize) -> Fram
     let object = &mut frame.objects[object_index];
     FrameRowMut {
         content: FrameContentMut::Direct(&mut object.content),
+        z_index: &mut object.z_index,
         transform: &mut object.transform,
         style: &mut object.style,
         appearance: &mut object.appearance,

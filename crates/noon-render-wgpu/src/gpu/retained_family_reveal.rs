@@ -230,6 +230,7 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let text_handle = texts.insert(text_resource()).unwrap();
         let text = noon_runtime::FrameObjectState {
+            z_index: 0.0,
             id: ObjectId::new(10),
             content: noon_core::ObjectContentRef::Text(text_handle),
             transform: noon_core::Transform2D::IDENTITY,
@@ -238,6 +239,7 @@ mod tests {
             text_bounds: None,
         };
         let circle = noon_runtime::FrameObjectState {
+            z_index: 0.0,
             id: ObjectId::new(11),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
             transform: noon_core::Transform2D::IDENTITY,
@@ -268,6 +270,7 @@ mod tests {
         store.add_member(family, second).unwrap();
 
         let first_object = noon_runtime::FrameObjectState {
+            z_index: 0.0,
             id: ObjectId::new(20),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
             transform: noon_core::Transform2D::IDENTITY,
@@ -276,6 +279,7 @@ mod tests {
             text_bounds: None,
         };
         let second_object = noon_runtime::FrameObjectState {
+            z_index: 0.0,
             id: ObjectId::new(21),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
             transform: noon_core::Transform2D::IDENTITY,
@@ -299,6 +303,7 @@ mod tests {
             time: 1.0,
             objects: vec![
                 FrameObjectState {
+                    z_index: 0.0,
                     id: ObjectId::new(20),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
                     text_bounds: None,
@@ -307,6 +312,7 @@ mod tests {
                     appearance: 1.0,
                 },
                 FrameObjectState {
+                    z_index: 0.0,
                     id: ObjectId::new(21),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
                     text_bounds: None,

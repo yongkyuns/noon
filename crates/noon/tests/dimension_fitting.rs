@@ -140,7 +140,7 @@ fn live_family_fitting_preserves_unrelated_state() {
 }
 
 #[test]
-fn rotated_uniform_fit_works_and_unrepresentable_stretch_rejects_atomically() {
+fn rotated_uniform_and_world_axis_fit_preserve_dimensions() {
     let scene = Scene::new();
     let mut a = scene.square(1.0).unwrap();
     a.rotate(0.3).unwrap();
@@ -150,10 +150,11 @@ fn rotated_uniform_fit_works_and_unrepresentable_stretch_rejects_atomically() {
     anchor.rescale_to_fit(4.0, Width, false).unwrap();
     assert!((family.layout().unwrap().width() - 4.0).abs() < 1e-6);
     let revision = scene.revision();
-    let states = [a.state().unwrap(), b.state().unwrap()];
-    assert!(anchor.rescale_to_fit(2.0, Width, true).is_err());
-    assert_eq!(scene.revision(), revision);
-    assert_eq!([a.state().unwrap(), b.state().unwrap()], states);
+    let height = family.layout().unwrap().height();
+    anchor.rescale_to_fit(2.0, Width, true).unwrap();
+    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    assert!((family.layout().unwrap().width() - 2.0).abs() < 1e-6);
+    assert!((family.layout().unwrap().height() - height).abs() < 1e-6);
 }
 
 #[test]

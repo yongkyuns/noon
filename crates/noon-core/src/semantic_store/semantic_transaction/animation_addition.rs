@@ -33,6 +33,8 @@ pub enum SemanticTransactionAnimationIntent {
         target: SemanticTransactionNodeRef,
         target_state: SemanticTransactionNodeRef,
         interpolation: SemanticTransformInterpolation,
+
+        complete_priority: bool,
     },
     Indicate {
         target: SemanticTransactionNodeRef,
@@ -196,10 +198,14 @@ impl SemanticTransactionAnimation {
                 target,
                 target_state,
                 interpolation,
+
+                complete_priority,
             } => SemanticTransactionAnimationIntent::TransformTo {
                 target: (*target).into(),
                 target_state: (*target_state).into(),
                 interpolation: *interpolation,
+
+                complete_priority: *complete_priority,
             },
             SemanticAnimationIntent::Rotate {
                 target,
@@ -325,10 +331,14 @@ impl SemanticTransactionAnimation {
                 target,
                 target_state,
                 interpolation,
+
+                complete_priority,
             } => SemanticAnimationIntent::TransformTo {
                 target: resolve_node_ref(*target, committed),
                 target_state: resolve_node_ref(*target_state, committed),
                 interpolation: *interpolation,
+
+                complete_priority: *complete_priority,
             },
             SemanticTransactionAnimationIntent::Rotate {
                 target,
@@ -771,11 +781,13 @@ pub(super) fn commit_add_animation(
             target,
             target_state,
             interpolation,
+            complete_priority,
         } => store
             .insert_semantic_transform_animation_with_interpolation(
                 *target,
                 *target_state,
                 *interpolation,
+                *complete_priority,
                 options,
             )
             .expect("preflighted semantic animation insertion must remain valid while transaction owns the store"),

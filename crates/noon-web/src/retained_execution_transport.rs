@@ -1162,6 +1162,7 @@ fn frame_object(
     content: ObjectContentRef,
 ) -> FrameObjectState {
     FrameObjectState {
+        z_index: 0.0,
         id: object.object,
         content,
         transform: object.transform,
@@ -1223,6 +1224,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    z_index: 0.0,
                     id: ObjectId::new(11),
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
                     transform: Transform2D::IDENTITY,
@@ -1231,6 +1233,7 @@ mod tests {
                     text_bounds: None,
                 },
                 FrameObjectState {
+                    z_index: 0.0,
                     id: ObjectId::new(12),
                     content: ObjectContentRef::Text(text),
                     transform: Transform2D::IDENTITY,
@@ -1379,6 +1382,7 @@ mod tests {
 
         let mut replaced = frame.clone();
         replaced.objects.push(FrameObjectState {
+            z_index: 0.0,
             id: ObjectId::new(13),
             content: ObjectContentRef::Geometry(GeometryRef::rectangle(3.0, 1.0)),
             transform: Transform2D::IDENTITY,
@@ -1480,6 +1484,7 @@ mod tests {
 
         let mut replaced = frame.clone();
         replaced.objects.push(FrameObjectState {
+            z_index: 0.0,
             id: ObjectId::new(13),
             content: ObjectContentRef::Geometry(GeometryRef::rectangle(3.0, 1.0)),
             transform: Transform2D::IDENTITY,
