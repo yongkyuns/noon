@@ -66,15 +66,34 @@ try {
     const caseStartedAt = performance.now();
     const context = await browser.newContext({ ...options });
     await runtimeCache.install(context);
+    if (noJspi) {
+      await context.route('**/__noon_no_jspi_worker__.mjs', async route => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'text/javascript',
+          body: [
+            'delete WebAssembly.promising; delete WebAssembly.Suspending;',
+            "if (typeof WebAssembly.promising !== 'undefined' || typeof WebAssembly.Suspending !== 'undefined') throw new Error('JSPI test precondition failed');",
+            'await import("./python-worker.js");',
+            '',
+          ].join('\n'),
+        });
+      });
+    }
     // Observe the existing result envelope without guessing its payload shape.
     // The production parser below validates the semantic descriptor and duration;
     // semantic_execution is an object, not the boolean true.
     // Renderer time may precede completion of an authored static wait.
-    await context.addInitScript(({ channel, protocolVersion }) => {
+    await context.addInitScript(({ channel, protocolVersion, noJspi }) => {
       window.__galleryAuthoringResults = [];
       window.Worker = new Proxy(window.Worker, {
         construct(target, args, newTarget) {
-          const worker = Reflect.construct(target, args, newTarget);
+          let workerArgs = args;
+          if (noJspi && /\/python-worker\.js(?:[?#]|$)/.test(String(args[0]))) {
+            const workerUrl = new URL(String(args[0]), location.href);
+            workerArgs = [new URL('./__noon_no_jspi_worker__.mjs', workerUrl), ...args.slice(1)];
+          }
+          const worker = Reflect.construct(target, workerArgs, newTarget);
           worker.addEventListener('message', ({ data }) => {
             if (data?.channel === channel && data.type === 'result') {
               if (data.protocolVersion !== protocolVersion) {
@@ -87,15 +106,11 @@ try {
           return worker;
         },
       });
-    }, { channel: AUTHORING_CHANNEL, protocolVersion: AUTHORING_PROTOCOL_VERSION });
+    }, { channel: AUTHORING_CHANNEL, protocolVersion: AUTHORING_PROTOCOL_VERSION, noJspi });
     const page = await context.newPage();
     page.setDefaultTimeout(10000);
     const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: browser.version(), errors: [], samples: [] };
     const name = `${entry.id}${noJspi ? '-no-jspi' : ''}`;
-    if (noJspi) await context.route('**/python-worker.js', async route => {
-      const response = await route.fetch();
-      await route.fulfill({ response, body: 'delete WebAssembly.promising; delete WebAssembly.Suspending;\n' + await response.text() });
-    });
     page.on('pageerror', error => result.errors.push(String(error)));
     page.on('console', msg => { if (msg.type() === 'error') result.errors.push(msg.text()); });
     try {
