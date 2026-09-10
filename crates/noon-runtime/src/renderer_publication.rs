@@ -50,11 +50,52 @@ impl DerivedDisplayObjectState {
     }
 }
 
+/// One transient visual occurrence and its placement provenance.
+///
+/// `anchor_object_index` identifies an existing stable execution slot only for
+/// painter placement and source-local invalidation. It is not the identity of this
+/// occurrence. `occurrence_index` preserves deterministic order when multiple
+/// derived copies share one source anchor.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DerivedDisplayObject {
+    anchor_object_index: u32,
+    occurrence_index: u32,
+    state: DerivedDisplayObjectState,
+}
+
+impl DerivedDisplayObject {
+    pub const fn new(
+        anchor_object_index: u32,
+        occurrence_index: u32,
+        state: DerivedDisplayObjectState,
+    ) -> Self {
+        Self {
+            anchor_object_index,
+            occurrence_index,
+            state,
+        }
+    }
+
+    pub const fn anchor_object_index(&self) -> u32 {
+        self.anchor_object_index
+    }
+
+    pub const fn occurrence_index(&self) -> u32 {
+        self.occurrence_index
+    }
+
+    pub const fn state(&self) -> &DerivedDisplayObjectState {
+        &self.state
+    }
+}
+
 /// One coherent borrowed runtime publication for renderer preparation.
 ///
 /// The runtime creates this only while consuming accumulated changes. It keeps an
 /// effective frame, its immutable projected resources, and their typed publication
-/// context together without copying a second render world.
+/// context together without copying a second render world. Optional derived display
+/// rows are borrowed animation output layered on that publication; they never enter
+/// `FrameState` or stable execution storage.
 pub struct RendererPublication<'a> {
     context: PublicationContext,
     frame: &'a FrameState,
@@ -65,6 +106,7 @@ pub struct RendererPublication<'a> {
     family_animation_plans: &'a [RetainedFamilyAnimationPlan],
     active_family_animation_indices: &'a BTreeSet<usize>,
     painter_order: &'a [u32],
+    derived_display_objects: &'a [DerivedDisplayObject],
 }
 
 impl RendererPublication<'_> {
@@ -112,6 +154,10 @@ impl RendererPublication<'_> {
         self.painter_order
     }
 
+    pub const fn derived_display_objects(&self) -> &[DerivedDisplayObject] {
+        self.derived_display_objects
+    }
+
     /// Escalate an acquired redraw to a full renderer invalidation while retaining
     /// this publication's exact frame, resources, and revision context.
     pub fn invalidate_all(&mut self) {
@@ -120,6 +166,18 @@ impl RendererPublication<'_> {
 }
 
 impl<'a> RendererPublication<'a> {
+    /// Attach animation-derived display rows to the exact publication that owns the
+    /// effective stable frame they were derived from. Existing runtime callers keep
+    /// the empty default, so this is additive until a transform-family owner supplies
+    /// the transient rows explicitly.
+    pub fn with_derived_display_objects(
+        mut self,
+        derived_display_objects: &'a [DerivedDisplayObject],
+    ) -> Self {
+        self.derived_display_objects = derived_display_objects;
+        self
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         context: PublicationContext,
@@ -142,6 +200,7 @@ impl<'a> RendererPublication<'a> {
             family_animation_plans,
             active_family_animation_indices,
             painter_order,
+            derived_display_objects: &[],
         }
     }
 }
@@ -152,9 +211,8 @@ mod derived_display_tests {
 
     use super::*;
 
-    #[test]
-    fn derived_display_row_reuses_retained_content_without_execution_identity() {
-        let state = DerivedDisplayObjectState {
+    fn derived_state() -> DerivedDisplayObjectState {
+        DerivedDisplayObjectState {
             z_index: 2.0,
             content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
             text_bounds: None,
@@ -169,7 +227,12 @@ mod derived_display_tests {
             morph: 0.0,
             render_geometry: None,
             render_transform: None,
-        };
+        }
+    }
+
+    #[test]
+    fn derived_display_row_reuses_retained_content_without_execution_identity() {
+        let state = derived_state();
 
         assert!(matches!(
             state.effective_render_geometry(),
@@ -179,6 +242,14 @@ mod derived_display_tests {
         // The type itself has no semantic or execution identity field: the only
         // retained object reference is immutable content/resource state.
         assert_eq!(state.text(), None);
+    }
+
+    #[test]
+    fn derived_display_occurrence_carries_only_existing_anchor_and_local_order() {
+        let occurrence = DerivedDisplayObject::new(7, 2, derived_state());
+        assert_eq!(occurrence.anchor_object_index(), 7);
+        assert_eq!(occurrence.occurrence_index(), 2);
+        assert_eq!(occurrence.state().appearance, 0.5);
     }
 
     #[test]
