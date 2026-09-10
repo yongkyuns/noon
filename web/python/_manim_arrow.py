@@ -202,6 +202,11 @@ class Arrow(_compat.Group):
         )
         _create(self, options, color=color, kwargs=kwargs)
 
+    def scale(self, *args: Any, **kwargs: Any):
+        raise NotImplementedError(
+            "Arrow.scale requires shared Rust preserve-tip-size and stroke recapping semantics"
+        )
+
     def get_start(self) -> _base.Vec2:
         from _manim_path_queries import endpoint
 
