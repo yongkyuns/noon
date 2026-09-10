@@ -111,6 +111,7 @@ pub use family_callback_translation::{CallbackFamilyTranslation, FamilyCallbackT
 pub use family_copy::FamilyCopy;
 pub use family_grid::{FamilyGridOptions, GridFlow};
 pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor};
+pub use family_style::StyleUpdate;
 pub use focus_on_authoring::FocusOnOptions;
 pub use host_callbacks::{RustHostCallbackContext, RustHostCallbackError, RustHostCallbackTable};
 pub use live_program::{
