@@ -394,3 +394,43 @@ impl WasmAuthoringVectorPath {
         self.path = std::mem::take(&mut self.path).close();
     }
 }
+
+/// Inert operand references. No geometry is captured until the constructor runs,
+/// so all operands observe one runtime publication.
+#[wasm_bindgen]
+pub struct WasmBooleanOperands {
+    pub(crate) objects: Vec<noon::Mobject>,
+}
+#[wasm_bindgen]
+impl WasmBooleanOperands {
+    pub fn push(&mut self, object: &crate::WasmAuthoringMobjectHandle) {
+        self.objects.push(object.semantic_mobject().clone());
+    }
+}
+pub(crate) fn boolean_operation(name: &str) -> Result<noon::BooleanOperation, JsValue> {
+    match name {
+        "Union" => Ok(noon::BooleanOperation::Union),
+        "Intersection" => Ok(noon::BooleanOperation::Intersection),
+        "Difference" => Ok(noon::BooleanOperation::Difference),
+        "Exclusion" => Ok(noon::BooleanOperation::Exclusion),
+        _ => Err(js_error("unknown boolean operation")),
+    }
+}
+#[wasm_bindgen]
+impl WasmManimGeometryOptions {
+    #[wasm_bindgen(js_name = booleanOperands)]
+    pub fn boolean_operands() -> WasmBooleanOperands {
+        WasmBooleanOperands {
+            objects: Vec::new(),
+        }
+    }
+    #[wasm_bindgen(js_name = booleanGeometry)]
+    pub fn boolean_geometry(
+        name: &str,
+        operands: &WasmBooleanOperands,
+    ) -> Result<WasmManimGeometryOptions, JsValue> {
+        noon::ManimGeometryOptions::boolean_geometry(boolean_operation(name)?, &operands.objects)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+}

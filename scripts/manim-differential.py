@@ -833,6 +833,18 @@ def _canonical_curve_layout(api):
     return [_object_observation(obj) for obj in (circle, ellipse, circle.copy(), family)]
 
 
+def _boolean_geometry(api):
+    a = api.Square(side_length=2)
+    b = api.Square(side_length=2).shift(api.RIGHT)
+    results = [_object_observation(operation(a, b))
+               for operation in (api.Union, api.Intersection, api.Difference, api.Exclusion)]
+    ring = api.Difference(api.Square(side_length=4), api.Square(side_length=2))
+    results.append([_object_observation(ring), len(ring.get_subpaths())])
+    # Operand order and content are untouched by all four constructors.
+    results.extend([_object_observation(a), _object_observation(b)])
+    return results
+
+
 def _path_smoothing(api):
     point = lambda x, y: api.RIGHT * x + api.UP * y
     source = api.VMobject().set_points_smoothly([point(0, 0), point(1, 1), point(2, 0)])
@@ -933,6 +945,7 @@ def _point_matching(api):
 
 
 FIXTURES = [
+    Fixture("boolean_geometry", lambda: _boolean_geometry(noon), lambda: _boolean_geometry(manim), 1e-5),
     Fixture("path_smoothing", lambda: _path_smoothing(noon), lambda: _path_smoothing(manim), 1e-5),
     Fixture("path_subcurves", lambda: _path_subcurves(noon), lambda: _path_subcurves(manim), 1e-5),
     Fixture("path_refinement", lambda: _path_refinement(noon), lambda: _path_refinement(manim), 1e-5),

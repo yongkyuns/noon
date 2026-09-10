@@ -1269,6 +1269,15 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_boolean_geometry_options(
+        &mut self,
+        operation: noon::BooleanOperation,
+        operands: &[noon::Mobject],
+    ) -> Result<noon::ManimGeometryOptions, AuthoringFailure> {
+        self.with_live_session(|live| live.boolean_geometry_options(operation, operands))
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective_path_query(
         &mut self,
