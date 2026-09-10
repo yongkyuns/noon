@@ -35,12 +35,17 @@ class ManimGroupCopyTests(unittest.TestCase):
             leaf = identity(Circle)
             family = identity(CustomFamily, submobjects=[leaf], selected=leaf)
             nested = identity(VGroup, submobjects=[family], selected=family)
-            clone, pairs = _manim_compat.prepare_family_wrapper_copy(nested, lambda value: set())
-            assert isinstance(clone[0], CustomFamily)
-            assert clone is not nested and clone[0] is not family
-            assert clone.selected is clone[0]
-            assert clone[0].selected is clone[0][0]
-            assert clone[0][0] is not leaf
+            from unittest.mock import patch
+            import _manim_semantic_handles as handles
+            with patch.object(handles, "_group_members", side_effect=lambda value: value.__dict__["submobjects"]):
+                clone, pairs, members = _manim_compat.prepare_family_wrapper_copy(nested, lambda value: set())
+            cloned = {id(original): target for original, target in pairs}
+            assert isinstance(cloned[id(family)], CustomFamily)
+            assert clone is not nested and cloned[id(family)] is not family
+            assert clone.selected is cloned[id(family)]
+            assert cloned[id(family)].selected is cloned[id(leaf)]
+            assert cloned[id(leaf)] is not leaf
+            assert dict((id(target), children) for target, children in members)[id(clone)] == [cloned[id(family)]]
             assert len(pairs) == 3
             """
         )

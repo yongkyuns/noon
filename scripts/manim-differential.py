@@ -509,7 +509,31 @@ def _manim_rotate_about_origin() -> Any:
     return _object_observation(obj)
 
 
+def _family_membership_order(provider: Any, group_name: str) -> Any:
+    a, b, c = [provider.Square(side_length=1.0) for _ in range(3)]
+    group_type = getattr(provider, group_name)
+    nested = group_type(a, b)
+    family = group_type(a, nested, a)
+    names = {id(a): "a", id(b): "b", id(c): "c", id(nested): "nested"}
+    order = lambda: [names[id(member)] for member in family.submobjects]
+    observed = [order()]
+    family.add(c, nested, c)
+    observed.append(order())
+    family.add(a)
+    observed.append(order())
+    family.remove(nested, nested)
+    observed.append(order())
+    family.add(nested)
+    observed.append(order())
+    copied = family.copy()
+    return {"order": observed, "nested_identity": nested[0] is a and nested[1] is b,
+            "copy_alias": copied[1] is copied[2][0],
+            "copy_independent": copied[1] is not a}
+
+
 FIXTURES = [
+    Fixture("group_membership_order", lambda: _family_membership_order(noon, "Group"), lambda: _family_membership_order(manim, "Group")),
+    Fixture("vgroup_membership_order", lambda: _family_membership_order(noon, "VGroup"), lambda: _family_membership_order(manim, "VGroup")),
     Fixture("circle_dimensions", _noon_circle_dimensions, _manim_circle_dimensions),
     Fixture("rectangle_dimensions", _noon_rectangle_dimensions, _manim_rectangle_dimensions),
     Fixture("shifted_circle", _noon_shifted_circle, _manim_shifted_circle),
@@ -557,7 +581,7 @@ FIXTURES = [
 # Explicitly tracked but not yet differential-gated.  Keep this list close to the
 # harness so unsupported behavior is never silently treated as a mismatch.
 UNSUPPORTED = {
-    "family_aliasing": "Python Group still flattens family identity pending shared semantic handles (#61)",
+    "family_insert_assignment": "duplicate-edge insert and indexed assignment remain under #74",
     "z_index": "Noon does not yet expose the 2.5D/z semantic model (#62)",
     "updater_frame_semantics": "host/native updater phase semantics are being defined in #56",
     "animation_lifecycle": "requires a reference Scene/animation-state probe, to be added incrementally",

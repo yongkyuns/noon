@@ -1596,6 +1596,20 @@ def _family_membership_batch(context: object, kind: str, mobjects: tuple[object,
     return batch
 
 
+def _family_wrapper_key(value: object) -> str:
+    _, handle = _family_member_handle(value)
+    if handle is None:
+        raise RuntimeError("family member has no shared semantic identity")
+    return f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
+
+
+def _group_members(self: _compat.Group) -> list[object]:
+    # Ordering is observed from Rust only when requested. Mutations update this
+    # identity registry locally; it is neither a membership nor an order cache.
+    return [self._semantic_member_wrappers[str(key)]
+            for key in engine_call(self._semantic_family_handle.memberKeys)]
+
+
 def _group_init(self: _compat.Group, *mobjects: object) -> None:
     if _create_family_handle is None or _new_membership_batch is None:
         raise RuntimeError("Group construction requires the shared Rust authoring host")
@@ -1607,14 +1621,8 @@ def _group_init(self: _compat.Group, *mobjects: object) -> None:
         if context is not None
         else engine_call(_create_family_handle, batch)
     )
-    # Rust selects the authoritative ordered members; this map retains Python identity.
-    wrappers = {}
-    for value in mobjects:
-        _, handle = _family_member_handle(value)
-        key = f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}"
-        wrappers.setdefault(key, value)
     self._semantic_family_handle = family
-    self.submobjects = [wrappers[str(key)] for key in engine_call(family.memberKeys)]
+    self._semantic_member_wrappers = {_family_wrapper_key(value): value for value in mobjects}
 
 
 def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
@@ -1624,14 +1632,12 @@ def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
     family_handle = self._semantic_family_handle
     context = _live_constructor_context("family")
     batch = _family_membership_batch(context, "add", mobjects)
-    changed = (
+    if context is not None:
         engine_call(context.liveEditFamilyMembership, family_handle, batch)
-        if context is not None
-        else engine_call(family_handle.editMembership, batch)
-    )
-    accepted = tuple(value for value, changed in zip(mobjects, changed) if changed)
-    if accepted:
-        self.submobjects.extend(accepted)
+    else:
+        engine_call(family_handle.editMembership, batch)
+    for value in mobjects:
+        self._semantic_member_wrappers[_family_wrapper_key(value)] = value
     return self
 
 
@@ -1646,10 +1652,9 @@ def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
         if context is not None
         else engine_call(family_handle.editMembership, batch)
     )
-    accepted = tuple(value for value, changed in zip(mobjects, changed) if changed)
-    if accepted:
-        removed = {id(value) for value in accepted}
-        self.submobjects = [value for value in self.submobjects if id(value) not in removed]
+    for value, removed in zip(mobjects, changed):
+        if removed:
+            self._semantic_member_wrappers.pop(_family_wrapper_key(value), None)
     return self
 
 
@@ -1692,26 +1697,14 @@ def _group_copy(self: _compat.Group) -> _compat.Group:
     def excluded_fields(value):
         excluded = {
             "_raw", "_scene", "_object", "_semantic_handle", "_semantic_handle_fresh",
-            "_semantic_family_handle", "_canonical_live_target_context",
+            "_semantic_family_handle", "_semantic_member_wrappers", "_canonical_live_target_context",
             "_noon_updater_registrations", "_noon_updater_registration_history",
         }
         if not isinstance(value, _compat.Group) and _is_bound(value) and hasattr(value, "_noon_updaters"):
             excluded.add("_noon_updaters")
         return excluded
 
-    clone, pairs = _compat.prepare_family_wrapper_copy(self, excluded_fields)
-    # Verify host identity metadata before committing the semantic copy. Rust owns
-    # the graph; Python cannot add, reorder, or omit a copied semantic member.
-    for source, _ in pairs:
-        if isinstance(source, _compat.Group):
-            keys = []
-            for member in source.submobjects:
-                _, handle = _family_member_handle(member)
-                if handle is None:
-                    raise RuntimeError("family member has no shared semantic identity")
-                keys.append(f"{int(handle.semanticSlot)}:{int(handle.semanticGeneration)}")
-            if keys != [str(key) for key in engine_call(source._semantic_family_handle.memberKeys)]:
-                raise RuntimeError("Group wrapper mirror diverged from shared family membership")
+    clone, pairs, family_members = _compat.prepare_family_wrapper_copy(self, excluded_fields)
     references = _family_membership_batch(context, "add", tuple(source for source, _ in pairs))
     copied = (engine_call(context.liveCopyFamily, self._semantic_family_handle, references)
               if context is not None else engine_call(self._semantic_family_handle.copyFamily, references))
@@ -1724,4 +1717,6 @@ def _group_copy(self: _compat.Group) -> _compat.Group:
             target._semantic_handle_fresh = True
             if context is not None:
                 target._canonical_live_target_context = context
+    for target, members in family_members:
+        target._semantic_member_wrappers = {_family_wrapper_key(member): member for member in members}
     return clone
