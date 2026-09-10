@@ -3252,4 +3252,12 @@ pub mod ordinary_rotating;
 
 pub mod scale_in_place;
 
+pub mod family_membership_order;
+pub mod family_state;
 pub mod style_operations;
+
+pub mod paint_queries_gradients;
+
+pub mod planar_affine;
+
+pub mod scale_pivots;

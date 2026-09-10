@@ -43,10 +43,14 @@ mod tests {
         let mut line =
             Mobject::manim_line(std::rc::Rc::clone(&authoring_store), -2.0, 1.0, 3.0, 5.0).unwrap();
         line.shift(-0.5, 0.25).unwrap();
-        line.rotate(-0.2).unwrap();
+        line.rotate(std::f64::consts::FRAC_PI_2).unwrap();
         let center = line.center().unwrap();
 
+        let width = line.width().unwrap();
+        let height = line.height().unwrap();
         line.manim_scale(2.0, 0.5).unwrap();
+        assert_close(line.width().unwrap(), width * 2.0);
+        assert_close(line.height().unwrap(), height * 0.5);
 
         let scaled_center = line.center().unwrap();
         assert_close(scaled_center.0, center.0);

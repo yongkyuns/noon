@@ -83,16 +83,30 @@ impl SemanticStore {
             let target_node = store
                 .node(target)
                 .ok_or(SemanticFamilyPairingError::UnknownNode(target))?;
+            // Memoize family pairs as well as leaves: a shared family DAG must
+            // not expand every alias path, and aliases must agree on both sides.
+            match (source_aliases.get(&source), target_aliases.get(&target)) {
+                (None, None) => {
+                    source_aliases.insert(source, target);
+                    target_aliases.insert(target, source);
+                }
+                (Some(expected_target), Some(expected_source))
+                    if *expected_target == target && *expected_source == source =>
+                {
+                    return Ok(())
+                }
+                _ => return Err(SemanticFamilyPairingError::AliasMismatch { source, target }),
+            }
             match (source_node.kind(), target_node.kind()) {
                 (SemanticNodeKind::Family, SemanticNodeKind::Family) => {
-                    if source_node.members().len() != target_node.members().len() {
+                    if source_node.member_count() != target_node.member_count() {
                         return Err(SemanticFamilyPairingError::TopologyMismatch {
                             source,
                             target,
                         });
                     }
-                    for (&source_member, target_member) in
-                        source_node.members().iter().zip(target_node.members())
+                    for (source_member, target_member) in
+                        source_node.members_iter().zip(target_node.members_iter())
                     {
                         pair(
                             store,
@@ -112,20 +126,8 @@ impl SemanticStore {
                     if target_node.semantic_object_state().is_none() {
                         return Err(SemanticFamilyPairingError::UnsupportedLeaf(target));
                     }
-                    match (source_aliases.get(&source), target_aliases.get(&target)) {
-                        (None, None) => {
-                            source_aliases.insert(source, target);
-                            target_aliases.insert(target, source);
-                            leaves.push((source, target));
-                            Ok(())
-                        }
-                        (Some(expected_target), Some(expected_source))
-                            if *expected_target == target && *expected_source == source =>
-                        {
-                            Ok(())
-                        }
-                        _ => Err(SemanticFamilyPairingError::AliasMismatch { source, target }),
-                    }
+                    leaves.push((source, target));
+                    Ok(())
                 }
                 (SemanticNodeKind::Family, _)
                 | (SemanticNodeKind::AuthoringObject, SemanticNodeKind::Family) => {

@@ -30,11 +30,15 @@ await mkdir(artifactDir, { recursive: true });
 // Remaining generic authoring/lifecycle cases run in directExecutionProof and
 // the shared Python corpus. These fixtures protect renderer-specific raster work.
 const examples = [
+  { name: "Paint queries and gradients", factory: "createDirectPaintQueriesGradientsSmokeRenderer", objectCount: 5, duration: 0.2 },
   { name: "Filled path Transform", factory: "createDirectFilledPathTransformRenderer", objectCount: 1, duration: 3.2 },
   { name: "Dimension fitting", factory: "createDirectDimensionFittingSmokeRenderer", objectCount: 2, duration: 0.2 },
+  { name: "Family membership order", factory: "createDirectFamilyMembershipOrderSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Family replacement", factory: "createDirectFamilyReplacementSmokeRenderer", objectCount: 3, duration: 0.2 },
   { name: "Family affine", factory: "createDirectFamilyAffineSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Family paint", factory: "createDirectFamilyPaintSmokeRenderer", objectCount: 2, duration: 0.2 },
+  { name: "Planar affine", factory: "createDirectPlanarAffineSmokeRenderer", objectCount: 4, duration: 0.2 },
+  { name: "Scale pivots", factory: "createDirectScalePivotsSmokeRenderer", objectCount: 4, duration: 0.2 },
   { name: "Family grid", factory: "createDirectFamilyGridSmokeRenderer", objectCount: 4, duration: 0.2 },
   { name: "Create shapes", factory: "createDirectCreateShapesRenderer", objectCount: 4, duration: 3.2 },
   { name: "Morph stress · 1,000", factory: "createDirectMorphStressRenderer", objectCount: 1000, duration: 3.4 },

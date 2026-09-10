@@ -27,8 +27,8 @@ class DimensionFittingTests(unittest.TestCase):
         source, target = self.wrapper(), self.wrapper()
         self.assertIs(source.scale_to_fit_width(4), source)
         self.assertIs(source.match_height(target, stretch=True), source)
-        self.assertEqual(self.calls, [("fit", (4.0, 0, False)),
-                                     ("match", (self.anchor, 1, True))])
+        self.assertEqual(self.calls, [("fit", (4.0, 0, False, 0., 0., False)),
+                                     ("match", (self.anchor, 1, True, 0., 0., False))])
 
     def test_live_dispatch_passes_both_opaque_anchors(self):
         source, target = self.wrapper(), self.wrapper()
@@ -39,15 +39,22 @@ class DimensionFittingTests(unittest.TestCase):
         with patch.object(semantic, "_live_mutation_context", return_value=context):
             source.stretch_to_fit_height(3)
             source.match_width(target)
-        self.assertEqual(self.calls, [("live fit", (self.anchor, 3.0, 1, True)),
-                                     ("live match", (self.anchor, self.anchor, 0, False))])
+        self.assertEqual(self.calls, [("live fit", (self.anchor, 3.0, 1, True, 0., 0., False)),
+                                     ("live match", (self.anchor, self.anchor, 0, False, 0., 0., False))])
+
+    def test_explicit_pivots_are_forwarded_without_frontend_bounds(self):
+        source, target = self.wrapper(), self.wrapper()
+        source.scale_to_fit_width(4, about_edge=noon.LEFT)
+        source.match_height(target, about_point=(2, 3))
+        self.assertEqual(self.calls, [("fit", (4., 0, False, -1., 0., False)),
+                                     ("match", (self.anchor, 1, False, 2., 3., True))])
 
     def test_unsupported_arguments_fail_before_calling_shared_mutation(self):
         source = self.wrapper()
         with self.assertRaises(NotImplementedError):
             source.rescale_to_fit(2, 2)
-        with self.assertRaises(NotImplementedError):
-            source.scale_to_fit_width(2, about_point=noon.ORIGIN)
+        with self.assertRaises(TypeError):
+            source.scale_to_fit_width(2, unknown_pivot=noon.ORIGIN)
         with self.assertRaises(TypeError):
             source.match_width(object())
         self.assertEqual(self.calls, [])

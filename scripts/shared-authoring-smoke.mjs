@@ -771,12 +771,16 @@ try {
       endpointTime: null,
     },
     { filename: "ordinary_filled_path_transform.py", objectCount: 1, expectedDuration: 3.2, endpointTime: null },
+    { filename: "ordinary_family_membership_order.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_placement.py", objectCount: 3, expectedDuration: 1, endpointTime: null },
     { filename: "ordinary_dimension_fitting.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_replacement.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_affine.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_paint_queries_gradients.py", objectCount: 5, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_style_operations.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_paint.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_planar_affine.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_scale_pivots.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_grid.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_create_shapes.py", objectCount: 4, expectedDuration: 3.2, endpointTime: null },
     { filename: "ordinary_morph_stress.py", objectCount: 96, expectedDuration: 3.4, endpointTime: null },
@@ -1674,6 +1678,31 @@ class SelectedAlignment(Scene):
     });
     assert.equal(result.duration, 0.2);
     assert.equal(result.metrics.objectCount, 3);
+  } finally {
+    await stopSampledSource(page);
+  }
+
+  const familyStateSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_family_state.py"), "utf8",
+  );
+  await startSampledSource(page, familyStateSource, "scene-shared-family-state");
+  try {
+    const canvas = page.locator("#scene-shared-family-state");
+    for (const [time, leftX, rightX, y] of [[0, -1, 1, 0], [0.2, -0.5, 1.5, 0.5], [0.4, -2, 0, 0], [0.6000000000000001, -2, 0, 0]]) {
+      await page.evaluate(time => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(time), time);
+      const frame = await canvas.screenshot();
+      const left = renderedWorldPixel(frame, leftX, y);
+      const right = renderedWorldPixel(frame, rightX, y);
+      assert.ok(left.red > 180 && left.blue < 50, `family state at ${time}s missed red member`);
+      assert.ok(right.blue > 180 && right.red < 50, `family state at ${time}s missed blue member`);
+    }
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const completed = await authored;
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.ok(Math.abs(result.duration - 0.6) < 1e-9);
+    assert.equal(result.metrics.objectCount, 2);
   } finally {
     await stopSampledSource(page);
   }

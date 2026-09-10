@@ -5,7 +5,7 @@ use std::{
 };
 
 use noon_core::{GeometryRef, ObjectId, Style, Transform2D, Vec2};
-use noon_render_wgpu::{CircleInstance, FramePreparer, RenderOrderKey};
+use noon_render_wgpu::{CircleInstance, FramePreparer};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 
 const DEFAULT_SIZES: [usize; 3] = [1_000, 10_000, 100_000];
@@ -51,16 +51,14 @@ fn benchmark_size(object_count: usize, config: Config) {
         black_box(prepared.stats.instances_repacked);
     });
 
-    let mut keyed_preparer = FramePreparer::new();
-    let keyed_order = (0..object_count)
-        .map(|index| RenderOrderKey::new((index % 7) as i32, index as u64))
-        .collect::<Vec<_>>();
-    keyed_preparer
-        .set_render_order_keys(&frame, &keyed_order)
-        .expect("benchmark render-order key count must match frame");
-    keyed_preparer.prepare(&frame);
+    let mut ordered_preparer = FramePreparer::new();
+    // A precomputed permutation models the execution plan's ordering input.
+    let mut painter_order = (0..object_count as u32).collect::<Vec<_>>();
+    painter_order.sort_by_key(|index| index % 7);
+    ordered_preparer.set_painter_order(&frame, &painter_order);
+    ordered_preparer.prepare(&frame);
     let explicit_order = measure(config, |_| {
-        let prepared = keyed_preparer.prepare(black_box(&frame));
+        let prepared = ordered_preparer.prepare(black_box(&frame));
         black_box(prepared.stats.instances_repacked);
     });
 
