@@ -178,8 +178,8 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
 
     /// Proposed presentation states, grouped in first changed-object order.
     ///
-    /// This derived overlay applies only `SetProperty`, `ReplaceStyle`, and
-    /// `ReplaceContent`. It is not a structural or subscription overlay; consumers
+    /// This derived overlay applies object `SetZIndex`, `SetProperty`, `ReplaceStyle`,
+    /// and `ReplaceContent`. It is not a structural or subscription overlay; consumers
     /// must separately check which mutation classes they support. One pass over
     /// the batch clones only the affected object states, never the store or arena.
     pub fn object_updates(

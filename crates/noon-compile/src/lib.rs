@@ -86,6 +86,7 @@ pub struct CompiledObject {
     pub text_bounds: Option<Rect>,
     pub base_transform: Transform2D,
     pub base_style: Style,
+    /// Derived finite painter priority; family traversal breaks equal-priority ties.
     pub base_z_index: f64,
     pub dynamic: DynamicProperties,
     /// Whether this stable compiled slot currently contains a live scene object.
@@ -374,9 +375,10 @@ pub struct CompiledScene {
     track_count: usize,
     object_indices: BTreeMap<ObjectId, u32>,
     retired_object_indices: BTreeMap<ObjectId, u32>,
-    /// Live stable row indices in authoritative semantic painter order.
+    /// Derived live family traversal; local reorders retain this equal-z tie-breaker.
     family_order: Vec<u32>,
     family_ranks: Vec<Option<u32>>,
+    /// Stable row indices sorted by priority, then family traversal.
     painter_order: Vec<u32>,
     painter_ranks: Vec<Option<u32>>,
     track_locators: BTreeMap<TrackId, CompiledTrackLocator>,
