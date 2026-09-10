@@ -1,0 +1,48 @@
+name: codex b3 family transform activation probe
+
+on:
+  push:
+    branches: [codex/b3-family-transform-activation]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Compile activation preparation
+        id: check
+        shell: bash
+        run: |
+          set +e
+          cargo check -p noon-compile --tests 2>&1 | tee activation-check.log
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Formatting check
+        id: fmt
+        shell: bash
+        run: |
+          set +e
+          cargo fmt --all -- --check 2>&1 | tee activation-fmt.log
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: b3-family-transform-activation-probe
+          path: |
+            activation-check.log
+            activation-fmt.log
+      - name: Fail on probe errors
+        if: steps.check.outputs.status != '0' || steps.fmt.outputs.status != '0'
+        run: exit 1
