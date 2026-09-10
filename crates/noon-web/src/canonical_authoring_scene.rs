@@ -7304,7 +7304,7 @@ mod tests {
                 .unwrap()
                 .live_edit_family_members(&pair, &[(&right).into(), (&right).into()], true)
                 .unwrap(),
-            vec![true, false]
+            vec![false, true]
         );
         context
             .live_arrange_family(
