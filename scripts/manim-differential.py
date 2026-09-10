@@ -536,7 +536,44 @@ def _group_coordinate_dimensions(api, group_class):
     return observations
 
 
+def _family_become(api):
+    def make(width, height, distance):
+        a = api.Square(side_length=width).shift(distance * api.LEFT)
+        b = api.Rectangle(width=width, height=height).shift(distance * api.RIGHT)
+        return api.VGroup(a, api.VGroup(a, b))
+    source = make(1.0, 2.0, 2.0)
+    target = make(2.0, 3.0, 3.0).shift(api.RIGHT + api.UP)
+    observations = []
+    for options in ({}, {"match_height": True}, {"match_height": True, "match_width": True},
+                    {"stretch": True, "match_center": True}):
+        value = source.copy()
+        first = value[0]
+        second = value[1][1]
+        value.become(target, **options)
+        observations.append({"family": _object_observation(value),
+                             "first": _object_observation(first), "second": _object_observation(second),
+                             "alias": first is value[1][0], "target": _object_observation(target)})
+    source.save_state()
+    source.become(target)
+    source.restore()
+    return {"states": observations, "restored": _object_observation(source)}
+
+
+def _family_become_cross_alias(api):
+    observations = []
+    for match_center in (False, True):
+        a = api.Square(side_length=1).shift(api.LEFT)
+        b = api.Square(side_length=1).shift(api.RIGHT)
+        source = api.VGroup(a, b)
+        target = api.VGroup(b, a)
+        source.become(target, match_center=match_center)
+        observations.append([_object_observation(a), _object_observation(b)])
+    return observations
+
+
 FIXTURES = [
+    Fixture("vgroup_become_cross_alias", lambda: _family_become_cross_alias(noon), lambda: _family_become_cross_alias(manim)),
+    Fixture("vgroup_become_restore", lambda: _family_become(noon), lambda: _family_become(manim)),
     Fixture("group_coordinate_dimensions",
             lambda: _group_coordinate_dimensions(noon, noon.Group),
             lambda: _group_coordinate_dimensions(manim, manim.Group)),

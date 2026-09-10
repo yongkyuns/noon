@@ -595,6 +595,28 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringFamilyHandle {
+        #[wasm_bindgen(js_name = becomeFamily)]
+        pub fn become_family(
+            &self,
+            target: &WasmAuthoringFamilyHandle,
+            match_height: bool,
+            match_width: bool,
+            match_center: bool,
+            stretch: bool,
+        ) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .become_family(
+                    &target.semantic_family()?,
+                    noon::ManimBecomeOptions {
+                        match_height,
+                        match_width,
+                        match_center,
+                        stretch,
+                    },
+                )
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setColor)]
         #[allow(clippy::too_many_arguments)]
         pub fn set_color(

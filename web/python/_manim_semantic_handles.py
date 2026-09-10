@@ -869,6 +869,19 @@ def _become(
     if match_depth:
         raise NotImplementedError("depth matching requires the shared 2.5D family model")
 
+    if isinstance(self, _compat.Group) or isinstance(mobject, _compat.Group):
+        if not isinstance(self, _compat.Group) or not isinstance(mobject, _compat.Group):
+            raise NotImplementedError("become between an object and a family requires topology alignment")
+        source = self._semantic_family_handle
+        target = mobject._semantic_family_handle
+        flags = (bool(match_height), bool(match_width), bool(match_center), bool(stretch))
+        context = _group_target_context(self) or _group_target_context(mobject)
+        if context is None:
+            engine_call(source.becomeFamily, target, *flags)
+        else:
+            engine_call(context.liveBecomeFamily, source, target, *flags)
+        return self
+
     handle = _handle_for(self)
     other_handle = _handle_for(mobject)
     if handle is not None and other_handle is not None:
@@ -1655,13 +1668,19 @@ def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
 
 def _group_target_context(value: object) -> object | None:
     contexts: list[object] = []
+    seen: set[int] = set()
 
     def collect(member: object) -> None:
+        if id(member) in seen:
+            return
+        seen.add(id(member))
         if isinstance(member, _compat.Group):
             for child in member.submobjects:
                 collect(child)
             return
         context = getattr(member, "_canonical_live_target_context", None)
+        if context is None:
+            context = _live_mutation_context(member)
         if context is not None:
             contexts.append(context)
 
@@ -1680,14 +1699,6 @@ def _group_target_context(value: object) -> object | None:
 
 def _group_copy(self: _compat.Group) -> _compat.Group:
     context = _group_target_context(self)
-    # Bound families outside construct() still have the same context on leaves.
-    if context is None:
-        contexts = [candidate for leaf in _compat._leaf_mobjects(self)
-                    if (candidate := _live_mutation_context(leaf)) is not None]
-        if contexts:
-            context = contexts[0]
-            if any(candidate is not context for candidate in contexts[1:]):
-                raise RuntimeError("family copy members belong to different live contexts")
 
     def excluded_fields(value):
         excluded = {

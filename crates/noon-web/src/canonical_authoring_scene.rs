@@ -5547,6 +5547,32 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveBecomeFamily)]
+        pub fn live_become_family(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            target: &crate::WasmAuthoringFamilyHandle,
+            match_height: bool,
+            match_width: bool,
+            match_center: bool,
+            stretch: bool,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_become_family(
+                    &source.semantic_family()?,
+                    &target.semantic_family()?,
+                    noon::ManimBecomeOptions {
+                        match_height,
+                        match_width,
+                        match_center,
+                        stretch,
+                    },
+                )
+                .map_err(typed_js_error)
+        }
+
         /// Replace one object's content and presentation through the shared semantic owner.
         #[wasm_bindgen(js_name = liveBecomeMobject)]
         pub fn live_become_mobject(

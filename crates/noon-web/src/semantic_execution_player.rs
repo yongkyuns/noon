@@ -425,6 +425,17 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_become_family(
+        &mut self,
+        source: &noon::MobjectFamily,
+        target: &noon::MobjectFamily,
+        options: noon::ManimBecomeOptions,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.become_family(source, target, options))
+            .map(|_| ())
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_become_mobject(
         &mut self,

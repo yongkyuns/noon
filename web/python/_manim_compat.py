@@ -389,28 +389,17 @@ def _mobject_restore(self: Mobject) -> Mobject:
 
 
 class MoveToTarget:
-    """ManimCE ``MoveToTarget`` over the shared leaf ``TransformTo`` path."""
+    """Manim target-editor request over the ordinary shared Transform path."""
 
     def __new__(cls, mobject: object, **kwargs: Any):
-        if isinstance(mobject, Group):
-            raise NotImplementedError(
-                "MoveToTarget(Group/VGroup) requires retained family Transform semantics"
-            )
         if not isinstance(mobject, Mobject):
             raise TypeError("MoveToTarget target must be a Mobject")
         if not hasattr(mobject, "target"):
             raise ValueError("MoveToTarget called on mobject without attribute 'target'")
         target = mobject.target
-        if not isinstance(target, Mobject) or isinstance(target, Group):
-            raise NotImplementedError(
-                "MoveToTarget currently requires a leaf Mobject target produced by generate_target()"
-            )
-        unsupported = sorted(set(kwargs) - {"key"})
-        if unsupported:
-            raise NotImplementedError(
-                "unsupported MoveToTarget option(s): " + ", ".join(unsupported)
-            )
-        return _base.Transform(mobject, target, key=kwargs.get("key"))
+        if not isinstance(target, Mobject):
+            raise TypeError("MoveToTarget target state must be a Mobject")
+        return _base.Transform(mobject, target, **kwargs)
 
 
 _FAMILY_COPY_METADATA = object()

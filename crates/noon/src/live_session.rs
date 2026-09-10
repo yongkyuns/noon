@@ -12,12 +12,13 @@ pub use family_layout::LiveLayoutTarget;
 use crate::execution_session::EffectiveSemanticObject;
 use crate::{
     family_arrangement::FamilyArrangePlan,
-    semantic_mobject::{authoring_render_f64, prepare_become_state, stage_state_changes},
+    semantic_mobject::{authoring_render_f64, stage_state_changes},
     semantic_mobject::{
         edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
         edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
         edit_stroke_opacity,
     },
+    state_replacement::prepare_become_state,
     DeclaredAnimation, ExecutionSegment, ExecutionSegmentAdvanceError,
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError,
@@ -740,6 +741,26 @@ impl<'a> LiveSession<'a> {
             .map_err(LiveSessionError::from)?;
         let mut transaction = SemanticMutationTransaction::new();
         stage_state_changes(&mut transaction, target.node_id(), &authored, &next);
+        self.apply(transaction)
+    }
+
+    /// Replace a matching family's presentation from one coherent capture.
+    /// Existing member identities/order survive, and all edits publish together.
+    pub fn become_family(
+        &mut self,
+        source: &MobjectFamily,
+        target: &MobjectFamily,
+        options: ManimBecomeOptions,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family(source)?;
+        self.require_family(target)?;
+        self.require_target_capture()?;
+        let transaction = crate::state_replacement::family_become_transaction(
+            source,
+            target,
+            options,
+            |object| self.capture_mobject_state(object),
+        )?;
         self.apply(transaction)
     }
 

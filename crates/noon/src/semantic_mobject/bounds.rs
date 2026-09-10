@@ -244,7 +244,7 @@ fn geometry_layout_bounds(
         GeometryRef::External(_) => None,
     }
 }
-pub(super) fn layout_for_content(
+pub(crate) fn layout_for_content(
     store: &SemanticStore,
     content: SemanticObjectContent,
     transform: SemanticTransform2_5D,

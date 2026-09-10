@@ -85,6 +85,7 @@ mod scene;
 mod scene_membership;
 mod sector_authoring;
 mod semantic_mobject;
+mod state_replacement;
 #[cfg(any(feature = "native-text", feature = "typst"))]
 mod text_authoring;
 
@@ -142,9 +143,8 @@ pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
 pub use scene::Scene;
 pub use scene_membership::SceneMembershipRequest;
-pub use semantic_mobject::{
-    ManimBecomeOptions, ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject,
-};
+pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
+pub use state_replacement::ManimBecomeOptions;
 #[cfg(any(feature = "native-text", feature = "typst"))]
 pub use text_authoring::TextAuthoringError;
 #[cfg(feature = "typst")]

@@ -724,3 +724,12 @@ pub async fn create_direct_dimension_fitting_smoke_renderer(
     let session = noon::example_scenes::dimension_fitting::session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
+
+/// Family become/target/restore use the same Rust continuation on native and web.
+#[wasm_bindgen(js_name = createDirectFamilyStateSmokeRenderer)]
+pub async fn create_direct_family_state_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::family_state::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}

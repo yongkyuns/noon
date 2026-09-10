@@ -1676,6 +1676,31 @@ class SelectedAlignment(Scene):
     await stopSampledSource(page);
   }
 
+  const familyStateSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_family_state.py"), "utf8",
+  );
+  await startSampledSource(page, familyStateSource, "scene-shared-family-state");
+  try {
+    const canvas = page.locator("#scene-shared-family-state");
+    for (const [time, leftX, rightX, y] of [[0, -1, 1, 0], [0.2, -0.5, 1.5, 0.5], [0.4, -2, 0, 0], [0.6000000000000001, -2, 0, 0]]) {
+      await page.evaluate(time => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(time), time);
+      const frame = await canvas.screenshot();
+      const left = renderedWorldPixel(frame, leftX, y);
+      const right = renderedWorldPixel(frame, rightX, y);
+      assert.ok(left.red > 180 && left.blue < 50, `family state at ${time}s missed red member`);
+      assert.ok(right.blue > 180 && right.red < 50, `family state at ${time}s missed blue member`);
+    }
+    const result = await page.evaluate(async () => {
+      const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
+      const completed = await authored;
+      return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
+    });
+    assert.ok(Math.abs(result.duration - 0.6) < 1e-9);
+    assert.equal(result.metrics.objectCount, 2);
+  } finally {
+    await stopSampledSource(page);
+  }
+
   const familyTransformIndicateSource = await readFile(
     path.join(repoRoot, "web/python/examples/ordinary_family_transform_indicate.py"), "utf8",
   );

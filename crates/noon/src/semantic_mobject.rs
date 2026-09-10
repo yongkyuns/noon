@@ -1,9 +1,9 @@
 //! Shared geometry authoring over store-owned semantic object state.
 //!
 //! Handles retain only their originating store and generational identity. All
-//! durable edits use the canonical transaction vocabulary; snapshots are explicit
-//! migration/export adapters owned for deletion by #958/#959.
-use crate::AuthoringError;
+//! durable edits use the canonical transaction vocabulary. Captured state is
+//! transient input to shared preparation and coherent publication.
+use crate::{state_replacement::prepare_become_state, AuthoringError, ManimBecomeOptions};
 use noon_core::{
     Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticGeometryContent,
     SemanticGeometryLayout, SemanticMutationImpact, SemanticMutationTransaction,
@@ -17,7 +17,8 @@ mod bounds;
 mod layout;
 mod manim_geometry;
 mod style;
-use bounds::{layout_for_content, transform_layout_xy};
+pub(crate) use bounds::layout_for_content;
+use bounds::transform_layout_xy;
 pub(crate) use style::{
     edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
     edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
@@ -31,16 +32,6 @@ pub struct ManimNextToArgs {
     pub buff: f64,
     pub aligned_edge: (f64, f64),
     pub mask: (f64, f64),
-}
-
-/// Dimension matching applies height then width; stretch overrides both.
-/// Center matching runs last, after the target dimensions have been resolved.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ManimBecomeOptions {
-    pub match_height: bool,
-    pub match_width: bool,
-    pub match_center: bool,
-    pub stretch: bool,
 }
 
 /// World-space endpoints of one analytic Manim Line.
@@ -877,83 +868,6 @@ pub(crate) fn stage_state_changes(
     }
 }
 
-pub(crate) fn prepare_become_state(
-    store: &SemanticStore,
-    source: &SemanticObjectState,
-    mut target: SemanticObjectState,
-    options: ManimBecomeOptions,
-) -> Result<SemanticObjectState, AuthoringError> {
-    validate_content(store, source.content)?;
-    validate_content(store, target.content)?;
-
-    if options.stretch {
-        let source_width = state_dimension(store, source, true)?;
-        let source_height = state_dimension(store, source, false)?;
-        let target_width = state_dimension(store, &target, true)?;
-        let target_height = state_dimension(store, &target, false)?;
-        if target_width == 0.0 || target_height == 0.0 {
-            return Err(AuthoringError::ZeroStretchTarget);
-        }
-        let center = state_center(store, &target)?;
-        scale_state_about_center(
-            store,
-            &mut target,
-            source_width / target_width,
-            source_height / target_height,
-            center,
-        )?;
-    } else {
-        if options.match_height {
-            let source_height = state_dimension(store, source, false)?;
-            let target_height = state_dimension(store, &target, false)?;
-            if target_height == 0.0 {
-                return Err(AuthoringError::ZeroMatchHeight);
-            }
-            let center = state_center(store, &target)?;
-            let factor = source_height / target_height;
-            scale_state_about_center(store, &mut target, factor, factor, center)?;
-        }
-        if options.match_width {
-            let source_width = state_dimension(store, source, true)?;
-            let target_width = state_dimension(store, &target, true)?;
-            if target_width == 0.0 {
-                return Err(AuthoringError::ZeroMatchWidth);
-            }
-            let center = state_center(store, &target)?;
-            let factor = source_width / target_width;
-            scale_state_about_center(store, &mut target, factor, factor, center)?;
-        }
-    }
-    if options.match_center {
-        let source_center = state_center(store, source)?;
-        let target_center = state_center(store, &target)?;
-        target.transform.translation.x += source_center.0 - target_center.0;
-        target.transform.translation.y += source_center.1 - target_center.1;
-        target
-            .transform
-            .translation
-            .lower_xy_f32()
-            .map_err(AuthoringError::from)?;
-    }
-    Ok(target)
-}
-
-fn state_dimension(
-    store: &SemanticStore,
-    state: &SemanticObjectState,
-    horizontal: bool,
-) -> Result<f64, AuthoringError> {
-    Ok(
-        layout_for_content(store, state.content, state.transform)?.map_or(0.0, |bounds| {
-            if horizontal {
-                bounds.width()
-            } else {
-                bounds.height()
-            }
-        }),
-    )
-}
-
 pub(crate) fn state_center(
     store: &SemanticStore,
     state: &SemanticObjectState,
@@ -1219,7 +1133,7 @@ pub(crate) fn import_geometry(
 #[cfg(test)]
 mod tests;
 
-fn validate_content(
+pub(crate) fn validate_content(
     store: &SemanticStore,
     content: SemanticObjectContent,
 ) -> Result<(), AuthoringError> {
