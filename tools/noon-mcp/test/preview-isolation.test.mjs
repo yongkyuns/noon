@@ -30,6 +30,8 @@ test("Docker create contract is fail-closed and exposes only bounded read-only a
     "--cap-drop=ALL", "--security-opt=no-new-privileges=true", "--pids-limit=128",
     "dst=/noon/web,readonly", "dst=/noon/tools/noon-mcp,readonly",
   ]) assert.ok(joined.includes(required), `missing ${required}`);
+  assert.equal(args.some((arg) => arg.startsWith("--cap-add=")), false,
+    "Chromium sandbox compatibility must not grant capabilities to the outer container");
   assert.equal(args.some((arg) => arg.startsWith("--pid=")), false,
     "Docker default PID namespace must remain private");
   assert.equal(joined.includes("src=/repo,dst=/noon"), false, "whole checkout must not be mounted");
