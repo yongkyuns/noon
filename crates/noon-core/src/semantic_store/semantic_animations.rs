@@ -912,7 +912,7 @@ impl SemanticStore {
         if let Some(member) = family_member {
             if !matches!(
                 self.node(member.family).map(|node| node.kind()),
-                Some(crate::SemanticNodeKind::Family)
+                Some(crate::SemanticNodeKind::Family(_))
             ) || !crate::semantic_scene_root_contains(self, member.family, target)
                 .map_err(|_| SemanticAnimationError::InvalidTextWriteTarget)?
             {

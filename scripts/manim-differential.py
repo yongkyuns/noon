@@ -319,6 +319,18 @@ def _grid_inferred_and_alias_probe(api):
     return _members_observation(group)
 
 
+def _z_index_probe(api):
+    a, b = api.Square(), api.Circle()
+    nested = api.VGroup(a, b)
+    family = api.VGroup(a, nested)
+    family.set_z_index(2.5)
+    family.set_z_index(-1.25, family=False)
+    copy = family.copy()
+    a.z_index = 4.5
+    return [float(node.z_index) for node in
+            (family, nested, a, b, copy, copy[0], copy[1])]
+
+
 def _scale_pivots_probe(api):
     result = []
     for pivot in ({}, {"about_point": [0, 0, 0]}, {"about_edge": api.RIGHT}):
@@ -715,6 +727,7 @@ def _paint_queries_gradients(api):
 
 
 FIXTURES = [
+    Fixture("z_index", lambda: _z_index_probe(noon), lambda: _z_index_probe(manim)),
     Fixture("scale_pivots", lambda: _scale_pivots_probe(noon), lambda: _scale_pivots_probe(manim)),
     Fixture("planar_flip_pivots", lambda: _planar_flip_probe(noon), lambda: _planar_flip_probe(manim)),
 

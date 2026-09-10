@@ -1071,6 +1071,17 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_z_index(
+        &mut self,
+        anchor: &noon::LayoutAnchor,
+        value: f64,
+        family: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_z_index(anchor, value, family))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_flip_layout(
         &mut self,
         anchor: &noon::LayoutAnchor,

@@ -147,7 +147,7 @@ fn target_node_checked(
         .node(id)
         .ok_or(SemanticSceneOperationError::UnknownNode(id))?;
     let is_target = match node.kind() {
-        SemanticNodeKind::Family => true,
+        SemanticNodeKind::Family(_) => true,
         SemanticNodeKind::AuthoringObject => node.semantic_object_state().is_some(),
         SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => false,
     };

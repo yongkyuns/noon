@@ -85,6 +85,7 @@ impl SemanticExecutionIndex {
                 | SemanticMutationImpact::ObjectProperty { .. }
                 | SemanticMutationImpact::ObjectContent { .. }
                 | SemanticMutationImpact::ObjectStyle { .. }
+                | SemanticMutationImpact::ZIndex { .. }
                 | SemanticMutationImpact::Subscription { .. }
                 | SemanticMutationImpact::UpdaterRegistrations { .. }
                 | SemanticMutationImpact::SignalScoped { .. }
@@ -131,7 +132,7 @@ impl SemanticExecutionIndex {
         let node = store
             .node(root)
             .ok_or(SemanticStoreError::UnknownNode(root))?;
-        if !matches!(node.kind(), SemanticNodeKind::Family) {
+        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
             return Err(SemanticStoreError::NotFamily(root).into());
         }
         self.lower_roots(store, std::iter::once(root))
@@ -641,7 +642,7 @@ mod tests {
             noon_core::StrokeCap::Square
         );
         assert_eq!(object_state.base_style.opacity, 0.6);
-        assert_eq!(object_state.presentation.z_index, 9);
+        assert_eq!(object_state.presentation.z_index, 9.0);
         assert_eq!(object_state.presentation.insertion_order, 0);
     }
 

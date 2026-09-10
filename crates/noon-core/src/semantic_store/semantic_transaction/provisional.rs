@@ -122,7 +122,7 @@ impl<'a> TransactionNodeCatalog<'a> {
             };
             if !matches!(
                 self.store.node(member.family).map(|node| node.kind()),
-                Some(crate::SemanticNodeKind::Family)
+                Some(crate::SemanticNodeKind::Family(_))
             ) || !crate::semantic_scene_root_contains(self.store, member.family, target)
                 .map_err(|_| SemanticMutationTransactionError::InvalidTextWriteTarget { index })?
             {
@@ -211,6 +211,22 @@ impl<'a> TransactionNodeCatalog<'a> {
             .collect()
     }
 
+    /// Called only after validating an authoring node, including pending tokens.
+    pub(super) fn family_z_index(&self, node: SemanticTransactionNodeRef) -> Option<f64> {
+        match node {
+            SemanticTransactionNodeRef::Existing(node) => {
+                match self.store.node(node).expect("validated node").kind() {
+                    SemanticNodeKind::Family(presentation) => Some(presentation.z_index),
+                    _ => None,
+                }
+            }
+            SemanticTransactionNodeRef::Pending(token) => match self.pending[&token] {
+                PendingSemanticNode::Creation(SemanticNodeCreation::Family { .. }) => Some(0.0),
+                _ => None,
+            },
+        }
+    }
+
     pub(super) fn ensure_family(
         &self,
         node: SemanticTransactionNodeRef,
@@ -224,7 +240,7 @@ impl<'a> TransactionNodeCatalog<'a> {
                         error: SemanticSceneOperationError::UnknownNode(node),
                     });
                 };
-                if !matches!(existing.kind(), SemanticNodeKind::Family) {
+                if !matches!(existing.kind(), SemanticNodeKind::Family(_)) {
                     return Err(SemanticMutationTransactionError::Family {
                         index,
                         error: SemanticSceneOperationError::NotSemanticFamily(node),
@@ -261,7 +277,7 @@ impl<'a> TransactionNodeCatalog<'a> {
                         error: SemanticSceneOperationError::UnknownNode(node),
                     });
                 };
-                let valid = matches!(existing.kind(), SemanticNodeKind::Family)
+                let valid = matches!(existing.kind(), SemanticNodeKind::Family(_))
                     || matches!(existing.kind(), SemanticNodeKind::AuthoringObject)
                         && existing.semantic_object_state().is_some();
                 if !valid {
@@ -511,6 +527,7 @@ pub(super) fn duplicate_mutation_error(
         SemanticMutationKey::ObjectProperty { object, .. }
         | SemanticMutationKey::ObjectContent(object)
         | SemanticMutationKey::ObjectStyle(object)
+        | SemanticMutationKey::ZIndex(object)
         | SemanticMutationKey::Subscription { object, .. }
         | SemanticMutationKey::NodeRemoval(object) => match object {
             SemanticTransactionNodeRef::Pending(token) => Some(token),
@@ -542,6 +559,9 @@ pub(super) fn duplicate_mutation_error(
         },
         SemanticMutationKey::ObjectContent(SemanticTransactionNodeRef::Existing(object)) => {
             SemanticMutationTransactionError::DuplicateContent { index, object }
+        }
+        SemanticMutationKey::ZIndex(SemanticTransactionNodeRef::Existing(node)) => {
+            SemanticMutationTransactionError::DuplicateZIndex { index, node }
         }
         SemanticMutationKey::ObjectStyle(SemanticTransactionNodeRef::Existing(object)) => {
             SemanticMutationTransactionError::DuplicateStyle { index, object }

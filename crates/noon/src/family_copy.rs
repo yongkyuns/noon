@@ -107,14 +107,17 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
         if copied.contains_key(&id) {
             continue;
         }
-        let members = {
+        let (members, family_z) = {
             let store = store.borrow();
             let node = store.node(id).ok_or_else(|| {
                 AuthoringError::from(noon_core::SemanticSceneOperationError::UnknownNode(id))
             })?;
             match node.kind() {
-                SemanticNodeKind::Family => Some(node.members_iter().collect::<Vec<_>>()),
-                SemanticNodeKind::AuthoringObject => None,
+                SemanticNodeKind::Family(presentation) => (
+                    Some(node.members_iter().collect::<Vec<_>>()),
+                    Some(presentation.z_index),
+                ),
+                SemanticNodeKind::AuthoringObject => (None, None),
                 _ => {
                     return Err(AuthoringError::from(
                         noon_core::SemanticSceneOperationError::NotSemanticAuthoringNode(id),
@@ -131,7 +134,11 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
             let mobject = Mobject::from_node(Rc::clone(store), id)?;
             SemanticNodeCreation::object(capture(&mobject)?)
         };
-        copied.insert(id, transaction.create_node(creation));
+        let pending = transaction.create_node(creation);
+        if let Some(z) = family_z {
+            transaction.set_z_index(pending, z);
+        }
+        copied.insert(id, pending);
     }
     for (parent, members) in edges {
         for member in members {

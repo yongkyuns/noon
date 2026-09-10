@@ -11,8 +11,9 @@ use crate::{CompiledFamilyAnimation, CompiledObject};
 pub enum ExecutionPatch {
     CreateObject(CompiledObject),
     RemoveObject(ObjectId),
-    /// Move one live object in the derived painter order without relocating its
-    /// stable execution row. `before=None` moves it to the live tail.
+    /// Move one live object in the derived family traversal order without relocating its
+    /// stable execution row. Z-index determines painter layers; equal layers follow
+    /// this traversal. `before=None` moves it to the live family tail.
     ReorderObject {
         object: ObjectId,
         before: Option<ObjectId>,
@@ -25,6 +26,10 @@ pub enum ExecutionPatch {
     SetTransform {
         object: ObjectId,
         transform: Transform2D,
+    },
+    SetZIndex {
+        object: ObjectId,
+        value: f64,
     },
     SetStyle {
         object: ObjectId,

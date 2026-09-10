@@ -2738,7 +2738,7 @@ impl ExecutionSession {
                 "family fade target {target:?} does not exist"
             ))
         })?;
-        if !matches!(node.kind(), noon_core::SemanticNodeKind::Family) {
+        if !matches!(node.kind(), noon_core::SemanticNodeKind::Family(_)) {
             return Err(ExecutionSessionAnimationError::InvalidComposition(
                 "family fade target must be a semantic family".into(),
             ));
