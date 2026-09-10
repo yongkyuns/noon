@@ -140,57 +140,99 @@ test("provider qualification selects each consumer input even when changed alone
     "crates/noon/build.rs",
     "crates/noon/Cargo.toml",
     "crates/noon-core/src/lib.rs",
-    "crates/noon-core/tests/property_invariants.rs",
-    "crates/noon-core/benches/store.rs",
-    "crates/noon-core/build.rs",
-    "crates/noon-core/Cargo.toml",
     "crates/noon-compile/src/lib.rs",
-    "crates/noon-compile/tests/analytic_transform.rs",
-    "crates/noon-compile/benches/lowering.rs",
-    "crates/noon-compile/build.rs",
-    "crates/noon-compile/Cargo.toml",
-    "crates/noon-runtime/src/lib.rs",
-    "crates/noon-runtime/tests/static_frame_locality.rs",
-    "crates/noon-runtime/benches/runtime.rs",
-    "crates/noon-runtime/build.rs",
-    "crates/noon-runtime/Cargo.toml",
-    "crates/noon-render-wgpu/src/lib.rs",
-    "crates/noon-render-wgpu/tests/appearance.rs",
-    "crates/noon-render-wgpu/benches/renderer.rs",
-    "crates/noon-render-wgpu/build.rs",
-    "crates/noon-render-wgpu/Cargo.toml",
-    "crates/noon-native/src/lib.rs",
-    "crates/noon-native/examples/create_shapes.rs",
-    "crates/noon-native/tests/smoke.rs",
-    "crates/noon-native/benches/native.rs",
-    "crates/noon-native/build.rs",
-    "crates/noon-native/Cargo.toml",
-    "crates/noon-web/src/lib.rs",
-    "crates/noon-web/tests/deterministic_replay.rs",
-    "crates/noon-web/benches/web.rs",
-    "crates/noon-web/build.rs",
-    "crates/noon-web/Cargo.toml",
+    "crates/noon-runtime/src/frame.rs",
+    "crates/noon-geometry/src/lib.rs",
     "crates/noon-text/src/lib.rs",
-    "crates/noon-text/tests/metrics.rs",
-    "crates/noon-text/benches/text.rs",
-    "crates/noon-text/build.rs",
-    "crates/noon-text/Cargo.toml",
     "crates/noon-typst/src/lib.rs",
-    "crates/noon-typst/tests/smoke.rs",
-    "crates/noon-typst/benches/typst.rs",
-    "crates/noon-typst/build.rs",
-    "crates/noon-typst/Cargo.toml",
+    "crates/noon-text/fonts/fixture.ttf",
+    "crates/new-provider/src/lib.rs",
+    "crates/new-provider/build.rs",
+    "crates/new-provider/Cargo.toml",
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain",
+    "rust-toolchain.toml",
+    ".cargo/config",
+    ".cargo/config.toml",
+    "rustfmt.toml",
+    ".rustfmt.toml",
+    "clippy.toml",
+    ".clippy.toml",
+    "fixtures/clippy.toml",
+    "fixtures/.rustfmt.toml",
+    "fixtures/provider-consumer/Cargo.toml",
+    "fixtures/provider-consumer/Cargo.lock",
+    "fixtures/provider-consumer/.cargo/config.toml",
+    "fixtures/provider-consumer/src/main.rs",
+    "fixtures/provider-consumer/tests/providers.rs",
+    "fixtures/provider-consumer/tests/public_facade.rs",
+    "fixtures/provider-consumer/fonts/fixture.ttf",
+    "scripts/provider-features.py",
+    "scripts/provider_features_test.py",
+    "web/ci-workflow-topology.test.mjs",
+    ".github/workflows/provider-features.yml",
   ]) {
-    assert.equal(selectsProvider([changed]), true, `provider workflow must select ${changed}`);
+    assert.equal(selectsProvider([changed]), true, `provider qualification skipped ${changed}`);
   }
 });
 
-test("provider qualification ignores unrelated docs and workflow-only changes", () => {
-  for (const changed of [
-    "README.md",
-    "docs/architecture.md",
-    ".github/workflows/provider-features.yml",
-  ]) {
-    assert.equal(selectsProvider([changed]), false, `provider workflow must ignore ${changed}`);
+test("provider selection excludes unrelated edits and handles mixed changes", () => {
+  const irrelevant = [
+    "README.md", "docs/architecture.md", "assets/hello_world.gif",
+    "web/python/_manim_compat.py", "web/index.html", "scripts/browser-smoke.mjs",
+    ".github/workflows/pages.yml", "fixtures/unrelated/input.json",
+    "crates-other/noon/src/lib.rs", "fixtures/provider-consumer-other/src/main.rs",
+    "scripts/provider_features_test.py.bak", "Cargo.toml.bak",
+  ];
+  for (const changed of irrelevant) assert.equal(selectsProvider([changed]), false, changed);
+  assert.equal(selectsProvider([]), false);
+  assert.equal(selectsProvider(irrelevant), false);
+  assert.equal(selectsProvider([...irrelevant, "crates/noon/examples/provider_probe.rs"]), true);
+});
+
+test("provider selector preserves glob boundaries and fails closed on new syntax", () => {
+  for (const changed of ["crates/Cargo.toml", "crates/noon/Cargo.toml", "crates/nested/noon/Cargo.toml"]) {
+    assert.equal(providerPathMatches("crates/**/Cargo.toml", changed), true);
   }
+  assert.equal(providerPathMatches("crates/**", "crates/.hidden/input.rs"), true);
+  assert.equal(providerPathMatches("crates/**", "other/crates/noon/src/lib.rs"), false);
+  assert.equal(providerPathMatches("crates/**/Cargo.toml", "crates/noon/Cargo.toml.bak"), false);
+  assert.equal(providerPathMatches("Cargo.toml", "CargoXtoml"), false);
+  assert.throws(() => providerPathMatches("crates/*/src/**", "crates/noon/src/lib.rs"), /unsupported/);
+  assert.throws(() => providerPullRequestPaths(providerWorkflow.replace("    paths:", "    paths-ignore:")), /paths-only/);
+  assert.throws(() => providerPullRequestPaths(providerWorkflow.replace("    paths:", "    branches: [master]\n    paths:")), /paths-only/);
+  assert.throws(() => providerPullRequestPaths(providerWorkflow.replace("      - 'Cargo.toml'", "      - '!Cargo.toml'")), /unsupported/);
+});
+
+test("provider workflow retains cached five-by-two qualification and example regression", () => {
+  assert.match(providerWorkflow, /config: \[minimal, native-text, native-bundled, typst, product\]/);
+  assert.match(providerWorkflow, /target: \[x86_64-unknown-linux-gnu, wasm32-unknown-unknown\]/);
+  assert.match(providerWorkflow, /RUSTC_WRAPPER: \$\{\{ !inputs\.measure && 'sccache' \|\| '' \}\}/);
+  assert.match(providerWorkflow, /SCCACHE_GHA_RW_MODE: READ_ONLY/);
+  assert.match(providerWorkflow, /if: github\.event_name == 'workflow_dispatch' && inputs\.measure/);
+  assert.match(providerWorkflow, /cargo test -p noon --no-default-features --doc/);
+  assert.match(providerWorkflow, /cargo run -p noon --no-default-features --example shared_authoring/);
+  const probe = providerWorkflow.split("      - name: Prove provider-dependent examples require feature guards\n")[1]?.split("\n      - ")[0];
+  assert.ok(probe, "provider example regression must run in the real workflow");
+  assert.match(probe, /if: matrix\.config == 'minimal' && matrix\.target == 'x86_64-unknown-linux-gnu'/);
+  assert.match(probe, /NOON_PROVIDER_COMPILE_TESTS: '1'/);
+  assert.match(probe, /python3 scripts\/provider_features_test\.py ProviderExampleTests/);
+});
+
+
+test("architecture diagrams stay a read-only check with independently preserved artifacts", async () => {
+  const workflow = await readFile(new URL("architecture-diagrams.yml", workflowDir), "utf8");
+  assert.match(workflow, /permissions:\n  contents: read/);
+  assert.doesNotMatch(workflow, /^\s*(contents|actions|pull-requests):\s*write\b/m);
+  assert.match(workflow, /persist-credentials: false/);
+  assert.doesNotMatch(workflow, /\bgit\s+(push|commit)\b/);
+  assert.match(workflow, /python3 scripts\/test_architecture_diagrams\.py/);
+  assert.match(workflow, /python3 scripts\/architecture_diagrams\.py --check/);
+  assert.match(workflow, /sha256sum -c -/);
+  const preservation = workflow.split("      - name: Preserve diagram sources and checked-in SVGs\n")[1];
+  assert.ok(preservation, "diagram artifacts must remain available when checks fail");
+  assert.match(preservation, /^        if: always\(\)$/m);
+  assert.match(preservation, /uses: actions\/upload-artifact@/);
+  assert.match(preservation, /docs\/diagrams\//);
 });
