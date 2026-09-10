@@ -116,6 +116,21 @@ class VMobject(Mobject):
         return _get_stroke_opacity(self)
 
 
+    def point_from_proportion(self, alpha: float) -> _base.Vec2:
+        from _manim_path_queries import point_from_proportion
+        return point_from_proportion(self, alpha)
+
+    def get_start(self) -> _base.Vec2:
+        return self.point_from_proportion(0.0)
+
+    def get_end(self) -> _base.Vec2:
+        return self.point_from_proportion(1.0)
+
+    def get_arc_length(self, sample_points_per_curve: int | None = None) -> float:
+        from _manim_path_queries import arc_length
+        return arc_length(self, sample_points_per_curve)
+
+
 class Circle(VMobject):
     def __init__(
         self,

@@ -3262,4 +3262,5 @@ pub mod planar_affine;
 
 pub mod scale_pivots;
 
+pub mod path_queries;
 pub mod z_index;

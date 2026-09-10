@@ -786,6 +786,15 @@ pub async fn create_direct_scale_pivots_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Shared path observations use the same execution session on native and web.
+#[wasm_bindgen(js_name = createDirectPathQueriesSmokeRenderer)]
+pub async fn create_direct_path_queries_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::path_queries::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 #[wasm_bindgen(js_name = createDirectZIndexSmokeRenderer)]
 pub async fn create_direct_z_index_smoke_renderer(
     canvas: OffscreenCanvas,

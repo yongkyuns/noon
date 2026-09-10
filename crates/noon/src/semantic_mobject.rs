@@ -810,7 +810,7 @@ fn line_endpoints_for_state(
     })
 }
 
-fn semantic_transform_with_effective_affine(
+pub(crate) fn semantic_transform_with_effective_affine(
     mut authored: SemanticTransform2_5D,
     effective: Transform2D,
 ) -> SemanticTransform2_5D {
