@@ -1,4 +1,8 @@
-import { PythonAuthoringClient } from "./authoring-client.js";
+import {
+  AUTHORING_CHANNEL,
+  AUTHORING_PROTOCOL_VERSION,
+  PythonAuthoringClient,
+} from "./authoring-client.js";
 
 const expectedPaths = Object.freeze({
   worker: "./python-worker.js",
@@ -25,7 +29,9 @@ export class ProvenancedPythonAuthoringClient extends PythonAuthoringClient {
     worker.addEventListener("message", (event) => {
       try {
         const message = event.data;
-        if (message?.channel !== "noon.authoring" || message?.protocolVersion !== 7 || message?.type !== "ready") {
+        if (message?.channel !== AUTHORING_CHANNEL ||
+            message?.protocolVersion !== AUTHORING_PROTOCOL_VERSION ||
+            message?.type !== "ready") {
           return;
         }
         resolveIdentity(validateRuntimeBuildIdentity(message.buildIdentity));
