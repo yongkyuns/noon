@@ -11,6 +11,17 @@
   },
   "fixtures": [
     {
+      "id": "path-editing",
+      "scene": "OrdinaryPathEditing",
+      "source": "parity/manim-v0.21/core-examples/path_editing.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
       "id": "path-arrangement",
       "scene": "OrdinaryPathArrangement",
       "source": "parity/manim-v0.21/core-examples/path_arrangement.py",

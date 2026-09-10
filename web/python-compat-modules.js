@@ -5,6 +5,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_manim_compat.py", runtimePath: "/tmp/_manim_compat.py", label: "Noon Manim compatibility layer" },
   { sourcePath: "python/_manim_semantic_handles.py", runtimePath: "/tmp/_manim_semantic_handles.py", label: "Noon shared semantic handle layer" },
   { sourcePath: "python/_manim_path_queries.py", runtimePath: "/tmp/_manim_path_queries.py", label: "Noon shared path query wrappers" },
+  { sourcePath: "python/_manim_path_editing.py", runtimePath: "/tmp/_manim_path_editing.py", label: "Noon shared path editing wrappers" },
   { sourcePath: "python/_manim_typst.py", runtimePath: "/tmp/_manim_typst.py", label: "Noon retained Typst compatibility layer" },
   { sourcePath: "python/_manim_family_creation.py", runtimePath: "/tmp/_manim_family_creation.py", label: "Noon Write/Unwrite syntax layer" },
   { sourcePath: "python/_manim_rate_functions.py", runtimePath: "/tmp/_manim_rate_functions.py", label: "Noon Manim rate functions" },

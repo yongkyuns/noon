@@ -644,6 +644,27 @@ impl SemanticStore {
         Ok(self.geometry_resources.insert_path(path))
     }
 
+    /// Make a new immutable path available to one atomic semantic publication.
+    /// The callback must use a preflighted/atomic transaction: on error this
+    /// discards only the unpublished resource, preserving existing handles.
+    pub fn with_geometry_path<T, E>(
+        &mut self,
+        path: crate::VectorPath,
+        publish: impl FnOnce(&mut Self, crate::GeometryResourceHandle) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<crate::GeometryResourceError>,
+    {
+        let handle = self.insert_geometry_path(path).map_err(E::from)?;
+        let result = publish(self, handle);
+        if result.is_err() {
+            self.geometry_resources
+                .remove(handle.id)
+                .expect("an unpublished fresh path remains removable");
+        }
+        result
+    }
+
     pub fn new() -> Self {
         Self::default()
     }

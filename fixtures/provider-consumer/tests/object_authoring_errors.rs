@@ -128,7 +128,10 @@ fn style_transform_and_query_categories_are_typed_and_atomic() -> TestResult {
         object.set_rotation(f64::INFINITY),
         Err(AuthoringError::InvalidRenderNumber { .. })
     ));
-    let error = object.path_query()?.point_from_proportion(-1.0).unwrap_err();
+    let error = object
+        .path_query()?
+        .point_from_proportion(-1.0)
+        .unwrap_err();
     assert!(matches!(error, AuthoringError::PathQuery(_)));
     assert!(error.source().is_some());
     assert_eq!(snapshot(&scene, &[&object]), before);

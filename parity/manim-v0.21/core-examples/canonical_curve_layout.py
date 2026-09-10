@@ -3,7 +3,7 @@ from manim import *
 
 class OrdinaryCanonicalCurveLayout(Scene):
     def construct(self):
-        circle = Circle(radius=1, color=WHITE).stretch(2, 0).stretch(0.75, 1)
+        circle = Circle(radius=1, color=WHITE).stretch_to_fit_width(4).stretch_to_fit_height(1.5)
         ellipse = Ellipse(width=4, height=1.5, color="#58c4dd")
         for shape, x in ((circle, -2.4), (ellipse, 2.4)):
             shape.rotate(PI / 6).shift(RIGHT * x)

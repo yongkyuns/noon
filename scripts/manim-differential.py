@@ -825,12 +825,20 @@ def _path_family_arrangement(api):
 
 
 def _canonical_curve_layout(api):
-    circle = api.Circle(radius=1).stretch(2, 0).stretch(0.75, 1)
+    circle = api.Circle(radius=1).stretch_to_fit_width(4).stretch_to_fit_height(1.5)
     ellipse = api.Ellipse(width=4, height=1.5)
     for obj in (circle, ellipse):
         obj.rotate(api.PI / 6)
     family = api.VGroup(circle, ellipse)
     return [_object_observation(obj) for obj in (circle, ellipse, circle.copy(), family)]
+
+
+def _path_editing(api):
+    path = api.VMobject(color="#58c4dd").set_points_as_corners([(-2, -1, 0), (0, 1, 0), (2, -1, 0)])
+    original = path.copy()
+    path.shift(api.RIGHT * 4).rotate(0.6)
+    path.set_points_as_corners([(1, -1, 0), (3, -1, 0), (2, 1, 0), (1, -1, 0)])
+    return [[_object_observation(obj), list(obj.get_start())[:2], list(obj.get_end())[:2], obj.get_arc_length()] for obj in (path, original)]
 
 
 def _point_matching(api):
@@ -844,6 +852,7 @@ def _point_matching(api):
 
 
 FIXTURES = [
+    Fixture("path_editing", lambda: _path_editing(noon), lambda: _path_editing(manim), 1e-5),
     Fixture("point_matching", lambda: _point_matching(noon), lambda: _point_matching(manim), 1e-5),
     Fixture("canonical_curve_layout", lambda: _canonical_curve_layout(noon), lambda: _canonical_curve_layout(manim), 1e-5),
     Fixture("path_family_arrangement", lambda: _path_family_arrangement(noon), lambda: _path_family_arrangement(manim), 1e-5),

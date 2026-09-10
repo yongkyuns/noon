@@ -5727,6 +5727,20 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetPointsAsCorners)]
+        pub fn live_set_points_as_corners(
+            &mut self,
+            source: &crate::WasmAuthoringMobjectHandle,
+            values: Vec<f64>,
+        ) -> Result<(), JsValue> {
+            let points = crate::authoring_geometry::points(&values)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_points_as_corners(source.semantic_mobject(), &points)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveMatchPoints)]
         pub fn live_match_points(
             &mut self,
