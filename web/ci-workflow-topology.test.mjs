@@ -25,7 +25,6 @@ const exactFamilies = new Map([
   ["fuzz.yml", "fuzz"],
   ["branch-cleanup-once.yml", "maintenance"],
   ["noon-agent-foundation.yml", "agent-authoring"],
-  ["agent-preview-isolation.yml", "agent-preview"],
 ]);
 
 function classifyWorkflow(name) {
@@ -62,7 +61,6 @@ const requiredFamilies = new Set([
   "manim",
   "playground",
   "agent-authoring",
-  "agent-preview",
 ]);
 const presentFamilies = new Set(classified.map(({ family }) => family));
 for (const family of requiredFamilies) {
@@ -146,6 +144,7 @@ test("provider qualification selects each consumer input even when changed alone
     "crates/noon-text/src/lib.rs",
     "crates/noon-typst/src/lib.rs",
     "crates/noon-text/fonts/fixture.ttf",
+    // New/moved provider packages must not need a historical crate-name allowlist.
     "crates/new-provider/src/lib.rs",
     "crates/new-provider/build.rs",
     "crates/new-provider/Cargo.toml",

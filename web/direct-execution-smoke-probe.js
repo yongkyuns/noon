@@ -1,4 +1,5 @@
 const {
+  createDirectStyleOperationsSmokeRenderer,
   createDirectAffineCallbackSmokeRenderer,
   createDirectLiveUpdaterLifecycleSmokeRenderer,
   createDirectCallbackPaintSmokeRenderer,
@@ -1399,6 +1400,30 @@ async function directFamilyArrangementProof(expectedBackend) {
   }
 }
 
+async function directStyleOperationsProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectStyleOperationsSmokeRenderer(canvas);
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    const wake = await settleDirectPublication(renderer, 0);
+    const first = await sampleRenderedColor(canvas, -2, 0);
+    const second = await sampleRenderedColor(canvas, 0, 0);
+    const matched = await sampleRenderedColor(canvas, 2, 0);
+    const metrics = { backend: renderer.rendererBackend(), objects: renderer.objectCount(), first, second, matched };
+    if (metrics.backend !== expectedBackend || metrics.objects !== 3 || wake.cadence !== "idle"
+        || first.red < first.blue + 90 || second.red < second.blue + 90
+        || matched.blue < matched.red + 90) {
+      throw new Error(`shared style operations failed: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
 async function directFamilyPlacementProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectFamilyPlacementSmokeRenderer(canvas);
@@ -2489,6 +2514,7 @@ async function start() {
   metrics.mixedScalarComposition = await directMixedScalarCompositionProof(expectedBackend);
   metrics.familyTransformIndicate = await directFamilyTransformIndicateProof(expectedBackend);
   metrics.familyArrangement = await directFamilyArrangementProof(expectedBackend);
+  metrics.styleOperations = await directStyleOperationsProof(expectedBackend);
   metrics.familyPlacement = await directFamilyPlacementProof(expectedBackend);
   metrics.drawBorderThenFill = await directDrawBorderThenFillProof(expectedBackend);
   metrics.ordinaryMembership = await directOrdinaryMembershipProof(expectedBackend);

@@ -15,7 +15,7 @@ on:
       - "web/authoring-execution-client.js"
       - "scripts/build-web-demo.sh"
       - ".github/actions/dev-wasm-build/**"
-      - ".github/workflows/agent-preview-isolation.yml"
+      - ".github/workflows/authoring-agent-preview-isolation.yml"
 
 permissions:
   contents: read
