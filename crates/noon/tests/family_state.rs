@@ -173,11 +173,20 @@ fn paired_program_animates_and_restores_through_coherent_completion() {
         program.resume().unwrap(),
         LiveProgramStatus::Awaiting(_)
     ));
+    let center = |program: &noon::LiveProgram<noon::example_scenes::family_state::FamilyState>| {
+        let frame = program.session().frame();
+        frame
+            .render_geometry(0)
+            .unwrap()
+            .world_bounds(frame.render_transform(0))
+            .unwrap()
+            .center()
+    };
+    let initial = center(&program);
     program.drive_to(&mut callbacks, 0.2).unwrap();
-    close(
-        f64::from(program.session().frame().render_transform(0).translation.x),
-        -0.5,
-    );
+    let midpoint = center(&program);
+    close(f64::from(midpoint.x - initial.x), 0.5);
+    close(f64::from(midpoint.y - initial.y), 0.5);
     for time in [0.4, 0.6000000000000001] {
         assert!(matches!(
             program.drive_to(&mut callbacks, time).unwrap(),
@@ -187,10 +196,8 @@ fn paired_program_animates_and_restores_through_coherent_completion() {
         program.admit_publication(context).unwrap();
         program.resume().unwrap();
     }
-    close(
-        f64::from(program.session().frame().render_transform(0).translation.x),
-        -2.0,
-    );
+    close(f64::from(center(&program).x), -2.0);
+    close(f64::from(center(&program).y), 0.0);
 }
 
 #[test]
