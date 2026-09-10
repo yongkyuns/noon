@@ -1,11 +1,54 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 
 use noon_core::{
-    FontResourceLookup, GeometryResourceLookup, PublicationContext, RetainedFamilyAnimationPlan,
-    TextResourceLookup,
+    FontResourceLookup, GeometryRef, GeometryResourceLookup, ObjectContentRef, PublicationContext,
+    Rect, RetainedFamilyAnimationPlan, Style, TextResourceHandle, TextResourceLookup, Transform2D,
 };
 
 use crate::{FrameChanges, FrameState, RetainedPlannedFamilyFrame};
+
+/// One identity-free effective visual row derived for renderer-only animation work.
+///
+/// Unlike [`crate::FrameObjectState`], this type deliberately has no `ObjectId` and
+/// therefore cannot enter the stable execution-slot domain. It is suitable for
+/// temporary family-Transform padding copies whose lifetime is bounded by one
+/// animation plan/publication. Content still uses the same immutable retained
+/// resources as ordinary frame rows; there is no second geometry/text world.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DerivedDisplayObjectState {
+    pub z_index: f64,
+    pub content: ObjectContentRef,
+    pub text_bounds: Option<Rect>,
+    pub transform: Transform2D,
+    pub style: Style,
+    pub appearance: f32,
+    pub presence: bool,
+    pub reveal: f32,
+    pub morph: f32,
+    /// Optional execution-derived geometry override, mirroring `FrameState` without
+    /// acquiring stable row identity.
+    pub render_geometry: Option<Arc<GeometryRef>>,
+    /// Optional execution-derived coordinate frame for `render_geometry`.
+    pub render_transform: Option<Transform2D>,
+}
+
+impl DerivedDisplayObjectState {
+    pub fn geometry(&self) -> Option<&GeometryRef> {
+        self.content.geometry()
+    }
+
+    pub const fn text(&self) -> Option<TextResourceHandle> {
+        self.content.text()
+    }
+
+    pub fn effective_render_geometry(&self) -> Option<&GeometryRef> {
+        self.render_geometry.as_deref().or_else(|| self.geometry())
+    }
+
+    pub fn effective_render_transform(&self) -> Transform2D {
+        self.render_transform.unwrap_or(self.transform)
+    }
+}
 
 /// One coherent borrowed runtime publication for renderer preparation.
 ///
@@ -100,5 +143,68 @@ impl<'a> RendererPublication<'a> {
             active_family_animation_indices,
             painter_order,
         }
+    }
+}
+
+#[cfg(test)]
+mod derived_display_tests {
+    use noon_core::{GeometryRef, Style, Vec2};
+
+    use super::*;
+
+    #[test]
+    fn derived_display_row_reuses_retained_content_without_execution_identity() {
+        let state = DerivedDisplayObjectState {
+            z_index: 2.0,
+            content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+            text_bounds: None,
+            transform: Transform2D {
+                translation: Vec2::new(1.0, 2.0),
+                ..Transform2D::IDENTITY
+            },
+            style: Style::default(),
+            appearance: 0.5,
+            presence: true,
+            reveal: 1.0,
+            morph: 0.0,
+            render_geometry: None,
+            render_transform: None,
+        };
+
+        assert!(matches!(
+            state.effective_render_geometry(),
+            Some(GeometryRef::Circle { radius }) if *radius == 1.0
+        ));
+        assert_eq!(state.effective_render_transform(), state.transform);
+        // The type itself has no semantic or execution identity field: the only
+        // retained object reference is immutable content/resource state.
+        assert_eq!(state.text(), None);
+    }
+
+    #[test]
+    fn derived_display_overrides_stay_local_to_the_visual_row() {
+        let override_transform = Transform2D {
+            translation: Vec2::new(-3.0, 4.0),
+            ..Transform2D::IDENTITY
+        };
+        let state = DerivedDisplayObjectState {
+            z_index: 0.0,
+            content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
+            text_bounds: None,
+            transform: Transform2D::IDENTITY,
+            style: Style::default(),
+            appearance: 1.0,
+            presence: true,
+            reveal: 0.5,
+            morph: 0.25,
+            render_geometry: Some(Arc::new(GeometryRef::rectangle(3.0, 4.0))),
+            render_transform: Some(override_transform),
+        };
+
+        assert!(matches!(
+            state.effective_render_geometry(),
+            Some(GeometryRef::Rectangle { .. })
+        ));
+        assert_eq!(state.effective_render_transform(), override_transform);
     }
 }
