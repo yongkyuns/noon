@@ -11,6 +11,17 @@
   },
   "fixtures": [
     {
+      "id": "path-alignment",
+      "scene": "OrdinaryPathAlignment",
+      "source": "parity/manim-v0.21/core-examples/path_alignment.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
       "id": "boolean-geometry",
       "scene": "OrdinaryBooleanGeometry",
       "source": "parity/manim-v0.21/core-examples/boolean_geometry.py",
@@ -38,9 +49,9 @@
       "source": "parity/manim-v0.21/core-examples/path_subcurves.py",
       "expected_duration": 0.2,
       "raster_tolerance": {
-        "max_bounds_delta_px": 1,
-        "max_differing_ratio": 0.003,
-        "max_mean_absolute_channel_error": 0.1
+        "max_bounds_delta_px": 0,
+        "max_differing_ratio": 0.0032,
+        "max_mean_absolute_channel_error": 0.04
       }
     },
     {

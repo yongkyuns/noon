@@ -139,6 +139,10 @@ class VMobject(Mobject):
         from _manim_path_editing import edit_points
         return edit_points(self, "reverseDirection", "liveReverseDirection", ())
 
+    def align_points(self, vmobject):
+        from _manim_path_editing import align_points
+        return align_points(self, vmobject)
+
     def pointwise_become_partial(self, vmobject, a, b):
         from _manim_path_editing import pointwise_become_partial
         return pointwise_become_partial(self, vmobject, a, b)

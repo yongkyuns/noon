@@ -81,6 +81,7 @@ pub mod integration;
 mod live_program;
 mod live_session;
 mod native_signal_authoring;
+mod path_alignment;
 mod path_editing;
 mod path_queries;
 mod path_smoothing;

@@ -548,6 +548,15 @@ impl SemanticExecutionPlayer {
         self.with_live_session(|live| live.subcurve(source, a, b))
     }
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_align_points(
+        &mut self,
+        left: &noon::Mobject,
+        right: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.align_points(left, right))
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_pointwise_become_partial(
         &mut self,
         object: &noon::Mobject,

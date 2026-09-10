@@ -1523,6 +1523,11 @@ mod wasm {
                 .map(Self::from_semantic_mobject)
                 .map_err(js_error)
         }
+        #[wasm_bindgen(js_name = alignPoints)]
+        pub fn align_points(&self, other: &WasmAuthoringMobjectHandle) -> Result<(), JsValue> {
+            self.handle.align_points(&other.handle).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = pointwiseBecomePartial)]
         pub fn pointwise_become_partial(
             &self,
