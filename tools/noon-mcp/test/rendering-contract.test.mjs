@@ -71,4 +71,6 @@ test("inspect and close accept only the session capability", () => {
   }
   assert.equal(renderingToolContracts.noon_inspect.annotations.readOnlyHint, true);
   assert.equal(renderingToolContracts.noon_close_scene.annotations.destructiveHint, true);
+  assert.equal(renderingToolContracts.noon_close_scene.annotations.idempotentHint, false,
+    "a closed handle becomes stale and must be rejected rather than silently reused");
 });
