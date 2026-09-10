@@ -175,9 +175,14 @@ export function validateDockerInspection(inspect, config) {
   const tmpfs = host.Tmpfs ?? {};
   if (typeof tmpfs["/work"] !== "string" || !tmpfs["/work"].includes(`size=${limits.workBytes}`)) failures.push("bounded /work tmpfs required");
   if (typeof tmpfs["/tmp"] !== "string" || !tmpfs["/tmp"].includes(`size=${limits.tmpBytes}`)) failures.push("bounded /tmp tmpfs required");
-  for (const destination of ["/noon/web", "/noon/tools/noon-mcp"]) {
+  for (const [destination, expectedSource] of [
+    ["/noon/web", config.webRoot],
+    ["/noon/tools/noon-mcp", config.toolingRoot],
+  ]) {
     const entry = mount(destination);
-    if (!entry || entry.RW !== false || entry.Type !== "bind") failures.push(`${destination} must be a read-only bind mount`);
+    if (!entry || entry.RW !== false || entry.Type !== "bind" || entry.Source !== expectedSource) {
+      failures.push(`${destination} must be the expected read-only bind mount`);
+    }
   }
   if (failures.length > 0) throw new Error(`Docker isolation verification failed: ${failures.join("; ")}`);
   return true;
@@ -243,7 +248,7 @@ export class DockerIsolatedProcess {
   #config;
   #containerId;
   #attached;
-  #closed = false;
+  #closePromise = null;
   #abortSubscription;
   #stderr = Buffer.alloc(0);
   #stderrTruncated = false;
@@ -295,8 +300,17 @@ export class DockerIsolatedProcess {
     this.#containerId = containerId;
     this.#attached = attached;
     this.#exited = new Promise((resolve) => {
-      attached.once("close", (code, receivedSignal) => {
-        resolve(Object.freeze({ code, signal: receivedSignal }));
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        resolve(Object.freeze(value));
+      };
+      attached.once("close", (code, receivedSignal) => finish({ code, signal: receivedSignal, error: null }));
+      attached.once("error", (error) => {
+        const message = String(error?.message ?? error).slice(0, 1200);
+        this.#cleanupError ??= message;
+        finish({ code: null, signal: null, error: message });
       });
     });
     attached.stderr.on("data", (chunk) => {
@@ -320,19 +334,23 @@ export class DockerIsolatedProcess {
     return Object.freeze({ stderr: this.#stderr.toString("utf8"), stderrTruncated: this.#stderrTruncated, cleanupError: this.#cleanupError });
   }
 
-  async close(reason = "preview container closed") {
-    if (this.#closed) return false;
-    if (typeof reason !== "string" || reason.trim() === "") throw new TypeError("close reason must be non-empty");
-    this.#closed = true;
-    this.#abortSubscription?.[Symbol.dispose]();
-    try { this.#attached.stdin.end(); } catch {}
-    const cleanup = await removeContainer(this.#config, this.#containerId);
-    try { await Promise.race([this.#exited, new Promise((resolve) => setTimeout(resolve, 1_500))]); } catch {}
-    if (this.#attached.exitCode === null && this.#attached.signalCode === null) this.#attached.kill("SIGKILL");
-    if (!cleanup.removed) {
-      this.#cleanupError = cleanup.error ?? "preview container cleanup failed";
-      throw new Error(this.#cleanupError);
+  close(reason = "preview container closed") {
+    if (this.#closePromise) return this.#closePromise;
+    if (typeof reason !== "string" || reason.trim() === "") {
+      return Promise.reject(new TypeError("close reason must be non-empty"));
     }
-    return Object.freeze({ closed: true, containerId: this.#containerId, cleanup });
+    this.#abortSubscription?.[Symbol.dispose]();
+    this.#closePromise = (async () => {
+      try { this.#attached.stdin.end(); } catch {}
+      const cleanup = await removeContainer(this.#config, this.#containerId);
+      try { await Promise.race([this.#exited, new Promise((resolve) => setTimeout(resolve, 1_500))]); } catch {}
+      if (this.#attached.exitCode === null && this.#attached.signalCode === null) this.#attached.kill("SIGKILL");
+      if (!cleanup.removed) {
+        this.#cleanupError = cleanup.error ?? "preview container cleanup failed";
+        throw new Error(this.#cleanupError);
+      }
+      return Object.freeze({ closed: true, containerId: this.#containerId, cleanup });
+    })();
+    return this.#closePromise;
   }
 }
