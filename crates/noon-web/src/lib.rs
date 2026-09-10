@@ -2,6 +2,8 @@
 
 #[cfg(target_arch = "wasm32")]
 mod authoring_arc;
+#[cfg(target_arch = "wasm32")]
+mod authoring_arrow;
 mod authoring_error;
 #[cfg(target_arch = "wasm32")]
 mod authoring_geometry;
@@ -49,6 +51,8 @@ mod semantic_execution_player;
 mod text_parts;
 
 pub use authoring_error::AuthoringFailure;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_arrow::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_geometry::*;
 pub use authoring_mobject::*;
