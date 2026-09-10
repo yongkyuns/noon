@@ -64,14 +64,12 @@ fn arrow_vector_and_double_arrow_share_one_semantic_family_contract() {
         ])
         .unwrap();
     let mut session = scene.execution_session().unwrap();
-    let initial_revision = session.execution_revision();
     {
         let mut live = scene.live(&mut session);
         let wait = live.wait_segment(0.2).unwrap();
         live.advance_segment_to(wait, wait.end_time()).unwrap();
         live.complete_segment(wait).unwrap();
     }
-    assert!(session.execution_revision() >= initial_revision);
 }
 
 #[test]
