@@ -3257,3 +3257,9 @@ pub mod family_state;
 pub mod style_operations;
 
 pub mod paint_queries_gradients;
+
+pub mod planar_affine;
+
+pub mod scale_pivots;
+
+pub mod z_index;

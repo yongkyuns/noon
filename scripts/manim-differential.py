@@ -319,6 +319,50 @@ def _grid_inferred_and_alias_probe(api):
     return _members_observation(group)
 
 
+def _z_index_probe(api):
+    a, b = api.Square(), api.Circle()
+    nested = api.VGroup(a, b)
+    family = api.VGroup(a, nested)
+    family.set_z_index(2.5)
+    family.set_z_index(-1.25, family=False)
+    copy = family.copy()
+    a.z_index = 4.5
+    return [float(node.z_index) for node in
+            (family, nested, a, b, copy, copy[0], copy[1])]
+
+
+def _scale_pivots_probe(api):
+    result = []
+    for pivot in ({}, {"about_point": [0, 0, 0]}, {"about_edge": api.RIGHT}):
+        line = api.Line([1, 1, 0], [3, 2, 0])
+        line.scale(1.5, **pivot)
+        result.append([_point_observation(line.get_start()), _point_observation(line.get_end())])
+        a, b = api.Square().shift(api.LEFT), api.Square().shift(api.RIGHT)
+        family = api.VGroup(a, api.VGroup(a, b))
+        family.scale(1.5, **pivot)
+        result.append([_point_observation(a.get_center()), _point_observation(b.get_center()), float(family.width)])
+        line.scale_to_fit_width(2, **pivot)
+        family.match_height(line, **pivot)
+        result.append([_point_observation(line.get_start()), _point_observation(line.get_end()),
+                       _object_observation(family)])
+    return result
+
+
+def _planar_flip_probe(api):
+    observations = []
+    for axis in (api.RIGHT, api.UP, api.RIGHT + api.UP, api.OUT):
+        for pivot in ({}, {"about_point": 2 * api.RIGHT + api.UP}, {"about_edge": api.RIGHT + api.UP}):
+            line = api.Line(api.LEFT, api.RIGHT + api.UP).rotate(.37).shift(2 * api.LEFT)
+            line.flip(axis, **pivot)
+            observations.append([_point_observation(line.get_start()), _point_observation(line.get_end())])
+    a = api.Rectangle(width=2, height=1).rotate(.3).shift(api.LEFT)
+    b = api.Line(api.ORIGIN, api.RIGHT + api.UP)
+    family = api.VGroup(a, api.VGroup(a, b))
+    family.flip(api.UP, about_point=api.ORIGIN).rotate_about_origin(.2)
+    return {"leaves": observations, "family": _object_observation(family),
+            "rectangle": _object_observation(a), "line": _object_observation(b)}
+
+
 def _noon_vgroup_scale() -> Any:
     group = noon.VGroup(
         noon.Circle(radius=0.25),
@@ -709,6 +753,10 @@ def _arc_geometry(api):
 
 FIXTURES = [
     Fixture("arc_geometry", lambda: _arc_geometry(noon), lambda: _arc_geometry(manim), 1e-5),
+    Fixture("z_index", lambda: _z_index_probe(noon), lambda: _z_index_probe(manim)),
+    Fixture("scale_pivots", lambda: _scale_pivots_probe(noon), lambda: _scale_pivots_probe(manim)),
+    Fixture("planar_flip_pivots", lambda: _planar_flip_probe(noon), lambda: _planar_flip_probe(manim)),
+
     Fixture("vgroup_become_cross_alias", lambda: _family_become_cross_alias(noon), lambda: _family_become_cross_alias(manim)),
     Fixture("vgroup_become_restore", lambda: _family_become(noon), lambda: _family_become(manim)),
     Fixture("paint_queries_gradients", lambda: _paint_queries_gradients(noon), lambda: _paint_queries_gradients(manim)),

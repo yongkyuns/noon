@@ -36,17 +36,11 @@ fn command_point(command: &PathCommand) -> Vec2 {
 }
 
 fn close(actual: f32, expected: f32) {
-    assert!(
-        (actual - expected).abs() < 1e-5,
-        "{actual} != {expected}"
-    );
+    assert!((actual - expected).abs() < 1e-5, "{actual} != {expected}");
 }
 
 fn close64(actual: f64, expected: f64) {
-    assert!(
-        (actual - expected).abs() < 1e-5,
-        "{actual} != {expected}"
-    );
+    assert!((actual - expected).abs() < 1e-5, "{actual} != {expected}");
 }
 
 fn signed_chord_side(start: Vec2, end: Vec2, point: Vec2) -> f32 {
@@ -57,19 +51,13 @@ fn signed_chord_side(start: Vec2, end: Vec2, point: Vec2) -> f32 {
 
 #[test]
 fn arc_retains_manim_cubic_segments_center_and_signed_direction() {
-    let positive = retained_path(
-        Options::arc(
-            2.0,
-            0.0,
-            std::f64::consts::FRAC_PI_2,
-            3,
-            1.0,
-            -1.0,
-        )
-        .unwrap(),
-    );
+    let positive =
+        retained_path(Options::arc(2.0, 0.0, std::f64::consts::FRAC_PI_2, 3, 1.0, -1.0).unwrap());
     assert_eq!(positive.commands().len(), 3);
-    assert!(matches!(positive.commands()[1], PathCommand::CubicTo { .. }));
+    assert!(matches!(
+        positive.commands()[1],
+        PathCommand::CubicTo { .. }
+    ));
     let start = command_point(&positive.commands()[0]);
     let end = command_point(positive.commands().last().unwrap());
     close(start.x, 3.0);
@@ -77,17 +65,8 @@ fn arc_retains_manim_cubic_segments_center_and_signed_direction() {
     close(end.x, 1.0);
     close(end.y, 1.0);
 
-    let clockwise = retained_path(
-        Options::arc(
-            2.0,
-            0.0,
-            -std::f64::consts::FRAC_PI_2,
-            3,
-            1.0,
-            -1.0,
-        )
-        .unwrap(),
-    );
+    let clockwise =
+        retained_path(Options::arc(2.0, 0.0, -std::f64::consts::FRAC_PI_2, 3, 1.0, -1.0).unwrap());
     let clockwise_end = command_point(clockwise.commands().last().unwrap());
     close(clockwise_end.x, 1.0);
     close(clockwise_end.y, -3.0);
@@ -115,12 +94,10 @@ fn arc_between_points_maps_endpoints_and_radius_sign_without_frontend_geometry()
     close(implicit_end.x, end.x);
     close(implicit_end.y, end.y);
 
-    let positive = retained_path(
-        Options::arc_between_points(1.0, 2.0, 4.0, 6.0, 0.1, Some(3.0), 3).unwrap(),
-    );
-    let negative = retained_path(
-        Options::arc_between_points(1.0, 2.0, 4.0, 6.0, 0.1, Some(-3.0), 3).unwrap(),
-    );
+    let positive =
+        retained_path(Options::arc_between_points(1.0, 2.0, 4.0, 6.0, 0.1, Some(3.0), 3).unwrap());
+    let negative =
+        retained_path(Options::arc_between_points(1.0, 2.0, 4.0, 6.0, 0.1, Some(-3.0), 3).unwrap());
     let positive_mid = command_point(&positive.commands()[1]);
     let negative_mid = command_point(&negative.commands()[1]);
     let positive_side = signed_chord_side(start, end, positive_mid);
@@ -139,7 +116,12 @@ fn arc_between_points_maps_endpoints_and_radius_sign_without_frontend_geometry()
 #[test]
 fn arc_between_points_metadata_matches_manim_radius_and_resolved_angle() {
     let (implicit_radius, implicit_angle) = Options::arc_between_points_metadata(
-        -1.0, 0.0, 1.0, 0.0, std::f64::consts::FRAC_PI_2, None,
+        -1.0,
+        0.0,
+        1.0,
+        0.0,
+        std::f64::consts::FRAC_PI_2,
+        None,
     )
     .unwrap();
     close64(implicit_radius, 2.0_f64.sqrt());
@@ -158,9 +140,8 @@ fn arc_between_points_metadata_matches_manim_radius_and_resolved_angle() {
 
 #[test]
 fn zero_angle_arc_between_points_is_the_retained_straight_line_fallback() {
-    let path = retained_path(
-        Options::arc_between_points(-2.0, 1.0, 3.0, -4.0, 0.0, None, 9).unwrap(),
-    );
+    let path =
+        retained_path(Options::arc_between_points(-2.0, 1.0, 3.0, -4.0, 0.0, None, 9).unwrap());
     assert_eq!(
         path.commands(),
         &[
@@ -182,12 +163,12 @@ fn arc_inputs_reject_before_semantic_resource_creation() {
     ));
     assert!(matches!(
         Options::arc_between_points(0.0, 0.0, 4.0, 0.0, 1.0, Some(1.0), 9),
-        Err(AuthoringError::Arc(ArcAuthoringError::RadiusTooSmall { .. }))
+        Err(AuthoringError::Arc(
+            ArcAuthoringError::RadiusTooSmall { .. }
+        ))
     ));
     assert!(Options::arc(f64::NAN, 0.0, 1.0, 9, 0.0, 0.0).is_err());
     assert!(Options::arc(1.0, 0.0, f64::INFINITY, 9, 0.0, 0.0).is_err());
     assert!(Options::arc_between_points(0.0, 0.0, f64::NAN, 1.0, 1.0, None, 9).is_err());
-    assert!(
-        Options::arc_between_points(0.0, 0.0, 1.0, 1.0, 1.0, Some(f64::NAN), 9).is_err()
-    );
+    assert!(Options::arc_between_points(0.0, 0.0, 1.0, 1.0, 1.0, Some(f64::NAN), 9).is_err());
 }

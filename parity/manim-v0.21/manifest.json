@@ -370,7 +370,7 @@
       "id": "family-state",
       "scene": "OrdinaryFamilyState",
       "source": "parity/manim-v0.21/core-examples/family_state.py",
-      "expected_duration": 0.6,
+      "expected_duration": 0.6000000000000001,
       "raster_tolerance": {
         "max_bounds_delta_px": 1,
         "max_differing_ratio": 0.003,
@@ -381,6 +381,39 @@
       "id": "family-replacement",
       "scene": "FamilyReplacement",
       "source": "parity/manim-v0.21/core-examples/family_replacement.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
+      "id": "planar-affine",
+      "scene": "OrdinaryPlanarAffine",
+      "source": "parity/manim-v0.21/core-examples/planar_affine.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
+      "id": "z-index",
+      "scene": "OrdinaryZIndex",
+      "source": "parity/manim-v0.21/core-examples/z_index.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
+      "id": "scale-pivots",
+      "scene": "OrdinaryScalePivots",
+      "source": "parity/manim-v0.21/core-examples/scale_pivots.py",
       "expected_duration": 0.2,
       "raster_tolerance": {
         "max_bounds_delta_px": 1,

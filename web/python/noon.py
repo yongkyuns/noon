@@ -416,6 +416,20 @@ class Mobject:
     def match_y(self, mobject: Mobject, direction: object = ORIGIN) -> Mobject:
         return self.match_coord(mobject, 1, direction)
 
+    @property
+    def z_index(self) -> float:
+        return _semantic_operations()._get_z_index(self)
+
+    @z_index.setter
+    def z_index(self, value: float) -> None:
+        self.set_z_index(value, family=False)
+
+    def set_z_index(self, z_index_value: float, family: bool = True) -> Mobject:
+        return _semantic_operations()._set_z_index(self, z_index_value, family)
+
+    def flip(self, axis=UP, *, about_point=None, about_edge=None) -> Mobject:
+        return _semantic_operations()._flip(self, axis, about_point=about_point, about_edge=about_edge)
+
     def rotate_about_origin(
         self, angle: float, axis: object = (0.0, 0.0, 1.0), **kwargs: Any,
     ) -> Mobject:

@@ -767,3 +767,29 @@ pub async fn create_direct_paint_queries_gradients_smoke_renderer(
     let session = noon::example_scenes::paint_queries_gradients::session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
+
+/// Shared pivot/reflection semantics use the same typed execution session on web.
+#[wasm_bindgen(js_name = createDirectPlanarAffineSmokeRenderer)]
+pub async fn create_direct_planar_affine_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::planar_affine::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+/// Shared scale pivots use the same retained native and Rust/WASM session.
+#[wasm_bindgen(js_name = createDirectScalePivotsSmokeRenderer)]
+pub async fn create_direct_scale_pivots_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::scale_pivots::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
+#[wasm_bindgen(js_name = createDirectZIndexSmokeRenderer)]
+pub async fn create_direct_z_index_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::z_index::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}

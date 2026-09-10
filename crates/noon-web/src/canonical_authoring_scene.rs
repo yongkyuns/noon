@@ -5150,13 +5150,22 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = liveRescaleToFit)]
+        #[allow(clippy::too_many_arguments)]
         pub fn live_rescale_to_fit(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             length: f64,
             dimension: u32,
             stretch: bool,
+            x: f64,
+            y: f64,
+            about_point: bool,
         ) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -5165,6 +5174,7 @@ mod wasm {
                     length,
                     dimension.try_into().map_err(typed_js_error)?,
                     stretch,
+                    pivot,
                 )
                 .map_err(typed_js_error)
         }
@@ -5190,13 +5200,22 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = liveMatchDimSize)]
+        #[allow(clippy::too_many_arguments)]
         pub fn live_match_dim_size(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             target: &crate::authoring_mobject::WasmLayoutAnchor,
             dimension: u32,
             stretch: bool,
+            x: f64,
+            y: f64,
+            about_point: bool,
         ) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
@@ -5205,6 +5224,7 @@ mod wasm {
                     &target.anchor,
                     dimension.try_into().map_err(typed_js_error)?,
                     stretch,
+                    pivot,
                 )
                 .map_err(typed_js_error)
         }
@@ -6499,28 +6519,6 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveRotateFamily)]
-        pub fn live_rotate_family(
-            &mut self,
-            handle: &crate::WasmAuthoringFamilyHandle,
-            angle: f64,
-            x: f64,
-            y: f64,
-            about_point: bool,
-        ) -> Result<(), JsValue> {
-            let family = handle.semantic_family()?;
-            let pivot = if about_point {
-                noon::ManimRotationPivot::Point(x, y)
-            } else {
-                noon::ManimRotationPivot::Edge(x, y)
-            };
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_rotate_family(&family, angle, pivot)
-                .map_err(typed_js_error)
-        }
-
         #[wasm_bindgen(js_name = liveArrangeFamily)]
         pub fn live_arrange_family(
             &mut self,
@@ -6586,20 +6584,88 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveRotate)]
-        pub fn live_rotate(
+        #[wasm_bindgen(js_name = liveScaleLayout)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_scale_layout(
             &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
-            angle: f64,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            scale_x: f64,
+            scale_y: f64,
+            x: f64,
+            y: f64,
+            about_point: bool,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_rotate(handle.semantic_mobject(), angle)
+                .live_scale_layout(&source.anchor, scale_x, scale_y, pivot)
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = liveRotateLayout)]
+        pub fn live_rotate_layout(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            angle: f64,
+            x: f64,
+            y: f64,
+            about_point: bool,
+        ) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_rotate_layout(&source.anchor, angle, pivot)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetZIndex)]
+        pub fn live_set_z_index(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            value: f64,
+            family: bool,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_z_index(&source.anchor, value, family)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveFlipLayout)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_flip_layout(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            axis_x: f64,
+            axis_y: f64,
+            axis_z: f64,
+            x: f64,
+            y: f64,
+            about_point: bool,
+        ) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_flip_layout(
+                    &source.anchor,
+                    noon::SemanticVec3::new(axis_x, axis_y, axis_z),
+                    pivot,
+                )
                 .map_err(typed_js_error)
         }
 

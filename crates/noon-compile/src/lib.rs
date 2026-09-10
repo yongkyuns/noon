@@ -86,6 +86,8 @@ pub struct CompiledObject {
     pub text_bounds: Option<Rect>,
     pub base_transform: Transform2D,
     pub base_style: Style,
+    /// Derived finite painter priority; family traversal breaks equal-priority ties.
+    pub base_z_index: f64,
     pub dynamic: DynamicProperties,
     /// Whether this stable compiled slot currently contains a live scene object.
     /// Removed objects leave tombstones so unrelated slot numbers never change.
@@ -105,6 +107,7 @@ impl CompiledObject {
             text_bounds: None,
             base_transform,
             base_style,
+            base_z_index: 0.0,
             dynamic: DynamicProperties::default(),
             live: true,
         }
@@ -372,7 +375,10 @@ pub struct CompiledScene {
     track_count: usize,
     object_indices: BTreeMap<ObjectId, u32>,
     retired_object_indices: BTreeMap<ObjectId, u32>,
-    /// Live stable row indices in authoritative semantic painter order.
+    /// Derived live family traversal; local reorders retain this equal-z tie-breaker.
+    family_order: Vec<u32>,
+    family_ranks: Vec<Option<u32>>,
+    /// Stable row indices sorted by priority, then family traversal.
     painter_order: Vec<u32>,
     painter_ranks: Vec<Option<u32>>,
     track_locators: BTreeMap<TrackId, CompiledTrackLocator>,
@@ -427,6 +433,7 @@ impl PartialEq<Vec<CompiledTrack>> for CompiledTracks<'_> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompileError {
+    InvalidZIndex(ObjectId),
     TooManyObjects(usize),
     DuplicateObject(ObjectId),
     UnknownObject(ObjectId),
@@ -441,6 +448,9 @@ pub enum CompileError {
 impl std::fmt::Display for CompileError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidZIndex(id) => {
+                write!(formatter, "object {} has non-finite z-index", id.get())
+            }
             Self::TooManyObjects(count) => {
                 write!(formatter, "scene contains too many objects: {count}")
             }
@@ -523,6 +533,7 @@ pub enum CompilePatchError {
         resource: TextResourceHandle,
     },
     InvalidContentBounds(ObjectId),
+    InvalidZIndex(ObjectId),
     Resource(CompiledResourceError),
     DiscontinuousPresence {
         previous: TrackId,
@@ -542,6 +553,7 @@ impl std::fmt::Display for CompilePatchError {
             Self::TooManyFamilyAnimations => {
                 formatter.write_str("scene contains too many family animation plans")
             }
+            Self::InvalidZIndex(id) => write!(formatter, "object {} has non-finite z-index", id.get()),
             Self::InvalidFamilyAnimation => {
                 formatter.write_str("invalid family animation plan, timing, or mapping")
             }
@@ -718,6 +730,9 @@ impl CompiledScene {
         let mut objects = Vec::with_capacity(object_count);
 
         for (index, mut object) in source_objects.into_iter().enumerate() {
+            if !object.base_z_index.is_finite() {
+                return Err(CompileError::InvalidZIndex(object.id));
+            }
             let index =
                 u32::try_from(index).map_err(|_| CompileError::TooManyObjects(object_count))?;
             if object_indices.insert(object.id, index).is_some() {
@@ -760,9 +775,22 @@ impl CompiledScene {
         }
 
         let live_object_count = objects.len();
+        let mut painter_order = (0..objects.len() as u32).collect::<Vec<_>>();
+        painter_order.sort_by(|&a, &b| {
+            objects[a as usize]
+                .base_z_index
+                .partial_cmp(&objects[b as usize].base_z_index)
+                .unwrap()
+        });
+        let mut painter_ranks = vec![None; objects.len()];
+        for (rank, &index) in painter_order.iter().enumerate() {
+            painter_ranks[index as usize] = Some(rank as u32);
+        }
         Ok(Self {
-            painter_order: (0..objects.len() as u32).collect(),
-            painter_ranks: (0..objects.len() as u32).map(Some).collect(),
+            family_order: (0..objects.len() as u32).collect(),
+            family_ranks: (0..objects.len() as u32).map(Some).collect(),
+            painter_order,
+            painter_ranks,
             objects,
             live_object_count,
             tracks: tracks_by_channel,
@@ -802,20 +830,49 @@ impl CompiledScene {
     }
 
     fn painter_reorder_changes(&self, object: ObjectId, before: Option<ObjectId>) -> bool {
-        let Some(current) = self.painter_position(object) else {
+        let Some(index) = self.object_index(object) else {
             return true;
         };
+        let current = self.family_ranks[index as usize].expect("live family rank") as usize;
         let destination = match before {
             Some(anchor) if anchor == object => return false,
             Some(anchor) => {
-                let Some(anchor) = self.painter_position(anchor) else {
+                let Some(anchor) = self.object_index(anchor) else {
                     return true;
                 };
-                anchor.saturating_sub(usize::from(current < anchor))
+                let rank = self.family_ranks[anchor as usize].expect("live family rank") as usize;
+                rank - usize::from(current < rank)
             }
-            None => self.painter_order.len().saturating_sub(1),
+            None => self.family_order.len() - 1,
         };
         current != destination
+    }
+
+    /// Restore one row's z/family ordering using a binary search and one local move.
+    fn reposition_painter_row(&mut self, index: u32) {
+        let position = self.painter_ranks[index as usize].expect("live painter rank") as usize;
+        let z = self.objects[index as usize].base_z_index;
+        let family_rank = self.family_ranks[index as usize].expect("live family rank");
+        // Search the sorted sequence with the changed row logically excluded.
+        let mut low = 0;
+        let mut high = self.painter_order.len() - 1;
+        while low < high {
+            let middle = low + (high - low) / 2;
+            let candidate = self.painter_order[middle + usize::from(middle >= position)] as usize;
+            let other_z = self.objects[candidate].base_z_index;
+            if other_z < z || (other_z == z && self.family_ranks[candidate].unwrap() < family_rank)
+            {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        move_order_row(
+            &mut self.painter_order,
+            &mut self.painter_ranks,
+            position,
+            low,
+        );
     }
 
     pub const fn resources(&self) -> &CompiledResources {
@@ -989,6 +1046,9 @@ impl CompiledScene {
             ExecutionPatch::SetTransform { object, transform } => self
                 .object_index(*object)
                 .is_none_or(|index| self.objects[index as usize].base_transform != *transform),
+            ExecutionPatch::SetZIndex { object, value } => self
+                .object_index(*object)
+                .is_none_or(|index| self.objects[index as usize].base_z_index != *value),
             ExecutionPatch::SetStyle { object, style } => self
                 .object_index(*object)
                 .is_none_or(|index| self.objects[index as usize].base_style != *style),
@@ -1039,8 +1099,11 @@ impl CompiledScene {
                     self.object_indices
                         .insert(self.objects[index as usize].id, index);
                     self.live_object_count += 1;
+                    self.family_order.push(index);
+                    self.family_ranks[index as usize] = Some(self.family_order.len() as u32 - 1);
                     self.painter_order.push(index);
                     self.painter_ranks[index as usize] = Some(self.painter_order.len() as u32 - 1);
+                    self.reposition_painter_row(index);
                     stats.object_slots_reactivated = 1;
                     return Ok(stats);
                 }
@@ -1049,9 +1112,13 @@ impl CompiledScene {
                 self.object_indices.insert(object.id, index);
                 self.objects.push(object);
                 self.live_object_count += 1;
+                self.family_order.push(index);
+                self.family_ranks
+                    .push(Some(self.family_order.len() as u32 - 1));
                 self.painter_order.push(index);
                 self.painter_ranks
                     .push(Some(self.painter_order.len() as u32 - 1));
+                self.reposition_painter_row(index);
                 stats.object_slots_appended = 1;
             }
             ExecutionPatch::RemoveObject(id) => {
@@ -1084,6 +1151,13 @@ impl CompiledScene {
                 for rank in painter_position..self.painter_order.len() {
                     self.painter_ranks[self.painter_order[rank] as usize] = Some(rank as u32);
                 }
+                let family_position = self.family_ranks[index as usize]
+                    .take()
+                    .expect("live family rank") as usize;
+                self.family_order.remove(family_position);
+                for rank in family_position..self.family_order.len() {
+                    self.family_ranks[self.family_order[rank] as usize] = Some(rank as u32);
+                }
                 stats.object_slots_retired = 1;
                 // No unrelated object or track payload changes storage location.
                 stats.object_indices_rewritten = 0;
@@ -1103,25 +1177,28 @@ impl CompiledScene {
                 if before_index == Some(index) {
                     return Ok(stats);
                 }
-                let position = self
-                    .painter_order
-                    .iter()
-                    .position(|candidate| *candidate == index)
-                    .expect("live object has one painter-order entry");
-                self.painter_order.remove(position);
-                let destination = before_index
-                    .and_then(|anchor| {
-                        self.painter_order
-                            .iter()
-                            .position(|candidate| *candidate == anchor)
-                    })
-                    .unwrap_or(self.painter_order.len());
-                self.painter_order.insert(destination, index);
-                let first = position.min(destination);
-                let last = position.max(destination).min(self.painter_order.len() - 1);
-                for rank in first..=last {
-                    self.painter_ranks[self.painter_order[rank] as usize] = Some(rank as u32);
-                }
+                let position =
+                    self.family_ranks[index as usize].expect("live family rank") as usize;
+                let destination = before_index.map_or(self.family_order.len() - 1, |anchor| {
+                    let rank =
+                        self.family_ranks[anchor as usize].expect("live family rank") as usize;
+                    rank - usize::from(position < rank)
+                });
+                move_order_row(
+                    &mut self.family_order,
+                    &mut self.family_ranks,
+                    position,
+                    destination,
+                );
+                self.reposition_painter_row(index);
+            }
+            ExecutionPatch::SetZIndex { object, value } => {
+                let index = self
+                    .object_index(*object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                validate_z_index(*object, *value)?;
+                self.objects[index as usize].base_z_index = *value;
+                self.reposition_painter_row(index);
             }
             ExecutionPatch::SetContent {
                 object,
@@ -1581,7 +1658,34 @@ fn validate_execution_content_resource(
     Ok(())
 }
 
+fn move_order_row(
+    order: &mut [u32],
+    ranks: &mut [Option<u32>],
+    position: usize,
+    destination: usize,
+) {
+    let first = position.min(destination);
+    let last = position.max(destination);
+    if position < destination {
+        order[first..=last].rotate_left(1);
+    } else {
+        order[first..=last].rotate_right(1);
+    }
+    for rank in first..=last {
+        ranks[order[rank] as usize] = Some(rank as u32);
+    }
+}
+
+fn validate_z_index(object: ObjectId, value: f64) -> Result<(), CompilePatchError> {
+    if value.is_finite() {
+        Ok(())
+    } else {
+        Err(CompilePatchError::InvalidZIndex(object))
+    }
+}
+
 fn validate_compiled_object(object: &CompiledObject) -> Result<(), CompilePatchError> {
+    validate_z_index(object.id, object.base_z_index)?;
     validate_execution_content(object.id, &object.content, object.text_bounds)?;
     validate_transform(object.id, object.base_transform).map_err(map_object_state_error)?;
     validate_style(object.id, object.base_style).map_err(map_object_state_error)
@@ -2949,5 +3053,40 @@ mod tests {
         assert_eq!(compiled.painter_order(), &[0, 1]);
         assert_eq!(compiled.object_index(returning), Some(0));
         assert_eq!(compiled.object_index(later), Some(1));
+    }
+    #[test]
+    fn indexed_painter_moves_preserve_ranks_and_stable_rows_in_both_directions() {
+        let object = |n| {
+            CompiledObject::new(
+                ObjectId::new(n),
+                GeometryRef::circle(1.),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )
+        };
+        let mut compiled =
+            CompiledScene::compile_objects((1..=5).map(object).collect(), &[]).unwrap();
+        for (moving, before, expected) in [
+            (2, Some(5), [0, 2, 3, 1, 4]),
+            (5, Some(3), [0, 4, 2, 3, 1]),
+            (1, None, [4, 2, 3, 1, 0]),
+            (4, Some(4), [4, 2, 3, 1, 0]),
+            (1, Some(5), [0, 4, 2, 3, 1]),
+        ] {
+            compiled
+                .apply_execution_patch(&ExecutionPatch::ReorderObject {
+                    object: ObjectId::new(moving),
+                    before: before.map(ObjectId::new),
+                })
+                .unwrap();
+            assert_eq!(compiled.painter_order(), &expected);
+            for (rank, index) in expected.into_iter().enumerate() {
+                assert_eq!(compiled.painter_rank(index), Some(rank as u32));
+                assert_eq!(
+                    compiled.object_index(ObjectId::new(index as u64 + 1)),
+                    Some(index)
+                );
+            }
+        }
     }
 }

@@ -163,15 +163,15 @@ impl SemanticStyle {
 }
 
 /// Painter metadata is independent from transform hierarchy and style.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SemanticPresentation {
-    pub z_index: i32,
+    pub z_index: f64,
     /// Stable insertion/painter tie-break assigned by the semantic store.
     pub insertion_order: u64,
 }
 
 impl SemanticPresentation {
-    pub const fn order_key(self) -> (i32, u64) {
+    pub const fn order_key(self) -> (f64, u64) {
         (self.z_index, self.insertion_order)
     }
 }
@@ -473,12 +473,12 @@ mod tests {
     fn painter_key_uses_z_then_stable_insertion_order() {
         assert!(
             SemanticPresentation {
-                z_index: 2,
+                z_index: 2.0,
                 insertion_order: 0,
             }
             .order_key()
                 > SemanticPresentation {
-                    z_index: 1,
+                    z_index: 1.0,
                     insertion_order: 100,
                 }
                 .order_key()

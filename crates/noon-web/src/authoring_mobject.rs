@@ -347,6 +347,61 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmLayoutAnchor {
+        pub fn scale(
+            &self,
+            scale_x: f64,
+            scale_y: f64,
+            x: f64,
+            y: f64,
+            about_point: bool,
+        ) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
+            self.anchor.scale(scale_x, scale_y, pivot).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = zIndex)]
+        pub fn z_index(&self) -> Result<f64, JsValue> {
+            self.anchor.z_index().map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setZIndex)]
+        pub fn set_z_index(&self, value: f64, family: bool) -> Result<(), JsValue> {
+            self.anchor.set_z_index(value, family).map_err(js_error)
+        }
+
+        pub fn rotate(&self, angle: f64, x: f64, y: f64, about_point: bool) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
+            self.anchor.rotate(angle, pivot).map_err(js_error)
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        pub fn flip(
+            &self,
+            axis_x: f64,
+            axis_y: f64,
+            axis_z: f64,
+            x: f64,
+            y: f64,
+            about_point: bool,
+        ) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
+            self.anchor
+                .flip(noon::SemanticVec3::new(axis_x, axis_y, axis_z), pivot)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = moveTo)]
         pub fn move_to(
             &self,
@@ -385,14 +440,28 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = rescaleToFit)]
+        #[allow(clippy::too_many_arguments)]
         pub fn rescale_to_fit(
             &self,
             length: f64,
             dimension: u32,
             stretch: bool,
+            x: f64,
+            y: f64,
+            about_point: bool,
         ) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
             self.anchor
-                .rescale_to_fit(length, dimension.try_into().map_err(js_error)?, stretch)
+                .rescale_to_fit_with_pivot(
+                    length,
+                    dimension.try_into().map_err(js_error)?,
+                    stretch,
+                    pivot,
+                )
                 .map_err(js_error)
         }
 
@@ -413,17 +482,27 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = matchDimSize)]
+        #[allow(clippy::too_many_arguments)]
         pub fn match_dim_size(
             &self,
             target: &WasmLayoutAnchor,
             dimension: u32,
             stretch: bool,
+            x: f64,
+            y: f64,
+            about_point: bool,
         ) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
             self.anchor
-                .match_dim_size(
+                .match_dim_size_with_pivot(
                     &target.anchor,
                     dimension.try_into().map_err(js_error)?,
                     stretch,
+                    pivot,
                 )
                 .map_err(js_error)
         }
@@ -1380,7 +1459,7 @@ mod wasm {
         }
 
         pub fn scale(&mut self, x: f64, y: f64) -> Result<(), JsValue> {
-            self.handle.scale(x, y).map_err(js_error)
+            self.handle.manim_scale(x, y).map_err(js_error)
         }
 
         pub fn rotate(&mut self, angle: f64) -> Result<(), JsValue> {

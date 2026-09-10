@@ -383,7 +383,7 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
                 );
             }
         },
-        SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family => {}
+        SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family(_) => {}
     }
 
     references

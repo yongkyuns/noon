@@ -90,7 +90,7 @@ impl LayoutAnchor {
         let Some(index) = self.index else {
             return Ok(self.node);
         };
-        if !matches!(node.kind(), noon_core::SemanticNodeKind::Family) {
+        if !matches!(node.kind(), noon_core::SemanticNodeKind::Family(_)) {
             return Err(
                 noon_core::SemanticSceneOperationError::NotSemanticFamily(self.node).into(),
             );
@@ -115,7 +115,7 @@ impl LayoutAnchor {
         let node = self.resolve()?;
         if matches!(
             self.store.borrow().node(node).map(|n| n.kind()),
-            Some(noon_core::SemanticNodeKind::Family)
+            Some(noon_core::SemanticNodeKind::Family(_))
         ) {
             MobjectFamily::from_node(Rc::clone(&self.store), node)?.layout()
         } else {

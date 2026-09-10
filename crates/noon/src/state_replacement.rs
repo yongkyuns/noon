@@ -186,16 +186,14 @@ pub(crate) fn prepare_become_states(
         target_center
     };
     for target in &mut targets {
-        crate::dimension_fit::validate_fit_stretch(
-            target.transform.rotation_z,
-            options.stretch && x != y,
-        )?;
+        let (local_x, local_y) =
+            crate::dimension_fit::world_scale_factors(target.transform.rotation_z, x, y)?;
         let old_center = state_center(store, target)?;
         let next_center = (
             destination.0 + (old_center.0 - target_center.0) * x,
             destination.1 + (old_center.1 - target_center.1) * y,
         );
-        scale_state_about_center(store, target, x, y, next_center)?;
+        scale_state_about_center(store, target, local_x, local_y, next_center)?;
     }
     Ok(targets)
 }

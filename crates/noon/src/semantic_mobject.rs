@@ -649,19 +649,7 @@ impl Mobject {
         line_match_transform(start, end, target_start, target_end)
     }
     pub fn manim_scale(&mut self, x: f64, y: f64) -> Result<(), AuthoringError> {
-        self.validate()?;
-        let center = self.center()?;
-        self.scale_about_center(x, y, center)
-    }
-    fn scale_about_center(
-        &mut self,
-        x: f64,
-        y: f64,
-        center: (f64, f64),
-    ) -> Result<(), AuthoringError> {
-        let mut state = self.state()?;
-        scale_state_about_center(&self.store.borrow(), &mut state, x, y, center)?;
-        self.commit_state(state)
+        crate::LayoutAnchor::from(&*self).scale(x, y, crate::ManimRotationPivot::Center)
     }
     pub fn replace_handle(
         &mut self,
@@ -764,14 +752,9 @@ impl Mobject {
         self.commit_state(state)
     }
 
+    /// Rotate about the current semantic geometry center, as in ordinary Manim authoring.
     pub fn rotate(&mut self, angle: f64) -> Result<(), AuthoringError> {
-        self.validate()?;
-        let mut state = self.state()?;
-        let angle = authoring_render_f64("rotation", angle)?;
-        let rotation = state.transform.rotation_z + angle;
-        finite_f32("rotation result", rotation)?;
-        state.transform.rotation_z = rotation;
-        self.commit_state(state)
+        self.rotate_with_pivot(angle, crate::ManimRotationPivot::Center)
     }
 
     pub fn rotate_about_point(
