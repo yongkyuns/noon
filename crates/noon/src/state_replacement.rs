@@ -12,8 +12,8 @@ use crate::{
     AuthoringError, Mobject, MobjectFamily,
 };
 use noon_core::{
-    Bounds2D64, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticNodeKind,
-    SemanticObjectState, SemanticStore, SemanticTransactionNodeRef, VectorPath,
+    Bounds2D64, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
+    SemanticNodeKind, SemanticObjectState, SemanticStore, SemanticTransactionNodeRef, VectorPath,
 };
 
 /// Pair through the same topology/alias contract as ordinary family Transform.
@@ -157,8 +157,13 @@ impl<'a> PersistentFamilyReconcile<'a> {
         let node = self.store.node(candidate)?;
         let compatible = matches!(
             (node.kind(), target),
-            (SemanticNodeKind::AuthoringObject, PersistentTargetNode::Object)
-                | (SemanticNodeKind::Family(_), PersistentTargetNode::Family { .. })
+            (
+                SemanticNodeKind::AuthoringObject,
+                PersistentTargetNode::Object
+            ) | (
+                SemanticNodeKind::Family(_),
+                PersistentTargetNode::Family { .. }
+            )
         );
         compatible.then_some(candidate)
     }
@@ -182,7 +187,9 @@ impl<'a> PersistentFamilyReconcile<'a> {
                 } else {
                     let (state, path) = self.target_states.get(&target).ok_or_else(|| {
                         AuthoringError::from(
-                            noon_core::SemanticSceneOperationError::NotSemanticAuthoringNode(target),
+                            noon_core::SemanticSceneOperationError::NotSemanticAuthoringNode(
+                                target,
+                            ),
                         )
                     })?;
                     // Existing path replacement preparation addresses committed
@@ -242,14 +249,21 @@ impl<'a> PersistentFamilyReconcile<'a> {
             desired.push(self.reconcile_node(current.get(index).copied(), target_member)?);
         }
 
-        let desired_existing: HashSet<_> = desired.iter().filter_map(|member| member.existing()).collect();
+        let desired_existing: HashSet<_> = desired
+            .iter()
+            .filter_map(|member| member.existing())
+            .collect();
         let current_set: HashSet<_> = current.iter().copied().collect();
         for member in current.iter().copied() {
             if !desired_existing.contains(&member) {
                 self.transaction.remove_member(source, member);
             }
         }
-        for member in desired.iter().copied().filter_map(|member| member.existing()) {
+        for member in desired
+            .iter()
+            .copied()
+            .filter_map(|member| member.existing())
+        {
             if !current_set.contains(&member) {
                 self.transaction.add_member(source, member);
             }
@@ -258,7 +272,11 @@ impl<'a> PersistentFamilyReconcile<'a> {
         // First establish the relative order of all committed identities. Pending
         // additions can then be inserted before the next committed target member;
         // multiple pending members sharing the same anchor retain target order.
-        for member in desired.iter().copied().filter_map(|member| member.existing()) {
+        for member in desired
+            .iter()
+            .copied()
+            .filter_map(|member| member.existing())
+        {
             self.transaction.reorder_member(source, member, None);
         }
         for (index, member) in desired.iter().copied().enumerate() {
@@ -270,7 +288,8 @@ impl<'a> PersistentFamilyReconcile<'a> {
                 .iter()
                 .find_map(|candidate| candidate.existing())
             {
-                self.transaction.reorder_member(source, member, Some(before));
+                self.transaction
+                    .reorder_member(source, member, Some(before));
             }
         }
         Ok(())
@@ -311,10 +330,7 @@ fn prepare_persistent_family_reconcile<E: From<AuthoringError>>(
 
     let store = source.integration_store().borrow();
     let fitted_targets = prepare_become_states(&store, &source_states, captured_targets, options)?;
-    let target_states: HashMap<_, _> = target_leaves
-        .into_iter()
-        .zip(fitted_targets)
-        .collect();
+    let target_states: HashMap<_, _> = target_leaves.into_iter().zip(fitted_targets).collect();
     let mut reconcile = PersistentFamilyReconcile::new(&store, &target_states);
     let root = reconcile.reconcile_node(Some(source.node_id()), target.node_id())?;
     debug_assert_eq!(root.existing(), Some(source.node_id()));
