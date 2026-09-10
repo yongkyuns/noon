@@ -55,6 +55,28 @@ pub fn session() -> Result<ExecutionSession, String> {
             crate::LayoutDimension::Height,
             Pivot::Point(0., 0.),
         )?;
+        live.rotate_layout(&LayoutAnchor::from(&b), 0.27, Pivot::Center)?;
+        let target = live.target_editor(&b)?;
+        live.stretch(
+            &LayoutAnchor::from(&target),
+            1.3,
+            crate::LayoutDimension::Width,
+            Pivot::Center,
+        )?;
+        let request = crate::AnimationCompositionRequest::TransformTo(
+            crate::TransformToRequest::new(
+                &b,
+                &target,
+                crate::AnimationOptions::new()
+                    .run_time(0.8)
+                    .rate_func(crate::RateFunction::Linear),
+            )
+            .method_target(),
+        );
+        let segment =
+            live.declare_and_activate_composition(&request, crate::AnimationOptions::new())?;
+        live.advance_segment_to(segment, segment.end_time())?;
+        live.complete_segment(segment)?;
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;

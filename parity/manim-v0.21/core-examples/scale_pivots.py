@@ -19,4 +19,6 @@ class OrdinaryScalePivots(Scene):
         other.match_height(line, about_point=2 * RIGHT + UP)
         family.scale_to_fit_width(4, about_edge=RIGHT)
         family.stretch(.8, 1, about_point=ORIGIN)
+        b.rotate(.27)
+        self.play(b.animate.stretch(1.3, 0), run_time=.8, rate_func=linear)
         self.wait(.2)

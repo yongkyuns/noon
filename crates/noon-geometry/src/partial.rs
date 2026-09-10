@@ -136,25 +136,7 @@ impl PathProportionPlan {
                 index,
                 count: self.curves.len(),
             })?;
-        let from = SemanticVec3::from_vec2(curve.from);
-        let to = SemanticVec3::from_vec2(curve.to);
-        let (first, second) = match curve.kind {
-            CurveKind::Line | CurveKind::Close => {
-                (lerp_f64(from, to, 1. / 3.), lerp_f64(from, to, 2. / 3.))
-            }
-            CurveKind::Quadratic { control } => {
-                let control = SemanticVec3::from_vec2(control);
-                (
-                    lerp_f64(from, control, 2. / 3.),
-                    lerp_f64(to, control, 2. / 3.),
-                )
-            }
-            CurveKind::Cubic { control1, control2 } => (
-                SemanticVec3::from_vec2(control1),
-                SemanticVec3::from_vec2(control2),
-            ),
-        };
-        Ok([from, first, second, to])
+        Ok(curve_controls(*curve))
     }
 
     /// Prepare the reusable local-space proportion measure for `path`.
@@ -620,6 +602,54 @@ fn lerp_f64(a: SemanticVec3, b: SemanticVec3, t: f64) -> SemanticVec3 {
         a.y + (b.y - a.y) * t,
         a.z + (b.z - a.z) * t,
     )
+}
+
+pub(crate) struct CubicContour {
+    pub(crate) curves: Vec<[Vec2; 4]>,
+    pub(crate) closed: bool,
+}
+
+/// Canonical per-curve controls for shared correspondence and query preparation.
+pub(crate) fn cubic_contours(path: &VectorPath) -> Vec<CubicContour> {
+    let mut result: Vec<CubicContour> = Vec::new();
+    let mut subpath = None;
+    for curve in collect_curves(path) {
+        if subpath != Some(curve.subpath) {
+            result.push(CubicContour {
+                curves: Vec::new(),
+                closed: false,
+            });
+            subpath = Some(curve.subpath);
+        }
+        let contour = result.last_mut().unwrap();
+        contour
+            .curves
+            .push(curve_controls(curve).map(|p| Vec2::new(p.x as f32, p.y as f32)));
+        contour.closed |= curve.closes_contour;
+    }
+    result
+}
+
+fn curve_controls(curve: Curve) -> [SemanticVec3; 4] {
+    let from = SemanticVec3::from_vec2(curve.from);
+    let to = SemanticVec3::from_vec2(curve.to);
+    let (first, second) = match curve.kind {
+        CurveKind::Line | CurveKind::Close => {
+            (lerp_f64(from, to, 1. / 3.), lerp_f64(from, to, 2. / 3.))
+        }
+        CurveKind::Quadratic { control } => {
+            let control = SemanticVec3::from_vec2(control);
+            (
+                lerp_f64(from, control, 2. / 3.),
+                lerp_f64(to, control, 2. / 3.),
+            )
+        }
+        CurveKind::Cubic { control1, control2 } => (
+            SemanticVec3::from_vec2(control1),
+            SemanticVec3::from_vec2(control2),
+        ),
+    };
+    [from, first, second, to]
 }
 
 #[cfg(test)]

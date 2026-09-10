@@ -1,3 +1,4 @@
+mod correspondence;
 use noon_core::{Vec2, VectorPath};
 
 use crate::{
@@ -103,6 +104,7 @@ impl MorphFrame {
 #[derive(Clone, Debug, PartialEq)]
 pub enum MorphError {
     Geometry(GeometryError),
+    PathAlignment(crate::PathProportionError),
     InvalidSampleCount(usize),
     InvalidFlattenTolerance(f32),
     ContourCountMismatch {
@@ -130,6 +132,7 @@ impl std::fmt::Display for MorphError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Geometry(error) => write!(formatter, "invalid morph path: {error}"),
+            Self::PathAlignment(error) => write!(formatter, "invalid morph correspondence: {error}"),
             Self::InvalidSampleCount(count) => write!(
                 formatter,
                 "morph samples per contour must be at least 3, got {count}"
@@ -176,8 +179,8 @@ pub fn plan_morph(
 /// Plan a morph while preserving the authored contour start point and winding.
 ///
 /// ManimCE Transform aligns VMobject cubic arrays by index and does not cyclically
-/// rotate a closed contour to minimize geometric distance. This mode exists for
-/// the compatibility renderer; native Noon morph planning keeps geometric alignment.
+/// rotate a closed contour to minimize geometric distance. Curves align through
+/// the shared path operations and flatten together at matching parameters.
 pub fn plan_morph_preserving_order(
     source: &VectorPath,
     target: &VectorPath,
@@ -193,6 +196,9 @@ fn plan_morph_impl(
     align_closed_correspondence: bool,
 ) -> Result<MorphPlan, MorphError> {
     validate_options(options)?;
+    if !align_closed_correspondence {
+        return correspondence::plan(source, target, options);
+    }
     let source_contours = flatten_path(source, options.flatten_tolerance)?;
     let target_contours = flatten_path(target, options.flatten_tolerance)?;
     if source_contours.len() != target_contours.len() {

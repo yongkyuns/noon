@@ -95,6 +95,8 @@ fn invalid_late_family_member_rolls_back_resources_and_affine_edits() {
                 .line_to(noon::Vec2::new(1., 1.)),
             noon_core::SemanticStyle {
                 stroke: Some(noon_core::SemanticPaint::Solid(noon_core::Color::WHITE)),
+                stroke_width_mode: noon_core::StrokeWidthMode::ScaleWithObject,
+                stroke_width: 0.04,
                 ..Default::default()
             },
         )

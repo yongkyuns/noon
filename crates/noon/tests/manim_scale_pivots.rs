@@ -88,7 +88,7 @@ fn rejected_explicit_scale_pivot_is_atomic() {
 }
 
 #[test]
-fn aliased_family_scale_keeps_its_edge_and_rejects_world_shear_atomically() {
+fn aliased_family_scale_keeps_its_edge_and_applies_world_stretch_once() {
     use noon::{LayoutAnchor, ManimRotationPivot};
     let scene = Scene::new();
     let mut a = scene.square(1.).unwrap();
@@ -103,9 +103,11 @@ fn aliased_family_scale_keeps_its_edge_and_rejects_world_shear_atomically() {
     assert_eq!(a.center().unwrap(), (-3.5, 0.));
     assert_eq!(b.center().unwrap(), (0.5, 0.));
     b.rotate(0.3).unwrap();
-    let before = [a.state().unwrap(), b.state().unwrap()];
-    assert!(family.scale(2., 1.).is_err());
-    assert_eq!([a.state().unwrap(), b.state().unwrap()], before);
+    let before = family.layout().unwrap();
+    family.scale(2., 1.).unwrap();
+    let after = family.layout().unwrap();
+    assert!((after.width() - 2. * before.width()).abs() < 2e-6);
+    assert!((after.height() - before.height()).abs() < 2e-6);
 }
 
 #[test]
