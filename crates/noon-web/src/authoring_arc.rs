@@ -5,6 +5,26 @@ use wasm_bindgen::prelude::*;
 
 use crate::{authoring_error::js_error, authoring_geometry::WasmManimGeometryOptions};
 
+/// Read-only constructor metadata resolved by the shared Rust arc implementation.
+#[wasm_bindgen]
+pub struct WasmManimArcBetweenPointsMetadata {
+    radius: f64,
+    angle: f64,
+}
+
+#[wasm_bindgen]
+impl WasmManimArcBetweenPointsMetadata {
+    #[wasm_bindgen(getter)]
+    pub fn radius(&self) -> f64 {
+        self.radius
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn angle(&self) -> f64 {
+        self.angle
+    }
+}
+
 #[wasm_bindgen]
 impl WasmManimGeometryOptions {
     /// Construct an Arc using the shared retained Rust geometry implementation.
@@ -27,6 +47,23 @@ impl WasmManimGeometryOptions {
         )
         .map(Self::from_options)
         .map_err(js_error)
+    }
+
+    /// Resolve ArcBetweenPoints metadata without frontend-owned geometry math.
+    #[wasm_bindgen(js_name = arcBetweenPointsMetadata)]
+    pub fn arc_between_points_metadata(
+        start_x: f64,
+        start_y: f64,
+        end_x: f64,
+        end_y: f64,
+        angle: f64,
+        radius: Option<f64>,
+    ) -> Result<WasmManimArcBetweenPointsMetadata, JsValue> {
+        let (radius, angle) = noon::ManimGeometryOptions::arc_between_points_metadata(
+            start_x, start_y, end_x, end_y, angle, radius,
+        )
+        .map_err(js_error)?;
+        Ok(WasmManimArcBetweenPointsMetadata { radius, angle })
     }
 
     /// Construct an ArcBetweenPoints without frontend-owned path mathematics.
