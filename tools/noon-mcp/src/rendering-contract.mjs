@@ -77,7 +77,7 @@ export const renderingToolContracts = Object.freeze({
     annotations: Object.freeze({
       readOnlyHint: false,
       destructiveHint: true,
-      idempotentHint: true,
+      idempotentHint: false,
       openWorldHint: false,
     }),
   }),
