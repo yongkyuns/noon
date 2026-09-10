@@ -18,12 +18,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 tools/_codex_b3_family_schedule_fix.py
           python3 tools/_codex_b3_family_schedule_patch.py
           cargo fmt --all
           cargo fmt --all -- --check
           cargo test -p noon-compile --test family_transform_schedule
           cargo test -p noon-compile animation_schedule --lib
           rm tools/_codex_b3_family_schedule_patch.py
+          rm tools/_codex_b3_family_schedule_fix.py
           rm .github/workflows/_codex_b3_family_schedule.yml
           git config user.name "Yongkyun Shin"
           git config user.email "yongkyuns@gmail.com"
