@@ -19,6 +19,7 @@ class DimensionFittingTests(unittest.TestCase):
     def setUp(self):
         self.calls = []
         self.anchor = types.SimpleNamespace(
+            scale=lambda *args: self.calls.append(("scale", args)),
             rescaleToFit=lambda *args: self.calls.append(("fit", args)),
             matchDimSize=lambda *args: self.calls.append(("match", args)),
         )
@@ -29,6 +30,13 @@ class DimensionFittingTests(unittest.TestCase):
         self.assertIs(source.match_height(target, stretch=True), source)
         self.assertEqual(self.calls, [("fit", (4.0, 0, False, 0., 0., False)),
                                      ("match", (self.anchor, 1, True, 0., 0., False))])
+
+    def test_stretch_routes_only_dimension_and_pivot_arguments(self):
+        source = self.wrapper()
+        self.assertIs(source.stretch(-2, 0, about_edge=noon.LEFT), source)
+        self.assertIs(source.stretch_about_point(3, 1, (2, 4)), source)
+        self.assertEqual(self.calls, [("scale", (-2., 1., -1., 0., False)),
+                                     ("scale", (1., 3., 2., 4., True))])
 
     def test_live_dispatch_passes_both_opaque_anchors(self):
         source, target = self.wrapper(), self.wrapper()

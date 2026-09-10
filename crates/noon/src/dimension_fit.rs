@@ -69,6 +69,20 @@ pub(crate) fn world_scale_factors(
 }
 
 impl LayoutAnchor {
+    /// Stretch one world dimension around a shared pivot, preserving semantic identity.
+    pub fn stretch(
+        &self,
+        factor: f64,
+        dimension: LayoutDimension,
+        pivot: crate::ManimRotationPivot,
+    ) -> Result<(), AuthoringError> {
+        let (x, y) = match dimension {
+            LayoutDimension::Width => (factor, 1.0),
+            LayoutDimension::Height => (1.0, factor),
+        };
+        self.scale(x, y, pivot)
+    }
+
     /// Fit the selected object or family through its ordinary affine semantics.
     /// A zero source extent is a no-op; families edit each unique leaf once.
     pub fn rescale_to_fit(
@@ -97,18 +111,23 @@ impl LayoutAnchor {
         let Some((x, y)) = dimension.scale(layout.bounds(), length, stretch)? else {
             return Ok(());
         };
-        let transaction = {
+        let prepared = {
             let store = self.integration_store().borrow();
-            crate::family_affine::FamilyAffine::Scale(x, y, pivot).transaction(
+            crate::family_affine::FamilyAffine::Scale(x, y, pivot).prepare(
                 &store,
                 layout.leaves(),
                 layout.boundary_bounds(),
             )?
         };
-        transaction
-            .apply(&mut self.integration_store().borrow_mut())
-            .map(|_| ())
-            .map_err(AuthoringError::from)
+        prepared.publish(
+            &mut self.integration_store().borrow_mut(),
+            |store, transaction| {
+                transaction
+                    .apply(store)
+                    .map(|_| ())
+                    .map_err(AuthoringError::from)
+            },
+        )
     }
 
     /// Match an object's or family's dimension using a fresh shared observation.
@@ -157,7 +176,7 @@ pub(crate) fn replacement_transaction(
     )],
     dimension: LayoutDimension,
     stretch: bool,
-) -> Result<noon_core::SemanticMutationTransaction, AuthoringError> {
+) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
     use crate::semantic_mobject::{scale_state_about_center, stage_state_changes, state_center};
     use std::collections::BTreeSet;
 
@@ -210,11 +229,24 @@ pub(crate) fn replacement_transaction(
     }));
     let destination = crate::family_layout::bounds_critical_point(target_after_scale, 0.0, 0.0);
     let mut transaction = noon_core::SemanticMutationTransaction::new();
+    let mut replacements = Vec::new();
     for &leaf in leaves {
         let previous = store
             .semantic_object_state_checked(leaf)
             .map_err(AuthoringError::from)?;
-        let (local_x, local_y) = world_scale_factors(previous.transform.rotation_z, x, y)?;
+        let Ok((local_x, local_y)) = world_scale_factors(previous.transform.rotation_z, x, y)
+        else {
+            let path = crate::family_affine::world_scaled_path(
+                store,
+                previous,
+                x,
+                y,
+                center,
+                destination,
+            )?;
+            replacements.push((leaf, previous.clone(), path));
+            continue;
+        };
         let old_center = state_center(store, previous)?;
         let next_center = (
             destination.0 + (old_center.0 - center.0) * x,
@@ -224,7 +256,10 @@ pub(crate) fn replacement_transaction(
         scale_state_about_center(store, &mut next, local_x, local_y, next_center)?;
         stage_state_changes(&mut transaction, leaf, previous, &next);
     }
-    Ok(transaction)
+    Ok(
+        crate::path_editing::PreparedPathEdits::prepare(store, replacements)?
+            .with_transaction(transaction),
+    )
 }
 
 impl LayoutAnchor {
@@ -256,7 +291,7 @@ impl LayoutAnchor {
                 Ok((node, object.layout_bounds()?, object.boundary_bounds()?))
             })
             .collect::<Result<Vec<_>, AuthoringError>>()?;
-        let transaction = replacement_transaction(
+        let prepared = replacement_transaction(
             &self.integration_store().borrow(),
             source.leaves(),
             (source.bounds(), source.boundary_bounds()),
@@ -264,9 +299,14 @@ impl LayoutAnchor {
             dimension,
             stretch,
         )?;
-        transaction
-            .apply(&mut self.integration_store().borrow_mut())
-            .map(|_| ())
-            .map_err(AuthoringError::from)
+        prepared.publish(
+            &mut self.integration_store().borrow_mut(),
+            |store, transaction| {
+                transaction
+                    .apply(store)
+                    .map(|_| ())
+                    .map_err(AuthoringError::from)
+            },
+        )
     }
 }

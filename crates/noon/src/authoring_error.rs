@@ -42,7 +42,7 @@ pub enum UnsupportedAuthoringOperation {
     ExternalGeometry,
     /// Line.match_points requires an analytic Line source.
     LineMatchSourceContent,
-    /// dimension stretching of rotated objects is unsupported.
+    /// This operation cannot retain the requested world-axis deformation.
     RotatedDimensionStretch,
 }
 
@@ -66,7 +66,7 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::PathEditContent => "point editing requires retained vector geometry",
             Self::PointMatchContent => "match_points requires vector geometry on both operands",
             Self::LineMatchSourceContent => "Line.match_points requires an analytic Line source",
-            Self::RotatedDimensionStretch => "dimension stretching of rotated objects is unsupported",
+            Self::RotatedDimensionStretch => "this operation cannot represent the requested world-axis deformation",
         })
     }
 }

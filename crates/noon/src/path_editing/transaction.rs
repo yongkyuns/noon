@@ -5,6 +5,7 @@ use noon_core::{SemanticNodeId, StoredGeometry};
 pub(crate) struct PreparedPathEdits {
     states: Vec<(SemanticNodeId, SemanticObjectState, SemanticObjectState)>,
     paths: Vec<VectorPath>,
+    transaction: SemanticMutationTransaction,
 }
 
 impl PreparedPathEdits {
@@ -15,6 +16,7 @@ impl PreparedPathEdits {
         let mut result = Self {
             states: Vec::new(),
             paths: Vec::new(),
+            transaction: SemanticMutationTransaction::new(),
         };
         for (node, captured, path) in replacements {
             let before = store.semantic_object_state_checked(node)?;
@@ -28,6 +30,15 @@ impl PreparedPathEdits {
         Ok(result)
     }
 
+    pub(crate) fn with_transaction(mut self, transaction: SemanticMutationTransaction) -> Self {
+        self.transaction = transaction;
+        self
+    }
+
+    pub(crate) fn creates_resources(&self) -> bool {
+        !self.paths.is_empty()
+    }
+
     pub(crate) fn publish<T, E>(
         self,
         store: &mut SemanticStore,
@@ -37,7 +48,7 @@ impl PreparedPathEdits {
         E: From<noon_core::GeometryResourceError>,
     {
         store.with_geometry_paths(self.paths, |store, handles| {
-            let mut transaction = SemanticMutationTransaction::new();
+            let mut transaction = self.transaction;
             for ((node, before, mut after), handle) in self.states.into_iter().zip(handles) {
                 after.content = StoredGeometry::Resource(*handle).into();
                 crate::semantic_mobject::stage_state_changes(

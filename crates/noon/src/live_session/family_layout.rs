@@ -16,6 +16,21 @@ pub enum LiveLayoutTarget<'a> {
 }
 
 impl LiveSession<'_> {
+    /// Stretch a selected live object/family through the shared world-axis operation.
+    pub fn stretch(
+        &mut self,
+        source: &crate::LayoutAnchor,
+        factor: f64,
+        dimension: crate::LayoutDimension,
+        pivot: crate::ManimRotationPivot,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let (x, y) = match dimension {
+            crate::LayoutDimension::Width => (factor, 1.0),
+            crate::LayoutDimension::Height => (1.0, factor),
+        };
+        self.scale_layout(source, x, y, pivot)
+    }
+
     /// Fit from the current coherent layout and publish one local affine edit.
     /// Active affine/content drivers must finish before persistent fitting.
     pub fn rescale_to_fit(
@@ -56,10 +71,12 @@ impl LiveSession<'_> {
             return Ok(());
         };
         let (_, boundary) = self.anchor_layout_measure(source, true)?;
-        let transaction = crate::family_affine::FamilyAffine::Scale(x, y, pivot)
-            .transaction(&self.store.borrow(), &leaves, boundary)
-            .map_err(LiveSessionError::from)?;
-        self.apply(transaction).map(|_| ())
+        let prepared = crate::family_affine::FamilyAffine::Scale(x, y, pivot).prepare(
+            &self.store.borrow(),
+            &leaves,
+            boundary,
+        )?;
+        self.publish_affine(prepared).map(|_| ())
     }
 
     /// Match the effective target dimension; no wrapper computes layout ratios.
@@ -128,7 +145,7 @@ impl LiveSession<'_> {
             })
             .collect::<Result<Vec<_>, LiveSessionError>>()?;
         let (_, boundary) = self.anchor_layout_measure(source, true)?;
-        let transaction = crate::dimension_fit::replacement_transaction(
+        let prepared = crate::dimension_fit::replacement_transaction(
             &self.store.borrow(),
             &leaves,
             (bounds, boundary),
@@ -137,7 +154,7 @@ impl LiveSession<'_> {
             stretch,
         )
         .map_err(LiveSessionError::from)?;
-        self.apply(transaction).map(|_| ())
+        self.publish_affine(prepared).map(|_| ())
     }
 
     /// Publish one alias-aware family scale after validating every local member.
@@ -285,10 +302,24 @@ impl LiveSession<'_> {
                 Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
             self.placement_authored_transform(&object)?;
         }
-        let transaction = operation
-            .transaction(&self.store.borrow(), &leaves, bounds)
-            .map_err(LiveSessionError::from)?;
-        self.apply(transaction)
+        let prepared = operation.prepare(&self.store.borrow(), &leaves, bounds)?;
+        self.publish_affine(prepared)
+    }
+
+    fn publish_affine(
+        &mut self,
+        prepared: crate::path_editing::PreparedPathEdits,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let mut store = self.store.borrow_mut();
+        if prepared.creates_resources() {
+            self.session
+                .require_resource_creation_at_root(&store, self.root)?;
+        }
+        prepared.publish(&mut store, |store, transaction| {
+            self.session
+                .apply_semantic_transaction_at_root(store, self.root, transaction)
+                .map_err(LiveSessionError::from)
+        })
     }
 
     /// Observe this family's effective bounds, including detached authored members.

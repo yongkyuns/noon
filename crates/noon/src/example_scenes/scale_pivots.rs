@@ -13,6 +13,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         let mut a = scene.square(0.6)?;
         a.set_fill(1., 68. / 255., 102. / 255., 1.)?;
         a.set_stroke_width(0.)?;
+        a.rotate(0.37)?;
         a.shift(-1., -1.)?;
         let mut b = scene.square(0.6)?;
         b.set_fill(1., 204. / 255., 68. / 255., 1.)?;
@@ -47,6 +48,12 @@ pub fn session() -> Result<ExecutionSession, String> {
             crate::LayoutDimension::Width,
             false,
             Pivot::Edge(1., 0.),
+        )?;
+        live.stretch(
+            &LayoutAnchor::from(&family),
+            0.8,
+            crate::LayoutDimension::Height,
+            Pivot::Point(0., 0.),
         )?;
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;
