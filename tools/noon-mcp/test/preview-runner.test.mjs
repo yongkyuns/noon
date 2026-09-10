@@ -12,14 +12,24 @@ function fixture() {
 }
 
 async function requestLine(stream) {
-  const chunks = [];
-  for await (const chunk of stream) {
-    chunks.push(chunk);
-    const buffer = Buffer.concat(chunks);
-    const newline = buffer.indexOf(0x0a);
-    if (newline >= 0) return JSON.parse(buffer.subarray(0, newline).toString("utf8"));
-  }
-  throw new Error("request stream ended");
+  return new Promise((resolve, reject) => {
+    let buffered = Buffer.alloc(0);
+    const cleanup = () => {
+      stream.off("data", onData);
+      stream.off("error", onError);
+    };
+    const onError = (error) => { cleanup(); reject(error); };
+    const onData = (chunk) => {
+      buffered = Buffer.concat([buffered, Buffer.from(chunk)]);
+      const newline = buffered.indexOf(0x0a);
+      if (newline < 0) return;
+      cleanup();
+      try { resolve(JSON.parse(buffered.subarray(0, newline).toString("utf8"))); }
+      catch (error) { reject(error); }
+    };
+    stream.on("data", onData);
+    stream.once("error", onError);
+  });
 }
 
 test("JSON-line client correlates one bounded request and response", async () => {
@@ -43,16 +53,34 @@ test("unknown response IDs fail outstanding work instead of being ignored", asyn
   await assert.rejects(client.request({ op: "inspect" }), /unknown request id/);
 });
 
-test("cancellation rejects the request and does not accept its late response", async () => {
+test("cancellation rejects the request and poisons the control channel", async () => {
   const { client, toWorker, fromWorker } = fixture();
   const outbound = requestLine(toWorker);
   const controller = new AbortController();
   const pending = client.request({ op: "sample", time: 1 }, { signal: controller.signal });
-  const request = await outbound;
+  await outbound;
   controller.abort("client canceled");
   await assert.rejects(pending, /client canceled/);
-  fromWorker.write(`${JSON.stringify({ id: request.id, ok: true })}\n`);
-  await assert.rejects(client.request({ op: "inspect" }), /unknown request id/);
+  await assert.rejects(client.request({ op: "inspect" }), /client canceled/);
+});
+
+test("concurrent requests are rejected before duplicate worker work", async () => {
+  const { client, toWorker } = fixture();
+  const outbound = requestLine(toWorker);
+  const first = client.request({ op: "inspect" });
+  await outbound;
+  await assert.rejects(client.request({ op: "sample", time: 1 }), /already in progress/);
+  client.close("test complete");
+  await assert.rejects(first, /test complete/);
+});
+
+test("request timeout poisons the control channel", async () => {
+  const { client, toWorker } = fixture();
+  const outbound = requestLine(toWorker);
+  const pending = client.request({ op: "inspect" }, { timeoutMs: 1 });
+  await outbound;
+  await assert.rejects(pending, /timed out/);
+  await assert.rejects(client.request({ op: "inspect" }), /timed out/);
 });
 
 test("oversized source request is rejected before writing to the worker", async () => {
