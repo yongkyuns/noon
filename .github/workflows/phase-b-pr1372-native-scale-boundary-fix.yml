@@ -6,6 +6,7 @@ on:
       - codex/74-scale-pivot-prep
     paths:
       - .github/phase-b-pr1372-native-scale-boundary-fix.py
+      - .github/phase-b-pr1372-native-scale-boundary-fix2.py
       - .github/workflows/phase-b-pr1372-native-scale-boundary-fix.yml
 
 permissions:
@@ -33,7 +34,9 @@ jobs:
             "+refs/heads/${PREP_BRANCH}:refs/remotes/origin/${PREP_BRANCH}"
           test "$(git rev-parse origin/${PRODUCT_BRANCH})" = "$EXPECTED_HEAD"
           git show "origin/${PREP_BRANCH}:.github/phase-b-pr1372-native-scale-boundary-fix.py" > /tmp/fix.py
+          git show "origin/${PREP_BRANCH}:.github/phase-b-pr1372-native-scale-boundary-fix2.py" > /tmp/fix2.py
           python /tmp/fix.py
+          python /tmp/fix2.py
 
       - name: Focused qualification
         shell: bash
@@ -57,6 +60,7 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git checkout -B "$PRODUCT_BRANCH"
           git add \
+            crates/noon/src/dimension_fit.rs \
             crates/noon/src/family_affine.rs \
             crates/noon/src/live_session/family_layout.rs \
             crates/noon/tests/manim_scale_pivots.rs \
