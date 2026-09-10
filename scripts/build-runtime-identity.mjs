@@ -11,6 +11,7 @@ const runtimeFiles = Object.freeze({
   worker: Object.freeze({ path: "./python-worker.js", diskPath: "web/python-worker.js" }),
   wasm: Object.freeze({ path: "./pkg/noon_web_bg.wasm", diskPath: "web/pkg/noon_web_bg.wasm" }),
   glue: Object.freeze({ path: "./pkg/noon_web.js", diskPath: "web/pkg/noon_web.js" }),
+  verifier: Object.freeze({ path: "./runtime-build-verifier.js", diskPath: "web/runtime-build-verifier.js" }),
 });
 
 function sha256(value) {
@@ -53,6 +54,7 @@ export function runtimeBuildIdentityCore({ sourceRevision, hashes }) {
       worker: { path: runtimeFiles.worker.path, sha256: hashes.worker },
       wasm: { path: runtimeFiles.wasm.path, sha256: hashes.wasm },
       glue: { path: runtimeFiles.glue.path, sha256: hashes.glue },
+      verifier: { path: runtimeFiles.verifier.path, sha256: hashes.verifier },
     },
   };
 }
