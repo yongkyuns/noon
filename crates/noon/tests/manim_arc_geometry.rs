@@ -42,6 +42,13 @@ fn close(actual: f32, expected: f32) {
     );
 }
 
+fn close64(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() < 1e-5,
+        "{actual} != {expected}"
+    );
+}
+
 fn signed_chord_side(start: Vec2, end: Vec2, point: Vec2) -> f32 {
     let chord = end - start;
     let offset = point - start;
@@ -127,6 +134,31 @@ fn arc_between_points_maps_endpoints_and_radius_sign_without_frontend_geometry()
         close(actual_end.x, end.x);
         close(actual_end.y, end.y);
     }
+}
+
+#[test]
+fn arc_between_points_metadata_matches_manim_radius_and_resolved_angle() {
+    let (implicit_radius, implicit_angle) = Options::arc_between_points_metadata(
+        -1.0,
+        0.0,
+        1.0,
+        0.0,
+        std::f64::consts::FRAC_PI_2,
+        None,
+    )
+    .unwrap();
+    close64(implicit_radius, 2.0_f64.sqrt());
+    close64(implicit_angle, std::f64::consts::FRAC_PI_2);
+
+    let (explicit_radius, explicit_angle) =
+        Options::arc_between_points_metadata(-1.0, 0.0, 1.0, 0.0, 0.1, Some(-2.0)).unwrap();
+    close64(explicit_radius, 2.0);
+    close64(explicit_angle, -std::f64::consts::FRAC_PI_3);
+
+    let (zero_radius, zero_angle) =
+        Options::arc_between_points_metadata(-1.0, 0.0, 1.0, 0.0, 0.0, None).unwrap();
+    assert!(zero_radius.is_infinite() && zero_radius.is_sign_positive());
+    assert_eq!(zero_angle, 0.0);
 }
 
 #[test]
