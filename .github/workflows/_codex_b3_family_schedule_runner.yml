@@ -1,0 +1,41 @@
+name: codex b3 family transform scheduler runner
+
+on:
+  push:
+    branches: [codex/b3-family-transform-schedule-runner]
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/b3-family-transform-schedule
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply and qualify target branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "b8409c66f31fb4e754b68923c244d51eeb35643e"
+          python3 tools/_codex_b3_family_schedule_fix.py
+          python3 tools/_codex_b3_family_schedule_test_fix.py
+          python3 tools/_codex_b3_family_schedule_patch.py
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo test -p noon-compile --test family_transform_schedule
+          cargo test -p noon-compile animation_schedule --lib
+          rm tools/_codex_b3_family_schedule_patch.py
+          rm tools/_codex_b3_family_schedule_fix.py
+          rm tools/_codex_b3_family_schedule_test_fix.py
+          rm .github/workflows/_codex_b3_family_schedule.yml
+          git config user.name "Yongkyun Shin"
+          git config user.email "yongkyuns@gmail.com"
+          git add -A
+          git commit -m "Project family Transform through shared scheduler"
+          git push origin HEAD:codex/b3-family-transform-schedule
