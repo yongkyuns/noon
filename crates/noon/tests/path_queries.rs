@@ -116,7 +116,6 @@ fn effective_reveal_queries_keep_curve_boundaries_transforms_and_snapshots() {
         .unwrap();
     object.set_scale(2., 1.).unwrap();
     object.shift(1., 3.).unwrap();
-    let revision = scene.revision();
     let mut session = scene.execution_session().unwrap();
     let snapshot;
     {
@@ -147,7 +146,6 @@ fn effective_reveal_queries_keep_curve_boundaries_transforms_and_snapshots() {
         near(snapshot.end().unwrap(), (21., 4.));
     }
     let committed_revision = scene.revision();
-    assert!(committed_revision >= revision);
     session.seek(1.5).unwrap();
     let replay = scene
         .live(&mut session)

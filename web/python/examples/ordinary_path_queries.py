@@ -26,6 +26,7 @@ class OrdinaryPathQueries(Scene):
         wait_end = live.wait(0.2)
         live.advance_to(wait_end)
         live.complete()
+        self.remove(ellipse)
         self.play(Create(ellipse), run_time=1, rate_func=linear)
         observed = self.live_execution()
         observed.evaluate(1.7)

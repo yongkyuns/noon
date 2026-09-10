@@ -59,6 +59,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;
         assert_eq!(live.effective_path_query(&rectangle)?.start()?, before);
+        live.remove(&ellipse)?;
         let reveal = live.declare_and_activate_create(
             &ellipse,
             crate::AnimationOptions::new()
