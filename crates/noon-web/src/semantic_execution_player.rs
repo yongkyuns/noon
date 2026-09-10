@@ -867,8 +867,11 @@ impl SemanticExecutionPlayer {
         length: f64,
         dimension: noon::LayoutDimension,
         stretch: bool,
+        pivot: noon::ManimRotationPivot,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.rescale_to_fit(source, length, dimension, stretch))
+        self.with_live_session(|live| {
+            live.rescale_to_fit_with_pivot(source, length, dimension, stretch, pivot)
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -889,8 +892,11 @@ impl SemanticExecutionPlayer {
         target: &noon::LayoutAnchor,
         dimension: noon::LayoutDimension,
         stretch: bool,
+        pivot: noon::ManimRotationPivot,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.match_dim_size(source, target, dimension, stretch))
+        self.with_live_session(|live| {
+            live.match_dim_size_with_pivot(source, target, dimension, stretch, pivot)
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1016,7 +1022,7 @@ impl SemanticExecutionPlayer {
                 .expect("live semantic store has one scene root"),
             &mut self.session,
         )
-        .scale(mobject, x, y)
+        .manim_scale(mobject, x, y)
         .map(|_| ())
         .map_err(AuthoringFailure::from)
     }
@@ -1042,6 +1048,17 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_scale_layout(
+        &mut self,
+        anchor: &noon::LayoutAnchor,
+        x: f64,
+        y: f64,
+        pivot: noon::ManimRotationPivot,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.scale_layout(anchor, x, y, pivot))
+            .map(|_| ())
+    }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_rotate_layout(
         &mut self,

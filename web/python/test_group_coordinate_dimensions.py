@@ -24,8 +24,8 @@ class GroupCoordinateDimensionTests(unittest.TestCase):
                      patch.object(semantic, "_group_live_layout_context", return_value=None):
                     group.width = 4
                     group.height = 2
-        self.assertEqual(self.calls, [("fit", (4.0, 0, False)),
-                                     ("fit", (2.0, 1, False))] * 2)
+        self.assertEqual(self.calls, [("fit", (4.0, 0, False, 0., 0., False)),
+                                     ("fit", (2.0, 1, False, 0., 0., False))] * 2)
 
     def test_directional_coordinates_use_family_placement(self):
         layout = types.SimpleNamespace(
@@ -57,7 +57,7 @@ class GroupCoordinateDimensionTests(unittest.TestCase):
             self.group.height = 3
         self.assertEqual(self.calls, [
             ("move", (self.group._semantic_family_handle, 5.0, 0.0, -1.0, 0.0, 1.0, 0.0)),
-            ("fit", (self.anchor, 3.0, 1, False)),
+            ("fit", (self.anchor, 3.0, 1, False, 0., 0., False)),
         ])
 
     def test_invalid_coordinate_does_not_start_a_family_mutation(self):

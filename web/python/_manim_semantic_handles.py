@@ -700,10 +700,7 @@ def _move_to(
     return self
 
 
-def _dimension_fit_source(self, dim, kwargs):
-    if kwargs:
-        unsupported = ", ".join(sorted(kwargs))
-        raise NotImplementedError(f"rescale_to_fit anchor option(s) are not yet supported: {unsupported}")
+def _dimension_fit_source(self, dim):
     if dim not in (0, 1):
         raise NotImplementedError("Noon currently exposes width/height fitting only")
     anchor = _layout_anchor(self)
@@ -714,37 +711,39 @@ def _dimension_fit_source(self, dim, kwargs):
     return anchor, context
 
 
-def _rescale_to_fit(self, length, dim, stretch=False, **kwargs):
-    anchor, context = _dimension_fit_source(self, dim, kwargs)
+def _rescale_to_fit(self, length, dim, stretch=False, *, about_point=None, about_edge=None):
+    anchor, context = _dimension_fit_source(self, dim)
+    pivot = _pivot_arguments(about_point, about_edge)
     length = float(length)
     try:
         if context is None:
-            engine_call(anchor.rescaleToFit, length, dim, bool(stretch))
+            engine_call(anchor.rescaleToFit, length, dim, bool(stretch), *pivot)
         else:
-            engine_call(context.liveRescaleToFit, anchor, length, dim, bool(stretch))
+            engine_call(context.liveRescaleToFit, anchor, length, dim, bool(stretch), *pivot)
     except Exception as error:
         raise_engine_error(error)
     return self
 
 
-def _match_dim_size(self, mobject, dim, stretch=False, **kwargs):
+def _match_dim_size(self, mobject, dim, stretch=False, *, about_point=None, about_edge=None):
     if not isinstance(mobject, _base.Mobject):
         raise TypeError("dimension match target must be a Mobject")
-    anchor, context = _dimension_fit_source(self, dim, kwargs)
+    anchor, context = _dimension_fit_source(self, dim)
+    pivot = _pivot_arguments(about_point, about_edge)
     target = _layout_anchor(mobject)
     if target is None:
         raise RuntimeError("dimension matching requires a shared Rust target")
     try:
         if context is None:
-            engine_call(anchor.matchDimSize, target, dim, bool(stretch))
+            engine_call(anchor.matchDimSize, target, dim, bool(stretch), *pivot)
         else:
-            engine_call(context.liveMatchDimSize, anchor, target, dim, bool(stretch))
+            engine_call(context.liveMatchDimSize, anchor, target, dim, bool(stretch), *pivot)
     except Exception as error:
         raise_engine_error(error)
     return self
 
 
-def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
+def _scale(self: _base.Mobject, factor: object, *, about_point=None, about_edge=None) -> _base.Mobject:
     handle = _handle_for(self)
     if handle is None:
         raise RuntimeError("Mobject edits require a current shared Rust semantic handle")
@@ -753,6 +752,8 @@ def _scale(self: _base.Mobject, factor: object) -> _base.Mobject:
     else:
         scalar = float(factor)
         value = _base.Vec2(scalar, scalar)
+    if about_point is not None or about_edge is not None:
+        return _planar_affine(self, "scale", (value.x, value.y), about_point, about_edge)
     context = _live_mutation_context(self)
     if context is not None:
         try:
@@ -794,15 +795,19 @@ def _rotate(
     return _planar_affine(self, "rotate", (_compat._rotation_angle_2d(angle, axis),), about_point, about_edge)
 
 
+def _pivot_arguments(about_point, about_edge):
+    point = _base._as_vec2(about_point if about_point is not None
+                           else (_base.ORIGIN if about_edge is None else about_edge))
+    return point.x, point.y, about_point is not None
+
+
 def _planar_affine(self, operation, arguments, about_point, about_edge):
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("affine edits require the shared Rust authoring host")
-    point = _base._as_vec2(about_point if about_point is not None
-                           else (_base.ORIGIN if about_edge is None else about_edge))
     context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
                else _live_mutation_context(self))
-    arguments = (*arguments, point.x, point.y, about_point is not None)
+    arguments = (*arguments, *_pivot_arguments(about_point, about_edge))
     if context is None:
         engine_call(getattr(anchor, operation), *arguments)
     else:
@@ -921,7 +926,7 @@ def _replace(
 ) -> _base.Mobject:
     if not isinstance(mobject, _base.Mobject):
         raise TypeError("replacement target must be a Mobject")
-    source, context = _dimension_fit_source(self, dim_to_match, {})
+    source, context = _dimension_fit_source(self, dim_to_match)
     target = _layout_anchor(mobject)
     if target is None:
         raise RuntimeError("replacement requires a shared Rust target layout")
@@ -1450,9 +1455,11 @@ def _group_arrange_in_grid(self, rows=None, cols=None, buff=_base.MED_SMALL_BUFF
     return self
 
 
-def _group_scale(self: _compat.Group, factor: object) -> _compat.Group:
+def _group_scale(self: _compat.Group, factor: object, *, about_point=None, about_edge=None) -> _compat.Group:
     scale = (_base._as_vec2(factor) if isinstance(factor, (tuple, list, _base.Vec2))
              else _base.Vec2(float(factor), float(factor)))
+    if about_point is not None or about_edge is not None:
+        return _planar_affine(self, "scale", (scale.x, scale.y), about_point, about_edge)
     handle = getattr(self, "_semantic_family_handle", None)
     if handle is None:
         raise RuntimeError("Group scale requires the shared Rust authoring host")

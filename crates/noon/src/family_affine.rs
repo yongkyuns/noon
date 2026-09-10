@@ -12,7 +12,7 @@ use noon_core::{Bounds2D64, SemanticMutationTransaction, SemanticNodeId, Semanti
 
 #[derive(Clone, Copy)]
 pub(crate) enum FamilyAffine {
-    Scale(f64, f64),
+    Scale(f64, f64, ManimRotationPivot),
     Rotate(f64, ManimRotationPivot),
     Flip(SemanticVec3, ManimRotationPivot),
 }
@@ -40,27 +40,16 @@ impl FamilyAffine {
             }
         }
         let pivot = match self {
-            Self::Scale(x, y) => {
+            Self::Scale(x, y, pivot) => {
                 authoring_render_f64("family scale.x", x)?;
                 authoring_render_f64("family scale.y", y)?;
-                center
+                resolve_pivot(bounds, center, pivot)?
             }
             Self::Rotate(_, pivot) | Self::Flip(_, pivot) => {
                 if let Self::Rotate(angle, _) = self {
                     authoring_render_f64("family rotation", angle)?;
                 }
-                match pivot {
-                    ManimRotationPivot::Center => center,
-                    ManimRotationPivot::Point(x, y) => (
-                        authoring_render_f64("family pivot.x", x)?,
-                        authoring_render_f64("family pivot.y", y)?,
-                    ),
-                    ManimRotationPivot::Edge(x, y) => {
-                        authoring_render_f64("family edge.x", x)?;
-                        authoring_render_f64("family edge.y", y)?;
-                        bounds_critical_point(bounds, x, y)
-                    }
-                }
+                resolve_pivot(bounds, center, pivot)?
             }
         };
         let mut transaction = SemanticMutationTransaction::new();
@@ -70,13 +59,18 @@ impl FamilyAffine {
                 .map_err(AuthoringError::from)?;
             let mut next = previous.clone();
             match self {
-                Self::Scale(x, y) => {
+                Self::Scale(x, y, _) => {
+                    let (local_x, local_y) = crate::dimension_fit::world_scale_factors(
+                        previous.transform.rotation_z,
+                        x,
+                        y,
+                    )?;
                     let old_center = state_center(store, previous)?;
                     let target_center = (
-                        center.0 + (old_center.0 - center.0) * x,
-                        center.1 + (old_center.1 - center.1) * y,
+                        pivot.0 + (old_center.0 - pivot.0) * x,
+                        pivot.1 + (old_center.1 - pivot.1) * y,
                     );
-                    scale_state_about_center(store, &mut next, x, y, target_center)?;
+                    scale_state_about_center(store, &mut next, local_x, local_y, target_center)?;
                 }
                 Self::Flip(axis, _) if axis.z == 0.0 => {
                     let norm = axis.x.hypot(axis.y);
@@ -122,10 +116,29 @@ impl FamilyAffine {
     }
 }
 
+fn resolve_pivot(
+    bounds: Option<Bounds2D64>,
+    center: (f64, f64),
+    pivot: ManimRotationPivot,
+) -> Result<(f64, f64), AuthoringError> {
+    match pivot {
+        ManimRotationPivot::Center => Ok(center),
+        ManimRotationPivot::Point(x, y) => Ok((
+            authoring_render_f64("pivot.x", x)?,
+            authoring_render_f64("pivot.y", y)?,
+        )),
+        ManimRotationPivot::Edge(x, y) => {
+            authoring_render_f64("edge.x", x)?;
+            authoring_render_f64("edge.y", y)?;
+            Ok(bounds_critical_point(bounds, x, y))
+        }
+    }
+}
+
 impl MobjectFamily {
     /// Scale each unique semantic leaf about the family center in one transaction.
     pub fn scale(&self, x: f64, y: f64) -> Result<(), AuthoringError> {
-        self.apply_affine(FamilyAffine::Scale(x, y))
+        self.apply_affine(FamilyAffine::Scale(x, y, ManimRotationPivot::Center))
     }
 
     /// Rotate each unique leaf about a shared center, edge or explicit point.
@@ -149,6 +162,11 @@ impl MobjectFamily {
 }
 
 impl LayoutAnchor {
+    /// Scale selected unique leaves about one shared world-space pivot.
+    pub fn scale(&self, x: f64, y: f64, pivot: ManimRotationPivot) -> Result<(), AuthoringError> {
+        self.apply_affine(FamilyAffine::Scale(x, y, pivot))
+    }
+
     /// Rotate all selected leaves around one shared center, edge or explicit point.
     pub fn rotate(&self, angle: f64, pivot: ManimRotationPivot) -> Result<(), AuthoringError> {
         self.apply_affine(FamilyAffine::Rotate(angle, pivot))
@@ -178,6 +196,27 @@ impl LayoutAnchor {
 }
 
 impl Mobject {
+    /// Scale about an explicit world point through the shared affine transaction.
+    pub fn manim_scale_about_point(
+        &mut self,
+        x: f64,
+        y: f64,
+        px: f64,
+        py: f64,
+    ) -> Result<(), AuthoringError> {
+        LayoutAnchor::from(&*self).scale(x, y, ManimRotationPivot::Point(px, py))
+    }
+    /// Scale about the geometry critical point selected by a world direction.
+    pub fn manim_scale_about_edge(
+        &mut self,
+        x: f64,
+        y: f64,
+        ex: f64,
+        ey: f64,
+    ) -> Result<(), AuthoringError> {
+        LayoutAnchor::from(&*self).scale(x, y, ManimRotationPivot::Edge(ex, ey))
+    }
+
     /// Apply a Manim-compatible rotation pivot using shared semantic bounds.
     pub fn rotate_with_pivot(
         &self,

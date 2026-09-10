@@ -307,9 +307,9 @@ class Group(Mobject):
     def set_y(self, y: float, direction: object = _base.ORIGIN) -> Group:
         return self.set_coord(y, 1, direction)
 
-    def scale(self, factor: float | tuple[float, float]) -> Group:
+    def scale(self, factor: float | tuple[float, float], *, about_point=None, about_edge=None) -> Group:
         from _manim_semantic_handles import _group_scale
-        return _group_scale(self, factor)
+        return _group_scale(self, factor, about_point=about_point, about_edge=about_edge)
 
     def flip(self, axis=_base.UP, *, about_point=None, about_edge=None):
         return _base._semantic_operations()._flip(self, axis, about_point=about_point, about_edge=about_edge)

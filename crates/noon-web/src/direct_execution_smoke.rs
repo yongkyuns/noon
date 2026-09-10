@@ -776,3 +776,12 @@ pub async fn create_direct_planar_affine_smoke_renderer(
     let session = noon::example_scenes::planar_affine::session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
+
+/// Shared scale pivots use the same retained native and Rust/WASM session.
+#[wasm_bindgen(js_name = createDirectScalePivotsSmokeRenderer)]
+pub async fn create_direct_scale_pivots_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::scale_pivots::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
