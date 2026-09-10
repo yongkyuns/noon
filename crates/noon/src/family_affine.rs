@@ -60,16 +60,17 @@ impl FamilyAffine {
             let mut next = previous.clone();
             match self {
                 Self::Scale(x, y, _) => {
-                    crate::dimension_fit::validate_fit_stretch(
+                    let (local_x, local_y) = crate::dimension_fit::world_scale_factors(
                         previous.transform.rotation_z,
-                        x != y,
+                        x,
+                        y,
                     )?;
                     let old_center = state_center(store, previous)?;
                     let target_center = (
                         pivot.0 + (old_center.0 - pivot.0) * x,
                         pivot.1 + (old_center.1 - pivot.1) * y,
                     );
-                    scale_state_about_center(store, &mut next, x, y, target_center)?;
+                    scale_state_about_center(store, &mut next, local_x, local_y, target_center)?;
                 }
                 Self::Flip(axis, _) if axis.z == 0.0 => {
                     let norm = axis.x.hypot(axis.y);

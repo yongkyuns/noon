@@ -119,3 +119,31 @@ fn paired_scale_example_uses_the_retained_execution_path() {
         4
     );
 }
+
+#[test]
+fn quarter_turn_world_scaling_preserves_world_dimensions_and_live_example() {
+    use noon::{LayoutAnchor, LayoutDimension, ManimRotationPivot as Pivot};
+    let scene = Scene::new();
+    for angle in [
+        std::f64::consts::FRAC_PI_2,
+        -std::f64::consts::FRAC_PI_2,
+        std::f64::consts::PI,
+    ] {
+        let mut shape = scene.rectangle(2., 1.).unwrap();
+        shape.rotate(angle).unwrap();
+        shape.shift(3., 2.).unwrap();
+        let width = shape.width().unwrap();
+        let height = shape.height().unwrap();
+        shape.manim_scale_about_point(2., 0.5, 0., 0.).unwrap();
+        assert!((shape.width().unwrap() - width * 2.).abs() < 1e-6);
+        assert!((shape.height().unwrap() - height * 0.5).abs() < 1e-6);
+        assert_eq!(shape.center().unwrap(), (6., 1.));
+        let right = shape.critical_point(1., 0.).unwrap();
+        LayoutAnchor::from(&shape)
+            .rescale_to_fit_with_pivot(3., LayoutDimension::Width, true, Pivot::Edge(1., 0.))
+            .unwrap();
+        assert!((shape.width().unwrap() - 3.).abs() < 1e-6);
+        assert!((shape.critical_point(1., 0.).unwrap().0 - right.0).abs() < 1e-6);
+    }
+    noon::example_scenes::family_affine::session().unwrap();
+}
