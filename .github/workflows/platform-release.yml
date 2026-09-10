@@ -11,6 +11,7 @@ on:
       - '!crates/**/tests/**'
       - 'scripts/build-web-demo.sh'
       - 'scripts/build-python-worker.mjs'
+      - 'scripts/build-runtime-identity.mjs'
       - 'scripts/check-web-package.mjs'
       - 'scripts/deterministic-replay-smoke.mjs'
       - 'web/**'
@@ -22,11 +23,14 @@ on:
       - 'crates/noon-web/Cargo.toml'
       - 'crates/noon-web/src/determinism.rs'
       - 'scripts/build-web-demo.sh'
+      - 'scripts/build-python-worker.mjs'
+      - 'scripts/build-runtime-identity.mjs'
       - 'scripts/check-web-package.mjs'
       - 'scripts/deterministic-replay-smoke.mjs'
       - '.github/ci/wasm-build.mjs'
       - '.github/ci/optimized-replay-artifact.mjs'
       - 'web/optimized-replay-contract.test.mjs'
+      - 'web/runtime-build-verifier.js'
       - '.github/workflows/platform-release.yml'
   workflow_dispatch:
 
@@ -164,6 +168,7 @@ jobs:
           path: |
             web/pkg
             web/python-worker.js
+            web/runtime-build-identity.json
             web/python/compat-bundle.*.json
             web/ci-artifact.json
             web/ci-Cargo.lock
@@ -184,6 +189,7 @@ jobs:
           path: |
             web/pkg
             web/python-worker.js
+            web/runtime-build-identity.json
             web/python/compat-bundle.*.json
             web/ci-artifact.json
             web/ci-Cargo.lock
