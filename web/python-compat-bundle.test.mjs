@@ -71,6 +71,21 @@ assert.match(
 );
 assert.match(
   generatedWorker,
+  /import \{ loadRuntimeBuild \} from "\.\/runtime-build-verifier\.js";/,
+  "deployed Python worker must use the checked-in runtime byte verifier",
+);
+assert.match(
+  generatedWorker,
+  /initNoonWeb\(\{ module_or_path: runtimeBuild\.wasmBytes \}\)/,
+  "deployed Python worker must initialize wasm-bindgen from verified WASM bytes",
+);
+assert.doesNotMatch(
+  generatedWorker,
+  /\(\) => initNoonWeb\(\)/,
+  "deployed Python worker must not retain implicit WASM fetching",
+);
+assert.match(
+  generatedWorker,
   /PYTHON_COMPAT_MODULES/,
   "generated worker must retain manifest validation",
 );
@@ -79,4 +94,4 @@ assert.ok(
   "Python sources must stay out of the worker critical path instead of being embedded",
 );
 
-console.log("✓ Python compatibility bootstrap is parallel and content-addressed");
+console.log("✓ Python compatibility bootstrap is parallel, content-addressed, and runtime-provenanced");
