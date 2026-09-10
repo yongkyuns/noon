@@ -524,6 +524,45 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_color_gradient(
+        &mut self,
+        target: &noon::Mobject,
+        colors: &[noon::Color],
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_color_by_gradient(target, colors))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_family_color_gradient(
+        &mut self,
+        target: &noon::MobjectFamily,
+        colors: &[noon::Color],
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_family_color_by_gradient(target, colors))
+            .map(|_| ())
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_fill_color(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
+        self.with_live_session(|live| live.effective_fill_color(target))
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_stroke_color(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
+        self.with_live_session(|live| live.effective_stroke_color(target))
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_effective_stroke_width(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<f64, AuthoringFailure> {
+        self.with_live_session(|live| live.effective_stroke_width(target))
+    }
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_style(
         &mut self,
         source: &noon::Mobject,

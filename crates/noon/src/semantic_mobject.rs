@@ -21,7 +21,8 @@ use bounds::{layout_for_content, transform_layout_xy};
 pub(crate) use style::{
     edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
     edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
-    edit_stroke_opacity, edit_stroke_width, manim_color_from_effective, PaintStyleEdit,
+    edit_stroke_opacity, edit_stroke_width, manim_color_from_effective, opaque_paint_color,
+    PaintStyleEdit,
 };
 use style::{parse_stroke_cap, parse_stroke_join, parse_stroke_width_mode};
 
@@ -533,7 +534,7 @@ impl Mobject {
         line_endpoints_for_state(&state, state.transform)
     }
 
-    /// Return Manim's stroke-first color without applying object opacity.
+    /// Return visible fill RGB, falling back to stroke RGB, independently of opacity.
     pub fn manim_color(&self) -> Result<Color, AuthoringError> {
         style::manim_color_from_semantic(&self.state()?.style)
     }

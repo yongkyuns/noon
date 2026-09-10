@@ -47,7 +47,7 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
                 def strokeOpacity(self): return 0.75
 
                 def manimColor(self):
-                    return SimpleNamespace(red=0.1, green=0.2, blue=0.3, alpha=0.4)
+                    return SimpleNamespace(red=0.1, green=0.2, blue=0.3, alpha=1.0)
 
             import _typed_geometry_test_support as geometry_test
             geometry_test.install_js_bridge(fake_js, Handle)
@@ -76,7 +76,7 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
                 authored_color.green,
                 authored_color.blue,
                 authored_color.alpha,
-            ) == (0.1, 0.2, 0.3, 0.4)
+            ) == (0.1, 0.2, 0.3, 1.0)
 
             class DetachedLiveContext:
                 def liveExecutionOwnership(self): return "returned"
@@ -88,7 +88,7 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
             line._canonical_live_target_context = DetachedLiveContext()
             assert line.get_start() == (1.25, -2.5)
             assert line.get_end() == (4.5, 3.75)
-            assert line.get_color().alpha == 0.4
+            assert line.get_color().alpha == 1.0
 
             import _manim_indication
             flash = _manim_indication.ShowPassingFlash(line)
@@ -119,7 +119,7 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
                     return 0.6
                 def queryMobjectColor(self, handle):
                     assert handle is line._semantic_handle
-                    return SimpleNamespace(red=0.8, green=0.7, blue=0.6, alpha=0.5)
+                    return SimpleNamespace(red=0.8, green=0.7, blue=0.6, alpha=1.0)
 
             context = EffectiveContext()
             line._scene = SimpleNamespace(
@@ -138,7 +138,7 @@ class ManimSharedObjectObservationTests(unittest.TestCase):
                 effective_color.green,
                 effective_color.blue,
                 effective_color.alpha,
-            ) == (0.8, 0.7, 0.6, 0.5)
+            ) == (0.8, 0.7, 0.6, 1.0)
 
             # Callback reads use the current ordered row and never query the
             # transferred player or authored handle. Reads see prior writes.

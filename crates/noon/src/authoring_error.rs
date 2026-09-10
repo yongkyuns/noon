@@ -116,6 +116,8 @@ pub enum AuthoringError {
     InvalidStrokeCap(String),
     /// A layout direction is non-finite.
     NonFiniteDirection,
+    /// A color gradient requires at least one reference color.
+    EmptyColorGradient,
     /// A layout direction has zero length.
     ZeroDirection,
     /// Line matching received non-finite endpoints.
@@ -224,6 +226,7 @@ impl std::fmt::Display for AuthoringError {
             Self::InvalidStrokeJoin(_) => f.write_str("stroke_join must be round, miter, or bevel"),
             Self::InvalidStrokeCap(_) => f.write_str("stroke_cap must be round, butt, or square"),
             Self::NonFiniteDirection => f.write_str("direction must be finite"),
+            Self::EmptyColorGradient => f.write_str("a color gradient requires at least one color"),
             Self::ZeroDirection => f.write_str("direction must be non-zero"),
             Self::NonFiniteLineEndpoints => {
                 f.write_str("Line.match_points endpoints must be finite")

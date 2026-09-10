@@ -51,6 +51,26 @@ def _as_color(name: str, value: object) -> _base.Color:
 class VMobject(Mobject):
     """Manim-compatible vector-mobject authoring type over Noon semantic geometry."""
 
+    def set_color_by_gradient(self, *colors):
+        from _manim_semantic_handles import _set_color_by_gradient
+        return _set_color_by_gradient(self, *colors)
+
+    set_submobject_colors_by_gradient = set_color_by_gradient
+
+    def get_fill_color(self):
+        from _manim_semantic_handles import _paint_color
+        return _paint_color(self, "fill")
+
+    def get_stroke_color(self, background=False):
+        if background:
+            raise NotImplementedError("background strokes require shared background paint")
+        from _manim_semantic_handles import _paint_color
+        return _paint_color(self, "stroke")
+
+    def get_stroke_width(self, background=False):
+        from _manim_semantic_handles import _get_stroke_width
+        return _get_stroke_width(self, background)
+
     def set_style(self, fill_color=None, fill_opacity=None, stroke_color=None,
                   stroke_width=None, stroke_opacity=None, family=True, **kwargs):
         from _manim_semantic_handles import _set_style
@@ -200,6 +220,12 @@ def _rotation_angle_2d(angle: float, axis: object = OUT) -> float:
 
 class Group(Mobject):
     """Python identities and ergonomics over a shared Rust semantic family."""
+
+    def set_color_by_gradient(self, *colors):
+        from _manim_semantic_handles import _set_color_by_gradient
+        return _set_color_by_gradient(self, *colors)
+
+    set_submobject_colors_by_gradient = set_color_by_gradient
 
     def set_style(self, fill_color=None, fill_opacity=None, stroke_color=None,
                   stroke_width=None, stroke_opacity=None, family=True, **kwargs):
