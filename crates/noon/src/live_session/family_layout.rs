@@ -25,6 +25,24 @@ impl LiveSession<'_> {
         dimension: crate::LayoutDimension,
         stretch: bool,
     ) -> Result<(), LiveSessionError> {
+        self.rescale_to_fit_with_pivot(
+            source,
+            length,
+            dimension,
+            stretch,
+            crate::ManimRotationPivot::Center,
+        )
+    }
+
+    /// Fit from current bounds around one shared source pivot, then publish atomically.
+    pub fn rescale_to_fit_with_pivot(
+        &mut self,
+        source: &crate::LayoutAnchor,
+        length: f64,
+        dimension: crate::LayoutDimension,
+        stretch: bool,
+        pivot: crate::ManimRotationPivot,
+    ) -> Result<(), LiveSessionError> {
         let (leaves, bounds) = self.anchor_layout_members(source)?;
         let scale = dimension
             .scale(bounds, length, stretch)
@@ -42,10 +60,9 @@ impl LiveSession<'_> {
         let Some((x, y)) = scale else {
             return Ok(());
         };
-        let transaction =
-            crate::family_affine::FamilyAffine::Scale(x, y, crate::ManimRotationPivot::Center)
-                .transaction(&self.store.borrow(), &leaves, bounds)
-                .map_err(LiveSessionError::from)?;
+        let transaction = crate::family_affine::FamilyAffine::Scale(x, y, pivot)
+            .transaction(&self.store.borrow(), &leaves, bounds)
+            .map_err(LiveSessionError::from)?;
         self.apply(transaction).map(|_| ())
     }
 
@@ -57,8 +74,26 @@ impl LiveSession<'_> {
         dimension: crate::LayoutDimension,
         stretch: bool,
     ) -> Result<(), LiveSessionError> {
+        self.match_dim_size_with_pivot(
+            source,
+            target,
+            dimension,
+            stretch,
+            crate::ManimRotationPivot::Center,
+        )
+    }
+
+    /// Read a coherent target extent and fit around the selected source pivot.
+    pub fn match_dim_size_with_pivot(
+        &mut self,
+        source: &crate::LayoutAnchor,
+        target: &crate::LayoutAnchor,
+        dimension: crate::LayoutDimension,
+        stretch: bool,
+        pivot: crate::ManimRotationPivot,
+    ) -> Result<(), LiveSessionError> {
         let (_, bounds) = self.anchor_layout_members(target)?;
-        self.rescale_to_fit(source, dimension.length(bounds), dimension, stretch)
+        self.rescale_to_fit_with_pivot(source, dimension.length(bounds), dimension, stretch, pivot)
     }
 
     /// Replace object/family size and center in one coherent local publication.

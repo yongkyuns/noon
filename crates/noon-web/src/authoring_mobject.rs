@@ -430,14 +430,28 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = rescaleToFit)]
+        #[allow(clippy::too_many_arguments)]
         pub fn rescale_to_fit(
             &self,
             length: f64,
             dimension: u32,
             stretch: bool,
+            x: f64,
+            y: f64,
+            about_point: bool,
         ) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
             self.anchor
-                .rescale_to_fit(length, dimension.try_into().map_err(js_error)?, stretch)
+                .rescale_to_fit_with_pivot(
+                    length,
+                    dimension.try_into().map_err(js_error)?,
+                    stretch,
+                    pivot,
+                )
                 .map_err(js_error)
         }
 
@@ -458,17 +472,27 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = matchDimSize)]
+        #[allow(clippy::too_many_arguments)]
         pub fn match_dim_size(
             &self,
             target: &WasmLayoutAnchor,
             dimension: u32,
             stretch: bool,
+            x: f64,
+            y: f64,
+            about_point: bool,
         ) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
             self.anchor
-                .match_dim_size(
+                .match_dim_size_with_pivot(
                     &target.anchor,
                     dimension.try_into().map_err(js_error)?,
                     stretch,
+                    pivot,
                 )
                 .map_err(js_error)
         }

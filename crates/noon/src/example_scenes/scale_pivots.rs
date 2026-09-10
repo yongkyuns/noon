@@ -27,6 +27,27 @@ pub fn session() -> Result<ExecutionSession, String> {
         live.manim_scale(&line, 0.8, 0.8)?;
         live.manim_scale_about_point(&other, 0.8, 0.8, 2., 1.)?;
         live.scale_layout(&LayoutAnchor::from(&family), 1.2, 1.2, Pivot::Edge(-1., 0.))?;
+        live.rescale_to_fit_with_pivot(
+            &LayoutAnchor::from(&line),
+            2.,
+            crate::LayoutDimension::Width,
+            false,
+            Pivot::Edge(-1., 0.),
+        )?;
+        live.match_dim_size_with_pivot(
+            &LayoutAnchor::from(&other),
+            &LayoutAnchor::from(&line),
+            crate::LayoutDimension::Height,
+            false,
+            Pivot::Point(2., 1.),
+        )?;
+        live.rescale_to_fit_with_pivot(
+            &LayoutAnchor::from(&family),
+            4.,
+            crate::LayoutDimension::Width,
+            false,
+            Pivot::Edge(1., 0.),
+        )?;
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;

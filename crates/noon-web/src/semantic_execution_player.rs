@@ -867,8 +867,11 @@ impl SemanticExecutionPlayer {
         length: f64,
         dimension: noon::LayoutDimension,
         stretch: bool,
+        pivot: noon::ManimRotationPivot,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.rescale_to_fit(source, length, dimension, stretch))
+        self.with_live_session(|live| {
+            live.rescale_to_fit_with_pivot(source, length, dimension, stretch, pivot)
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -889,8 +892,11 @@ impl SemanticExecutionPlayer {
         target: &noon::LayoutAnchor,
         dimension: noon::LayoutDimension,
         stretch: bool,
+        pivot: noon::ManimRotationPivot,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.match_dim_size(source, target, dimension, stretch))
+        self.with_live_session(|live| {
+            live.match_dim_size_with_pivot(source, target, dimension, stretch, pivot)
+        })
     }
 
     #[cfg(target_arch = "wasm32")]

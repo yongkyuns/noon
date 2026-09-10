@@ -178,3 +178,35 @@ fn fitting_preserves_offset_geometry_center_in_authored_and_live_paths() {
     assert_eq!(layout.width, 6.0);
     assert_eq!(layout.center, center);
 }
+
+#[test]
+fn fitting_pivots_keep_source_edges_and_capture_effective_target_dimensions() {
+    use noon::ManimRotationPivot as Pivot;
+    let mut scene = Scene::new();
+    let mut a = scene.rectangle(2., 1.).unwrap();
+    a.shift(2., 1.).unwrap();
+    let target = scene.square(3.).unwrap();
+    let source = LayoutAnchor::from(&a);
+    source
+        .rescale_to_fit_with_pivot(4., Width, false, Pivot::Edge(1., 0.))
+        .unwrap();
+    assert_eq!(a.critical_point(1., 0.).unwrap(), (3., 1.));
+    assert_eq!(a.center().unwrap(), (1., 1.));
+    scene.add_many(&[(&a).into(), (&target).into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut session);
+    live.match_dim_size_with_pivot(
+        &source,
+        &LayoutAnchor::from(&target),
+        Height,
+        false,
+        Pivot::Point(0., 0.),
+    )
+    .unwrap();
+    assert_eq!(live.effective_layout(&a).unwrap().center, (1.5, 1.5));
+    let before = a.state().unwrap();
+    assert!(live
+        .rescale_to_fit_with_pivot(&source, 2., Width, false, Pivot::Point(f64::NAN, 0.))
+        .is_err());
+    assert_eq!(a.state().unwrap(), before);
+}

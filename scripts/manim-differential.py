@@ -329,6 +329,10 @@ def _scale_pivots_probe(api):
         family = api.VGroup(a, api.VGroup(a, b))
         family.scale(1.5, **pivot)
         result.append([_point_observation(a.get_center()), _point_observation(b.get_center()), float(family.width)])
+        line.scale_to_fit_width(2, **pivot)
+        family.match_height(line, **pivot)
+        result.append([_point_observation(line.get_start()), _point_observation(line.get_end()),
+                       _object_observation(family)])
     return result
 
 

@@ -71,6 +71,22 @@ impl LayoutAnchor {
         dimension: LayoutDimension,
         stretch: bool,
     ) -> Result<(), AuthoringError> {
+        self.rescale_to_fit_with_pivot(
+            length,
+            dimension,
+            stretch,
+            crate::ManimRotationPivot::Center,
+        )
+    }
+
+    /// Fit a dimension while holding one shared center, edge, or explicit point.
+    pub fn rescale_to_fit_with_pivot(
+        &self,
+        length: f64,
+        dimension: LayoutDimension,
+        stretch: bool,
+        pivot: crate::ManimRotationPivot,
+    ) -> Result<(), AuthoringError> {
         let layout = self.layout()?;
         let Some((x, y)) = dimension.scale(layout.bounds(), length, stretch)? else {
             return Ok(());
@@ -83,8 +99,11 @@ impl LayoutAnchor {
                     .map_err(AuthoringError::from)?;
                 validate_fit_stretch(state.transform.rotation_z, stretch)?;
             }
-            crate::family_affine::FamilyAffine::Scale(x, y, crate::ManimRotationPivot::Center)
-                .transaction(&store, layout.leaves(), layout.bounds())?
+            crate::family_affine::FamilyAffine::Scale(x, y, pivot).transaction(
+                &store,
+                layout.leaves(),
+                layout.bounds(),
+            )?
         };
         transaction
             .apply(&mut self.integration_store().borrow_mut())
@@ -99,11 +118,27 @@ impl LayoutAnchor {
         dimension: LayoutDimension,
         stretch: bool,
     ) -> Result<(), AuthoringError> {
+        self.match_dim_size_with_pivot(
+            target,
+            dimension,
+            stretch,
+            crate::ManimRotationPivot::Center,
+        )
+    }
+
+    /// Match a fresh target extent and fit around the selected source pivot.
+    pub fn match_dim_size_with_pivot(
+        &self,
+        target: &LayoutAnchor,
+        dimension: LayoutDimension,
+        stretch: bool,
+        pivot: crate::ManimRotationPivot,
+    ) -> Result<(), AuthoringError> {
         if !Rc::ptr_eq(self.integration_store(), target.integration_store()) {
             return Err(AuthoringError::ForeignStore);
         }
         let length = dimension.length(target.layout()?.bounds());
-        self.rescale_to_fit(length, dimension, stretch)
+        self.rescale_to_fit_with_pivot(length, dimension, stretch, pivot)
     }
 }
 

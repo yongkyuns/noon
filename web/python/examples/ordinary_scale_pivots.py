@@ -15,4 +15,7 @@ class OrdinaryScalePivots(Scene):
         line.scale(.8)
         other.scale(.8, about_point=2 * RIGHT + UP)
         family.scale(1.2, about_edge=LEFT)
+        line.scale_to_fit_width(2, about_edge=LEFT)
+        other.match_height(line, about_point=2 * RIGHT + UP)
+        family.scale_to_fit_width(4, about_edge=RIGHT)
         self.wait(.2)
