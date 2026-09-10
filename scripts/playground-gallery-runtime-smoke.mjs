@@ -70,11 +70,19 @@ try {
     // The production parser below validates the semantic descriptor and duration;
     // semantic_execution is an object, not the boolean true.
     // Renderer time may precede completion of an authored static wait.
-    await context.addInitScript(({ channel, protocolVersion }) => {
+    await context.addInitScript(({ channel, protocolVersion, noJspi }) => {
       window.__galleryAuthoringResults = [];
       window.Worker = new Proxy(window.Worker, {
         construct(target, args, newTarget) {
-          const worker = Reflect.construct(target, args, newTarget);
+          const workerArgs = [...args];
+          if (noJspi) {
+            const workerUrl = new URL(workerArgs[0], window.location.href);
+            if (workerUrl.pathname.endsWith('/python-worker.js')) {
+              workerArgs[0] = new URL('./python-worker-no-jspi-test.js', workerUrl);
+              window.__galleryNoJspiWorkerWrapped = true;
+            }
+          }
+          const worker = Reflect.construct(target, workerArgs, newTarget);
           worker.addEventListener('message', ({ data }) => {
             if (data?.channel === channel && data.type === 'result') {
               if (data.protocolVersion !== protocolVersion) {
@@ -87,14 +95,22 @@ try {
           return worker;
         },
       });
-    }, { channel: AUTHORING_CHANNEL, protocolVersion: AUTHORING_PROTOCOL_VERSION });
+    }, { channel: AUTHORING_CHANNEL, protocolVersion: AUTHORING_PROTOCOL_VERSION, noJspi });
     const page = await context.newPage();
     page.setDefaultTimeout(10000);
     const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: browser.version(), errors: [], samples: [] };
     const name = `${entry.id}${noJspi ? '-no-jspi' : ''}`;
-    if (noJspi) await context.route('**/python-worker.js', async route => {
-      const response = await route.fetch();
-      await route.fulfill({ response, body: 'delete WebAssembly.promising; delete WebAssembly.Suspending;\n' + await response.text() });
+    if (noJspi) await context.route('**/python-worker-no-jspi-test.js', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/javascript',
+        body: [
+          'delete WebAssembly.promising;',
+          'delete WebAssembly.Suspending;',
+          'if ("promising" in WebAssembly || "Suspending" in WebAssembly) throw new Error("Unable to disable JSPI for gallery smoke");',
+          'await import("./python-worker.js");',
+        ].join('\n'),
+      });
     });
     page.on('pageerror', error => result.errors.push(String(error)));
     page.on('console', msg => { if (msg.type() === 'error') result.errors.push(msg.text()); });
@@ -126,6 +142,10 @@ try {
         await page.waitForTimeout(100);
       }
       assert.ok(completed, `${entry.id}: initial autoplay did not finish`);
+      if (noJspi && browserName === 'chromium') {
+        assert.equal(await page.evaluate(() => window.__galleryNoJspiWorkerWrapped), true,
+          'no-JSPI smoke did not wrap the production authoring worker');
+      }
       const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
       result.finalMetrics = metrics;
       assert.ok(Number(metrics?.metrics?.presentedFrames) > 0, 'no rendered frames');
