@@ -389,10 +389,7 @@ fn triangle_tip_path(
     direction: (f64, f64),
     length: f64,
 ) -> Result<VectorPath, AuthoringError> {
-    let base = (
-        apex.0 - direction.0 * length,
-        apex.1 - direction.1 * length,
-    );
+    let base = (apex.0 - direction.0 * length, apex.1 - direction.1 * length);
     let half_width = length * 0.5;
     let perpendicular = (-direction.1, direction.0);
     let first_base = (
