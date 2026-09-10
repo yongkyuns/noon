@@ -824,7 +824,7 @@ def _get_z_index(self):
 
 def _set_z_index(self, value, family=True):
     from _manim_updaters import _canonical_phase_context
-    if _canonical_phase_context(self) is not None:
+    if not isinstance(self, _compat.Group) and _canonical_phase_context(self) is not None:
         raise NotImplementedError("z-index during a host callback requires phase-local publication")
     value = float(value)
     anchor = _layout_anchor(self)

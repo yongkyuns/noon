@@ -11,6 +11,10 @@ class ZIndexTests(unittest.TestCase):
         for cls in (compat.VMobject, compat.VGroup):
             for live in (False, True):
                 value = identity_only_wrapper(cls, submobjects=[])
+                if cls is compat.VGroup:
+                    # Real Group wrappers have family identity, not leaf callback fields.
+                    del value._scene
+                    del value._object
                 anchor, context = Mock(), (Mock() if live else None)
                 anchor.zIndex.return_value = -2.5
                 with patch.object(handles, "_layout_anchor", return_value=anchor), \
