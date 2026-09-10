@@ -41,7 +41,8 @@ struct VertexOutput {
     @location(2) fill: vec4<f32>,
     @location(3) stroke: vec4<f32>,
     @location(4) metrics: vec2<f32>,
-    @location(5) flags: vec2<f32>,
+    // Instance flags are discrete; interpolating then casting can turn 3 into 2.
+    @location(5) @interpolate(flat) flags: vec2<f32>,
     @location(6) object_scale: vec2<f32>,
     @location(7) line_stroke_enabled: f32,
 };

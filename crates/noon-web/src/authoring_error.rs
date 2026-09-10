@@ -257,6 +257,9 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::GeometryResource(cause) => {
                 Self::caused_by("authoring.geometry_resource", message, cause.into())
             }
+            AuthoringError::PathQuery(cause) => {
+                Self::new("invalid_input", "path.invalid_query", cause)
+            }
             AuthoringError::Arc(cause) => Self::caused_by(
                 "authoring.arc",
                 message,

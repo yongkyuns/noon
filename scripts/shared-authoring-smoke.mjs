@@ -783,6 +783,7 @@ try {
     { filename: "ordinary_arc_geometry.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_path_arrangement.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_canonical_curve_layout.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_path_queries.py", objectCount: 10, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_z_index.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_scale_pivots.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_family_grid.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },

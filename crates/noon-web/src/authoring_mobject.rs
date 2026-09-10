@@ -1105,6 +1105,34 @@ mod wasm {
     }
 
     #[wasm_bindgen]
+    pub struct WasmPathQuery {
+        value: noon::PathQuery,
+    }
+
+    impl WasmPathQuery {
+        pub(crate) fn from_query(value: noon::PathQuery) -> Self {
+            Self { value }
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmPathQuery {
+        #[wasm_bindgen(js_name = pointFromProportion)]
+        pub fn point_from_proportion(&self, alpha: f64) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .point_from_proportion(alpha)
+                .map(|(x, y)| vec![x, y])
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = arcLength)]
+        pub fn arc_length(&self, samples: Option<u32>) -> Result<f64, JsValue> {
+            self.value
+                .arc_length(samples.map(|n| n as usize))
+                .map_err(js_error)
+        }
+    }
+
+    #[wasm_bindgen]
     pub struct WasmManimLineEndpoints {
         value: noon::ManimLineEndpoints,
     }
@@ -1277,6 +1305,21 @@ mod wasm {
                     None => anchor,
                 },
             })
+        }
+
+        #[wasm_bindgen(js_name = pathQuery)]
+        pub fn path_query(&self) -> Result<WasmPathQuery, JsValue> {
+            self.handle
+                .path_query()
+                .map(WasmPathQuery::from_query)
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = localPathQuery)]
+        pub fn local_path_query(&self) -> Result<WasmPathQuery, JsValue> {
+            self.handle
+                .local_path_query()
+                .map(WasmPathQuery::from_query)
+                .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = manimLineEndpoints)]
