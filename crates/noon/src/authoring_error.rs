@@ -8,6 +8,8 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum UnsupportedAuthoringOperation {
+    /// Point matching requires vector geometry on both operands.
+    PointMatchContent,
     /// Effective family layout requires authored content without overrides.
     EffectiveFamilyLayoutRenderOverride,
     /// move_to cannot compose with an active effective affine driver.
@@ -36,14 +38,8 @@ pub enum UnsupportedAuthoringOperation {
     ResourcePaintOpacityQuery,
     /// external geometry must resolve to an immutable semantic resource.
     ExternalGeometry,
-    /// Line.match_points target has unsupported nonuniform scaling.
-    LineMatchNonuniformScale,
-    /// Line.match_points requires an analytic Line target.
-    LineMatchTargetContent,
     /// Line.match_points requires an analytic Line source.
     LineMatchSourceContent,
-    /// Line endpoint queries require an analytic Line.
-    LineEndpointContent,
     /// dimension stretching of rotated objects is unsupported.
     RotatedDimensionStretch,
 }
@@ -65,10 +61,8 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::EffectivePathRenderOverride => "path queries require current retained content without active render overrides",
             Self::PathQueryContent => "path queries require retained geometry",
             Self::ExternalGeometry => "external geometry must resolve to an immutable semantic resource",
-            Self::LineMatchNonuniformScale => "Line.match_points target has unsupported nonuniform scaling",
-            Self::LineMatchTargetContent => "Line.match_points requires an analytic Line target",
+            Self::PointMatchContent => "match_points requires vector geometry on both operands",
             Self::LineMatchSourceContent => "Line.match_points requires an analytic Line source",
-            Self::LineEndpointContent => "Line endpoint queries require an analytic Line",
             Self::RotatedDimensionStretch => "dimension stretching of rotated objects is unsupported",
         })
     }

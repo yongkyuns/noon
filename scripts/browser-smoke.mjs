@@ -41,6 +41,7 @@ const examples = [
   { name: "Arc geometry", factory: "createDirectArcGeometrySmokeRenderer", objectCount: 3, duration: 0.2 },
   { name: "Path arrangement", factory: "createDirectPathArrangementSmokeRenderer", objectCount: 4, duration: 0.2 },
   { name: "Canonical curve layout", factory: "createDirectCanonicalCurveLayoutSmokeRenderer", objectCount: 4, duration: 0.2 },
+  { name: "Point matching", factory: "createDirectPointMatchingSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Path queries", factory: "createDirectPathQueriesSmokeRenderer", objectCount: 10, duration: 0.2 },
   { name: "Z-index", factory: "createDirectZIndexSmokeRenderer", objectCount: 3, duration: 0.2 },
   { name: "Scale pivots", factory: "createDirectScalePivotsSmokeRenderer", objectCount: 4, duration: 0.2 },

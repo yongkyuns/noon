@@ -1360,11 +1360,9 @@ mod wasm {
 
         /// Analytic Line-to-Line point matching. Rust validates both operands and
         /// commits only the source transform, preserving its content and paint.
-        #[wasm_bindgen(js_name = matchLine)]
-        pub fn match_line(&mut self, target: &WasmAuthoringMobjectHandle) -> Result<(), JsValue> {
-            self.handle
-                .match_line_handle(&target.handle)
-                .map_err(js_error)
+        #[wasm_bindgen(js_name = matchPoints)]
+        pub fn match_points(&mut self, target: &WasmAuthoringMobjectHandle) -> Result<(), JsValue> {
+            self.handle.match_points(&target.handle).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = snapshotJson)]

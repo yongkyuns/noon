@@ -833,7 +833,18 @@ def _canonical_curve_layout(api):
     return [_object_observation(obj) for obj in (circle, ellipse, circle.copy(), family)]
 
 
+def _point_matching(api):
+    source = api.Square(side_length=1, color="#58c4dd", fill_opacity=0.3, z_index=3.5)
+    target = api.Arc(radius=1.4, start_angle=-0.4, angle=4.7, num_components=9).rotate(0.2)
+    source.match_points(target)
+    line = api.Line(api.LEFT, api.RIGHT)
+    line.match_points(api.Ellipse(width=2, height=1).rotate(0.6))
+    return [_object_observation(source), source.z_index, _paint_rgb(source.get_color()),
+            _object_observation(line), list(line.get_start())[:2], list(line.get_end())[:2]]
+
+
 FIXTURES = [
+    Fixture("point_matching", lambda: _point_matching(noon), lambda: _point_matching(manim), 1e-5),
     Fixture("canonical_curve_layout", lambda: _canonical_curve_layout(noon), lambda: _canonical_curve_layout(manim), 1e-5),
     Fixture("path_family_arrangement", lambda: _path_family_arrangement(noon), lambda: _path_family_arrangement(manim), 1e-5),
     Fixture("arc_geometry", lambda: _arc_geometry(noon), lambda: _arc_geometry(manim), 1e-5),

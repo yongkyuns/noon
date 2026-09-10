@@ -128,15 +128,9 @@ fn style_transform_and_query_categories_are_typed_and_atomic() -> TestResult {
         object.set_rotation(f64::INFINITY),
         Err(AuthoringError::InvalidRenderNumber { .. })
     ));
-    let error = object.manim_line_endpoints().unwrap_err();
-    assert_eq!(
-        error,
-        AuthoringError::Unsupported(UnsupportedAuthoringOperation::LineEndpointContent)
-    );
-    assert!(error
-        .source()
-        .unwrap()
-        .is::<UnsupportedAuthoringOperation>());
+    let error = object.path_query()?.point_from_proportion(-1.0).unwrap_err();
+    assert!(matches!(error, AuthoringError::PathQuery(_)));
+    assert!(error.source().is_some());
     assert_eq!(snapshot(&scene, &[&object]), before);
     object.set_fill_opacity(0.5)?;
     object.set_rotation(0.25)?;

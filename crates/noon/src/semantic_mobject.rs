@@ -526,10 +526,10 @@ impl Mobject {
         Ok(self.state()?.style.object_opacity as f32 as f64)
     }
 
-    /// Return this analytic Line's authored endpoints in world space.
+    /// Return world-space endpoints, including geometry replaced by point matching.
     pub fn manim_line_endpoints(&self) -> Result<ManimLineEndpoints, AuthoringError> {
         let state = self.state()?;
-        line_endpoints_for_state(&state, state.transform)
+        line_endpoints_for_state(&self.store.borrow(), &state, state.transform)
     }
 
     /// Return visible fill RGB, falling back to stroke RGB, independently of opacity.
@@ -543,6 +543,7 @@ impl Mobject {
     ) -> Result<ManimLineEndpoints, AuthoringError> {
         let state = self.state()?;
         line_endpoints_for_state(
+            &self.store.borrow(),
             &state,
             semantic_transform_with_effective_affine(state.transform, transform),
         )
@@ -621,41 +622,6 @@ impl Mobject {
         let source = self.state()?;
         let target = other.state()?;
         let state = prepare_become_state(&self.store.borrow(), &source, target, options)?;
-        self.commit_state(state)
-    }
-
-    /// Match this analytic Line's immutable local endpoints to another analytic
-    /// Line's world endpoints using one rotation, translation, and uniform scale.
-    /// Content and paint remain owned by this object.
-    pub fn match_line_handle(&mut self, other: &Self) -> Result<(), AuthoringError> {
-        self.require_same_store(other)?;
-        let target = other.state()?;
-        if target.transform.scale.x != target.transform.scale.y {
-            return Err(AuthoringError::Unsupported(
-                crate::UnsupportedAuthoringOperation::LineMatchNonuniformScale,
-            ));
-        }
-        let StoredGeometry::Line { start, end } =
-            target
-                .content
-                .geometry()
-                .ok_or(AuthoringError::Unsupported(
-                    crate::UnsupportedAuthoringOperation::LineMatchTargetContent,
-                ))?
-        else {
-            return Err(AuthoringError::Unsupported(
-                crate::UnsupportedAuthoringOperation::LineMatchTargetContent,
-            ));
-        };
-        let target_start = semantic_transform_point(target.transform, start)?;
-        let target_end = semantic_transform_point(target.transform, end)?;
-        let transform = self.line_match_transform(target_start, target_end)?;
-        let mut state = self.state()?;
-        state.transform.translation.x = f64::from(transform.translation.x);
-        state.transform.translation.y = f64::from(transform.translation.y);
-        state.transform.rotation_z = f64::from(transform.rotation);
-        state.transform.scale.x = f64::from(transform.scale.x);
-        state.transform.scale.y = f64::from(transform.scale.y);
         self.commit_state(state)
     }
 
@@ -811,16 +777,16 @@ impl Mobject {
 }
 
 fn line_endpoints_for_state(
+    store: &SemanticStore,
     state: &SemanticObjectState,
     transform: SemanticTransform2_5D,
 ) -> Result<ManimLineEndpoints, AuthoringError> {
-    let StoredGeometry::Line { start, end } = state.content.geometry().ok_or(
-        AuthoringError::Unsupported(crate::UnsupportedAuthoringOperation::LineEndpointContent),
-    )?
-    else {
-        return Err(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::LineEndpointContent,
-        ));
+    let Some(StoredGeometry::Line { start, end }) = state.content.geometry() else {
+        let query = crate::path_queries::prepare_content(store, state.content, transform)?;
+        return Ok(ManimLineEndpoints {
+            start: query.start()?,
+            end: query.end()?,
+        });
     };
     Ok(ManimLineEndpoints {
         start: transform_layout_xy(transform, f64::from(start.x), f64::from(start.y)),
@@ -941,35 +907,7 @@ pub(crate) fn rotate_affine_about_point(
     ))
 }
 
-fn semantic_transform_point(
-    transform: SemanticTransform2_5D,
-    point: Vec2,
-) -> Result<Vec2, AuthoringError> {
-    if transform.scale.x != transform.scale.y {
-        return Err(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::LineMatchNonuniformScale,
-        ));
-    }
-    let scale = authoring_render_f64("Line.match_points target scale", transform.scale.x)?;
-    let rotation = authoring_render_f64("Line.match_points target rotation", transform.rotation_z)?;
-    let translation_x = authoring_render_f64(
-        "Line.match_points target translation.x",
-        transform.translation.x,
-    )?;
-    let translation_y = authoring_render_f64(
-        "Line.match_points target translation.y",
-        transform.translation.y,
-    )?;
-    let x = f64::from(point.x) * scale;
-    let y = f64::from(point.y) * scale;
-    let (sine, cosine) = rotation.sin_cos();
-    semantic_xy(
-        x * cosine - y * sine + translation_x,
-        x * sine + y * cosine + translation_y,
-    )
-}
-
-/// Shared analytic Line endpoint matching used by authored and callback paths.
+/// Shared analytic Line endpoint matching for effective callback transforms.
 pub fn line_match_transform(
     source_start: Vec2,
     source_end: Vec2,
