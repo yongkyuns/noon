@@ -23,11 +23,17 @@ _ARROW_CONSTRUCTOR_OPTIONS = frozenset(
         "position",
         "rotation",
         "scale",
+        "fill",
+        "stroke",
         "stroke_width",
         "stroke_width_mode",
         "stroke_join",
         "stroke_cap",
         "opacity",
+        "fill_color",
+        "stroke_color",
+        "fill_opacity",
+        "stroke_opacity",
         "z_index",
     }
 )
@@ -126,21 +132,18 @@ def _create(
 def _validate_straight_arrow_options(
     *,
     path_arc: float | None,
-    preserve_tip_size_when_scaling: bool,
     normal_vector: object,
-    use_rectangular_stem: bool,
     tip_shape: object | None,
+    tip_style: object | None,
 ) -> None:
-    """Reject compatibility breadth this straight-Arrow batch does not claim."""
+    """Reject ManimCE breadth this straight-Arrow batch does not claim."""
 
     if path_arc not in (None, 0, 0.0):
         raise NotImplementedError("curved Arrow path_arc is not part of the straight #77 batch")
-    if not preserve_tip_size_when_scaling:
-        raise NotImplementedError("preserve_tip_size_when_scaling=False is not yet supported")
-    if use_rectangular_stem:
-        raise NotImplementedError("rectangular Arrow stems are not part of the straight #77 batch")
     if tip_shape is not None:
         raise NotImplementedError("custom Arrow tip classes require shared tip-shape semantics")
+    if tip_style not in (None, {}):
+        raise NotImplementedError("Arrow tip_style requires shared tip-style semantics")
     try:
         normal = tuple(float(value) for value in normal_vector)  # type: ignore[arg-type]
     except (TypeError, ValueError) as error:
@@ -162,16 +165,16 @@ class Arrow(_compat.Group):
         self,
         start: object = _base.LEFT,
         end: object = _base.RIGHT,
+        stroke_width: float = 6.0,
         buff: float = 0.25,
-        path_arc: float | None = None,
+        path_arc: float | None = 0.0,
         max_tip_length_to_length_ratio: float = 0.25,
         max_stroke_width_to_length_ratio: float = 5.0,
-        preserve_tip_size_when_scaling: bool = True,
-        normal_vector: object = (0.0, 0.0, 1.0),
-        use_rectangular_stem: bool = False,
-        tip_shape: object | None = None,
         *,
         tip_length: float = 0.35,
+        normal_vector: object = (0.0, 0.0, 1.0),
+        tip_style: dict[str, Any] | None = None,
+        tip_shape: object | None = None,
         color: object | None = None,
         **kwargs: Any,
     ) -> None:
@@ -179,10 +182,9 @@ class Arrow(_compat.Group):
             raise RuntimeError("Arrow construction requires the shared Rust authoring host")
         _validate_straight_arrow_options(
             path_arc=path_arc,
-            preserve_tip_size_when_scaling=preserve_tip_size_when_scaling,
             normal_vector=normal_vector,
-            use_rectangular_stem=use_rectangular_stem,
             tip_shape=tip_shape,
+            tip_style=tip_style,
         )
         start_point = _numeric_endpoint("start", start)
         end_point = _numeric_endpoint("end", end)
@@ -200,9 +202,12 @@ class Arrow(_compat.Group):
             max_tip_length_to_length_ratio=max_tip_length_to_length_ratio,
             max_stroke_width_to_length_ratio=max_stroke_width_to_length_ratio,
         )
-        _create(self, options, color=color, kwargs=kwargs)
+        constructor_options = dict(kwargs)
+        constructor_options["stroke_width"] = stroke_width
+        _create(self, options, color=color, kwargs=constructor_options)
 
-    def scale(self, *args: Any, **kwargs: Any):
+    def scale(self, factor: float, scale_tips: bool = False, **kwargs: Any):
+        del factor, scale_tips, kwargs
         raise NotImplementedError(
             "Arrow.scale requires shared Rust preserve-tip-size and stroke recapping semantics"
         )
@@ -245,10 +250,21 @@ class Vector(Arrow):
         tip_length: float = 0.35,
         max_tip_length_to_length_ratio: float = 0.25,
         max_stroke_width_to_length_ratio: float = 5.0,
+        stroke_width: float = 6.0,
+        normal_vector: object = (0.0, 0.0, 1.0),
+        tip_style: dict[str, Any] | None = None,
+        tip_shape: object | None = None,
+        path_arc: float | None = 0.0,
         **kwargs: Any,
     ) -> None:
         if _arrow_options is None:
             raise RuntimeError("Vector construction requires the shared Rust authoring host")
+        _validate_straight_arrow_options(
+            path_arc=path_arc,
+            normal_vector=normal_vector,
+            tip_shape=tip_shape,
+            tip_style=tip_style,
+        )
         direction_point = _numeric_endpoint("direction", direction)
         options = engine_call(_arrow_options.vector, direction_point.x, direction_point.y)
         _apply_arrow_parameters(
@@ -258,7 +274,9 @@ class Vector(Arrow):
             max_tip_length_to_length_ratio=max_tip_length_to_length_ratio,
             max_stroke_width_to_length_ratio=max_stroke_width_to_length_ratio,
         )
-        _create(self, options, color=color, kwargs=kwargs)
+        constructor_options = dict(kwargs)
+        constructor_options["stroke_width"] = stroke_width
+        _create(self, options, color=color, kwargs=constructor_options)
 
 
 class DoubleArrow(Arrow):
@@ -268,16 +286,31 @@ class DoubleArrow(Arrow):
         self,
         start: object = _base.LEFT,
         end: object = _base.RIGHT,
+        stroke_width: float = 6.0,
         buff: float = 0.25,
         *,
         color: object | None = None,
         tip_length: float = 0.35,
         max_tip_length_to_length_ratio: float = 0.25,
         max_stroke_width_to_length_ratio: float = 5.0,
+        normal_vector: object = (0.0, 0.0, 1.0),
+        tip_style: dict[str, Any] | None = None,
+        tip_shape: object | None = None,
+        tip_shape_end: object | None = None,
+        tip_shape_start: object | None = None,
+        path_arc: float | None = 0.0,
         **kwargs: Any,
     ) -> None:
         if _arrow_options is None:
             raise RuntimeError("DoubleArrow construction requires the shared Rust authoring host")
+        if tip_shape_end is not None or tip_shape_start is not None:
+            raise NotImplementedError("custom DoubleArrow tip classes require shared tip-shape semantics")
+        _validate_straight_arrow_options(
+            path_arc=path_arc,
+            normal_vector=normal_vector,
+            tip_shape=tip_shape,
+            tip_style=tip_style,
+        )
         start_point = _numeric_endpoint("start", start)
         end_point = _numeric_endpoint("end", end)
         options = engine_call(
@@ -294,7 +327,9 @@ class DoubleArrow(Arrow):
             max_tip_length_to_length_ratio=max_tip_length_to_length_ratio,
             max_stroke_width_to_length_ratio=max_stroke_width_to_length_ratio,
         )
-        _create(self, options, color=color, kwargs=kwargs)
+        constructor_options = dict(kwargs)
+        constructor_options["stroke_width"] = stroke_width
+        _create(self, options, color=color, kwargs=constructor_options)
 
 
 __all__ = ["Arrow", "Vector", "DoubleArrow"]
