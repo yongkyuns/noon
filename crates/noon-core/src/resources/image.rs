@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::HashMap,
     mem::size_of,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -54,7 +54,7 @@ pub struct RasterImageResourceHandle {
     pub version: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct RasterImageResourceKey {
     encoding: RasterImageEncoding,
     width: u32,
@@ -126,11 +126,11 @@ pub struct RasterImageResourceStats {
 /// allocation. This is resource identity only: semantic object identity, scene
 /// membership, transforms, opacity and GPU texture residency remain owned by
 /// their normal architecture layers.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct RasterImageResourceArena {
     namespace: u64,
     entries: Vec<RasterImageResourceEntry>,
-    handles_by_content: BTreeMap<RasterImageResourceKey, RasterImageResourceHandle>,
+    handles_by_content: HashMap<RasterImageResourceKey, RasterImageResourceHandle>,
     retained_bytes: usize,
     encoded_bytes: usize,
 }
@@ -140,9 +140,29 @@ impl Default for RasterImageResourceArena {
         Self {
             namespace: next_raster_image_resource_arena(),
             entries: Vec::new(),
-            handles_by_content: BTreeMap::new(),
+            handles_by_content: HashMap::new(),
             retained_bytes: 0,
             encoded_bytes: 0,
+        }
+    }
+}
+
+// A cloned arena is an independent resource owner. Payload allocations remain
+// shared through Arc, while every derived handle is rewritten to the clone's
+// namespace so stale/foreign provenance cannot alias the clone.
+impl Clone for RasterImageResourceArena {
+    fn clone(&self) -> Self {
+        let namespace = next_raster_image_resource_arena();
+        let mut handles_by_content = self.handles_by_content.clone();
+        for handle in handles_by_content.values_mut() {
+            handle.arena = namespace;
+        }
+        Self {
+            namespace,
+            entries: self.entries.clone(),
+            handles_by_content,
+            retained_bytes: self.retained_bytes,
+            encoded_bytes: self.encoded_bytes,
         }
     }
 }
@@ -150,16 +170,6 @@ impl Default for RasterImageResourceArena {
 impl RasterImageResourceArena {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Re-namespace an independently cloned owner while preserving shared immutable
-    /// payload allocations. Derived content indexes are rewritten to local handles.
-    pub(crate) fn fork_namespace(&mut self) -> u64 {
-        self.namespace = next_raster_image_resource_arena();
-        for handle in self.handles_by_content.values_mut() {
-            handle.arena = self.namespace;
-        }
-        self.namespace
     }
 
     /// Intern one already-prepared encoded image.
@@ -359,8 +369,7 @@ mod tests {
             .unwrap();
         let source_payload = source.get_shared(source_handle).unwrap();
 
-        let mut cloned = source.clone();
-        cloned.fork_namespace();
+        let cloned = source.clone();
         let cloned_handle = *cloned
             .handles_by_content
             .values()
