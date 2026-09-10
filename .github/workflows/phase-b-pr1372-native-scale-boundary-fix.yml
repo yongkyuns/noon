@@ -1,0 +1,66 @@
+name: Phase B PR 1372 native scale boundary fix
+
+on:
+  push:
+    branches:
+      - codex/74-scale-pivot-prep
+    paths:
+      - .github/phase-b-pr1372-native-scale-boundary-fix.py
+      - .github/workflows/phase-b-pr1372-native-scale-boundary-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    env:
+      PRODUCT_BRANCH: codex/phase-b-scale-center-parity
+      EXPECTED_HEAD: 9e7960809b468a5c97891d9fbd902c45e1955931
+      PREP_BRANCH: codex/74-scale-pivot-prep
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 9e7960809b468a5c97891d9fbd902c45e1955931
+          fetch-depth: 0
+
+      - name: Verify canonical head and apply bounded repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin \
+            "+refs/heads/${PRODUCT_BRANCH}:refs/remotes/origin/${PRODUCT_BRANCH}" \
+            "+refs/heads/${PREP_BRANCH}:refs/remotes/origin/${PREP_BRANCH}"
+          test "$(git rev-parse origin/${PRODUCT_BRANCH})" = "$EXPECTED_HEAD"
+          git show "origin/${PREP_BRANCH}:.github/phase-b-pr1372-native-scale-boundary-fix.py" > /tmp/fix.py
+          python /tmp/fix.py
+
+      - name: Focused qualification
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup target add wasm32-unknown-unknown
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo test -p noon --no-default-features --lib --test manim_scale --test manim_scale_pivots --test dimension_fitting
+          cargo test -p noon-web manim_scale_bridge
+          cargo check -p noon-web --target wasm32-unknown-unknown
+          git diff --check
+
+      - name: Publish repaired canonical PR head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "+refs/heads/${PRODUCT_BRANCH}:refs/remotes/origin/${PRODUCT_BRANCH}"
+          test "$(git rev-parse origin/${PRODUCT_BRANCH})" = "$EXPECTED_HEAD"
+          git config user.name "noon phase-b worker"
+          git config user.email "actions@users.noreply.github.com"
+          git checkout -B "$PRODUCT_BRANCH"
+          git add \
+            crates/noon/src/family_affine.rs \
+            crates/noon/src/live_session/family_layout.rs \
+            crates/noon/tests/manim_scale_pivots.rs \
+            crates/noon-web/src/manim_scale_bridge.rs
+          git commit -m "fix: preserve native family scale boundary (#74)"
+          git push --force-with-lease="refs/heads/${PRODUCT_BRANCH}:${EXPECTED_HEAD}" \
+            origin HEAD:"refs/heads/${PRODUCT_BRANCH}"
