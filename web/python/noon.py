@@ -744,6 +744,8 @@ _PUBLIC_EXPORTS = {
     "MoveToTarget": "_manim_compat",
     "OUT": "_manim_compat",
     "IN": "_manim_compat",
+    "Arc": "_manim_arc",
+    "ArcBetweenPoints": "_manim_arc",
     "Elbow": "_manim_shared_geometry",
     "RoundedRectangle": "_manim_shared_geometry",
     "SurroundingRectangle": "_manim_shared_geometry",
