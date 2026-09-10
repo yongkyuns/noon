@@ -254,6 +254,50 @@ def _manim_vgroup_shift() -> Any:
     return _members_observation(group)
 
 
+def _group_slice_observation(module: Any, *, require_shared_family: bool) -> Any:
+    first = module.Square(side_length=0.5).shift(module.LEFT * 2.0)
+    middle = module.Circle(radius=0.3)
+    last = module.Rectangle(width=0.8, height=0.4).shift(module.RIGHT * 2.0)
+    family = module.VGroup(first, middle, last)
+    whole = family[:]
+    selected = family[1:]
+    reversed_family = family[::-1]
+    empty = family[9:]
+    plain = module.Group(first, middle, last)[::2]
+
+    if require_shared_family:
+        for sliced in (whole, selected, reversed_family, empty, plain):
+            assert sliced._semantic_family_handle is not family._semantic_family_handle
+        assert list(selected) == [middle, last]
+        assert list(reversed_family) == [last, middle, first]
+
+    integer_identity = family[-2] is middle
+    selected.shift(module.UP * 0.75)
+    return {
+        "whole_type": type(whole).__name__,
+        "slice_type": type(selected).__name__,
+        "reverse_type": type(reversed_family).__name__,
+        "empty_type": type(empty).__name__,
+        "plain_type": type(plain).__name__,
+        "slice_len": len(selected),
+        "reverse_len": len(reversed_family),
+        "empty_len": len(empty),
+        "plain_len": len(plain),
+        "integer_identity": integer_identity,
+        "family": _members_observation(family),
+        "selected": _members_observation(selected),
+        "reverse": _members_observation(reversed_family),
+    }
+
+
+def _noon_vgroup_slicing() -> Any:
+    return _group_slice_observation(noon, require_shared_family=True)
+
+
+def _manim_vgroup_slicing() -> Any:
+    return _group_slice_observation(manim, require_shared_family=False)
+
+
 def _noon_mobject_copy_independence() -> Any:
     source = noon.Rectangle(width=1.2, height=0.6).shift(noon.LEFT * 0.8)
     clone = source.copy().shift(noon.RIGHT * 2.0)
@@ -767,6 +811,7 @@ FIXTURES = [
     Fixture("next_to_point", _noon_next_to_point, _manim_next_to_point),
     Fixture("vgroup_add_remove", _noon_vgroup_add_remove, _manim_vgroup_add_remove),
     Fixture("vgroup_shift", _noon_vgroup_shift, _manim_vgroup_shift),
+    Fixture("vgroup_slicing", _noon_vgroup_slicing, _manim_vgroup_slicing),
     Fixture(
         "mobject_copy_independence",
         _noon_mobject_copy_independence,

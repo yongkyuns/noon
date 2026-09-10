@@ -269,7 +269,10 @@ class Group(Mobject):
     def __len__(self) -> int:
         return int(self._semantic_family_handle.memberCount)
 
-    def __getitem__(self, index: int) -> object:
+    def __getitem__(self, index: int | slice) -> object:
+        if isinstance(index, slice):
+            group_class = VGroup if isinstance(self, VGroup) else Group
+            return group_class(*self.submobjects[index])
         return self.submobjects[index]
 
     def add(self, *mobjects: object) -> Group:

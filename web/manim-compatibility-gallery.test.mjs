@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 11);
+assert.equal(gallery.examples.length, 12);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -28,6 +28,7 @@ assert.deepEqual(
     "compatible-text-write",
     "compatible-text-family-fade",
     "compatible-text-family-reveal",
+    "compatible-group-slicing",
   ],
 );
 
@@ -103,5 +104,21 @@ for (const entry of readyEntries) {
     );
   }
 }
+
+
+const slicingEntry = readyEntries.find((entry) => entry.id === "compatible-group-slicing");
+assert.ok(slicingEntry, "group slicing must be a ready compatibility example");
+assert.equal(slicingEntry.parity_fixture, "group-slicing");
+const slicingSource = await readFile(new URL(`./${slicingEntry.path}`, import.meta.url), "utf8");
+assert.match(slicingSource, /family\[1:\]\.shift\(UP \* 0\.75\)/);
+const slicingCanonical = await readFile(
+  new URL("../parity/manim-v0.21/core-examples/group_slicing.py", import.meta.url),
+  "utf8",
+);
+assert.equal(
+  slicingSource.replace("from noon import *", "from manim import *"),
+  slicingCanonical,
+  "group slicing gallery source must stay import-only equivalent to its canonical Manim fixture",
+);
 
 console.log("✓ Noon-authored Manim-compatible gallery examples");

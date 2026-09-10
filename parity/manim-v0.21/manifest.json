@@ -431,6 +431,12 @@
         "max_differing_ratio": 0.003,
         "max_mean_absolute_channel_error": 0.1
       }
+    },
+    {
+      "id": "group-slicing",
+      "scene": "GroupSlicing",
+      "source": "parity/manim-v0.21/core-examples/group_slicing.py",
+      "expected_duration": 1.0
     }
   ],
   "sample_fractions": [
