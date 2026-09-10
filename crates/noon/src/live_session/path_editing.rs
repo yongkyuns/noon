@@ -44,6 +44,30 @@ impl LiveSession<'_> {
     pub fn close_path(&mut self, object: &Mobject) -> Result<(), LiveSessionError> {
         self.edit_path(object, PathEdit::Close)
     }
+    pub fn reverse_direction(&mut self, object: &Mobject) -> Result<(), LiveSessionError> {
+        self.edit_path(object, PathEdit::Reverse)
+    }
+    /// Capture both operands from one coherent runtime publication; active
+    /// render overrides use the normal capture rejection, never stale geometry.
+    pub fn pointwise_become_partial(
+        &mut self,
+        object: &Mobject,
+        source: &Mobject,
+        a: f64,
+        b: f64,
+    ) -> Result<(), LiveSessionError> {
+        self.require_mobject(source)?;
+        let (a, b) = crate::path_editing::partial_interval(a, b)?;
+        let source = self.capture_mobject_state(source)?;
+        self.edit_path(
+            object,
+            PathEdit::Partial {
+                source: &source,
+                a,
+                b,
+            },
+        )
+    }
     fn edit_path(&mut self, object: &Mobject, edit: PathEdit<'_>) -> Result<(), LiveSessionError> {
         self.require_mobject(object)?;
         self.session
@@ -52,7 +76,9 @@ impl LiveSession<'_> {
         let before = object.state()?;
         let after = path_replacement_state(captured.clone())?;
         let mut store = self.store.borrow_mut();
-        let path = edit.prepare(&store, &captured)?;
+        let Some(path) = edit.prepare(&store, &captured)? else {
+            return Ok(());
+        };
         if path_is_unchanged(&store, &before, &after, &path) {
             return Ok(());
         }

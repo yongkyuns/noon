@@ -487,6 +487,24 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_reverse_direction(
+        &mut self,
+        object: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.reverse_direction(object))
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_pointwise_become_partial(
+        &mut self,
+        object: &noon::Mobject,
+        source: &noon::Mobject,
+        a: f64,
+        b: f64,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.pointwise_become_partial(object, source, a, b))
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_close_path(
         &mut self,
         source: &noon::Mobject,

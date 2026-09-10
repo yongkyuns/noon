@@ -81,6 +81,14 @@ class VMobject(Mobject):
         from _manim_path_editing import edit_points
         return edit_points(self, "addCubicBezierCurveTo", "liveAddCubicBezierCurveTo", (control1, control2, anchor))
 
+    def reverse_direction(self):
+        from _manim_path_editing import edit_points
+        return edit_points(self, "reverseDirection", "liveReverseDirection", ())
+
+    def pointwise_become_partial(self, vmobject, a, b):
+        from _manim_path_editing import pointwise_become_partial
+        return pointwise_become_partial(self, vmobject, a, b)
+
     def close_path(self):
         from _manim_path_editing import edit_points
         return edit_points(self, "closePath", "liveClosePath", ())

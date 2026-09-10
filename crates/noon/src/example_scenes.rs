@@ -3277,3 +3277,5 @@ pub mod point_matching;
 pub mod path_editing;
 
 pub mod path_construction;
+
+pub mod path_selection;

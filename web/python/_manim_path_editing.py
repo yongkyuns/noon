@@ -26,3 +26,21 @@ def edit_points(value, method, live_method, points, *, array=False):
     else:
         engine_call(getattr(context, live_method), handle, *values, operation="VMobject." + method)
     return value
+
+
+def pointwise_become_partial(value, source, a, b):
+    from _manim_compat import VMobject
+    from _manim_updaters import canonical_callback_phase_active
+    if not isinstance(source, VMobject):
+        raise TypeError("pointwise_become_partial requires a VMobject source")
+    if canonical_callback_phase_active():
+        raise NotImplementedError("callback path editing requires shared transient resource publication")
+    handle, source_handle = _handle_for(value), _handle_for(source)
+    if handle is None or source_handle is None:
+        raise RuntimeError("partial path editing requires shared semantic handles")
+    context = _live_mutation_context(value) or _live_mutation_context(source) or _live_constructor_context("path")
+    if context is None:
+        engine_call(handle.pointwiseBecomePartial, source_handle, float(a), float(b), operation="VMobject.pointwise_become_partial")
+    else:
+        engine_call(context.livePointwiseBecomePartial, handle, source_handle, float(a), float(b), operation="VMobject.pointwise_become_partial")
+    return value

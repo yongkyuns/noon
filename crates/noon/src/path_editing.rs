@@ -73,6 +73,12 @@ pub(crate) enum PathEdit<'a> {
     Quadratic(Vec2, Vec2),
     Cubic(Vec2, Vec2, Vec2),
     Close,
+    Reverse,
+    Partial {
+        source: &'a SemanticObjectState,
+        a: f32,
+        b: f32,
+    },
 }
 
 impl PathEdit<'_> {
@@ -80,27 +86,32 @@ impl PathEdit<'_> {
         self,
         store: &SemanticStore,
         state: &SemanticObjectState,
-    ) -> Result<VectorPath, AuthoringError> {
+    ) -> Result<Option<VectorPath>, AuthoringError> {
         if let Self::Corners(points) = self {
-            return corners_path(points);
+            return corners_path(points).map(Some);
         }
-        let checked = |name, value| {
-            crate::semantic_mobject::authoring_render_f64(name, value).map(|value| value as f32)
-        };
-        let transform = state.transform;
-        let transform = noon_core::Transform2D {
-            translation: Vec2::new(
-                checked("path translation x", transform.translation.x)?,
-                checked("path translation y", transform.translation.y)?,
-            ),
-            scale: Vec2::new(
-                checked("path scale x", transform.scale.x)?,
-                checked("path scale y", transform.scale.y)?,
-            ),
-            rotation: checked("path rotation", transform.rotation_z)?,
-        };
-        let mut path =
-            crate::path_queries::content_path(store, state.content)?.transformed(transform);
+        if let Self::Partial { source, a, b } = self {
+            let path = world_path(store, source)?;
+            // Manim leaves the destination unchanged when the source has no
+            // complete curve, except when the whole point set was requested.
+            if !(a == 0. && b == 1.)
+                && !path.commands().iter().any(|command| {
+                    matches!(
+                        command,
+                        noon_core::PathCommand::LineTo { .. }
+                            | noon_core::PathCommand::QuadraticTo { .. }
+                            | noon_core::PathCommand::CubicTo { .. }
+                    )
+                })
+            {
+                return Ok(None);
+            }
+            return Ok(Some(noon_geometry::authored_partial_path(&path, a, b)));
+        }
+        let mut path = world_path(store, state)?;
+        if let Self::Reverse = self {
+            return Ok(Some(noon_geometry::reverse_path(&path)));
+        }
         if let Self::Start(point) = self {
             if let Some(noon_core::PathCommand::MoveTo { to }) = path.commands().last().copied() {
                 // Complete an unfinished anchor as one degenerate curve before
@@ -140,14 +151,55 @@ impl PathEdit<'_> {
                         }
                     }
                 }
-                Self::Corners(_) | Self::Start(_) => unreachable!(),
+                Self::Corners(_) | Self::Start(_) | Self::Reverse | Self::Partial { .. } => {
+                    unreachable!()
+                }
             };
         }
         if !path.is_finite() {
             return Err(AuthoringError::NonFiniteGeometry);
         }
-        Ok(path)
+        Ok(Some(path))
     }
+}
+
+pub(crate) fn world_path(
+    store: &SemanticStore,
+    state: &SemanticObjectState,
+) -> Result<VectorPath, AuthoringError> {
+    let checked = |name, value| {
+        crate::semantic_mobject::authoring_render_f64(name, value).map(|value| value as f32)
+    };
+    let transform = state.transform;
+    let transform = noon_core::Transform2D {
+        translation: Vec2::new(
+            checked("path translation x", transform.translation.x)?,
+            checked("path translation y", transform.translation.y)?,
+        ),
+        scale: Vec2::new(
+            checked("path scale x", transform.scale.x)?,
+            checked("path scale y", transform.scale.y)?,
+        ),
+        rotation: checked("path rotation", transform.rotation_z)?,
+    };
+    let path = crate::path_queries::content_path(store, state.content)?.transformed(transform);
+    Ok(path)
+}
+
+pub(crate) fn partial_interval(a: f64, b: f64) -> Result<(f32, f32), AuthoringError> {
+    for alpha in [a, b] {
+        if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
+            return Err(AuthoringError::PathQuery(
+                noon_geometry::PathProportionError::InvalidProportion(alpha as f32),
+            ));
+        }
+    }
+    if a > b {
+        return Err(AuthoringError::PathQuery(
+            noon_geometry::PathProportionError::InvalidInterval,
+        ));
+    }
+    Ok((a as f32, b as f32))
 }
 
 impl Mobject {
@@ -181,11 +233,35 @@ impl Mobject {
     pub fn close_path(&mut self) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Close)
     }
+    /// Reverse this object's curves and subpath order, retaining paint and identity.
+    pub fn reverse_direction(&mut self) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::Reverse)
+    }
+    /// Replace world points with a curve-count parameter interval of another
+    /// vector object. Unlike point_from_proportion, this is not arc-length based.
+    /// The supported interval is finite and ordered: 0 <= a <= b <= 1.
+    pub fn pointwise_become_partial(
+        &mut self,
+        source: &Mobject,
+        a: f64,
+        b: f64,
+    ) -> Result<(), AuthoringError> {
+        self.require_same_store(source)?;
+        let (a, b) = partial_interval(a, b)?;
+        let source = source.state()?;
+        self.edit_path(PathEdit::Partial {
+            source: &source,
+            a,
+            b,
+        })
+    }
     fn edit_path(&mut self, edit: PathEdit<'_>) -> Result<(), AuthoringError> {
         let before = self.state()?;
         let after = path_replacement_state(before.clone())?;
         let mut store = self.integration_store().borrow_mut();
-        let path = edit.prepare(&store, &before)?;
+        let Some(path) = edit.prepare(&store, &before)? else {
+            return Ok(());
+        };
         if path_is_unchanged(&store, &before, &after, &path) {
             return Ok(());
         }

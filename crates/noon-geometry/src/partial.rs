@@ -24,6 +24,7 @@ pub enum PathProportionError {
     EmptyPath,
     InvalidMetric,
     InvalidSampleCount,
+    InvalidInterval,
 }
 
 impl std::fmt::Display for PathProportionError {
@@ -38,6 +39,9 @@ impl std::fmt::Display for PathProportionError {
             Self::EmptyPath => formatter.write_str("path has no drawable curves"),
             Self::InvalidMetric => {
                 formatter.write_str("path metric must have finite coordinates, scales and length")
+            }
+            Self::InvalidInterval => {
+                formatter.write_str("partial path requires an ordered interval: a <= b")
             }
             Self::InvalidSampleCount => {
                 formatter.write_str("path length sample count must be at least two")
@@ -204,6 +208,16 @@ pub fn point_from_proportion_f64(
 /// boundary curves. It does *not* use arc length. This function mirrors that
 /// contract while preserving explicit Noon subpath breaks.
 pub fn pointwise_partial_path(path: &VectorPath, a: f32, b: f32) -> VectorPath {
+    partial_path(path, a, b, false)
+}
+
+/// Persistent partial geometry retains degenerate boundary curves, because later
+/// curve-count selection observes them. Render-only reveal may omit those curves.
+pub fn authored_partial_path(path: &VectorPath, a: f32, b: f32) -> VectorPath {
+    partial_path(path, a, b, true)
+}
+
+fn partial_path(path: &VectorPath, a: f32, b: f32, retain_boundary_curves: bool) -> VectorPath {
     let a = a.clamp(0.0, 1.0);
     let b = b.clamp(a, 1.0);
     if a <= 0.0 && b >= 1.0 {
@@ -218,7 +232,7 @@ pub fn pointwise_partial_path(path: &VectorPath, a: f32, b: f32) -> VectorPath {
     let (lower_index, lower_t) = integer_interpolate(curves.len(), a);
     let (upper_index, upper_t) = integer_interpolate(curves.len(), b);
 
-    if b <= a {
+    if b <= a && !retain_boundary_curves {
         let point = curve_point(curves[lower_index], lower_t);
         return VectorPath::new().move_to(point);
     }
@@ -233,7 +247,7 @@ pub fn pointwise_partial_path(path: &VectorPath, a: f32, b: f32) -> VectorPath {
     {
         let t0 = if index == lower_index { lower_t } else { 0.0 };
         let t1 = if index == upper_index { upper_t } else { 1.0 };
-        if t1 <= t0 {
+        if t1 <= t0 && !retain_boundary_curves {
             continue;
         }
 

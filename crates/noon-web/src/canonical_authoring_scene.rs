@@ -5815,6 +5815,37 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveReverseDirection)]
+        pub fn live_reverse_direction(
+            &mut self,
+            object: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_reverse_direction(object.semantic_mobject())
+                .map_err(typed_js_error)
+        }
+        #[wasm_bindgen(js_name = livePointwiseBecomePartial)]
+        pub fn live_pointwise_become_partial(
+            &mut self,
+            object: &crate::WasmAuthoringMobjectHandle,
+            source: &crate::WasmAuthoringMobjectHandle,
+            a: f64,
+            b: f64,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_pointwise_become_partial(
+                    object.semantic_mobject(),
+                    source.semantic_mobject(),
+                    a,
+                    b,
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveClosePath)]
         pub fn live_close_path(
             &mut self,

@@ -49,3 +49,27 @@ class PathEditingTests(unittest.TestCase):
         handle.addQuadraticBezierCurveTo.assert_called_once_with(5., 6., 7., 8.)
         handle.addCubicBezierCurveTo.assert_called_once_with(1., 2., 3., 4., 5., 6.)
         handle.closePath.assert_called_once_with()
+
+    def test_partial_and_direction_use_shared_operands_in_authored_and_live_modes(self):
+        value = identity_only_wrapper(compat.VMobject)
+        source = identity_only_wrapper(compat.VMobject)
+        handle, source_handle = Mock(), Mock()
+        for context in (None, Mock()):
+            with patch.object(editing, '_handle_for', side_effect=lambda obj: handle if obj is value else source_handle), \
+                 patch.object(editing, '_live_mutation_context', return_value=context), \
+                 patch.object(editing, '_live_constructor_context', return_value=None):
+                self.assertIs(value.pointwise_become_partial(source, 0.2, 0.8), value)
+                self.assertIs(value.reverse_direction(), value)
+                if context is None:
+                    handle.pointwiseBecomePartial.assert_called_once_with(source_handle, 0.2, 0.8)
+                    handle.reverseDirection.assert_called_once_with()
+                else:
+                    context.livePointwiseBecomePartial.assert_called_once_with(handle, source_handle, 0.2, 0.8)
+                    context.liveReverseDirection.assert_called_once_with(handle)
+
+    def test_partial_rejects_nonvector_source_without_resolving_handles(self):
+        value = identity_only_wrapper(compat.VMobject)
+        with patch.object(editing, '_handle_for') as resolve:
+            with self.assertRaises(TypeError):
+                value.pointwise_become_partial(object(), 0.2, 0.8)
+            resolve.assert_not_called()

@@ -1419,6 +1419,23 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = reverseDirection)]
+        pub fn reverse_direction(&mut self) -> Result<(), JsValue> {
+            self.handle.reverse_direction().map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = pointwiseBecomePartial)]
+        pub fn pointwise_become_partial(
+            &self,
+            source: &WasmAuthoringMobjectHandle,
+            a: f64,
+            b: f64,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .clone()
+                .pointwise_become_partial(&source.handle, a, b)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = closePath)]
         pub fn close_path(&mut self) -> Result<(), JsValue> {
             self.handle.close_path().map_err(js_error)

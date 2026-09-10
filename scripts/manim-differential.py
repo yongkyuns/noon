@@ -833,6 +833,22 @@ def _canonical_curve_layout(api):
     return [_object_observation(obj) for obj in (circle, ellipse, circle.copy(), family)]
 
 
+def _path_selection(api):
+    point = lambda x, y: api.RIGHT * x + api.UP * y
+    source = api.VMobject().start_new_path(point(-3, -1))
+    source.add_cubic_bezier_curve_to(point(-3, 2), point(0, 2), point(0, -1))
+    source.start_new_path(point(1, -1)).add_line_to(point(3, 1))
+    selected = source.copy().pointwise_become_partial(source, 0.2, 0.8)
+    def observe(value):
+        return [list(value.get_start())[:2], list(value.get_end())[:2], value.get_arc_length(), _object_observation(value)]
+    result = [observe(selected)]
+    selected.reverse_direction()
+    result.append(observe(selected))
+    selected.pointwise_become_partial(selected, 0.2, 0.8)
+    result.append(observe(selected))
+    return result
+
+
 def _path_construction(api):
     point = lambda x, y: api.RIGHT * x + api.UP * y
     path = api.VMobject()
@@ -868,6 +884,7 @@ def _point_matching(api):
 
 
 FIXTURES = [
+    Fixture("path_selection", lambda: _path_selection(noon), lambda: _path_selection(manim), 1e-5),
     Fixture("path_construction", lambda: _path_construction(noon), lambda: _path_construction(manim), 1e-5),
     Fixture("path_editing", lambda: _path_editing(noon), lambda: _path_editing(manim), 1e-5),
     Fixture("point_matching", lambda: _point_matching(noon), lambda: _point_matching(manim), 1e-5),
