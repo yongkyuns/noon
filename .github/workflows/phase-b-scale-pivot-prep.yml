@@ -19,13 +19,16 @@ jobs:
       - name: Apply bounded scale-pivot slice
         run: |
           git show origin/codex/74-scale-pivot-prep:.github/phase-b-scale-pivot-prep.py > /tmp/phase-b-scale-pivot-prep.py
+          git show origin/codex/74-scale-pivot-prep:.github/phase-b-scale-pivot-live-prep.py > /tmp/phase-b-scale-pivot-live-prep.py
           python /tmp/phase-b-scale-pivot-prep.py
+          python /tmp/phase-b-scale-pivot-live-prep.py
       - name: Format and focused validation
         run: |
           rustup target add wasm32-unknown-unknown
           cargo fmt --all
           cargo fmt --all -- --check
-          cargo test -p noon manim_scale_preserves_center_and_resolves_explicit_point_and_edge_pivots
+          cargo test -p noon manim_scale
+          cargo test -p noon-web manim_scale
           cargo check -p noon-web --target wasm32-unknown-unknown
           python -m py_compile web/python/_manim_semantic_handles.py scripts/manim-differential.py
           git diff --check
@@ -34,6 +37,6 @@ jobs:
           git config user.name "noon phase-b worker"
           git config user.email "actions@users.noreply.github.com"
           git checkout -B codex/74-scale-pivot-parity
-          git add crates/noon/src/semantic_mobject.rs crates/noon/src/semantic_mobject/tests.rs crates/noon-web/src/authoring_mobject.rs web/python/_manim_semantic_handles.py scripts/manim-differential.py
+          git add crates/noon/src/semantic_mobject.rs crates/noon/src/semantic_mobject/tests.rs crates/noon/src/live_session.rs crates/noon-web/src/authoring_mobject.rs crates/noon-web/src/semantic_execution_player.rs crates/noon-web/src/canonical_authoring_scene.rs web/python/_manim_semantic_handles.py scripts/manim-differential.py
           git commit -m "fix: match Manim scale pivots (#74)"
-          git push origin HEAD:refs/heads/codex/74-scale-pivot-parity
+          git push --force-with-lease=refs/heads/codex/74-scale-pivot-parity:78b497efd7ddb68035df39aa95d324b1ba7e365f origin HEAD:refs/heads/codex/74-scale-pivot-parity
