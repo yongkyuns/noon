@@ -52,6 +52,7 @@
 
 mod animation_authoring;
 mod arc_authoring;
+mod arrow_authoring;
 mod authoring_error;
 mod boolean_authoring;
 mod camera_authoring;
@@ -102,6 +103,11 @@ mod z_index;
 
 pub use animation_authoring::DeclaredAnimation;
 pub use arc_authoring::ArcAuthoringError;
+pub use arrow_authoring::{
+    ManimArrow, ManimArrowOptions, DEFAULT_ARROW_STROKE_WIDTH,
+    DEFAULT_ARROW_STROKE_WIDTH_RATIO, DEFAULT_ARROW_TIP_LENGTH,
+    DEFAULT_ARROW_TIP_LENGTH_RATIO,
+};
 pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
 pub use boolean_authoring::{BooleanOperation, BooleanPathError};
 pub use dashed_line_authoring::DashedLineAuthoringError;
@@ -178,9 +184,10 @@ pub mod prelude {
         AnimationOptions, AuthoringError, BooleanOperation, Color, ContinuationStep,
         DeclaredAnimation, DrawBorderThenFillOptions, EffectiveMobjectState, ExecutionSession,
         FadeEndpoint, FadeTranslation, LiveContinuation, LiveProgram, LiveSession,
-        LiveSessionError, Mobject, MobjectFamily, MobjectFamilyMember, NativeBoolSignal,
-        NativeVectorSignal, RateFunction, Scene, SemanticObjectState, SemanticStyle,
-        StoredGeometry, TrackerPosition, ValueTracker, Vec2, VectorPath,
+        LiveSessionError, ManimArrow, ManimArrowOptions, Mobject, MobjectFamily,
+        MobjectFamilyMember, NativeBoolSignal, NativeVectorSignal, RateFunction, Scene,
+        SemanticObjectState, SemanticStyle, StoredGeometry, TrackerPosition, ValueTracker, Vec2,
+        VectorPath,
     };
 }
 
