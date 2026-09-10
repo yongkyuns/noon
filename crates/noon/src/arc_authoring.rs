@@ -51,6 +51,15 @@ impl std::fmt::Display for ArcAuthoringError {
 
 impl std::error::Error for ArcAuthoringError {}
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ResolvedArcBetweenPoints {
+    base_radius: f32,
+    radius: f32,
+    angle: f32,
+    scale: f32,
+    rotation: f32,
+}
+
 fn point_is_finite(point: Vec2) -> bool {
     point.x.is_finite() && point.y.is_finite()
 }
@@ -125,13 +134,12 @@ pub(crate) fn circular_arc_path(
     Ok(path)
 }
 
-fn arc_between_points_path(
+fn resolve_arc_between_points(
     start: Vec2,
     end: Vec2,
     angle: f32,
     radius: Option<f32>,
-    num_components: usize,
-) -> Result<VectorPath, ArcAuthoringError> {
+) -> Result<ResolvedArcBetweenPoints, ArcAuthoringError> {
     if !point_is_finite(start) {
         return Err(ArcAuthoringError::NonFinitePoint(start));
     }
@@ -141,12 +149,10 @@ fn arc_between_points_path(
     if !angle.is_finite() {
         return Err(ArcAuthoringError::NonFiniteAngle(angle));
     }
-    if num_components < 2 {
-        return Err(ArcAuthoringError::TooFewComponents(num_components));
-    }
 
     let chord = end - start;
     let chord_length = chord.length();
+    let radius_was_explicit = radius.is_some();
     let (base_radius, resolved_angle) = match radius {
         Some(radius) => {
             if !radius.is_finite() {
@@ -173,7 +179,17 @@ fn arc_between_points_path(
     };
 
     if resolved_angle == 0.0 {
-        return Ok(VectorPath::new().move_to(start).line_to(end));
+        return Ok(ResolvedArcBetweenPoints {
+            base_radius,
+            radius: if radius_was_explicit {
+                base_radius
+            } else {
+                f32::INFINITY
+            },
+            angle: resolved_angle,
+            scale: 1.0,
+            rotation: 0.0,
+        });
     }
 
     let base_start = Vec2::new(base_radius, 0.0);
@@ -184,21 +200,51 @@ fn arc_between_points_path(
     if base_chord_length <= f32::EPSILON {
         return Err(ArcAuthoringError::DegenerateChordAngle(resolved_angle));
     }
-
     let scale = chord_length / base_chord_length;
     let rotation = chord.y.atan2(chord.x) - base_chord.y.atan2(base_chord.x);
-    let transform = |point: Vec2| start + (point - base_start).rotate(rotation) * scale;
+    Ok(ResolvedArcBetweenPoints {
+        base_radius,
+        radius: if radius_was_explicit {
+            base_radius
+        } else {
+            base_radius * scale
+        },
+        angle: resolved_angle,
+        scale,
+        rotation,
+    })
+}
+
+fn arc_between_points_path(
+    start: Vec2,
+    end: Vec2,
+    angle: f32,
+    radius: Option<f32>,
+    num_components: usize,
+) -> Result<VectorPath, ArcAuthoringError> {
+    if num_components < 2 {
+        return Err(ArcAuthoringError::TooFewComponents(num_components));
+    }
+    let resolved = resolve_arc_between_points(start, end, angle, radius)?;
+    if resolved.angle == 0.0 {
+        return Ok(VectorPath::new().move_to(start).line_to(end));
+    }
+
+    let base_start = Vec2::new(resolved.base_radius, 0.0);
+    let transform = |point: Vec2| {
+        start + (point - base_start).rotate(resolved.rotation) * resolved.scale
+    };
 
     let segment_count = num_components - 1;
-    let delta = resolved_angle / segment_count as f32;
+    let delta = resolved.angle / segment_count as f32;
     let handle_factor = (4.0 / 3.0) * (delta / 4.0).tan();
     let base_point_at = |theta: f32| {
         let (sin, cos) = theta.sin_cos();
-        Vec2::new(base_radius * cos, base_radius * sin)
+        Vec2::new(resolved.base_radius * cos, resolved.base_radius * sin)
     };
     let base_tangent_at = |theta: f32| {
         let (sin, cos) = theta.sin_cos();
-        Vec2::new(-base_radius * sin, base_radius * cos)
+        Vec2::new(-resolved.base_radius * sin, resolved.base_radius * cos)
     };
 
     let mut path = VectorPath::new().move_to(start);
@@ -236,6 +282,33 @@ impl ManimGeometryOptions {
             ),
         )?;
         Self::path(path)
+    }
+
+    /// Resolve the observable Manim radius/angle metadata without frontend geometry math.
+    #[allow(clippy::too_many_arguments)]
+    pub fn arc_between_points_metadata(
+        start_x: f64,
+        start_y: f64,
+        end_x: f64,
+        end_y: f64,
+        angle: f64,
+        radius: Option<f64>,
+    ) -> Result<(f64, f64), AuthoringError> {
+        let resolved = resolve_arc_between_points(
+            Vec2::new(
+                authored_f32(start_x, "arc start x")?,
+                authored_f32(start_y, "arc start y")?,
+            ),
+            Vec2::new(
+                authored_f32(end_x, "arc end x")?,
+                authored_f32(end_y, "arc end y")?,
+            ),
+            authored_f32(angle, "arc angle")?,
+            radius
+                .map(|value| authored_f32(value, "arc radius"))
+                .transpose()?,
+        )?;
+        Ok((f64::from(resolved.radius), f64::from(resolved.angle)))
     }
 
     /// Build ManimCE-compatible retained geometry spanning two endpoints.
