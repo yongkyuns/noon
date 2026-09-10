@@ -410,7 +410,7 @@ try {
       for (const member of members) request.appendMobject("", member);
       return request;
     };
-    const family = store.createFamily(batch());
+    const family = store.createFamily(batch(), 0);
     const copy = circle.cloneHandle();
     const target = circle.targetEditor();
     const identity = (handle) => `${handle.semanticSlot}:${handle.semanticGeneration}`;
@@ -431,7 +431,7 @@ try {
     if (family.memberCount !== 0) throw new Error("failed authored batch partially committed");
     family.editMembership(batch(circle, copy, target));
     const layout = family.layout();
-    const foreignFamily = otherStore.createFamily(batch(foreign));
+    const foreignFamily = otherStore.createFamily(batch(foreign), 0);
     const foreignLayout = foreignFamily.layout();
     const layoutBefore = [circle.centerX, copy.centerX, target.centerX, family.memberCount];
     const requireUnchangedLayout = () => {

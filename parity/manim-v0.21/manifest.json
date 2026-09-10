@@ -11,6 +11,17 @@
   },
   "fixtures": [
     {
+      "id": "arc-geometry",
+      "scene": "ArcGeometry",
+      "source": "parity/manim-v0.21/core-examples/arc_geometry.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 2,
+        "max_differing_ratio": 0.006,
+        "max_mean_absolute_channel_error": 0.5
+      }
+    },
+    {
       "id": "create-circle",
       "scene": "CreateCircle",
       "expected_duration": 1.0,
@@ -433,15 +444,10 @@
       }
     },
     {
-      "id": "arc-geometry",
-      "scene": "ArcGeometry",
-      "source": "parity/manim-v0.21/core-examples/arc_geometry.py",
-      "expected_duration": 0.2,
-      "raster_tolerance": {
-        "max_bounds_delta_px": 2,
-        "max_differing_ratio": 0.006,
-        "max_mean_absolute_channel_error": 0.5
-      }
+      "id": "group-slicing",
+      "scene": "GroupSlicing",
+      "source": "parity/manim-v0.21/core-examples/group_slicing.py",
+      "expected_duration": 1.0
     }
   ],
   "sample_fractions": [

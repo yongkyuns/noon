@@ -50,7 +50,7 @@ try {
     const family = (store, ...handles) => {
       const members = new wasm.WasmSceneMembershipBatch("add");
       for (const handle of handles) members.appendMobject("", handle);
-      return store.createFamily(members);
+      return store.createFamily(members, 0);
     };
     const snapshot = (context, live) => ({
       members: Array.from(context.rootMembershipKeys()), duration: context.authoredDuration(),
@@ -474,7 +474,7 @@ try {
     globalThis.noonAuthoringVectorPath = () => new wasm.WasmAuthoringVectorPath();
     globalThis.noonCreateAuthoringGeometryHandle = options => store.createManimGeometry(options);
     globalThis.noonAuthoringMembershipBatch = kind => new wasm.WasmSceneMembershipBatch(kind);
-    globalThis.noonCreateAuthoringFamilyHandle = batch => store.createFamily(batch);
+    globalThis.noonCreateAuthoringFamilyHandle = (batch, zIndex) => store.createFamily(batch, zIndex);
     // Exact plain-result projection from the production worker, no host semantics.
     globalThis.noonResolveAnimationOptions = (...args) => {
       const result = wasm.resolveAnimationOptions(...args);

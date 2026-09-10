@@ -4,11 +4,13 @@ use crate::{ExecutionSession, Scene};
 pub fn session() -> Result<ExecutionSession, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
         let mut scene = Scene::new();
-        let mut a = scene.square(2.)?;
+        let mut options = crate::ManimGeometryOptions::square(2.)?;
+        options.set_z_index(1.)?;
+        let mut a = scene.geometry(options.clone())?;
         a.set_fill(1., 68. / 255., 102. / 255., 1.)?;
         a.set_stroke_width(0.)?;
         a.shift(-0.6, -0.3)?;
-        let mut b = scene.square(2.)?;
+        let mut b = scene.geometry(options)?;
         b.set_fill(68. / 255., 136. / 255., 1., 1.)?;
         b.set_stroke_width(0.)?;
         b.shift(0.6, -0.3)?;
@@ -16,10 +18,8 @@ pub fn session() -> Result<ExecutionSession, String> {
         c.set_fill(68. / 255., 1., 136. / 255., 1.)?;
         c.set_stroke_width(0.)?;
         c.shift(0., 0.5)?;
-        let nested = scene.family(&[(&a).into(), (&b).into()])?;
-        let family = scene.family(&[(&a).into(), (&nested).into()])?;
-        family.set_z_index(1., true)?;
-        family.set_z_index(-3., false)?;
+        let nested = scene.family_with_z_index(&[(&a).into(), (&b).into()], 1.)?;
+        let family = scene.family_with_z_index(&[(&a).into(), (&nested).into()], -3.)?;
         let copied = family.copy_family()?;
         assert_eq!(copied.root().z_index()?, -3.);
         assert_eq!(copied.mobject(&a)?.z_index()?, 1.);
