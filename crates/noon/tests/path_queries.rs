@@ -244,13 +244,15 @@ fn native_object_scaled_strokes_use_the_same_morph_controls() {
         .path(path, noon_core::SemanticStyle::default())
         .unwrap();
     scene.add(&object).unwrap();
-    let target = object.target_editor().unwrap();
-    noon::LayoutAnchor::from(&target)
-        .stretch(
-            2.,
-            noon::LayoutDimension::Width,
-            noon::ManimRotationPivot::Center,
-        )
+    let mut target = object.target_editor().unwrap();
+    target
+        .set_points_as_corners(&[
+            Vec2::new(-2., -1.),
+            Vec2::new(2., -1.),
+            Vec2::new(2., 1.),
+            Vec2::new(-2., 1.),
+            Vec2::new(-2., -1.),
+        ])
         .unwrap();
     let animation = scene
         .declare_transform_to(
