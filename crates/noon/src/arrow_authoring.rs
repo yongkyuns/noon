@@ -39,7 +39,12 @@ pub struct ManimArrowOptions {
 }
 
 impl ManimArrowOptions {
-    pub fn arrow(start_x: f64, start_y: f64, end_x: f64, end_y: f64) -> Result<Self, AuthoringError> {
+    pub fn arrow(
+        start_x: f64,
+        start_y: f64,
+        end_x: f64,
+        end_y: f64,
+    ) -> Result<Self, AuthoringError> {
         let mut prototype = ManimGeometryOptions::line(start_x, start_y, end_x, end_y)?;
         prototype.set_stroke_width(DEFAULT_ARROW_STROKE_WIDTH)?;
         Ok(Self {
@@ -144,7 +149,8 @@ impl ManimArrowOptions {
     }
 
     fn prepare(self, store: &mut SemanticStore) -> Result<PreparedArrow, AuthoringError> {
-        let (visible_start, visible_end, direction, length) = shortened_line(self.start, self.end, self.buff)?;
+        let (visible_start, visible_end, direction, length) =
+            shortened_line(self.start, self.end, self.buff)?;
         let effective_tip_length = self
             .tip_length
             .min(self.max_tip_length_to_length_ratio * length);
@@ -156,7 +162,11 @@ impl ManimArrowOptions {
             visible_start.0 + direction.0 * effective_tip_length,
             visible_start.1 + direction.1 * effective_tip_length,
         );
-        let shaft_start = if self.start_tip { start_base } else { visible_start };
+        let shaft_start = if self.start_tip {
+            start_base
+        } else {
+            visible_start
+        };
         let shaft_end = end_base;
 
         let mut shaft = self.prototype.into_state(store)?;
@@ -174,7 +184,13 @@ impl ManimArrowOptions {
         let end_tip = triangle_tip_path(visible_end, direction, effective_tip_length)?;
         let start_tip = self
             .start_tip
-            .then(|| triangle_tip_path(visible_start, (-direction.0, -direction.1), effective_tip_length))
+            .then(|| {
+                triangle_tip_path(
+                    visible_start,
+                    (-direction.0, -direction.1),
+                    effective_tip_length,
+                )
+            })
             .transpose()?;
 
         Ok(PreparedArrow {
@@ -260,7 +276,8 @@ fn commit_prepared(
     store: &mut SemanticStore,
     prepared: PreparedArrow,
 ) -> Result<CommittedArrow, AuthoringError> {
-    store.with_geometry_path(prepared.end_tip, |store, end_tip_handle| {
+    let end_path = prepared.end_tip.clone();
+    store.with_geometry_path(end_path, |store, end_tip_handle| {
         if let Some(start_path) = prepared.start_tip.clone() {
             store.with_geometry_path(start_path, |store, start_tip_handle| {
                 commit_transaction(store, &prepared, end_tip_handle, Some(start_tip_handle))
@@ -372,7 +389,10 @@ fn triangle_tip_path(
     direction: (f64, f64),
     length: f64,
 ) -> Result<VectorPath, AuthoringError> {
-    let base = (apex.0 - direction.0 * length, apex.1 - direction.1 * length);
+    let base = (
+        apex.0 - direction.0 * length,
+        apex.1 - direction.1 * length,
+    );
     let half_width = length * 0.5;
     let perpendicular = (-direction.1, direction.0);
     let first_base = (
@@ -391,7 +411,11 @@ fn triangle_tip_path(
 }
 
 fn manim_visible_color(style: &noon_core::SemanticStyle) -> Color {
-    let fill_visible = style.fill_opacity > 0.0;
+    let fill_visible = matches!(
+        style.fill.as_ref(),
+        Some(SemanticPaint::Solid(color))
+            if f64::from(color.alpha) * style.fill_opacity > 0.0
+    );
     let paint = if fill_visible {
         style.fill.as_ref()
     } else {
@@ -436,7 +460,8 @@ mod tests {
     use noon_core::SemanticObjectContent;
 
     fn line_endpoints(state: &SemanticObjectState) -> (Vec2, Vec2) {
-        let SemanticObjectContent::Geometry(StoredGeometry::Line { start, end }) = state.content else {
+        let SemanticObjectContent::Geometry(StoredGeometry::Line { start, end }) = state.content
+        else {
             panic!("arrow shaft must stay an analytic Line");
         };
         (start, end)
@@ -456,7 +481,16 @@ mod tests {
         assert!((start.x + 0.75).abs() < 1e-6);
         assert!((end.x - 0.40).abs() < 1e-6);
         assert!((arrow.shaft().state().unwrap().style.stroke_width - 0.06).abs() < 1e-12);
-        assert_eq!(arrow.family().integration_store().borrow().semantic_family_members_checked(arrow.family().node_id()).unwrap().len(), 2);
+        assert_eq!(
+            arrow
+                .family()
+                .integration_store()
+                .borrow()
+                .semantic_family_members_checked(arrow.family().node_id())
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]
@@ -506,7 +540,14 @@ mod tests {
             .borrow()
             .semantic_family_members_checked(arrow.family().node_id())
             .unwrap();
-        assert_eq!(members, vec![arrow.shaft().node_id(), arrow.end_tip().node_id(), arrow.start_tip().unwrap().node_id()]);
+        assert_eq!(
+            members,
+            vec![
+                arrow.shaft().node_id(),
+                arrow.end_tip().node_id(),
+                arrow.start_tip().unwrap().node_id()
+            ]
+        );
     }
 
     #[test]
@@ -526,10 +567,24 @@ mod tests {
     fn invalid_option_rejects_before_identity_or_resource_publication() {
         let scene = Scene::new();
         let before_revision = scene.integration_store().borrow().scene_revision();
-        let before_resources = scene.integration_store().borrow().geometry_resources().stats();
+        let before_resources = scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .stats();
         let mut options = ManimArrowOptions::arrow(-1.0, 0.0, 1.0, 0.0).unwrap();
         assert!(options.set_tip_length(f64::NAN).is_err());
-        assert_eq!(scene.integration_store().borrow().scene_revision(), before_revision);
-        assert_eq!(scene.integration_store().borrow().geometry_resources().stats(), before_resources);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            before_revision
+        );
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .geometry_resources()
+                .stats(),
+            before_resources
+        );
     }
 }
