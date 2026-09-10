@@ -174,6 +174,7 @@ mod tests {
         store.add_member(family, leaf).unwrap();
 
         let object = noon_runtime::FrameObjectState {
+            z_index: 0.0,
             id: object,
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
             transform: noon_core::Transform2D::IDENTITY,

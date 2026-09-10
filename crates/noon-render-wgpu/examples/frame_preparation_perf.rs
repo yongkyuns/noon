@@ -115,6 +115,7 @@ fn build_frame(object_count: usize) -> FrameState {
         time: 0.0,
         objects: (0..object_count)
             .map(|index| FrameObjectState {
+                z_index: 0.0,
                 id: ObjectId::new(index as u64),
                 content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(0.5)),
                 text_bounds: None,

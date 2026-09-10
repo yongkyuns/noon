@@ -338,6 +338,7 @@ mod tests {
             time: 0.0,
             objects: vec![
                 FrameObjectState {
+                    z_index: 0.0,
                     id: text_id,
                     content: ObjectContentRef::Text(text),
                     transform: Transform2D::IDENTITY,
@@ -346,6 +347,7 @@ mod tests {
                     text_bounds: None,
                 },
                 FrameObjectState {
+                    z_index: 0.0,
                     id: circle_id,
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
                     transform: Transform2D::IDENTITY,
@@ -436,6 +438,7 @@ mod tests {
         let mut texts = TextResourceArena::new();
         let text = texts.insert(text_resource()).unwrap();
         let object = FrameObjectState {
+            z_index: 0.0,
             id: ObjectId::new(12),
             content: ObjectContentRef::Text(text),
             transform: Transform2D::IDENTITY,

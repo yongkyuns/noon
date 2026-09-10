@@ -135,6 +135,8 @@ fn animation_can_reference_two_pending_objects() {
             target,
             target_state,
             interpolation: SemanticTransformInterpolation::Affine,
+
+            complete_priority: false,
         }
     );
 }

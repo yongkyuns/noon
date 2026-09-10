@@ -101,6 +101,7 @@ enum OrdinaryCompositionChild {
         source: noon::Mobject,
         target: noon::Mobject,
         interpolation: noon_core::SemanticTransformInterpolation,
+        complete_priority: bool,
         options: noon_core::AnimationOptions,
     },
     FamilyTransformTo {
@@ -1131,6 +1132,7 @@ impl CanonicalAuthoringScene {
                     source,
                     target,
                     interpolation,
+                    complete_priority,
                     options,
                     ..
                 } => {
@@ -1142,7 +1144,11 @@ impl CanonicalAuthoringScene {
                             noon::TransformToRequest::point_correspondence(source, target, *options)
                         }
                     };
-                    noon::AnimationCompositionRequest::TransformTo(request)
+                    noon::AnimationCompositionRequest::TransformTo(if *complete_priority {
+                        request.method_target()
+                    } else {
+                        request
+                    })
                 }
                 OrdinaryCompositionChild::FamilyTransformTo {
                     source,
@@ -3015,12 +3021,14 @@ mod wasm {
     }
 
     impl WasmAnimationCompositionBuilder {
+        #[allow(clippy::too_many_arguments)]
         fn push_transform(
             &mut self,
             entering_id: Option<ObjectId>,
             source: &crate::WasmAuthoringMobjectHandle,
             target: &crate::WasmAuthoringMobjectHandle,
             interpolation: noon_core::SemanticTransformInterpolation,
+            complete_priority: bool,
             child_run_time: f64,
             rate_function: &str,
         ) -> Result<(), JsValue> {
@@ -3035,6 +3043,7 @@ mod wasm {
                 source: source.semantic_mobject().clone(),
                 target: target.semantic_mobject().clone(),
                 interpolation,
+                complete_priority,
                 options: noon_core::AnimationOptions::new()
                     .run_time(child_run_time)
                     .rate_func(rate_function),
@@ -3214,6 +3223,38 @@ mod wasm {
             Ok(())
         }
 
+        /// One typed method-target request; Rust owns its completion event.
+        #[allow(clippy::too_many_arguments)]
+        #[wasm_bindgen(js_name = appendMethodTransformTo)]
+        pub fn append_method_transform_to(
+            &mut self,
+            entering_id: Option<String>,
+            source: &crate::WasmAuthoringMobjectHandle,
+            target: &crate::WasmAuthoringMobjectHandle,
+            point_correspondence: bool,
+            child_run_time: f64,
+            rate_function: &str,
+        ) -> Result<(), JsValue> {
+            let entering = entering_id
+                .as_deref()
+                .map(|id| parse_object_id("object ID", id))
+                .transpose()?;
+            let interpolation = if point_correspondence {
+                noon_core::SemanticTransformInterpolation::PointCorrespondence
+            } else {
+                noon_core::SemanticTransformInterpolation::Affine
+            };
+            self.push_transform(
+                entering,
+                source,
+                target,
+                interpolation,
+                true,
+                child_run_time,
+                rate_function,
+            )
+        }
+
         #[wasm_bindgen(js_name = appendTransformTo)]
         pub fn append_transform_to(
             &mut self,
@@ -3227,6 +3268,7 @@ mod wasm {
                 source,
                 target,
                 noon_core::SemanticTransformInterpolation::Affine,
+                false,
                 child_run_time,
                 rate_function,
             )
@@ -3245,6 +3287,7 @@ mod wasm {
                 source,
                 target,
                 noon_core::SemanticTransformInterpolation::PointCorrespondence,
+                false,
                 child_run_time,
                 rate_function,
             )
@@ -3264,6 +3307,7 @@ mod wasm {
                 source,
                 target,
                 noon_core::SemanticTransformInterpolation::Affine,
+                false,
                 child_run_time,
                 rate_function,
             )
@@ -3283,6 +3327,7 @@ mod wasm {
                 source,
                 target,
                 noon_core::SemanticTransformInterpolation::PointCorrespondence,
+                false,
                 child_run_time,
                 rate_function,
             )
@@ -7025,6 +7070,7 @@ mod tests {
             source: source.clone(),
             target,
             interpolation: noon_core::SemanticTransformInterpolation::Affine,
+            complete_priority: false,
             options,
         }
     }
@@ -8224,6 +8270,7 @@ mod tests {
             source: label.clone(),
             target,
             interpolation: noon_core::SemanticTransformInterpolation::Affine,
+            complete_priority: false,
             options,
         };
         context
@@ -8518,6 +8565,7 @@ mod tests {
                 source: shared,
                 target,
                 interpolation: noon_core::SemanticTransformInterpolation::Affine,
+                complete_priority: false,
                 options,
             },
         ];

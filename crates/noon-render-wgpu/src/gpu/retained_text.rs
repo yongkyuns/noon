@@ -2019,6 +2019,7 @@ impl RetainedFramePreparer {
         let scratch_slot = self.scratch.objects.len();
         let scratch_id = ObjectId::new(scratch_slot as u64);
         self.scratch.objects.push(FrameObjectState {
+            z_index: 0.0,
             id: scratch_id,
             content: ObjectContentRef::Geometry(geometry),
             text_bounds: None,
@@ -2975,6 +2976,7 @@ mod tests {
                 time: 0.0,
                 objects: vec![
                     FrameObjectState {
+                        z_index: 0.0,
                         id: ObjectId::new(1),
                         content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
                         text_bounds: None,
@@ -2983,6 +2985,7 @@ mod tests {
                         appearance: 1.0,
                     },
                     FrameObjectState {
+                        z_index: 0.0,
                         id: ObjectId::new(2),
                         content: ObjectContentRef::Text(text),
                         text_bounds: Some(bounds),
@@ -3021,6 +3024,7 @@ mod tests {
                 time: 0.0,
                 objects: vec![
                     FrameObjectState {
+                        z_index: 0.0,
                         id: ObjectId::new(1),
                         content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
                         text_bounds: None,
@@ -3029,6 +3033,7 @@ mod tests {
                         appearance: 1.0,
                     },
                     FrameObjectState {
+                        z_index: 0.0,
                         id: ObjectId::new(2),
                         content: ObjectContentRef::Text(text),
                         text_bounds: Some(bounds),
@@ -3058,6 +3063,7 @@ mod tests {
                 ..Style::default()
             };
             FrameObjectState {
+                z_index: 0.0,
                 id: ObjectId::new(id),
                 content: ObjectContentRef::Geometry(GeometryRef::path(
                     VectorPath::new()

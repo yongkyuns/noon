@@ -84,6 +84,8 @@ fn sigmoid(value: f32) -> f32 {
 #[serde(rename_all = "snake_case")]
 pub enum Property {
     Presence,
+    /// Exact painter priority, changed only by an instantaneous event.
+    ZIndex,
     Transform,
     Position,
     Rotation,
@@ -100,6 +102,7 @@ pub enum Property {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueKind {
     Bool,
+    ZIndex,
     Scalar,
     Vec2,
     Color,
@@ -110,6 +113,7 @@ impl Property {
     pub const fn value_kind(self) -> ValueKind {
         match self {
             Self::Presence => ValueKind::Bool,
+            Self::ZIndex => ValueKind::ZIndex,
             Self::Transform => ValueKind::Object,
             Self::Fill | Self::Stroke => ValueKind::Color,
             Self::Position | Self::Scale => ValueKind::Vec2,
@@ -123,7 +127,7 @@ impl Property {
     }
 
     pub const fn is_instant(self) -> bool {
-        matches!(self, Self::Presence)
+        matches!(self, Self::Presence | Self::ZIndex)
     }
 }
 
@@ -166,6 +170,11 @@ impl std::fmt::Display for TrackValueEndpoint {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrackValues {
+    /// Exact finite f64 priorities; never lowered to shader precision or interpolated.
+    ZIndex {
+        from: f64,
+        to: f64,
+    },
     Bool {
         from: bool,
         to: bool,
@@ -202,6 +211,7 @@ impl TrackValues {
     pub const fn value_kind(&self) -> ValueKind {
         match self {
             Self::Bool { .. } => ValueKind::Bool,
+            Self::ZIndex { .. } => ValueKind::ZIndex,
             Self::Scalar { .. } => ValueKind::Scalar,
             Self::Vec2 { .. } => ValueKind::Vec2,
             Self::Color { .. } => ValueKind::Color,
@@ -216,6 +226,12 @@ impl TrackValues {
         property: Property,
     ) -> Result<(), TimelineError> {
         match self {
+            Self::ZIndex { from, to } if !from.is_finite() || !to.is_finite() => {
+                Err(TimelineError::InvalidZIndexValues {
+                    from: *from,
+                    to: *to,
+                })
+            }
             Self::Scalar { from, to } if !from.is_finite() || !to.is_finite() => {
                 Err(TimelineError::InvalidScalarValues {
                     property,
@@ -356,6 +372,10 @@ pub struct TrackDefinition {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TimelineError {
+    InvalidZIndexValues {
+        from: f64,
+        to: f64,
+    },
     InvalidStartTime(f64),
     InvalidDuration(f64),
     InvalidInstantDuration {
@@ -415,6 +435,10 @@ impl std::fmt::Display for TimelineError {
             Self::PreparedMorphPropertyMismatch(property) => write!(
                 formatter,
                 "prepared morph execution data cannot drive {property:?}"
+            ),
+            Self::InvalidZIndexValues { from, to } => write!(
+                formatter,
+                "painter priorities must be finite: {from} -> {to}"
             ),
             Self::InvalidScalarValues { property, from, to } => write!(
                 formatter,

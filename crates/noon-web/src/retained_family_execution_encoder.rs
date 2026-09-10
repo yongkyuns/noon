@@ -433,6 +433,7 @@ mod tests {
         Vec<Option<FamilyAnimationState>>,
     ) {
         let first = noon_runtime::FrameObjectState {
+            z_index: 0.0,
             id: ObjectId::new(10),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
             transform: noon_core::Transform2D::IDENTITY,
@@ -441,6 +442,7 @@ mod tests {
             text_bounds: None,
         };
         let second = noon_runtime::FrameObjectState {
+            z_index: 0.0,
             id: ObjectId::new(11),
             content: noon_core::ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
             transform: noon_core::Transform2D::IDENTITY,
@@ -470,6 +472,7 @@ mod tests {
             time: 0.5,
             objects: vec![
                 FrameObjectState {
+                    z_index: 0.0,
                     id: first.id,
                     content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
                     transform: Transform2D::IDENTITY,
@@ -478,6 +481,7 @@ mod tests {
                     text_bounds: None,
                 },
                 FrameObjectState {
+                    z_index: 0.0,
                     id: second.id,
                     content: ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
                     transform: Transform2D::IDENTITY,

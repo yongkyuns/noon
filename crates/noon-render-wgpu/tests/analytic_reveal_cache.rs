@@ -11,6 +11,7 @@ fn rectangle(id: u64, width: f32, height: f32) -> FrameObjectState {
         ..Style::default()
     };
     FrameObjectState {
+        z_index: 0.0,
         id: ObjectId::new(id),
         content: noon_core::ObjectContentRef::Geometry(GeometryRef::rectangle(width, height)),
         text_bounds: None,
