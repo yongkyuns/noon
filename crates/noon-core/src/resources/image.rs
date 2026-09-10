@@ -248,8 +248,7 @@ fn expected_rgba8_len(width: u32, height: u32) -> Result<usize, RasterImageResou
         .checked_mul(u64::from(height))
         .and_then(|pixels| pixels.checked_mul(4))
         .ok_or(RasterImageResourceError::ImageTooLarge { width, height })?;
-    usize::try_from(pixels)
-        .map_err(|_| RasterImageResourceError::ImageTooLarge { width, height })
+    usize::try_from(pixels).map_err(|_| RasterImageResourceError::ImageTooLarge { width, height })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
