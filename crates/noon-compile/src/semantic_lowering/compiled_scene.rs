@@ -198,18 +198,16 @@ pub(super) fn lower_content(
     resources: &mut CompiledResources,
 ) -> Result<(ObjectContentRef, Option<Rect>), SemanticCompiledSceneError> {
     match content {
-        SemanticObjectContent::Geometry(content) => {
-            lower_semantic_geometry_value(content.geometry(), store)
-                .map(|geometry| (ObjectContentRef::Geometry(geometry), None))
-                .map_err(|error| match error {
-                    SemanticGeometryValueError::InvalidAnalyticGeometry => {
-                        SemanticCompiledSceneError::InvalidAnalyticGeometry { node }
-                    }
-                    SemanticGeometryValueError::UnsupportedGeometryResource(resource) => {
-                        SemanticCompiledSceneError::UnsupportedGeometryResource { node, resource }
-                    }
-                })
-        }
+        SemanticObjectContent::Geometry(content) => lower_semantic_geometry_value(content, store)
+            .map(|geometry| (ObjectContentRef::Geometry(geometry), None))
+            .map_err(|error| match error {
+                SemanticGeometryValueError::InvalidAnalyticGeometry => {
+                    SemanticCompiledSceneError::InvalidAnalyticGeometry { node }
+                }
+                SemanticGeometryValueError::UnsupportedGeometryResource(resource) => {
+                    SemanticCompiledSceneError::UnsupportedGeometryResource { node, resource }
+                }
+            }),
         SemanticObjectContent::Text(text) => {
             let store = store.ok_or(SemanticCompiledSceneError::Resource {
                 node,

@@ -436,6 +436,15 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_match_points(
+        &mut self,
+        source: &noon::Mobject,
+        target: &noon::Mobject,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.match_points(source, target))
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_become_mobject(
         &mut self,

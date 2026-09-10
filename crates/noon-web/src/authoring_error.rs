@@ -257,11 +257,6 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::GeometryResource(cause) => {
                 Self::caused_by("authoring.geometry_resource", message, cause.into())
             }
-            AuthoringError::GeometryLayout(cause) => Self::caused_by(
-                "authoring.geometry_layout",
-                message,
-                Self::new("invalid_input", "geometry.invalid_layout", cause),
-            ),
             AuthoringError::PathQuery(cause) => {
                 Self::new("invalid_input", "path.invalid_query", cause)
             }
@@ -964,9 +959,13 @@ mod tests {
             &["authoring.invalid_opacity"],
         );
         assert_authoring_projection(
-            first.manim_line_endpoints().unwrap_err(),
-            "unsupported_operation",
-            &["authoring.unsupported", "authoring.unsupported_operation"],
+            first
+                .path_query()
+                .unwrap()
+                .point_from_proportion(-1.0)
+                .unwrap_err(),
+            "invalid_input",
+            &["path.invalid_query"],
         );
         assert_authoring_projection(
             LayoutAnchor::from(&family).member(-3).layout().unwrap_err(),

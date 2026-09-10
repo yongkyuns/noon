@@ -21,9 +21,10 @@ pub(super) fn transform_layout_xy(transform: SemanticTransform2_5D, x: f64, y: f
     )
 }
 
-fn manim_ellipse_control_hull_bounds(
+fn canonical_circle_layout_bounds(
     radius: f32,
     transform: SemanticTransform2_5D,
+    include_handles: bool,
 ) -> Option<Bounds2D64> {
     let radius = f64::from(radius);
     let factor = (4.0 / 3.0) * (std::f64::consts::PI / 16.0).tan();
@@ -33,7 +34,7 @@ fn manim_ellipse_control_hull_bounds(
         let end_angle = f64::from(index + 1) * std::f64::consts::PI / 4.0;
         let (start_sine, start_cosine) = start_angle.sin_cos();
         let (end_sine, end_cosine) = end_angle.sin_cos();
-        for (x, y) in [
+        for (point_index, (x, y)) in [
             (start_cosine, start_sine),
             (
                 start_cosine - factor * start_sine,
@@ -44,7 +45,13 @@ fn manim_ellipse_control_hull_bounds(
                 end_sine - factor * end_cosine,
             ),
             (end_cosine, end_sine),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if !include_handles && (point_index == 1 || point_index == 2) {
+                continue;
+            }
             include_layout_point(
                 &mut bounds,
                 transform_layout_xy(transform, radius * x, radius * y),
@@ -53,7 +60,7 @@ fn manim_ellipse_control_hull_bounds(
     }
     bounds
 }
-// Manim authoring dimensions and centers bound the cubic control points.
+// Manim dimensions bound cubic control points; centers and edges bound anchors.
 // These are layout bounds; runtime visibility continues using geometric bounds.
 fn transformed_path_layout_bounds(
     path: &VectorPath,
@@ -143,17 +150,7 @@ fn geometry_layout_bounds(
 ) -> Option<Bounds2D64> {
     match geometry {
         GeometryRef::Circle { radius } => {
-            let radius = f64::from(*radius);
-            let sine = transform.rotation_z.sin();
-            let cosine = transform.rotation_z.cos();
-            let half_width = radius * (transform.scale.x * cosine).hypot(transform.scale.y * sine);
-            let half_height = radius * (transform.scale.x * sine).hypot(transform.scale.y * cosine);
-            Some(Bounds2D64 {
-                min_x: transform.translation.x - half_width,
-                min_y: transform.translation.y - half_height,
-                max_x: transform.translation.x + half_width,
-                max_y: transform.translation.y + half_height,
-            })
+            canonical_circle_layout_bounds(*radius, transform, include_handles)
         }
         GeometryRef::Rectangle { size } => {
             let half_x = f64::from(size.x) * 0.5;
@@ -233,13 +230,7 @@ fn measure_content(
             return Ok(bounds);
         }
     };
-    if geometry.layout() == SemanticGeometryLayout::ManimEllipseControlHull {
-        let StoredGeometry::Circle { radius } = geometry.geometry() else {
-            unreachable!("checked Manim Ellipse layout always owns Circle geometry")
-        };
-        return Ok(manim_ellipse_control_hull_bounds(radius, transform));
-    }
-    Ok(match geometry.geometry() {
+    Ok(match geometry {
         StoredGeometry::Circle { radius } => {
             geometry_layout_bounds(&GeometryRef::circle(radius), transform, include_handles)
         }

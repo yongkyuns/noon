@@ -60,6 +60,17 @@ class MovingDotsPrimitiveTests(unittest.TestCase):
                 updaters._ACTIVE_CANONICAL_CONTEXT.reset(token)
             assert tracker.get_value() == 0.0
 
+            # General authored matching cannot mutate semantic content from a callback.
+            token = updaters._ACTIVE_CANONICAL_CONTEXT.set(object())
+            try:
+                identity(manim.Square).match_points(identity(manim.Circle))
+            except NotImplementedError as error:
+                assert "callback point matching" in str(error)
+            else:
+                raise AssertionError("callback matching must not publish authored geometry")
+            finally:
+                updaters._ACTIVE_CANONICAL_CONTEXT.reset(token)
+
             # Raw geometry replacement is no longer a callback compatibility path.
             # The canonical opaque-handle proof lives in test_canonical_line_match.
             source_line = identity(manim.Line)
@@ -67,7 +78,7 @@ class MovingDotsPrimitiveTests(unittest.TestCase):
             try:
                 source_line.match_points(target_line)
             except NotImplementedError as error:
-                assert "opaque shared semantic Line handles" in str(error)
+                assert "opaque shared semantic vector handles" in str(error)
             else:
                 raise AssertionError("raw Line geometry matching must not remain available")
             """

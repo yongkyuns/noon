@@ -572,19 +572,16 @@ class WasmErrorProjectionTests(unittest.TestCase):
         self.assertAlmostEqual(target.strokeOpacity, 0.5)
         self.assertEqual(json.loads(target.snapshotJson())["style"]["opacity"], 1.0)
 
-    def test_public_line_match_retains_unsupported_cause_and_recovers(self):
+    def test_public_point_match_accepts_nonuniform_lines_and_retains_paint(self):
         host.resetStore()
         from noon import Line
-        source = Line((-1, 0), (1, 0))
+        source = Line((-1, 0), (1, 0)).set_stroke(color="#00FF00")
         target = Line((-1, 0), (1, 0)).scale((2, 1))
-        before = source._semantic_handle.snapshotJson()
-        with self.assertRaises(NoonUnsupportedError) as caught:
-            source.match_points(target)
-        self.assert_diagnostic(caught.exception, "unsupported_operation")
-        self.assertEqual(caught.exception.operation, "Line.match_points")
-        self.assertEqual(codes(caught.exception),
-                         ["authoring.unsupported", "authoring.unsupported_operation"])
-        self.assertEqual(source._semantic_handle.snapshotJson(), before)
+        before_style = json.loads(source._semantic_handle.snapshotJson())["style"]
+        source.match_points(target)
+        self.assertEqual(json.loads(source._semantic_handle.snapshotJson())["style"], before_style)
+        self.assertAlmostEqual(source.get_start()[0], -2.0)
+        self.assertAlmostEqual(source.get_end()[0], 2.0)
         source.match_points(Line((0, 0), (0, 2)))
         self.assertAlmostEqual(source.get_end()[1], 2.0)
 

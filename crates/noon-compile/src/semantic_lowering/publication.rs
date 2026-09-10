@@ -548,7 +548,7 @@ fn lower_prepared_entry(
     }
     let (content, text_bounds) = match state.content {
         SemanticObjectContent::Geometry(content) => (
-            lower_semantic_geometry_value(content.geometry(), Some(prepared.store()))
+            lower_semantic_geometry_value(content, Some(prepared.store()))
                 .map_err(|error| SemanticPublicationLoweringError::PreparedGeometry {
                     object,
                     error,
