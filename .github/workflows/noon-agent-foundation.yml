@@ -9,6 +9,7 @@ on:
       - "scripts/check-noon-agent-skill.py"
       - "scripts/manim-api-coverage.py"
       - "scripts/agent-preview-artifacts*.mjs"
+      - "scripts/agent-preview-capture*.mjs"
       - "compat/manim-v0.21.0.json"
       - "web/python/**"
       - "parity/manim-v0.21/upstream-examples/**"
@@ -22,6 +23,7 @@ on:
       - "scripts/check-noon-agent-skill.py"
       - "scripts/manim-api-coverage.py"
       - "scripts/agent-preview-artifacts*.mjs"
+      - "scripts/agent-preview-capture*.mjs"
       - "compat/manim-v0.21.0.json"
       - "web/python/**"
       - "parity/manim-v0.21/upstream-examples/**"
@@ -68,9 +70,11 @@ jobs:
           git rev-parse HEAD
           uname -a
           node --version
-      - name: Check artifact module syntax
+      - name: Check artifact and capture module syntax
         run: |
           node --check scripts/agent-preview-artifacts.mjs
           node --check scripts/agent-preview-artifacts.test.mjs
-      - name: Test bounded storage, provenance and cleanup
-        run: node --test scripts/agent-preview-artifacts.test.mjs
+          node --check scripts/agent-preview-capture.mjs
+          node --check scripts/agent-preview-capture.test.mjs
+      - name: Test bounded storage, capture provenance and cleanup
+        run: node --test scripts/agent-preview-artifacts.test.mjs scripts/agent-preview-capture.test.mjs
