@@ -4,9 +4,8 @@ import { createServer } from "node:http";
 import { mkdir, open, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
-// Keep browser-process diagnostics visible in this qualification probe. Worker
-// process exits otherwise surface only as a generic Worker error event.
-process.env.DEBUG = "pw:browser*";
+import { installPinnedPyodideRoute } from "../src/preview-pyodide.mjs";
+
 const webRoot = await realpath(process.env.NOON_WEB_ROOT || "/noon/web");
 const require = createRequire("/opt/noon-runner/loader.cjs");
 const { chromium } = require("/opt/noon-runner/playwright");
@@ -85,6 +84,7 @@ try {
     ],
   });
   const page = await browser.newPage({ viewport: { width: 960, height: 540 }, deviceScaleFactor: 1 });
+  await installPinnedPyodideRoute(page.context());
   const pageDiagnostics = [];
   page.on("console", (entry) => pageDiagnostics.push(`console:${entry.type()}:${entry.text()}`));
   page.on("pageerror", (error) => pageDiagnostics.push(`pageerror:${error?.stack ?? error}`));
@@ -128,6 +128,7 @@ try {
     pngBytes: png.length,
     networkBlocked,
     chromiumSandbox: true,
+    pyodideNetworkAccess: false,
     observedChromiumProcesses: chromiumCommands.length,
   }));
 } finally {
