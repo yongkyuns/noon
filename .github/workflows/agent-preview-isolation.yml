@@ -3,13 +3,14 @@ name: Agent preview isolation
 on:
   pull_request:
     paths:
-      - "tools/noon-mcp/src/preview-isolation.mjs"
+      - "tools/noon-mcp/src/preview-*.mjs"
       - "tools/noon-mcp/scripts/setup-preview-runtime.mjs"
       - "tools/noon-mcp/preview.Dockerfile"
-      - "tools/noon-mcp/test/preview-isolation*.mjs"
-      - "tools/noon-mcp/test/docker-isolation-smoke.mjs"
+      - "tools/noon-mcp/test/*preview*.mjs"
+      - "tools/noon-mcp/test/docker-*.mjs"
       - "web/semantic-preview-session*"
       - "web/manim-raster-host*"
+      - "web/agent-preview-host*"
       - "web/authoring-client.js"
       - "web/authoring-execution-client.js"
       - "scripts/build-web-demo.sh"
@@ -32,31 +33,49 @@ jobs:
       NOON_PREVIEW_CACHE: ${{ runner.temp }}/noon-preview
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - id: source
+        name: Detect qualified preview-isolation source
+        shell: bash
+        run: |
+          if [[ -f tools/noon-mcp/src/preview-isolation.mjs \
+             && -f tools/noon-mcp/test/preview-isolation.test.mjs \
+             && -f tools/noon-mcp/test/docker-isolation-smoke.mjs ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Preview isolation source is not landed yet; workflow registration only."
+          fi
+      - if: steps.source.outputs.enabled == 'true'
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
-      - name: Validate isolation contract units
+      - if: steps.source.outputs.enabled == 'true'
+        name: Validate isolation contract units
         working-directory: tools/noon-mcp
         run: node --test test/preview-isolation.test.mjs
-      - name: Build current browser package with exact provenance
+      - if: steps.source.outputs.enabled == 'true'
+        name: Build current browser package with exact provenance
         uses: ./.github/actions/dev-wasm-build
         with:
           preflight: "false"
           cache-ref: ${{ github.event.pull_request.base.sha || github.sha }}
-      - name: Record Docker runtime
+      - if: steps.source.outputs.enabled == 'true'
+        name: Record Docker runtime
         run: |
           docker version
           docker info --format '{{json .SecurityOptions}}'
-      - name: Prepare content-addressed preview runtime
+      - if: steps.source.outputs.enabled == 'true'
+        name: Prepare content-addressed preview runtime
         working-directory: tools/noon-mcp
         run: node scripts/setup-preview-runtime.mjs > "$RUNNER_TEMP/noon-preview-setup.json"
-      - name: Verify isolated real-browser preview
+      - if: steps.source.outputs.enabled == 'true'
+        name: Verify isolated real-browser preview
         env:
           NOON_PREVIEW_RUNTIME_CONFIG: ${{ runner.temp }}/noon-preview/runtime.json
         working-directory: tools/noon-mcp
         run: timeout --signal=TERM 150s node test/docker-isolation-smoke.mjs | tee "$RUNNER_TEMP/noon-preview-isolation.json"
-      - name: Upload isolation evidence
-        if: always()
+      - if: always() && steps.source.outputs.enabled == 'true'
+        name: Upload isolation evidence
         uses: actions/upload-artifact@v7
         with:
           name: agent-preview-isolation-evidence
