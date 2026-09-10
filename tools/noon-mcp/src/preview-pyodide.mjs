@@ -34,7 +34,8 @@ async function verifyInstalledRuntime(root) {
 /**
  * Fulfil the worker's pinned jsDelivr Pyodide URLs from the content-addressed
  * Docker image. The browser keeps --network=none; no request is allowed to
- * escape to jsDelivr at runtime.
+ * escape to jsDelivr at runtime. Cross-origin module/fetch semantics still need
+ * the CORS header that the real CDN would have supplied.
  */
 export async function installPinnedPyodideRoute(context, { root = PYODIDE_ROOT } = {}) {
   if (!context || typeof context.route !== "function") throw new TypeError("Playwright browser context is required");
@@ -57,10 +58,19 @@ export async function installPinnedPyodideRoute(context, { root = PYODIDE_ROOT }
       await route.fulfill({
         status: 200,
         contentType: contentType(resolved),
+        headers: {
+          "access-control-allow-origin": "*",
+          "cache-control": "no-store",
+        },
         body: await readFile(resolved),
       });
     } catch {
-      await route.fulfill({ status: 404, contentType: "text/plain; charset=utf-8", body: "not found" });
+      await route.fulfill({
+        status: 404,
+        contentType: "text/plain; charset=utf-8",
+        headers: { "access-control-allow-origin": "*" },
+        body: "not found",
+      });
     }
   });
 }
