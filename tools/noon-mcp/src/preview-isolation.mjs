@@ -123,7 +123,6 @@ export function buildDockerCreateArgs(config, command, { containerName } = {}) {
     "--read-only",
     "--network=none",
     "--ipc=private",
-    "--pid=private",
     "--user=pwuser",
     `--memory=${limits.memoryBytes}`,
     `--memory-swap=${limits.memoryBytes}`,
@@ -160,7 +159,7 @@ export function validateDockerInspection(inspect, config) {
   if (inspect.Image !== config.imageId) failures.push("container image identity mismatch");
   if (host.NetworkMode !== "none") failures.push("network must be none");
   if (host.IpcMode !== "private") failures.push("IPC namespace must be private");
-  if (host.PidMode !== "private") failures.push("PID namespace must be private");
+  if (host.PidMode !== "") failures.push("PID namespace must be private");
   if (host.ReadonlyRootfs !== true) failures.push("root filesystem must be read-only");
   if (host.Privileged === true) failures.push("privileged mode forbidden");
   if (container.User !== "pwuser") failures.push("container must run as pwuser");
