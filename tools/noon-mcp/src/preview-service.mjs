@@ -67,6 +67,7 @@ export class AgentPreviewService {
     const { sessionId, snapshot: capture } = opened;
     let artifactScope = null;
     try {
+      this.#assertScopeCurrent(scopeCapability, scope);
       throwIfAborted(openOptions.signal);
       artifactScope = this.#artifacts.openScope({
         sessionId,
@@ -75,11 +76,13 @@ export class AgentPreviewService {
       });
       const artifact = artifactScope.putFrame(artifactFrame(capture));
       throwIfAborted(openOptions.signal);
+      this.#assertScopeCurrent(scopeCapability, scope);
       scope.sessions.set(sessionId, {
         artifactScope,
         lastArtifact: artifact,
         frameCount: 1,
         lastRequestedTime: artifact.provenance.requestedTime,
+        busy: false,
       });
       return Object.freeze({ sessionId, snapshot: publicSnapshot(capture), artifact });
     } catch (error) {
@@ -97,36 +100,41 @@ export class AgentPreviewService {
 
   async sampleFrames(scopeCapability, sessionId, times, options = {}) {
     const { scope, entry } = this.#entry(scopeCapability, sessionId);
+    if (entry.busy) throw new Error("preview service operation already in progress");
     const sampleOptions = options ?? {};
     const remaining = this.#maxFramesPerSession - entry.frameCount;
     const normalized = sampleTimes(times, entry.lastRequestedTime, remaining);
-    throwIfAborted(sampleOptions.signal);
+    entry.busy = true;
+    try {
+      throwIfAborted(sampleOptions.signal);
+      const results = [];
+      for (const timeSeconds of normalized) {
+        let capture;
+        try {
+          capture = await this.#registry.sample(scopeCapability, sessionId, timeSeconds, sampleOptions);
+          throwIfAborted(sampleOptions.signal);
+        } catch (error) {
+          await this.#reconcileFailedOperation(scopeCapability, scope, sessionId, entry, error,
+            errorMessage(error, "preview sample failed"));
+          throw error;
+        }
 
-    const results = [];
-    for (const timeSeconds of normalized) {
-      let capture;
-      try {
-        capture = await this.#registry.sample(scopeCapability, sessionId, timeSeconds, sampleOptions);
-        throwIfAborted(sampleOptions.signal);
-      } catch (error) {
-        await this.#reconcileFailedOperation(scopeCapability, scope, sessionId, entry, error,
-          errorMessage(error, "preview sample failed"));
-        throw error;
+        try {
+          const artifact = entry.artifactScope.putFrame(artifactFrame(capture));
+          entry.lastArtifact = artifact;
+          entry.frameCount += 1;
+          entry.lastRequestedTime = artifact.provenance.requestedTime;
+          results.push(Object.freeze({ snapshot: publicSnapshot(capture), artifact }));
+        } catch (error) {
+          await this.#retirePreserving(scopeCapability, scope, sessionId, entry, error,
+            errorMessage(error, "preview artifact publication failed"));
+          throw error;
+        }
       }
-
-      try {
-        const artifact = entry.artifactScope.putFrame(artifactFrame(capture));
-        entry.lastArtifact = artifact;
-        entry.frameCount += 1;
-        entry.lastRequestedTime = artifact.provenance.requestedTime;
-        results.push(Object.freeze({ snapshot: publicSnapshot(capture), artifact }));
-      } catch (error) {
-        await this.#retirePreserving(scopeCapability, scope, sessionId, entry, error,
-          errorMessage(error, "preview artifact publication failed"));
-        throw error;
-      }
+      return Object.freeze(results);
+    } finally {
+      if (scope.sessions.get(sessionId) === entry) entry.busy = false;
     }
-    return Object.freeze(results);
   }
 
   inspect(scopeCapability, sessionId) {
@@ -254,6 +262,12 @@ export class AgentPreviewService {
     const scope = this.#scopes.get(capability);
     if (!scope || scope.closed) throw new Error("stale preview service scope capability");
     return scope;
+  }
+
+  #assertScopeCurrent(capability, scope) {
+    if (this.#disposed || scope.closed || this.#scopes.get(capability) !== scope) {
+      throw new Error("preview service scope closed during operation");
+    }
   }
 
   #assertLive() {
