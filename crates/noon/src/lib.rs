@@ -93,6 +93,8 @@ mod semantic_mobject;
 mod state_replacement;
 #[cfg(any(feature = "native-text", feature = "typst"))]
 mod text_authoring;
+#[cfg(any(feature = "native-text", feature = "typst"))]
+mod text_part_authoring;
 mod z_index;
 
 pub use animation_authoring::DeclaredAnimation;
@@ -136,14 +138,14 @@ pub use noon_core::{
     SemanticFadeDirection, SemanticNodeId, SemanticObjectProperty, SemanticObjectState,
     SemanticPaint, SemanticSignalValue, SemanticStyle, SemanticTransform2_5D,
     SemanticTransformInterpolation, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin,
-    StrokeWidthMode, Style, Transform2D, Vec2, VectorPath, BLACK, BLUE, BLUE_A, BLUE_B, BLUE_C,
-    BLUE_D, BLUE_E, DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH, DEFAULT_MOBJECT_TO_EDGE_BUFFER,
-    DEFAULT_MOBJECT_TO_MOBJECT_BUFFER, DEGREES, DL, DOWN, DR, GOLD, GRAY, GREEN, GREEN_A, GREEN_B,
-    GREEN_C, GREEN_D, GREEN_E, GREY, LARGE_BUFF, LEFT, LIGHT_PINK, MAROON, MED_LARGE_BUFF,
-    MED_SMALL_BUFF, ORANGE, ORIGIN, PI, PINK, PURPLE, PURPLE_A, PURPLE_B, PURPLE_C, PURPLE_D,
-    PURPLE_E, RED, RED_A, RED_B, RED_C, RED_D, RED_E, RIGHT, SMALL_BUFF, TAU, TEAL, TEAL_A, TEAL_B,
-    TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D,
-    YELLOW_E,
+    StrokeWidthMode, Style, TextPart, TextPartQueryError, TextSourceSpan, Transform2D, Vec2,
+    VectorPath, BLACK, BLUE, BLUE_A, BLUE_B, BLUE_C, BLUE_D, BLUE_E, DEFAULT_FRAME_HEIGHT,
+    DEFAULT_FRAME_WIDTH, DEFAULT_MOBJECT_TO_EDGE_BUFFER, DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
+    DEGREES, DL, DOWN, DR, GOLD, GRAY, GREEN, GREEN_A, GREEN_B, GREEN_C, GREEN_D, GREEN_E, GREY,
+    LARGE_BUFF, LEFT, LIGHT_PINK, MAROON, MED_LARGE_BUFF, MED_SMALL_BUFF, ORANGE, ORIGIN, PI, PINK,
+    PURPLE, PURPLE_A, PURPLE_B, PURPLE_C, PURPLE_D, PURPLE_E, RED, RED_A, RED_B, RED_C, RED_D,
+    RED_E, RIGHT, SMALL_BUFF, TAU, TEAL, TEAL_A, TEAL_B, TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE,
+    YELLOW, YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D, YELLOW_E,
 };
 pub use noon_runtime::EvaluationError;
 pub use path_queries::PathQuery;
@@ -162,6 +164,8 @@ pub use text_authoring::{MathTypst, Typst, TypstBackendError, DEFAULT_TYPST_FONT
 pub use text_authoring::{
     NativeFontFace, Text, DEFAULT_NATIVE_TEXT_FONT_FAMILY, DEFAULT_NATIVE_TEXT_FONT_SIZE,
 };
+#[cfg(any(feature = "native-text", feature = "typst"))]
+pub use text_part_authoring::TextPartAuthoringError;
 
 /// Common imports for direct typed semantic authoring and live publication.
 /// Host integration and mutable arena access must be imported explicitly.

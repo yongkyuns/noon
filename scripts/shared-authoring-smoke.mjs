@@ -781,6 +781,7 @@ try {
     { filename: "ordinary_family_paint.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_planar_affine.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_arc_geometry.py", objectCount: 3, expectedDuration: 0.2, endpointTime: null },
+    { filename: "ordinary_text_source_parts.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_path_arrangement.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_canonical_curve_layout.py", objectCount: 4, expectedDuration: 0.2, endpointTime: null },
     { filename: "ordinary_path_construction.py", objectCount: 2, expectedDuration: 0.2, endpointTime: null },
