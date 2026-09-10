@@ -173,7 +173,7 @@ test("overlapping composition requests reject before entering the shared session
 
   await assert.rejects(service.sample(scope, opened.sessionId, 1), /preview service operation already in progress/);
   assert.deepEqual(controls[0].sampled, [0.5]);
-  assert.equal(service.inspect(scope, opened.sessionId).retainedFrames, 1);
+  assert.equal(service.stats.artifacts.artifacts, 1);
 
   releaseSample();
   const completed = await first;
