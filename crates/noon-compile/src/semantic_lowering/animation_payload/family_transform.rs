@@ -1,15 +1,6 @@
 use std::collections::HashSet;
 
-use noon_core::{
-    ObjectId, Property, SemanticNodeId, SemanticNodeKind, SemanticObjectProperty,
-    SemanticSceneOperationError, SemanticSignalValue, SemanticStore, SemanticTransformInterpolation,
-    TrackValues,
-};
-
-use super::affine::{
-    affine_payload_error, lower_transform_channels, EffectiveAnimationProperties,
-    SemanticAffineAnimationTrackError,
-};
+use noon_core::{SemanticNodeId, SemanticNodeKind, SemanticStore};
 
 /// One leaf-to-leaf visual occurrence after Manim-style family alignment.
 ///
@@ -43,6 +34,10 @@ impl FamilyTransformOccurrence {
 }
 
 /// Transient family correspondence used only while compiling one Transform.
+///
+/// This object contains references to authored leaves plus copy markers. It owns no
+/// Semantic Scene identity, stable execution identity, authored membership, or
+/// persistent topology.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FamilyTransformCorrespondence {
     occurrences: Vec<FamilyTransformOccurrence>,
@@ -62,14 +57,13 @@ impl FamilyTransformCorrespondence {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FamilyTransformCorrespondenceError {
-    InvalidNode {
-        node: SemanticNodeId,
-        error: SemanticSceneOperationError,
-    },
+    MissingNode(SemanticNodeId),
     RootIsNotFamily(SemanticNodeId),
     UnsupportedNode(SemanticNodeId),
+    InvalidObject(SemanticNodeId),
+    InvalidFamily(SemanticNodeId),
     EmptyAlignment {
         source: SemanticNodeId,
         target: SemanticNodeId,
@@ -81,9 +75,9 @@ pub enum FamilyTransformCorrespondenceError {
 impl std::fmt::Display for FamilyTransformCorrespondenceError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidNode { node, error } => write!(
+            Self::MissingNode(node) => write!(
                 formatter,
-                "family Transform node {}:{} is invalid: {error}",
+                "family Transform node {}:{} is stale or missing",
                 node.slot(),
                 node.generation()
             ),
@@ -96,6 +90,18 @@ impl std::fmt::Display for FamilyTransformCorrespondenceError {
             Self::UnsupportedNode(node) => write!(
                 formatter,
                 "family Transform node {}:{} is not an object or family",
+                node.slot(),
+                node.generation()
+            ),
+            Self::InvalidObject(node) => write!(
+                formatter,
+                "family Transform object {}:{} is invalid",
+                node.slot(),
+                node.generation()
+            ),
+            Self::InvalidFamily(node) => write!(
+                formatter,
+                "family Transform family {}:{} is invalid",
                 node.slot(),
                 node.generation()
             ),
@@ -123,18 +129,16 @@ impl std::fmt::Display for FamilyTransformCorrespondenceError {
     }
 }
 
-impl std::error::Error for FamilyTransformCorrespondenceError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidNode { error, .. } => Some(error),
-            _ => None,
-        }
-    }
-}
+impl std::error::Error for FamilyTransformCorrespondenceError {}
 
 /// Derive Manim-compatible recursive submobject correspondence without changing
-/// either authored family. This is the animation-side counterpart to persistent
-/// `become`: repeated occurrences are only padding descriptors.
+/// either authored family.
+///
+/// At every family level the shorter side is expanded to the longer side with the
+/// same repeat-index rule used by ManimCE's `add_n_more_submobjects`:
+/// `floor(position * original_count / aligned_count)`. The first occurrence keeps
+/// the authored leaf; later occurrences are marked as transparent derived copies.
+/// Alignment then recurses, so nested families preserve the same structural rule.
 pub fn derive_family_transform_correspondence(
     store: &SemanticStore,
     source: SemanticNodeId,
@@ -164,19 +168,14 @@ fn require_family_root(
 ) -> Result<(), FamilyTransformCorrespondenceError> {
     let node_ref = store
         .node(node)
-        .ok_or_else(|| invalid_node(store, node))?;
+        .ok_or(FamilyTransformCorrespondenceError::MissingNode(node))?;
     if !matches!(node_ref.kind(), SemanticNodeKind::Family(_)) {
         return Err(FamilyTransformCorrespondenceError::RootIsNotFamily(node));
     }
-    Ok(())
-}
-
-fn invalid_node(store: &SemanticStore, node: SemanticNodeId) -> FamilyTransformCorrespondenceError {
-    let error = store
+    store
         .semantic_family_members_checked(node)
-        .err()
-        .unwrap_or(SemanticSceneOperationError::NotFamily(node));
-    FamilyTransformCorrespondenceError::InvalidNode { node, error }
+        .map_err(|_| FamilyTransformCorrespondenceError::InvalidFamily(node))?;
+    Ok(())
 }
 
 struct CorrespondenceBuilder<'a> {
@@ -198,46 +197,22 @@ impl CorrespondenceBuilder<'_> {
             .store
             .node(source)
             .map(|node| node.kind())
-            .ok_or_else(|| invalid_node(self.store, source))?;
+            .ok_or(FamilyTransformCorrespondenceError::MissingNode(source))?;
         let target_kind = self
             .store
             .node(target)
             .map(|node| node.kind())
-            .ok_or_else(|| invalid_node(self.store, target))?;
+            .ok_or(FamilyTransformCorrespondenceError::MissingNode(target))?;
 
         match (source_kind, target_kind) {
             (SemanticNodeKind::AuthoringObject, SemanticNodeKind::AuthoringObject) => {
-                self.store
-                    .semantic_object_state_checked(source)
-                    .map_err(|error| FamilyTransformCorrespondenceError::InvalidNode {
-                        node: source,
-                        error,
-                    })?;
-                self.store
-                    .semantic_object_state_checked(target)
-                    .map_err(|error| FamilyTransformCorrespondenceError::InvalidNode {
-                        node: target,
-                        error,
-                    })?;
+                self.require_object(source)?;
+                self.require_object(target)?;
                 self.push_leaf(source, target, source_padding, target_padding)
             }
             (SemanticNodeKind::Family(_), SemanticNodeKind::Family(_)) => {
-                let source_members = self
-                    .store
-                    .semantic_family_members_checked(source)
-                    .map_err(|error| FamilyTransformCorrespondenceError::InvalidNode {
-                        node: source,
-                        error,
-                    })?
-                    .to_vec();
-                let target_members = self
-                    .store
-                    .semantic_family_members_checked(target)
-                    .map_err(|error| FamilyTransformCorrespondenceError::InvalidNode {
-                        node: target,
-                        error,
-                    })?
-                    .to_vec();
+                let source_members = self.family_members(source)?;
+                let target_members = self.family_members(target)?;
                 self.align_sequences(
                     source,
                     target,
@@ -248,20 +223,8 @@ impl CorrespondenceBuilder<'_> {
                 )
             }
             (SemanticNodeKind::AuthoringObject, SemanticNodeKind::Family(_)) => {
-                self.store
-                    .semantic_object_state_checked(source)
-                    .map_err(|error| FamilyTransformCorrespondenceError::InvalidNode {
-                        node: source,
-                        error,
-                    })?;
-                let target_members = self
-                    .store
-                    .semantic_family_members_checked(target)
-                    .map_err(|error| FamilyTransformCorrespondenceError::InvalidNode {
-                        node: target,
-                        error,
-                    })?
-                    .to_vec();
+                self.require_object(source)?;
+                let target_members = self.family_members(target)?;
                 self.align_sequences(
                     source,
                     target,
@@ -272,20 +235,8 @@ impl CorrespondenceBuilder<'_> {
                 )
             }
             (SemanticNodeKind::Family(_), SemanticNodeKind::AuthoringObject) => {
-                self.store
-                    .semantic_object_state_checked(target)
-                    .map_err(|error| FamilyTransformCorrespondenceError::InvalidNode {
-                        node: target,
-                        error,
-                    })?;
-                let source_members = self
-                    .store
-                    .semantic_family_members_checked(source)
-                    .map_err(|error| FamilyTransformCorrespondenceError::InvalidNode {
-                        node: source,
-                        error,
-                    })?
-                    .to_vec();
+                self.require_object(target)?;
+                let source_members = self.family_members(source)?;
                 self.align_sequences(
                     source,
                     target,
@@ -297,6 +248,26 @@ impl CorrespondenceBuilder<'_> {
             }
             _ => Err(FamilyTransformCorrespondenceError::UnsupportedNode(source)),
         }
+    }
+
+    fn require_object(
+        &self,
+        node: SemanticNodeId,
+    ) -> Result<(), FamilyTransformCorrespondenceError> {
+        self.store
+            .semantic_object_state_checked(node)
+            .map(|_| ())
+            .map_err(|_| FamilyTransformCorrespondenceError::InvalidObject(node))
+    }
+
+    fn family_members(
+        &self,
+        node: SemanticNodeId,
+    ) -> Result<Vec<SemanticNodeId>, FamilyTransformCorrespondenceError> {
+        self.store
+            .semantic_family_members_checked(node)
+            .map(|members| members.to_vec())
+            .map_err(|_| FamilyTransformCorrespondenceError::InvalidFamily(node))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -315,6 +286,7 @@ impl CorrespondenceBuilder<'_> {
                 target: target_parent,
             });
         }
+
         let count = sources.len().max(targets.len());
         let source_occurrences = expand_sequence(sources, count);
         let target_occurrences = expand_sequence(targets, count);
@@ -339,10 +311,14 @@ impl CorrespondenceBuilder<'_> {
         target_padding: bool,
     ) -> Result<(), FamilyTransformCorrespondenceError> {
         if !source_padding && !self.seen_source_leaves.insert(source) {
-            return Err(FamilyTransformCorrespondenceError::AliasedSourceLeaf(source));
+            return Err(FamilyTransformCorrespondenceError::AliasedSourceLeaf(
+                source,
+            ));
         }
         if !target_padding && !self.seen_target_leaves.insert(target) {
-            return Err(FamilyTransformCorrespondenceError::AliasedTargetLeaf(target));
+            return Err(FamilyTransformCorrespondenceError::AliasedTargetLeaf(
+                target,
+            ));
         }
         self.occurrences.push(FamilyTransformOccurrence {
             source,
@@ -360,98 +336,15 @@ fn expand_sequence(nodes: &[SemanticNodeId], target_len: usize) -> Vec<(Semantic
     if nodes.len() == target_len {
         return nodes.iter().copied().map(|node| (node, false)).collect();
     }
+
     let mut seen = vec![false; nodes.len()];
     (0..target_len)
         .map(|position| {
             let index = ((position as u128 * nodes.len() as u128) / target_len as u128) as usize;
-            let padding = seen[index];
-            seen[index] = true;
+            let padding = std::mem::replace(&mut seen[index], true);
             (nodes[index], padding)
         })
         .collect()
-}
-
-/// One execution-only channel for a padded source occurrence.
-#[derive(Clone, Debug, PartialEq)]
-pub struct DerivedFamilyTransformChannel {
-    pub property: Property,
-    pub values: TrackValues,
-}
-
-/// Reuse the canonical Transform payload lowering for an execution-only padded
-/// occurrence. `source_padding` starts from a fully faded effective copy;
-/// `target_padding` ends at a fully faded copy of the target. The returned channels
-/// carry no semantic completion because the owning execution display slot is retired
-/// at the segment boundary.
-#[allow(clippy::too_many_arguments)]
-pub fn lower_derived_family_transform_channels(
-    store: &SemanticStore,
-    animation: SemanticNodeId,
-    source: SemanticNodeId,
-    target: SemanticNodeId,
-    mut from: EffectiveAnimationProperties,
-    interpolation: SemanticTransformInterpolation,
-    source_padding: bool,
-    target_padding: bool,
-) -> Result<Vec<DerivedFamilyTransformChannel>, SemanticAffineAnimationTrackError> {
-    let source_state = store
-        .semantic_object_state_checked(source)
-        .map_err(|error| SemanticAffineAnimationTrackError::Target {
-            animation,
-            node: source,
-            error,
-        })?;
-    let target_state = store
-        .semantic_object_state_checked(target)
-        .map_err(|error| SemanticAffineAnimationTrackError::Target {
-            animation,
-            node: target,
-            error,
-        })?;
-    if source_padding {
-        from.style.opacity = 0.0;
-    }
-    let mut channels = lower_transform_channels(
-        store,
-        source_state,
-        target_state,
-        from,
-        interpolation,
-    )
-    .map_err(|error| affine_payload_error(animation, source, target, error))?;
-
-    if target_padding {
-        if let Some(channel) = channels
-            .iter_mut()
-            .find(|channel| channel.property == Property::Opacity)
-        {
-            let TrackValues::Scalar { from, .. } = channel.values else {
-                unreachable!("opacity channel must contain scalar values")
-            };
-            channel.values = TrackValues::Scalar { from, to: 0.0 };
-        } else if from.style.opacity != 0.0 {
-            channels.push(super::affine::LoweredAffineChannel {
-                property: Property::Opacity,
-                conflict_property: SemanticObjectProperty::ObjectOpacity,
-                completion: super::affine::SemanticAnimationCompletion::Property {
-                    property: SemanticObjectProperty::ObjectOpacity,
-                    value: SemanticSignalValue::Scalar(0.0),
-                },
-                values: TrackValues::Scalar {
-                    from: from.style.opacity,
-                    to: 0.0,
-                },
-            });
-        }
-    }
-
-    Ok(channels
-        .into_iter()
-        .map(|channel| DerivedFamilyTransformChannel {
-            property: channel.property,
-            values: channel.values,
-        })
-        .collect())
 }
 
 #[cfg(test)]
@@ -603,14 +496,26 @@ mod tests {
         let source = family(&mut store, &[s0, s1]);
         let target = family(&mut store, &[t0, t1, t2]);
         let revision = store.scene_revision();
-        let source_before = store.semantic_family_members_checked(source).unwrap().to_vec();
-        let target_before = store.semantic_family_members_checked(target).unwrap().to_vec();
+        let source_before = store
+            .semantic_family_members_checked(source)
+            .unwrap()
+            .to_vec();
+        let target_before = store
+            .semantic_family_members_checked(target)
+            .unwrap()
+            .to_vec();
 
         let _ = derive_family_transform_correspondence(&store, source, target).unwrap();
 
         assert_eq!(store.scene_revision(), revision);
-        assert_eq!(store.semantic_family_members_checked(source).unwrap(), source_before);
-        assert_eq!(store.semantic_family_members_checked(target).unwrap(), target_before);
+        assert_eq!(
+            store.semantic_family_members_checked(source).unwrap(),
+            source_before
+        );
+        assert_eq!(
+            store.semantic_family_members_checked(target).unwrap(),
+            target_before
+        );
     }
 
     #[test]
@@ -619,6 +524,7 @@ mod tests {
         let source_leaf = object(&mut store);
         let source = family(&mut store, &[source_leaf]);
         let target = family(&mut store, &[]);
+
         assert!(matches!(
             derive_family_transform_correspondence(&store, source, target),
             Err(FamilyTransformCorrespondenceError::EmptyAlignment { .. })
