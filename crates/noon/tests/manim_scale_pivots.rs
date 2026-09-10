@@ -52,7 +52,7 @@ fn live_explicit_scale_pivots_publish_once_and_preserve_edge_anchor() {
 
     let before_edge = scene.revision();
     let right_before = {
-        let mut live = scene.live(&mut session);
+        let live = scene.live(&mut session);
         let layout = live.effective_layout(&line).unwrap();
         layout.center.0 + layout.width * 0.5
     };
