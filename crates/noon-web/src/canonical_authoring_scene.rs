@@ -6499,28 +6499,6 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveRotateFamily)]
-        pub fn live_rotate_family(
-            &mut self,
-            handle: &crate::WasmAuthoringFamilyHandle,
-            angle: f64,
-            x: f64,
-            y: f64,
-            about_point: bool,
-        ) -> Result<(), JsValue> {
-            let family = handle.semantic_family()?;
-            let pivot = if about_point {
-                noon::ManimRotationPivot::Point(x, y)
-            } else {
-                noon::ManimRotationPivot::Edge(x, y)
-            };
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_rotate_family(&family, angle, pivot)
-                .map_err(typed_js_error)
-        }
-
         #[wasm_bindgen(js_name = liveArrangeFamily)]
         pub fn live_arrange_family(
             &mut self,
@@ -6586,20 +6564,52 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveRotate)]
-        pub fn live_rotate(
+        #[wasm_bindgen(js_name = liveRotateLayout)]
+        pub fn live_rotate_layout(
             &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
             angle: f64,
+            x: f64,
+            y: f64,
+            about_point: bool,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_rotate(handle.semantic_mobject(), angle)
+                .live_rotate_layout(&source.anchor, angle, pivot)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveFlipLayout)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn live_flip_layout(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            axis_x: f64,
+            axis_y: f64,
+            axis_z: f64,
+            x: f64,
+            y: f64,
+            about_point: bool,
+        ) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_flip_layout(
+                    &source.anchor,
+                    noon::SemanticVec3::new(axis_x, axis_y, axis_z),
+                    pivot,
+                )
                 .map_err(typed_js_error)
         }
 

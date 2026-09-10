@@ -347,6 +347,35 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmLayoutAnchor {
+        pub fn rotate(&self, angle: f64, x: f64, y: f64, about_point: bool) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
+            self.anchor.rotate(angle, pivot).map_err(js_error)
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        pub fn flip(
+            &self,
+            axis_x: f64,
+            axis_y: f64,
+            axis_z: f64,
+            x: f64,
+            y: f64,
+            about_point: bool,
+        ) -> Result<(), JsValue> {
+            let pivot = if about_point {
+                noon::ManimRotationPivot::Point(x, y)
+            } else {
+                noon::ManimRotationPivot::Edge(x, y)
+            };
+            self.anchor
+                .flip(noon::SemanticVec3::new(axis_x, axis_y, axis_z), pivot)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = moveTo)]
         pub fn move_to(
             &self,

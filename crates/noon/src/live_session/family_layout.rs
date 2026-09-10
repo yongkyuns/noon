@@ -131,7 +131,41 @@ impl LiveSession<'_> {
         family: &MobjectFamily,
         operation: crate::family_affine::FamilyAffine,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let (leaves, bounds) = self.family_layout_members(family)?;
+        self.affine_layout(&crate::LayoutAnchor::from(family), operation)
+    }
+
+    /// Rotate a selected object or family using coherent live pivot bounds.
+    pub fn rotate_layout(
+        &mut self,
+        anchor: &crate::LayoutAnchor,
+        angle: f64,
+        pivot: crate::ManimRotationPivot,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.affine_layout(
+            anchor,
+            crate::family_affine::FamilyAffine::Rotate(angle, pivot),
+        )
+    }
+
+    /// Reflect selected leaves atomically through the ordinary semantic publication.
+    pub fn flip_layout(
+        &mut self,
+        anchor: &crate::LayoutAnchor,
+        axis: crate::SemanticVec3,
+        pivot: crate::ManimRotationPivot,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.affine_layout(
+            anchor,
+            crate::family_affine::FamilyAffine::Flip(axis, pivot),
+        )
+    }
+
+    fn affine_layout(
+        &mut self,
+        anchor: &crate::LayoutAnchor,
+        operation: crate::family_affine::FamilyAffine,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        let (leaves, bounds) = self.anchor_layout_members(anchor)?;
         // As with placement, resolve an active affine driver at its logical
         // completion barrier before a persistent edit; never overwrite it midway.
         for &leaf in &leaves {

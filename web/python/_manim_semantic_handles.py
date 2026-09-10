@@ -789,36 +789,40 @@ def _rotate(
             **kwargs,
         )
 
-    handle = _handle_for(self)
-    if handle is None:
-        raise RuntimeError("Mobject edits require a current shared Rust semantic handle")
-    context = _live_mutation_context(self)
-    if context is not None:
-        if kwargs or about_point is not None or about_edge is not None:
-            raise NotImplementedError(
-                "canonical live affine rotation supports only rotation about the current center"
-            )
-        try:
-            engine_call(context.liveRotate, handle, _compat._rotation_angle_2d(angle, axis))
-        except Exception as error:
-            raise_engine_error(error)
-        return self
     if kwargs:
-        unsupported = ", ".join(sorted(kwargs))
-        raise NotImplementedError(f"unsupported Manim rotate option(s): {unsupported}")
-    signed_angle = _compat._rotation_angle_2d(angle, axis)
-    if about_point is not None:
-        pivot = _base._as_vec2(about_point)
-    elif about_edge is None:
-        pivot = _base.Vec2(float(handle.centerX), float(handle.centerY))
+        raise NotImplementedError(f"unsupported Manim rotate option(s): {', '.join(sorted(kwargs))}")
+    return _planar_affine(self, "rotate", (_compat._rotation_angle_2d(angle, axis),), about_point, about_edge)
+
+
+def _planar_affine(self, operation, arguments, about_point, about_edge):
+    anchor = _layout_anchor(self)
+    if anchor is None:
+        raise RuntimeError("affine edits require the shared Rust authoring host")
+    point = _base._as_vec2(about_point if about_point is not None
+                           else (_base.ORIGIN if about_edge is None else about_edge))
+    context = (_group_live_layout_context(self) if isinstance(self, _compat.Group)
+               else _live_mutation_context(self))
+    arguments = (*arguments, point.x, point.y, about_point is not None)
+    if context is None:
+        engine_call(getattr(anchor, operation), *arguments)
     else:
-        edge = _base._as_vec2(about_edge)
-        pivot = _base.Vec2(
-            float(engine_call(handle.criticalX, edge.x, edge.y)),
-            float(engine_call(handle.criticalY, edge.x, edge.y)),
-        )
-    engine_call(handle.rotateAboutPoint, signed_angle, pivot.x, pivot.y)
+        engine_call(getattr(context, f"live{operation.title()}Layout"), anchor, *arguments)
     return self
+
+
+def _flip(self, axis=_base.UP, *, about_point=None, about_edge=None):
+    from _manim_updaters import _canonical_phase_context
+    if not isinstance(self, _compat.Group) and _canonical_phase_context(self) is not None:
+        raise NotImplementedError("flip during a host callback needs shared phase-local affine capture")
+    try:
+        components = tuple(float(component) for component in axis)
+    except (TypeError, ValueError) as error:
+        raise TypeError("flip axis must be a two- or three-component vector") from error
+    if len(components) == 2:
+        components += (0.0,)
+    if len(components) != 3:
+        raise TypeError("flip axis must be a two- or three-component vector")
+    return _planar_affine(self, "flip", components, about_point, about_edge)
 
 
 def _set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobject:
@@ -1465,21 +1469,9 @@ def _group_scale(self: _compat.Group, factor: object) -> _compat.Group:
 
 def _group_rotate(self: _compat.Group, angle: float, axis: object = _compat.OUT,
                   *, about_point=None, about_edge=None, **kwargs) -> _compat.Group:
-    signed_angle = _compat._rotation_angle_2d(angle, axis)
-    point = (_base._as_vec2(about_point) if about_point is not None
-             else _base._as_vec2(_base.ORIGIN if about_edge is None else about_edge))
-    handle = getattr(self, "_semantic_family_handle", None)
-    if handle is None:
-        raise RuntimeError("Group rotation requires the shared Rust authoring host")
-    context = _group_live_layout_context(self)
-    try:
-        if context is not None:
-            engine_call(context.liveRotateFamily, handle, signed_angle, point.x, point.y, about_point is not None)
-        else:
-            engine_call(handle.rotate, signed_angle, point.x, point.y, about_point is not None)
-    except Exception as error:
-        raise_engine_error(error)
-    return self
+    if kwargs:
+        raise NotImplementedError(f"unsupported Manim rotate option(s): {', '.join(sorted(kwargs))}")
+    return _planar_affine(self, "rotate", (_compat._rotation_angle_2d(angle, axis),), about_point, about_edge)
 
 
 def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:

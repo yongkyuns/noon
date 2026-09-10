@@ -764,14 +764,9 @@ impl Mobject {
         self.commit_state(state)
     }
 
+    /// Rotate about the current semantic geometry center, as in ordinary Manim authoring.
     pub fn rotate(&mut self, angle: f64) -> Result<(), AuthoringError> {
-        self.validate()?;
-        let mut state = self.state()?;
-        let angle = authoring_render_f64("rotation", angle)?;
-        let rotation = state.transform.rotation_z + angle;
-        finite_f32("rotation result", rotation)?;
-        state.transform.rotation_z = rotation;
-        self.commit_state(state)
+        self.rotate_with_pivot(angle, crate::ManimRotationPivot::Center)
     }
 
     pub fn rotate_about_point(

@@ -6,7 +6,7 @@ use crate::{
         authoring_render_f64, rotate_affine_about_point, scale_state_about_center,
         stage_state_changes, state_center,
     },
-    ManimRotationPivot, MobjectFamily,
+    LayoutAnchor, ManimRotationPivot, Mobject, MobjectFamily, SemanticVec3,
 };
 use noon_core::{Bounds2D64, SemanticMutationTransaction, SemanticNodeId, SemanticStore};
 
@@ -14,6 +14,7 @@ use noon_core::{Bounds2D64, SemanticMutationTransaction, SemanticNodeId, Semanti
 pub(crate) enum FamilyAffine {
     Scale(f64, f64),
     Rotate(f64, ManimRotationPivot),
+    Flip(SemanticVec3, ManimRotationPivot),
 }
 
 impl FamilyAffine {
@@ -24,14 +25,30 @@ impl FamilyAffine {
         bounds: Option<Bounds2D64>,
     ) -> Result<SemanticMutationTransaction, AuthoringError> {
         let center = bounds_critical_point(bounds, 0.0, 0.0);
+        if let Self::Flip(axis, _) = self {
+            for (name, value) in [
+                ("flip axis.x", axis.x),
+                ("flip axis.y", axis.y),
+                ("flip axis.z", axis.z),
+            ] {
+                authoring_render_f64(name, value)?;
+            }
+            if (axis.x == 0.0 && axis.y == 0.0 && axis.z == 0.0)
+                || (axis.z != 0.0 && (axis.x != 0.0 || axis.y != 0.0))
+            {
+                return Err(AuthoringError::InvalidFlipAxis);
+            }
+        }
         let pivot = match self {
             Self::Scale(x, y) => {
                 authoring_render_f64("family scale.x", x)?;
                 authoring_render_f64("family scale.y", y)?;
                 center
             }
-            Self::Rotate(angle, pivot) => {
-                authoring_render_f64("family rotation", angle)?;
+            Self::Rotate(_, pivot) | Self::Flip(_, pivot) => {
+                if let Self::Rotate(angle, _) = self {
+                    authoring_render_f64("family rotation", angle)?;
+                }
                 match pivot {
                     ManimRotationPivot::Center => center,
                     ManimRotationPivot::Point(x, y) => (
@@ -61,7 +78,30 @@ impl FamilyAffine {
                     );
                     scale_state_about_center(store, &mut next, x, y, target_center)?;
                 }
-                Self::Rotate(angle, _) => {
+                Self::Flip(axis, _) if axis.z == 0.0 => {
+                    let norm = axis.x.hypot(axis.y);
+                    let (x, y) = (axis.x / norm, axis.y / norm);
+                    let (c, s) = (x * x - y * y, 2.0 * x * y);
+                    let (dx, dy) = (
+                        previous.transform.translation.x - pivot.0,
+                        previous.transform.translation.y - pivot.1,
+                    );
+                    next.transform.translation.x = pivot.0 + c * dx + s * dy;
+                    next.transform.translation.y = pivot.1 + s * dx - c * dy;
+                    // F(axis) R(theta) D(sx, sy) = R(2*axis-theta) D(sx, -sy).
+                    next.transform.rotation_z = 2.0 * y.atan2(x) - previous.transform.rotation_z;
+                    next.transform.scale.y = -previous.transform.scale.y;
+                    next.transform
+                        .translation
+                        .lower_xy_f32()
+                        .map_err(AuthoringError::from)?;
+                    authoring_render_f64("flip rotation result", next.transform.rotation_z)?;
+                }
+                Self::Rotate(_, _) | Self::Flip(_, _) => {
+                    let angle = match self {
+                        Self::Rotate(angle, _) => angle,
+                        _ => std::f64::consts::PI,
+                    };
                     let (translation, rotation) = rotate_affine_about_point(
                         (
                             previous.transform.translation.x,
@@ -93,18 +133,66 @@ impl MobjectFamily {
         self.apply_affine(FamilyAffine::Rotate(angle, pivot))
     }
 
+    /// Reflect about a world-space axis through the chosen family pivot.
+    /// Supports axes in the XY plane and a half-turn about the Z axis.
+    pub fn flip(
+        &self,
+        axis: SemanticVec3,
+        pivot: ManimRotationPivot,
+    ) -> Result<(), AuthoringError> {
+        LayoutAnchor::from(self).flip(axis, pivot)
+    }
+
+    fn apply_affine(&self, operation: FamilyAffine) -> Result<(), AuthoringError> {
+        LayoutAnchor::from(self).apply_affine(operation)
+    }
+}
+
+impl LayoutAnchor {
+    /// Rotate all selected leaves around one shared center, edge or explicit point.
+    pub fn rotate(&self, angle: f64, pivot: ManimRotationPivot) -> Result<(), AuthoringError> {
+        self.apply_affine(FamilyAffine::Rotate(angle, pivot))
+    }
+
+    /// Reflect the selected leaf/family in the XY plane, retaining geometry resources.
+    pub fn flip(
+        &self,
+        axis: SemanticVec3,
+        pivot: ManimRotationPivot,
+    ) -> Result<(), AuthoringError> {
+        self.apply_affine(FamilyAffine::Flip(axis, pivot))
+    }
+
     fn apply_affine(&self, operation: FamilyAffine) -> Result<(), AuthoringError> {
         let layout = self.layout()?;
-        let transaction = {
-            let store = self.integration_store().borrow();
-            let leaves = store
-                .ordered_leaf_nodes(self.node_id())
-                .map_err(AuthoringError::from)?;
-            operation.transaction(&store, &leaves, layout.bounds())?
-        };
+        let transaction = operation.transaction(
+            &self.integration_store().borrow(),
+            layout.leaves(),
+            layout.bounds(),
+        )?;
         transaction
             .apply(&mut self.integration_store().borrow_mut())
             .map(|_| ())
             .map_err(AuthoringError::from)
+    }
+}
+
+impl Mobject {
+    /// Apply a Manim-compatible rotation pivot using shared semantic bounds.
+    pub fn rotate_with_pivot(
+        &self,
+        angle: f64,
+        pivot: ManimRotationPivot,
+    ) -> Result<(), AuthoringError> {
+        LayoutAnchor::from(self).rotate(angle, pivot)
+    }
+
+    /// Reflect around a shared center/edge/point without copying path data.
+    pub fn flip(
+        &self,
+        axis: SemanticVec3,
+        pivot: ManimRotationPivot,
+    ) -> Result<(), AuthoringError> {
+        LayoutAnchor::from(self).flip(axis, pivot)
     }
 }

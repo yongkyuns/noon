@@ -904,17 +904,6 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_rotate_family(
-        &mut self,
-        family: &noon::MobjectFamily,
-        angle: f64,
-        pivot: noon::ManimRotationPivot,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|session| session.rotate_family(family, angle, pivot))
-            .map(|_| ())
-    }
-
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_arrange_family(
         &mut self,
@@ -1054,24 +1043,25 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_rotate(
+    pub(crate) fn live_rotate_layout(
         &mut self,
-        mobject: &noon::Mobject,
+        anchor: &noon::LayoutAnchor,
         angle: f64,
+        pivot: noon::ManimRotationPivot,
     ) -> Result<(), AuthoringFailure> {
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .expect("live semantic store has one scene root"),
-            &mut self.session,
-        )
-        .rotate(mobject, angle)
-        .map(|_| ())
-        .map_err(AuthoringFailure::from)
+        self.with_live_session(|live| live.rotate_layout(anchor, angle, pivot))
+            .map(|_| ())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_flip_layout(
+        &mut self,
+        anchor: &noon::LayoutAnchor,
+        axis: noon::SemanticVec3,
+        pivot: noon::ManimRotationPivot,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.flip_layout(anchor, axis, pivot))
+            .map(|_| ())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
