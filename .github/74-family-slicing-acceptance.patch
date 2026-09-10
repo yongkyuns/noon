@@ -16,7 +16,6 @@ new file mode 100644
 +        self.add(*family)
 +        family[1:].shift(UP * 0.75)
 +        self.wait(1.0)
-
 diff --git a/web/python/examples/manim_compatible_group_slicing.py b/web/python/examples/manim_compatible_group_slicing.py
 new file mode 100644
 --- /dev/null
@@ -35,7 +34,6 @@ new file mode 100644
 +        self.add(*family)
 +        family[1:].shift(UP * 0.75)
 +        self.wait(1.0)
-
 diff --git a/web/thumbnails/manim/compatible-group-slicing.svg b/web/thumbnails/manim/compatible-group-slicing.svg
 new file mode 100644
 --- /dev/null
@@ -50,7 +48,6 @@ new file mode 100644
 +  <rect x="430" y="105" width="110" height="70" rx="5" fill="#83c167"/>
 +  <path d="M228 228 C258 228 272 198 292 174" fill="none" stroke="#f7d96f" stroke-width="5" stroke-dasharray="10 10" opacity="0.75"/>
 +</svg>
-
 diff --git a/parity/manim-v0.21/manifest.json b/parity/manim-v0.21/manifest.json
 --- a/parity/manim-v0.21/manifest.json
 +++ b/parity/manim-v0.21/manifest.json
@@ -67,7 +64,6 @@ diff --git a/parity/manim-v0.21/manifest.json b/parity/manim-v0.21/manifest.json
      {
        "id": "mixed-object-parity-stress",
        "scene": "MixedObjectParityStress",
-
 diff --git a/web/python/examples/manim_compatibility_manifest.json b/web/python/examples/manim_compatibility_manifest.json
 --- a/web/python/examples/manim_compatibility_manifest.json
 +++ b/web/python/examples/manim_compatibility_manifest.json
@@ -93,7 +89,6 @@ diff --git a/web/python/examples/manim_compatibility_manifest.json b/web/python/
      }
    ]
  }
-
 diff --git a/web/manim-compatibility-gallery.test.mjs b/web/manim-compatibility-gallery.test.mjs
 --- a/web/manim-compatibility-gallery.test.mjs
 +++ b/web/manim-compatibility-gallery.test.mjs
