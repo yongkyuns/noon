@@ -11,12 +11,19 @@ const PLAYWRIGHT_VERSION = "1.62.1";
 const SECCOMP_URL = `https://raw.githubusercontent.com/microsoft/playwright/v${PLAYWRIGHT_VERSION}/utils/docker/seccomp_profile.json`;
 const SECCOMP_GIT_BLOB = "fddc05fb520affb145404e6f6f647ca96af8087d";
 const SECCOMP_FETCH_ATTEMPTS = 4;
+const IMAGE_BUILD_ATTEMPTS = 3;
 const IMAGE_TAG = "noon-preview-runtime:1.62.1";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(scriptDir, "..");
 const cacheDir = process.env.NOON_PREVIEW_CACHE || path.join(homedir(), ".cache", "noon-preview");
 const runtimePath = path.join(cacheDir, "runtime.json");
 const seccompPath = path.join(cacheDir, "playwright-seccomp-v1.62.1-noon.json");
+
+function processErrorOutput(stderr) {
+  const trimmed = stderr.trim();
+  if (trimmed.length <= 4000) return trimmed;
+  return `...${trimmed.slice(-4000)}`;
+}
 
 function run(executable, args, { cwd } = {}) {
   return new Promise((resolve, reject) => {
@@ -26,10 +33,13 @@ function run(executable, args, { cwd } = {}) {
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => { if (stdout.length < 65536) stdout += chunk; });
-    child.stderr.on("data", (chunk) => { if (stderr.length < 65536) stderr += chunk; });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+      if (stderr.length > 65536) stderr = stderr.slice(-65536);
+    });
     child.once("error", reject);
     child.once("close", (code) => {
-      if (code !== 0) reject(new Error(`${executable} failed (${code}): ${stderr.trim().slice(0, 1200)}`));
+      if (code !== 0) reject(new Error(`${executable} failed (${code}): ${processErrorOutput(stderr)}`));
       else resolve(stdout.trim());
     });
   });
@@ -85,13 +95,30 @@ async function installSeccompProfile() {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+async function buildPreviewImage() {
+  let lastError = null;
+  for (let attempt = 1; attempt <= IMAGE_BUILD_ATTEMPTS; attempt += 1) {
+    try {
+      await run("docker", ["build", "--pull", "--tag", IMAGE_TAG, "--file", "preview.Dockerfile", "."], { cwd: packageRoot });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < IMAGE_BUILD_ATTEMPTS) await delay(1000 * (2 ** (attempt - 1)));
+    }
+  }
+  throw new Error(
+    `failed to build pinned preview image after ${IMAGE_BUILD_ATTEMPTS} attempts: ${String(lastError?.message ?? lastError)}`,
+    { cause: lastError },
+  );
+}
+
 await mkdir(cacheDir, { recursive: true, mode: 0o700 });
 await chmod(cacheDir, 0o700);
 await run("docker", ["version", "--format", "{{.Server.Version}}"]).catch((error) => {
   throw new Error(`Docker with a reachable local daemon is required: ${error.message}`);
 });
 const seccompProfileSha256 = await installSeccompProfile();
-await run("docker", ["build", "--pull", "--tag", IMAGE_TAG, "--file", "preview.Dockerfile", "."], { cwd: packageRoot });
+await buildPreviewImage();
 const imageId = await run("docker", ["image", "inspect", "--format", "{{.Id}}", IMAGE_TAG]);
 if (!/^sha256:[0-9a-f]{64}$/.test(imageId)) throw new Error("Docker did not return a content-addressed preview image ID");
 
