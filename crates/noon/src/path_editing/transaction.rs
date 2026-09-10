@@ -96,7 +96,7 @@ mod tests {
             .unwrap();
         let before = object.state().unwrap();
         let mut captured = before.clone();
-        captured.style.opacity = 0.25;
+        captured.style.object_opacity = 0.25;
         let store = scene.integration_store();
         let path = crate::path_editing::world_path(&store.borrow(), &before).unwrap();
         let count = store.borrow().geometry_resources().len();
@@ -113,7 +113,7 @@ mod tests {
             .unwrap();
         let after = object.state().unwrap();
         assert_eq!(after.content, before.content);
-        assert_eq!(after.style.opacity, 0.25);
+        assert_eq!(after.style.object_opacity, 0.25);
         assert_eq!(after.z_index(), 2.0);
         assert_eq!(store.borrow().geometry_resources().len(), count);
     }
