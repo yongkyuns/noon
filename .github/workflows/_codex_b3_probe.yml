@@ -1,0 +1,23 @@
+name: codex b3 unequal family transform probe
+
+on:
+  push:
+    branches: [codex/b3-unequal-family-transform]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Compiler correspondence tests
+        run: cargo test -p noon-compile family_transform --lib
+      - name: Formatting check
+        run: cargo fmt --all -- --check
