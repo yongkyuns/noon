@@ -834,16 +834,17 @@ def _canonical_curve_layout(api):
 
 
 def _path_construction(api):
+    point = lambda x, y: api.RIGHT * x + api.UP * y
     path = api.VMobject()
-    path.start_new_path((-2, 0, 0))
+    path.start_new_path(point(-2, 0))
     observations = [[list(path.get_start())[:2], list(path.get_end())[:2], path.get_arc_length()]]
-    path.start_new_path((0, 0, 0)).add_line_to((2, 0, 0))
-    path.start_new_path((5, 1, 0))
+    path.start_new_path(point(0, 0)).add_line_to(point(2, 0))
+    path.start_new_path(point(5, 1))
     observations.append([list(path.get_start())[:2], list(path.get_end())[:2], path.get_arc_length(), list(path.point_from_proportion(1))[:2]])
-    path.add_quadratic_bezier_curve_to((6, 2, 0), (7, 1, 0))
-    path.add_cubic_bezier_curve_to((8, 1, 0), (8, 0, 0), (7, 0, 0)).close_path()
+    path.add_quadratic_bezier_curve_to(point(6, 2), point(7, 1))
+    path.add_cubic_bezier_curve_to(point(8, 1), point(8, 0), point(7, 0)).close_path()
     observations.append([_object_observation(path), path.get_arc_length(), list(path.get_end())[:2]])
-    path.add_line_to((8, 1, 0))
+    path.add_line_to(point(8, 1))
     observations.append([_object_observation(path), path.get_arc_length(), list(path.get_end())[:2]])
     return observations
 
