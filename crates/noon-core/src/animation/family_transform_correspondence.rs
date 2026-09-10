@@ -115,7 +115,8 @@ fn expanded_indices(original_count: usize, aligned_count: usize) -> Vec<(u32, bo
     let mut seen = vec![false; original_count];
     (0..aligned_count)
         .map(|aligned_index| {
-            let original_index = aligned_index * original_count / aligned_count;
+            let original_index = ((aligned_index as u64) * (original_count as u64)
+                / (aligned_count as u64)) as usize;
             let is_derived_copy = std::mem::replace(&mut seen[original_index], true);
             (
                 u32::try_from(original_index).expect("preflighted family index fits u32"),
