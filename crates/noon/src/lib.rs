@@ -91,6 +91,7 @@ mod semantic_mobject;
 mod state_replacement;
 #[cfg(any(feature = "native-text", feature = "typst"))]
 mod text_authoring;
+mod z_index;
 
 pub use animation_authoring::DeclaredAnimation;
 pub use arc_authoring::ArcAuthoringError;

@@ -230,12 +230,12 @@ impl SemanticObjectState {
         self.presentation
     }
 
-    pub const fn z_index(&self) -> i32 {
+    pub const fn z_index(&self) -> f64 {
         self.presentation.z_index
     }
 
-    pub fn set_z_index(&mut self, z_index: i32) {
-        self.presentation.z_index = z_index;
+    pub fn set_z_index(&mut self, z_index: impl Into<f64>) {
+        self.presentation.z_index = z_index.into();
     }
 
     pub const fn insertion_order(&self) -> u64 {
@@ -326,7 +326,7 @@ mod tests {
         assert_eq!(state.transform.translation.z, 4.5);
         assert_eq!(state.transform.scale.z, 2.0);
         assert_eq!(state.style.object_opacity, 0.4);
-        assert_eq!(state.z_index(), 7);
+        assert_eq!(state.z_index(), 7.0);
         assert_eq!(state.insertion_order(), 0);
         assert_eq!(state.role(), SemanticObjectRole::Ordinary);
         assert!(state.signal_bindings().is_empty());

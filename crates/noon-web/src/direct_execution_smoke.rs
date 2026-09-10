@@ -794,3 +794,11 @@ pub async fn create_direct_path_queries_smoke_renderer(
     let session = noon::example_scenes::path_queries::session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
+
+#[wasm_bindgen(js_name = createDirectZIndexSmokeRenderer)]
+pub async fn create_direct_z_index_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::z_index::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}

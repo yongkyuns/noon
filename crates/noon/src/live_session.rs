@@ -8,6 +8,7 @@
 
 mod family_layout;
 mod path_queries;
+mod z_index;
 pub use family_layout::LiveLayoutTarget;
 
 use crate::execution_session::EffectiveSemanticObject;

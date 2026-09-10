@@ -310,6 +310,7 @@ fn validate_mutations(
             SemanticMutation::SetProperty { .. }
                 | SemanticMutation::ReplaceContent { .. }
                 | SemanticMutation::ReplaceStyle { .. }
+                | SemanticMutation::SetZIndex { .. }
                 | SemanticMutation::AddMember { .. }
                 | SemanticMutation::RemoveMember { .. }
                 | SemanticMutation::ReorderMember { .. }
@@ -410,7 +411,7 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
                     );
                     if !matches!(
                         kind.kind(),
-                        SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family
+                        SemanticNodeKind::AuthoringObject | SemanticNodeKind::Family(_)
                     ) {
                         return Err(SemanticPublicationLoweringError::UnsupportedNodeRemoval {
                             node,
@@ -523,7 +524,7 @@ fn collect_existing_exit_leaves(
                 leaves.push(node);
             }
         }
-        SemanticNodeKind::Family => {
+        SemanticNodeKind::Family(_) => {
             for member in semantic.members() {
                 collect_existing_exit_leaves(store, member, reachability, seen, leaves)?;
             }
@@ -574,6 +575,7 @@ fn lower_prepared_entry(
         .map_err(|error| SemanticPublicationLoweringError::PreparedValue { object, error })?;
     let mut compiled = CompiledObject::new(ObjectId::new(0), content, transform, style);
     compiled.text_bounds = text_bounds;
+    compiled.base_z_index = state.z_index();
     Ok(PreparedEntry { object, compiled })
 }
 
@@ -585,7 +587,7 @@ fn lower_semantic_publication(
     handled_scalar_signals: Option<&HashSet<SemanticNodeId>>,
 ) -> Result<(ExecutionMutationTransaction, CompiledResources), SemanticPublicationLoweringError> {
     validate_mutations(prepared.mutations(), handled_scalar_signals)?;
-    let mut domains: HashMap<SemanticNodeId, (bool, bool, bool)> = HashMap::new();
+    let mut domains: HashMap<SemanticNodeId, (bool, bool, bool, bool)> = HashMap::new();
     for mutation in prepared.candidate_mutations() {
         match mutation {
             SemanticMutation::SetProperty {
@@ -605,6 +607,11 @@ fn lower_semantic_publication(
             SemanticMutation::ReplaceContent { object, .. } => {
                 if let Some(object) = object.existing() {
                     domains.entry(object).or_default().2 = true;
+                }
+            }
+            SemanticMutation::SetZIndex { node, .. } => {
+                if let Some(object) = node.existing() {
+                    domains.entry(object).or_default().3 = true;
                 }
             }
             SemanticMutation::ReplaceStyle { object, .. } => {
@@ -633,7 +640,13 @@ fn lower_semantic_publication(
         let Some(object) = index.execution_object_id(node) else {
             continue;
         };
-        let (transform, style, content) = domains[&node];
+        let (transform, style, content, z_index) = domains[&node];
+        if z_index {
+            mutations.push(ExecutionPatch::SetZIndex {
+                object,
+                value: state.z_index(),
+            });
+        }
         if content {
             let (content, text_bounds) = lower_content(
                 node,

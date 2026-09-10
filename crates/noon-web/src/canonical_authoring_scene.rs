@@ -6650,6 +6650,20 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveSetZIndex)]
+        pub fn live_set_z_index(
+            &mut self,
+            source: &crate::authoring_mobject::WasmLayoutAnchor,
+            value: f64,
+            family: bool,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_z_index(&source.anchor, value, family)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveFlipLayout)]
         #[allow(clippy::too_many_arguments)]
         pub fn live_flip_layout(

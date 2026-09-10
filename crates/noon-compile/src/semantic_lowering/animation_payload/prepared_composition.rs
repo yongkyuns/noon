@@ -273,7 +273,7 @@ where
         if prepared
             .store()
             .node(member)
-            .is_some_and(|node| matches!(node.kind(), noon_core::SemanticNodeKind::Family))
+            .is_some_and(|node| matches!(node.kind(), noon_core::SemanticNodeKind::Family(_)))
         {
             admitted.extend(
                 prepared

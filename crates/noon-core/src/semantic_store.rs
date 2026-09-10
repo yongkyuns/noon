@@ -331,7 +331,7 @@ pub enum SemanticNodeKind {
     /// frontend identity seam and are owned for migration by #61/#959.
     AuthoringObject,
     /// A semantic family/collection with no implied transform ownership.
-    Family,
+    Family(SemanticPresentation),
     /// Authored native-reactive signal using the same scene-global generational
     /// identity allocator as objects and families.
     Signal(SemanticSignalState),
@@ -395,6 +395,28 @@ impl SemanticNode {
 
     pub fn semantic_object_state_mut(&mut self) -> Option<&mut SemanticObjectState> {
         self.object_state.as_mut()
+    }
+
+    /// Authored painter metadata on an object or a non-rendered family root.
+    pub fn presentation(&self) -> Option<SemanticPresentation> {
+        match &self.kind {
+            SemanticNodeKind::Family(presentation) => Some(*presentation),
+            _ => self
+                .object_state
+                .as_ref()
+                .map(SemanticObjectState::presentation),
+        }
+    }
+
+    pub(crate) fn set_z_index(&mut self, value: f64) {
+        match &mut self.kind {
+            SemanticNodeKind::Family(presentation) => presentation.z_index = value,
+            _ => self
+                .object_state
+                .as_mut()
+                .expect("validated authoring node")
+                .set_z_index(value),
+        }
     }
 
     pub fn source_identity(&self) -> Option<&SourceIdentity> {
@@ -653,7 +675,7 @@ impl SemanticStore {
     }
 
     pub fn insert_family(&mut self) -> SemanticNodeId {
-        self.insert_kind(SemanticNodeKind::Family)
+        self.insert_kind(SemanticNodeKind::Family(SemanticPresentation::default()))
     }
 
     pub(crate) fn insert_semantic_signal_state(
@@ -758,7 +780,7 @@ impl SemanticStore {
         let node = self
             .node(scope)
             .ok_or(SemanticStoreError::UnknownNode(scope))?;
-        if !matches!(node.kind(), SemanticNodeKind::Family) {
+        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
             return Err(SemanticStoreError::NotFamily(scope));
         }
         Ok(node.scoped_signals())
@@ -771,7 +793,7 @@ impl SemanticStore {
     ) -> Result<bool, SemanticStoreError> {
         if !matches!(
             self.node(scope).map(SemanticNode::kind),
-            Some(SemanticNodeKind::Family)
+            Some(SemanticNodeKind::Family(_))
         ) {
             return Err(match self.node(scope) {
                 None => SemanticStoreError::UnknownNode(scope),
@@ -1088,7 +1110,7 @@ impl SemanticStore {
         let family = self
             .node(family_id)
             .ok_or(SemanticStoreError::UnknownNode(family_id))?;
-        if !matches!(family.kind(), SemanticNodeKind::Family) {
+        if !matches!(family.kind(), SemanticNodeKind::Family(_)) {
             return Err(SemanticStoreError::NotFamily(family_id));
         }
         if self.node(member).is_none() {
@@ -1108,7 +1130,7 @@ impl SemanticStore {
     ) -> Result<(), SemanticStoreError> {
         if !matches!(
             self.node(family).map(SemanticNode::kind),
-            Some(SemanticNodeKind::Family)
+            Some(SemanticNodeKind::Family(_))
         ) {
             return Err(SemanticStoreError::NotFamily(family));
         }
@@ -1162,7 +1184,7 @@ impl SemanticStore {
     ) -> Result<bool, SemanticStoreError> {
         if !matches!(
             self.node(family).map(SemanticNode::kind),
-            Some(SemanticNodeKind::Family)
+            Some(SemanticNodeKind::Family(_))
         ) {
             return Err(SemanticStoreError::NotFamily(family));
         }
@@ -1205,7 +1227,7 @@ impl SemanticStore {
     ) -> Result<bool, SemanticStoreError> {
         if !matches!(
             self.node(family).map(SemanticNode::kind),
-            Some(SemanticNodeKind::Family)
+            Some(SemanticNodeKind::Family(_))
         ) {
             return Err(SemanticStoreError::NotFamily(family));
         }

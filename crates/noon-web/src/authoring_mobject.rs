@@ -363,6 +363,16 @@ mod wasm {
             self.anchor.scale(scale_x, scale_y, pivot).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = zIndex)]
+        pub fn z_index(&self) -> Result<f64, JsValue> {
+            self.anchor.z_index().map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setZIndex)]
+        pub fn set_z_index(&self, value: f64, family: bool) -> Result<(), JsValue> {
+            self.anchor.set_z_index(value, family).map_err(js_error)
+        }
+
         pub fn rotate(&self, angle: f64, x: f64, y: f64, about_point: bool) -> Result<(), JsValue> {
             let pivot = if about_point {
                 noon::ManimRotationPivot::Point(x, y)

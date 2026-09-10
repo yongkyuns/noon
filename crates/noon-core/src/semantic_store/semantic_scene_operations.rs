@@ -119,7 +119,7 @@ impl SemanticStore {
         let node = self
             .node(id)
             .ok_or(SemanticSceneOperationError::UnknownNode(id))?;
-        if !matches!(node.kind(), SemanticNodeKind::Family) {
+        if !matches!(node.kind(), SemanticNodeKind::Family(_)) {
             return Err(SemanticSceneOperationError::NotSemanticFamily(id));
         }
         Ok(node)
@@ -133,7 +133,7 @@ impl SemanticStore {
             .node(id)
             .ok_or(SemanticSceneOperationError::UnknownNode(id))?;
         let is_target = match node.kind() {
-            SemanticNodeKind::Family => true,
+            SemanticNodeKind::Family(_) => true,
             SemanticNodeKind::AuthoringObject => node.semantic_object_state().is_some(),
             SemanticNodeKind::Signal(_) | SemanticNodeKind::Animation(_) => false,
         };

@@ -431,6 +431,7 @@ impl SceneInstance {
             ExecutionPatch::CreateObject(_)
                 | ExecutionPatch::RemoveObject(_)
                 | ExecutionPatch::ReorderObject { .. }
+                | ExecutionPatch::SetZIndex { .. }
         ) {
             self.apply_structural_patch(patch)?;
             return Ok(&self.frame);
@@ -442,9 +443,9 @@ impl SceneInstance {
     fn apply_structural_patch(&mut self, patch: &ExecutionPatch) -> Result<(), CompilePatchError> {
         let previous_order_len = self.compiled.painter_order().len();
         let previous_order_position = match patch {
-            ExecutionPatch::RemoveObject(object) | ExecutionPatch::ReorderObject { object, .. } => {
-                self.compiled.painter_position(*object)
-            }
+            ExecutionPatch::RemoveObject(object)
+            | ExecutionPatch::ReorderObject { object, .. }
+            | ExecutionPatch::SetZIndex { object, .. } => self.compiled.painter_position(*object),
             ExecutionPatch::CreateObject(_) => None,
             _ => unreachable!("structural patch helper accepts only create/remove/reorder"),
         };
@@ -457,7 +458,7 @@ impl SceneInstance {
                 Some((object_index, self.compiled.object_channels(*object)))
             }
             ExecutionPatch::CreateObject(_) => None,
-            ExecutionPatch::ReorderObject { .. } => None,
+            ExecutionPatch::ReorderObject { .. } | ExecutionPatch::SetZIndex { .. } => None,
             _ => unreachable!("structural patch helper accepts only create/remove"),
         };
 
@@ -506,13 +507,14 @@ impl SceneInstance {
                 self.clear_family_animation_runtime_state(object_index);
                 self.mark_removed(object_index);
             }
-            ExecutionPatch::ReorderObject { .. } => {}
+            ExecutionPatch::ReorderObject { .. } | ExecutionPatch::SetZIndex { .. } => {}
             _ => unreachable!("structural patch helper accepts only create/remove"),
         }
 
         let next_position = match patch {
             ExecutionPatch::CreateObject(object) => self.compiled.painter_position(object.id),
-            ExecutionPatch::ReorderObject { object, .. } => self.compiled.painter_position(*object),
+            ExecutionPatch::ReorderObject { object, .. }
+            | ExecutionPatch::SetZIndex { object, .. } => self.compiled.painter_position(*object),
             ExecutionPatch::RemoveObject(_) => None,
             _ => unreachable!("structural patch helper accepts only create/remove/reorder"),
         };

@@ -37,7 +37,7 @@ fn add_node_allocates_detached_object_and_family_and_reports_real_identities() {
     assert!(store.semantic_object_state_checked(*object).is_ok());
     assert!(matches!(
         store.node(*family).unwrap().kind(),
-        SemanticNodeKind::Family
+        SemanticNodeKind::Family(_)
     ));
     assert_eq!(
         store.node(*object).unwrap().residency(),
