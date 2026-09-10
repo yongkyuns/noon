@@ -43,8 +43,7 @@ def _set_coord(
     coordinate = _shared._ir._finite_number("value", value)
     mask = _coordinate_mask(dim)
     point = _base.Vec2(coordinate if dim == 0 else 0.0, coordinate if dim == 1 else 0.0)
-    return _shared._move_to(
-        self,
+    return self.move_to(
         point,
         aligned_edge=direction,
         coor_mask=mask,
@@ -79,8 +78,7 @@ def _match_coord(
 ) -> _base.Mobject:
     """Match a directional coordinate through shared critical-point placement."""
 
-    return _shared._move_to(
-        self,
+    return self.move_to(
         mobject,
         aligned_edge=direction,
         coor_mask=_coordinate_mask(dim),

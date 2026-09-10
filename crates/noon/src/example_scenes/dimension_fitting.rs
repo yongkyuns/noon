@@ -42,7 +42,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         let mut live = scene.live(&mut session);
         live.match_dim_size(&source, &target, Width, true)
             .map_err(|e| e.to_string())?;
-        live.rescale_to_fit(&group, 2.0, Height, true)
+        live.rescale_to_fit(&group, 2.0, Height, false)
             .map_err(|e| e.to_string())?;
         assert!(
             (live.effective_layout(&a).map_err(|e| e.to_string())?.width
