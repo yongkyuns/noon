@@ -108,9 +108,14 @@ class ArcBetweenPoints(Arc):
             radius_value,
             operation="ArcBetweenPoints.metadata",
         )
+        try:
+            resolved_radius = float(metadata.radius)
+            resolved_angle = float(metadata.angle)
+        finally:
+            metadata.free()
         _finish_candidate(self, candidate, "ArcBetweenPoints", options)
-        self.radius = float(metadata.radius)
+        self.radius = resolved_radius
         self.start_angle = 0.0
-        self.angle = float(metadata.angle)
+        self.angle = resolved_angle
         self.num_components = component_count
         self.arc_center = _base.ORIGIN

@@ -172,3 +172,9 @@ fn arc_inputs_reject_before_semantic_resource_creation() {
     assert!(Options::arc_between_points(0.0, 0.0, f64::NAN, 1.0, 1.0, None, 9).is_err());
     assert!(Options::arc_between_points(0.0, 0.0, 1.0, 1.0, 1.0, Some(f64::NAN), 9).is_err());
 }
+
+#[test]
+fn paired_arc_example_uses_the_shared_execution_session() {
+    let session = noon::example_scenes::arc_geometry::session().unwrap();
+    assert_eq!(session.frame().objects.len(), 3);
+}

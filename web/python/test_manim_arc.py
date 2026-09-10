@@ -23,6 +23,7 @@ class ManimArcFacadeTests(unittest.TestCase):
             fake_js = types.ModuleType("js")
             calls = []
             metadata_calls = []
+            released_metadata = []
 
             class FakeHandle:
                 def __init__(self, snapshot):
@@ -73,7 +74,8 @@ class ManimArcFacadeTests(unittest.TestCase):
                 else:
                     resolved_radius = abs(float(radius))
                     resolved_angle = -0.8 if float(radius) < 0 else 0.8
-                return types.SimpleNamespace(radius=resolved_radius, angle=resolved_angle)
+                return types.SimpleNamespace(radius=resolved_radius, angle=resolved_angle,
+                    free=lambda: released_metadata.append(True))
 
             support.install_option_factory(fake_js, "arc", arc)
             support.install_option_factory(fake_js, "arcBetweenPoints", arc_between_points)
@@ -126,6 +128,7 @@ class ManimArcFacadeTests(unittest.TestCase):
             assert "Arc" in noon.__all__ and "ArcBetweenPoints" in noon.__all__
 
             before = list(calls)
+            assert len(released_metadata) == len(metadata_calls)
             before_metadata = list(metadata_calls)
             for thunk in (
                 lambda: Arc(num_components=1),

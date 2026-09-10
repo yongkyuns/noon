@@ -38,6 +38,7 @@ const examples = [
   { name: "Family affine", factory: "createDirectFamilyAffineSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Family paint", factory: "createDirectFamilyPaintSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Planar affine", factory: "createDirectPlanarAffineSmokeRenderer", objectCount: 4, duration: 0.2 },
+  { name: "Arc geometry", factory: "createDirectArcGeometrySmokeRenderer", objectCount: 3, duration: 0.2 },
   { name: "Z-index", factory: "createDirectZIndexSmokeRenderer", objectCount: 3, duration: 0.2 },
   { name: "Scale pivots", factory: "createDirectScalePivotsSmokeRenderer", objectCount: 4, duration: 0.2 },
   { name: "Family grid", factory: "createDirectFamilyGridSmokeRenderer", objectCount: 4, duration: 0.2 },
