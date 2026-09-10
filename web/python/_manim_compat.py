@@ -81,6 +81,34 @@ class VMobject(Mobject):
         from _manim_path_editing import edit_points
         return edit_points(self, "addCubicBezierCurveTo", "liveAddCubicBezierCurveTo", (control1, control2, anchor))
 
+    def insert_n_curves(self, n):
+        from _manim_path_editing import insert_n_curves
+        return insert_n_curves(self, n)
+
+    def get_num_curves(self):
+        from _manim_path_queries import curve_count
+        return curve_count(self)
+
+    def get_nth_curve_points(self, n):
+        from _manim_path_queries import curve_points
+        return curve_points(self, n)
+
+    def get_start_anchors(self):
+        from _manim_path_queries import path_points
+        return path_points(self, "startAnchors")
+
+    def get_end_anchors(self):
+        from _manim_path_queries import path_points
+        return path_points(self, "endAnchors")
+
+    def get_anchors(self):
+        from _manim_path_queries import path_points
+        return path_points(self, "anchors")
+
+    def get_anchors_and_handles(self):
+        from _manim_path_queries import anchors_and_handles
+        return anchors_and_handles(self)
+
     def reverse_direction(self):
         from _manim_path_editing import edit_points
         return edit_points(self, "reverseDirection", "liveReverseDirection", ())

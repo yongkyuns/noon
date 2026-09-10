@@ -41,3 +41,43 @@ def endpoint(value, end):
         return _base.Vec2(float(coordinates[0]), float(coordinates[1]))
     finally:
         query.free()
+
+
+def _points(coordinates):
+    return [_base.Vec2(float(coordinates[i]), float(coordinates[i + 1])) for i in range(0, len(coordinates), 2)]
+
+
+def curve_count(value):
+    query = _query(value)
+    try:
+        return int(query.curveCount)
+    finally:
+        query.free()
+
+
+def curve_points(value, n):
+    index = operator.index(n)
+    if not 0 <= index <= 0xFFFFFFFF:
+        raise IndexError("curve index must be between 0 and 4294967295")
+    query = _query(value)
+    try:
+        return _points(engine_call(query.curvePoints, index))
+    finally:
+        query.free()
+
+
+def path_points(value, method):
+    query = _query(value)
+    try:
+        return _points(engine_call(getattr(query, method)))
+    finally:
+        query.free()
+
+
+def anchors_and_handles(value):
+    query = _query(value)
+    try:
+        return [_points(engine_call(getattr(query, method))) for method in
+                ("startAnchors", "firstHandles", "secondHandles", "endAnchors")]
+    finally:
+        query.free()

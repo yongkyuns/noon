@@ -487,6 +487,15 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_insert_n_curves(
+        &mut self,
+        object: &noon::Mobject,
+        additional: usize,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.insert_n_curves(object, additional))
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_reverse_direction(
         &mut self,
         object: &noon::Mobject,

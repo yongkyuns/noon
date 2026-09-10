@@ -833,6 +833,23 @@ def _canonical_curve_layout(api):
     return [_object_observation(obj) for obj in (circle, ellipse, circle.copy(), family)]
 
 
+def _path_refinement(api):
+    point = lambda x, y: api.RIGHT * x + api.UP * y
+    source = api.VMobject().start_new_path(point(0, 0))
+    source.add_quadratic_bezier_curve_to(point(3, 6), point(6, 0))
+    source.start_new_path(point(10, 0)).add_line_to(point(18, 0))
+    source.shift(api.UP * 2)
+    def observe(value):
+        return [value.get_num_curves(),
+                [list(p)[:2] for p in value.get_anchors()],
+                [[list(p)[:2] for p in column] for column in value.get_anchors_and_handles()],
+                [list(p)[:2] for p in value.get_nth_curve_points(0)]]
+    result = [observe(source)]
+    source.insert_n_curves(3)
+    result.append(observe(source))
+    return result
+
+
 def _path_selection(api):
     point = lambda x, y: api.RIGHT * x + api.UP * y
     source = api.VMobject().start_new_path(point(-3, -1))
@@ -884,6 +901,7 @@ def _point_matching(api):
 
 
 FIXTURES = [
+    Fixture("path_refinement", lambda: _path_refinement(noon), lambda: _path_refinement(manim), 1e-5),
     Fixture("path_selection", lambda: _path_selection(noon), lambda: _path_selection(manim), 1e-5),
     Fixture("path_construction", lambda: _path_construction(noon), lambda: _path_construction(manim), 1e-5),
     Fixture("path_editing", lambda: _path_editing(noon), lambda: _path_editing(manim), 1e-5),

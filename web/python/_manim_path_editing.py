@@ -44,3 +44,22 @@ def pointwise_become_partial(value, source, a, b):
     else:
         engine_call(context.livePointwiseBecomePartial, handle, source_handle, float(a), float(b), operation="VMobject.pointwise_become_partial")
     return value
+
+
+def insert_n_curves(value, n):
+    import operator
+    from _manim_updaters import canonical_callback_phase_active
+    count = operator.index(n)
+    if not 0 <= count <= 0xFFFFFFFF:
+        raise ValueError("n must be between 0 and 4294967295")
+    if canonical_callback_phase_active():
+        raise NotImplementedError("callback path editing requires shared transient resource publication")
+    handle = _handle_for(value)
+    if handle is None:
+        raise RuntimeError("path editing requires a shared semantic handle")
+    context = _live_mutation_context(value) or _live_constructor_context("path")
+    if context is None:
+        engine_call(handle.insertNCurves, count, operation="VMobject.insert_n_curves")
+    else:
+        engine_call(context.liveInsertNCurves, handle, count, operation="VMobject.insert_n_curves")
+    return value

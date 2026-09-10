@@ -3279,3 +3279,5 @@ pub mod path_editing;
 pub mod path_construction;
 
 pub mod path_selection;
+
+pub mod path_refinement;

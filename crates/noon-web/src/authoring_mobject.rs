@@ -1117,6 +1117,57 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmPathQuery {
+        #[wasm_bindgen(getter, js_name = curveCount)]
+        pub fn curve_count(&self) -> u32 {
+            self.value.curve_count() as u32
+        }
+        #[wasm_bindgen(js_name = curvePoints)]
+        pub fn curve_points(&self, index: u32) -> Result<Vec<f64>, JsValue> {
+            self.value
+                .curve_points(index as usize)
+                .map(|points| points.into_iter().flat_map(|(x, y)| [x, y]).collect())
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = startAnchors)]
+        pub fn start_anchors(&self) -> Vec<f64> {
+            self.value
+                .start_anchors()
+                .into_iter()
+                .flat_map(|(x, y)| [x, y])
+                .collect()
+        }
+        #[wasm_bindgen(js_name = endAnchors)]
+        pub fn end_anchors(&self) -> Vec<f64> {
+            self.value
+                .end_anchors()
+                .into_iter()
+                .flat_map(|(x, y)| [x, y])
+                .collect()
+        }
+        #[wasm_bindgen(js_name = firstHandles)]
+        pub fn first_handles(&self) -> Vec<f64> {
+            self.value
+                .first_handles()
+                .into_iter()
+                .flat_map(|(x, y)| [x, y])
+                .collect()
+        }
+        #[wasm_bindgen(js_name = secondHandles)]
+        pub fn second_handles(&self) -> Vec<f64> {
+            self.value
+                .second_handles()
+                .into_iter()
+                .flat_map(|(x, y)| [x, y])
+                .collect()
+        }
+        pub fn anchors(&self) -> Vec<f64> {
+            self.value
+                .anchors()
+                .into_iter()
+                .flat_map(|(x, y)| [x, y])
+                .collect()
+        }
+
         #[wasm_bindgen(js_name = pointFromProportion)]
         pub fn point_from_proportion(&self, alpha: f64) -> Result<Vec<f64>, JsValue> {
             self.value
@@ -1419,6 +1470,12 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = insertNCurves)]
+        pub fn insert_n_curves(&mut self, additional: u32) -> Result<(), JsValue> {
+            self.handle
+                .insert_n_curves(additional as usize)
+                .map_err(js_error)
+        }
         #[wasm_bindgen(js_name = reverseDirection)]
         pub fn reverse_direction(&mut self) -> Result<(), JsValue> {
             self.handle.reverse_direction().map_err(js_error)

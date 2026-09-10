@@ -74,6 +74,7 @@ pub(crate) enum PathEdit<'a> {
     Cubic(Vec2, Vec2, Vec2),
     Close,
     Reverse,
+    Subdivide(usize),
     Partial {
         source: &'a SemanticObjectState,
         a: f32,
@@ -108,7 +109,15 @@ impl PathEdit<'_> {
             }
             return Ok(Some(noon_geometry::authored_partial_path(&path, a, b)));
         }
+        if let Self::Subdivide(0) = self {
+            return Ok(None);
+        }
         let mut path = world_path(store, state)?;
+        if let Self::Subdivide(additional) = self {
+            return noon_geometry::subdivide_path(&path, additional)
+                .map(Some)
+                .map_err(AuthoringError::PathQuery);
+        }
         if let Self::Reverse = self {
             return Ok(Some(noon_geometry::reverse_path(&path)));
         }
@@ -151,7 +160,11 @@ impl PathEdit<'_> {
                         }
                     }
                 }
-                Self::Corners(_) | Self::Start(_) | Self::Reverse | Self::Partial { .. } => {
+                Self::Corners(_)
+                | Self::Start(_)
+                | Self::Reverse
+                | Self::Subdivide(_)
+                | Self::Partial { .. } => {
                     unreachable!()
                 }
             };
@@ -233,6 +246,11 @@ impl Mobject {
     pub fn close_path(&mut self) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Close)
     }
+    /// Add curves through deterministic subdivision, preserving the shape.
+    pub fn insert_n_curves(&mut self, additional: usize) -> Result<(), AuthoringError> {
+        self.edit_path(PathEdit::Subdivide(additional))
+    }
+
     /// Reverse this object's curves and subpath order, retaining paint and identity.
     pub fn reverse_direction(&mut self) -> Result<(), AuthoringError> {
         self.edit_path(PathEdit::Reverse)

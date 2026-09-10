@@ -42,3 +42,27 @@ class PathQueryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 value.point_from_proportion(-1)
             query.free.assert_called_once()
+
+    def test_curve_queries_share_one_snapshot_and_release_it(self):
+        value = identity_only_wrapper(compat.VMobject)
+        query = Mock()
+        query.curveCount = 2
+        query.curvePoints.return_value = [0., 0., 1., 2., 2., 2., 3., 0.]
+        query.startAnchors.return_value = [0., 0., 3., 0.]
+        query.endAnchors.return_value = [3., 0., 4., 0.]
+        query.firstHandles.return_value = [1., 2., 3.3, 0.]
+        query.secondHandles.return_value = [2., 2., 3.6, 0.]
+        query.anchors.return_value = [0., 0., 3., 0., 3., 0., 4., 0.]
+        with patch.object(queries, '_typed_manim_observation', return_value=query) as observe:
+            self.assertEqual(value.get_num_curves(), 2)
+            self.assertEqual(value.get_nth_curve_points(0), [(0., 0.), (1., 2.), (2., 2.), (3., 0.)])
+            self.assertEqual(value.get_start_anchors(), [(0., 0.), (3., 0.)])
+            self.assertEqual(value.get_end_anchors(), [(3., 0.), (4., 0.)])
+            self.assertEqual(len(value.get_anchors()), 4)
+            columns = value.get_anchors_and_handles()
+            self.assertEqual(columns[1], [(1., 2.), (3.3, 0.)])
+            self.assertEqual(observe.call_count, 6)
+            self.assertEqual(query.free.call_count, 6)
+            query.curvePoints.side_effect = ValueError('curve index out of bounds')
+            with self.assertRaises(ValueError): value.get_nth_curve_points(4)
+            self.assertEqual(query.free.call_count, 7)

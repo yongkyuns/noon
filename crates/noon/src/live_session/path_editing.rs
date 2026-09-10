@@ -44,6 +44,13 @@ impl LiveSession<'_> {
     pub fn close_path(&mut self, object: &Mobject) -> Result<(), LiveSessionError> {
         self.edit_path(object, PathEdit::Close)
     }
+    pub fn insert_n_curves(
+        &mut self,
+        object: &Mobject,
+        additional: usize,
+    ) -> Result<(), LiveSessionError> {
+        self.edit_path(object, PathEdit::Subdivide(additional))
+    }
     pub fn reverse_direction(&mut self, object: &Mobject) -> Result<(), LiveSessionError> {
         self.edit_path(object, PathEdit::Reverse)
     }

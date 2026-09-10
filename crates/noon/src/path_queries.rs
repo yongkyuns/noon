@@ -14,6 +14,7 @@ pub struct PathQuery {
     plan: Option<PathProportionPlan>,
     transform: SemanticTransform2_5D,
     endpoints: Option<(noon_core::Vec2, noon_core::Vec2)>,
+    unfinished_anchor: Option<noon_core::Vec2>,
 }
 
 impl PathQuery {
@@ -31,7 +32,76 @@ impl PathQuery {
             plan,
             transform,
             endpoints: path.endpoints(),
+            unfinished_anchor: match path.commands().last() {
+                Some(noon_core::PathCommand::MoveTo { to }) => Some(*to),
+                _ => None,
+            },
         })
+    }
+
+    /// Number of complete curves; an unfinished MoveTo is an anchor only.
+    pub fn curve_count(&self) -> usize {
+        self.plan
+            .as_ref()
+            .map_or(0, PathProportionPlan::curve_count)
+    }
+
+    /// Cubic controls in this snapshot's coordinate space. Lines and quadratics
+    /// are promoted exactly; the returned points are derived observations.
+    pub fn curve_points(&self, index: usize) -> Result<[(f64, f64); 4], AuthoringError> {
+        let plan = self.plan.as_ref().ok_or(AuthoringError::PathQuery(
+            PathProportionError::InvalidCurveIndex { index, count: 0 },
+        ))?;
+        Ok(plan
+            .curve_points(index)
+            .map_err(AuthoringError::PathQuery)?
+            .map(|p| self.transform_point(p.x, p.y)))
+    }
+
+    fn curve_column(&self, column: usize) -> Vec<(f64, f64)> {
+        let mut points = (0..self.curve_count())
+            .map(|index| self.curve_points(index).expect("known curve index")[column])
+            .collect::<Vec<_>>();
+        if column == 0 {
+            if let Some(point) = self.unfinished_anchor {
+                points.push(self.transform_point(f64::from(point.x), f64::from(point.y)));
+            }
+        }
+        points
+    }
+
+    pub fn start_anchors(&self) -> Vec<(f64, f64)> {
+        self.curve_column(0)
+    }
+    pub fn first_handles(&self) -> Vec<(f64, f64)> {
+        self.curve_column(1)
+    }
+    pub fn second_handles(&self) -> Vec<(f64, f64)> {
+        self.curve_column(2)
+    }
+    pub fn end_anchors(&self) -> Vec<(f64, f64)> {
+        self.curve_column(3)
+    }
+
+    /// Start anchors, first handles, second handles and end anchors. An
+    /// unfinished subpath contributes only to the start-anchor column.
+    pub fn anchors_and_handles(&self) -> [Vec<(f64, f64)>; 4] {
+        std::array::from_fn(|column| self.curve_column(column))
+    }
+
+    /// Ordered start/end anchors, followed by any unfinished starting anchor.
+    pub fn anchors(&self) -> Vec<(f64, f64)> {
+        let mut anchors = Vec::with_capacity(
+            self.curve_count() * 2 + usize::from(self.unfinished_anchor.is_some()),
+        );
+        for index in 0..self.curve_count() {
+            let points = self.curve_points(index).expect("known curve index");
+            anchors.extend([points[0], points[3]]);
+        }
+        if let Some(point) = self.unfinished_anchor {
+            anchors.push(self.transform_point(f64::from(point.x), f64::from(point.y)));
+        }
+        anchors
     }
 
     /// Point in the coordinate space captured when this query was prepared.

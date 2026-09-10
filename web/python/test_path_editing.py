@@ -73,3 +73,15 @@ class PathEditingTests(unittest.TestCase):
             with self.assertRaises(TypeError):
                 value.pointwise_become_partial(object(), 0.2, 0.8)
             resolve.assert_not_called()
+
+    def test_subdivision_validates_integer_input_and_dispatches_to_shared_edit(self):
+        value = identity_only_wrapper(compat.VMobject)
+        handle = Mock()
+        with patch.object(editing, '_handle_for', return_value=handle), \
+             patch.object(editing, '_live_mutation_context', return_value=None), \
+             patch.object(editing, '_live_constructor_context', return_value=None):
+            self.assertIs(value.insert_n_curves(3), value)
+            handle.insertNCurves.assert_called_once_with(3)
+            for count in [-1, 2**32]:
+                with self.assertRaises(ValueError): value.insert_n_curves(count)
+            with self.assertRaises(TypeError): value.insert_n_curves(0.5)

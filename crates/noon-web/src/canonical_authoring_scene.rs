@@ -5815,6 +5815,18 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveInsertNCurves)]
+        pub fn live_insert_n_curves(
+            &mut self,
+            object: &crate::WasmAuthoringMobjectHandle,
+            additional: u32,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_insert_n_curves(object.semantic_mobject(), additional as usize)
+                .map_err(typed_js_error)
+        }
         #[wasm_bindgen(js_name = liveReverseDirection)]
         pub fn live_reverse_direction(
             &mut self,
