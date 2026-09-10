@@ -137,6 +137,17 @@ jobs:
           else
             echo "Shared preview CLI smoke not present in this revision."
           fi
+      - if: steps.source.outputs.enabled == 'true'
+        name: Verify configured MCP rendering when present
+        env:
+          NOON_PREVIEW_RUNTIME_CONFIG: ${{ runner.temp }}/noon-preview/runtime.json
+        working-directory: tools/noon-mcp
+        run: |
+          if [[ -f test/docker-mcp-rendering-smoke.mjs ]]; then
+            timeout --signal=TERM 300s node test/docker-mcp-rendering-smoke.mjs | tee "$RUNNER_TEMP/noon-preview-mcp.json"
+          else
+            echo "MCP rendering smoke not present in this revision."
+          fi
       - name: Upload isolation evidence
         if: always() && steps.source.outputs.enabled == 'true'
         uses: actions/upload-artifact@v7
@@ -147,6 +158,7 @@ jobs:
             ${{ runner.temp }}/noon-preview-isolation.json
             ${{ runner.temp }}/noon-preview-runner.json
             ${{ runner.temp }}/noon-preview-cli.json
+            ${{ runner.temp }}/noon-preview-mcp.json
             ${{ runner.temp }}/noon-preview/runtime.json
           if-no-files-found: warn
           retention-days: 14
