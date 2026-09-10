@@ -116,7 +116,7 @@ class ManimArcFacadeTests(unittest.TestCase):
             assert a.num_components == 7
             assert a.arc_center == noon.Vec2(3.0, -2.0)
             assert math.isclose(a.style["stroke"]["red"], noon.BLUE.red)
-            assert b.style["stroke_width"] == 0.08
+            assert b.style["stroke_width"] == 0.0008
             assert b.radius == 3.25
             assert b.angle == -1.25
             assert b.start_angle == 0.0
