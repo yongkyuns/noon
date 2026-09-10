@@ -50,9 +50,9 @@ mod semantic_execution_player;
 #[cfg(target_arch = "wasm32")]
 mod text_parts;
 
-pub use authoring_error::AuthoringFailure;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_arrow::*;
+pub use authoring_error::AuthoringFailure;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_geometry::*;
 pub use authoring_mobject::*;
