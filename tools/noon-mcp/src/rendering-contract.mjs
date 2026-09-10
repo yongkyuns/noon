@@ -1,10 +1,8 @@
 import { Buffer } from "node:buffer";
 import * as z from "zod/v4";
 
-// Contract preparation only. These schemas are intentionally not imported by
-// server.mjs until #1197 qualifies the shared runner and its isolation/cleanup
-// boundary. Keeping the contract inert prevents a schema-only change from
-// accidentally exposing source execution through MCP.
+// Public MCP rendering schemas. Execution remains delegated to the shared
+// AgentPreviewService; these contracts bound only the external transport input.
 export const RENDERING_CONTRACT_VERSION = 1;
 export const MAX_RENDER_SOURCE_BYTES = 1_000_000;
 export const MAX_RENDER_TIME_SECONDS = 600;
