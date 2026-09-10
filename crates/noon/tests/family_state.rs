@@ -12,6 +12,14 @@ fn leaves(family: &MobjectFamily) -> Vec<noon::SemanticNodeId> {
         .unwrap()
 }
 
+fn direct_members(family: &MobjectFamily) -> Vec<noon::SemanticNodeId> {
+    family
+        .integration_store()
+        .borrow()
+        .semantic_family_members_checked(family.node_id())
+        .unwrap()
+}
+
 fn family(scene: &Scene) -> MobjectFamily {
     let a = scene.square(1.0).unwrap();
     let mut b = scene.rectangle(1.0, 2.0).unwrap();
@@ -58,6 +66,71 @@ fn family_become_and_restore_preserve_alias_identity_and_share_content() {
 }
 
 #[test]
+fn unequal_family_become_reuses_receiver_identity_and_never_imports_target_ids() {
+    let scene = Scene::new();
+    let source_leaf = scene.square(1.0).unwrap();
+    let source = scene.family(&[(&source_leaf).into()]).unwrap();
+    let source_root = source.node_id();
+    let first_target = scene.circle(2.0).unwrap();
+    let mut second_target = scene.rectangle(3.0, 1.0).unwrap();
+    second_target.shift(4.0, 1.0).unwrap();
+    let target = scene
+        .family(&[(&first_target).into(), (&second_target).into()])
+        .unwrap();
+    let target_ids = leaves(&target);
+    let target_states: Vec<_> = target_ids
+        .iter()
+        .map(|&id| {
+            scene
+                .integration_store()
+                .borrow()
+                .semantic_object_state_checked(id)
+                .unwrap()
+                .clone()
+        })
+        .collect();
+    let revision = scene.revision();
+
+    source.become_family(&target, Default::default()).unwrap();
+
+    assert_eq!(source.node_id(), source_root);
+    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    let receiver_ids = leaves(&source);
+    assert_eq!(receiver_ids.len(), 2);
+    assert_eq!(receiver_ids[0], source_leaf.node_id());
+    assert!(!target_ids.contains(&receiver_ids[0]));
+    assert!(!target_ids.contains(&receiver_ids[1]));
+    assert_ne!(receiver_ids[1], source_leaf.node_id());
+    let receiver_states: Vec<_> = receiver_ids
+        .iter()
+        .map(|&id| {
+            scene
+                .integration_store()
+                .borrow()
+                .semantic_object_state_checked(id)
+                .unwrap()
+                .clone()
+        })
+        .collect();
+    assert_eq!(receiver_states, target_states);
+    assert_eq!(leaves(&target), target_ids);
+
+    // Contracting topology only changes membership. Detached receiver-owned
+    // descendants retain valid identities for any other handles/aliases.
+    let empty = scene.family(&[]).unwrap();
+    let expanded_ids = receiver_ids.clone();
+    let revision = scene.revision();
+    source.become_family(&empty, Default::default()).unwrap();
+    assert_eq!(source.node_id(), source_root);
+    assert!(leaves(&source).is_empty());
+    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    let store = scene.integration_store().borrow();
+    for id in expanded_ids {
+        assert!(store.node(id).is_some());
+    }
+}
+
+#[test]
 fn dimension_matching_uses_aggregate_bounds_and_center_not_individual_leaf_sizes() {
     let scene = Scene::new();
     let source = family(&scene);
@@ -99,15 +172,14 @@ fn dimension_matching_uses_aggregate_bounds_and_center_not_individual_leaf_sizes
 fn invalid_family_become_is_atomic_and_rotated_stretch_preserves_dimensions() {
     let scene = Scene::new();
     let source = family(&scene);
-    let different = scene.family(&[]).unwrap();
     let foreign = family(&Scene::new());
     let saved = source.layout_bounds().unwrap();
     let revision = scene.revision();
-    for target in [&different, &foreign] {
-        assert!(source.become_family(target, Default::default()).is_err());
-        assert_eq!(source.layout_bounds().unwrap(), saved);
-        assert_eq!(scene.revision(), revision);
-    }
+    assert!(source
+        .become_family(&foreign, Default::default())
+        .is_err());
+    assert_eq!(source.layout_bounds().unwrap(), saved);
+    assert_eq!(scene.revision(), revision);
     let target = family(&scene);
     target
         .rotate(0.3, noon::ManimRotationPivot::Center)
@@ -126,9 +198,10 @@ fn invalid_family_become_is_atomic_and_rotated_stretch_preserves_dimensions() {
     let before = saved.unwrap();
     close(after.width(), before.width());
     close(after.height(), before.height());
-    different
-        .become_family(&different, Default::default())
-        .unwrap();
+    let empty = scene.family(&[]).unwrap();
+    let revision = scene.revision();
+    empty.become_family(&empty, Default::default()).unwrap();
+    assert_eq!(scene.revision(), revision);
 }
 
 #[test]
@@ -201,7 +274,7 @@ fn paired_program_animates_and_restores_through_coherent_completion() {
 }
 
 #[test]
-fn pairing_memoizes_shared_family_dags_and_rejects_different_family_aliases() {
+fn pairing_memoizes_shared_family_dags_and_persistent_become_reconciles_alias_shape() {
     let scene = Scene::new();
     let a = scene.square(1.0).unwrap();
     let mut root = scene.family(&[(&a).into()]).unwrap();
@@ -226,9 +299,22 @@ fn pairing_memoizes_shared_family_dags_and_rejects_different_family_aliases() {
         .unwrap();
     copied_right.remove((&copied_shared).into()).unwrap();
     copied_right.add((&distinct).into()).unwrap();
-    assert!(source
+    let revision = scene.revision();
+
+    source
         .become_family(target.root(), Default::default())
-        .is_err());
+        .unwrap();
+
+    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    assert_eq!(leaves(&source), [a.node_id()]);
+    let right_member = direct_members(&right)[0];
+    assert_ne!(right_member, shared.node_id());
+    assert_ne!(right_member, distinct.node_id());
+    let store = scene.integration_store().borrow();
+    assert_eq!(
+        store.semantic_family_members_checked(right_member).unwrap(),
+        [a.node_id()]
+    );
 }
 
 #[test]
