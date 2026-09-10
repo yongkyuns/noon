@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title desc">
+  <title id="title">Group slicing demo</title>
+  <desc id="desc">A square stays low while the circle and rectangle selected by a VGroup slice move upward.</desc>
+  <rect width="640" height="360" fill="#10141d"/>
+  <rect x="120" y="205" width="70" height="70" rx="5" fill="#58c4dd"/>
+  <circle cx="320" cy="140" r="43" fill="#d147bd"/>
+  <rect x="430" y="105" width="110" height="70" rx="5" fill="#83c167"/>
+  <path d="M228 228 C258 228 272 198 292 174" fill="none" stroke="#f7d96f" stroke-width="5" stroke-dasharray="10 10" opacity="0.75"/>
+</svg>
