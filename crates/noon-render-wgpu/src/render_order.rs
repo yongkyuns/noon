@@ -899,10 +899,8 @@ impl std::error::Error for DerivedDisplayRenderError {}
 pub fn prepare_derived_display(
     publication: &noon_runtime::RendererPublication<'_>,
 ) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
-    let mut by_anchor = std::collections::BTreeMap::<
-        u32,
-        Vec<&noon_runtime::DerivedDisplayObject>,
-    >::new();
+    let mut by_anchor =
+        std::collections::BTreeMap::<u32, Vec<&noon_runtime::DerivedDisplayObject>>::new();
     for object in publication.derived_display_objects() {
         let anchor = object.anchor_object_index();
         let state = object.state();
@@ -934,8 +932,13 @@ pub fn prepare_derived_display(
             });
         }
     }
-    if let Some(&anchor) = by_anchor.keys().find(|anchor| !seen_anchors.contains(anchor)) {
-        return Err(DerivedDisplayRenderError::MissingAnchorInPainterOrder(anchor));
+    if let Some(&anchor) = by_anchor
+        .keys()
+        .find(|anchor| !seen_anchors.contains(anchor))
+    {
+        return Err(DerivedDisplayRenderError::MissingAnchorInPainterOrder(
+            anchor,
+        ));
     }
     Ok(prepared)
 }
