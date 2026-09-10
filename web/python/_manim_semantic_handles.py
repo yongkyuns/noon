@@ -228,9 +228,7 @@ def _attach_shared_handle(self: _base.Mobject, handle: object) -> None:
 
 
 def _constructor_color(name: str, value: object) -> _base.Color:
-    if not isinstance(value, _base.Color):
-        raise TypeError(f"{name} must be a Color or None")
-    return value
+    return _compat._as_color(name, value)
 
 
 def _apply_shared_constructor_options(handle: object, kwargs: dict[str, Any]) -> None:
