@@ -1,6 +1,5 @@
 use noon::{ManimArrow, ManimArrowOptions, Scene, StoredGeometry, Vec2};
 use noon_core::SemanticObjectContent;
-use std::rc::Rc;
 
 fn shaft_endpoints(arrow: &ManimArrow) -> (Vec2, Vec2) {
     let state = arrow.shaft().state().expect("shaft state");
@@ -18,20 +17,20 @@ fn arrow_vector_and_double_arrow_share_one_semantic_family_contract() {
     arrow_options
         .set_color(88.0 / 255.0, 196.0 / 255.0, 221.0 / 255.0, 1.0)
         .unwrap();
-    let arrow = ManimArrow::create(Rc::clone(scene.integration_store()), arrow_options).unwrap();
+    let arrow = scene.manim_arrow(arrow_options).unwrap();
 
     let mut vector_options = ManimArrowOptions::vector(2.0, 1.0).unwrap();
     vector_options.set_translation(-0.5, -1.0).unwrap();
     vector_options
         .set_color(247.0 / 255.0, 217.0 / 255.0, 111.0 / 255.0, 1.0)
         .unwrap();
-    let vector = ManimArrow::create(Rc::clone(scene.integration_store()), vector_options).unwrap();
+    let vector = scene.manim_arrow(vector_options).unwrap();
 
     let mut double_options = ManimArrowOptions::double_arrow(1.0, 1.2, 3.5, 1.2).unwrap();
     double_options
         .set_color(252.0 / 255.0, 98.0 / 255.0, 85.0 / 255.0, 1.0)
         .unwrap();
-    let double = ManimArrow::create(Rc::clone(scene.integration_store()), double_options).unwrap();
+    let double = scene.manim_arrow(double_options).unwrap();
 
     assert_eq!(
         scene
@@ -86,7 +85,10 @@ fn arrow_construction_rejects_invalid_values_without_publishing() {
         .stats();
 
     assert!(ManimArrowOptions::arrow(f64::NAN, 0.0, 1.0, 0.0).is_err());
-    assert_eq!(scene.integration_store().borrow().scene_revision(), revision);
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        revision
+    );
     assert_eq!(
         scene
             .integration_store()
@@ -103,14 +105,13 @@ fn buff_and_tip_caps_match_pinned_manim_reference_cases() {
 
     let mut oversized_buff = ManimArrowOptions::arrow(-0.2, 0.0, 0.2, 0.0).unwrap();
     oversized_buff.set_buff(0.25).unwrap();
-    let oversized =
-        ManimArrow::create(Rc::clone(scene.integration_store()), oversized_buff).unwrap();
+    let oversized = scene.manim_arrow(oversized_buff).unwrap();
     let (start, _) = shaft_endpoints(&oversized);
     assert!((start.x + 0.2).abs() < 1.0e-6);
 
     let mut short = ManimArrowOptions::arrow(0.0, 0.0, 0.4, 0.0).unwrap();
     short.set_buff(0.0).unwrap();
-    let short = ManimArrow::create(Rc::clone(scene.integration_store()), short).unwrap();
+    let short = scene.manim_arrow(short).unwrap();
     let (_, end) = shaft_endpoints(&short);
     assert!((end.x - 0.3).abs() < 1.0e-6);
     assert!((short.shaft().state().unwrap().style.stroke_width - 0.02).abs() < 1.0e-12);
