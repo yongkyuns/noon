@@ -18,6 +18,31 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Compiler correspondence tests
-        run: cargo test -p noon-compile family_transform --lib
+        id: tests
+        shell: bash
+        run: |
+          set +e
+          cargo test -p noon-compile family_transform --lib 2>&1 | tee family-transform-test.log
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
       - name: Formatting check
-        run: cargo fmt --all -- --check
+        id: fmt
+        shell: bash
+        run: |
+          set +e
+          cargo fmt --all -- --check 2>&1 | tee family-transform-fmt.log
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Upload probe logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: b3-unequal-family-transform-probe
+          path: |
+            family-transform-test.log
+            family-transform-fmt.log
+      - name: Fail on probe errors
+        if: steps.tests.outputs.status != '0' || steps.fmt.outputs.status != '0'
+        run: exit 1
