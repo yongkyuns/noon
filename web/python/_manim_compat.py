@@ -54,6 +54,8 @@ class VMobject(Mobject):
     def __init__(self, *, color=None, **kwargs):
         from _manim_semantic_handles import _geometry_options, _apply_shared_constructor_options, _apply_constructor_color, _attach_geometry_options
         from _noon_errors import engine_call
+        if _geometry_options is None:
+            raise RuntimeError("Mobject construction requires the shared Rust authoring host")
         options = engine_call(_geometry_options.emptyPath)
         _apply_shared_constructor_options(options, kwargs)
         _apply_constructor_color(options, color)
