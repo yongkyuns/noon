@@ -175,9 +175,7 @@ fn invalid_family_become_is_atomic_and_rotated_stretch_preserves_dimensions() {
     let foreign = family(&Scene::new());
     let saved = source.layout_bounds().unwrap();
     let revision = scene.revision();
-    assert!(source
-        .become_family(&foreign, Default::default())
-        .is_err());
+    assert!(source.become_family(&foreign, Default::default()).is_err());
     assert_eq!(source.layout_bounds().unwrap(), saved);
     assert_eq!(scene.revision(), revision);
     let target = family(&scene);
