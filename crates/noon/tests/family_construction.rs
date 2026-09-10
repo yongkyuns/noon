@@ -2,6 +2,7 @@ use noon::{MobjectFamilyMember, Scene};
 
 #[test]
 fn nested_creation_and_membership_edits_preserve_identity_order_and_atomicity() {
+    // Duplicate inputs retain their last occurrence, as in the shared Manim family contract.
     let scene = Scene::new();
     let first = scene.square(1.0).unwrap();
     let second = scene.circle(0.2).unwrap();
@@ -22,7 +23,7 @@ fn nested_creation_and_membership_edits_preserve_identity_order_and_atomicity() 
             .borrow()
             .semantic_family_members_checked(root.node_id())
             .unwrap(),
-        vec![first.node_id(), nested.node_id()]
+        vec![nested.node_id(), first.node_id()]
     );
     assert_eq!(
         scene
@@ -136,7 +137,7 @@ fn live_member_batch_rejects_a_late_cycle_without_partial_publication() {
         assert_eq!(
             live.add_family_members(&nested, &[(&second).into(), (&second).into()])
                 .unwrap(),
-            vec![true, false]
+            vec![false, true]
         );
         assert_eq!(
             store.borrow().scene_revision(),
@@ -145,7 +146,7 @@ fn live_member_batch_rejects_a_late_cycle_without_partial_publication() {
         assert_eq!(
             live.remove_family_members(&nested, &[(&second).into(), (&second).into()])
                 .unwrap(),
-            vec![true, false]
+            vec![false, true]
         );
         assert_eq!(
             live.add_family_members(&nested, &[(&second).into()])
@@ -192,7 +193,7 @@ fn authored_member_batches_roll_back_cycles_and_late_invalid_handles() {
         nested
             .add_many(&[(&second).into(), (&second).into()])
             .unwrap(),
-        vec![true, false]
+        vec![false, true]
     );
     assert_eq!(
         scene.integration_store().borrow().scene_revision(),
@@ -202,7 +203,7 @@ fn authored_member_batches_roll_back_cycles_and_late_invalid_handles() {
         nested
             .remove_many(&[(&first).into(), (&second).into(), (&first).into()])
             .unwrap(),
-        vec![true, true, false]
+        vec![false, true, true]
     );
     assert!(scene
         .integration_store()
