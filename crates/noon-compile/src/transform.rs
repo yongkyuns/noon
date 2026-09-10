@@ -52,9 +52,13 @@ pub(crate) fn compile_transform_geometry_plan(
                 let Some(target) = source.morph_target() else {
                     return Err(TransformCompileFailure::UnsupportedGeometry);
                 };
-                noon_geometry::plan_morph(source, target, noon_geometry::MorphOptions::DEFAULT)
-                    .map_err(|_| TransformCompileFailure::UnsupportedGeometry)?;
-                noon_geometry::plan_filled_morph(
+                noon_geometry::plan_morph_preserving_order(
+                    source,
+                    target,
+                    noon_geometry::MorphOptions::DEFAULT,
+                )
+                .map_err(|_| TransformCompileFailure::UnsupportedGeometry)?;
+                noon_geometry::plan_filled_morph_preserving_order(
                     source,
                     target,
                     noon_geometry::MorphOptions::DEFAULT,
@@ -227,8 +231,12 @@ fn compile_path_pair(
         return Err(TransformCompileFailure::RequiresRetessellation);
     }
     if from_style.fill.is_some()
-        && noon_geometry::plan_filled_morph(&source, &target, noon_geometry::MorphOptions::DEFAULT)
-            .is_err()
+        && noon_geometry::plan_filled_morph_preserving_order(
+            &source,
+            &target,
+            noon_geometry::MorphOptions::DEFAULT,
+        )
+        .is_err()
     {
         return Err(TransformCompileFailure::UnsafeFilledPath);
     }
@@ -257,7 +265,7 @@ fn compile_path_pair(
                 to_transform,
             )
             && (from_style.fill.is_none()
-                || noon_geometry::plan_filled_morph(
+                || noon_geometry::plan_filled_morph_preserving_order(
                     &world_source,
                     &world_target,
                     noon_geometry::MorphOptions::DEFAULT,

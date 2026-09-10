@@ -183,3 +183,44 @@ fn effective_morph_queries_interpolate_controls_and_keep_snapshot_and_seek_coher
         );
     }
 }
+
+#[test]
+fn native_object_scaled_strokes_use_the_same_morph_controls() {
+    let mut scene = Scene::new();
+    let path = VectorPath::new()
+        .move_to(Vec2::new(-1., -1.))
+        .line_to(Vec2::new(1., -1.))
+        .line_to(Vec2::new(1., 1.))
+        .line_to(Vec2::new(-1., 1.))
+        .line_to(Vec2::new(-1., -1.))
+        .close();
+    let object = scene
+        .path(path, noon_core::SemanticStyle::default())
+        .unwrap();
+    scene.add(&object).unwrap();
+    let target = object.target_editor().unwrap();
+    noon::LayoutAnchor::from(&target)
+        .stretch(
+            2.,
+            noon::LayoutDimension::Width,
+            noon::ManimRotationPivot::Center,
+        )
+        .unwrap();
+    let animation = scene
+        .declare_transform_to(
+            &object,
+            &target,
+            AnimationOptions::new()
+                .run_time(2.)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut session);
+    let segment = live.play_animation(&animation).unwrap();
+    live.advance_segment_to(segment, 1.).unwrap();
+    near(
+        live.effective_path_query(&object).unwrap().start().unwrap(),
+        (-1.5, -1.),
+    );
+}

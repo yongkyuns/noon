@@ -4,7 +4,7 @@ use crate::{AuthoringError, UnsupportedAuthoringOperation};
 
 impl LiveSession<'_> {
     /// Capture exact current path controls and transform from one coherent
-    /// runtime publication. Active reveals and geometric rematching remain unsupported.
+    /// runtime publication. Active reveals remain explicitly unsupported.
     pub fn effective_path_query(&self, object: &Mobject) -> Result<PathQuery, LiveSessionError> {
         self.require_mobject(object)?;
         let store = self.store.borrow();
@@ -27,11 +27,6 @@ impl LiveSession<'_> {
             AuthoringError::Unsupported(UnsupportedAuthoringOperation::PathQueryContent),
         )?;
         if let Some(target) = path.morph_target() {
-            // Retained ordinary method transforms use ordered cubic correspondence.
-            // Geometrically rematched native plans have a different contract.
-            if observed.object.style.stroke_width_mode != noon_core::StrokeWidthMode::ScreenSpace {
-                return Err(unsupported().into());
-            }
             path = noon_geometry::interpolate_path_preserving_order(&path, target, observed.morph)
                 .map_err(AuthoringError::MorphQuery)?;
         } else if observed.morph != 0.0 {
