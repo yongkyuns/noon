@@ -7,6 +7,7 @@ __pycache__/
 /web/python/compat-bundle.json
 /web/python/compat-bundle.*.json
 /web/python-worker.js
+/web/runtime-build-identity.json
 /output/playwright
 /.playwright-cli
 /ci-artifacts
