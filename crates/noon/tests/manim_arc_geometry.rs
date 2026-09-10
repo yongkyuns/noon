@@ -160,5 +160,7 @@ fn arc_inputs_reject_before_semantic_resource_creation() {
     assert!(Options::arc(f64::NAN, 0.0, 1.0, 9, 0.0, 0.0).is_err());
     assert!(Options::arc(1.0, 0.0, f64::INFINITY, 9, 0.0, 0.0).is_err());
     assert!(Options::arc_between_points(0.0, 0.0, f64::NAN, 1.0, 1.0, None, 9).is_err());
-    assert!(Options::arc_between_points(0.0, 0.0, 1.0, 1.0, 1.0, Some(f64::NAN), 9).is_err());
+    assert!(
+        Options::arc_between_points(0.0, 0.0, 1.0, 1.0, 1.0, Some(f64::NAN), 9).is_err()
+    );
 }
