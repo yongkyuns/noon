@@ -45,17 +45,93 @@ impl From<TextResourceHandle> for SemanticObjectContent {
     }
 }
 
+/// Immutable authored policy needed by one Arrow shaft dependency.
+///
+/// The visible shaft width may be capped by current Arrow length, so retaining
+/// only `SemanticStyle::stroke_width` loses the constructor value required by a
+/// later Manim-compatible resize. This payload remains Semantic Scene state; the
+/// runtime and renderer continue to consume only ordinary geometry/style values.
+#[derive(Clone, Copy, Debug)]
+pub struct SemanticArrowShaftRole {
+    initial_stroke_width: f64,
+    max_stroke_width_to_length_ratio: f64,
+}
+
+impl SemanticArrowShaftRole {
+    pub const fn new(initial_stroke_width: f64, max_stroke_width_to_length_ratio: f64) -> Self {
+        Self {
+            initial_stroke_width,
+            max_stroke_width_to_length_ratio,
+        }
+    }
+
+    pub const fn initial_stroke_width(self) -> f64 {
+        self.initial_stroke_width
+    }
+
+    pub const fn max_stroke_width_to_length_ratio(self) -> f64 {
+        self.max_stroke_width_to_length_ratio
+    }
+
+    pub fn is_valid(self) -> bool {
+        self.initial_stroke_width.is_finite()
+            && self.initial_stroke_width >= 0.0
+            && self.max_stroke_width_to_length_ratio.is_finite()
+            && self.max_stroke_width_to_length_ratio >= 0.0
+    }
+
+    fn canonical_bits(value: f64) -> u64 {
+        if value == 0.0 {
+            0
+        } else {
+            value.to_bits()
+        }
+    }
+}
+
+impl PartialEq for SemanticArrowShaftRole {
+    fn eq(&self, other: &Self) -> bool {
+        Self::canonical_bits(self.initial_stroke_width)
+            == Self::canonical_bits(other.initial_stroke_width)
+            && Self::canonical_bits(self.max_stroke_width_to_length_ratio)
+                == Self::canonical_bits(other.max_stroke_width_to_length_ratio)
+    }
+}
+
+impl Eq for SemanticArrowShaftRole {}
+
+impl std::hash::Hash for SemanticArrowShaftRole {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        Self::canonical_bits(self.initial_stroke_width).hash(state);
+        Self::canonical_bits(self.max_stroke_width_to_length_ratio).hash(state);
+    }
+}
+
 /// Scene-level role carried by an ordinary semantic object.
 ///
 /// Roles describe how shared semantic scene state interprets an object; they do
 /// not create a second renderer/runtime object model. In particular, a 2D camera
 /// remains an ordinary semantic frame object whose effective execution transform
-/// determines the renderer-facing [`crate::Camera2DState`].
+/// determines the renderer-facing [`crate::Camera2DState`]. Arrow component roles
+/// retain only the dependency information required to keep shaft/tip mutations
+/// coherent; rendering still sees ordinary Line/path leaves.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SemanticObjectRole {
     #[default]
     Ordinary,
     Camera2D,
+    ArrowShaft(SemanticArrowShaftRole),
+    ArrowEndTip,
+    ArrowStartTip,
+}
+
+impl SemanticObjectRole {
+    pub fn is_valid(self) -> bool {
+        match self {
+            Self::ArrowShaft(policy) => policy.is_valid(),
+            Self::Ordinary | Self::Camera2D | Self::ArrowEndTip | Self::ArrowStartTip => true,
+        }
+    }
 }
 
 /// Stable authored object properties that may be driven by native-reactive signals.
@@ -262,6 +338,27 @@ mod tests {
         assert_eq!(state.role(), SemanticObjectRole::Ordinary);
         state.set_role(SemanticObjectRole::Camera2D);
         assert_eq!(state.role(), SemanticObjectRole::Camera2D);
+    }
+
+    #[test]
+    fn arrow_role_retains_uncapped_stroke_policy_without_affecting_style() {
+        let mut state = SemanticObjectState::new(StoredGeometry::Line {
+            start: Vec2::ZERO,
+            end: Vec2::new(0.2, 0.0),
+        });
+        state.style.stroke_width = 0.01;
+        let policy = SemanticArrowShaftRole::new(0.06, 0.05);
+        state.set_role(SemanticObjectRole::ArrowShaft(policy));
+
+        assert_eq!(state.style.stroke_width, 0.01);
+        assert_eq!(state.role(), SemanticObjectRole::ArrowShaft(policy));
+        assert_eq!(policy.initial_stroke_width(), 0.06);
+        assert_eq!(policy.max_stroke_width_to_length_ratio(), 0.05);
+        assert!(state.role().is_valid());
+
+        let invalid = SemanticArrowShaftRole::new(f64::NAN, 0.05);
+        assert_eq!(invalid, invalid);
+        assert!(!invalid.is_valid());
     }
 
     #[test]

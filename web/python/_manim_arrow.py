@@ -103,9 +103,9 @@ def _attach_arrow_family(self: "Arrow", created: object) -> None:
     end_tip = _leaf(engine_call(created.endTip))
     start_tip = _leaf(engine_call(created.startTip)) if bool(created.hasStartTip) else None
 
-    # Retain the aggregate Rust handle as the query authority. It owns no parallel
-    # Python semantic state: its observations are resolved from the same retained
-    # shaft/tip leaves exposed below.
+    # Retain the aggregate Rust handle as the query/mutation capability. It owns no
+    # parallel Python semantic state: policy and geometry live on the same retained
+    # semantic shaft/tip leaves exposed below.
     self._semantic_arrow_handle = created
     self._semantic_family_handle = family
     self._shaft = shaft
@@ -232,10 +232,26 @@ class Arrow(_compat.Group):
         _create(self, options, color=color, kwargs=constructor_options)
 
     def scale(self, factor: float, scale_tips: bool = False, **kwargs: Any):
-        del factor, scale_tips, kwargs
-        raise NotImplementedError(
-            "Arrow.scale requires shared Rust preserve-tip-size and stroke recapping semantics"
+        if kwargs:
+            unknown = ", ".join(sorted(kwargs))
+            raise NotImplementedError(
+                f"Arrow.scale pivot option(s) are not yet shared Rust semantics: {unknown}"
+            )
+        if _shared._group_live_layout_context(self) is not None:
+            raise NotImplementedError(
+                "live Arrow.scale requires shared dependent publication support"
+            )
+        handle = getattr(self, "_semantic_arrow_handle", None)
+        operation = getattr(handle, "scale", None) if handle is not None else None
+        if operation is None:
+            raise RuntimeError("Arrow.scale requires the shared Rust authoring host")
+        engine_call(
+            operation,
+            _ir._finite_number("factor", factor),
+            bool(scale_tips),
+            operation="Arrow.scale",
         )
+        return self
 
     def get_start(self) -> _base.Vec2:
         return _base.Vec2(
