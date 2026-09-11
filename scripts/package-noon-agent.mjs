@@ -20,8 +20,10 @@ export const NOON_AGENT_PACKAGE_KIND = "noon-agent-package";
 const scriptPath = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(scriptPath), "..");
 const skillRoot = "skills/noon-authoring";
+const packagedSkillRoot = "skill/noon-authoring";
 const manifestName = "manifest.json";
 const capabilitiesName = "capabilities.json";
+const generatorRelative = "scripts/package-noon-agent.mjs";
 const runnerEntrypoints = Object.freeze([
   "tools/noon-mcp/bin/noon-preview.mjs",
   "tools/noon-mcp/src/server.mjs",
@@ -62,6 +64,19 @@ function validateRelative(relative) {
     throw new Error(`unsafe package path: ${JSON.stringify(relative)}`);
   }
   return relative;
+}
+
+function plainRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) &&
+    [Object.prototype, null].includes(Object.getPrototypeOf(value));
+}
+
+function sortedKeys(record) {
+  return Object.keys(record).sort();
+}
+
+function sameStrings(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 async function confinedRegularFile(root, relative) {
@@ -217,19 +232,28 @@ function mapDigest(files) {
   return sha256(Buffer.from(lines.join(""), "utf8"));
 }
 
-async function copySkill(outputRoot) {
-  const sourceFiles = await walkRegularFiles(repoRoot, skillRoot);
+async function skillSourceHashes() {
   const hashes = {};
-  for (const sourceRelative of sourceFiles) {
+  for (const sourceRelative of await walkRegularFiles(repoRoot, skillRoot)) {
     const relativeWithinSkill = portable(path.relative(skillRoot, sourceRelative));
-    const destinationRelative = `skill/noon-authoring/${relativeWithinSkill}`;
+    const destinationRelative = `${packagedSkillRoot}/${relativeWithinSkill}`;
+    hashes[destinationRelative] = sha256(await readFile(await confinedRegularFile(repoRoot, sourceRelative)));
+  }
+  return Object.freeze(hashes);
+}
+
+async function copySkill(outputRoot) {
+  const expected = await skillSourceHashes();
+  for (const [destinationRelative, digest] of Object.entries(expected)) {
+    const relativeWithinSkill = destinationRelative.slice(`${packagedSkillRoot}/`.length);
+    const sourceRelative = `${skillRoot}/${relativeWithinSkill}`;
     const source = await confinedRegularFile(repoRoot, sourceRelative);
     const destination = path.resolve(outputRoot, destinationRelative);
     await mkdir(path.dirname(destination), { recursive: true });
     await copyFile(source, destination, fsConstants.COPYFILE_EXCL);
-    hashes[destinationRelative] = sha256(await readFile(destination));
+    if (sha256(await readFile(destination)) !== digest) throw new Error(`copied skill hash mismatch: ${destinationRelative}`);
   }
-  return Object.freeze(hashes);
+  return expected;
 }
 
 async function currentRevision() {
@@ -290,7 +314,6 @@ export async function buildAgentBundle({ outputDir }) {
     [capabilitiesName]: sha256(capabilities.bytes),
     ...skillFiles,
   });
-  const generatorRelative = "scripts/package-noon-agent.mjs";
   const generatorSha256 = sha256(await readFile(await confinedRegularFile(repoRoot, generatorRelative)));
   const manifest = {
     schema: NOON_AGENT_PACKAGE_SCHEMA,
@@ -305,7 +328,7 @@ export async function buildAgentBundle({ outputDir }) {
       sha256: payloadFiles[capabilitiesName],
     },
     skill: {
-      root: "skill/noon-authoring",
+      root: packagedSkillRoot,
       files: skillFiles,
     },
     runner: {
@@ -326,6 +349,7 @@ export async function buildAgentBundle({ outputDir }) {
       python: ">=3.12",
       platform: "POSIX",
       docker: "required-for-isolated-rendering",
+      buildBrowserPackage: "bash scripts/build-web-demo.sh",
       installMcpDependencies: "cd tools/noon-mcp && npm ci --ignore-scripts --no-audit --no-fund",
       preparePreviewRuntime: "cd tools/noon-mcp && node scripts/setup-preview-runtime.mjs",
     },
@@ -343,24 +367,23 @@ export async function verifyAgentBundle({ bundleDir }) {
   if (typeof bundleDir !== "string" || bundleDir.trim() === "" || bundleDir.includes("\0")) {
     throw new TypeError("bundleDir must be a non-empty path without NUL");
   }
-  const bundleRoot = await realpath(path.resolve(bundleDir));
-  const rootMetadata = await lstat(bundleRoot);
-  if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) throw new Error("bundleDir must be a regular directory");
+  const requestedRoot = path.resolve(bundleDir);
+  const requestedMetadata = await lstat(requestedRoot);
+  if (requestedMetadata.isSymbolicLink() || !requestedMetadata.isDirectory()) {
+    throw new Error("bundleDir must be a regular non-symlink directory");
+  }
+  const bundleRoot = await realpath(requestedRoot);
   const manifest = await readBundleJson(bundleRoot, manifestName);
   if (manifest?.schema !== NOON_AGENT_PACKAGE_SCHEMA || manifest?.kind !== NOON_AGENT_PACKAGE_KIND) {
     throw new Error("unsupported Noon agent package manifest");
   }
-  if (!manifest.payload?.files || typeof manifest.payload.files !== "object" || Array.isArray(manifest.payload.files)) {
-    throw new Error("manifest payload file map is missing");
-  }
+  if (!plainRecord(manifest.payload?.files)) throw new Error("manifest payload file map is missing");
 
   const actualFiles = (await enumerateBundleFiles(bundleRoot)).filter((name) => name !== manifestName);
-  const expectedFiles = Object.keys(manifest.payload.files).sort();
-  if (JSON.stringify(actualFiles) !== JSON.stringify(expectedFiles)) {
-    throw new Error("bundle payload file set does not match manifest");
-  }
+  const payloadFiles = sortedKeys(manifest.payload.files);
+  if (!sameStrings(actualFiles, payloadFiles)) throw new Error("bundle payload file set does not match manifest");
   const actualPayload = {};
-  for (const relative of expectedFiles) {
+  for (const relative of payloadFiles) {
     const bytes = await readFile(await confinedRegularFile(bundleRoot, relative));
     const digest = sha256(bytes);
     if (digest !== manifest.payload.files[relative]) throw new Error(`bundle payload hash mismatch: ${relative}`);
@@ -368,29 +391,56 @@ export async function verifyAgentBundle({ bundleDir }) {
   }
   if (mapDigest(actualPayload) !== manifest.payload.sha256) throw new Error("bundle payload digest mismatch");
 
-  const capabilities = await readBundleJson(bundleRoot, manifest.capabilities?.path);
+  if (manifest.capabilities?.path !== capabilitiesName) throw new Error("capability package path mismatch");
+  const bundledCapabilitiesBytes = await readFile(await confinedRegularFile(bundleRoot, capabilitiesName));
+  const capabilities = await readBundleJson(bundleRoot, capabilitiesName);
   if (capabilities?.schema_version !== manifest.capabilities?.schemaVersion ||
       capabilities?.kind !== "noon-agent-capabilities" || capabilities?.scope !== "source-inventory") {
     throw new Error("bundled capability inventory does not match manifest");
   }
-  if (manifest.capabilities.sha256 !== manifest.payload.files[manifest.capabilities.path]) {
+  if (manifest.capabilities.sha256 !== manifest.payload.files[capabilitiesName] ||
+      manifest.capabilities.sha256 !== sha256(bundledCapabilitiesBytes)) {
     throw new Error("capability hash is not bound to bundle payload");
+  }
+  const currentCapabilities = generateCapabilities();
+  if (sha256(currentCapabilities.bytes) !== manifest.capabilities.sha256) {
+    throw new Error("bundled capability inventory does not match current canonical inventory");
   }
   if ((capabilities.provenance?.revision ?? null) !== (manifest.source?.revision ?? null) ||
       (capabilities.provenance?.dirty ?? null) !== (manifest.source?.dirty ?? null)) {
     throw new Error("bundle source identity does not match capability provenance");
   }
 
-  const generatorBytes = await readFile(await confinedRegularFile(repoRoot, manifest.generator?.path));
+  if (manifest.skill?.root !== packagedSkillRoot || !plainRecord(manifest.skill?.files)) {
+    throw new Error("skill package root or file map is invalid");
+  }
+  const currentSkillHashes = await skillSourceHashes();
+  const skillFiles = sortedKeys(manifest.skill.files);
+  if (!sameStrings(skillFiles, sortedKeys(currentSkillHashes))) {
+    throw new Error("skill package file set does not match current skill tree");
+  }
+  for (const relative of skillFiles) {
+    if (manifest.skill.files[relative] !== currentSkillHashes[relative] ||
+        manifest.payload.files[relative] !== currentSkillHashes[relative]) {
+      throw new Error(`skill package hash mismatch: ${relative}`);
+    }
+  }
+
+  if (manifest.generator?.path !== generatorRelative) throw new Error("package generator path mismatch");
+  const generatorBytes = await readFile(await confinedRegularFile(repoRoot, generatorRelative));
   if (sha256(generatorBytes) !== manifest.generator?.sha256) throw new Error("package generator source hash mismatch");
 
-  const runnerHashes = manifest.runner?.sourceSha256;
-  if (!runnerHashes || typeof runnerHashes !== "object" || Array.isArray(runnerHashes)) {
-    throw new Error("runner source hash map is missing");
+  if (!plainRecord(manifest.runner?.sourceSha256)) throw new Error("runner source hash map is missing");
+  const expectedRunnerFiles = await runnerSourceFiles();
+  const runnerFiles = sortedKeys(manifest.runner.sourceSha256);
+  if (!sameStrings(runnerFiles, [...expectedRunnerFiles])) {
+    throw new Error("runner source file set does not match current entrypoints");
   }
-  const currentRunnerHashes = await hashCheckoutFiles(Object.keys(runnerHashes).sort());
-  for (const [relative, digest] of Object.entries(runnerHashes)) {
-    if (currentRunnerHashes[relative] !== digest) throw new Error(`runner source hash mismatch: ${relative}`);
+  const currentRunnerHashes = await hashCheckoutFiles(expectedRunnerFiles);
+  for (const relative of expectedRunnerFiles) {
+    if (currentRunnerHashes[relative] !== manifest.runner.sourceSha256[relative]) {
+      throw new Error(`runner source hash mismatch: ${relative}`);
+    }
   }
   if (mapDigest(currentRunnerHashes) !== manifest.runner.sourceSetSha256) throw new Error("runner source-set digest mismatch");
 
