@@ -145,8 +145,7 @@ fn unequal_family_transform_direct_seek_matches_forward_playback() {
     assert_eq!(forward_derived.len(), 1);
     assert_eq!(forward_derived[0].anchor_object_index(), 0);
     assert!(
-        forward_derived[0].state().appearance > 0.0
-            && forward_derived[0].state().appearance < 1.0
+        forward_derived[0].state().appearance > 0.0 && forward_derived[0].state().appearance < 1.0
     );
 }
 
