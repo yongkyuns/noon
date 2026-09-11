@@ -284,7 +284,7 @@ pub(crate) fn create_arrow_batch_family(
             }
         }
 
-        store_ref.with_geometry_paths(paths, |store, handles| {
+        store_ref.with_geometry_paths(paths, |store, handles| -> Result<_, AuthoringError> {
             let mut transaction = SemanticMutationTransaction::new();
             let family = transaction.create_node(SemanticNodeCreation::family());
             let mut staged = Vec::with_capacity(prepared.len());
@@ -585,8 +585,6 @@ mod tests {
         )
         .unwrap();
         let (start, end) = line_endpoints(&arrow.shaft().state().unwrap());
-        // Public endpoints are +/-0.75 after buff. The 0.35 tip then moves only
-        // the retained shaft endpoint back to its base at x=0.40.
         assert!((start.x + 0.75).abs() < 1e-6);
         assert!((end.x - 0.40).abs() < 1e-6);
         assert!((arrow.shaft().state().unwrap().style.stroke_width - 0.06).abs() < 1e-12);
@@ -609,7 +607,7 @@ mod tests {
         options.set_buff(0.0).unwrap();
         let arrow = ManimArrow::create(Rc::clone(scene.integration_store()), options).unwrap();
         let (_, end) = line_endpoints(&arrow.shaft().state().unwrap());
-        assert!((end.x - 0.3).abs() < 1e-6); // 25% tip cap => 0.1
+        assert!((end.x - 0.3).abs() < 1e-6);
         assert!((arrow.shaft().state().unwrap().style.stroke_width - 0.02).abs() < 1e-12);
     }
 
