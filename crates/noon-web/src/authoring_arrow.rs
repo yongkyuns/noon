@@ -230,7 +230,10 @@ impl WasmManimArrowOptions {
         blue: f64,
         alpha: f64,
     ) -> Result<(), JsValue> {
-        if [red, green, blue, alpha].iter().any(|value| !value.is_finite()) {
+        if [red, green, blue, alpha]
+            .iter()
+            .any(|value| !value.is_finite())
+        {
             return Err(invalid_input(
                 "vector_field.invalid_color",
                 "vector-field color components must be finite",
@@ -267,7 +270,10 @@ impl WasmManimArrowOptions {
         blue: f64,
         alpha: f64,
     ) -> Result<(), JsValue> {
-        if [red, green, blue, alpha].iter().any(|value| !value.is_finite()) {
+        if [red, green, blue, alpha]
+            .iter()
+            .any(|value| !value.is_finite())
+        {
             return Err(invalid_input(
                 "vector_field.invalid_color",
                 "vector-field gradient color components must be finite",
@@ -691,10 +697,13 @@ impl WasmAuthoringStore {
                     })
                     .map_err(js_error)
             }
-            ArrowRequest::VectorField(draft) => publish_vector_field(Rc::clone(&self.semantics), draft)
-                .map(|field| WasmAuthoringArrowHandle {
-                    published: PublishedArrowRequest::VectorField(field),
-                }),
+            ArrowRequest::VectorField(draft) => {
+                publish_vector_field(Rc::clone(&self.semantics), draft).map(|field| {
+                    WasmAuthoringArrowHandle {
+                        published: PublishedArrowRequest::VectorField(field),
+                    }
+                })
+            }
         }
     }
 }
@@ -929,20 +938,20 @@ fn vector_field_authoring_error(error: noon::ArrowVectorFieldAuthoringError) -> 
     match error {
         noon::ArrowVectorFieldAuthoringError::Planning(cause) => vector_field_planning_error(cause),
         noon::ArrowVectorFieldAuthoringError::Authoring(cause) => js_error(cause),
-        noon::ArrowVectorFieldAuthoringError::InvalidColorConfiguration(_) => js_error(
-            AuthoringFailure::new(
+        noon::ArrowVectorFieldAuthoringError::InvalidColorConfiguration(reason) => {
+            js_error(AuthoringFailure::new(
                 "invalid_input",
                 "vector_field.invalid_color_configuration",
-                error,
-            ),
-        ),
-        noon::ArrowVectorFieldAuthoringError::NonFiniteColorSchemeOutput { .. } => js_error(
-            AuthoringFailure::new(
+                reason,
+            ))
+        }
+        noon::ArrowVectorFieldAuthoringError::NonFiniteColorSchemeOutput { sample_index } => {
+            js_error(AuthoringFailure::new(
                 "invalid_input",
                 "vector_field.non_finite_color_scheme",
-                error,
-            ),
-        ),
+                format!("vector-field color scheme returned a non-finite value at sample {sample_index}"),
+            ))
+        }
     }
 }
 
