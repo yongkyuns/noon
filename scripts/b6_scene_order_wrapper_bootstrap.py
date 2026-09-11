@@ -36,21 +36,9 @@ test = r'''
         let first = context.scene.circle(0.4).unwrap();
         let second = context.scene.square(0.8).unwrap();
         let third = context.scene.rectangle(0.6, 1.0).unwrap();
-        context
-            .edit_membership(SceneMembershipBatch {
-                kind: SceneMembershipBatchKind::Add,
-                members: vec![
-                    membership_mobject(0, &first),
-                    membership_mobject(1, &second),
-                    membership_mobject(2, &third),
-                ],
-                bindings: vec![
-                    (ObjectId::new(0), first.clone()),
-                    (ObjectId::new(1), second.clone()),
-                    (ObjectId::new(2), third.clone()),
-                ],
-            })
-            .unwrap();
+        context.bind_mobject(ObjectId::new(0), &first).unwrap();
+        context.bind_mobject(ObjectId::new(1), &second).unwrap();
+        context.bind_mobject(ObjectId::new(2), &third).unwrap();
         let key = |handle: &noon::Mobject| {
             format!(
                 "{}:{}",
