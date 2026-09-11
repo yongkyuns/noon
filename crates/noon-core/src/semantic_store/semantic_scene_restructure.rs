@@ -869,7 +869,9 @@ mod tests {
         );
         assert_eq!(
             store.scene_revision(),
-            revision.checked_next().expect("revision should advance once")
+            revision
+                .checked_next()
+                .expect("revision should advance once")
         );
         assert_eq!(
             store.semantic_family_members_checked(family).unwrap(),
