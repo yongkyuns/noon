@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     SemanticMutationTransaction, SemanticNode, SemanticNodeId, SemanticNodeKind,
@@ -221,6 +221,10 @@ fn plan_explicit_root_projection(
         }
     }
 
+    let first_replacement_by_root = plans
+        .iter()
+        .map(|(root, replacements, _)| (*root, replacements.first().copied()))
+        .collect::<HashMap<_, _>>();
     let retained_roots: HashSet<_> = explicit
         .iter()
         .copied()
@@ -253,9 +257,11 @@ fn plan_explicit_root_projection(
     }
     let mut anchor = match placement {
         ExplicitPlacement::Tail => None,
-        ExplicitPlacement::Head => {
-            first_projected_root_after_restructure(root_node, &affected_roots, &plans)
-        }
+        ExplicitPlacement::Head => first_projected_root_after_restructure(
+            root_node,
+            &affected_roots,
+            &first_replacement_by_root,
+        ),
     };
     for member in explicit.iter().rev() {
         transaction.reorder_member(scene_root, *member, anchor);
@@ -267,18 +273,15 @@ fn plan_explicit_root_projection(
 fn first_projected_root_after_restructure(
     root: &SemanticNode,
     affected_roots: &HashSet<SemanticNodeId>,
-    plans: &[(SemanticNodeId, Vec<SemanticNodeId>, Option<SemanticNodeId>)],
+    first_replacement_by_root: &HashMap<SemanticNodeId, Option<SemanticNodeId>>,
 ) -> Option<SemanticNodeId> {
     let mut current = root.first_member();
     while let Some(member) = current {
         if !affected_roots.contains(&member) {
             return Some(member);
         }
-        if let Some((_, replacements, _)) = plans.iter().find(|(planned, _, _)| *planned == member)
-        {
-            if let Some(first) = replacements.first() {
-                return Some(*first);
-            }
+        if let Some(Some(first)) = first_replacement_by_root.get(&member) {
+            return Some(*first);
         }
         current = root.next_member(member);
     }
