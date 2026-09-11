@@ -1,0 +1,34 @@
+name: b3 derived host followup
+on:
+  push:
+    branches: [codex/b3-derived-display-host]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: python scripts/_codex_b3_host_followup.py
+      - run: cargo fmt --all
+      - run: cargo test -p noon-render-wgpu derived_display --lib
+      - run: cargo check -p noon-render-wgpu
+      - run: cargo clippy -p noon-render-wgpu --lib -- -D warnings
+      - run: cargo check -p noon-web --features renderer --target wasm32-unknown-unknown
+      - run: cargo test -p noon-native --lib
+      - run: cargo check -p noon-native
+      - run: cargo clippy -p noon-native --lib -- -D warnings
+      - name: Commit production files
+        run: |
+          git config user.name 'Yongkyun Shin'
+          git config user.email 'yongkyuns@gmail.com'
+          git add crates/noon-render-wgpu/src/render_order.rs crates/noon-render-wgpu/src/gpu/derived_display.rs crates/noon-render-wgpu/src/gpu/retained_text.rs crates/noon-web/src/execution_canvas.rs crates/noon-native/src/lib.rs
+          git commit -m 'Render derived family Transform rows in direct hosts'
+          git push origin HEAD:codex/b3-derived-display-host
