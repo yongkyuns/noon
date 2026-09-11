@@ -54,3 +54,22 @@ test("missing configuration fails without emitting non-protocol stdout", { timeo
   assert.equal(stdout, "");
   assert.match(stderr, /Noon discovery startup failed/);
 });
+
+test("explicit invalid preview runtime fails before protocol startup and keeps stdout clean", { timeout: 5_000 }, async () => {
+  const child = spawn(process.execPath, [serverPath], {
+    env: {
+      NOON_REPO: root,
+      NOON_PYTHON: python,
+      NOON_PREVIEW_RUNTIME_CONFIG: path.join(root, "does-not-exist-preview-runtime.json"),
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "", stderr = "";
+  child.stdout.on("data", (data) => { stdout += data; });
+  child.stderr.on("data", (data) => { stderr += data; });
+  const exit = await new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
+  assert.equal(exit, 1);
+  assert.equal(stdout, "");
+  assert.match(stderr, /Noon discovery startup failed/);
+  assert.match(stderr, /preview runtime config|ENOENT/i);
+});

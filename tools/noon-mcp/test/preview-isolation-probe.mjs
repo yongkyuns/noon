@@ -4,6 +4,8 @@ import { createServer } from "node:http";
 import { mkdir, open, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
+import { installPinnedPyodideRoute } from "../src/preview-pyodide.mjs";
+
 const webRoot = await realpath(process.env.NOON_WEB_ROOT || "/noon/web");
 const require = createRequire("/opt/noon-runner/loader.cjs");
 const { chromium } = require("/opt/noon-runner/playwright");
@@ -15,6 +17,15 @@ function contentType(filename) {
   if (filename.endsWith(".wasm")) return "application/wasm";
   if (filename.endsWith(".py")) return "text/plain; charset=utf-8";
   return "application/octet-stream";
+}
+
+async function cgroupDiagnostics() {
+  const fields = {};
+  for (const file of ["memory.current", "memory.peak", "memory.events", "pids.current", "pids.events"]) {
+    try { fields[file] = (await readFile(`/sys/fs/cgroup/${file}`, "utf8")).trim(); }
+    catch {}
+  }
+  return fields;
 }
 
 const server = createServer(async (request, response) => {
@@ -73,10 +84,25 @@ try {
     ],
   });
   const page = await browser.newPage({ viewport: { width: 960, height: 540 }, deviceScaleFactor: 1 });
+  await installPinnedPyodideRoute(page.context());
+  const pageDiagnostics = [];
+  page.on("console", (entry) => pageDiagnostics.push(`console:${entry.type()}:${entry.text()}`));
+  page.on("pageerror", (error) => pageDiagnostics.push(`pageerror:${error?.stack ?? error}`));
+  page.on("crash", () => pageDiagnostics.push("page:crash"));
   await page.goto(url);
   await page.waitForFunction(() => window.noonHostRaster !== undefined);
   const source = await readFile(path.join(webRoot, "python/examples/manim_parity_square_to_circle.py"), "utf8");
-  const loaded = await page.evaluate((code) => window.noonHostRaster.load(code, 4), source);
+  let loaded;
+  try {
+    loaded = await page.evaluate((code) => window.noonHostRaster.load(code, 4), source);
+  } catch (error) {
+    console.error(JSON.stringify({
+      probeFailure: String(error?.stack ?? error),
+      pageDiagnostics,
+      cgroup: await cgroupDiagnostics(),
+    }));
+    throw error;
+  }
   assert.equal(loaded.rendererBackend, "WebGL2");
   const png = await page.locator("#scene").screenshot();
   assert.ok(png.length > 1000, "browser did not produce a useful preview image");
@@ -102,6 +128,7 @@ try {
     pngBytes: png.length,
     networkBlocked,
     chromiumSandbox: true,
+    pyodideNetworkAccess: false,
     observedChromiumProcesses: chromiumCommands.length,
   }));
 } finally {

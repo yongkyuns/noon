@@ -4,6 +4,8 @@ import { createRequire } from "node:module";
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
+import { installPinnedPyodideRoute } from "./preview-pyodide.mjs";
+
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_SOURCE_BYTES = 1_000_000;
@@ -167,6 +169,7 @@ try {
     ],
   });
   page = await browser.newPage({ viewport: { width: 960, height: 540 }, deviceScaleFactor: 1 });
+  await installPinnedPyodideRoute(page.context());
   await page.goto(hostUrl);
   await page.waitForFunction(() => window.noonAgentPreviewHost !== undefined);
   for await (const line of boundedLines(process.stdin)) {
