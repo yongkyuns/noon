@@ -96,7 +96,10 @@ mod tests {
         arrow.family().scale(2.0, 2.0).unwrap();
         arrow
             .family()
-            .rotate(std::f64::consts::FRAC_PI_2, crate::ManimRotationPivot::Center)
+            .rotate(
+                std::f64::consts::FRAC_PI_2,
+                crate::ManimRotationPivot::Center,
+            )
             .unwrap();
 
         assert!((arrow.manim_length().unwrap() - before * 2.0).abs() < 2.0e-6);
