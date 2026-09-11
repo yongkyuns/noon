@@ -55,7 +55,9 @@ function syntheticSet(context, { repetitions = 2 } = {}) {
       topP: 1,
       maxOutputTokens: 4096,
       seedPolicy: "same external policy across all three modes",
+      systemPromptSha256: "a".repeat(64),
     },
+    taskOrder: [...context.taskIds],
     repetitions,
     runs,
   };
@@ -75,7 +77,9 @@ test("complete three-mode synthetic matrix aggregates the required comparison me
   const report = aggregateComparison(set, context);
   assert.equal(report.fixtureOnly, true);
   assert.equal(report.taskCount, context.taskIds.length);
+  assert.deepEqual(report.taskOrder, context.taskIds);
   assert.deepEqual(Object.keys(report.modes), EVALUATION_MODES);
+  assert.equal(report.model.systemPromptSha256, "a".repeat(64));
   assert.equal(report.modes["docs-only"].meanToolCalls, 0);
   assert.equal(report.modes["skill+runner"].meanToolCalls, 3);
   assert.equal(report.modes["skill+MCP"].meanToolCalls, 4);
@@ -85,9 +89,10 @@ test("complete three-mode synthetic matrix aggregates the required comparison me
   assert.ok(report.modes["docs-only"].meanFirstUsefulFrameMs > report.modes["skill+MCP"].meanFirstUsefulFrameMs);
   assert.match(comparisonMarkdown(report), /SYNTHETIC FIXTURE — NOT STOCHASTIC AGENT RESULTS/);
   assert.match(comparisonMarkdown(report), /First useful frame \(ms\)/);
+  assert.match(comparisonMarkdown(report), /System prompt: `a{64}`/);
 });
 
-test("comparison rejects stale corpus or prompt identities", async () => {
+test("comparison rejects stale corpus, prompt identities, or task order", async () => {
   const context = await loadEvaluationContext();
   const staleCorpus = syntheticSet(context);
   staleCorpus.corpusSha256 = "0".repeat(64);
@@ -96,6 +101,10 @@ test("comparison rejects stale corpus or prompt identities", async () => {
   const stalePrompts = syntheticSet(context);
   stalePrompts.promptPackSha256 = "1".repeat(64);
   assert.throws(() => validateComparisonSet(stalePrompts, context), /prompt-pack hash/);
+
+  const reordered = syntheticSet(context);
+  [reordered.taskOrder[0], reordered.taskOrder[1]] = [reordered.taskOrder[1], reordered.taskOrder[0]];
+  assert.throws(() => validateComparisonSet(reordered, context), /taskOrder/);
 });
 
 test("comparison rejects incomplete, duplicate, or mode-specific result shapes", async () => {
@@ -120,11 +129,15 @@ test("comparison rejects incomplete, duplicate, or mode-specific result shapes",
   assert.throws(() => validateComparisonSet(executable, context), /executable runs require visual\/latency/);
 });
 
-test("comparison schema is strict so per-run settings cannot silently differ by mode", async () => {
+test("comparison schema is strict so mode-specific model/settings cannot silently differ", async () => {
   const context = await loadEvaluationContext();
   const set = syntheticSet(context);
   set.runs[0].model = { name: "different-model" };
   assert.throws(() => validateComparisonSet(set, context), /unknown field model/);
+
+  const missingSystemPrompt = syntheticSet(context);
+  delete missingSystemPrompt.model.systemPromptSha256;
+  assert.throws(() => validateComparisonSet(missingSystemPrompt, context), /systemPromptSha256/);
 
   const unknownUsage = syntheticSet(context);
   unknownUsage.runs[0].usage.costUsd = 1;
