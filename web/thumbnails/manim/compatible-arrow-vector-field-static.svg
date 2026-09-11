@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title desc">
+  <title id="title">Static ArrowVectorField</title>
+  <desc id="desc">A five by three rotational vector field with arrows tangent to circles around an empty zero-vector center.</desc>
+  <defs>
+    <marker id="tip-green" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0 0 L8 4 L0 8 Z" fill="#83c167"/></marker>
+    <marker id="tip-yellow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0 0 L8 4 L0 8 Z" fill="#ffff00"/></marker>
+    <marker id="tip-red" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0 0 L8 4 L0 8 Z" fill="#fc6255"/></marker>
+  </defs>
+  <rect width="640" height="360" fill="#10141d"/>
+  <g fill="none" stroke-linecap="round" stroke-width="5">
+    <path d="M150 222 L169 259" stroke="#fc6255" marker-end="url(#tip-red)"/>
+    <path d="M232 233 L257 257" stroke="#ffff00" marker-end="url(#tip-yellow)"/>
+    <path d="M314 252 L338 252" stroke="#83c167" marker-end="url(#tip-green)"/>
+    <path d="M397 257 L422 233" stroke="#ffff00" marker-end="url(#tip-yellow)"/>
+    <path d="M471 259 L490 222" stroke="#fc6255" marker-end="url(#tip-red)"/>
+
+    <path d="M160 180 L160 221" stroke="#ffff00" marker-end="url(#tip-yellow)"/>
+    <path d="M240 180 L240 214" stroke="#83c167" marker-end="url(#tip-green)"/>
+    <path d="M400 180 L400 146" stroke="#83c167" marker-end="url(#tip-green)"/>
+    <path d="M480 180 L480 139" stroke="#ffff00" marker-end="url(#tip-yellow)"/>
+
+    <path d="M169 101 L150 138" stroke="#fc6255" marker-end="url(#tip-red)"/>
+    <path d="M257 103 L232 127" stroke="#ffff00" marker-end="url(#tip-yellow)"/>
+    <path d="M338 108 L314 108" stroke="#83c167" marker-end="url(#tip-green)"/>
+    <path d="M422 127 L397 103" stroke="#ffff00" marker-end="url(#tip-yellow)"/>
+    <path d="M490 138 L471 101" stroke="#fc6255" marker-end="url(#tip-red)"/>
+  </g>
+</svg>

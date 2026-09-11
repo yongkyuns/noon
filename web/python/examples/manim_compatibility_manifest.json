@@ -186,6 +186,22 @@
     "thumbnail_alt": "Square below a circle and rectangle shifted upward through a VGroup slice",
     "thumbnail_time": 1.0,
     "order": 1120
-  }
+  },
+    {
+      "id": "compatible-arrow-vector-field-static",
+      "title": "ArrowVectorFieldStatic",
+      "summary": "Static rotational ArrowVectorField with explicit 2D ranges and Manim-compatible default length and norm-color behavior.",
+      "status": "ready",
+      "path": "python/examples/manim_compatible_arrow_vector_field.py",
+      "category": "manim-compatible/visualization",
+      "features": ["ArrowVectorField", "explicit 2D ranges", "static field", "default length", "default norm colors", "pixel-parity", "time-parity", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "parity-qualified",
+      "parity_fixture": "arrow-vector-field-static",
+      "thumbnail": "thumbnails/manim/compatible-arrow-vector-field-static.svg",
+      "thumbnail_alt": "Five by three rotational vector field with a zero vector at the center",
+      "thumbnail_time": 0.2,
+      "order": 1130
+    }
   ]
 }

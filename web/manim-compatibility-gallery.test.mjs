@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 12);
+assert.equal(gallery.examples.length, 13);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -29,6 +29,7 @@ assert.deepEqual(
     "compatible-text-family-fade",
     "compatible-text-family-reveal",
     "compatible-group-slicing",
+    "compatible-arrow-vector-field-static",
   ],
 );
 
@@ -123,6 +124,28 @@ assert.equal(
   slicingSource.replace("from noon import *", "from manim import *"),
   slicingCanonical,
   "group slicing gallery source must stay import-only equivalent to its canonical Manim fixture",
+);
+
+const vectorFieldEntry = readyEntries.find(
+  (entry) => entry.id === "compatible-arrow-vector-field-static",
+);
+assert.ok(vectorFieldEntry, "static ArrowVectorField must be a ready compatibility example");
+assert.equal(vectorFieldEntry.parity_status, "parity-qualified");
+assert.equal(vectorFieldEntry.parity_fixture, "arrow-vector-field-static");
+assert.ok(vectorFieldEntry.features.includes("pixel-parity"));
+assert.ok(vectorFieldEntry.features.includes("time-parity"));
+const vectorFieldSource = await readFile(
+  new URL(`./${vectorFieldEntry.path}`, import.meta.url),
+  "utf8",
+);
+const vectorFieldCanonical = await readFile(
+  new URL("../parity/manim-v0.21/core-examples/arrow_vector_field.py", import.meta.url),
+  "utf8",
+);
+assert.equal(
+  vectorFieldSource.replace("from noon import *", "from manim import *"),
+  vectorFieldCanonical,
+  "ArrowVectorField gallery source must stay import-only equivalent to its qualified canonical fixture",
 );
 
 console.log("✓ Noon-authored Manim-compatible gallery examples");
