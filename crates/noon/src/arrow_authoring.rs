@@ -19,6 +19,8 @@ pub const DEFAULT_ARROW_STROKE_WIDTH_RATIO: f64 = 0.05;
 /// Manim's default Arrow stroke width 6 after Cairo's 0.01 conversion.
 pub const DEFAULT_ARROW_STROKE_WIDTH: f64 = 0.06;
 
+type ArrowEndpoints = ((f64, f64), (f64, f64));
+
 /// Inert shared constructor intent for Arrow, Vector, or DoubleArrow.
 ///
 /// Width values are in Noon's semantic scene units, matching
@@ -253,7 +255,7 @@ impl ManimArrow {
 
     /// Current public Arrow endpoints. Tip apexes, not the shortened shaft bases,
     /// are the observable endpoints when tips are present.
-    pub fn endpoints(&self) -> Result<((f64, f64), (f64, f64)), AuthoringError> {
+    pub fn endpoints(&self) -> Result<ArrowEndpoints, AuthoringError> {
         self.validate_components()?;
         let shaft = self.shaft.manim_line_endpoints()?;
         let start = match self.start_tip.as_ref() {
