@@ -770,6 +770,7 @@ _PUBLIC_EXPORTS = {
     "Arrow": "_manim_arrow",
     "Vector": "_manim_arrow",
     "DoubleArrow": "_manim_arrow",
+    "ArrowVectorField": "_manim_arrow",
     "Elbow": "_manim_shared_geometry",
     "RoundedRectangle": "_manim_shared_geometry",
     "SurroundingRectangle": "_manim_shared_geometry",

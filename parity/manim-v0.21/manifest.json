@@ -143,6 +143,17 @@
       }
     },
     {
+      "id": "arrow-vector-field-static",
+      "scene": "ArrowVectorFieldStatic",
+      "source": "parity/manim-v0.21/core-examples/arrow_vector_field.py",
+      "expected_duration": 0.2,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 2,
+        "max_differing_ratio": 0.006,
+        "max_mean_absolute_channel_error": 0.5
+      }
+    },
+    {
       "id": "canonical-curve-layout",
       "scene": "OrdinaryCanonicalCurveLayout",
       "source": "parity/manim-v0.21/core-examples/canonical_curve_layout.py",

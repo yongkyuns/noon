@@ -1,4 +1,4 @@
-"""Thin Manim-compatible Arrow family facade over shared Rust semantics."""
+"""Thin Manim-compatible Arrow families over shared Rust semantics."""
 
 from __future__ import annotations
 
@@ -31,6 +31,19 @@ _ARROW_CONSTRUCTOR_OPTIONS = frozenset(
         "z_index",
     }
 )
+
+_FIELD_QUERY_METHODS = {
+    "startX": "vectorStartX",
+    "startY": "vectorStartY",
+    "endX": "vectorEndX",
+    "endY": "vectorEndY",
+    "vectorX": "vectorVectorX",
+    "vectorY": "vectorVectorY",
+    "length": "vectorLength",
+    "angle": "vectorAngle",
+    "unitVectorX": "vectorUnitVectorX",
+    "unitVectorY": "vectorUnitVectorY",
+}
 
 
 def _numeric_endpoint(name: str, value: object) -> _base.Vec2:
@@ -129,10 +142,16 @@ def _create(
 
 def _arrow_scalar(self: "Arrow", method: str) -> float:
     handle = getattr(self, "_semantic_arrow_handle", None)
-    operation = getattr(handle, method, None) if handle is not None else None
+    index = getattr(self, "_semantic_arrow_index", None)
+    if handle is None:
+        raise RuntimeError("Arrow observation requires the shared Rust authoring host")
+    operation_name = method if index is None else _FIELD_QUERY_METHODS[method]
+    operation = getattr(handle, operation_name, None)
     if operation is None:
         raise RuntimeError("Arrow observation requires the shared Rust authoring host")
-    return float(engine_call(operation, operation=f"Arrow.{method}"))
+    if index is None:
+        return float(engine_call(operation, operation=f"Arrow.{method}"))
+    return float(engine_call(operation, index, operation=f"Arrow.{method}"))
 
 
 def _validate_straight_arrow_options(
@@ -357,4 +376,163 @@ class DoubleArrow(Arrow):
         _create(self, options, color=color, kwargs=constructor_options)
 
 
-__all__ = ["Arrow", "Vector", "DoubleArrow"]
+_DEFAULT_VECTOR_FIELD_LENGTH = object()
+
+
+def _vector_field_range(name: str, value: object) -> tuple[list[float], list[float]]:
+    if value is None:
+        raise NotImplementedError(
+            f"ArrowVectorField {name}=None requires shared frame-derived default ranges"
+        )
+    try:
+        values = [float(component) for component in value]  # type: ignore[arg-type]
+    except (TypeError, ValueError) as error:
+        raise TypeError(f"{name} must contain two or three numeric values") from error
+    if len(values) == 2:
+        values.append(0.5)
+    elif len(values) != 3:
+        raise ValueError(f"{name} must contain [min, max] or [min, max, step]")
+    if any(not _base.math.isfinite(component) for component in values):
+        raise ValueError(f"{name} must contain finite values")
+    nominal = values.copy()
+    public = values.copy()
+    public[1] += public[2]
+    return nominal, public
+
+
+def _default_vector_field_length(norm: float) -> float:
+    return 0.45 / (1.0 + _base.math.exp(-float(norm)))
+
+
+def _attach_vector_field_member(created: object, index: int) -> Vector:
+    wrapper = object.__new__(Vector)
+    family = engine_call(created.vectorFamily, index)
+    shaft = _leaf(engine_call(created.vectorShaft, index), _compat.Line)
+    end_tip = _leaf(engine_call(created.vectorEndTip, index))
+    wrapper._semantic_arrow_handle = created
+    wrapper._semantic_arrow_index = index
+    wrapper._semantic_family_handle = family
+    wrapper._shaft = shaft
+    wrapper.tip = end_tip
+    wrapper.start_tip = None
+    wrapper._semantic_member_wrappers = {
+        _shared._family_wrapper_key(member): member for member in (shaft, end_tip)
+    }
+    return wrapper
+
+
+class ArrowVectorField(_compat.VGroup):
+    """Static 2D ArrowVectorField prepared at Rust-owned Manim sample points."""
+
+    def __init__(
+        self,
+        func,
+        color=None,
+        color_scheme=None,
+        min_color_scheme_value: float = 0,
+        max_color_scheme_value: float = 2,
+        colors=None,
+        *,
+        x_range=None,
+        y_range=None,
+        z_range=None,
+        three_dimensions: bool = False,
+        length_func=_DEFAULT_VECTOR_FIELD_LENGTH,
+        opacity: float = 1.0,
+        vector_config=None,
+        **kwargs: Any,
+    ) -> None:
+        if _arrow_options is None or _create_arrow_handle is None:
+            raise RuntimeError("ArrowVectorField construction requires the shared Rust authoring host")
+        if _shared._live_constructor_context("ArrowVectorField") is not None:
+            raise NotImplementedError(
+                "live ArrowVectorField construction requires shared retained-family publication support"
+            )
+        if not callable(func):
+            raise TypeError("ArrowVectorField func must be callable")
+        if color is not None:
+            raise NotImplementedError("ArrowVectorField single-color mode is not part of this B5 slice")
+        if color_scheme is not None:
+            raise NotImplementedError("custom ArrowVectorField color_scheme is not part of this B5 slice")
+        if float(min_color_scheme_value) != 0.0 or float(max_color_scheme_value) != 2.0:
+            raise NotImplementedError("custom ArrowVectorField color-scheme bounds are not part of this B5 slice")
+        if colors is not None:
+            raise NotImplementedError("custom ArrowVectorField color lists are not part of this B5 slice")
+        if z_range is not None or three_dimensions:
+            raise NotImplementedError("3D ArrowVectorField requires the Phase B6/C 3D field contract")
+        opacity_value = _ir._finite_number("opacity", opacity)
+        if opacity_value != 1.0:
+            raise NotImplementedError("ArrowVectorField opacity other than 1.0 is not part of this B5 slice")
+        if vector_config not in (None, {}):
+            raise NotImplementedError("ArrowVectorField vector_config is not part of this B5 slice")
+        if kwargs:
+            raise TypeError(
+                "unsupported ArrowVectorField constructor option(s): "
+                + ", ".join(sorted(kwargs))
+            )
+
+        x_nominal, x_public = _vector_field_range("x_range", x_range)
+        y_nominal, y_public = _vector_field_range("y_range", y_range)
+        custom_length = length_func is not _DEFAULT_VECTOR_FIELD_LENGTH
+        if custom_length and not callable(length_func):
+            raise TypeError("ArrowVectorField length_func must be callable")
+
+        draft = engine_call(
+            _arrow_options.vectorField,
+            x_nominal[0],
+            x_nominal[1],
+            x_nominal[2],
+            y_nominal[0],
+            y_nominal[1],
+            y_nominal[2],
+            custom_length,
+        )
+        try:
+            sample_count = int(draft.sampleCount)
+            for index in range(sample_count):
+                x = float(engine_call(draft.sampleX, index))
+                y = float(engine_call(draft.sampleY, index))
+                raw = _base._as_vec2(func((x, y, 0.0)))
+                engine_call(draft.setVector, index, raw.x, raw.y)
+                if custom_length:
+                    norm = raw.length()
+                    if norm != 0.0:
+                        display_length = _ir._finite_number(
+                            "length_func result", length_func(norm)
+                        )
+                        engine_call(draft.setDisplayLength, index, display_length)
+
+            created = engine_call(_create_arrow_handle, draft)
+        finally:
+            release = getattr(draft, "free", None)
+            if release is not None:
+                try:
+                    engine_call(release)
+                except Exception:
+                    pass
+
+        self._semantic_arrow_handle = created
+        self._semantic_family_handle = engine_call(created.family)
+        vector_count = int(created.vectorCount)
+        vectors = [
+            _attach_vector_field_member(created, index)
+            for index in range(vector_count)
+        ]
+        self._semantic_member_wrappers = {
+            _shared._family_wrapper_key(member): member for member in vectors
+        }
+
+        self.func = func
+        self.x_range = x_public
+        self.y_range = y_public
+        self.z_range = [0.0, 0.5, 0.5]
+        self.ranges = [self.x_range, self.y_range, self.z_range]
+        self.length_func = (
+            length_func if custom_length else _default_vector_field_length
+        )
+        self.opacity = opacity_value
+        self.vector_config = {}
+        self.single_color = False
+
+
+__all__ = ["Arrow", "Vector", "DoubleArrow", "ArrowVectorField"]
