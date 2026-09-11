@@ -15,7 +15,9 @@ use noon_core::{
 #[derive(Clone, Debug, PartialEq)]
 pub enum ArrowScaleError {
     Authoring(AuthoringError),
-    InvalidFamilyTopology { family: SemanticNodeId },
+    InvalidFamilyTopology {
+        family: SemanticNodeId,
+    },
     InvalidComponentRole {
         node: SemanticNodeId,
         expected: &'static str,
@@ -233,9 +235,9 @@ impl ManimArrow {
             };
 
         let mut shaft = scale_one(previous_shaft)?;
-        shaft.style.stroke_width = policy.initial_stroke_width().min(
-            policy.max_stroke_width_to_length_ratio() * old_length * factor.abs(),
-        );
+        shaft.style.stroke_width = policy
+            .initial_stroke_width()
+            .min(policy.max_stroke_width_to_length_ratio() * old_length * factor.abs());
         let end_tip = scale_one(previous_end_tip)?;
         let start_tip = previous_start_tip.map(scale_one).transpose()?;
         Ok((shaft, end_tip, start_tip))
@@ -496,7 +498,10 @@ mod tests {
         arrow.scale(0.5, false).unwrap();
         let scaled_length = arrow.manim_length().unwrap();
         assert!((scaled_length - 0.2).abs() < 1e-6);
-        assert_eq!(resource_handle(&arrow.end_tip().state().unwrap()), tip_resource);
+        assert_eq!(
+            resource_handle(&arrow.end_tip().state().unwrap()),
+            tip_resource
+        );
         assert!(
             (arrow.shaft().state().unwrap().style.stroke_width
                 - DEFAULT_ARROW_STROKE_WIDTH_RATIO * scaled_length)
@@ -510,7 +515,10 @@ mod tests {
 
         arrow.scale(10.0, false).unwrap();
         assert!((arrow.manim_length().unwrap() - 2.0).abs() < 1e-5);
-        assert_eq!(resource_handle(&arrow.end_tip().state().unwrap()), tip_resource);
+        assert_eq!(
+            resource_handle(&arrow.end_tip().state().unwrap()),
+            tip_resource
+        );
         assert!((arrow.shaft().state().unwrap().style.stroke_width - 0.06).abs() < 1e-12);
     }
 
@@ -550,7 +558,10 @@ mod tests {
         let endpoints = arrow.manim_endpoints().unwrap();
         assert!((endpoints.start.0 - 1.0).abs() < 1e-5);
         assert!((endpoints.end.0 + 1.0).abs() < 1e-5);
-        assert_eq!(arrow.end_tip().state().unwrap().transform.scale, before_tip_scale);
+        assert_eq!(
+            arrow.end_tip().state().unwrap().transform.scale,
+            before_tip_scale
+        );
         assert!((arrow.manim_angle().unwrap() - std::f64::consts::PI).abs() < 1e-5);
     }
 
@@ -565,7 +576,10 @@ mod tests {
 
         arrow.scale(0.5, false).unwrap();
 
-        assert_eq!(resource_handle(&arrow.end_tip().state().unwrap()), end_resource);
+        assert_eq!(
+            resource_handle(&arrow.end_tip().state().unwrap()),
+            end_resource
+        );
         assert_eq!(
             resource_handle(&arrow.start_tip().unwrap().state().unwrap()),
             start_resource
@@ -586,7 +600,10 @@ mod tests {
 
         arrow.scale(3.0, false).unwrap();
 
-        assert_eq!(scene.integration_store().borrow().scene_revision(), before_revision);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            before_revision
+        );
         assert_eq!(arrow.shaft().state().unwrap(), before_shaft);
     }
 
@@ -604,7 +621,10 @@ mod tests {
 
         assert!(arrow.scale(f64::NAN, false).is_err());
 
-        assert_eq!(scene.integration_store().borrow().scene_revision(), before_revision);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            before_revision
+        );
         assert_eq!(unrelated.state().unwrap(), unrelated_before);
     }
 }
