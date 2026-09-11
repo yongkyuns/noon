@@ -23,6 +23,8 @@ const CAPABILITY_STATUSES = new Set(["blocked", "deferred", "missing"]);
 const HASH_OPS = new Set(["equal", "notEqual"]);
 const ID = /^[a-z0-9][a-z0-9-]{0,127}$/;
 const FEATURE = /^[A-Za-z_][A-Za-z0-9_.-]{0,127}$/;
+const SYMBOL = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+const EVAL_SCENE = /^eval\/scenes\/[A-Za-z0-9_.-]+\.py$/;
 
 function record(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -47,8 +49,26 @@ function identifiers(value, label, pattern = ID) {
   return value;
 }
 
+function evalScenePath(value, label) {
+  if (typeof value !== "string" || !EVAL_SCENE.test(value) || value.split("/").includes("..")) {
+    throw new TypeError(`${label} must be a confined eval scene`);
+  }
+  return value;
+}
+
 function validateRender(task) {
-  if (typeof task.example !== "string" || !ID.test(task.example)) throw new TypeError(`${task.id}: invalid example ID`);
+  const hasExample = typeof task.example === "string";
+  const hasSourcePath = typeof task.sourcePath === "string";
+  if (hasExample === hasSourcePath) {
+    throw new TypeError(`${task.id}: render task requires exactly one inventory example or Noon-owned sourcePath`);
+  }
+  if (hasExample) {
+    if (!ID.test(task.example)) throw new TypeError(`${task.id}: invalid example ID`);
+    if (task.requiredSymbols !== undefined) throw new TypeError(`${task.id}: inventory example must not duplicate capability symbols`);
+  } else {
+    evalScenePath(task.sourcePath, `${task.id}.sourcePath`);
+    identifiers(task.requiredSymbols, `${task.id}.requiredSymbols`, SYMBOL);
+  }
   identifiers(task.requiredFeatures, `${task.id}.requiredFeatures`, FEATURE);
   boundedNumber(task.loopDurationSeconds, `${task.id}.loopDurationSeconds`, { min: Number.EPSILON });
   if (!Array.isArray(task.sampleTimes) || task.sampleTimes.length === 0 || task.sampleTimes[0] !== 0) {
@@ -86,10 +106,7 @@ function validateCapability(task) {
 }
 
 function validateCancellation(task) {
-  if (typeof task.sourcePath !== "string" || !/^eval\/scenes\/[A-Za-z0-9_.-]+\.py$/.test(task.sourcePath) ||
-      task.sourcePath.split("/").includes("..")) {
-    throw new TypeError(`${task.id}: cancellation source must be a confined eval scene`);
-  }
+  evalScenePath(task.sourcePath, `${task.id}.sourcePath`);
   boundedNumber(task.loopDurationSeconds, `${task.id}.loopDurationSeconds`, { min: Number.EPSILON });
   boundedNumber(task.sampleTime, `${task.id}.sampleTime`, { min: Number.EPSILON });
   boundedNumber(task.abortAfterMs, `${task.id}.abortAfterMs`, { min: 10, max: 5_000, integer: true });
