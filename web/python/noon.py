@@ -82,7 +82,7 @@ class Vec2(tuple):
         divisor = float(scalar)
         if divisor == 0.0:
             raise ZeroDivisionError("cannot divide Vec2 by zero")
-        return Vec2(self.x / divisor, self.y / divisor)
+        return self / divisor
 
     def length(self) -> float:
         return math.hypot(self.x, self.y)
@@ -178,7 +178,7 @@ def color_from_hex(value: str | int) -> Color:
     return _hex_color(value)
 
 
-# Manim Community default palette. Base names alias the C shade.
+# Manim Community default palette. Base names alias their C shade.
 WHITE = _hex_color(0xFFFFFF)
 BLACK = _hex_color(0x000000)
 BLUE_A = _hex_color(0xC7E9F1)
@@ -562,10 +562,7 @@ class Scene:
     """Python authoring facade; semantic operations require the shared Rust host."""
 
     def __init__(self) -> None:
-        # Derived wrapper/export identities only. These rows never carry scene
-        # content, painter order, animation tracks, or runtime state.
         self._owner = object()
-        # Derived host binding IDs map to the authoritative Rust handles.
         self._binding_handles: dict[int, object] = {}
         self._object_keys: dict[int, str] = {}
         self._object_key_ids: dict[str, int] = {}
@@ -594,8 +591,6 @@ class Scene:
         if not mobjects:
             return self
         self._edit_membership("add", mobjects, key=key)
-
-        # Python returns the wrapper for a single leaf, or the Scene for a batch.
         from _manim_compat import _leaf_mobjects
         leaves = [member for value in mobjects for member in _leaf_mobjects(value)]
         return leaves[0] if len(leaves) == 1 else self
@@ -711,7 +706,6 @@ class Scene:
 
 Object = Mobject
 
-# Public wrappers resolve from their defining modules without startup mutation.
 _PUBLIC_EXPORTS = {
     "Transform": "_manim_animate",
     "ReplacementTransform": "_manim_animate",
@@ -770,6 +764,7 @@ _PUBLIC_EXPORTS = {
     "Arrow": "_manim_arrow",
     "Vector": "_manim_arrow",
     "DoubleArrow": "_manim_arrow",
+    "ArrowVectorField": "_manim_arrow",
     "Elbow": "_manim_shared_geometry",
     "RoundedRectangle": "_manim_shared_geometry",
     "SurroundingRectangle": "_manim_shared_geometry",
