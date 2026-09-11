@@ -1,0 +1,56 @@
+name: B3 derived worker transport runner v2
+
+on:
+  push:
+    branches:
+      - codex/b3-derived-display-worker-transport
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Extract patch script without altering embedded literals
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('.github/workflows/b3-derived-worker-transport-patch.yml').read_text().splitlines()
+          start = source.index("          python3 - <<'PY'") + 1
+          end = len(source) - 1 - source[::-1].index('          PY')
+          body = []
+          inside_triple = False
+          for line in source[start:end]:
+              out = line if inside_triple else (line[10:] if line.startswith('          ') else line)
+              body.append(out)
+              if out.count("'''") % 2 == 1:
+                  inside_triple = not inside_triple
+          Path('/tmp/b3_patch.py').write_text('\n'.join(body) + '\n')
+          PY
+          python3 /tmp/b3_patch.py
+      - name: Format and focused tests
+        shell: bash
+        run: |
+          cargo fmt --all
+          cargo test -p noon-web derived_display_transport_regression --lib
+          cargo test -p noon-render-wgpu derived_display --lib
+      - name: Commit implementation
+        shell: bash
+        run: |
+          rm .github/workflows/b3-derived-worker-transport-patch.yml
+          rm .github/workflows/b3-derived-worker-run.yml
+          rm .github/workflows/b3-derived-worker-run-v2.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'Transport derived family rows across worker boundary'
+          git push origin HEAD:codex/b3-derived-display-worker-transport
