@@ -1,6 +1,6 @@
 use noon::{
-    Color, ManimArrowVectorField, MobjectFamilyMember, Scene, VectorFieldAxisRange,
-    VectorFieldPoint, VectorFieldRanges2D, BLUE, RED, YELLOW,
+    ManimArrowVectorField, Scene, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, BLUE,
+    PINK, RED, YELLOW,
 };
 use std::rc::Rc;
 
@@ -21,13 +21,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         |raw| raw.x + raw.y,
     )?;
 
-    scene.add_many(&[MobjectFamilyMember::Family(field.family())])?;
+    scene.add_many(&[field.family().into()])?;
     noon_native::run(scene.execution_session()?)?;
     Ok(())
 }
 
 #[allow(dead_code)]
-fn single_color_example(scene: &Scene) -> Result<ManimArrowVectorField, Box<dyn std::error::Error>> {
+fn single_color_example(
+    scene: &Scene,
+) -> Result<ManimArrowVectorField, Box<dyn std::error::Error>> {
     let ranges = VectorFieldRanges2D::new(
         VectorFieldAxisRange::new(-1.0, 1.0, 1.0),
         VectorFieldAxisRange::new(-1.0, 1.0, 1.0),
@@ -36,6 +38,6 @@ fn single_color_example(scene: &Scene) -> Result<ManimArrowVectorField, Box<dyn 
         Rc::clone(scene.integration_store()),
         |point| VectorFieldPoint::new(-point.y, point.x),
         ranges,
-        Color::rgb(0.819_607_85, 0.278_431_4, 0.741_176_5),
+        PINK,
     )?)
 }
