@@ -4,7 +4,7 @@
   "reference": {
     "compatibility": "Manim Community v0.21.0",
     "renderBackend": "WebGL2",
-    "sourcePolicy": "Ready tasks reference the maintained Noon/Manim example inventory by ID; no external scene or asset corpus is copied here."
+    "sourcePolicy": "Inventory-backed tasks resolve maintained Noon/Manim example IDs. Noon-owned eval fixtures are confined to eval/scenes and must declare maintained capability symbols. No external scene or asset corpus is copied here."
   },
   "tasks": [
     {
@@ -64,18 +64,21 @@
       ]
     },
     {
-      "id": "native-text-static",
+      "id": "native-text-hold",
       "kind": "render",
       "covers": ["text"],
-      "example": "manim-example1-text",
-      "requiredFeatures": ["Text", "Scene.add", "retained-text"],
-      "loopDurationSeconds": 1,
-      "sampleTimes": [0],
+      "sourcePath": "eval/scenes/native_text_hold.py",
+      "requiredSymbols": ["Text"],
+      "requiredFeatures": ["Text", "Scene.add", "wait", "retained-text"],
+      "loopDurationSeconds": 2,
+      "sampleTimes": [0, 1],
       "expectedBackend": "WebGL2",
-      "expectedAuthoredDuration": 0,
+      "expectedAuthoredDuration": 1,
       "expectedFinalObjectCount": 1,
       "repeatFresh": 1,
-      "hashRelations": []
+      "hashRelations": [
+        { "op": "equal", "left": 0, "right": 1 }
+      ]
     },
     {
       "id": "rotation-updater-callback",
