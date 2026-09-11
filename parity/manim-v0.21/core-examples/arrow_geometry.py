@@ -26,5 +26,8 @@ class ArrowGeometry(Scene):
             buff=0.15,
             color="#FC6255",
         ).scale(0.65)
-        self.add(arrow, vector, short, double)
+        source = Circle(radius=0.45).shift((2.45, 1.45, 0.0))
+        target = Square(side_length=0.8).rotate(PI / 8).shift((3.8, 1.15, 0.0))
+        bounded = Arrow(source, target, buff=0.05, color="#9A72AC")
+        self.add(arrow, vector, short, double, source, target, bounded)
         self.wait(0.2)
