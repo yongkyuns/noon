@@ -133,11 +133,11 @@ mod wasm {
 
     use crate::authoring_error::js_error;
 
-    type SharedSemanticStore = Rc<RefCell<SemanticStore>>;
+    pub(crate) type SharedSemanticStore = Rc<RefCell<SemanticStore>>;
 
     #[wasm_bindgen]
     pub struct WasmAuthoringStore {
-        semantics: SharedSemanticStore,
+        pub(crate) semantics: SharedSemanticStore,
     }
 
     #[wasm_bindgen]

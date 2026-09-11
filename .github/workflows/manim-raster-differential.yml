@@ -3,6 +3,8 @@ name: Manim raster differential
 on:
   pull_request:
     paths:
+      - "parity/manim-v0.21/manifest.json"
+      - "parity/manim-v0.21/core-examples/**"
       - "web/semantic-preview-session*"
       - "web/manim-raster-host.js"
       - "scripts/semantic-preview-*"
