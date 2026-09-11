@@ -899,9 +899,35 @@ impl std::error::Error for DerivedDisplayRenderError {}
 pub fn prepare_derived_display(
     publication: &noon_runtime::RendererPublication<'_>,
 ) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
+    prepare_derived_display_inner(publication, None)
+}
+
+/// Prepare only derived occurrences whose real source anchor participates in this
+/// viewport projection. Stable and derived painter ordering still comes from the
+/// authoritative publication order rather than candidate order.
+pub fn prepare_derived_display_visible(
+    publication: &noon_runtime::RendererPublication<'_>,
+    visible_object_indices: &[usize],
+) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
+    let visible = visible_object_indices
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    prepare_derived_display_inner(publication, Some(&visible))
+}
+
+fn prepare_derived_display_inner(
+    publication: &noon_runtime::RendererPublication<'_>,
+    visible: Option<&std::collections::HashSet<usize>>,
+) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
     let mut by_anchor =
         std::collections::BTreeMap::<u32, Vec<&noon_runtime::DerivedDisplayObject>>::new();
     for object in publication.derived_display_objects() {
+        if visible
+            .is_some_and(|visible| !visible.contains(&(object.anchor_object_index() as usize)))
+        {
+            continue;
+        }
         let anchor = object.anchor_object_index();
         let state = object.state();
         if state.z_index != publication.frame().objects[anchor as usize].z_index {
@@ -918,6 +944,9 @@ pub fn prepare_derived_display(
     let mut prepared = PreparedDerivedDisplay::default();
     let mut seen_anchors = HashSet::with_capacity(by_anchor.len());
     for &object_index in publication.painter_order() {
+        if visible.is_some_and(|visible| !visible.contains(&(object_index as usize))) {
+            continue;
+        }
         prepared
             .painter_items
             .push(DisplayPainterItem::Stable { object_index });
