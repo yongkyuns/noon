@@ -58,6 +58,8 @@ class ManimArrowFacadeTests(unittest.TestCase):
                 def shaft(self): return self._shaft
                 def startTip(self): return self._start
                 def endTip(self): return self._end
+                def scale(self, factor, scale_tips):
+                    calls.append(("arrow_scale", float(factor), bool(scale_tips)))
 
             class FakeOptions:
                 def __init__(self, kind, start, end):
@@ -157,7 +159,7 @@ class ManimArrowFacadeTests(unittest.TestCase):
             assert ("publish", "double") in calls
 
             # Python does not recompute family geometry. Supported whole-object edits
-            # route through the existing shared family handle.
+            # route through existing shared Rust handles.
             arrow.shift((0.5, -0.25))
             assert ("family_shift", 0.5, -0.25) in calls
             assert len(arrow.submobjects) == 2
@@ -168,6 +170,18 @@ class ManimArrowFacadeTests(unittest.TestCase):
             assert double.get_start_tip() is double.start_tip
             assert arrow.get_end() == noon.Vec2(3.0, 0.0)
 
+            # Arrow-aware scaling stays on the opaque Rust Arrow capability.
+            arrow.scale(2.0)
+            arrow.scale(0.5, scale_tips=True)
+            assert ("arrow_scale", 2.0, False) in calls
+            assert ("arrow_scale", 0.5, True) in calls
+
+            # Derived public queries consume the shared endpoint observations.
+            assert arrow.get_vector() == noon.Vec2(2.0, 0.0)
+            assert arrow.get_length() == 2.0
+            assert arrow.get_angle() == 0.0
+            assert arrow.get_unit_vector() == noon.Vec2(1.0, 0.0)
+
             # Unsupported ManimCE semantic breadth rejects rather than being approximated.
             before = list(calls)
             for thunk in (
@@ -175,8 +189,7 @@ class ManimArrowFacadeTests(unittest.TestCase):
                 lambda: arrows.Arrow(tip_shape=object()),
                 lambda: arrows.Arrow(tip_style={"fill_opacity": 0.0}),
                 lambda: arrows.DoubleArrow(tip_shape_start=object()),
-                lambda: arrow.scale(2.0),
-                lambda: arrow.scale(2.0, scale_tips=True),
+                lambda: arrow.scale(2.0, about_point=(0.0, 0.0)),
             ):
                 try:
                     thunk()

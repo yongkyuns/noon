@@ -2,9 +2,8 @@
 //!
 //! One Arrow is a semantic family whose renderable leaves are an analytic Line
 //! shaft plus retained filled triangular tip paths. Geometry, buff shortening,
-//! tip sizing, stroke-width capping, and family publication are Rust-owned.
-//! Frontends only construct this inert typed request and wrap the returned
-//! semantic handles.
+//! tip sizing, stroke-width capping, dependent scaling, and family publication
+//! are Rust-owned. Frontends retain only typed handles.
 
 use crate::{AuthoringError, ManimGeometryOptions, Mobject, MobjectFamily};
 use noon_core::{
@@ -179,9 +178,8 @@ impl ManimArrowOptions {
             end: lower_point("arrow shaft end", shaft_end)?,
         }
         .into();
-        shaft.style.stroke_width = shaft
-            .style
-            .stroke_width
+        let initial_stroke_width = shaft.style.stroke_width;
+        shaft.style.stroke_width = initial_stroke_width
             .min(self.max_stroke_width_to_length_ratio * length);
 
         let tip_color = manim_visible_color(&shaft.style);
@@ -203,17 +201,25 @@ impl ManimArrowOptions {
             start_tip,
             tip_color,
             z_index: self.z_index,
+            initial_stroke_width,
+            max_stroke_width_to_length_ratio: self.max_stroke_width_to_length_ratio,
         })
     }
 }
 
 /// Typed semantic handles for one atomically-created Arrow family.
+///
+/// The class-specific scaling policy is retained here in shared Rust. Optional
+/// language frontends may retain this opaque handle, but they never mirror the
+/// policy values or recompute Arrow geometry.
 #[derive(Clone, Debug)]
 pub struct ManimArrow {
     family: MobjectFamily,
     shaft: Mobject,
     end_tip: Mobject,
     start_tip: Option<Mobject>,
+    initial_stroke_width: f64,
+    max_stroke_width_to_length_ratio: f64,
 }
 
 impl ManimArrow {
@@ -245,6 +251,264 @@ impl ManimArrow {
         self.start_tip.as_ref()
     }
 
+    /// Current public Arrow endpoints. Tip apexes, not the shortened shaft bases,
+    /// are the observable endpoints when tips are present.
+    pub fn endpoints(&self) -> Result<((f64, f64), (f64, f64)), AuthoringError> {
+        self.validate_components()?;
+        let shaft = self.shaft.manim_line_endpoints()?;
+        let start = match self.start_tip.as_ref() {
+            Some(tip) => tip.path_query()?.start()?,
+            None => shaft.start,
+        };
+        let end = self.end_tip.path_query()?.start()?;
+        Ok((start, end))
+    }
+
+    pub fn length(&self) -> Result<f64, AuthoringError> {
+        let (start, end) = self.endpoints()?;
+        Ok((end.0 - start.0).hypot(end.1 - start.1))
+    }
+
+    pub fn angle(&self) -> Result<f64, AuthoringError> {
+        let (start, end) = self.endpoints()?;
+        Ok((end.1 - start.1).atan2(end.0 - start.0))
+    }
+
+    /// Match ManimCE Arrow.scale for the straight retained Arrow family.
+    ///
+    /// With `scale_tips=false`, public shaft endpoints scale about the shaft
+    /// center while the existing tip resources retain their current size and are
+    /// only re-oriented/re-positioned. With `scale_tips=true`, all Arrow leaves
+    /// scale about the aggregate family center. Both modes recap the shaft from
+    /// the originally authored stroke width and publish one semantic transaction.
+    pub fn scale(&self, factor: f64, scale_tips: bool) -> Result<(), AuthoringError> {
+        let factor = crate::integration::authoring_render_f64("arrow scale factor", factor)?;
+        self.validate_components()?;
+        let (start, end) = self.endpoints()?;
+        let old_length = distance(start, end);
+        // Pinned ManimCE returns immediately for a zero-length Arrow.
+        if old_length == 0.0 {
+            return Ok(());
+        }
+
+        let (previous_shaft, previous_end_tip, previous_start_tip) = (
+            self.shaft.state()?,
+            self.end_tip.state()?,
+            self.start_tip
+                .as_ref()
+                .map(Mobject::state)
+                .transpose()?,
+        );
+
+        let store = self.family.integration_store();
+        let (next_shaft, next_end_tip, next_start_tip) = {
+            let store_ref = store.borrow();
+            if scale_tips {
+                self.scaled_with_tips(
+                    &store_ref,
+                    factor,
+                    old_length,
+                    &previous_shaft,
+                    &previous_end_tip,
+                    previous_start_tip.as_ref(),
+                )?
+            } else {
+                self.scaled_preserving_tips(
+                    factor,
+                    start,
+                    end,
+                    &previous_shaft,
+                    &previous_end_tip,
+                    previous_start_tip.as_ref(),
+                )?
+            }
+        };
+
+        let mut transaction = SemanticMutationTransaction::new();
+        crate::semantic_mobject::stage_state_changes(
+            &mut transaction,
+            self.shaft.node_id(),
+            &previous_shaft,
+            &next_shaft,
+        );
+        crate::semantic_mobject::stage_state_changes(
+            &mut transaction,
+            self.end_tip.node_id(),
+            &previous_end_tip,
+            &next_end_tip,
+        );
+        if let (Some(handle), Some(previous), Some(next)) = (
+            self.start_tip.as_ref(),
+            previous_start_tip.as_ref(),
+            next_start_tip.as_ref(),
+        ) {
+            crate::semantic_mobject::stage_state_changes(
+                &mut transaction,
+                handle.node_id(),
+                previous,
+                next,
+            );
+        }
+        transaction
+            .apply(&mut store.borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
+    fn validate_components(&self) -> Result<(), AuthoringError> {
+        self.family.validate()?;
+        self.shaft.validate()?;
+        self.end_tip.validate()?;
+        if let Some(tip) = self.start_tip.as_ref() {
+            tip.validate()?;
+        }
+        Ok(())
+    }
+
+    fn scaled_with_tips(
+        &self,
+        store: &SemanticStore,
+        factor: f64,
+        old_length: f64,
+        previous_shaft: &SemanticObjectState,
+        previous_end_tip: &SemanticObjectState,
+        previous_start_tip: Option<&SemanticObjectState>,
+    ) -> Result<(SemanticObjectState, SemanticObjectState, Option<SemanticObjectState>), AuthoringError>
+    {
+        let bounds = self
+            .family
+            .layout_bounds()?
+            .ok_or(AuthoringError::MissingLayoutBounds(self.family.node_id()))?;
+        let pivot = (
+            (bounds.min_x + bounds.max_x) * 0.5,
+            (bounds.min_y + bounds.max_y) * 0.5,
+        );
+
+        let scale_one = |previous: &SemanticObjectState|
+         -> Result<SemanticObjectState, AuthoringError> {
+            let old_center = crate::semantic_mobject::state_center(store, previous)?;
+            let target_center = (
+                pivot.0 + (old_center.0 - pivot.0) * factor,
+                pivot.1 + (old_center.1 - pivot.1) * factor,
+            );
+            let mut next = previous.clone();
+            crate::semantic_mobject::scale_state_about_center(
+                store,
+                &mut next,
+                factor,
+                factor,
+                target_center,
+            )?;
+            Ok(next)
+        };
+
+        let mut shaft = scale_one(previous_shaft)?;
+        shaft.style.stroke_width = self
+            .initial_stroke_width
+            .min(self.max_stroke_width_to_length_ratio * old_length * factor.abs());
+        let end_tip = scale_one(previous_end_tip)?;
+        let start_tip = previous_start_tip.map(scale_one).transpose()?;
+        Ok((shaft, end_tip, start_tip))
+    }
+
+    fn scaled_preserving_tips(
+        &self,
+        factor: f64,
+        start: (f64, f64),
+        end: (f64, f64),
+        previous_shaft: &SemanticObjectState,
+        previous_end_tip: &SemanticObjectState,
+        previous_start_tip: Option<&SemanticObjectState>,
+    ) -> Result<(SemanticObjectState, SemanticObjectState, Option<SemanticObjectState>), AuthoringError>
+    {
+        let pivot = midpoint(start, end);
+        let new_start = scale_point_about(start, pivot, factor);
+        let new_end = scale_point_about(end, pivot, factor);
+        let new_length = distance(new_start, new_end);
+
+        let shaft_endpoints = self.shaft.manim_line_endpoints()?;
+        let end_tip_length = distance(end, shaft_endpoints.end);
+        let start_tip_length = previous_start_tip
+            .map(|_| distance(start, shaft_endpoints.start))
+            .unwrap_or(0.0);
+
+        let mut next_end_tip = previous_end_tip.clone();
+        let mut next_start_tip = previous_start_tip.cloned();
+        let (shaft_start, shaft_end) = if new_length == 0.0 {
+            reposition_tip(
+                &mut next_end_tip,
+                end,
+                current_tip_direction(shaft_endpoints.end, end),
+                new_end,
+                None,
+            )?;
+            if let (Some(previous), Some(next)) =
+                (previous_start_tip, next_start_tip.as_mut())
+            {
+                reposition_tip(
+                    next,
+                    start,
+                    current_tip_direction(shaft_endpoints.start, start),
+                    new_start,
+                    None,
+                )?;
+                debug_assert_eq!(previous.content, next.content);
+            }
+            (new_start, new_end)
+        } else {
+            let direction = unit_direction(new_start, new_end);
+            reposition_tip(
+                &mut next_end_tip,
+                end,
+                current_tip_direction(shaft_endpoints.end, end),
+                new_end,
+                Some(direction),
+            )?;
+            let end_base = (
+                new_end.0 - direction.0 * end_tip_length,
+                new_end.1 - direction.1 * end_tip_length,
+            );
+
+            let start_base = if let Some(next) = next_start_tip.as_mut() {
+                // Manim re-adds the end tip first. The start-tip tangent is therefore
+                // based on the line from the public start to the newly shortened end.
+                let tangent = unit_direction_or(
+                    new_start,
+                    end_base,
+                    direction,
+                );
+                let start_direction = (-tangent.0, -tangent.1);
+                reposition_tip(
+                    next,
+                    start,
+                    current_tip_direction(shaft_endpoints.start, start),
+                    new_start,
+                    Some(start_direction),
+                )?;
+                (
+                    new_start.0 + tangent.0 * start_tip_length,
+                    new_start.1 + tangent.1 * start_tip_length,
+                )
+            } else {
+                new_start
+            };
+            (start_base, end_base)
+        };
+
+        let mut next_shaft = previous_shaft.clone();
+        set_line_world_endpoints(
+            &mut next_shaft,
+            shaft_start,
+            shaft_end,
+            "scaled arrow shaft",
+        )?;
+        next_shaft.style.stroke_width = self
+            .initial_stroke_width
+            .min(self.max_stroke_width_to_length_ratio * new_length);
+
+        Ok((next_shaft, next_end_tip, next_start_tip))
+    }
+
     fn from_committed(
         store: Rc<RefCell<SemanticStore>>,
         committed: CommittedArrow,
@@ -257,6 +521,8 @@ impl ManimArrow {
                 .start_tip
                 .map(|node| Mobject::from_node(Rc::clone(&store), node))
                 .transpose()?,
+            initial_stroke_width: committed.initial_stroke_width,
+            max_stroke_width_to_length_ratio: committed.max_stroke_width_to_length_ratio,
         })
     }
 }
@@ -336,6 +602,8 @@ struct PreparedArrow {
     start_tip: Option<VectorPath>,
     tip_color: Color,
     z_index: f64,
+    initial_stroke_width: f64,
+    max_stroke_width_to_length_ratio: f64,
 }
 
 struct StagedArrow {
@@ -350,6 +618,8 @@ struct CommittedArrow {
     shaft: noon_core::SemanticNodeId,
     end_tip: noon_core::SemanticNodeId,
     start_tip: Option<noon_core::SemanticNodeId>,
+    initial_stroke_width: f64,
+    max_stroke_width_to_length_ratio: f64,
 }
 
 struct ShortenedLine {
@@ -432,6 +702,8 @@ fn resolve_staged_arrow(
             .start_tip
             .map(|token| resolve(token).ok_or(AuthoringError::UnresolvedCreatedNode(token)))
             .transpose()?,
+        initial_stroke_width: prepared.initial_stroke_width,
+        max_stroke_width_to_length_ratio: prepared.max_stroke_width_to_length_ratio,
     })
 }
 
@@ -556,6 +828,122 @@ fn nonnegative(name: &str, value: f64) -> Result<f64, AuthoringError> {
     Ok(value)
 }
 
+fn distance(left: (f64, f64), right: (f64, f64)) -> f64 {
+    (right.0 - left.0).hypot(right.1 - left.1)
+}
+
+fn midpoint(left: (f64, f64), right: (f64, f64)) -> (f64, f64) {
+    ((left.0 + right.0) * 0.5, (left.1 + right.1) * 0.5)
+}
+
+fn scale_point_about(point: (f64, f64), pivot: (f64, f64), factor: f64) -> (f64, f64) {
+    (
+        pivot.0 + (point.0 - pivot.0) * factor,
+        pivot.1 + (point.1 - pivot.1) * factor,
+    )
+}
+
+fn unit_direction(start: (f64, f64), end: (f64, f64)) -> (f64, f64) {
+    let dx = end.0 - start.0;
+    let dy = end.1 - start.1;
+    let length = dx.hypot(dy);
+    debug_assert!(length > 0.0);
+    (dx / length, dy / length)
+}
+
+fn unit_direction_or(
+    start: (f64, f64),
+    end: (f64, f64),
+    fallback: (f64, f64),
+) -> (f64, f64) {
+    let dx = end.0 - start.0;
+    let dy = end.1 - start.1;
+    let length = dx.hypot(dy);
+    if length == 0.0 {
+        fallback
+    } else {
+        (dx / length, dy / length)
+    }
+}
+
+fn current_tip_direction(base: (f64, f64), apex: (f64, f64)) -> Option<(f64, f64)> {
+    let dx = apex.0 - base.0;
+    let dy = apex.1 - base.1;
+    let length = dx.hypot(dy);
+    (length > 0.0).then_some((dx / length, dy / length))
+}
+
+fn reposition_tip(
+    state: &mut SemanticObjectState,
+    old_apex: (f64, f64),
+    old_direction: Option<(f64, f64)>,
+    new_apex: (f64, f64),
+    new_direction: Option<(f64, f64)>,
+) -> Result<(), AuthoringError> {
+    if let (Some(old), Some(new)) = (old_direction, new_direction) {
+        let angle = new.1.atan2(new.0) - old.1.atan2(old.0);
+        let ((translation_x, translation_y), rotation) =
+            crate::semantic_mobject::rotate_affine_about_point(
+                (state.transform.translation.x, state.transform.translation.y),
+                state.transform.rotation_z,
+                angle,
+                old_apex,
+            )?;
+        state.transform.translation.x = translation_x;
+        state.transform.translation.y = translation_y;
+        state.transform.rotation_z = rotation;
+    }
+    state.transform.translation.x += new_apex.0 - old_apex.0;
+    state.transform.translation.y += new_apex.1 - old_apex.1;
+    state
+        .transform
+        .translation
+        .lower_xy_f32()
+        .map_err(AuthoringError::from)?;
+    Ok(())
+}
+
+fn set_line_world_endpoints(
+    state: &mut SemanticObjectState,
+    start: (f64, f64),
+    end: (f64, f64),
+    name: &str,
+) -> Result<(), AuthoringError> {
+    let start = inverse_transform_point(state.transform, start, name)?;
+    let end = inverse_transform_point(state.transform, end, name)?;
+    state.content = StoredGeometry::Line {
+        start: lower_point(&format!("{name} start"), start)?,
+        end: lower_point(&format!("{name} end"), end)?,
+    }
+    .into();
+    Ok(())
+}
+
+fn inverse_transform_point(
+    transform: noon_core::SemanticTransform2_5D,
+    point: (f64, f64),
+    name: &str,
+) -> Result<(f64, f64), AuthoringError> {
+    let translated_x = point.0 - transform.translation.x;
+    let translated_y = point.1 - transform.translation.y;
+    let (sin, cos) = transform.rotation_z.sin_cos();
+    let rotated_x = translated_x * cos + translated_y * sin;
+    let rotated_y = -translated_x * sin + translated_y * cos;
+    checked_point(
+        name,
+        if transform.scale.x == 0.0 {
+            0.0
+        } else {
+            rotated_x / transform.scale.x
+        },
+        if transform.scale.y == 0.0 {
+            0.0
+        } else {
+            rotated_y / transform.scale.y
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,6 +956,13 @@ mod tests {
             panic!("arrow shaft must stay an analytic Line");
         };
         (start, end)
+    }
+
+    fn resource_handle(state: &SemanticObjectState) -> noon_core::GeometryResourceHandle {
+        let SemanticObjectContent::Geometry(StoredGeometry::Resource(handle)) = state.content else {
+            panic!("arrow tip must remain a retained geometry resource");
+        };
+        handle
     }
 
     #[test]
@@ -662,6 +1057,87 @@ mod tests {
         let (start, end) = line_endpoints(&arrow.shaft().state().unwrap());
         assert_eq!(start, end);
         assert_eq!(arrow.shaft().state().unwrap().style.stroke_width, 0.0);
+    }
+
+    #[test]
+    fn scale_preserves_tip_resource_and_recovers_authored_stroke_cap() {
+        let scene = Scene::new();
+        let mut options = ManimArrowOptions::arrow(0.0, 0.0, 0.4, 0.0).unwrap();
+        options.set_buff(0.0).unwrap();
+        let arrow = ManimArrow::create(Rc::clone(scene.integration_store()), options).unwrap();
+        let tip_resource = resource_handle(&arrow.end_tip().state().unwrap());
+        let before_revision = scene.integration_store().borrow().scene_revision();
+
+        arrow.scale(0.5, false).unwrap();
+        assert!((arrow.length().unwrap() - 0.2).abs() < 1e-6);
+        assert_eq!(resource_handle(&arrow.end_tip().state().unwrap()), tip_resource);
+        assert!((arrow.shaft().state().unwrap().style.stroke_width - 0.01).abs() < 1e-12);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            before_revision.checked_next().unwrap()
+        );
+
+        arrow.scale(10.0, false).unwrap();
+        assert!((arrow.length().unwrap() - 2.0).abs() < 1e-5);
+        assert_eq!(resource_handle(&arrow.end_tip().state().unwrap()), tip_resource);
+        assert!((arrow.shaft().state().unwrap().style.stroke_width - 0.06).abs() < 1e-12);
+    }
+
+    #[test]
+    fn scale_tips_true_scales_tip_with_family_in_one_publication() {
+        let scene = Scene::new();
+        let mut options = ManimArrowOptions::arrow(-1.0, 0.0, 1.0, 0.0).unwrap();
+        options.set_buff(0.0).unwrap();
+        let arrow = ManimArrow::create(Rc::clone(scene.integration_store()), options).unwrap();
+        let tip_resource = resource_handle(&arrow.end_tip().state().unwrap());
+        let tip_scale = arrow.end_tip().state().unwrap().transform.scale;
+        let before_revision = scene.integration_store().borrow().scene_revision();
+
+        arrow.scale(2.0, true).unwrap();
+
+        let after = arrow.end_tip().state().unwrap();
+        assert_eq!(resource_handle(&after), tip_resource);
+        assert!((after.transform.scale.x - tip_scale.x * 2.0).abs() < 1e-12);
+        assert!((after.transform.scale.y - tip_scale.y * 2.0).abs() < 1e-12);
+        assert!((arrow.length().unwrap() - 4.0).abs() < 1e-5);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            before_revision.checked_next().unwrap()
+        );
+    }
+
+    #[test]
+    fn negative_scale_preserves_tip_size_and_reverses_public_direction() {
+        let scene = Scene::new();
+        let mut options = ManimArrowOptions::arrow(-1.0, 0.0, 1.0, 0.0).unwrap();
+        options.set_buff(0.0).unwrap();
+        let arrow = ManimArrow::create(Rc::clone(scene.integration_store()), options).unwrap();
+        let before_tip_scale = arrow.end_tip().state().unwrap().transform.scale;
+
+        arrow.scale(-1.0, false).unwrap();
+
+        let (start, end) = arrow.endpoints().unwrap();
+        assert!((start.0 - 1.0).abs() < 1e-5);
+        assert!((end.0 + 1.0).abs() < 1e-5);
+        assert_eq!(arrow.end_tip().state().unwrap().transform.scale, before_tip_scale);
+        assert!((arrow.angle().unwrap() - std::f64::consts::PI).abs() < 1e-5);
+    }
+
+    #[test]
+    fn zero_length_scale_is_a_noop_like_manim() {
+        let scene = Scene::new();
+        let arrow = ManimArrow::create(
+            Rc::clone(scene.integration_store()),
+            ManimArrowOptions::arrow(1.0, 2.0, 1.0, 2.0).unwrap(),
+        )
+        .unwrap();
+        let before_revision = scene.integration_store().borrow().scene_revision();
+        let before_shaft = arrow.shaft().state().unwrap();
+
+        arrow.scale(3.0, false).unwrap();
+
+        assert_eq!(scene.integration_store().borrow().scene_revision(), before_revision);
+        assert_eq!(arrow.shaft().state().unwrap(), before_shaft);
     }
 
     #[test]
