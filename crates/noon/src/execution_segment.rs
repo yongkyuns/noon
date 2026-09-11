@@ -45,6 +45,10 @@ pub(crate) struct SegmentCompletionEntry {
     pub property: Property,
     pub track: TrackId,
     pub end_time: f64,
+    /// Keep this execution endpoint authoritative instead of reconciling the track
+    /// back to authored base state at segment completion. Used only for derived/
+    /// presentation state with no authored field to receive the endpoint.
+    pub retain_effective: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
