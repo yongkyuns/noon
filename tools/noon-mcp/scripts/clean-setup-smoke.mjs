@@ -50,13 +50,13 @@ try {
   });
   assert.notEqual(reference.isError, true);
   assert.match(reference.structuredContent.source, /class SquareToCircle/);
-  assert.match(reference.structuredContent.source_sha256, /^[0-9a-f]{64}$/);
+  assert.match(reference.structuredContent.example.source_sha256, /^[0-9a-f]{64}$/);
 
   process.stdout.write(`${JSON.stringify({
     ok: true,
     packageRoot,
     capabilityRevision: capabilities.structuredContent.provenance.revision,
-    referenceSha256: reference.structuredContent.source_sha256,
+    referenceSha256: reference.structuredContent.example.source_sha256,
   })}\n`);
 } finally {
   await client.close().catch(() => {});
