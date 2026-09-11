@@ -61,16 +61,12 @@ impl WasmManimArrowOptions {
 
     fn sample_point(&self, index: u32) -> Result<noon::VectorFieldPoint, JsValue> {
         let draft = self.vector_field_draft()?;
-        draft
-            .points
-            .get(index as usize)
-            .copied()
-            .ok_or_else(|| {
-                invalid_input(
-                    "vector_field.sample_index",
-                    format!("vector-field sample index {index} is out of range"),
-                )
-            })
+        draft.points.get(index as usize).copied().ok_or_else(|| {
+            invalid_input(
+                "vector_field.sample_index",
+                format!("vector-field sample index {index} is out of range"),
+            )
+        })
     }
 }
 
@@ -128,11 +124,9 @@ impl WasmManimArrowOptions {
             noon::VectorFieldAxisRange::new(x_start, x_end, x_step),
             noon::VectorFieldAxisRange::new(y_start, y_end, y_step),
         );
-        let plan = noon_geometry::plan_static_arrow_vector_field(
-            |_| noon::VectorFieldPoint::ZERO,
-            ranges,
-        )
-        .map_err(vector_field_planning_error)?;
+        let plan =
+            noon_geometry::plan_static_arrow_vector_field(|_| noon::VectorFieldPoint::ZERO, ranges)
+                .map_err(vector_field_planning_error)?;
         let points = plan
             .samples
             .into_iter()
@@ -210,7 +204,9 @@ impl WasmManimArrowOptions {
 
     #[wasm_bindgen(js_name = setTipLength)]
     pub fn set_tip_length(&mut self, value: f64) -> Result<(), JsValue> {
-        self.arrow_options_mut()?.set_tip_length(value).map_err(js_error)
+        self.arrow_options_mut()?
+            .set_tip_length(value)
+            .map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = setMaxTipLengthToLengthRatio)]
@@ -229,7 +225,9 @@ impl WasmManimArrowOptions {
 
     #[wasm_bindgen(js_name = setZIndex)]
     pub fn set_z_index(&mut self, value: f64) -> Result<(), JsValue> {
-        self.arrow_options_mut()?.set_z_index(value).map_err(js_error)
+        self.arrow_options_mut()?
+            .set_z_index(value)
+            .map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = setTranslation)]
@@ -246,7 +244,9 @@ impl WasmManimArrowOptions {
 
     #[wasm_bindgen(js_name = setRotation)]
     pub fn set_rotation(&mut self, value: f64) -> Result<(), JsValue> {
-        self.arrow_options_mut()?.set_rotation(value).map_err(js_error)
+        self.arrow_options_mut()?
+            .set_rotation(value)
+            .map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = setColor)]
@@ -324,15 +324,14 @@ impl WasmAuthoringArrowHandle {
 
     fn vector(&self, index: u32) -> Result<&noon::ManimArrow, JsValue> {
         match &self.published {
-            PublishedArrowRequest::VectorField(field) => field
-                .vectors()
-                .get(index as usize)
-                .ok_or_else(|| {
+            PublishedArrowRequest::VectorField(field) => {
+                field.vectors().get(index as usize).ok_or_else(|| {
                     invalid_input(
                         "vector_field.vector_index",
                         format!("vector-field vector index {index} is out of range"),
                     )
-                }),
+                })
+            }
             PublishedArrowRequest::Arrow(_) => Err(invalid_input(
                 "vector_field.not_field",
                 "vector member access is available only on an ArrowVectorField handle",
@@ -403,9 +402,8 @@ impl WasmAuthoringArrowHandle {
 
     #[wasm_bindgen(js_name = vectorEndTip)]
     pub fn vector_end_tip(&self, index: u32) -> Result<WasmAuthoringMobjectHandle, JsValue> {
-        self.vector(index).map(|arrow| {
-            WasmAuthoringMobjectHandle::from_semantic_mobject(arrow.end_tip().clone())
-        })
+        self.vector(index)
+            .map(|arrow| WasmAuthoringMobjectHandle::from_semantic_mobject(arrow.end_tip().clone()))
     }
 }
 
@@ -419,11 +417,13 @@ impl WasmAuthoringStore {
         candidate: WasmManimArrowOptions,
     ) -> Result<WasmAuthoringArrowHandle, JsValue> {
         match candidate.request {
-            ArrowRequest::Arrow(options) => noon::ManimArrow::create(Rc::clone(&self.semantics), options)
-                .map(|arrow| WasmAuthoringArrowHandle {
-                    published: PublishedArrowRequest::Arrow(arrow),
-                })
-                .map_err(js_error),
+            ArrowRequest::Arrow(options) => {
+                noon::ManimArrow::create(Rc::clone(&self.semantics), options)
+                    .map(|arrow| WasmAuthoringArrowHandle {
+                        published: PublishedArrowRequest::Arrow(arrow),
+                    })
+                    .map_err(js_error)
+            }
             ArrowRequest::VectorField(draft) => {
                 let vectors = complete_vectors(&draft)?;
                 let semantics = Rc::clone(&self.semantics);
