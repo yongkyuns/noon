@@ -20,26 +20,46 @@ function requireFeatures(record, required, label) {
   for (const feature of required) assert.ok(features.has(feature), `${label} lost required feature ${feature}`);
 }
 
-test("fixed agent evaluation corpus is grounded in the maintained capability/example inventory", { timeout: 30_000 }, async (t) => {
+async function evalFixture(task) {
+  const evalRoot = await realpath(path.join(packageRoot, "eval"));
+  const sourcePath = await realpath(path.join(packageRoot, task.sourcePath));
+  assert.ok(sourcePath.startsWith(`${evalRoot}${path.sep}`), `${task.id} escaped the eval fixture root`);
+  const source = await readFile(sourcePath);
+  assert.match(hash(source), /^[0-9a-f]{64}$/);
+  return source.toString("utf8");
+}
+
+test("fixed agent evaluation corpus is grounded in maintained inventories and declared Noon fixtures", { timeout: 30_000 }, async (t) => {
   const corpus = await loadEvaluationCorpus();
   assert.equal(corpus.reference.compatibility, "Manim Community v0.21.0");
   assert.equal(corpus.reference.renderBackend, "WebGL2");
 
   const discovery = await createDiscovery({ repoRoot, pythonExecutable: python });
   t.after(() => discovery.close());
-  const examples = corpus.tasks.filter((task) => task.kind !== "cancellation").map((task) => task.example);
-  const report = await discovery.capabilities({ examples });
+  const examples = corpus.tasks.filter((task) => task.example).map((task) => task.example);
+  const symbols = [...new Set(corpus.tasks.flatMap((task) => task.requiredSymbols ?? []))];
+  const report = await discovery.capabilities({ examples, symbols });
   assert.equal(report.qualification.behavioral_tests_run, false,
     "source inventory must not be mislabeled as deterministic render qualification");
 
   for (const task of corpus.tasks) {
     if (task.kind === "cancellation") {
-      const evalRoot = await realpath(path.join(packageRoot, "eval"));
-      const sourcePath = await realpath(path.join(packageRoot, task.sourcePath));
-      assert.ok(sourcePath.startsWith(`${evalRoot}${path.sep}`), `${task.id} escaped the eval fixture root`);
-      const source = await readFile(sourcePath);
-      assert.match(source.toString("utf8"), /while True:/, `${task.id} must remain the intentional stuck-source fixture`);
-      assert.match(hash(source), /^[0-9a-f]{64}$/);
+      const source = await evalFixture(task);
+      assert.match(source, /while True:/, `${task.id} must remain the intentional stuck-source fixture`);
+      continue;
+    }
+
+    if (task.kind === "render" && task.sourcePath) {
+      const source = await evalFixture(task);
+      assert.match(source, /from noon import \*/);
+      for (const symbol of task.requiredSymbols) {
+        const record = report.symbols[symbol];
+        assert.ok(record, `${task.id} lost capability symbol ${symbol}`);
+        assert.equal(record.exported, true, `${task.id} requires exported ${symbol}`);
+        assert.ok(["supported", "partial"].includes(record.policy.status),
+          `${task.id} requires an available capability classification for ${symbol}`);
+        assert.equal(record.runtime_verified, false);
+      }
       continue;
     }
 
