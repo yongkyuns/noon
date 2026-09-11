@@ -66,9 +66,9 @@ A package or checkout hash is not evidence that a particular browser runtime was
 loaded. Actual preview results obtain build identity from the running browser worker
 and carry it with retained frame provenance.
 
-Runtime and dependency notices are in `THIRD_PARTY_NOTICES.md`. The initial package
-adds no copied external scene/asset corpus; any later evaluation corpus must be
-reviewed for redistribution provenance separately.
+Runtime and dependency notices are in `THIRD_PARTY_NOTICES.md`. The deterministic
+evaluation corpus uses maintained repository examples plus two small Noon-owned
+fixtures under `eval/scenes`; it does not copy an external scene/assets corpus.
 
 ### Optional isolated preview
 
@@ -120,8 +120,9 @@ support.
 
 `noon_reference` accepts one `example` ID. It resolves a currently ready example
 through that same inventory, confines the source to the checkout's example tree,
-checks the source hash, and returns at most 64 KiB of source. A file changed since
-the inventory scan fails instead of returning falsely attributed evidence.
+checks the source hash, and returns at most 64 KiB of source. A file
+changed since the inventory scan fails instead of returning falsely attributed
+evidence.
 
 A ready fixture or a declared parity label is **not a test performed by these
 discovery tools**. Results explicitly report `behavioral_tests_run: false`.
@@ -146,6 +147,32 @@ source/build/requested-time/published-time/backend provenance from the qualified
 runner path. Session handles are scope capabilities: stale and cross-scope use is
 rejected. Request cancellation, transport disconnect, signals, and shutdown flow
 through the shared session/runner cleanup path.
+
+## Evaluation
+
+`eval/corpus.json` is the mandatory deterministic product corpus. The Agent MCP
+workflow runs it through the same Docker-isolated `AgentPreviewService` path and
+checks semantic observations, backend-qualified retained PNG evidence, provenance,
+cancellation cleanup, unsupported classifications, and fresh-run determinism.
+These deterministic checks remain authoritative CI.
+
+Stochastic model evaluation is separate. `eval/agent-prompts.json` fixes one prompt
+for every deterministic task ID and defines three comparison modes: `docs-only`,
+`skill+runner`, and `skill+MCP`. `eval/agent-comparison.mjs` accepts only a complete
+three-mode matrix using one shared model/settings block and the current corpus and
+prompt-pack hashes. See `eval/AGENT_EVALUATION.md` for the collection/scoring
+contract.
+
+After real external runs have been collected:
+
+```bash
+node scripts/report-agent-evaluation.mjs /absolute/path/to/comparison.json --format markdown
+```
+
+The repository does not claim stochastic scores merely because the reporting
+pipeline is tested. Synthetic fixtures are marked `fixtureOnly: true`; the CLI
+refuses them unless `--allow-fixture` is explicitly supplied and labels their
+output as non-results.
 
 ## Boundaries
 
@@ -181,9 +208,10 @@ NOON_PYTHON=/absolute/path/to/python3 \
 
 Unit tests exercise bounded discovery subprocesses, reference-file validation,
 rendering adapter mapping, structured errors, cancellation propagation,
-artifact-delivery cleanup, and deterministic distribution identities. The stdio
-and clean-setup tests start the real server through an MCP SDK client and verify
-discovery-only behavior and protocol-clean failures. The repository's Agent
-discovery workflow additionally runs the real Docker preview, shared runner, CLI,
-and configured MCP rendering client against actual PNG frames and verifies
-deterministic provenance and cleanup.
+artifact-delivery cleanup, deterministic distribution identities, deterministic
+evaluation-corpus grounding, and stochastic comparison/reporting fairness rules.
+The stdio and clean-setup tests start the real server through an MCP SDK client
+and verify discovery-only behavior and protocol-clean failures. The repository's
+Agent discovery workflow additionally runs the real Docker preview, shared runner,
+CLI, configured MCP rendering client, and deterministic corpus against actual PNG
+frames and verifies deterministic provenance and cleanup.
