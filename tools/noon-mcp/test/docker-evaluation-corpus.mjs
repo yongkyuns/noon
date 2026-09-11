@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -75,10 +75,29 @@ function assertHashRelations(task, hashes) {
   }
 }
 
+async function declaredSource(task) {
+  if (task.example) {
+    const reference = await discovery.reference({ example: task.example });
+    return { source: reference.source, sourceSha256: reference.example.source_sha256, sourceKind: "inventory-example" };
+  }
+
+  const evalRoot = await realpath(path.join(packageRoot, "eval"));
+  const sourceFile = await realpath(path.join(packageRoot, task.sourcePath));
+  assert.ok(sourceFile.startsWith(`${evalRoot}${path.sep}`), `${task.id} escaped the eval fixture root`);
+  const source = await readFile(sourceFile, "utf8");
+  const report = await discovery.capabilities({ symbols: task.requiredSymbols });
+  for (const symbol of task.requiredSymbols) {
+    const record = report.symbols[symbol];
+    assert.ok(record?.exported, `${task.id} requires exported capability ${symbol}`);
+    assert.ok(["supported", "partial"].includes(record.policy?.status),
+      `${task.id} requires available capability ${symbol}, got ${String(record.policy?.status)}`);
+  }
+  return { source, sourceSha256: sha256(Buffer.from(source, "utf8")), sourceKind: "noon-eval-fixture" };
+}
+
 async function renderOnce(task) {
-  const reference = await discovery.reference({ example: task.example });
-  const sourceSha256 = reference.example.source_sha256;
-  const opened = await service.open(scope, reference.source, { loopDurationSeconds: task.loopDurationSeconds });
+  const { source, sourceSha256, sourceKind } = await declaredSource(task);
+  const opened = await service.open(scope, source, { loopDurationSeconds: task.loopDurationSeconds });
   const { sessionId } = opened;
   try {
     const frames = [opened];
@@ -97,8 +116,9 @@ async function renderOnce(task) {
     assert.equal(final.authoredDuration, task.expectedAuthoredDuration, `${task.id} authored duration`);
     assert.equal(final.frame.objectCount, task.expectedFinalObjectCount, `${task.id} final object count`);
     assertHashRelations(task, hashes);
-    evidence.push({ id: task.id, sessionId, sourceSha256, hashes, finalObjectCount: final.frame.objectCount,
-      authoredDuration: final.authoredDuration, backend: final.frame.rendererBackend });
+    evidence.push({ id: task.id, sessionId, sourceKind, sourceSha256, hashes,
+      finalObjectCount: final.frame.objectCount, authoredDuration: final.authoredDuration,
+      backend: final.frame.rendererBackend });
     return hashes;
   } finally {
     const closed = await service.close(scope, sessionId, `${task.id} deterministic evaluation complete`);
