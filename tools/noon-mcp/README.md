@@ -11,12 +11,18 @@ second rendering implementation.
 
 Requirements for discovery are Node 22+, Python 3.12+, and a trusted Noon
 checkout on a POSIX host. The package is private and checkout-bound; it is not
-published to npm. Install its pinned, locked dependencies explicitly:
+published to npm. Install its pinned, locked dependencies explicitly and without
+lifecycle hooks:
 
 ```bash
 cd /path/to/noon/tools/noon-mcp
-npm ci --ignore-scripts
+npm ci --ignore-scripts --no-audit --no-fund
 ```
+
+A fresh checkout plus that command is the supported initial package setup. The
+Agent discovery workflow verifies it on fresh Linux and macOS hosted runners; the
+#1199 packaging job additionally emits the deterministic distribution manifest
+and exercises the real SDK client before any optional preview runtime is enabled.
 
 Configure an MCP host to launch the actual server module, not `npm start` (npm
 may write banners on the protocol channel). Replace the example absolute paths:
@@ -41,14 +47,40 @@ arguments. Missing configuration fails on stderr without emitting invalid
 stdout. The official MCP SDK owns stdio protocol handling; there is no custom
 JSON-RPC loop.
 
+### Distribution identity
+
+Generate the deterministic source-package manifest after the locked install:
+
+```bash
+npm run manifest
+```
+
+The manifest identifies the private package/lockfile, direct dependency versions,
+npm integrity strings and lockfile-declared licenses, `noon-authoring` skill
+version/hash, capability-export schema/provenance/input hashes, shared runner source
+hashes, pinned Playwright container identity, pinned Pyodide archive identity, and
+required Node/Python/Docker environment. It contains no generation timestamp.
+
+The source-package manifest deliberately records `loadedBuildIdentity: null`.
+A package or checkout hash is not evidence that a particular browser runtime was
+loaded. Actual preview results obtain build identity from the running browser worker
+and carry it with retained frame provenance.
+
+Runtime and dependency notices are in `THIRD_PARTY_NOTICES.md`. The initial package
+adds no copied external scene/asset corpus; any later evaluation corpus must be
+reviewed for redistribution provenance separately.
+
 ### Optional isolated preview
 
 Rendering additionally requires Docker with a reachable local daemon and the
-checkout's current browser package. Prepare the pinned, content-addressed Docker
-runtime with the existing setup helper:
+checkout's **current built browser package**. Build that package first from the
+trusted checkout, then prepare the pinned content-addressed Docker runtime:
 
 ```bash
-cd /path/to/noon/tools/noon-mcp
+cd /path/to/noon
+bash scripts/build-web-demo.sh
+
+cd tools/noon-mcp
 NOON_PREVIEW_CACHE=/absolute/path/to/private-preview-cache \
   node scripts/setup-preview-runtime.mjs
 ```
@@ -63,6 +95,20 @@ The preview runtime configuration is trusted startup configuration. Rendering
 tool arguments cannot choose another checkout, executable, Docker image,
 seccomp profile, command, or working directory.
 
+The same qualified service is also available as a one-shot CLI:
+
+```bash
+NOON_PREVIEW_RUNTIME_CONFIG=/absolute/path/to/runtime.json \
+  node bin/noon-preview.mjs \
+  --source /absolute/path/to/scene.py \
+  --output /absolute/path/to/preview-output \
+  --loop-duration 4 \
+  --time 1 --time 1.5 --time 3
+```
+
+Use a fresh run after editing source. The public preview contract is forward-only;
+it does not claim arbitrary seek or persistent live-object editing.
+
 ## Tools and evidence
 
 `noon_capabilities` accepts optional `symbols` and `examples` arrays, each
@@ -73,10 +119,9 @@ restrictions, and the distinction between API presence and declared behavioral
 support.
 
 `noon_reference` accepts one `example` ID. It resolves a currently ready example
-through that same inventory, confines the source to the checkout's example
-tree, checks the source hash, and returns at most 64 KiB of source. A file
-changed since the inventory scan fails instead of returning falsely attributed
-evidence.
+through that same inventory, confines the source to the checkout's example tree,
+checks the source hash, and returns at most 64 KiB of source. A file changed since
+the inventory scan fails instead of returning falsely attributed evidence.
 
 A ready fixture or a declared parity label is **not a test performed by these
 discovery tools**. Results explicitly report `behavioral_tests_run: false`.
@@ -128,12 +173,17 @@ providing arbitrary remote code execution.
 
 ```bash
 npm test
+npm run manifest
+NOON_REPO=/absolute/path/to/noon \
+NOON_PYTHON=/absolute/path/to/python3 \
+  npm run smoke:clean
 ```
 
 Unit tests exercise bounded discovery subprocesses, reference-file validation,
-rendering adapter mapping, structured errors, cancellation propagation, and
-artifact-delivery cleanup. The stdio tests start the real server through an MCP
-SDK client and verify discovery-only behavior and protocol-clean failures. The
-repository's Agent discovery MCP workflow additionally runs the real Docker
-preview, shared runner, CLI, and configured MCP rendering client against actual
-PNG frames and verifies deterministic provenance and cleanup.
+rendering adapter mapping, structured errors, cancellation propagation,
+artifact-delivery cleanup, and deterministic distribution identities. The stdio
+and clean-setup tests start the real server through an MCP SDK client and verify
+discovery-only behavior and protocol-clean failures. The repository's Agent
+discovery workflow additionally runs the real Docker preview, shared runner, CLI,
+and configured MCP rendering client against actual PNG frames and verifies
+deterministic provenance and cleanup.
