@@ -1,0 +1,102 @@
+name: codex b3 derived display host patch
+
+on:
+  push:
+    branches: [codex/b3-derived-display-host]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Wire viewport-filtered derived rows through retained host rendering
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one match, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          # CPU preparation: share one implementation and allow host visibility to
+          # cull derived occurrences by their real source anchor.
+          path = "crates/noon-render-wgpu/src/render_order.rs"
+          text = Path(path).read_text()
+          old_sig = '''pub fn prepare_derived_display(\n    publication: &noon_runtime::RendererPublication<'_>,\n) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {\n    let mut by_anchor =\n        std::collections::BTreeMap::<u32, Vec<&noon_runtime::DerivedDisplayObject>>::new();\n    for object in publication.derived_display_objects() {\n'''
+          new_sig = '''pub fn prepare_derived_display(\n    publication: &noon_runtime::RendererPublication<'_>,\n) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {\n    prepare_derived_display_inner(publication, None)\n}\n\n/// Prepare only derived occurrences whose real source anchor participates in this\n/// viewport projection. Stable and derived painter ordering still comes from the\n/// authoritative publication order rather than candidate order.\npub fn prepare_derived_display_visible(\n    publication: &noon_runtime::RendererPublication<'_>,\n    visible_object_indices: &[usize],\n) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {\n    let visible = visible_object_indices\n        .iter()\n        .copied()\n        .collect::<std::collections::HashSet<_>>();\n    prepare_derived_display_inner(publication, Some(&visible))\n}\n\nfn prepare_derived_display_inner(\n    publication: &noon_runtime::RendererPublication<'_>,\n    visible: Option<&std::collections::HashSet<usize>>,\n) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {\n    let mut by_anchor =\n        std::collections::BTreeMap::<u32, Vec<&noon_runtime::DerivedDisplayObject>>::new();\n    for object in publication.derived_display_objects() {\n        if visible.is_some_and(|visible| !visible.contains(&(object.anchor_object_index() as usize))) {\n            continue;\n        }\n'''
+          if text.count(old_sig) != 1:
+              raise SystemExit("render_order.rs: derived prep signature mismatch")
+          text = text.replace(old_sig, new_sig, 1)
+          old_loop = '''    for &object_index in publication.painter_order() {\n        prepared\n            .painter_items\n            .push(DisplayPainterItem::Stable { object_index });\n        let Some(objects) = by_anchor.get(&object_index) else {\n'''
+          new_loop = '''    for &object_index in publication.painter_order() {\n        if visible.is_some_and(|visible| !visible.contains(&(object_index as usize))) {\n            continue;\n        }\n        prepared\n            .painter_items\n            .push(DisplayPainterItem::Stable { object_index });\n        let Some(objects) = by_anchor.get(&object_index) else {\n'''
+          if text.count(old_loop) != 1:
+              raise SystemExit("render_order.rs: painter loop mismatch")
+          text = text.replace(old_loop, new_loop, 1)
+          Path(path).write_text(text)
+
+          # GPU core: retain timestamp profiling on the derived path.
+          path = "crates/noon-render-wgpu/src/gpu/derived_display.rs"
+          marker = '''    /// Upload renderer-owned transient analytic instances without changing stable\n    /// prepared-frame buffers or slot identity.\n    pub fn upload_derived(\n'''
+          method = '''    /// Profiled variant of [`Self::encode_with_derived`] using the same host-owned\n    /// two-entry timestamp query set as ordinary geometry encoding.\n    pub fn encode_with_derived_profiled(\n        &self,\n        encoder: &mut wgpu::CommandEncoder,\n        view: &wgpu::TextureView,\n        stable: &PreparedFrame<'_>,\n        derived: &PreparedDerivedDisplay,\n        clear_color: wgpu::Color,\n        query_set: &wgpu::QuerySet,\n    ) -> DrawStats {\n        self.encode_inner(\n            encoder,\n            view,\n            stable,\n            clear_color,\n            Some(derived),\n            Some(query_set),\n        )\n    }\n\n'''
+          replace_once(path, marker, method + marker)
+
+          # Retained geometry/text adapter: derived rows are supported only when the
+          # retained frame is geometry-only; mixed glyph painter order remains explicit.
+          path = "crates/noon-render-wgpu/src/gpu/retained_text.rs"
+          marker = '''#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]\npub struct RetainedDrawStats {\n    pub geometry: DrawStats,\n    pub text: TextGpuDrawStats,\n}\n\npub struct RetainedTextGpuState {\n'''
+          addition = '''#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]\npub struct RetainedDrawStats {\n    pub geometry: DrawStats,\n    pub text: TextGpuDrawStats,\n}\n\n#[derive(Clone, Copy, Debug, PartialEq, Eq)]\npub enum RetainedDerivedDisplayError {\n    MixedTextUnsupported,\n}\n\nimpl std::fmt::Display for RetainedDerivedDisplayError {\n    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n        match self {\n            Self::MixedTextUnsupported => formatter.write_str(\n                "derived family Transform display rows are not yet interleaved with retained glyph painter items",\n            ),\n        }\n    }\n}\n\nimpl std::error::Error for RetainedDerivedDisplayError {}\n\npub struct RetainedTextGpuState {\n'''
+          replace_once(path, marker, addition)
+
+          marker = '''    /// Encode the normal retained painter-order pass, optionally recording its\n    /// beginning/end into a host-owned two-entry timestamp query set.\n    pub fn encode_retained(\n'''
+          method = '''    /// Encode a retained geometry-only frame with identity-free derived analytic\n    /// occurrences. Mixed glyph frames fail closed until the retained text stream can\n    /// represent plan-local occurrence ordinals without manufacturing object IDs.\n    pub fn encode_retained_with_derived(\n        &self,\n        encoder: &mut wgpu::CommandEncoder,\n        view: &wgpu::TextureView,\n        prepared: &PreparedRetainedGpuFrame<'_>,\n        derived: &crate::PreparedDerivedDisplay,\n        clear_color: wgpu::Color,\n        query_set: Option<&wgpu::QuerySet>,\n    ) -> Result<RetainedDrawStats, RetainedDerivedDisplayError> {\n        if !prepared.geometry_only {\n            return Err(RetainedDerivedDisplayError::MixedTextUnsupported);\n        }\n        let geometry = match query_set {\n            Some(queries) => self.encode_with_derived_profiled(\n                encoder,\n                view,\n                &prepared.geometry,\n                derived,\n                clear_color,\n                queries,\n            ),\n            None => self.encode_with_derived(\n                encoder,\n                view,\n                &prepared.geometry,\n                derived,\n                clear_color,\n            ),\n        };\n        Ok(RetainedDrawStats {\n            geometry,\n            text: TextGpuDrawStats::default(),\n        })\n    }\n\n'''
+          replace_once(path, marker, method + marker)
+
+          # Direct WASM host: derive visible padding rows from the exact publication,
+          # upload them separately, then opt into the mixed geometry encoder.
+          path = "crates/noon-web/src/execution_canvas.rs"
+          replace_once(
+              path,
+              '''    use noon_render_wgpu::{Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState};\n''',
+              '''    use noon_render_wgpu::{\n        prepare_derived_display_visible, Camera2D, GpuRenderer, RetainedFramePreparer,\n        RetainedTextGpuState,\n    };\n''',
+          )
+          old_prepare = '''                let publication = direct.take_renderer_publication();\n                publication_context = publication.context();\n                let prepared = self\n                    .direct_preparer\n                    .prepare_planned_publication_visible(\n                        &self.device,\n                        &self.queue,\n                        &publication,\n                        visibility.object_indices(),\n                        metrics,\n                    )\n                    .map_err(js_error)?;\n                let upload = self.renderer.upload_retained(\n                    &self.device,\n                    &self.queue,\n                    &prepared,\n                    &mut self.direct_text_gpu,\n                );\n                self.last_geometry_cache_misses = prepared.geometry_stats().geometry_cache_misses;\n                self.last_bytes_uploaded = upload\n                    .geometry\n                    .bytes_uploaded\n                    .saturating_add(upload.text.bytes_uploaded);\n'''
+          new_prepare = '''                let publication = direct.take_renderer_publication();\n                publication_context = publication.context();\n                let derived = prepare_derived_display_visible(\n                    &publication,\n                    visibility.object_indices(),\n                )\n                .map_err(js_error)?;\n                let prepared = self\n                    .direct_preparer\n                    .prepare_planned_publication_visible(\n                        &self.device,\n                        &self.queue,\n                        &publication,\n                        visibility.object_indices(),\n                        metrics,\n                    )\n                    .map_err(js_error)?;\n                let upload = self.renderer.upload_retained(\n                    &self.device,\n                    &self.queue,\n                    &prepared,\n                    &mut self.direct_text_gpu,\n                );\n                let derived_upload = (!derived.slots.is_empty()).then(|| {\n                    self.renderer\n                        .upload_derived(&self.device, &self.queue, &derived)\n                });\n                self.last_geometry_cache_misses = prepared.geometry_stats().geometry_cache_misses;\n                self.last_bytes_uploaded = upload\n                    .geometry\n                    .bytes_uploaded\n                    .saturating_add(upload.text.bytes_uploaded)\n                    .saturating_add(derived_upload.map_or(0, |stats| stats.bytes_uploaded));\n'''
+          replace_once(path, old_prepare, new_prepare)
+
+          old_encode = '''                let draw = self.renderer.encode_retained(\n                    &mut encoder,\n                    &view,\n                    &prepared,\n                    &self.direct_text_gpu,\n                    self.clear_color,\n                    timestamp_slot.map(|slot| profiler.expect("reserved profiler").query_set(slot)),\n                );\n'''
+          new_encode = '''                let query_set =\n                    timestamp_slot.map(|slot| profiler.expect("reserved profiler").query_set(slot));\n                let draw = if derived.slots.is_empty() {\n                    self.renderer.encode_retained(\n                        &mut encoder,\n                        &view,\n                        &prepared,\n                        &self.direct_text_gpu,\n                        self.clear_color,\n                        query_set,\n                    )\n                } else {\n                    self.renderer\n                        .encode_retained_with_derived(\n                            &mut encoder,\n                            &view,\n                            &prepared,\n                            &derived,\n                            self.clear_color,\n                            query_set,\n                        )\n                        .map_err(js_error)\n                };\n'''
+          replace_once(path, old_encode, new_encode)
+      - name: Format
+        run: cargo fmt --all
+      - name: Derived renderer tests
+        run: cargo test -p noon-render-wgpu derived_display --lib
+      - name: Renderer check
+        run: cargo check -p noon-render-wgpu
+      - name: Renderer lint
+        run: cargo clippy -p noon-render-wgpu --lib -- -D warnings
+      - name: Web wasm check
+        run: cargo check -p noon-web --features renderer --target wasm32-unknown-unknown
+      - name: Commit production patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Yongkyun Shin"
+          git config user.email "yongkyuns@gmail.com"
+          git add crates/noon-render-wgpu/src/render_order.rs crates/noon-render-wgpu/src/gpu/derived_display.rs crates/noon-render-wgpu/src/gpu/retained_text.rs crates/noon-web/src/execution_canvas.rs
+          git commit -m "Render derived family Transform rows in direct host"
+          git push origin HEAD:codex/b3-derived-display-host
