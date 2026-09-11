@@ -289,33 +289,35 @@ impl ManimArrowVectorField {
             let mut vector =
                 ManimArrowOptions::vector(sample.display_vector.x, sample.display_vector.y)?;
             vector.set_translation(sample.point.x, sample.point.y)?;
-            let color = match &mut coloring {
-                ColorPolicy::Default => gradient_color(
-                    &DEFAULT_COLORS,
-                    DEFAULT_MIN_COLOR_SCHEME_VALUE,
-                    DEFAULT_MAX_COLOR_SCHEME_VALUE,
-                    sample.raw_norm,
-                ),
-                ColorPolicy::Single(color) => *color,
-                ColorPolicy::Gradient {
-                    colors,
-                    min,
-                    max,
-                    scheme,
-                } => {
-                    let value = if let Some(scheme) = scheme.as_deref_mut() {
-                        let value = scheme(sample.raw_vector);
-                        if !value.is_finite() {
-                            return Err(ArrowVectorFieldAuthoringError::
-                                NonFiniteColorSchemeOutput { sample_index });
-                        }
-                        value
-                    } else {
-                        sample.raw_norm
-                    };
-                    gradient_color(colors, *min, *max, value)
-                }
-            };
+            let color =
+                match &mut coloring {
+                    ColorPolicy::Default => gradient_color(
+                        &DEFAULT_COLORS,
+                        DEFAULT_MIN_COLOR_SCHEME_VALUE,
+                        DEFAULT_MAX_COLOR_SCHEME_VALUE,
+                        sample.raw_norm,
+                    ),
+                    ColorPolicy::Single(color) => *color,
+                    ColorPolicy::Gradient {
+                        colors,
+                        min,
+                        max,
+                        scheme,
+                    } => {
+                        let value =
+                            if let Some(scheme) = scheme.as_deref_mut() {
+                                let value = scheme(sample.raw_vector);
+                                if !value.is_finite() {
+                                    return Err(ArrowVectorFieldAuthoringError::
+                                        NonFiniteColorSchemeOutput { sample_index });
+                                }
+                                value
+                            } else {
+                                sample.raw_norm
+                            };
+                        gradient_color(colors, *min, *max, value)
+                    }
+                };
             vector.set_color(
                 f64::from(color.red),
                 f64::from(color.green),
@@ -571,9 +573,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(ArrowVectorFieldAuthoringError::NonFiniteColorSchemeOutput {
-                sample_index: 1
-            })
+            Err(ArrowVectorFieldAuthoringError::NonFiniteColorSchemeOutput { sample_index: 1 })
         ));
         assert_eq!(scene.integration_store().borrow().len(), before_nodes);
         assert_eq!(
