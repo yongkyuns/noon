@@ -7,9 +7,18 @@ on:
       - "scripts/noon-capabilities.py"
       - "scripts/test_noon_capabilities.py"
       - "scripts/check-noon-agent-skill.py"
+      - "scripts/package-noon-agent.mjs"
+      - "scripts/package-noon-agent.test.mjs"
       - "scripts/manim-api-coverage.py"
       - "scripts/agent-preview-artifacts*.mjs"
       - "scripts/agent-preview-capture*.mjs"
+      - "scripts/agent-preview-sessions.mjs"
+      - "tools/noon-mcp/**"
+      - "web/agent-preview-host*"
+      - "web/*authoring*.js"
+      - "web/*execution*.js"
+      - "web/provenanced-authoring-client.js"
+      - "web/semantic-preview-session.js"
       - "compat/manim-v0.21.0.json"
       - "web/python/**"
       - "parity/manim-v0.21/upstream-examples/**"
@@ -21,9 +30,18 @@ on:
       - "scripts/noon-capabilities.py"
       - "scripts/test_noon_capabilities.py"
       - "scripts/check-noon-agent-skill.py"
+      - "scripts/package-noon-agent.mjs"
+      - "scripts/package-noon-agent.test.mjs"
       - "scripts/manim-api-coverage.py"
       - "scripts/agent-preview-artifacts*.mjs"
       - "scripts/agent-preview-capture*.mjs"
+      - "scripts/agent-preview-sessions.mjs"
+      - "tools/noon-mcp/**"
+      - "web/agent-preview-host*"
+      - "web/*authoring*.js"
+      - "web/*execution*.js"
+      - "web/provenanced-authoring-client.js"
+      - "web/semantic-preview-session.js"
       - "compat/manim-v0.21.0.json"
       - "web/python/**"
       - "parity/manim-v0.21/upstream-examples/**"
@@ -38,25 +56,52 @@ concurrency:
 
 jobs:
   inventory:
-    name: Capability inventory and skill contracts
+    name: Capability inventory, skill and package contracts
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
       - name: Test offline discovery and negative cases
         run: python -B -m unittest discover -s scripts -p test_noon_capabilities.py -v
       - name: Validate actual checkout inventory without Manim
         run: python -S -B scripts/noon-capabilities.py > "$RUNNER_TEMP/noon-agent-capabilities.json"
       - name: Validate skill and current example references
         run: python -S -B scripts/check-noon-agent-skill.py
+      - name: Test deterministic package and tamper rejection
+        run: node --test scripts/package-noon-agent.test.mjs
+      - name: Build and verify package from a scrubbed environment
+        run: |
+          mkdir -p "$RUNNER_TEMP/noon-agent-home"
+          env -i \
+            HOME="$RUNNER_TEMP/noon-agent-home" \
+            PATH="$PATH" \
+            LANG=C \
+            LC_ALL=C \
+            node scripts/package-noon-agent.mjs --output "$RUNNER_TEMP/noon-agent-package"
+          env -i \
+            HOME="$RUNNER_TEMP/noon-agent-home" \
+            PATH="$PATH" \
+            LANG=C \
+            LC_ALL=C \
+            node scripts/package-noon-agent.mjs --verify "$RUNNER_TEMP/noon-agent-package"
       - name: Upload source inventory (not runtime qualification)
         uses: actions/upload-artifact@v7
         with:
           name: noon-agent-capabilities
           path: ${{ runner.temp }}/noon-agent-capabilities.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload reproducible authoring package
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon-agent-package
+          path: ${{ runner.temp }}/noon-agent-package
           if-no-files-found: error
           retention-days: 14
   artifacts:
