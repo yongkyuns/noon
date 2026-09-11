@@ -9,6 +9,8 @@ mod authoring_error;
 mod authoring_geometry;
 mod authoring_mobject;
 mod authoring_options;
+#[cfg(target_arch = "wasm32")]
+mod authoring_vector_field_defaults;
 mod canonical_authoring_scene;
 mod clock;
 mod determinism;
