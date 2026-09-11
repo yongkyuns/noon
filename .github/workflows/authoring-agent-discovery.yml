@@ -137,6 +137,10 @@ jobs:
             echo "Preview isolation source is not present; discovery-only change."
           fi
       - if: steps.source.outputs.enabled == 'true'
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - if: steps.source.outputs.enabled == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: "22"
@@ -211,6 +215,14 @@ jobs:
           else
             echo "MCP rendering smoke not present in this revision."
           fi
+      - if: steps.source.outputs.enabled == 'true'
+        name: Verify deterministic agent evaluation corpus
+        env:
+          NOON_PREVIEW_RUNTIME_CONFIG: ${{ runner.temp }}/noon-preview/runtime.json
+        working-directory: tools/noon-mcp
+        run: |
+          set -o pipefail
+          timeout --signal=TERM 420s node test/docker-evaluation-corpus.mjs | tee "$RUNNER_TEMP/noon-agent-evaluation.json"
       - name: Upload isolation evidence
         if: always() && steps.source.outputs.enabled == 'true'
         uses: actions/upload-artifact@v7
@@ -222,6 +234,7 @@ jobs:
             ${{ runner.temp }}/noon-preview-runner.json
             ${{ runner.temp }}/noon-preview-cli.json
             ${{ runner.temp }}/noon-preview-mcp.json
+            ${{ runner.temp }}/noon-agent-evaluation.json
             ${{ runner.temp }}/noon-preview/runtime.json
           if-no-files-found: warn
           retention-days: 14
