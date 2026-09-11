@@ -196,12 +196,18 @@ impl WasmAuthoringArrowHandle {
 
     #[wasm_bindgen(js_name = vectorX)]
     pub fn vector_x(&self) -> Result<f64, JsValue> {
-        self.arrow.manim_vector().map(|vector| vector.0).map_err(js_error)
+        self.arrow
+            .manim_vector()
+            .map(|vector| vector.0)
+            .map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = vectorY)]
     pub fn vector_y(&self) -> Result<f64, JsValue> {
-        self.arrow.manim_vector().map(|vector| vector.1).map_err(js_error)
+        self.arrow
+            .manim_vector()
+            .map(|vector| vector.1)
+            .map_err(js_error)
     }
 
     pub fn length(&self) -> Result<f64, JsValue> {
