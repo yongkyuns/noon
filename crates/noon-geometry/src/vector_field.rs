@@ -233,17 +233,21 @@ fn arange_values(
         return Err(StaticVectorFieldError::SampleCountOverflow);
     }
     let count = count as usize;
+
+    // NumPy arange's floating-point implementation does not repeatedly add the
+    // requested step directly. Its effective increment is the representable
+    // difference `(start + step) - start`; this matters when `start` is large
+    // relative to `step`, and it can even be zero. The element count is still
+    // derived from the requested step/stop span above. Preserve both details so
+    // Manim's range normalization is reproduced without importing NumPy.
+    let actual_step = (range.start + range.step) - range.start;
+    if !actual_step.is_finite() {
+        return Err(StaticVectorFieldError::InvalidRange { axis });
+    }
+
     let mut values = Vec::with_capacity(count);
     for index in 0..count {
-        let value = range.start + range.step * index as f64;
-        let inside = if range.step > 0.0 {
-            value < stop
-        } else {
-            value > stop
-        };
-        if inside {
-            values.push(value);
-        }
+        values.push(range.start + actual_step * index as f64);
     }
     Ok(values)
 }
@@ -286,6 +290,28 @@ mod tests {
         assert_eq!(xs.len(), 5);
         assert!((xs[4] - 1.2).abs() < 1e-12);
         assert!(xs[4] > 1.0);
+    }
+
+    #[test]
+    fn arange_uses_numpy_effective_step_at_large_offsets() {
+        let start = 100_000_000.0;
+        let end = start + 1.0e-6;
+        let step = 1.0e-8;
+        let plan = plan_static_arrow_vector_field(
+            |_| VectorFieldPoint::ZERO,
+            ranges(
+                VectorFieldAxisRange::new(start, end, step),
+                VectorFieldAxisRange::new(0.0, 0.0, 1.0),
+            ),
+        )
+        .unwrap();
+
+        let xs: Vec<_> = plan.samples.iter().map(|sample| sample.point.x).collect();
+        let actual_step = (start + step) - start;
+        assert_eq!(xs.len(), 102);
+        assert_eq!(xs[1] - xs[0], actual_step);
+        assert_ne!(actual_step, step);
+        assert!(xs[xs.len() - 1] > end + step);
     }
 
     #[test]
