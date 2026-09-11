@@ -27,8 +27,12 @@ pub enum ArrowVectorFieldAuthoringError {
 impl fmt::Display for ArrowVectorFieldAuthoringError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Planning(error) => write!(formatter, "static vector-field planning failed: {error}"),
-            Self::Authoring(error) => write!(formatter, "static vector-field authoring failed: {error}"),
+            Self::Planning(error) => {
+                write!(formatter, "static vector-field planning failed: {error}")
+            }
+            Self::Authoring(error) => {
+                write!(formatter, "static vector-field authoring failed: {error}")
+            }
         }
     }
 }
@@ -115,10 +119,8 @@ impl ManimArrowVectorField {
         // one transaction publishes the nested field family.
         let mut options = Vec::with_capacity(plan.samples.len());
         for sample in &plan.samples {
-            let mut vector = ManimArrowOptions::vector(
-                sample.display_vector.x,
-                sample.display_vector.y,
-            )?;
+            let mut vector =
+                ManimArrowOptions::vector(sample.display_vector.x, sample.display_vector.y)?;
             vector.set_translation(sample.point.x, sample.point.y)?;
             let color = default_vector_field_color(sample.raw_norm);
             vector.set_color(
