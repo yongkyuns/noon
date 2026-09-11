@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import noon as _base
@@ -90,6 +91,10 @@ def _attach_arrow_family(self: "Arrow", created: object) -> None:
     end_tip = _leaf(engine_call(created.endTip))
     start_tip = _leaf(engine_call(created.startTip)) if bool(created.hasStartTip) else None
 
+    # This is an opaque shared-Rust authoring capability, not mirrored Arrow
+    # state. It retains class policy needed by dependent mutations such as
+    # shrink-then-grow stroke recapping.
+    self._arrow_handle = created
     self._semantic_family_handle = family
     self._shaft = shaft
     self.tip = end_tip
@@ -120,12 +125,7 @@ def _create(
     if color is not None:
         _shared._apply_constructor_color(options, _compat._as_color("color", color))
     created = engine_call(_create_arrow_handle, options)
-    try:
-        _attach_arrow_family(self, created)
-    finally:
-        release = getattr(created, "free", None)
-        if release is not None:
-            engine_call(release)
+    _attach_arrow_family(self, created)
 
 
 def _validate_straight_arrow_options(
@@ -206,10 +206,20 @@ class Arrow(_compat.Group):
         _create(self, options, color=color, kwargs=constructor_options)
 
     def scale(self, factor: float, scale_tips: bool = False, **kwargs: Any):
-        del factor, scale_tips, kwargs
-        raise NotImplementedError(
-            "Arrow.scale requires shared Rust preserve-tip-size and stroke recapping semantics"
+        if kwargs:
+            raise NotImplementedError(
+                "Arrow.scale about_point/about_edge requires the next shared pivot slice"
+            )
+        if _shared._live_mutation_context(self) is not None:
+            raise NotImplementedError(
+                "live Arrow.scale requires retained-family live publication support"
+            )
+        engine_call(
+            self._arrow_handle.scale,
+            _ir._finite_number("scale_factor", factor),
+            bool(scale_tips),
         )
+        return self
 
     def get_start(self) -> _base.Vec2:
         from _manim_path_queries import endpoint
@@ -221,6 +231,26 @@ class Arrow(_compat.Group):
 
         # Rust builds the tip path with its public apex as the first retained point.
         return endpoint(self.tip, False)
+
+    def get_vector(self) -> _base.Vec2:
+        start = self.get_start()
+        end = self.get_end()
+        return _base.Vec2(end.x - start.x, end.y - start.y)
+
+    def get_length(self) -> float:
+        vector = self.get_vector()
+        return math.hypot(vector.x, vector.y)
+
+    def get_angle(self) -> float:
+        vector = self.get_vector()
+        return math.atan2(vector.y, vector.x)
+
+    def get_unit_vector(self) -> _base.Vec2:
+        vector = self.get_vector()
+        length = math.hypot(vector.x, vector.y)
+        if length == 0.0:
+            return _base.Vec2(0.0, 0.0)
+        return _base.Vec2(vector.x / length, vector.y / length)
 
     def get_tip(self):
         return self.tip
