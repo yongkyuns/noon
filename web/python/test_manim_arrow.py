@@ -99,6 +99,14 @@ class ManimArrowFacadeTests(unittest.TestCase):
                 def setStrokeOpacity(self, value): self._record("stroke_opacity", float(value))
                 def setColor(self, r, g, b, a): self._record("color", float(r), float(g), float(b), float(a))
 
+            def boundary_options(kind, mode, *values):
+                encoded = tuple(
+                    value.semanticSlot if isinstance(value, FakeLeafHandle) else float(value)
+                    for value in values
+                )
+                calls.append((f"boundary_{kind}_{mode}", *encoded))
+                return FakeOptions(kind, None, None)
+
             class Factory:
                 @staticmethod
                 def arrow(sx, sy, ex, ey):
@@ -112,26 +120,31 @@ class ManimArrowFacadeTests(unittest.TestCase):
                 def doubleArrow(sx, sy, ex, ey):
                     calls.append(("double_arrow", float(sx), float(sy), float(ex), float(ey)))
                     return FakeOptions("double", (sx, sy), (ex, ey))
-
-            def boundary_options(kind, mode, *values):
-                encoded = tuple(
-                    value.semanticSlot if isinstance(value, FakeLeafHandle) else float(value)
-                    for value in values
-                )
-                calls.append((f"boundary_{kind}_{mode}", *encoded))
-                return FakeOptions(kind, None, None)
-
-            fake_js.noonAuthoringArrowFromMobjects = lambda start, end: boundary_options("arrow", "both", start, end)
-            fake_js.noonAuthoringArrowFromMobject = lambda start, ex, ey: boundary_options("arrow", "start", start, ex, ey)
-            fake_js.noonAuthoringArrowToMobject = lambda sx, sy, end: boundary_options("arrow", "end", sx, sy, end)
-            fake_js.noonAuthoringDoubleArrowFromMobjects = lambda start, end: boundary_options("double", "both", start, end)
-            fake_js.noonAuthoringDoubleArrowFromMobject = lambda start, ex, ey: boundary_options("double", "start", start, ex, ey)
-            fake_js.noonAuthoringDoubleArrowToMobject = lambda sx, sy, end: boundary_options("double", "end", sx, sy, end)
+                @staticmethod
+                def arrowFromMobjects(start, end):
+                    return boundary_options("arrow", "both", start, end)
+                @staticmethod
+                def arrowFromMobject(start, ex, ey):
+                    return boundary_options("arrow", "start", start, ex, ey)
+                @staticmethod
+                def arrowToMobject(sx, sy, end):
+                    return boundary_options("arrow", "end", sx, sy, end)
+                @staticmethod
+                def doubleArrowFromMobjects(start, end):
+                    return boundary_options("double", "both", start, end)
+                @staticmethod
+                def doubleArrowFromMobject(start, ex, ey):
+                    return boundary_options("double", "start", start, ex, ey)
+                @staticmethod
+                def doubleArrowToMobject(sx, sy, end):
+                    return boundary_options("double", "end", sx, sy, end)
 
             def create_arrow(options):
                 calls.append(("publish", options.kind))
                 return FakeCreatedArrow(options.kind == "double")
 
+            # Match the real Python worker: Arrow boundary constructors are static
+            # methods on the already-exported typed options bridge, not extra globals.
             fake_js.noonAuthoringArrowOptions = Factory
             fake_js.noonCreateAuthoringArrowHandle = create_arrow
 
