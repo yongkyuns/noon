@@ -1108,19 +1108,26 @@ impl ExecutionSession {
 
     /// Consume one coherent renderer publication from this typed session.
     pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
+        let expiring =
+            self.derived_display_plan.is_some() && self.derived_display_expire_after_publication;
         if let Some(plan) = self.derived_display_plan.as_ref() {
             self.derived_display_objects = plan
                 .evaluate(self.runtime.frame().time)
                 .expect("validated derived family Transform plan must evaluate at runtime time");
-            if self.derived_display_expire_after_publication {
-                self.derived_display_plan = None;
-                self.derived_display_expire_after_publication = false;
-            }
         } else {
             self.derived_display_objects.clear();
         }
-        self.runtime
-            .take_renderer_publication()
+        if expiring {
+            self.derived_display_plan = None;
+            self.derived_display_expire_after_publication = false;
+        }
+        let publication = if expiring {
+            self.runtime
+                .take_renderer_publication_with_followup_invalidation()
+        } else {
+            self.runtime.take_renderer_publication()
+        };
+        publication
             .with_derived_display_objects(&self.derived_display_objects)
             .expect("compiler-owned family Transform rows retain valid painter anchors")
     }
