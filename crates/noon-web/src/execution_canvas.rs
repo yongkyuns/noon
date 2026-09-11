@@ -22,7 +22,10 @@ mod wasm {
         NativeStateSource, ReactiveValue, Rect, SemanticNodeId, Vec2,
     };
     use noon_render_wgpu::text::TextDeviceMetrics;
-    use noon_render_wgpu::{Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState};
+    use noon_render_wgpu::{
+        prepare_derived_display_visible, Camera2D, GpuRenderer, RetainedFramePreparer,
+        RetainedTextGpuState,
+    };
     use serde::Serialize;
     use wasm_bindgen::{prelude::*, JsCast};
     use web_sys::OffscreenCanvas;
@@ -1121,6 +1124,9 @@ mod wasm {
                 ));
                 let publication = direct.take_renderer_publication();
                 publication_context = publication.context();
+                let derived =
+                    prepare_derived_display_visible(&publication, visibility.object_indices())
+                        .map_err(js_error)?;
                 let prepared = self
                     .direct_preparer
                     .prepare_planned_publication_visible(
@@ -1137,11 +1143,16 @@ mod wasm {
                     &prepared,
                     &mut self.direct_text_gpu,
                 );
+                let derived_upload = (!derived.slots.is_empty()).then(|| {
+                    self.renderer
+                        .upload_derived(&self.device, &self.queue, &derived)
+                });
                 self.last_geometry_cache_misses = prepared.geometry_stats().geometry_cache_misses;
                 self.last_bytes_uploaded = upload
                     .geometry
                     .bytes_uploaded
-                    .saturating_add(upload.text.bytes_uploaded);
+                    .saturating_add(upload.text.bytes_uploaded)
+                    .saturating_add(derived_upload.map_or(0, |stats| stats.bytes_uploaded));
 
                 let view = surface_texture
                     .texture
@@ -1156,21 +1167,38 @@ mod wasm {
                     .as_mut()
                     .and_then(GpuTimestampProfiler::reserve_slot);
                 let profiler = self.timestamp_profiler.as_ref();
-                let draw = self.renderer.encode_retained(
-                    &mut encoder,
-                    &view,
-                    &prepared,
-                    &self.direct_text_gpu,
-                    self.clear_color,
-                    timestamp_slot.map(|slot| profiler.expect("reserved profiler").query_set(slot)),
-                );
+                let query_set =
+                    timestamp_slot.map(|slot| profiler.expect("reserved profiler").query_set(slot));
+                let draw: Result<_, JsValue> = if derived.slots.is_empty() {
+                    self.renderer
+                        .encode_retained(
+                            &mut encoder,
+                            &view,
+                            &prepared,
+                            &self.direct_text_gpu,
+                            self.clear_color,
+                            query_set,
+                        )
+                        .map_err(js_error)
+                } else {
+                    self.renderer
+                        .encode_retained_with_derived(
+                            &mut encoder,
+                            &view,
+                            &prepared,
+                            &derived,
+                            self.clear_color,
+                            query_set,
+                        )
+                        .map_err(js_error)
+                };
                 let draw = match draw {
                     Ok(draw) => draw,
                     Err(error) => {
                         if let Some(slot) = timestamp_slot {
                             profiler.expect("reserved profiler").cancel_slot(slot);
                         }
-                        return Err(js_error(error));
+                        return Err(error);
                     }
                 };
                 if let Some(slot) = timestamp_slot {
