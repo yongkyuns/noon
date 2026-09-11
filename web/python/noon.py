@@ -353,7 +353,7 @@ class Mobject:
 
     def match_dim_size(self, mobject: Mobject, dim: int, **kwargs: Any) -> Mobject:
         from _manim_semantic_handles import _match_dim_size
-        return _match_dim_size(self, mobject, dim, stretch=False, **kwargs) if False else _match_dim_size(self, mobject, dim, **kwargs)
+        return _match_dim_size(self, mobject, dim, **kwargs)
 
     def generate_target(self, use_deepcopy: bool = False) -> Mobject:
         from _manim_compat import _mobject_generate_target
