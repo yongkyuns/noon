@@ -469,6 +469,9 @@ impl ExecutionSession {
         self.signal_timeline.commit_append(timeline);
         self.pending_segment_completion = None;
         self.completed_segment_sequence = Some(token.sequence());
+        if self.derived_display_plan.is_some() {
+            self.derived_display_expire_after_publication = true;
+        }
         self.last_callback_receipt = None;
         let publication = self.publication_context();
         self.callback_schedule
