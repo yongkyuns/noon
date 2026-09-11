@@ -1,6 +1,6 @@
 use noon::{
-    ManimArrowVectorField, Scene, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, BLUE,
-    PINK, RED, YELLOW,
+    ManimArrowVectorField, Scene, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D,
+    BLUE, PINK, RED, YELLOW,
 };
 use std::rc::Rc;
 
