@@ -1,9 +1,9 @@
 ---
 name: noon-authoring
 description: Author and review Noon animation scenes using capability-qualified ManimCE-style Python or the shared Rust API. Use when a user asks to create, explain, repair, or verify a Noon animation, or when scene source imports noon. Not a generic ManimGL skill or a contract for modifying Noon internals.
-compatibility: Requires a trusted Noon repository checkout and Python 3.12+ for capability discovery. Previewing requires the repository's existing browser build and rendering environment; capability discovery alone does not render or install dependencies.
+compatibility: Requires a trusted Noon repository checkout, Python 3.12+, and Node 22+ for local capability/MCP tooling. Isolated preview additionally requires Docker, a built current browser package, and the repository-pinned preview runtime; capability discovery alone does not render or install dependencies.
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 # Noon authoring
@@ -45,31 +45,101 @@ about an installed binary, the current GPU, or a live session. See
 3. Write ordinary `from noon import *` Python for the supported CE-like surface, or
    use the current shared Rust API. Keep the editable source as the deliverable.
    Do not import `manimlib`, invoke `manim`/`manimgl`, or silently switch renderers.
-4. Use the existing playground to render the scene. Inspect the intended initial
-   state, transition interiors, completion boundaries, and final membership. A
-   final blank frame after `FadeOut` can be correct; a successful run alone is not
-   visual verification. Apply the [verification checks](references/verification.md).
+4. Prefer the qualified local preview CLI or configured Noon MCP tools below when
+   available. Inspect the intended initial state, transition interiors, completion
+   boundaries, and final membership. A final blank frame after `FadeOut` can be
+   correct; a successful run alone is not visual verification. Apply the
+   [verification checks](references/verification.md).
 5. Revise source based on actual diagnostics and frames. Preserve the original
    mathematical and animation semantics; never conceal an unsupported operation by
    replacing `MathTex` with `Text` or removing an updater.
 
-## Current preview route
+## Qualified local preview route
 
-Use an already-built playground when available. To build one explicitly:
+The checkout-bound tooling package is private and is not published to npm. Install
+only its committed lockfile, with lifecycle hooks disabled:
+
+```bash
+cd /path/to/noon/tools/noon-mcp
+npm ci --ignore-scripts --no-audit --no-fund
+```
+
+The preview path also needs the current browser package and the pinned local Docker
+runtime. From the trusted checkout:
+
+```bash
+cd /path/to/noon
+bash scripts/build-web-demo.sh
+
+cd tools/noon-mcp
+NOON_PREVIEW_CACHE=/absolute/path/to/private-preview-cache \
+  node scripts/setup-preview-runtime.mjs
+```
+
+The setup helper prints the absolute `runtimeConfig` path. It pins the Playwright
+container/runtime and Pyodide payload, verifies their identities, and does not make
+the model choose Docker images, executables, checkout paths, seccomp profiles, or
+commands. Preview execution remains local, bounded, and `--network=none` inside the
+qualified Docker boundary.
+
+For a one-shot still-frame run, use the shared CLI over `AgentPreviewService`:
+
+```bash
+NOON_PREVIEW_RUNTIME_CONFIG=/absolute/path/to/runtime.json \
+  node /path/to/noon/tools/noon-mcp/bin/noon-preview.mjs \
+  --source /absolute/path/to/scene.py \
+  --output /absolute/path/to/preview-output \
+  --loop-duration 4 \
+  --time 1 --time 1.5 --time 3
+```
+
+The manifest and PNGs report observed source/build/requested-time/published-time/
+backend provenance. Sampling is forward-only; use a fresh run after source edits.
+Do not claim arbitrary seek or persistent live-object editing.
+
+When an MCP host is configured to launch `tools/noon-mcp/src/server.mjs` with
+`NOON_REPO`, `NOON_PYTHON`, and `NOON_PREVIEW_RUNTIME_CONFIG` as trusted startup
+environment, use these tools rather than inventing a second execution route:
+
+- `noon_capabilities` — static source/policy discovery, not a renderer claim.
+- `noon_reference` — hash-checked ready example source.
+- `noon_open_scene` — opens an isolated session and returns the initial PNG plus
+  coherent metadata.
+- `noon_sample_frames` — advances through nondecreasing times; at most 31 samples
+  in one call, with the shared retained-frame budget enforced across calls.
+- `noon_inspect` — metadata-only inspection of the last coherent retained state.
+- `noon_close_scene` — closes the owned session; the handle becomes stale.
+
+Session handles are transport-scoped capabilities. Treat stale/cross-scope errors,
+source failures, cancellation, and quota failures as real diagnostics. Cancellation,
+disconnect, and shutdown retire owned sessions/containers. Do not retry by bypassing
+the service or by starting an unrestricted browser.
+
+If Docker or the built browser package is unavailable, fall back to capability/source
+review and say that rendered verification was not performed. The older local playground
+remains useful for interactive development, but it is not a substitute for claiming
+qualified CLI/MCP evidence:
 
 ```bash
 bash scripts/build-web-demo.sh
 python3 -m http.server --bind 127.0.0.1 --directory web 8080
 ```
 
-Open the local playground, paste the source into **Python scene source**, and run
-it. The build can require downloads and substantial dependencies; it is not a side
-effect of capability discovery. Do not claim the preview ran when the required
-browser/WASM environment is unavailable.
+## Distribution identity
 
-There is not yet a supported `noon render` command or shipped Noon MCP preview
-server in this skill. The isolated runner and MCP adapter are tracked in #1197 and
-#1198. Do not invent their installation or tool commands.
+For reproducible setup/evaluation work, generate the checkout-bound agent manifest:
+
+```bash
+cd /path/to/noon/tools/noon-mcp
+node scripts/package-manifest.mjs
+```
+
+It records the private package/lock identities, direct dependency integrity/licenses,
+skill hash/version, capability-export provenance, runner source hashes, pinned
+Playwright/Pyodide identities, and environment requirements. A source-package manifest
+intentionally reports no loaded runtime build identity; actual preview results must
+supply the build identity observed by the running browser worker. See
+`THIRD_PARTY_NOTICES.md` for runtime provenance/license notices.
 
 ## Semantic boundaries
 
