@@ -175,7 +175,8 @@ impl ManimArrow {
             .family()
             .integration_store()
             .borrow()
-            .semantic_family_members_checked(self.family().node_id())?;
+            .semantic_family_members_checked(self.family().node_id())
+            .map_err(AuthoringError::from)?;
         let topology_matches = members.len() == expected
             && members.first() == Some(&self.shaft().node_id())
             && members.get(1) == Some(&self.end_tip().node_id())
