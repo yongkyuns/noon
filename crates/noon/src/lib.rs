@@ -200,9 +200,9 @@ pub mod prelude {
         EffectiveMobjectState, ExecutionSession, FadeEndpoint, FadeTranslation, LiveContinuation,
         LiveProgram, LiveSession, LiveSessionError, ManimArrow, ManimArrowOptions,
         ManimArrowVectorField, Mobject, MobjectFamily, MobjectFamilyMember, NativeBoolSignal,
-        NativeVectorSignal, RateFunction, Scene, SemanticObjectState, SemanticStyle, StoredGeometry,
-        TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange, VectorFieldPoint,
-        VectorFieldRanges2D, VectorPath,
+        NativeVectorSignal, RateFunction, Scene, SemanticObjectState, SemanticStyle,
+        StoredGeometry, TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange,
+        VectorFieldPoint, VectorFieldRanges2D, VectorPath,
     };
 }
 
