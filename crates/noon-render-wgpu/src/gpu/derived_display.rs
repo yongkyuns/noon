@@ -126,6 +126,20 @@ fn resolve_mixed_draw_items(
 }
 
 impl GpuRenderer {
+    /// Encode one painter-coherent frame containing stable slots plus identity-free
+    /// derived analytic occurrences. Derived buffers must have been uploaded with
+    /// `upload_derived` for this exact publication.
+    pub fn encode_with_derived(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        stable: &PreparedFrame<'_>,
+        derived: &PreparedDerivedDisplay,
+        clear_color: wgpu::Color,
+    ) -> DrawStats {
+        self.encode_inner(encoder, view, stable, clear_color, Some(derived), None)
+    }
+
     /// Upload renderer-owned transient analytic instances without changing stable
     /// prepared-frame buffers or slot identity.
     pub fn upload_derived(
@@ -318,7 +332,10 @@ mod tests {
             DerivedDisplayObject::new(
                 1,
                 8,
-                state(GeometryRef::line(noon_core::Vec2::ZERO, noon_core::Vec2::ONE)),
+                state(GeometryRef::line(
+                    noon_core::Vec2::ZERO,
+                    noon_core::Vec2::ONE,
+                )),
             ),
         ];
         let publication = runtime
