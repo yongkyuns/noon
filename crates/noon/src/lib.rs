@@ -158,8 +158,8 @@ pub use noon_core::{
     YELLOW, YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D, YELLOW_E,
 };
 pub use noon_geometry::{
-    StaticVectorFieldError, StaticVectorFieldPlan, VectorFieldAxis, VectorFieldAxisRange,
-    VectorFieldPoint, VectorFieldRanges2D, VectorFieldSample, DEFAULT_VECTOR_FIELD_STEP,
+    StaticVectorFieldError, VectorFieldAxis, VectorFieldAxisRange, VectorFieldPoint,
+    VectorFieldRanges2D, DEFAULT_VECTOR_FIELD_STEP,
 };
 pub use noon_runtime::EvaluationError;
 pub use path_queries::PathQuery;
