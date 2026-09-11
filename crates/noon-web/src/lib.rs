@@ -4,6 +4,8 @@
 mod authoring_arc;
 #[cfg(target_arch = "wasm32")]
 mod authoring_arrow;
+#[cfg(target_arch = "wasm32")]
+mod authoring_arrow_endpoints;
 mod authoring_error;
 #[cfg(target_arch = "wasm32")]
 mod authoring_geometry;
