@@ -53,6 +53,7 @@
 mod animation_authoring;
 mod arc_authoring;
 mod arrow_authoring;
+mod arrow_queries;
 mod authoring_error;
 mod boolean_authoring;
 mod camera_authoring;
@@ -92,6 +93,7 @@ mod rounded_rectangle_authoring;
 mod scalar_authoring;
 mod scene;
 mod scene_membership;
+mod scene_ordering;
 mod sector_authoring;
 mod semantic_mobject;
 mod state_replacement;

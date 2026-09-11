@@ -32,6 +32,19 @@ _ARROW_CONSTRUCTOR_OPTIONS = frozenset(
     }
 )
 
+_FIELD_QUERY_METHODS = {
+    "startX": "vectorStartX",
+    "startY": "vectorStartY",
+    "endX": "vectorEndX",
+    "endY": "vectorEndY",
+    "vectorX": "vectorVectorX",
+    "vectorY": "vectorVectorY",
+    "length": "vectorLength",
+    "angle": "vectorAngle",
+    "unitVectorX": "vectorUnitVectorX",
+    "unitVectorY": "vectorUnitVectorY",
+}
+
 
 def _numeric_endpoint(name: str, value: object) -> _base.Vec2:
     if isinstance(value, (_base.Mobject, _compat.Group)):
@@ -90,6 +103,10 @@ def _attach_arrow_family(self: "Arrow", created: object) -> None:
     end_tip = _leaf(engine_call(created.endTip))
     start_tip = _leaf(engine_call(created.startTip)) if bool(created.hasStartTip) else None
 
+    # Retain the aggregate Rust handle as the query authority. It owns no parallel
+    # Python semantic state: its observations are resolved from the same retained
+    # shaft/tip leaves exposed below.
+    self._semantic_arrow_handle = created
     self._semantic_family_handle = family
     self._shaft = shaft
     self.tip = end_tip
@@ -120,12 +137,21 @@ def _create(
     if color is not None:
         _shared._apply_constructor_color(options, _compat._as_color("color", color))
     created = engine_call(_create_arrow_handle, options)
-    try:
-        _attach_arrow_family(self, created)
-    finally:
-        release = getattr(created, "free", None)
-        if release is not None:
-            engine_call(release)
+    _attach_arrow_family(self, created)
+
+
+def _arrow_scalar(self: "Arrow", method: str) -> float:
+    handle = getattr(self, "_semantic_arrow_handle", None)
+    index = getattr(self, "_semantic_arrow_index", None)
+    if handle is None:
+        raise RuntimeError("Arrow observation requires the shared Rust authoring host")
+    operation_name = method if index is None else _FIELD_QUERY_METHODS[method]
+    operation = getattr(handle, operation_name, None)
+    if operation is None:
+        raise RuntimeError("Arrow observation requires the shared Rust authoring host")
+    if index is None:
+        return float(engine_call(operation, operation=f"Arrow.{method}"))
+    return float(engine_call(operation, index, operation=f"Arrow.{method}"))
 
 
 def _validate_straight_arrow_options(
@@ -212,14 +238,34 @@ class Arrow(_compat.Group):
         )
 
     def get_start(self) -> _base.Vec2:
-        from _manim_path_queries import endpoint
-
-        return endpoint(self.start_tip if self.start_tip is not None else self._shaft, False)
+        return _base.Vec2(
+            _arrow_scalar(self, "startX"),
+            _arrow_scalar(self, "startY"),
+        )
 
     def get_end(self) -> _base.Vec2:
-        from _manim_path_queries import endpoint
+        return _base.Vec2(
+            _arrow_scalar(self, "endX"),
+            _arrow_scalar(self, "endY"),
+        )
 
-        return endpoint(self.tip, False)
+    def get_vector(self) -> _base.Vec2:
+        return _base.Vec2(
+            _arrow_scalar(self, "vectorX"),
+            _arrow_scalar(self, "vectorY"),
+        )
+
+    def get_length(self) -> float:
+        return _arrow_scalar(self, "length")
+
+    def get_unit_vector(self) -> _base.Vec2:
+        return _base.Vec2(
+            _arrow_scalar(self, "unitVectorX"),
+            _arrow_scalar(self, "unitVectorY"),
+        )
+
+    def get_angle(self) -> float:
+        return _arrow_scalar(self, "angle")
 
     def get_tip(self):
         return self.tip
@@ -363,6 +409,8 @@ def _attach_vector_field_member(created: object, index: int) -> Vector:
     family = engine_call(created.vectorFamily, index)
     shaft = _leaf(engine_call(created.vectorShaft, index), _compat.Line)
     end_tip = _leaf(engine_call(created.vectorEndTip, index))
+    wrapper._semantic_arrow_handle = created
+    wrapper._semantic_arrow_index = index
     wrapper._semantic_family_handle = family
     wrapper._shaft = shaft
     wrapper.tip = end_tip
@@ -463,20 +511,16 @@ class ArrowVectorField(_compat.VGroup):
                 except Exception:
                     pass
 
-        try:
-            self._semantic_family_handle = engine_call(created.family)
-            vector_count = int(created.vectorCount)
-            vectors = [
-                _attach_vector_field_member(created, index)
-                for index in range(vector_count)
-            ]
-            self._semantic_member_wrappers = {
-                _shared._family_wrapper_key(member): member for member in vectors
-            }
-        finally:
-            release = getattr(created, "free", None)
-            if release is not None:
-                engine_call(release)
+        self._semantic_arrow_handle = created
+        self._semantic_family_handle = engine_call(created.family)
+        vector_count = int(created.vectorCount)
+        vectors = [
+            _attach_vector_field_member(created, index)
+            for index in range(vector_count)
+        ]
+        self._semantic_member_wrappers = {
+            _shared._family_wrapper_key(member): member for member in vectors
+        }
 
         self.func = func
         self.x_range = x_public

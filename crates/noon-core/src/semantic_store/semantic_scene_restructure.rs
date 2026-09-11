@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     SemanticMutationTransaction, SemanticNode, SemanticNodeId, SemanticNodeKind,
@@ -9,6 +9,7 @@ use crate::{
 #[derive(Clone, Copy, Debug)]
 pub enum SemanticSceneMembershipRequest<'a> {
     Add(&'a [SemanticNodeId]),
+    BringToBack(&'a [SemanticNodeId]),
     Remove(&'a [SemanticNodeId]),
     Clear,
     Replace {
@@ -77,12 +78,38 @@ pub fn plan_semantic_scene_membership(
         SemanticSceneMembershipRequest::Add(ids) => {
             let explicit = validated_distinct_nodes(store, ids)?;
             let remove_set = downward_target_closure(store, &explicit)?;
-            plan_explicit_root_projection(store, scene_root, &remove_set, None, &explicit)
+            plan_explicit_root_projection(
+                store,
+                scene_root,
+                &remove_set,
+                None,
+                &explicit,
+                ExplicitPlacement::Tail,
+            )
+        }
+        SemanticSceneMembershipRequest::BringToBack(ids) => {
+            let explicit = validated_distinct_nodes(store, ids)?;
+            let remove_set = downward_target_closure(store, &explicit)?;
+            plan_explicit_root_projection(
+                store,
+                scene_root,
+                &remove_set,
+                None,
+                &explicit,
+                ExplicitPlacement::Head,
+            )
         }
         SemanticSceneMembershipRequest::Remove(ids) => {
             let explicit = validated_distinct_nodes(store, ids)?;
             let remove_set = explicit.into_iter().collect();
-            plan_explicit_root_projection(store, scene_root, &remove_set, None, &[])
+            plan_explicit_root_projection(
+                store,
+                scene_root,
+                &remove_set,
+                None,
+                &[],
+                ExplicitPlacement::Tail,
+            )
         }
         SemanticSceneMembershipRequest::Replace { old, new } => {
             target_node_checked(store, old)?;
@@ -99,7 +126,14 @@ pub fn plan_semantic_scene_membership(
             }
             let mut remove_set = downward_target_closure(store, &[new])?;
             remove_set.insert(old);
-            plan_explicit_root_projection(store, scene_root, &remove_set, Some((old, new)), &[])
+            plan_explicit_root_projection(
+                store,
+                scene_root,
+                &remove_set,
+                Some((old, new)),
+                &[],
+                ExplicitPlacement::Tail,
+            )
         }
     }
 }
@@ -126,12 +160,19 @@ fn projected_root_path_count(
     Ok(count)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExplicitPlacement {
+    Head,
+    Tail,
+}
+
 fn plan_explicit_root_projection(
     store: &SemanticStore,
     scene_root: SemanticNodeId,
     remove_set: &HashSet<SemanticNodeId>,
     replacement: Option<(SemanticNodeId, SemanticNodeId)>,
-    append: &[SemanticNodeId],
+    explicit: &[SemanticNodeId],
+    placement: ExplicitPlacement,
 ) -> Result<SemanticMutationTransaction, SemanticSceneOperationError> {
     let (affected, affected_roots) = affected_explicit_root_closure(store, scene_root, remove_set)?;
     let root_node = target_node_checked(store, scene_root)?;
@@ -180,7 +221,20 @@ fn plan_explicit_root_projection(
         }
     }
 
-    let retained_roots: HashSet<_> = append
+    let head_anchor = if placement == ExplicitPlacement::Head {
+        let first_replacement_by_root = plans
+            .iter()
+            .map(|(root, replacements, _)| (*root, replacements.first().copied()))
+            .collect::<HashMap<_, _>>();
+        first_projected_root_after_restructure(
+            root_node,
+            &affected_roots,
+            &first_replacement_by_root,
+        )
+    } else {
+        None
+    };
+    let retained_roots: HashSet<_> = explicit
         .iter()
         .copied()
         .filter(|member| root_node.contains_member(*member))
@@ -196,7 +250,7 @@ fn plan_explicit_root_projection(
             transaction.add_member(scene_root, *replacement);
         }
     }
-    for member in append {
+    for member in explicit {
         if !retained_roots.contains(member) {
             transaction.add_member(scene_root, *member);
         }
@@ -210,12 +264,33 @@ fn plan_explicit_root_projection(
             anchor = Some(*replacement);
         }
     }
-    let mut anchor = None;
-    for member in append.iter().rev() {
+    let mut anchor = match placement {
+        ExplicitPlacement::Tail => None,
+        ExplicitPlacement::Head => head_anchor,
+    };
+    for member in explicit.iter().rev() {
         transaction.reorder_member(scene_root, *member, anchor);
         anchor = Some(*member);
     }
     Ok(transaction)
+}
+
+fn first_projected_root_after_restructure(
+    root: &SemanticNode,
+    affected_roots: &HashSet<SemanticNodeId>,
+    first_replacement_by_root: &HashMap<SemanticNodeId, Option<SemanticNodeId>>,
+) -> Option<SemanticNodeId> {
+    let mut current = root.first_member();
+    while let Some(member) = current {
+        if !affected_roots.contains(&member) {
+            return Some(member);
+        }
+        if let Some(Some(first)) = first_replacement_by_root.get(&member) {
+            return Some(*first);
+        }
+        current = root.next_member(member);
+    }
+    None
 }
 
 fn affected_explicit_root_closure(
@@ -760,6 +835,47 @@ mod tests {
         assert_eq!(
             store.semantic_family_members_checked(family).unwrap(),
             vec![first, second]
+        );
+    }
+
+    #[test]
+    fn explicit_root_bring_to_back_prepends_after_family_promotion_in_caller_order() {
+        let mut store = SemanticStore::new();
+        let root = store.insert_family();
+        let first = object(&mut store, 1.0);
+        let survivor = object(&mut store, 2.0);
+        let middle = object(&mut store, 3.0);
+        let last = object(&mut store, 4.0);
+        let family = store.insert_family();
+        store.add_semantic_family_member(family, first).unwrap();
+        store.add_semantic_family_member(family, survivor).unwrap();
+        for member in [family, middle, last] {
+            store.add_semantic_family_member(root, member).unwrap();
+        }
+
+        let revision = store.scene_revision();
+        plan_semantic_scene_membership(
+            &store,
+            root,
+            SemanticSceneMembershipRequest::BringToBack(&[first, last]),
+        )
+        .unwrap()
+        .apply(&mut store)
+        .unwrap();
+
+        assert_eq!(
+            store.node(root).unwrap().members(),
+            &[first, last, survivor, middle]
+        );
+        assert_eq!(
+            store.scene_revision(),
+            revision
+                .checked_next()
+                .expect("revision should advance once")
+        );
+        assert_eq!(
+            store.semantic_family_members_checked(family).unwrap(),
+            vec![first, survivor]
         );
     }
 

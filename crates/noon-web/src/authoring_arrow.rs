@@ -378,6 +378,78 @@ impl WasmAuthoringArrowHandle {
             .ok_or_else(|| JsValue::from_str("Arrow has no start tip"))
     }
 
+    #[wasm_bindgen(js_name = startX)]
+    pub fn start_x(&self) -> Result<f64, JsValue> {
+        self.arrow()?
+            .manim_endpoints()
+            .map(|endpoints| endpoints.start.0)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = startY)]
+    pub fn start_y(&self) -> Result<f64, JsValue> {
+        self.arrow()?
+            .manim_endpoints()
+            .map(|endpoints| endpoints.start.1)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = endX)]
+    pub fn end_x(&self) -> Result<f64, JsValue> {
+        self.arrow()?
+            .manim_endpoints()
+            .map(|endpoints| endpoints.end.0)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = endY)]
+    pub fn end_y(&self) -> Result<f64, JsValue> {
+        self.arrow()?
+            .manim_endpoints()
+            .map(|endpoints| endpoints.end.1)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = vectorX)]
+    pub fn vector_x(&self) -> Result<f64, JsValue> {
+        self.arrow()?
+            .manim_vector()
+            .map(|vector| vector.0)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = vectorY)]
+    pub fn vector_y(&self) -> Result<f64, JsValue> {
+        self.arrow()?
+            .manim_vector()
+            .map(|vector| vector.1)
+            .map_err(js_error)
+    }
+
+    pub fn length(&self) -> Result<f64, JsValue> {
+        self.arrow()?.manim_length().map_err(js_error)
+    }
+
+    pub fn angle(&self) -> Result<f64, JsValue> {
+        self.arrow()?.manim_angle().map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = unitVectorX)]
+    pub fn unit_vector_x(&self) -> Result<f64, JsValue> {
+        self.arrow()?
+            .manim_unit_vector()
+            .map(|vector| vector.0)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = unitVectorY)]
+    pub fn unit_vector_y(&self) -> Result<f64, JsValue> {
+        self.arrow()?
+            .manim_unit_vector()
+            .map(|vector| vector.1)
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(getter, js_name = vectorCount)]
     pub fn vector_count(&self) -> u32 {
         match &self.published {
@@ -404,6 +476,80 @@ impl WasmAuthoringArrowHandle {
     pub fn vector_end_tip(&self, index: u32) -> Result<WasmAuthoringMobjectHandle, JsValue> {
         self.vector(index)
             .map(|arrow| WasmAuthoringMobjectHandle::from_semantic_mobject(arrow.end_tip().clone()))
+    }
+
+    #[wasm_bindgen(js_name = vectorStartX)]
+    pub fn vector_start_x(&self, index: u32) -> Result<f64, JsValue> {
+        self.vector(index)?
+            .manim_endpoints()
+            .map(|endpoints| endpoints.start.0)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = vectorStartY)]
+    pub fn vector_start_y(&self, index: u32) -> Result<f64, JsValue> {
+        self.vector(index)?
+            .manim_endpoints()
+            .map(|endpoints| endpoints.start.1)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = vectorEndX)]
+    pub fn vector_end_x(&self, index: u32) -> Result<f64, JsValue> {
+        self.vector(index)?
+            .manim_endpoints()
+            .map(|endpoints| endpoints.end.0)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = vectorEndY)]
+    pub fn vector_end_y(&self, index: u32) -> Result<f64, JsValue> {
+        self.vector(index)?
+            .manim_endpoints()
+            .map(|endpoints| endpoints.end.1)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = vectorVectorX)]
+    pub fn vector_vector_x(&self, index: u32) -> Result<f64, JsValue> {
+        self.vector(index)?
+            .manim_vector()
+            .map(|vector| vector.0)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = vectorVectorY)]
+    pub fn vector_vector_y(&self, index: u32) -> Result<f64, JsValue> {
+        self.vector(index)?
+            .manim_vector()
+            .map(|vector| vector.1)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = vectorLength)]
+    pub fn vector_length(&self, index: u32) -> Result<f64, JsValue> {
+        self.vector(index)?.manim_length().map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = vectorAngle)]
+    pub fn vector_angle(&self, index: u32) -> Result<f64, JsValue> {
+        self.vector(index)?.manim_angle().map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = vectorUnitVectorX)]
+    pub fn vector_unit_vector_x(&self, index: u32) -> Result<f64, JsValue> {
+        self.vector(index)?
+            .manim_unit_vector()
+            .map(|vector| vector.0)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = vectorUnitVectorY)]
+    pub fn vector_unit_vector_y(&self, index: u32) -> Result<f64, JsValue> {
+        self.vector(index)?
+            .manim_unit_vector()
+            .map(|vector| vector.1)
+            .map_err(js_error)
     }
 }
 

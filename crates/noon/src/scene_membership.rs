@@ -11,6 +11,7 @@ use crate::{AuthoringError, MobjectFamilyMember};
 #[derive(Clone, Copy)]
 pub enum SceneMembershipRequest<'a> {
     Add(&'a [MobjectFamilyMember<'a>]),
+    BringToBack(&'a [MobjectFamilyMember<'a>]),
     Remove(&'a [MobjectFamilyMember<'a>]),
     Clear,
     Replace {
@@ -40,6 +41,18 @@ pub(crate) fn prepare_scene_membership(
                 .map(validate)
                 .collect::<Result<Vec<_>, _>>()?;
             plan_semantic_scene_membership(&store, root, SemanticSceneMembershipRequest::Add(&ids))
+        }
+        SceneMembershipRequest::BringToBack(members) => {
+            let ids = members
+                .iter()
+                .copied()
+                .map(validate)
+                .collect::<Result<Vec<_>, _>>()?;
+            plan_semantic_scene_membership(
+                &store,
+                root,
+                SemanticSceneMembershipRequest::BringToBack(&ids),
+            )
         }
         SceneMembershipRequest::Remove(members) => {
             let ids = members
