@@ -9,31 +9,26 @@ permissions:
   contents: write
 
 jobs:
-  patch:
+  sync:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: codex/b6-scene-order-wrappers
           fetch-depth: 0
-      - name: Apply qualification cleanup
-        run: python scripts/b6_scene_order_wrapper_bootstrap.py
-      - name: Validate qualification slice
+      - name: Merge current master
         run: |
-          cargo fmt --all
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git fetch origin master
+          git merge --no-edit origin/master
+      - name: Validate synchronized branch
+        run: |
           cargo fmt --all -- --check
           cargo check -p noon-web
           PYTHONPATH=web/python python -m unittest web/python/test_scene_painter_order.py
           python -m py_compile parity/manim-v0.21/core-examples/scene_painter_order.py web/python/examples/manim_compatible_scene_painter_order.py
           python -m json.tool parity/manim-v0.21/manifest.json >/dev/null
           git diff --check
-      - name: Commit qualification slice
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/noon-web/src/canonical_authoring_scene.rs \
-            parity/manim-v0.21/manifest.json \
-            parity/manim-v0.21/core-examples/scene_painter_order.py \
-            web/python/examples/manim_compatible_scene_painter_order.py
-          git commit -m "Qualify scene painter order through canonical raster fixture"
-          git push origin HEAD:codex/b6-scene-order-wrappers
+      - name: Push synchronized branch
+        run: git push origin HEAD:codex/b6-scene-order-wrappers
