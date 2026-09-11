@@ -20,6 +20,14 @@ async function fileBytes(root, relative) {
   return await readFile(path.join(root, relative));
 }
 
+async function readManifest(root) {
+  return JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
+}
+
+async function writeManifest(root, manifest) {
+  await writeFile(path.join(root, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
 test("argument parser requires one explicit package mode", () => {
   assert.deepEqual(parsePackageArgs(["--output", "out"]), { mode: "output", target: "out", help: false });
   assert.deepEqual(parsePackageArgs(["--verify", "bundle"]), { mode: "verify", target: "bundle", help: false });
@@ -45,6 +53,7 @@ test("package is deterministic, checkout-bound and independently verifiable", { 
   assert.equal(a.manifest.runner.loadedBuildIdentity, "runtime-observed-per-artifact");
   assert.equal(a.manifest.environment.node, ">=22");
   assert.equal(a.manifest.environment.python, ">=3.12");
+  assert.equal(a.manifest.environment.buildBrowserPackage, "bash scripts/build-web-demo.sh");
   assert.ok(Object.keys(a.manifest.runner.sourceSha256).some((name) => name === "tools/noon-mcp/src/server.mjs"));
   assert.ok(Object.keys(a.manifest.runner.sourceSha256).some((name) => name === "web/agent-preview-host.js"));
   assert.ok(Object.keys(a.manifest.runner.sourceSha256).some((name) => name === "scripts/agent-preview-sessions.mjs"));
@@ -85,4 +94,33 @@ test("verification rejects modified payload and symlink substitution", { timeout
   await rm(linkedSkill);
   await symlink(path.join(repoRoot, "skills/noon-authoring/SKILL.md"), linkedSkill);
   await assert.rejects(verifyAgentBundle({ bundleDir: linked }), /symbolic link|non-symlink/);
+
+  const target = path.join(root, "root-target");
+  await buildAgentBundle({ outputDir: target });
+  const rootLink = path.join(root, "root-link");
+  await symlink(target, rootLink, "dir");
+  await assert.rejects(verifyAgentBundle({ bundleDir: rootLink }), /non-symlink directory/);
+});
+
+test("verification recomputes required skill and runner file sets", { timeout: 30_000 }, async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "noon-agent-package-omission-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const missingSkill = path.join(root, "missing-skill");
+  await buildAgentBundle({ outputDir: missingSkill });
+  const skillManifest = await readManifest(missingSkill);
+  const skillKey = Object.keys(skillManifest.skill.files).sort()[0];
+  assert.ok(skillKey);
+  delete skillManifest.skill.files[skillKey];
+  await writeManifest(missingSkill, skillManifest);
+  await assert.rejects(verifyAgentBundle({ bundleDir: missingSkill }), /skill package file set/);
+
+  const missingRunner = path.join(root, "missing-runner");
+  await buildAgentBundle({ outputDir: missingRunner });
+  const runnerManifest = await readManifest(missingRunner);
+  const runnerKey = Object.keys(runnerManifest.runner.sourceSha256).sort()[0];
+  assert.ok(runnerKey);
+  delete runnerManifest.runner.sourceSha256[runnerKey];
+  await writeManifest(missingRunner, runnerManifest);
+  await assert.rejects(verifyAgentBundle({ bundleDir: missingRunner }), /runner source file set/);
 });
