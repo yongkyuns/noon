@@ -20,10 +20,10 @@ const USAGE_KEYS = new Set([
 ]);
 const SET_KEYS = new Set([
   "schema", "kind", "evaluationId", "fixtureOnly", "repositoryRevision", "corpusSha256", "promptPackSha256",
-  "model", "repetitions", "runs",
+  "model", "taskOrder", "repetitions", "runs",
 ]);
 const MODEL_KEYS = new Set([
-  "provider", "name", "version", "temperature", "topP", "maxOutputTokens", "seedPolicy",
+  "provider", "name", "version", "temperature", "topP", "maxOutputTokens", "seedPolicy", "systemPromptSha256",
 ]);
 
 function sha256(bytes) {
@@ -83,6 +83,7 @@ function stableModel(model) {
   boundedNumber(row.topP, "model.topP", { max: 1 });
   boundedInt(row.maxOutputTokens, "model.maxOutputTokens", { min: 1, max: 1_000_000 });
   boundedText(row.seedPolicy, "model.seedPolicy", { max: 256 });
+  boundedText(row.systemPromptSha256, "model.systemPromptSha256", { max: 64, pattern: SHA256 });
   return Object.freeze({
     provider: row.provider,
     name: row.name,
@@ -91,6 +92,7 @@ function stableModel(model) {
     topP: row.topP,
     maxOutputTokens: row.maxOutputTokens,
     seedPolicy: row.seedPolicy,
+    systemPromptSha256: row.systemPromptSha256,
   });
 }
 
@@ -146,6 +148,10 @@ export function validateComparisonSet(input, context) {
   if (set.corpusSha256 !== context.corpusSha256) throw new Error("comparison corpus hash does not match the current deterministic corpus");
   if (set.promptPackSha256 !== context.promptPackSha256) throw new Error("comparison prompt-pack hash does not match the current prompt pack");
   const model = stableModel(set.model);
+  if (!Array.isArray(set.taskOrder) || set.taskOrder.length !== context.taskIds.length ||
+      set.taskOrder.some((taskId, index) => taskId !== context.taskIds[index])) {
+    throw new Error("taskOrder must exactly match the current fixed corpus order");
+  }
   boundedInt(set.repetitions, "repetitions", { min: 1, max: 20 });
   if (!Array.isArray(set.runs)) throw new TypeError("runs must be an array");
 
@@ -190,7 +196,7 @@ export function validateComparisonSet(input, context) {
     }
   }
   if (seen.size !== expected.size) throw new Error("comparison run matrix is incomplete");
-  return Object.freeze({ ...set, model });
+  return Object.freeze({ ...set, taskOrder: Object.freeze([...set.taskOrder]), model });
 }
 
 function summarizeMode(runs) {
@@ -226,6 +232,7 @@ export function aggregateComparison(set, context) {
     corpusSha256: validated.corpusSha256,
     promptPackSha256: validated.promptPackSha256,
     model: validated.model,
+    taskOrder: validated.taskOrder,
     repetitions: validated.repetitions,
     taskCount: context.taskIds.length,
     modes: byMode,
@@ -250,7 +257,7 @@ export function comparisonMarkdown(report) {
   }).join("\n");
   return `${banner}# Noon stochastic agent comparison\n\n` +
     `Evaluation: \`${report.evaluationId}\`  \nRepository: \`${report.repositoryRevision}\`  \nCorpus: \`${report.corpusSha256}\`  \nPrompt pack: \`${report.promptPackSha256}\`  \n` +
-    `Model: \`${report.model.provider}/${report.model.name}\`  \nRepetitions: ${report.repetitions}; tasks: ${report.taskCount}\n\n` +
+    `Model: \`${report.model.provider}/${report.model.name}\`  \nSystem prompt: \`${report.model.systemPromptSha256}\`  \nRepetitions: ${report.repetitions}; tasks: ${report.taskCount}\n\n` +
     `| Mode | Semantic | Visual | Unsupported API | Repairs | First useful frame (ms) | Tokens | Tool calls | Tool tokens |\n` +
     `| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n${rows}\n`;
 }
