@@ -2547,6 +2547,23 @@ pub struct RetainedDrawStats {
     pub text: TextGpuDrawStats,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetainedDerivedDisplayError {
+    MixedTextUnsupported,
+}
+
+impl std::fmt::Display for RetainedDerivedDisplayError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MixedTextUnsupported => formatter.write_str(
+                "derived family Transform display rows are not yet interleaved with retained glyph painter items",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RetainedDerivedDisplayError {}
+
 pub struct RetainedTextGpuState {
     glyphs: TextGlyphGpuRenderer,
     last_uploaded_generation: Option<u64>,
@@ -2690,6 +2707,40 @@ impl GpuRenderer {
             TextGpuUploadStats::default()
         };
         RetainedUploadStats { geometry, text }
+    }
+
+    /// Encode a retained geometry-only frame with identity-free derived analytic
+    /// occurrences. Mixed glyph frames fail closed until the retained text stream can
+    /// represent plan-local occurrence ordinals without manufacturing object IDs.
+    pub fn encode_retained_with_derived(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        prepared: &PreparedRetainedGpuFrame<'_>,
+        derived: &crate::PreparedDerivedDisplay,
+        clear_color: wgpu::Color,
+        query_set: Option<&wgpu::QuerySet>,
+    ) -> Result<RetainedDrawStats, RetainedDerivedDisplayError> {
+        if !prepared.geometry_only {
+            return Err(RetainedDerivedDisplayError::MixedTextUnsupported);
+        }
+        let geometry = match query_set {
+            Some(queries) => self.encode_with_derived_profiled(
+                encoder,
+                view,
+                &prepared.geometry,
+                derived,
+                clear_color,
+                queries,
+            ),
+            None => {
+                self.encode_with_derived(encoder, view, &prepared.geometry, derived, clear_color)
+            }
+        };
+        Ok(RetainedDrawStats {
+            geometry,
+            text: TextGpuDrawStats::default(),
+        })
     }
 
     /// Encode the normal retained painter-order pass, optionally recording its
