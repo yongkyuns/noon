@@ -1,0 +1,57 @@
+name: B3 derived worker transport runner
+
+on:
+  push:
+    branches:
+      - codex/b3-derived-display-worker-transport
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Extract patch script
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('.github/workflows/b3-derived-worker-transport-patch.yml').read_text().splitlines()
+          start = source.index("          python3 - <<'PY'") + 1
+          end = len(source) - 1 - source[::-1].index('          PY')
+          body = []
+          for line in source[start:end]:
+              body.append(line[10:] if line.startswith('          ') else line)
+          Path('/tmp/b3_patch.py').write_text('\n'.join(body) + '\n')
+          PY
+          python3 /tmp/b3_patch.py
+      - name: Format and focused tests
+        shell: bash
+        run: |
+          cargo fmt --all
+          cargo test -p noon-web derived_display_transport_regression --lib
+          cargo test -p noon-render-wgpu derived_display --lib
+      - name: Commit implementation
+        shell: bash
+        run: |
+          rm .github/workflows/b3-derived-worker-transport-patch.yml
+          rm .github/workflows/b3-derived-worker-run.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/noon-web/src/retained_family_execution_transport.rs \
+                  crates/noon-web/src/semantic_execution_player.rs \
+                  crates/noon-web/src/retained_execution_resources.rs \
+                  crates/noon-render-wgpu/src/render_order.rs \
+                  crates/noon-web/src/retained_execution_canvas.rs \
+                  .github/workflows/b3-derived-worker-transport-patch.yml \
+                  .github/workflows/b3-derived-worker-run.yml
+          git commit -m 'Transport derived family rows across worker boundary'
+          git push origin HEAD:codex/b3-derived-display-worker-transport
