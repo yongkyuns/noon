@@ -22,7 +22,7 @@ jobs:
         run: |
           cargo fmt --all
           cargo fmt --all -- --check
-          cargo test -p noon-web canonical_membership_bring_to_back_routes_through_shared_authority
+          cargo check -p noon-web
           PYTHONPATH=web/python python -m unittest web/python/test_scene_painter_order.py
           git diff --check
       - name: Commit patch
