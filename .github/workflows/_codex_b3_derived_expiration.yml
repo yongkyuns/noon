@@ -1,0 +1,49 @@
+name: b3 derived display expiration
+on:
+  push:
+    branches: [codex/b3-derived-display-expiration]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: dtolnay/rust-toolchain@stable
+        with: {components: 'rustfmt, clippy'}
+      - uses: Swatinem/rust-cache@v2
+      - name: Patch follow-up invalidation
+        shell: python
+        run: |
+          from pathlib import Path
+          def rep(path, old, new):
+              p=Path(path); t=p.read_text(); n=t.count(old)
+              if n!=1: raise SystemExit(f'{path}: expected 1 match, got {n}')
+              p.write_text(t.replace(old,new,1))
+          path='crates/noon-runtime/src/lib.rs'
+          marker='''    /// Consume derived spatial invalidation for the execution-session index owner.\n    pub fn take_spatial_changes(&mut self) -> FrameChanges {\n'''
+          method='''    /// Consume one renderer publication while queueing a renderer-only full\n    /// invalidation for the immediately following publication.\n    ///\n    /// This supports transient overlays whose exact endpoint must be presented once\n    /// and then removed on the next redraw without mutating scene or spatial state.\n    pub fn take_renderer_publication_with_followup_invalidation(\n        &mut self,\n    ) -> RendererPublication<'_> {\n        let changes = self.take_frame_changes();\n        self.changes.invalidate_all();\n        RendererPublication::new(\n            self.publication,\n            &self.frame,\n            changes,\n            self.compiled.text_resources(),\n            self.compiled.font_resources(),\n            self.compiled.geometry_resources(),\n            self.compiled.family_animation_plans(),\n            &self.active_family_animation_indices,\n            &self.painter_order,\n        )\n    }\n\n'''
+          rep(path, marker, method+marker)
+          path='crates/noon/src/execution_session.rs'
+          old='''        self.runtime\n            .take_renderer_publication()\n            .with_derived_display_objects(&self.derived_display_objects)\n            .expect("compiler-owned family Transform rows retain valid painter anchors")\n'''
+          new='''        let publication = if self.derived_display_expire_after_publication {\n            self.derived_display_expire_after_publication = false;\n            self.runtime\n                .take_renderer_publication_with_followup_invalidation()\n        } else {\n            self.runtime.take_renderer_publication()\n        };\n        publication\n            .with_derived_display_objects(&self.derived_display_objects)\n            .expect("compiler-owned family Transform rows retain valid painter anchors")\n'''
+          # The existing block clears the plan before this selection; preserve that behavior.
+          rep(path, old, new)
+          path='crates/noon/src/execution_session/family_transform_tests.rs'
+          old='''    // Completion grants the endpoint one coherent publication, then the synthetic\n    // alignment occurrence disappears without changing semantic topology.\n    assert!(session.take_renderer_publication().derived_display_objects().is_empty());\n'''
+          new='''    // Completion grants the endpoint one coherent publication, then queues one\n    // renderer-only follow-up so the synthetic alignment occurrence is actually\n    // removed from a presented surface.\n    assert!(session.wake_state().frame_pending());\n    let removal = session.take_renderer_publication();\n    assert!(removal.changes().is_all());\n    assert!(removal.derived_display_objects().is_empty());\n'''
+          rep(path, old, new)
+      - run: cargo fmt --all
+      - run: cargo test -p noon unequal_family --lib -- --nocapture
+      - run: cargo test -p noon-runtime --lib
+      - run: cargo check -p noon
+      - run: cargo clippy -p noon --lib -- -D warnings
+      - name: Commit production files
+        run: |
+          git config user.name 'Yongkyun Shin'
+          git config user.email 'yongkyuns@gmail.com'
+          git add crates/noon-runtime/src/lib.rs crates/noon/src/execution_session.rs crates/noon/src/execution_session/family_transform_tests.rs
+          git commit -m 'Queue renderer redraw when derived display state expires'
+          git push origin HEAD:codex/b3-derived-display-expiration
