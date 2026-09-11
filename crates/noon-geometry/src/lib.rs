@@ -16,6 +16,7 @@ pub use reverse::reverse_path;
 pub use smoothing::change_path_anchor_mode;
 mod tessellation;
 mod vector_field;
+mod vector_field_defaults;
 
 pub use geometry_proportion::*;
 pub use isoline::*;
@@ -24,3 +25,4 @@ pub use outline::*;
 pub use partial::*;
 pub use tessellation::*;
 pub use vector_field::*;
+pub use vector_field_defaults::*;
