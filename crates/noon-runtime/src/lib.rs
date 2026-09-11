@@ -286,6 +286,29 @@ impl SceneInstance {
         )
     }
 
+    /// Consume one renderer publication while queueing a renderer-only full
+    /// invalidation for the immediately following publication.
+    ///
+    /// This supports transient overlays whose exact endpoint must be presented once
+    /// and then removed on the next redraw without mutating scene or spatial state.
+    pub fn take_renderer_publication_with_followup_invalidation(
+        &mut self,
+    ) -> RendererPublication<'_> {
+        let changes = self.take_frame_changes();
+        self.changes.invalidate_all();
+        RendererPublication::new(
+            self.publication,
+            &self.frame,
+            changes,
+            self.compiled.text_resources(),
+            self.compiled.font_resources(),
+            self.compiled.geometry_resources(),
+            self.compiled.family_animation_plans(),
+            &self.active_family_animation_indices,
+            &self.painter_order,
+        )
+    }
+
     /// Consume derived spatial invalidation for the execution-session index owner.
     pub fn take_spatial_changes(&mut self) -> FrameChanges {
         std::mem::take(&mut self.spatial_changes)
