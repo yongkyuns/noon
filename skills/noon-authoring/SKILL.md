@@ -1,7 +1,7 @@
 ---
 name: noon-authoring
 description: Author and review Noon animation scenes using capability-qualified ManimCE-style Python or the shared Rust API. Use when a user asks to create, explain, repair, or verify a Noon animation, or when scene source imports noon. Not a generic ManimGL skill or a contract for modifying Noon internals.
-compatibility: Requires a trusted Noon repository checkout and Python 3.12+ for capability discovery. Previewing requires the repository's existing browser build and rendering environment; capability discovery alone does not render or install dependencies.
+compatibility: Requires a trusted Noon checkout, Python 3.12+, and Node 22+. Discovery does not render. Isolated CLI/MCP preview additionally requires Docker and a prepared NOON_PREVIEW_RUNTIME_CONFIG; the local runner is not a remote or malicious-checkout sandbox.
 metadata:
   version: "0.1.0"
 ---
@@ -45,31 +45,62 @@ about an installed binary, the current GPU, or a live session. See
 3. Write ordinary `from noon import *` Python for the supported CE-like surface, or
    use the current shared Rust API. Keep the editable source as the deliverable.
    Do not import `manimlib`, invoke `manim`/`manimgl`, or silently switch renderers.
-4. Use the existing playground to render the scene. Inspect the intended initial
-   state, transition interiors, completion boundaries, and final membership. A
-   final blank frame after `FadeOut` can be correct; a successful run alone is not
-   visual verification. Apply the [verification checks](references/verification.md).
+4. Render through the qualified shared preview path when it is configured. Inspect
+   the intended initial state, transition interiors, completion boundaries, and final
+   membership. A final blank frame after `FadeOut` can be correct; a successful run
+   alone is not visual verification. Apply the [verification checks](references/verification.md).
 5. Revise source based on actual diagnostics and frames. Preserve the original
    mathematical and animation semantics; never conceal an unsupported operation by
    replacing `MathTex` with `Text` or removing an updater.
 
 ## Current preview route
 
-Use an already-built playground when available. To build one explicitly:
+The supported file-based agent preview is the shared checkout-bound CLI. Prepare the
+same isolated runtime used by MCP, then render selected authored times:
 
 ```bash
 bash scripts/build-web-demo.sh
-python3 -m http.server --bind 127.0.0.1 --directory web 8080
+cd tools/noon-mcp
+npm ci --ignore-scripts --no-audit --no-fund
+node scripts/setup-preview-runtime.mjs
+# Export the absolute runtimeConfig path printed above.
+export NOON_PREVIEW_RUNTIME_CONFIG=/absolute/path/to/runtime.json
+cd ../..
+node tools/noon-mcp/bin/noon-preview.mjs \
+  --source scene.py --output noon-preview-output \
+  --time 1 --time 1.5 --time 3
 ```
 
-Open the local playground, paste the source into **Python scene source**, and run
-it. The build can require downloads and substantial dependencies; it is not a side
-effect of capability discovery. Do not claim the preview ran when the required
-browser/WASM environment is unavailable.
+The CLI uses the same `AgentPreviewService`, isolated Docker runner, retained artifact
+store, and observed runtime provenance as MCP. Read `manifest.json` and inspect the
+actual `frame-*.png` files; do not substitute a successful process exit for visual
+verification. Sampling is forward-only and bounded, and success/failure both await
+session/container cleanup.
 
-There is not yet a supported `noon render` command or shipped Noon MCP preview
-server in this skill. The isolated runner and MCP adapter are tracked in #1197 and
-#1198. Do not invent their installation or tool commands.
+When the existing local MCP server is launched with that same
+`NOON_PREVIEW_RUNTIME_CONFIG`, use its shared rendering tools rather than inventing
+another render path:
+
+1. `noon_open_scene` with the complete source;
+2. `noon_sample_frames` with a nondecreasing schedule of useful authored times;
+3. `noon_inspect` for the last coherent metadata when needed;
+4. `noon_close_scene` when finished.
+
+`open`/`sample` return actual `image/png` content plus retained descriptors carrying
+source/build/requested-time/published-time/backend provenance. Session handles are
+scope-local and become stale after close/cancellation. A new source edit starts a new
+scene session; persistent live object editing is not implied.
+
+If the isolated runtime is unavailable, the existing browser playground remains a
+manual fallback. Build it with `bash scripts/build-web-demo.sh`, serve `web/` locally,
+and report that the qualified CLI/MCP preview was unavailable. Do not claim rendering
+occurred when only capability discovery or source inspection ran.
+
+For a reproducible source bundle of this skill plus the canonical capability inventory,
+use `node scripts/package-noon-agent.mjs --output <new-directory>` and verify it with
+`node scripts/package-noon-agent.mjs --verify <bundle-directory>`. The bundle identifies
+checkout runner source; actual loaded worker/WASM identity is still observed from each
+preview artifact rather than fabricated from source metadata.
 
 ## Semantic boundaries
 
