@@ -236,21 +236,27 @@ try {
     "open_scene must preserve first-frame readiness instead of waiting for source completion");
 
   const controller = new AbortController();
+  const cancellationReason = new DOMException("noon-mcp-cancel-probe", "AbortError");
   const pending = client.callTool({
     name: "noon_sample_frames",
     arguments: { session: stuckSessionId, times: [0.2] },
   }, { signal: controller.signal, timeout: 30_000 });
-  const abortTimer = setTimeout(() => controller.abort(), 750);
+  const abortTimer = setTimeout(() => controller.abort(cancellationReason), 750);
   let cancelled = false;
   try {
     const result = await pending;
     cancelled = result.isError === true;
   } catch (error) {
     cancelled = true;
-    assert.match(String(error?.name ?? error), /abort/i, "client cancellation should reject as an abort when it rejects locally");
+    // @modelcontextprotocol/client 2.0.0 wraps deliberate AbortSignal rejection
+    // in SdkError/REQUEST_TIMEOUT. Match the explicit reason instead of its
+    // current wrapper type so this remains a cancellation proof after SDK fixes.
+    assert.match(String(error?.message ?? error), /noon-mcp-cancel-probe/i,
+      "client cancellation rejection must preserve the explicit abort reason");
   } finally {
     clearTimeout(abortTimer);
   }
+  assert.equal(controller.signal.aborted, true, "cancellation probe must actually abort the client request");
   assert.equal(cancelled, true, "canceled sample_frames must never report success");
   await waitForNoOwnedContainers();
   const canceledStale = await client.callTool({ name: "noon_inspect", arguments: { session: stuckSessionId } });
