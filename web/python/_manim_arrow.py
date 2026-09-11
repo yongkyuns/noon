@@ -24,13 +24,17 @@ try:
     from js import noonAuthoringDoubleArrowFromMobject as _double_arrow_from_mobject
     from js import noonAuthoringDoubleArrowFromMobjects as _double_arrow_from_mobjects
     from js import noonAuthoringDoubleArrowToMobject as _double_arrow_to_mobject
-except ImportError:  # Native CPython tests install these only when needed.
-    _arrow_from_mobject = None
-    _arrow_from_mobjects = None
-    _arrow_to_mobject = None
-    _double_arrow_from_mobject = None
-    _double_arrow_from_mobjects = None
-    _double_arrow_to_mobject = None
+except ImportError:  # Normal worker hosts expose these on the typed Arrow options bridge.
+    _arrow_from_mobject = getattr(_arrow_options, "arrowFromMobject", None)
+    _arrow_from_mobjects = getattr(_arrow_options, "arrowFromMobjects", None)
+    _arrow_to_mobject = getattr(_arrow_options, "arrowToMobject", None)
+    _double_arrow_from_mobject = getattr(
+        _arrow_options, "doubleArrowFromMobject", None
+    )
+    _double_arrow_from_mobjects = getattr(
+        _arrow_options, "doubleArrowFromMobjects", None
+    )
+    _double_arrow_to_mobject = getattr(_arrow_options, "doubleArrowToMobject", None)
 
 
 _ARROW_CONSTRUCTOR_OPTIONS = frozenset(
