@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from _noon_errors import engine_call
 
-import copy
-import math
 from typing import Any
 
 import noon as _base
@@ -87,48 +85,6 @@ def _mobject_get_color(self: _base.Mobject) -> _base.Color:
 def _group_get_color(self: _compat.Group) -> _base.Color:
     leaves = _compat._leaf_mobjects(self)
     return _base.WHITE if not leaves else _mobject_get_color(leaves[0])
-
-
-class Arrow(_compat.Group):
-    """2D Manim-style arrow composed from a Line and a triangular tip.
-
-    This gives documentation examples a retained family rather than a special renderer
-    primitive. Exact arrow-tip raster parity remains tracked separately from source
-    compatibility and family transforms.
-    """
-
-    def __init__(
-        self,
-        start: object = _base.LEFT,
-        end: object = _base.RIGHT,
-        buff: float = 0.25,
-        color: _base.Color = _base.WHITE,
-        **kwargs: Any,
-    ) -> None:
-        start_point = _base._as_vec2(start)
-        end_point = _base._as_vec2(end)
-        delta = end_point - start_point
-        length = delta.length()
-        if length <= 0.0:
-            raise ValueError("Arrow start and end must differ")
-        direction = delta / length
-        trim = min(max(float(buff), 0.0), length * 0.49)
-        shaft_start = start_point + direction * trim
-        shaft_end = end_point - direction * trim
-        shaft = _compat.Line(shaft_start, shaft_end, color=color, **kwargs)
-        tip = Triangle(color=color, fill_opacity=1.0, stroke_opacity=0.0)
-        tip.scale(min(0.18, length * 0.12))
-        tip.rotate(math.atan2(direction.y, direction.x) - math.pi / 2.0)
-        tip.move_to(shaft_end)
-        self._shaft = shaft
-        self._tip = tip
-        super().__init__(shaft, tip)
-
-    def get_start(self) -> _base.Vec2:
-        return _line_get_start(self._shaft)
-
-    def get_end(self) -> _base.Vec2:
-        return self._tip.get_center()
 
 
 def _public_bound_method_name(source: object, method: object) -> str:
