@@ -483,7 +483,8 @@ mod tests {
     use std::rc::Rc;
 
     fn resource_handle(state: &SemanticObjectState) -> noon_core::GeometryResourceHandle {
-        let SemanticObjectContent::Geometry(StoredGeometry::Resource(handle)) = state.content else {
+        let SemanticObjectContent::Geometry(StoredGeometry::Resource(handle)) = state.content
+        else {
             panic!("arrow tip must remain a retained geometry resource");
         };
         handle
