@@ -161,6 +161,12 @@ impl WasmAuthoringArrowHandle {
             .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
             .ok_or_else(|| JsValue::from_str("Arrow has no start tip"))
     }
+
+    /// Publish one Arrow-aware scale transaction. The aggregate handle retains
+    /// only Rust-owned class policy; all leaf state remains in the semantic store.
+    pub fn scale(&self, factor: f64, scale_tips: bool) -> Result<(), JsValue> {
+        self.arrow.scale(factor, scale_tips).map_err(js_error)
+    }
 }
 
 #[wasm_bindgen]
