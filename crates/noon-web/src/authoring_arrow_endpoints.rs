@@ -59,7 +59,67 @@ fn to_mobject(
         .and_then(|endpoints| options_from_endpoints(endpoints, double_arrow))
 }
 
-/// Resolve both VMobject boundaries in shared Rust before publishing the Arrow.
+/// Resolve VMobject boundaries through the same typed Arrow-options capability the
+/// Python worker already exposes. The worker therefore does not need a second set
+/// of feature-specific global functions just to reach shared Rust semantics.
+#[wasm_bindgen]
+impl WasmManimArrowOptions {
+    #[wasm_bindgen(js_name = arrowFromMobjects)]
+    pub fn arrow_from_mobjects_options(
+        start: &WasmAuthoringMobjectHandle,
+        end: &WasmAuthoringMobjectHandle,
+    ) -> Result<WasmManimArrowOptions, JsValue> {
+        from_mobjects(start, end, false)
+    }
+
+    #[wasm_bindgen(js_name = arrowFromMobject)]
+    pub fn arrow_from_mobject_options(
+        start: &WasmAuthoringMobjectHandle,
+        end_x: f64,
+        end_y: f64,
+    ) -> Result<WasmManimArrowOptions, JsValue> {
+        from_mobject(start, end_x, end_y, false)
+    }
+
+    #[wasm_bindgen(js_name = arrowToMobject)]
+    pub fn arrow_to_mobject_options(
+        start_x: f64,
+        start_y: f64,
+        end: &WasmAuthoringMobjectHandle,
+    ) -> Result<WasmManimArrowOptions, JsValue> {
+        to_mobject(start_x, start_y, end, false)
+    }
+
+    #[wasm_bindgen(js_name = doubleArrowFromMobjects)]
+    pub fn double_arrow_from_mobjects_options(
+        start: &WasmAuthoringMobjectHandle,
+        end: &WasmAuthoringMobjectHandle,
+    ) -> Result<WasmManimArrowOptions, JsValue> {
+        from_mobjects(start, end, true)
+    }
+
+    #[wasm_bindgen(js_name = doubleArrowFromMobject)]
+    pub fn double_arrow_from_mobject_options(
+        start: &WasmAuthoringMobjectHandle,
+        end_x: f64,
+        end_y: f64,
+    ) -> Result<WasmManimArrowOptions, JsValue> {
+        from_mobject(start, end_x, end_y, true)
+    }
+
+    #[wasm_bindgen(js_name = doubleArrowToMobject)]
+    pub fn double_arrow_to_mobject_options(
+        start_x: f64,
+        start_y: f64,
+        end: &WasmAuthoringMobjectHandle,
+    ) -> Result<WasmManimArrowOptions, JsValue> {
+        to_mobject(start_x, start_y, end, true)
+    }
+}
+
+/// Direct exports remain a narrow embedding surface for hosts that import the
+/// generated WASM bindings themselves. Python authoring uses the typed options
+/// bridge above so all existing worker hosts receive the capability automatically.
 #[wasm_bindgen(js_name = noonAuthoringArrowFromMobjects)]
 pub fn arrow_from_mobjects(
     start: &WasmAuthoringMobjectHandle,
