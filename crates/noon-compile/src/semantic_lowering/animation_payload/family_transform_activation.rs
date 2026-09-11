@@ -4,11 +4,11 @@ use noon_core::{
     ObjectId, PreparedSemanticMutationTransaction, SemanticNodeId, SemanticTransactionNodeRef,
 };
 
+use super::super::{PreparedSemanticAnimationScheduleProjection, SemanticExecutionIndex};
 use super::affine::EffectiveAnimationProperties;
 use super::family_transform::{
     derive_family_transform_correspondence, FamilyTransformCorrespondenceError,
 };
-use super::super::{PreparedSemanticAnimationScheduleProjection, SemanticExecutionIndex};
 
 /// One activation-time family Transform occurrence before execution publication.
 ///
@@ -145,15 +145,14 @@ where
     for family in schedule.family_transforms() {
         let source_family = existing_endpoint(family.animation, family.source)?;
         let target_family = existing_endpoint(family.animation, family.target_state)?;
-        let correspondence = derive_family_transform_correspondence(
-            prepared.store(),
-            source_family,
-            target_family,
-        )
-        .map_err(|error| PreparedFamilyTransformActivationError::Correspondence {
-            animation: family.animation,
-            error,
-        })?;
+        let correspondence =
+            derive_family_transform_correspondence(prepared.store(), source_family, target_family)
+                .map_err(
+                    |error| PreparedFamilyTransformActivationError::Correspondence {
+                        animation: family.animation,
+                        error,
+                    },
+                )?;
 
         for correspondence_member in correspondence.occurrences() {
             let source = correspondence_member.source();
@@ -203,10 +202,10 @@ fn existing_endpoint(
     animation: SemanticTransactionNodeRef,
     endpoint: SemanticTransactionNodeRef,
 ) -> Result<SemanticNodeId, PreparedFamilyTransformActivationError> {
-    endpoint
-        .existing()
-        .ok_or(PreparedFamilyTransformActivationError::PendingFamilyEndpoint {
+    endpoint.existing().ok_or(
+        PreparedFamilyTransformActivationError::PendingFamilyEndpoint {
             animation,
             endpoint,
-        })
+        },
+    )
 }
