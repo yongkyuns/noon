@@ -59,6 +59,21 @@ impl From<AuthoringError> for ArrowScaleError {
     }
 }
 
+/// Immutable inputs observed before one Arrow scale publication.
+///
+/// Keeping the dependency closure together makes it explicit that both scale
+/// modes operate from one coherent semantic snapshot before staging mutations.
+struct ArrowScaleSnapshot<'a> {
+    policy: SemanticArrowShaftRole,
+    factor: f64,
+    start: (f64, f64),
+    end: (f64, f64),
+    old_length: f64,
+    previous_shaft: &'a SemanticObjectState,
+    previous_end_tip: &'a SemanticObjectState,
+    previous_start_tip: Option<&'a SemanticObjectState>,
+}
+
 impl ManimArrow {
     /// Match pinned ManimCE v0.21 `Arrow.scale` for straight retained Arrows.
     ///
@@ -84,30 +99,24 @@ impl ManimArrow {
         let previous_shaft = self.shaft().state()?;
         let previous_end_tip = self.end_tip().state()?;
         let previous_start_tip = self.start_tip().map(Mobject::state).transpose()?;
+        let snapshot = ArrowScaleSnapshot {
+            policy,
+            factor,
+            start,
+            end,
+            old_length,
+            previous_shaft: &previous_shaft,
+            previous_end_tip: &previous_end_tip,
+            previous_start_tip: previous_start_tip.as_ref(),
+        };
         let store = self.family().integration_store();
 
         let (next_shaft, next_end_tip, next_start_tip) = {
             let store_ref = store.borrow();
             if scale_tips {
-                self.scaled_with_tips(
-                    &store_ref,
-                    policy,
-                    factor,
-                    old_length,
-                    &previous_shaft,
-                    &previous_end_tip,
-                    previous_start_tip.as_ref(),
-                )?
+                self.scaled_with_tips(&store_ref, &snapshot)?
             } else {
-                self.scaled_preserving_tips(
-                    policy,
-                    factor,
-                    start,
-                    end,
-                    &previous_shaft,
-                    &previous_end_tip,
-                    previous_start_tip.as_ref(),
-                )?
+                self.scaled_preserving_tips(&snapshot)?
             }
         };
 
@@ -194,12 +203,7 @@ impl ManimArrow {
     fn scaled_with_tips(
         &self,
         store: &SemanticStore,
-        policy: SemanticArrowShaftRole,
-        factor: f64,
-        old_length: f64,
-        previous_shaft: &SemanticObjectState,
-        previous_end_tip: &SemanticObjectState,
-        previous_start_tip: Option<&SemanticObjectState>,
+        snapshot: &ArrowScaleSnapshot<'_>,
     ) -> Result<
         (
             SemanticObjectState,
@@ -221,38 +225,34 @@ impl ManimArrow {
             |previous: &SemanticObjectState| -> Result<SemanticObjectState, ArrowScaleError> {
                 let old_center = crate::semantic_mobject::state_center(store, previous)?;
                 let target_center = (
-                    pivot.0 + (old_center.0 - pivot.0) * factor,
-                    pivot.1 + (old_center.1 - pivot.1) * factor,
+                    pivot.0 + (old_center.0 - pivot.0) * snapshot.factor,
+                    pivot.1 + (old_center.1 - pivot.1) * snapshot.factor,
                 );
                 let mut next = previous.clone();
                 crate::semantic_mobject::scale_state_about_center(
                     store,
                     &mut next,
-                    factor,
-                    factor,
+                    snapshot.factor,
+                    snapshot.factor,
                     target_center,
                 )?;
                 Ok(next)
             };
 
-        let mut shaft = scale_one(previous_shaft)?;
-        shaft.style.stroke_width = policy
-            .initial_stroke_width()
-            .min(policy.max_stroke_width_to_length_ratio() * old_length * factor.abs());
-        let end_tip = scale_one(previous_end_tip)?;
-        let start_tip = previous_start_tip.map(scale_one).transpose()?;
+        let mut shaft = scale_one(snapshot.previous_shaft)?;
+        shaft.style.stroke_width = snapshot.policy.initial_stroke_width().min(
+            snapshot.policy.max_stroke_width_to_length_ratio()
+                * snapshot.old_length
+                * snapshot.factor.abs(),
+        );
+        let end_tip = scale_one(snapshot.previous_end_tip)?;
+        let start_tip = snapshot.previous_start_tip.map(scale_one).transpose()?;
         Ok((shaft, end_tip, start_tip))
     }
 
     fn scaled_preserving_tips(
         &self,
-        policy: SemanticArrowShaftRole,
-        factor: f64,
-        start: (f64, f64),
-        end: (f64, f64),
-        previous_shaft: &SemanticObjectState,
-        previous_end_tip: &SemanticObjectState,
-        previous_start_tip: Option<&SemanticObjectState>,
+        snapshot: &ArrowScaleSnapshot<'_>,
     ) -> Result<
         (
             SemanticObjectState,
@@ -261,32 +261,33 @@ impl ManimArrow {
         ),
         ArrowScaleError,
     > {
-        let pivot = midpoint(start, end);
-        let new_start = scale_point_about(start, pivot, factor);
-        let new_end = scale_point_about(end, pivot, factor);
+        let pivot = midpoint(snapshot.start, snapshot.end);
+        let new_start = scale_point_about(snapshot.start, pivot, snapshot.factor);
+        let new_end = scale_point_about(snapshot.end, pivot, snapshot.factor);
         let new_length = distance(new_start, new_end);
 
         let shaft_endpoints = self.shaft().manim_line_endpoints()?;
-        let end_tip_length = distance(end, shaft_endpoints.end);
-        let start_tip_length = previous_start_tip
-            .map(|_| distance(start, shaft_endpoints.start))
+        let end_tip_length = distance(snapshot.end, shaft_endpoints.end);
+        let start_tip_length = snapshot
+            .previous_start_tip
+            .map(|_| distance(snapshot.start, shaft_endpoints.start))
             .unwrap_or(0.0);
 
-        let mut next_end_tip = previous_end_tip.clone();
-        let mut next_start_tip = previous_start_tip.cloned();
+        let mut next_end_tip = snapshot.previous_end_tip.clone();
+        let mut next_start_tip = snapshot.previous_start_tip.cloned();
         let (shaft_start, shaft_end) = if new_length == 0.0 {
             reposition_tip(
                 &mut next_end_tip,
-                end,
-                current_tip_direction(shaft_endpoints.end, end),
+                snapshot.end,
+                current_tip_direction(shaft_endpoints.end, snapshot.end),
                 new_end,
                 None,
             )?;
             if let Some(next) = next_start_tip.as_mut() {
                 reposition_tip(
                     next,
-                    start,
-                    current_tip_direction(shaft_endpoints.start, start),
+                    snapshot.start,
+                    current_tip_direction(shaft_endpoints.start, snapshot.start),
                     new_start,
                     None,
                 )?;
@@ -296,8 +297,8 @@ impl ManimArrow {
             let direction = unit_direction(new_start, new_end);
             reposition_tip(
                 &mut next_end_tip,
-                end,
-                current_tip_direction(shaft_endpoints.end, end),
+                snapshot.end,
+                current_tip_direction(shaft_endpoints.end, snapshot.end),
                 new_end,
                 Some(direction),
             )?;
@@ -313,8 +314,8 @@ impl ManimArrow {
                 let start_direction = (-tangent.0, -tangent.1);
                 reposition_tip(
                     next,
-                    start,
-                    current_tip_direction(shaft_endpoints.start, start),
+                    snapshot.start,
+                    current_tip_direction(shaft_endpoints.start, snapshot.start),
                     new_start,
                     Some(start_direction),
                 )?;
@@ -328,16 +329,17 @@ impl ManimArrow {
             (start_base, end_base)
         };
 
-        let mut next_shaft = previous_shaft.clone();
+        let mut next_shaft = snapshot.previous_shaft.clone();
         set_line_world_endpoints(
             &mut next_shaft,
             shaft_start,
             shaft_end,
             "scaled arrow shaft",
         )?;
-        next_shaft.style.stroke_width = policy
+        next_shaft.style.stroke_width = snapshot
+            .policy
             .initial_stroke_width()
-            .min(policy.max_stroke_width_to_length_ratio() * new_length);
+            .min(snapshot.policy.max_stroke_width_to_length_ratio() * new_length);
 
         Ok((next_shaft, next_end_tip, next_start_tip))
     }
@@ -481,8 +483,7 @@ mod tests {
     use std::rc::Rc;
 
     fn resource_handle(state: &SemanticObjectState) -> noon_core::GeometryResourceHandle {
-        let SemanticObjectContent::Geometry(StoredGeometry::Resource(handle)) = state.content
-        else {
+        let SemanticObjectContent::Geometry(StoredGeometry::Resource(handle)) = state.content else {
             panic!("arrow tip must remain a retained geometry resource");
         };
         handle
