@@ -39,8 +39,15 @@ pub(crate) enum TransformCompileFailure {
 pub(crate) fn compile_transform_geometry_plan(
     track: &TrackDefinition,
 ) -> Result<Option<TransformGeometryPlan>, TransformCompileFailure> {
-    if track.property == Property::Morph {
-        return match &track.values {
+    compile_transform_geometry_values(track.property, &track.values)
+}
+
+pub(crate) fn compile_transform_geometry_values(
+    property: Property,
+    values: &TrackValues,
+) -> Result<Option<TransformGeometryPlan>, TransformCompileFailure> {
+    if property == Property::Morph {
+        return match values {
             TrackValues::PreparedMorph {
                 geometry,
                 render_transform,
@@ -72,10 +79,10 @@ pub(crate) fn compile_transform_geometry_plan(
             _ => Ok(None),
         };
     }
-    if track.property != Property::Transform {
+    if property != Property::Transform {
         return Ok(None);
     }
-    let TrackValues::Object { from, to } = &track.values else {
+    let TrackValues::Object { from, to } = values else {
         unreachable!("validated Transform track must contain object snapshots");
     };
 
@@ -328,6 +335,36 @@ fn fixed_frame_inverse_is_finite(
 mod tests {
     use super::*;
     use noon_core::{Color, Vec2};
+
+    #[test]
+    fn identity_free_value_plan_matches_stable_track_plan() {
+        let values = TrackValues::Object {
+            from: noon_core::TransformTrackEndpoint {
+                geometry: GeometryRef::circle(1.0),
+                transform: Transform2D::IDENTITY,
+                style: Style::default(),
+            },
+            to: noon_core::TransformTrackEndpoint {
+                geometry: GeometryRef::rectangle(2.0, 1.0),
+                transform: Transform2D::IDENTITY,
+                style: Style::default(),
+            },
+        };
+        let direct = compile_transform_geometry_values(Property::Transform, &values).unwrap();
+        let track = TrackDefinition {
+            id: noon_core::TrackId::new(7),
+            object: noon_core::ObjectId::new(11),
+            property: Property::Transform,
+            values,
+            timing: noon_core::TrackTiming::new(0.0, 1.0, noon_core::RateFunction::Linear),
+            time_map: noon_core::CompositionTimeMap::identity(),
+        };
+        assert_eq!(direct, compile_transform_geometry_plan(&track).unwrap());
+        assert!(matches!(
+            direct,
+            Some(TransformGeometryPlan::PathPair { .. })
+        ));
+    }
 
     #[test]
     fn fixed_world_pair_requires_finite_invertible_driver_takeover() {
