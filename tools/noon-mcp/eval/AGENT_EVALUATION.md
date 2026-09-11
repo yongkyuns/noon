@@ -8,8 +8,9 @@ available guidance/tools; they must never replace or weaken deterministic CI.
 ## Comparison modes
 
 Every comparison uses the exact task prompts in `agent-prompts.json`, the same
-model identity/settings, the same repetition count, and the same landed
-`corpus.json` identity. Only the available Noon integration surface changes:
+model identity/settings, the same system prompt bytes, the same fixed task order,
+the same repetition count, and the same landed `corpus.json` identity. Only the
+available Noon integration surface changes:
 
 | Mode | Agent-visible Noon integration |
 | --- | --- |
@@ -18,7 +19,9 @@ model identity/settings, the same repetition count, and the same landed
 | `skill+MCP` | Same prompt/model settings plus the first-party skill and the qualified local Noon MCP discovery/reference/preview tools. |
 
 Do not change system prompts, temperature, top-p, output-token limits, seed policy,
-context selection rules, task order, or repetition count between modes. If a
+context selection rules, task order, or repetition count between modes. Record the
+SHA-256 of the exact common system-prompt bytes in `model.systemPromptSha256`.
+`taskOrder` must exactly match the current deterministic corpus order. If a
 provider/tool harness necessarily injects mode-specific tool schemas, record that
 as part of the mode boundary; do not compensate with a different model setting.
 
@@ -26,8 +29,8 @@ as part of the mode boundary; do not compensate with a different model setting.
 
 A comparison JSON uses `kind: "noon-agent-stochastic-comparison"`, `schema: 1`,
 and `fixtureOnly: false`. `eval/agent-comparison.mjs` rejects stale corpus or
-prompt-pack hashes, incomplete mode/task/repetition matrices, per-run model
-settings, unknown metric fields, and task-inappropriate result shapes.
+prompt-pack hashes, changed task order, incomplete mode/task/repetition matrices,
+per-run model settings, unknown metric fields, and task-inappropriate result shapes.
 
 Each run records:
 
@@ -40,9 +43,24 @@ Each run records:
 - one or more evidence references (transcript, retained artifact, external run ID,
   or another durable evidence locator).
 
-Use the external evaluation harness's native token accounting when available.
-Do not estimate missing token/tool metrics from text length. A failed run still
-needs explicit scores/usage/evidence so failure rates are not silently dropped.
+Use these metric definitions consistently:
+
+- **Repair iterations:** the count of candidate-source revisions after the first
+  submitted candidate and before the final scored answer. Pure explanation edits
+  without a changed candidate source do not increment it.
+- **First useful frame:** monotonic elapsed milliseconds from task delivery until
+  the evaluator first has a backend-qualified PNG from the current candidate that
+  is useful for judging the requested scene. In `docs-only`, this includes the
+  evaluator's first post-agent render of the submitted candidate. Capability-only
+  unsupported tasks record `null` because no honest rendered frame is expected.
+- **Token usage:** provider-reported input/output/cached-input counts. Do not infer
+  missing counts from character length.
+- **Tool overhead:** actual tool-call count plus provider/harness-reported tool
+  input/output token counts. A mode with no exposed tools records zeroes.
+
+A failed run still needs explicit scores/usage/evidence so failure rates are not
+silently dropped. Use the external evaluation harness's native accounting when
+available; do not estimate missing token/tool metrics.
 
 ## Scoring discipline
 
@@ -84,5 +102,5 @@ AGENT RESULTS`. No synthetic score belongs in a product comparison report.
 
 The repository contains the reproducible prompts, validation and aggregation
 contract. It intentionally contains **no claimed stochastic model scores** until
-real external runs using one fixed model/settings block and all three modes have
-been performed and their evidence retained.
+real external runs using one fixed model/settings/system-prompt/task-order block
+and all three modes have been performed and their evidence retained.
