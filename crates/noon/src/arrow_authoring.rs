@@ -261,12 +261,88 @@ impl ManimArrow {
     }
 }
 
+/// Publish several already-validated Arrow requests and one outer family in one
+/// semantic transaction. This crate-private seam lets composite authoring reuse
+/// the single Arrow implementation without exposing a second geometry path.
+pub(crate) fn create_arrow_batch_family(
+    store: Rc<RefCell<SemanticStore>>,
+    options: Vec<ManimArrowOptions>,
+) -> Result<(MobjectFamily, Vec<ManimArrow>), AuthoringError> {
+    let (family_node, committed) = {
+        let mut store_ref = store.borrow_mut();
+        let prepared = options
+            .into_iter()
+            .map(|options| options.prepare(&mut store_ref))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut paths = Vec::with_capacity(
+            prepared.len()
+                + prepared
+                    .iter()
+                    .filter(|arrow| arrow.start_tip.is_some())
+                    .count(),
+        );
+        for arrow in &prepared {
+            paths.push(arrow.end_tip.clone());
+            if let Some(path) = &arrow.start_tip {
+                paths.push(path.clone());
+            }
+        }
+
+        store_ref.with_geometry_paths(paths, |store, handles| -> Result<_, AuthoringError> {
+            let mut transaction = SemanticMutationTransaction::new();
+            let family = transaction.create_node(SemanticNodeCreation::family());
+            let mut staged = Vec::with_capacity(prepared.len());
+            let mut handle_index = 0usize;
+            for arrow in &prepared {
+                let end_tip_handle = handles[handle_index];
+                handle_index += 1;
+                let start_tip_handle = if arrow.start_tip.is_some() {
+                    let handle = handles[handle_index];
+                    handle_index += 1;
+                    Some(handle)
+                } else {
+                    None
+                };
+                let staged_arrow =
+                    stage_prepared_arrow(&mut transaction, arrow, end_tip_handle, start_tip_handle);
+                transaction.add_member(family, staged_arrow.family);
+                staged.push(staged_arrow);
+            }
+            debug_assert_eq!(handle_index, handles.len());
+
+            let result = transaction.apply(store).map_err(AuthoringError::from)?;
+            let family_node = result
+                .resolve(family)
+                .ok_or(AuthoringError::UnresolvedCreatedNode(family))?;
+            let committed = staged
+                .into_iter()
+                .map(|arrow| resolve_staged_arrow(arrow, |token| result.resolve(token)))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((family_node, committed))
+        })?
+    };
+
+    let family = MobjectFamily::from_node(Rc::clone(&store), family_node)?;
+    let arrows = committed
+        .into_iter()
+        .map(|arrow| ManimArrow::from_committed(Rc::clone(&store), arrow))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((family, arrows))
+}
+
 struct PreparedArrow {
     shaft: SemanticObjectState,
     end_tip: VectorPath,
     start_tip: Option<VectorPath>,
     tip_color: Color,
     z_index: f64,
+}
+
+struct StagedArrow {
+    family: noon_core::SemanticLocalNodeToken,
+    shaft: noon_core::SemanticLocalNodeToken,
+    end_tip: noon_core::SemanticLocalNodeToken,
+    start_tip: Option<noon_core::SemanticLocalNodeToken>,
 }
 
 struct CommittedArrow {
@@ -306,6 +382,17 @@ fn commit_transaction(
     start_tip_handle: Option<noon_core::GeometryResourceHandle>,
 ) -> Result<CommittedArrow, AuthoringError> {
     let mut transaction = SemanticMutationTransaction::new();
+    let staged = stage_prepared_arrow(&mut transaction, prepared, end_tip_handle, start_tip_handle);
+    let result = transaction.apply(store).map_err(AuthoringError::from)?;
+    resolve_staged_arrow(staged, |token| result.resolve(token))
+}
+
+fn stage_prepared_arrow(
+    transaction: &mut SemanticMutationTransaction,
+    prepared: &PreparedArrow,
+    end_tip_handle: noon_core::GeometryResourceHandle,
+    start_tip_handle: Option<noon_core::GeometryResourceHandle>,
+) -> StagedArrow {
     let shaft = transaction.create_node(SemanticNodeCreation::object(prepared.shaft.clone()));
     let end_tip = transaction.create_node(SemanticNodeCreation::object(tip_state(
         prepared,
@@ -323,24 +410,27 @@ fn commit_transaction(
     if let Some(start_tip) = start_tip {
         transaction.add_member(family, start_tip);
     }
+    StagedArrow {
+        family,
+        shaft,
+        end_tip,
+        start_tip,
+    }
+}
 
-    let result = transaction.apply(store).map_err(AuthoringError::from)?;
+fn resolve_staged_arrow(
+    staged: StagedArrow,
+    mut resolve: impl FnMut(noon_core::SemanticLocalNodeToken) -> Option<noon_core::SemanticNodeId>,
+) -> Result<CommittedArrow, AuthoringError> {
     Ok(CommittedArrow {
-        family: result
-            .resolve(family)
-            .ok_or(AuthoringError::UnresolvedCreatedNode(family))?,
-        shaft: result
-            .resolve(shaft)
-            .ok_or(AuthoringError::UnresolvedCreatedNode(shaft))?,
-        end_tip: result
-            .resolve(end_tip)
-            .ok_or(AuthoringError::UnresolvedCreatedNode(end_tip))?,
-        start_tip: start_tip
-            .map(|token| {
-                result
-                    .resolve(token)
-                    .ok_or(AuthoringError::UnresolvedCreatedNode(token))
-            })
+        family: resolve(staged.family)
+            .ok_or(AuthoringError::UnresolvedCreatedNode(staged.family))?,
+        shaft: resolve(staged.shaft).ok_or(AuthoringError::UnresolvedCreatedNode(staged.shaft))?,
+        end_tip: resolve(staged.end_tip)
+            .ok_or(AuthoringError::UnresolvedCreatedNode(staged.end_tip))?,
+        start_tip: staged
+            .start_tip
+            .map(|token| resolve(token).ok_or(AuthoringError::UnresolvedCreatedNode(token)))
             .transpose()?,
     })
 }
@@ -489,8 +579,6 @@ mod tests {
         )
         .unwrap();
         let (start, end) = line_endpoints(&arrow.shaft().state().unwrap());
-        // Public endpoints are +/-0.75 after buff. The 0.35 tip then moves only
-        // the retained shaft endpoint back to its base at x=0.40.
         assert!((start.x + 0.75).abs() < 1e-6);
         assert!((end.x - 0.40).abs() < 1e-6);
         assert!((arrow.shaft().state().unwrap().style.stroke_width - 0.06).abs() < 1e-12);
@@ -513,7 +601,7 @@ mod tests {
         options.set_buff(0.0).unwrap();
         let arrow = ManimArrow::create(Rc::clone(scene.integration_store()), options).unwrap();
         let (_, end) = line_endpoints(&arrow.shaft().state().unwrap());
-        assert!((end.x - 0.3).abs() < 1e-6); // 25% tip cap => 0.1
+        assert!((end.x - 0.3).abs() < 1e-6);
         assert!((arrow.shaft().state().unwrap().style.stroke_width - 0.02).abs() < 1e-12);
     }
 
