@@ -611,6 +611,8 @@ struct StagedArrow {
     shaft: noon_core::SemanticLocalNodeToken,
     end_tip: noon_core::SemanticLocalNodeToken,
     start_tip: Option<noon_core::SemanticLocalNodeToken>,
+    initial_stroke_width: f64,
+    max_stroke_width_to_length_ratio: f64,
 }
 
 struct CommittedArrow {
@@ -685,6 +687,8 @@ fn stage_prepared_arrow(
         shaft,
         end_tip,
         start_tip,
+        initial_stroke_width: prepared.initial_stroke_width,
+        max_stroke_width_to_length_ratio: prepared.max_stroke_width_to_length_ratio,
     }
 }
 
@@ -702,8 +706,8 @@ fn resolve_staged_arrow(
             .start_tip
             .map(|token| resolve(token).ok_or(AuthoringError::UnresolvedCreatedNode(token)))
             .transpose()?,
-        initial_stroke_width: prepared.initial_stroke_width,
-        max_stroke_width_to_length_ratio: prepared.max_stroke_width_to_length_ratio,
+        initial_stroke_width: staged.initial_stroke_width,
+        max_stroke_width_to_length_ratio: staged.max_stroke_width_to_length_ratio,
     })
 }
 
