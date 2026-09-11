@@ -2,14 +2,15 @@
 //!
 //! One Arrow is a semantic family whose renderable leaves are an analytic Line
 //! shaft plus retained filled triangular tip paths. Geometry, buff shortening,
-//! tip sizing, stroke-width capping, and family publication are Rust-owned.
-//! Frontends only construct this inert typed request and wrap the returned
-//! semantic handles.
+//! tip sizing, stroke-width capping, component dependency roles, and family
+//! publication are Rust-owned. Frontends only construct this inert typed request
+//! and wrap the returned semantic handles.
 
 use crate::{AuthoringError, ManimGeometryOptions, Mobject, MobjectFamily};
 use noon_core::{
-    Color, SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectState, SemanticPaint,
-    SemanticStore, StoredGeometry, Vec2, VectorPath,
+    Color, SemanticArrowShaftRole, SemanticMutationTransaction, SemanticNodeCreation,
+    SemanticObjectRole, SemanticObjectState, SemanticPaint, SemanticStore, StoredGeometry, Vec2,
+    VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -179,10 +180,13 @@ impl ManimArrowOptions {
             end: lower_point("arrow shaft end", shaft_end)?,
         }
         .into();
-        shaft.style.stroke_width = shaft
-            .style
-            .stroke_width
-            .min(self.max_stroke_width_to_length_ratio * length);
+        let initial_stroke_width = shaft.style.stroke_width;
+        shaft.set_role(SemanticObjectRole::ArrowShaft(SemanticArrowShaftRole::new(
+            initial_stroke_width,
+            self.max_stroke_width_to_length_ratio,
+        )));
+        shaft.style.stroke_width =
+            initial_stroke_width.min(self.max_stroke_width_to_length_ratio * length);
 
         let tip_color = manim_visible_color(&shaft.style);
         let end_tip = triangle_tip_path(visible_end, direction, effective_tip_length)?;
@@ -397,9 +401,14 @@ fn stage_prepared_arrow(
     let end_tip = transaction.create_node(SemanticNodeCreation::object(tip_state(
         prepared,
         end_tip_handle,
+        SemanticObjectRole::ArrowEndTip,
     )));
     let start_tip = start_tip_handle.map(|handle| {
-        transaction.create_node(SemanticNodeCreation::object(tip_state(prepared, handle)))
+        transaction.create_node(SemanticNodeCreation::object(tip_state(
+            prepared,
+            handle,
+            SemanticObjectRole::ArrowStartTip,
+        )))
     });
     let family = transaction.create_node(SemanticNodeCreation::family());
     if prepared.z_index != 0.0 {
@@ -438,6 +447,7 @@ fn resolve_staged_arrow(
 fn tip_state(
     prepared: &PreparedArrow,
     handle: noon_core::GeometryResourceHandle,
+    role: SemanticObjectRole,
 ) -> SemanticObjectState {
     let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
     state.transform = prepared.shaft.transform;
@@ -448,6 +458,7 @@ fn tip_state(
     state.style.stroke_width = 0.0;
     state.style.stroke_opacity = 1.0;
     state.set_z_index(prepared.z_index);
+    state.set_role(role);
     state
 }
 
@@ -583,6 +594,14 @@ mod tests {
         assert!((end.x - 0.40).abs() < 1e-6);
         assert!((arrow.shaft().state().unwrap().style.stroke_width - 0.06).abs() < 1e-12);
         assert_eq!(
+            arrow.shaft().state().unwrap().role(),
+            SemanticObjectRole::ArrowShaft(SemanticArrowShaftRole::new(0.06, 0.05))
+        );
+        assert_eq!(
+            arrow.end_tip().state().unwrap().role(),
+            SemanticObjectRole::ArrowEndTip
+        );
+        assert_eq!(
             arrow
                 .family()
                 .integration_store()
@@ -636,6 +655,10 @@ mod tests {
         )
         .unwrap();
         assert!(arrow.start_tip().is_some());
+        assert_eq!(
+            arrow.start_tip().unwrap().state().unwrap().role(),
+            SemanticObjectRole::ArrowStartTip
+        );
         let members = scene
             .integration_store()
             .borrow()
