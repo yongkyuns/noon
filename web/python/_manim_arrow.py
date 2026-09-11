@@ -17,6 +17,21 @@ except ImportError:  # Native CPython tests install explicit bridge fixtures.
     _arrow_options = None
     _create_arrow_handle = None
 
+try:
+    from js import noonAuthoringArrowFromMobject as _arrow_from_mobject
+    from js import noonAuthoringArrowFromMobjects as _arrow_from_mobjects
+    from js import noonAuthoringArrowToMobject as _arrow_to_mobject
+    from js import noonAuthoringDoubleArrowFromMobject as _double_arrow_from_mobject
+    from js import noonAuthoringDoubleArrowFromMobjects as _double_arrow_from_mobjects
+    from js import noonAuthoringDoubleArrowToMobject as _double_arrow_to_mobject
+except ImportError:  # Native CPython tests install these only when needed.
+    _arrow_from_mobject = None
+    _arrow_from_mobjects = None
+    _arrow_to_mobject = None
+    _double_arrow_from_mobject = None
+    _double_arrow_from_mobjects = None
+    _double_arrow_to_mobject = None
+
 
 _ARROW_CONSTRUCTOR_OPTIONS = frozenset(
     {
@@ -52,6 +67,71 @@ def _numeric_endpoint(name: str, value: object) -> _base.Vec2:
             f"{name} Mobject endpoints require the shared Rust boundary-point constructor"
         )
     return _base._as_vec2(value)
+
+
+def _mobject_endpoint_handle(name: str, value: object):
+    if isinstance(value, _compat.Group):
+        raise NotImplementedError(
+            f"{name} Group endpoints require shared family boundary-point semantics"
+        )
+    if not isinstance(value, _base.Mobject):
+        return None
+    handle = _shared._handle_for(value)
+    if handle is None:
+        raise RuntimeError(f"{name} Mobject endpoint requires a current shared Rust handle")
+    return handle
+
+
+def _arrow_endpoint_options(start: object, end: object, *, double_arrow: bool):
+    start_handle = _mobject_endpoint_handle("start", start)
+    end_handle = _mobject_endpoint_handle("end", end)
+
+    if start_handle is not None and end_handle is not None:
+        operation = (
+            _double_arrow_from_mobjects if double_arrow else _arrow_from_mobjects
+        )
+        if operation is None:
+            raise RuntimeError("Arrow Mobject endpoints require the shared Rust boundary host")
+        return engine_call(operation, start_handle, end_handle, operation="Arrow.boundaryEndpoints")
+
+    if start_handle is not None:
+        end_point = _numeric_endpoint("end", end)
+        operation = (
+            _double_arrow_from_mobject if double_arrow else _arrow_from_mobject
+        )
+        if operation is None:
+            raise RuntimeError("Arrow Mobject endpoints require the shared Rust boundary host")
+        return engine_call(
+            operation,
+            start_handle,
+            end_point.x,
+            end_point.y,
+            operation="Arrow.boundaryEndpoints",
+        )
+
+    if end_handle is not None:
+        start_point = _numeric_endpoint("start", start)
+        operation = _double_arrow_to_mobject if double_arrow else _arrow_to_mobject
+        if operation is None:
+            raise RuntimeError("Arrow Mobject endpoints require the shared Rust boundary host")
+        return engine_call(
+            operation,
+            start_point.x,
+            start_point.y,
+            end_handle,
+            operation="Arrow.boundaryEndpoints",
+        )
+
+    start_point = _numeric_endpoint("start", start)
+    end_point = _numeric_endpoint("end", end)
+    factory = _arrow_options.doubleArrow if double_arrow else _arrow_options.arrow
+    return engine_call(
+        factory,
+        start_point.x,
+        start_point.y,
+        end_point.x,
+        end_point.y,
+    )
 
 
 def _apply_constructor_options(options: object, kwargs: dict[str, Any]) -> None:
@@ -211,15 +291,7 @@ class Arrow(_compat.Group):
             tip_shape=tip_shape,
             tip_style=tip_style,
         )
-        start_point = _numeric_endpoint("start", start)
-        end_point = _numeric_endpoint("end", end)
-        options = engine_call(
-            _arrow_options.arrow,
-            start_point.x,
-            start_point.y,
-            end_point.x,
-            end_point.y,
-        )
+        options = _arrow_endpoint_options(start, end, double_arrow=False)
         _apply_arrow_parameters(
             options,
             buff=buff,
@@ -371,15 +443,7 @@ class DoubleArrow(Arrow):
             tip_shape=tip_shape,
             tip_style=tip_style,
         )
-        start_point = _numeric_endpoint("start", start)
-        end_point = _numeric_endpoint("end", end)
-        options = engine_call(
-            _arrow_options.doubleArrow,
-            start_point.x,
-            start_point.y,
-            end_point.x,
-            end_point.y,
-        )
+        options = _arrow_endpoint_options(start, end, double_arrow=True)
         _apply_arrow_parameters(
             options,
             buff=buff,
