@@ -12,25 +12,15 @@ def replace_once(path: str, old: str, new: str) -> None:
     file.write_text(text.replace(old, new, 1))
 
 
-rust = "crates/noon-web/src/canonical_authoring_scene.rs"
-replace_once(
-    rust,
-    """enum SceneMembershipBatchKind {\n    Add,\n    Remove,\n    Clear,\n    Replace,\n}\n""",
-    """enum SceneMembershipBatchKind {\n    Add,\n    Remove,\n    Clear,\n    Replace,\n    BringToBack,\n}\n""",
-)
-replace_once(
-    rust,
-    """        let request = match batch.kind {\n            SceneMembershipBatchKind::Add => noon::SceneMembershipRequest::Add(&borrowed),\n            SceneMembershipBatchKind::Remove => noon::SceneMembershipRequest::Remove(&borrowed),\n            SceneMembershipBatchKind::Clear => {\n""",
-    """        let request = match batch.kind {\n            SceneMembershipBatchKind::Add => noon::SceneMembershipRequest::Add(&borrowed),\n            SceneMembershipBatchKind::Remove => noon::SceneMembershipRequest::Remove(&borrowed),\n            SceneMembershipBatchKind::BringToBack => {\n                noon::SceneMembershipRequest::BringToBack(&borrowed)\n            }\n            SceneMembershipBatchKind::Clear => {\n""",
-)
-replace_once(
-    rust,
-    """                \"add\" => SceneMembershipBatchKind::Add,\n                \"remove\" => SceneMembershipBatchKind::Remove,\n                \"clear\" => SceneMembershipBatchKind::Clear,\n                \"replace\" => SceneMembershipBatchKind::Replace,\n                _ => {\n                    return Err(js_error(format!(\n                        \"membership batch kind must be add, remove, clear, or replace; got {kind:?}\"\n                    )))\n                }\n""",
-    """                \"add\" => SceneMembershipBatchKind::Add,\n                \"remove\" => SceneMembershipBatchKind::Remove,\n                \"clear\" => SceneMembershipBatchKind::Clear,\n                \"replace\" => SceneMembershipBatchKind::Replace,\n                \"bring_to_back\" => SceneMembershipBatchKind::BringToBack,\n                _ => {\n                    return Err(js_error(format!(\n                        \"membership batch kind must be add, remove, clear, replace, or bring_to_back; got {kind:?}\"\n                    )))\n                }\n""",
-)
+def write_new(path: str, content: str) -> None:
+    file = Path(path)
+    if file.exists():
+        raise SystemExit(f"refusing to overwrite existing file: {path}")
+    file.write_text(content)
 
-test = r'''
-    #[test]
+
+rust = "crates/noon-web/src/canonical_authoring_scene.rs"
+invalid_test = r'''    #[test]
     fn canonical_membership_bring_to_back_routes_through_shared_authority() {
         let mut context = CanonicalAuthoringScene::default();
         let first = context.scene.circle(0.4).unwrap();
@@ -86,15 +76,15 @@ test = r'''
     }
 
 '''
-replace_once(
-    rust,
-    """    #[test]\n    fn typed_binding_shares_state_and_root_without_snapshot_synchronization() {\n""",
-    test
-    + """    #[test]\n    fn typed_binding_shares_state_and_root_without_snapshot_synchronization() {\n""",
+replace_once(rust, invalid_test, "")
+
+fixture = '''from manim import *\n\n\nclass ScenePainterOrder(Scene):\n    def construct(self):\n        def layer(color, offset):\n            return Square(\n                side_length=1.6,\n                fill_color=color,\n                fill_opacity=0.5,\n                stroke_opacity=0.0,\n            ).shift(offset)\n\n        left_center = 1.8 * LEFT\n        left_red = layer(RED, left_center + 0.3 * LEFT)\n        left_green = layer(GREEN, left_center + 0.3 * RIGHT)\n        left_blue = layer(BLUE, left_center + 0.3 * UP)\n\n        right_center = 1.8 * RIGHT\n        right_red = layer(RED, right_center + 0.3 * LEFT)\n        right_green = layer(GREEN, right_center + 0.3 * RIGHT)\n        right_blue = layer(BLUE, right_center + 0.3 * UP)\n\n        # Start each cluster in the opposite order. These two operations must\n        # restore the intended painter order while preserving caller order.\n        self.add(left_blue, left_green, left_red)\n        self.bring_to_back(left_red, left_green)\n\n        self.add(right_red, right_green, right_blue)\n        self.bring_to_front(right_green, right_red)\n\n        self.play(right_red.animate.shift(ORIGIN))\n'''
+write_new("parity/manim-v0.21/core-examples/scene_painter_order.py", fixture)
+write_new(
+    "web/python/examples/manim_compatible_scene_painter_order.py",
+    fixture.replace("from manim import *", "from noon import *", 1),
 )
 
-replace_once(
-    "web/python/noon.py",
-    """        return leaves[0] if len(leaves) == 1 else self\n\n    def remove(self, *mobjects: object) -> Scene:\n""",
-    """        return leaves[0] if len(leaves) == 1 else self\n\n    def bring_to_front(self, *mobjects: object) -> Scene:\n        self.add(*mobjects)\n        return self\n\n    def bring_to_back(self, *mobjects: object) -> Scene:\n        self._edit_membership(\"bring_to_back\", mobjects)\n        return self\n\n    def remove(self, *mobjects: object) -> Scene:\n""",
-)
+existing_fixture = '''    {\n      "id": "three-layer-painter-order",\n      "scene": "ThreeLayerPainterOrder",\n      "expected_duration": 1.0,\n      "raster_tolerance": {\n        "max_bounds_delta_px": 0,\n        "max_differing_ratio": 0.0009,\n        "max_mean_absolute_channel_error": 0.034\n      }\n    },\n'''
+new_fixture = existing_fixture + '''    {\n      "id": "scene-painter-order",\n      "scene": "ScenePainterOrder",\n      "source": "parity/manim-v0.21/core-examples/scene_painter_order.py",\n      "expected_duration": 1.0,\n      "raster_tolerance": {\n        "max_bounds_delta_px": 0,\n        "max_differing_ratio": 0.001,\n        "max_mean_absolute_channel_error": 0.04\n      }\n    },\n'''
+replace_once("parity/manim-v0.21/manifest.json", existing_fixture, new_fixture)
