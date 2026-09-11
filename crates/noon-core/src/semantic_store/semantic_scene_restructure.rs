@@ -859,7 +859,10 @@ mod tests {
             store.node(root).unwrap().members(),
             &[first, last, survivor, middle]
         );
-        assert_eq!(store.scene_revision(), revision + 1);
+        assert_eq!(
+            store.scene_revision(),
+            revision.checked_next().expect("revision should advance once")
+        );
         assert_eq!(
             store.semantic_family_members_checked(family).unwrap(),
             vec![first, survivor]
