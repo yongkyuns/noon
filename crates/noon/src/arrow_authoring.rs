@@ -179,8 +179,8 @@ impl ManimArrowOptions {
         }
         .into();
         let initial_stroke_width = shaft.style.stroke_width;
-        shaft.style.stroke_width = initial_stroke_width
-            .min(self.max_stroke_width_to_length_ratio * length);
+        shaft.style.stroke_width =
+            initial_stroke_width.min(self.max_stroke_width_to_length_ratio * length);
 
         let tip_color = manim_visible_color(&shaft.style);
         let end_tip = triangle_tip_path(visible_end, direction, effective_tip_length)?;
@@ -294,10 +294,7 @@ impl ManimArrow {
         let (previous_shaft, previous_end_tip, previous_start_tip) = (
             self.shaft.state()?,
             self.end_tip.state()?,
-            self.start_tip
-                .as_ref()
-                .map(Mobject::state)
-                .transpose()?,
+            self.start_tip.as_ref().map(Mobject::state).transpose()?,
         );
 
         let store = self.family.integration_store();
@@ -373,8 +370,14 @@ impl ManimArrow {
         previous_shaft: &SemanticObjectState,
         previous_end_tip: &SemanticObjectState,
         previous_start_tip: Option<&SemanticObjectState>,
-    ) -> Result<(SemanticObjectState, SemanticObjectState, Option<SemanticObjectState>), AuthoringError>
-    {
+    ) -> Result<
+        (
+            SemanticObjectState,
+            SemanticObjectState,
+            Option<SemanticObjectState>,
+        ),
+        AuthoringError,
+    > {
         let bounds = self
             .family
             .layout_bounds()?
@@ -384,23 +387,23 @@ impl ManimArrow {
             (bounds.min_y + bounds.max_y) * 0.5,
         );
 
-        let scale_one = |previous: &SemanticObjectState|
-         -> Result<SemanticObjectState, AuthoringError> {
-            let old_center = crate::semantic_mobject::state_center(store, previous)?;
-            let target_center = (
-                pivot.0 + (old_center.0 - pivot.0) * factor,
-                pivot.1 + (old_center.1 - pivot.1) * factor,
-            );
-            let mut next = previous.clone();
-            crate::semantic_mobject::scale_state_about_center(
-                store,
-                &mut next,
-                factor,
-                factor,
-                target_center,
-            )?;
-            Ok(next)
-        };
+        let scale_one =
+            |previous: &SemanticObjectState| -> Result<SemanticObjectState, AuthoringError> {
+                let old_center = crate::semantic_mobject::state_center(store, previous)?;
+                let target_center = (
+                    pivot.0 + (old_center.0 - pivot.0) * factor,
+                    pivot.1 + (old_center.1 - pivot.1) * factor,
+                );
+                let mut next = previous.clone();
+                crate::semantic_mobject::scale_state_about_center(
+                    store,
+                    &mut next,
+                    factor,
+                    factor,
+                    target_center,
+                )?;
+                Ok(next)
+            };
 
         let mut shaft = scale_one(previous_shaft)?;
         shaft.style.stroke_width = self
@@ -419,8 +422,14 @@ impl ManimArrow {
         previous_shaft: &SemanticObjectState,
         previous_end_tip: &SemanticObjectState,
         previous_start_tip: Option<&SemanticObjectState>,
-    ) -> Result<(SemanticObjectState, SemanticObjectState, Option<SemanticObjectState>), AuthoringError>
-    {
+    ) -> Result<
+        (
+            SemanticObjectState,
+            SemanticObjectState,
+            Option<SemanticObjectState>,
+        ),
+        AuthoringError,
+    > {
         let pivot = midpoint(start, end);
         let new_start = scale_point_about(start, pivot, factor);
         let new_end = scale_point_about(end, pivot, factor);
@@ -442,9 +451,7 @@ impl ManimArrow {
                 new_end,
                 None,
             )?;
-            if let (Some(previous), Some(next)) =
-                (previous_start_tip, next_start_tip.as_mut())
-            {
+            if let (Some(previous), Some(next)) = (previous_start_tip, next_start_tip.as_mut()) {
                 reposition_tip(
                     next,
                     start,
@@ -472,11 +479,7 @@ impl ManimArrow {
             let start_base = if let Some(next) = next_start_tip.as_mut() {
                 // Manim re-adds the end tip first. The start-tip tangent is therefore
                 // based on the line from the public start to the newly shortened end.
-                let tangent = unit_direction_or(
-                    new_start,
-                    end_base,
-                    direction,
-                );
+                let tangent = unit_direction_or(new_start, end_base, direction);
                 let start_direction = (-tangent.0, -tangent.1);
                 reposition_tip(
                     next,
@@ -855,11 +858,7 @@ fn unit_direction(start: (f64, f64), end: (f64, f64)) -> (f64, f64) {
     (dx / length, dy / length)
 }
 
-fn unit_direction_or(
-    start: (f64, f64),
-    end: (f64, f64),
-    fallback: (f64, f64),
-) -> (f64, f64) {
+fn unit_direction_or(start: (f64, f64), end: (f64, f64), fallback: (f64, f64)) -> (f64, f64) {
     let dx = end.0 - start.0;
     let dy = end.1 - start.1;
     let length = dx.hypot(dy);
@@ -963,7 +962,8 @@ mod tests {
     }
 
     fn resource_handle(state: &SemanticObjectState) -> noon_core::GeometryResourceHandle {
-        let SemanticObjectContent::Geometry(StoredGeometry::Resource(handle)) = state.content else {
+        let SemanticObjectContent::Geometry(StoredGeometry::Resource(handle)) = state.content
+        else {
             panic!("arrow tip must remain a retained geometry resource");
         };
         handle
@@ -1073,9 +1073,18 @@ mod tests {
         let before_revision = scene.integration_store().borrow().scene_revision();
 
         arrow.scale(0.5, false).unwrap();
-        assert!((arrow.length().unwrap() - 0.2).abs() < 1e-6);
-        assert_eq!(resource_handle(&arrow.end_tip().state().unwrap()), tip_resource);
-        assert!((arrow.shaft().state().unwrap().style.stroke_width - 0.01).abs() < 1e-12);
+        let scaled_length = arrow.length().unwrap();
+        assert!((scaled_length - 0.2).abs() < 1e-6);
+        assert_eq!(
+            resource_handle(&arrow.end_tip().state().unwrap()),
+            tip_resource
+        );
+        assert!(
+            (arrow.shaft().state().unwrap().style.stroke_width
+                - DEFAULT_ARROW_STROKE_WIDTH_RATIO * scaled_length)
+                .abs()
+                < 1e-12
+        );
         assert_eq!(
             scene.integration_store().borrow().scene_revision(),
             before_revision.checked_next().unwrap()
@@ -1083,7 +1092,10 @@ mod tests {
 
         arrow.scale(10.0, false).unwrap();
         assert!((arrow.length().unwrap() - 2.0).abs() < 1e-5);
-        assert_eq!(resource_handle(&arrow.end_tip().state().unwrap()), tip_resource);
+        assert_eq!(
+            resource_handle(&arrow.end_tip().state().unwrap()),
+            tip_resource
+        );
         assert!((arrow.shaft().state().unwrap().style.stroke_width - 0.06).abs() < 1e-12);
     }
 
@@ -1123,7 +1135,10 @@ mod tests {
         let (start, end) = arrow.endpoints().unwrap();
         assert!((start.0 - 1.0).abs() < 1e-5);
         assert!((end.0 + 1.0).abs() < 1e-5);
-        assert_eq!(arrow.end_tip().state().unwrap().transform.scale, before_tip_scale);
+        assert_eq!(
+            arrow.end_tip().state().unwrap().transform.scale,
+            before_tip_scale
+        );
         assert!((arrow.angle().unwrap() - std::f64::consts::PI).abs() < 1e-5);
     }
 
@@ -1140,7 +1155,10 @@ mod tests {
 
         arrow.scale(3.0, false).unwrap();
 
-        assert_eq!(scene.integration_store().borrow().scene_revision(), before_revision);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            before_revision
+        );
         assert_eq!(arrow.shaft().state().unwrap(), before_shaft);
     }
 
