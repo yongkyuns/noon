@@ -128,8 +128,7 @@ mod tests {
 
     fn assert_point(actual: (f64, f64), expected: (f64, f64)) {
         assert!(
-            (actual.0 - expected.0).abs() < 1.0e-6
-                && (actual.1 - expected.1).abs() < 1.0e-6,
+            (actual.0 - expected.0).abs() < 1.0e-6 && (actual.1 - expected.1).abs() < 1.0e-6,
             "expected {expected:?}, got {actual:?}"
         );
     }
@@ -143,7 +142,9 @@ mod tests {
 
         let endpoints = manim_arrow_endpoints_from_mobjects(&circle, &square).unwrap();
         assert_point(endpoints.start, (1.0, 0.0));
-        assert_point(endpoints.end, (3.0, 0.0));
+        // For -x the square's upper-left/lower-left anchors tie. Manim/NumPy
+        // argmax preserves the first defining anchor, which is upper-left.
+        assert_point(endpoints.end, (3.0, 1.0));
     }
 
     #[test]
@@ -151,12 +152,9 @@ mod tests {
         let scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
         let angle = 20.0_f64.to_radians();
-        let endpoints = manim_arrow_endpoints_from_mobject(
-            &circle,
-            10.0 * angle.cos(),
-            10.0 * angle.sin(),
-        )
-        .unwrap();
+        let endpoints =
+            manim_arrow_endpoints_from_mobject(&circle, 10.0 * angle.cos(), 10.0 * angle.sin())
+                .unwrap();
 
         // Manim Circle has eight cubic segments. At 20 degrees the +x anchor
         // wins the directional argmax; an analytic circle intersection would not.
