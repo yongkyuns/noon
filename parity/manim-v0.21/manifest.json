@@ -376,6 +376,17 @@
       }
     },
     {
+      "id": "scene-painter-order",
+      "scene": "ScenePainterOrder",
+      "source": "parity/manim-v0.21/core-examples/scene_painter_order.py",
+      "expected_duration": 1.0,
+      "raster_tolerance": {
+        "max_bounds_delta_px": 0,
+        "max_differing_ratio": 0.001,
+        "max_mean_absolute_channel_error": 0.04
+      }
+    },
+    {
       "id": "fade-in-shift-scale-styled-square",
       "scene": "FadeInShiftScaleStyledSquare",
       "expected_duration": 1.0

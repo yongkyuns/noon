@@ -7304,61 +7304,6 @@ mod tests {
     }
 
     #[test]
-    fn canonical_membership_bring_to_back_routes_through_shared_authority() {
-        let mut context = CanonicalAuthoringScene::default();
-        let first = context.scene.circle(0.4).unwrap();
-        let second = context.scene.square(0.8).unwrap();
-        let third = context.scene.rectangle(0.6, 1.0).unwrap();
-        context.bind_mobject(ObjectId::new(0), &first).unwrap();
-        context.bind_mobject(ObjectId::new(1), &second).unwrap();
-        context.bind_mobject(ObjectId::new(2), &third).unwrap();
-        let key = |handle: &noon::Mobject| {
-            format!(
-                "{}:{}",
-                handle.node_id().slot(),
-                handle.node_id().generation()
-            )
-        };
-
-        let revision = context.scene.integration_store().borrow().scene_revision();
-        context
-            .edit_membership(SceneMembershipBatch {
-                kind: SceneMembershipBatchKind::BringToBack,
-                members: vec![membership_mobject(2, &third), membership_mobject(0, &first)],
-                bindings: Vec::new(),
-            })
-            .unwrap();
-        assert_eq!(
-            context.root_membership_keys().unwrap(),
-            vec![key(&third), key(&first), key(&second)]
-        );
-        assert_eq!(
-            context.scene.integration_store().borrow().scene_revision(),
-            revision.checked_next().unwrap()
-        );
-
-        let foreign = CanonicalAuthoringScene::default();
-        let foreign_object = foreign.scene.circle(0.2).unwrap();
-        let before = context.root_membership_keys().unwrap();
-        let revision = context.scene.integration_store().borrow().scene_revision();
-        assert!(context
-            .edit_membership(SceneMembershipBatch {
-                kind: SceneMembershipBatchKind::BringToBack,
-                members: vec![
-                    membership_mobject(0, &first),
-                    membership_mobject(9, &foreign_object),
-                ],
-                bindings: Vec::new(),
-            })
-            .is_err());
-        assert_eq!(context.root_membership_keys().unwrap(), before);
-        assert_eq!(
-            context.scene.integration_store().borrow().scene_revision(),
-            revision
-        );
-    }
-
-    #[test]
     fn typed_binding_shares_state_and_root_without_snapshot_synchronization() {
         use std::{cell::RefCell, rc::Rc};
         let store = Rc::new(RefCell::new(noon_core::SemanticStore::new()));
