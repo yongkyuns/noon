@@ -1,6 +1,4 @@
-use crate::{
-    plan_static_arrow_vector_field, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D,
-};
+use crate::{VectorFieldAxisRange, VectorFieldRanges2D};
 use noon_core::{DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH};
 
 /// Pinned ManimCE v0.21 default 2D ArrowVectorField ranges for Noon's default frame.
@@ -27,6 +25,7 @@ pub fn manim_default_vector_field_ranges_2d() -> VectorFieldRanges2D {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{plan_static_arrow_vector_field, VectorFieldPoint};
 
     #[test]
     fn default_frame_ranges_match_pinned_manim_grid() {
@@ -38,7 +37,13 @@ mod tests {
         assert_eq!(plan.x_samples, 33);
         assert_eq!(plan.y_samples, 17);
         assert_eq!(plan.samples.len(), 561);
-        assert_eq!(plan.samples.first().unwrap().point, VectorFieldPoint::new(-8.0, -4.0));
-        assert_eq!(plan.samples.last().unwrap().point, VectorFieldPoint::new(8.0, 4.0));
+        assert_eq!(
+            plan.samples.first().unwrap().point,
+            VectorFieldPoint::new(-8.0, -4.0)
+        );
+        assert_eq!(
+            plan.samples.last().unwrap().point,
+            VectorFieldPoint::new(8.0, 4.0)
+        );
     }
 }
