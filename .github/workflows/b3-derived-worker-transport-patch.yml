@@ -1,0 +1,667 @@
+name: B3 derived worker transport patch
+
+on:
+  push:
+    branches:
+      - codex/b3-derived-display-worker-transport
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Patch retained worker derived-display transport
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text()
+              actual = text.count(old)
+              if actual != count:
+                  raise SystemExit(f"{path}: expected {count} occurrences, found {actual}\n{old[:240]}")
+              p.write_text(text.replace(old, new, count))
+
+          p = Path('crates/noon-web/src/retained_family_execution_transport.rs')
+          text = p.read_text()
+          text = text.replace(
+              'use std::collections::{BTreeSet, HashMap, HashSet};\n\nuse noon_core::{FamilyAnimationState, ObjectId, RetainedFamilyAnimationPlan, TextResourceLookup};\nuse noon_runtime::{FrameChanges, FrameState, RetainedFamilyFrame, RetainedPlannedFamilyFrame};',
+              'use std::{collections::{BTreeSet, HashMap, HashSet}, sync::Arc};\n\nuse noon_core::{\n    FamilyAnimationState, GeometryRef, ObjectContentRef, ObjectId, RetainedFamilyAnimationPlan,\n    Style, TextResourceLookup, Transform2D,\n};\nuse noon_runtime::{\n    DerivedDisplayObject, DerivedDisplayObjectState, FrameChanges, FrameState, RetainedFamilyFrame,\n    RetainedPlannedFamilyFrame,\n};'
+          )
+          marker = 'pub(crate) type ValidatedFamilyStateUpdate = (usize, Option<FamilyAnimationState>, Option<u32>);\n'
+          insert = r'''
+
+/// One identity-free derived analytic occurrence at the genuine execution-worker
+/// to render-worker boundary. `anchor` is an existing stable source object used
+/// only to recover renderer-local painter placement; it is not the identity of
+/// this transient occurrence.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RetainedDerivedDisplayObject {
+    pub anchor: ObjectId,
+    pub occurrence_index: u32,
+    pub z_index: f32,
+    pub geometry: GeometryRef,
+    pub transform: Transform2D,
+    pub style: Style,
+    pub appearance: f32,
+    pub presence: bool,
+    pub reveal: f32,
+    pub morph: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_geometry: Option<GeometryRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_transform: Option<Transform2D>,
+}
+
+impl RetainedDerivedDisplayObject {
+    fn from_runtime(
+        frame: &FrameState,
+        object: &DerivedDisplayObject,
+    ) -> Result<Self, RetainedFamilyExecutionTransportError> {
+        let anchor_index = object.anchor_object_index() as usize;
+        let anchor = frame.objects.get(anchor_index).ok_or(
+            RetainedFamilyExecutionTransportError::InvalidDerivedAnchorIndex(anchor_index),
+        )?;
+        let state = object.state();
+        let geometry = match &state.content {
+            ObjectContentRef::Geometry(geometry) => geometry.clone(),
+            ObjectContentRef::Text(_) => {
+                return Err(RetainedFamilyExecutionTransportError::UnsupportedDerivedContent(
+                    object.occurrence_index(),
+                ));
+            }
+        };
+        if !matches!(
+            geometry,
+            GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. } | GeometryRef::Line { .. }
+        ) || state.render_geometry.as_deref().is_some_and(|geometry| {
+            !matches!(
+                geometry,
+                GeometryRef::Circle { .. }
+                    | GeometryRef::Rectangle { .. }
+                    | GeometryRef::Line { .. }
+            )
+        }) {
+            return Err(RetainedFamilyExecutionTransportError::UnsupportedDerivedGeometry(
+                object.occurrence_index(),
+            ));
+        }
+        Ok(Self {
+            anchor: anchor.id,
+            occurrence_index: object.occurrence_index(),
+            z_index: state.z_index,
+            geometry,
+            transform: state.transform,
+            style: state.style,
+            appearance: state.appearance,
+            presence: state.presence,
+            reveal: state.reveal,
+            morph: state.morph,
+            render_geometry: state.render_geometry.as_deref().cloned(),
+            render_transform: state.render_transform,
+        })
+    }
+
+    fn install(&self, anchor_object_index: u32) -> DerivedDisplayObject {
+        DerivedDisplayObject::new(
+            anchor_object_index,
+            self.occurrence_index,
+            DerivedDisplayObjectState {
+                z_index: self.z_index,
+                content: ObjectContentRef::Geometry(self.geometry.clone()),
+                text_bounds: None,
+                transform: self.transform,
+                style: self.style,
+                appearance: self.appearance,
+                presence: self.presence,
+                reveal: self.reveal,
+                morph: self.morph,
+                render_geometry: self.render_geometry.clone().map(Arc::new),
+                render_transform: self.render_transform,
+            },
+        )
+    }
+}
+'''
+          if marker not in text:
+              raise SystemExit('family transport insertion marker missing')
+          text = text.replace(marker, marker + insert, 1)
+          text = text.replace(
+              '    #[serde(default, skip_serializing_if = "Option::is_none")]\n    pub resource_additions: Option<RetainedResourceBundle>,\n}',
+              '    #[serde(default, skip_serializing_if = "Option::is_none")]\n    pub resource_additions: Option<RetainedResourceBundle>,\n    #[serde(default, skip_serializing_if = "Vec::is_empty")]\n    pub derived_display_objects: Vec<RetainedDerivedDisplayObject>,\n}'
+          )
+          text = text.replace('            resource_additions: None,\n            retained,', '            resource_additions: None,\n            derived_display_objects: Vec::new(),\n            retained,')
+          validate_old = '''        for plan in &self.family_plans {
+            plan.validate()?;
+        }
+        Ok(())
+    }
+}'''
+          validate_new = '''        for plan in &self.family_plans {
+            plan.validate()?;
+        }
+        let mut occurrences = HashSet::with_capacity(self.derived_display_objects.len());
+        for object in &self.derived_display_objects {
+            if !occurrences.insert(object.occurrence_index) {
+                return Err(RetainedFamilyExecutionTransportError::DuplicateDerivedOccurrence(
+                    object.occurrence_index,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn replace_derived_display_objects(
+        &mut self,
+        frame: &FrameState,
+        objects: &[DerivedDisplayObject],
+    ) -> Result<(), RetainedFamilyExecutionTransportError> {
+        let next = objects
+            .iter()
+            .map(|object| RetainedDerivedDisplayObject::from_runtime(frame, object))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.derived_display_objects = next;
+        self.validate()
+    }
+}'''
+          if validate_old not in text:
+              raise SystemExit('family transport validate marker missing')
+          text = text.replace(validate_old, validate_new, 1)
+          text = text.replace(
+              '    DuplicateStateObject(ObjectId),\n    UnknownObject(ObjectId),',
+              '    DuplicateStateObject(ObjectId),\n    InvalidDerivedAnchorIndex(usize),\n    DuplicateDerivedOccurrence(u32),\n    UnsupportedDerivedContent(u32),\n    UnsupportedDerivedGeometry(u32),\n    UnknownDerivedAnchor(ObjectId),\n    UnknownObject(ObjectId),'
+          )
+          text = text.replace(
+              '            Self::UnknownObject(object) => write!(\n                formatter,\n                "retained family delta references unknown object {}",\n                object.get()\n            ),',
+              '''            Self::InvalidDerivedAnchorIndex(index) => write!(
+                formatter,
+                "derived display anchor index {index} is outside the retained frame"
+            ),
+            Self::DuplicateDerivedOccurrence(occurrence) => write!(
+                formatter,
+                "derived display occurrence {occurrence} is duplicated in one retained delta"
+            ),
+            Self::UnsupportedDerivedContent(occurrence) => write!(
+                formatter,
+                "derived display occurrence {occurrence} requires unsupported retained text content"
+            ),
+            Self::UnsupportedDerivedGeometry(occurrence) => write!(
+                formatter,
+                "derived display occurrence {occurrence} requires unsupported retained path/external geometry"
+            ),
+            Self::UnknownDerivedAnchor(object) => write!(
+                formatter,
+                "derived display occurrence references unknown stable anchor {}",
+                object.get()
+            ),
+            Self::UnknownObject(object) => write!(
+                formatter,
+                "retained family delta references unknown object {}",
+                object.get()
+            ),'''
+          )
+          p.write_text(text)
+
+          p = Path('crates/noon-web/src/semantic_execution_player.rs')
+          text = p.read_text()
+          start = text.index('    fn delta(\n        &mut self,\n        snapshot: bool,\n    ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {')
+          end = text.index('    fn encoded_delta(&mut self, snapshot: bool) -> Result<Option<String>, String> {', start)
+          replacement = r'''    fn delta(
+        &mut self,
+        snapshot: bool,
+    ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
+        let camera = self.session.camera().map_err(|e| e.to_string())?;
+        let publication = self.session.take_renderer_publication();
+        let changes = publication.changes().clone();
+        let frame = publication.frame();
+        let planned = publication.planned_family_frame();
+        let plans = publication.family_animation_plans();
+        let painter_order = publication.painter_order();
+
+        let mut delta = if snapshot || changes.is_all() || !self.snapshot_sent {
+            let indices = painter_order
+                .iter()
+                .map(|&index| index as usize)
+                .collect::<Vec<_>>();
+            let text_handles = indices
+                .iter()
+                .filter_map(|&index| frame.objects[index].text())
+                .collect::<Vec<_>>();
+            let mut delta = self
+                .encoder
+                .encode_planned_snapshot_indices(&planned, plans, camera, indices)
+                .map_err(|e| e.to_string())?;
+            self.encoder
+                .attach_resource_additions(
+                    &mut delta,
+                    text_handles,
+                    publication.text_resources(),
+                    publication.geometry_resources(),
+                    publication.font_resources(),
+                )
+                .map_err(|error| error.to_string())?;
+            self.snapshot_sent = true;
+            delta
+        } else if changes.is_structural() || changes.has_painter_order_change() {
+            let text_handles = changes
+                .object_indices()
+                .iter()
+                .filter_map(|&index| frame.objects.get(index)?.text())
+                .collect::<Vec<_>>();
+            let Some(mut delta) = self
+                .encoder
+                .encode_planned_incremental_with_painter_order(
+                    &planned,
+                    plans,
+                    &changes,
+                    camera,
+                    painter_order,
+                )
+                .map_err(|e| e.to_string())?
+            else {
+                return Ok(None);
+            };
+            self.encoder
+                .attach_resource_additions(
+                    &mut delta,
+                    text_handles,
+                    publication.text_resources(),
+                    publication.geometry_resources(),
+                    publication.font_resources(),
+                )
+                .map_err(|error| error.to_string())?;
+            delta
+        } else {
+            let text_handles = changes
+                .object_indices()
+                .iter()
+                .filter_map(|&index| frame.objects.get(index)?.text())
+                .collect::<Vec<_>>();
+            let Some(mut delta) = self
+                .encoder
+                .encode_planned_incremental(&planned, plans, &changes, camera)
+                .map_err(|e| e.to_string())?
+            else {
+                return Ok(None);
+            };
+            self.encoder
+                .attach_resource_additions(
+                    &mut delta,
+                    text_handles,
+                    publication.text_resources(),
+                    publication.geometry_resources(),
+                    publication.font_resources(),
+                )
+                .map_err(|error| error.to_string())?;
+            delta
+        };
+        delta
+            .replace_derived_display_objects(frame, publication.derived_display_objects())
+            .map_err(|error| error.to_string())?;
+        Ok(Some(delta))
+    }
+
+'''
+          text = text[:start] + replacement + text[end:]
+          p.write_text(text)
+
+          p = Path('crates/noon-web/src/retained_execution_resources.rs')
+          text = p.read_text()
+          text = text.replace(
+              '    family: InstalledRetainedFamilyExecutionState,\n}',
+              '    family: InstalledRetainedFamilyExecutionState,\n    derived_display_objects: Vec<noon_runtime::DerivedDisplayObject>,\n}'
+          )
+          text = text.replace(
+              '            family: InstalledRetainedFamilyExecutionState::default(),\n        })',
+              '            family: InstalledRetainedFamilyExecutionState::default(),\n            derived_display_objects: Vec::new(),\n        })'
+          )
+          text = text.replace(
+              '    pub fn active_family_animation_indices(&self) -> &std::collections::BTreeSet<usize> {\n        self.family.active_indices()\n    }',
+              '''    pub fn active_family_animation_indices(&self) -> &std::collections::BTreeSet<usize> {
+        self.family.active_indices()
+    }
+
+    pub fn derived_display_objects(&self) -> &[noon_runtime::DerivedDisplayObject] {
+        &self.derived_display_objects
+    }'''
+          )
+          text = text.replace(
+              '        if snapshot {\n            self.family = InstalledRetainedFamilyExecutionState::default();\n        }',
+              '        if snapshot {\n            self.family = InstalledRetainedFamilyExecutionState::default();\n            self.derived_display_objects.clear();\n        }'
+          )
+          old = '''        let prepared_family = self.prepare_family_update(&delta, self.resources.texts())?;
+
+        let (outcome, changes) = self.apply(delta.retained)?;
+        if outcome == RetainedTransportApplyOutcome::DroppedStale {
+            return Ok((outcome, changes));
+        }
+        self.family.commit_prepared(prepared_family);
+        Ok((outcome, changes))'''
+          new = '''        let prepared_family = self.prepare_family_update(&delta, self.resources.texts())?;
+        let prepared_derived = self.prepare_derived_display_objects(&delta)?;
+
+        let (outcome, changes) = self.apply(delta.retained)?;
+        if outcome == RetainedTransportApplyOutcome::DroppedStale {
+            return Ok((outcome, changes));
+        }
+        self.family.commit_prepared(prepared_family);
+        self.derived_display_objects = prepared_derived;
+        Ok((outcome, changes))'''
+          if old not in text:
+              raise SystemExit('apply_family block missing')
+          text = text.replace(old, new, 1)
+          old = '''        let prepared_family = match self.prepare_family_update(&delta, &text_lookup) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.wire.remove_installed_text_handles(text_handles.keys());
+                return Err(error);
+            }
+        };
+        let applied = self.apply_retained(delta.retained, false);'''
+          new = '''        let prepared_family = match self.prepare_family_update(&delta, &text_lookup) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.wire.remove_installed_text_handles(text_handles.keys());
+                return Err(error);
+            }
+        };
+        let prepared_derived = match self.prepare_derived_display_objects(&delta) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.wire.remove_installed_text_handles(text_handles.keys());
+                return Err(error);
+            }
+        };
+        let applied = self.apply_retained(delta.retained, false);'''
+          if old not in text:
+              raise SystemExit('resource additions preflight block missing')
+          text = text.replace(old, new, 1)
+          text = text.replace(
+              '        self.resources.commit_additions(additions);\n        self.family.commit_prepared(prepared_family);\n        Ok((outcome, changes))',
+              '        self.resources.commit_additions(additions);\n        self.family.commit_prepared(prepared_family);\n        self.derived_display_objects = prepared_derived;\n        Ok((outcome, changes))'
+          )
+          marker = '    fn prepare_family_update(\n'
+          idx = text.index(marker)
+          method = r'''    fn prepare_derived_display_objects(
+        &self,
+        delta: &RetainedFamilyExecutionDeltaEnvelope,
+    ) -> Result<Vec<noon_runtime::DerivedDisplayObject>, InstalledExecutionError> {
+        let snapshot = delta.retained.snapshot;
+        let mut next_indices = HashMap::with_capacity(delta.retained.objects.len());
+        let mut next_row = if snapshot {
+            0
+        } else {
+            self.resolved
+                .as_ref()
+                .ok_or(InstalledExecutionError::MissingResolvedFrame)?
+                .objects
+                .len()
+        };
+        for object in &delta.retained.objects {
+            let index = if snapshot {
+                let index = object.order as usize;
+                next_row = next_row.max(index + 1);
+                index
+            } else if let Some(index) = self.wire.frame_index_for_slot(object.slot) {
+                index
+            } else {
+                let index = next_row;
+                next_row += 1;
+                index
+            };
+            next_indices.insert(object.object, index);
+        }
+        delta
+            .derived_display_objects
+            .iter()
+            .map(|object| {
+                let index = next_indices.get(&object.anchor).copied().or_else(|| {
+                    (!snapshot)
+                        .then(|| self.wire.frame_index_for_object(object.anchor))
+                        .flatten()
+                }).ok_or_else(|| {
+                    InstalledExecutionError::Family(
+                        crate::RetainedFamilyExecutionTransportError::UnknownDerivedAnchor(
+                            object.anchor,
+                        ),
+                    )
+                })?;
+                let anchor = u32::try_from(index).map_err(|_| {
+                    InstalledExecutionError::Family(
+                        crate::RetainedFamilyExecutionTransportError::InvalidDerivedAnchorIndex(
+                            index,
+                        ),
+                    )
+                })?;
+                Ok(object.install(anchor))
+            })
+            .collect()
+    }
+
+'''
+          text = text[:idx] + method + text[idx:]
+          p.write_text(text)
+
+          p = Path('crates/noon-render-wgpu/src/render_order.rs')
+          text = p.read_text()
+          old = '''pub fn prepare_derived_display(
+    publication: &noon_runtime::RendererPublication<'_>,
+) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
+    prepare_derived_display_inner(publication, None)
+}'''
+          new = '''pub fn prepare_derived_display(
+    publication: &noon_runtime::RendererPublication<'_>,
+) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
+    prepare_derived_display_inner(
+        publication.frame(),
+        publication.painter_order(),
+        publication.derived_display_objects(),
+        None,
+    )
+}
+
+/// Pack identity-free derived rows already recovered at a genuine transport boundary.
+/// Stable painter order and the real source-anchor indices remain authoritative.
+pub fn prepare_derived_display_rows(
+    frame: &FrameState,
+    painter_order: &[u32],
+    objects: &[noon_runtime::DerivedDisplayObject],
+) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
+    prepare_derived_display_inner(frame, painter_order, objects, None)
+}'''
+          if old not in text:
+              raise SystemExit('render prepare entry missing')
+          text = text.replace(old, new, 1)
+          old = '''    prepare_derived_display_inner(publication, Some(&visible))
+}
+
+fn prepare_derived_display_inner(
+    publication: &noon_runtime::RendererPublication<'_>,
+    visible: Option<&std::collections::HashSet<usize>>,
+) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {'''
+          new = '''    prepare_derived_display_inner(
+        publication.frame(),
+        publication.painter_order(),
+        publication.derived_display_objects(),
+        Some(&visible),
+    )
+}
+
+fn prepare_derived_display_inner(
+    frame: &FrameState,
+    painter_order: &[u32],
+    derived_display_objects: &[noon_runtime::DerivedDisplayObject],
+    visible: Option<&std::collections::HashSet<usize>>,
+) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {'''
+          if old not in text:
+              raise SystemExit('render inner signature missing')
+          text = text.replace(old, new, 1)
+          text = text.replace('    for object in publication.derived_display_objects() {', '    for object in derived_display_objects {', 1)
+          text = text.replace('        if state.z_index != publication.frame().objects[anchor as usize].z_index {', '        if state.z_index != frame.objects[anchor as usize].z_index {', 1)
+          text = text.replace('    for &object_index in publication.painter_order() {', '    for &object_index in painter_order {', 1)
+          p.write_text(text)
+
+          p = Path('crates/noon-web/src/retained_execution_canvas.rs')
+          text = p.read_text()
+          text = text.replace(
+              '        Camera2D, GpuRenderer, PathMeshPreload, RetainedFramePreparer, RetainedTextGpuState,\n        UploadWrite,',
+              '        prepare_derived_display_rows, Camera2D, GpuRenderer, PathMeshPreload,\n        RetainedFramePreparer, RetainedTextGpuState, UploadWrite,'
+          )
+          marker = '            self.last_geometry_cache_misses = prepared.geometry_stats().geometry_cache_misses;\n'
+          inject = '''            let derived = prepare_derived_display_rows(
+                self.mirror.frame().ok_or_else(|| {
+                    js_message("retained execution renderer has no frame snapshot")
+                })?,
+                self.mirror.painter_order(),
+                self.mirror.derived_display_objects(),
+            )
+            .map_err(js_error)?;
+'''
+          if marker not in text:
+              raise SystemExit('retained canvas prepare marker missing')
+          text = text.replace(marker, inject + marker, 1)
+          old = '''            self.last_bytes_uploaded = upload
+                .geometry
+                .bytes_uploaded
+                .saturating_add(upload.text.bytes_uploaded);'''
+          new = '''            let derived_upload = (!derived.slots.is_empty()).then(|| {
+                self.renderer
+                    .upload_derived(&self.device, &self.queue, &derived)
+            });
+            self.last_bytes_uploaded = upload
+                .geometry
+                .bytes_uploaded
+                .saturating_add(upload.text.bytes_uploaded)
+                .saturating_add(derived_upload.map_or(0, |stats| stats.bytes_uploaded));'''
+          if old not in text:
+              raise SystemExit('retained canvas upload marker missing')
+          text = text.replace(old, new, 1)
+          old = '''            let draw = self
+                .renderer
+                .encode_retained(
+                    &mut encoder,
+                    &view,
+                    &prepared,
+                    &self.text_gpu,
+                    CLEAR_COLOR,
+                    None,
+                )
+                .map_err(js_error)?;'''
+          new = '''            let draw = if derived.slots.is_empty() {
+                self.renderer
+                    .encode_retained(
+                        &mut encoder,
+                        &view,
+                        &prepared,
+                        &self.text_gpu,
+                        CLEAR_COLOR,
+                        None,
+                    )
+                    .map_err(js_error)?
+            } else {
+                self.renderer
+                    .encode_retained_with_derived(
+                        &mut encoder,
+                        &view,
+                        &prepared,
+                        &derived,
+                        CLEAR_COLOR,
+                        None,
+                    )
+                    .map_err(js_error)?
+            };'''
+          if old not in text:
+              raise SystemExit('retained canvas draw marker missing')
+          text = text.replace(old, new, 1)
+          p.write_text(text)
+
+          # Producer/decoder regression: preserve an existing stable anchor but never
+          # allocate an ObjectId for the transient occurrence.
+          p = Path('crates/noon-web/src/retained_family_execution_transport.rs')
+          text = p.read_text()
+          text += r'''
+
+#[cfg(test)]
+mod derived_display_transport_regression {
+    use noon_core::{GeometryRef, ObjectContentRef, ObjectId, Style, Transform2D};
+    use noon_runtime::{DerivedDisplayObject, DerivedDisplayObjectState, FrameObjectState, FrameState};
+
+    use super::*;
+
+    #[test]
+    fn transient_analytic_occurrence_round_trips_with_only_real_anchor_identity() {
+        let frame = FrameState {
+            time: 0.5,
+            objects: vec![FrameObjectState {
+                id: ObjectId::new(41),
+                z_index: 0.0,
+                content: ObjectContentRef::Geometry(GeometryRef::circle(1.0)),
+                text_bounds: None,
+                transform: Transform2D::IDENTITY,
+                style: Style::default(),
+                appearance: 1.0,
+            }],
+            presences: vec![true],
+            reveals: vec![1.0],
+            morphs: vec![0.0],
+            render_geometries: vec![None],
+            render_transforms: vec![None],
+            family_animations: vec![None],
+            family_animation_plan_indices: vec![None],
+        };
+        let derived = DerivedDisplayObject::new(
+            0,
+            7,
+            DerivedDisplayObjectState {
+                z_index: 0.0,
+                content: ObjectContentRef::Geometry(GeometryRef::circle(0.5)),
+                text_bounds: None,
+                transform: Transform2D::IDENTITY,
+                style: Style::default(),
+                appearance: 0.5,
+                presence: true,
+                reveal: 1.0,
+                morph: 0.0,
+                render_geometry: None,
+                render_transform: None,
+            },
+        );
+        let wire = RetainedDerivedDisplayObject::from_runtime(&frame, &derived).unwrap();
+        assert_eq!(wire.anchor, ObjectId::new(41));
+        assert_eq!(wire.occurrence_index, 7);
+        let installed = wire.install(0);
+        assert_eq!(installed.anchor_object_index(), 0);
+        assert_eq!(installed.occurrence_index(), 7);
+        assert_eq!(installed.state().appearance, 0.5);
+    }
+}
+'''
+          p.write_text(text)
+          PY
+
+          cargo fmt --all -- --check || cargo fmt --all
+          cargo test -p noon-web derived_display_transport_regression --lib
+          cargo test -p noon-render-wgpu derived_display --lib
+
+          rm .github/workflows/b3-derived-worker-transport-patch.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/noon-web/src/retained_family_execution_transport.rs \
+                  crates/noon-web/src/semantic_execution_player.rs \
+                  crates/noon-web/src/retained_execution_resources.rs \
+                  crates/noon-render-wgpu/src/render_order.rs \
+                  crates/noon-web/src/retained_execution_canvas.rs \
+                  .github/workflows/b3-derived-worker-transport-patch.yml
+          git commit -m 'Transport derived family rows across worker boundary'
+          git push origin HEAD:codex/b3-derived-display-worker-transport
