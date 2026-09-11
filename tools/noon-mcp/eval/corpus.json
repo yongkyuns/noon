@@ -1,0 +1,135 @@
+{
+  "schema": 1,
+  "kind": "noon-deterministic-agent-evaluation-corpus",
+  "reference": {
+    "compatibility": "Manim Community v0.21.0",
+    "renderBackend": "WebGL2",
+    "sourcePolicy": "Ready tasks reference the maintained Noon/Manim example inventory by ID; no external scene or asset corpus is copied here."
+  },
+  "tasks": [
+    {
+      "id": "square-to-circle-lifecycle",
+      "kind": "render",
+      "covers": ["square-to-circle", "fade-lifecycle", "repeated-runs"],
+      "example": "parity-square-to-circle",
+      "requiredFeatures": ["Square", "Circle", "Create", "Transform", "FadeOut"],
+      "loopDurationSeconds": 4,
+      "sampleTimes": [0, 0.5, 1, 1.5, 2, 2.5, 3],
+      "expectedBackend": "WebGL2",
+      "expectedAuthoredDuration": 3,
+      "expectedFinalObjectCount": 0,
+      "repeatFresh": 2,
+      "hashRelations": [
+        { "op": "notEqual", "left": 0, "right": 1 },
+        { "op": "notEqual", "left": 2, "right": 3 },
+        { "op": "notEqual", "left": 4, "right": 5 },
+        { "op": "notEqual", "left": 5, "right": 6 }
+      ]
+    },
+    {
+      "id": "sequential-barrier-hold",
+      "kind": "render",
+      "covers": ["sequential-barriers"],
+      "example": "parity-different-rotations",
+      "requiredFeatures": ["animate", "Rotate", "wait"],
+      "loopDurationSeconds": 4,
+      "sampleTimes": [0, 1, 2, 3],
+      "expectedBackend": "WebGL2",
+      "expectedAuthoredDuration": 3,
+      "expectedFinalObjectCount": 2,
+      "repeatFresh": 1,
+      "hashRelations": [
+        { "op": "notEqual", "left": 0, "right": 1 },
+        { "op": "notEqual", "left": 1, "right": 2 },
+        { "op": "equal", "left": 2, "right": 3 }
+      ]
+    },
+    {
+      "id": "succession-composition",
+      "kind": "render",
+      "covers": ["composition"],
+      "example": "manim-succession-example",
+      "requiredFeatures": ["Succession", "Dot", "animate", "move_to"],
+      "loopDurationSeconds": 5,
+      "sampleTimes": [0, 1, 2, 3, 4],
+      "expectedBackend": "WebGL2",
+      "expectedAuthoredDuration": 4,
+      "expectedFinalObjectCount": 4,
+      "repeatFresh": 1,
+      "hashRelations": [
+        { "op": "notEqual", "left": 0, "right": 1 },
+        { "op": "notEqual", "left": 1, "right": 2 },
+        { "op": "notEqual", "left": 2, "right": 3 },
+        { "op": "notEqual", "left": 3, "right": 4 }
+      ]
+    },
+    {
+      "id": "native-text-static",
+      "kind": "render",
+      "covers": ["text"],
+      "example": "manim-example1-text",
+      "requiredFeatures": ["Text", "Scene.add", "retained-text"],
+      "loopDurationSeconds": 1,
+      "sampleTimes": [0],
+      "expectedBackend": "WebGL2",
+      "expectedAuthoredDuration": 0,
+      "expectedFinalObjectCount": 1,
+      "repeatFresh": 1,
+      "hashRelations": []
+    },
+    {
+      "id": "rotation-updater-callback",
+      "kind": "render",
+      "covers": ["callbacks"],
+      "example": "parity-rotation-updater",
+      "requiredFeatures": ["add_updater", "remove_updater", "rotate_about_origin", "wait", "host-callback-lifecycle"],
+      "loopDurationSeconds": 5,
+      "sampleTimes": [0, 1, 2, 3, 4, 4.5],
+      "expectedBackend": "WebGL2",
+      "expectedAuthoredDuration": 4.5,
+      "expectedFinalObjectCount": 2,
+      "repeatFresh": 1,
+      "hashRelations": [
+        { "op": "notEqual", "left": 0, "right": 1 },
+        { "op": "notEqual", "left": 1, "right": 2 },
+        { "op": "equal", "left": 1, "right": 3 },
+        { "op": "equal", "left": 0, "right": 4 },
+        { "op": "equal", "left": 4, "right": 5 }
+      ]
+    },
+    {
+      "id": "unsupported-plotting",
+      "kind": "capability",
+      "covers": ["unsupported-plotting"],
+      "example": "axes-and-plots",
+      "expectedStatus": "blocked",
+      "requiredFeatures": ["Axes", "plot", "NumberPlane"]
+    },
+    {
+      "id": "unsupported-latex-mathtex",
+      "kind": "capability",
+      "covers": ["unsupported-latex"],
+      "example": "text-and-math",
+      "expectedStatus": "blocked",
+      "requiredFeatures": ["Tex", "MathTex"]
+    },
+    {
+      "id": "unsupported-three-d",
+      "kind": "capability",
+      "covers": ["unsupported-3d"],
+      "example": "three-d",
+      "expectedStatus": "deferred",
+      "requiredFeatures": ["ThreeDScene", "ThreeDAxes", "Surface"]
+    },
+    {
+      "id": "cancel-stuck-after-first-frame",
+      "kind": "cancellation",
+      "covers": ["cancellation"],
+      "sourcePath": "eval/scenes/stuck_after_first_frame.py",
+      "loopDurationSeconds": 4,
+      "sampleTime": 0.2,
+      "abortAfterMs": 100,
+      "expectedInitialObjectCount": 1
+    }
+  ]
+}
