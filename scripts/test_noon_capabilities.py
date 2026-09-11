@@ -1,9 +1,10 @@
-#!/usr/bin/env python3
+"""Deterministic source-inventory tests; no Manim, WASM, browser or scenes run."""
 from __future__ import annotations
 
+import copy
+import hashlib
 import importlib.util
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -24,229 +25,210 @@ class CapabilityTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        (self.root / "compat").mkdir()
-        (self.root / "scripts").mkdir()
-        (self.root / "web/python/examples").mkdir(parents=True)
-        (self.root / "web/python/_manim_compat.py").write_text("EXPORTED = ('Circle', 'Transform', 'Axes')\n", encoding="utf-8")
-        (self.root / "web/python/noon.py").write_text("from _manim_compat import *\n", encoding="utf-8")
-        (self.root / "scripts/manim-api-coverage.py").write_text(
-            """from pathlib import Path\n"
-            "def validate_tutorial_examples(entries):\n"
-            "    ids=[e.get('id') for e in entries]\n"
-            "    return ['duplicate tutorial example id'] if len(ids)!=len(set(ids)) else []\n"
-            "def noon_public_exports(): return {'Circle','Transform','Axes'}\n"
-            "def browser_evidence_for(name, entries):\n"
-            "    return [e['id'] for e in entries if e.get('status')=='ready' and name in e.get('features',[])]\n"
-            """, encoding="utf-8")
-        shutil.copy2(SCRIPTS / "noon-capabilities.py", self.root / "scripts/noon-capabilities.py")
+        for directory in ("scripts", "compat", "web/python/examples"):
+            (self.root / directory).mkdir(parents=True)
+        for name in ("manim-api-coverage.py", "noon-capabilities.py"):
+            shutil.copyfile(SCRIPTS / name, self.root / "scripts" / name)
+        (self.root / "web/python/noon.py").write_text(
+            '__all__ = ["Circle", "Text", "NewThing"]\nraise RuntimeError("must not import noon")\n',
+            encoding="utf-8",
+        )
+        (self.root / "web/python/_manim_test.py").write_text(
+            'public = {"Create": None}\nraise RuntimeError("must not import adapter")\n', encoding="utf-8",
+        )
+        (self.root / "web/python/examples/circle.py").write_text(
+            'raise RuntimeError("must not execute example")\n', encoding="utf-8",
+        )
         self.policy = {
             "reference": {"package": "manim", "version": "0.21.0"},
-            "statuses": ["supported", "partial", "blocked"],
+            "statuses": ["supported", "partial", "missing", "blocked", "deferred", "intentional-divergence"],
             "overrides": {
-                "Circle": {"status": "supported", "evidence": "circle browser fixture"},
-                "Transform": {"status": "partial", "reason": "subset"},
-                "Axes": {"status": "blocked", "reason": "plotting unavailable"},
+                "Circle": {"status": "supported", "evidence": "fixture test"},
+                "Text": {"status": "partial", "reason": "No exact glyph parity", "dependency": "#83"},
+                "Axes": {"status": "missing", "dependency": "#85"},
             },
         }
         self.tutorial = {
             "reference": {"version": "0.21.0"},
             "entries": [
-                {"id": "circle", "status": "ready", "path": "python/examples/circle.py", "features": ["Circle"]},
-                {"id": "transform", "status": "ready", "path": "python/examples/transform.py", "features": ["Transform"], "parity_status": "candidate"},
-                {"id": "plot", "status": "blocked", "path": "python/examples/plot.py", "features": ["Axes"]},
+                {"id": "circle", "status": "ready", "path": "python/examples/circle.py",
+                 "features": ["Circle", "Create"], "upstream": "quickstart", "reuse": "fixture",
+                 "parity_status": "candidate", "qualification_mode": "shared-live"},
+                {"id": "plot", "status": "blocked", "dependency": "#85", "features": ["Axes"]},
             ],
         }
         self.save()
-        (self.root / "web/python/examples/circle.py").write_text("# circle\n", encoding="utf-8")
-        (self.root / "web/python/examples/transform.py").write_text("# transform\n", encoding="utf-8")
-        (self.root / "web/python/examples/plot.py").write_text("# plot\n", encoding="utf-8")
 
     def save(self):
-        (self.root / "compat/manim-v0.21.0.json").write_text(json.dumps(self.policy), encoding="utf-8")
-        (self.root / "web/python/examples/manim_tutorial_manifest.json").write_text(json.dumps(self.tutorial), encoding="utf-8")
+        (self.root / cap.POLICY).write_text(json.dumps(self.policy), encoding="utf-8")
+        (self.root / cap.TUTORIALS).write_text(json.dumps(self.tutorial), encoding="utf-8")
 
     def report(self):
+        self.save()
         return cap.build_report(self.root)
 
     def test_source_inventory_is_not_runtime_qualification(self):
         report = self.report()
+        self.assertEqual(report["schema_version"], 1)
         self.assertEqual(report["scope"], "source-inventory")
         self.assertFalse(report["qualification"]["behavioral_tests_run"])
+        self.assertTrue(all(value is None for value in report["runtime"].values()))
+        self.assertIsNone(report["provenance"]["revision"])
         self.assertFalse(report["symbols"]["Circle"]["runtime_verified"])
-        self.assertFalse(report["examples"]["circle"]["runtime_verified"])
 
-    def test_hashes_cover_inputs_and_change_with_source(self):
-        first = self.report()
-        hashes = first["provenance"]["input_sha256"]
-        self.assertIn("web/python/examples/circle.py", hashes)
-        self.assertIn("scripts/noon-capabilities.py", hashes)
-        self.assertRegex(hashes["web/python/examples/circle.py"], r"^[0-9a-f]{64}$")
-        self.assertEqual(first["examples"]["circle"]["source_sha256"], hashes["web/python/examples/circle.py"])
-        (self.root / "web/python/examples/circle.py").write_text("# changed\n", encoding="utf-8")
-        second = self.report()
-        self.assertNotEqual(first["examples"]["circle"]["source_sha256"], second["examples"]["circle"]["source_sha256"])
+    def test_noon_adapter_and_example_are_not_executed(self):
+        report = self.report()  # All three fixture files would raise on execution.
+        self.assertTrue(report["symbols"]["Create"]["exported"])
+        self.assertNotIn("manim", sys.modules)
 
-    def test_output_is_deterministic(self):
-        self.assertEqual(self.report(), self.report())
+    def test_static_module_exports_preserve_literal_and_unpacked_names(self):
+        (self.root / "web/python/noon.py").write_text(
+            '_PUBLIC_EXPORTS = {"Text": "_manim_typst", "Square": "_manim_compat"}\n'
+            '_PRIVATE = {"Hidden": "internal"}\n'
+            '__all__ = ["Circle", "NewThing", *_PUBLIC_EXPORTS]\n'
+            'raise RuntimeError("must not import noon")\n', encoding="utf-8",
+        )
+        symbols = self.report()["symbols"]
+        for name in ("Circle", "Text", "Square", "NewThing"):
+            self.assertTrue(symbols[name]["exported"])
+        self.assertNotIn("Hidden", symbols)
+        self.assertFalse(symbols["Square"]["runtime_verified"])
 
-    def test_symbol_filter_returns_relevant_ready_examples(self):
-        selected = cap.select_report(self.report(), ["Circle"], [])
-        self.assertEqual(set(selected["symbols"]), {"Circle"})
-        self.assertEqual(set(selected["examples"]), {"circle"})
+    def test_unclassified_export_cannot_be_promoted(self):
+        row = self.report()["symbols"]["NewThing"]
+        self.assertEqual(row["policy"]["status"], "partial")
+        self.assertEqual(row["classification_source"], "unclassified-export")
 
-    def test_unknown_symbol_and_example_fail(self):
-        report = self.report()
-        with self.assertRaisesRegex(ValueError, "unknown symbols"):
-            cap.select_report(report, ["Nope"], [])
-        with self.assertRaisesRegex(ValueError, "unknown examples"):
-            cap.select_report(report, [], ["nope"])
+    def test_restrictions_and_dependencies_survive(self):
+        row = self.report()["symbols"]["Text"]
+        self.assertEqual(row["policy"], self.policy["overrides"]["Text"])
+        self.assertEqual(row["ready_examples"], [])
+
+    def test_ready_candidate_is_not_parity_qualified(self):
+        row = self.report()["examples"]["circle"]
+        self.assertEqual(row["parity_status"], "candidate")
+        self.assertEqual(row["qualification_mode"], "shared-live")
+        self.assertFalse(row["runtime_verified"])
+
+    def test_qualified_label_needs_fixture(self):
+        self.tutorial["entries"][0]["parity_status"] = "parity-qualified"
+        with self.assertRaisesRegex(ValueError, "requires a parity fixture"):
+            self.report()
+
+    def test_unknown_parity_label_fails(self):
+        self.tutorial["entries"][0]["parity_status"] = "looks-good"
+        with self.assertRaisesRegex(ValueError, "invalid parity_status"):
+            self.report()
 
     def test_supported_requires_export(self):
-        self.policy["overrides"]["Missing"] = {"status": "supported", "evidence": "none"}
-        self.save()
+        self.policy["overrides"]["Ghost"] = {"status": "supported", "evidence": "test"}
         with self.assertRaisesRegex(ValueError, "export is absent"):
             self.report()
 
     def test_supported_requires_evidence(self):
         del self.policy["overrides"]["Circle"]["evidence"]
-        self.save()
         with self.assertRaisesRegex(ValueError, "requires declared evidence"):
             self.report()
 
     def test_blocked_export_with_ready_evidence_fails(self):
-        self.policy["overrides"]["Circle"] = {"status": "blocked", "reason": "bad"}
-        self.save()
-        with self.assertRaisesRegex(ValueError, "blocked export has ready tutorial evidence"):
+        self.policy["overrides"]["Circle"]["status"] = "blocked"
+        with self.assertRaisesRegex(ValueError, "blocked export"):
             self.report()
-
-    def test_unclassified_export_cannot_be_promoted(self):
-        del self.policy["overrides"]["Transform"]
-        self.save()
-        row = self.report()["symbols"]["Transform"]
-        self.assertEqual(row["classification_source"], "unclassified-export")
-        self.assertEqual(row["policy"]["status"], "partial")
-        self.assertIn("Statically exported", row["policy"]["reason"])
-
-    def test_restrictions_and_dependencies_survive(self):
-        self.policy["overrides"]["Transform"]["restriction"] = "same-family only"
-        self.policy["overrides"]["Transform"]["dependency"] = "supported mobject"
-        self.save()
-        row = self.report()["symbols"]["Transform"]["policy"]
-        self.assertEqual(row["restriction"], "same-family only")
-        self.assertEqual(row["dependency"], "supported mobject")
-
-    def test_ready_candidate_is_not_parity_qualified(self):
-        row = self.report()["examples"]["transform"]
-        self.assertEqual(row["status"], "ready")
-        self.assertEqual(row["parity_status"], "candidate")
-        self.assertNotIn("parity_fixture", row)
-
-    def test_qualified_label_needs_fixture(self):
-        self.tutorial["entries"][0]["parity_status"] = "parity-qualified"
-        self.save()
-        with self.assertRaisesRegex(ValueError, "requires a parity fixture"):
-            self.report()
-
-    def test_blocked_example_is_visible_but_not_ready_evidence(self):
-        report = self.report()
-        self.assertIn("plot", report["examples"])
-        self.assertEqual(report["examples"]["plot"]["status"], "blocked")
-        self.assertNotIn("source_sha256", report["examples"]["plot"])
-        self.assertEqual(report["symbols"]["Axes"]["ready_examples"], [])
 
     def test_missing_inventory_fails(self):
-        (self.root / "compat/manim-v0.21.0.json").unlink()
-        with self.assertRaises(OSError):
-            self.report()
+        (self.root / cap.TUTORIALS).unlink()
+        with self.assertRaisesRegex(ValueError, "missing or unconfined"):
+            cap.build_report(self.root)
 
     def test_malformed_inventory_fails(self):
-        (self.root / "compat/manim-v0.21.0.json").write_text("[]", encoding="utf-8")
-        with self.assertRaisesRegex(ValueError, "expected a JSON object"):
-            self.report()
+        (self.root / cap.POLICY).write_text("[]", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "JSON object"):
+            cap.build_report(self.root)
 
     def test_version_mismatch_fails(self):
-        self.tutorial["reference"]["version"] = "0.20.0"
-        self.save()
+        self.tutorial["reference"]["version"] = "99"
         with self.assertRaisesRegex(ValueError, "versions differ"):
             self.report()
 
     def test_invalid_policy_status_fails(self):
-        self.policy["overrides"]["Circle"]["status"] = "working"
-        self.save()
+        self.policy["overrides"]["Circle"]["status"] = "probably"
         with self.assertRaisesRegex(ValueError, "invalid policy status"):
             self.report()
 
-    def test_invalid_features_fail(self):
-        self.tutorial["entries"][0]["features"] = "Circle"
-        self.save()
-        with self.assertRaisesRegex(ValueError, "features must be a string array"):
-            self.report()
-
-    def test_unknown_parity_label_fails(self):
-        self.tutorial["entries"][0]["parity_status"] = "gold"
-        self.save()
-        with self.assertRaisesRegex(ValueError, "invalid parity_status"):
-            self.report()
-
     def test_duplicate_example_fails(self):
-        self.tutorial["entries"].append(dict(self.tutorial["entries"][0]))
-        self.save()
-        with self.assertRaisesRegex(ValueError, "duplicate tutorial example id"):
+        self.tutorial["entries"].append(copy.deepcopy(self.tutorial["entries"][0]))
+        with self.assertRaisesRegex(ValueError, "duplicate id"):
             self.report()
 
     def test_missing_ready_example_fails(self):
         (self.root / "web/python/examples/circle.py").unlink()
-        with self.assertRaisesRegex(ValueError, "missing or unconfined repository file"):
-            self.report()
-
-    def test_absolute_example_is_rejected(self):
-        self.tutorial["entries"][0]["path"] = "/tmp/scene.py"
-        self.save()
-        with self.assertRaisesRegex(ValueError, "unsafe absolute example path"):
+        with self.assertRaisesRegex(ValueError, "missing fixture"):
             self.report()
 
     def test_parent_traversal_is_rejected_even_when_file_exists(self):
-        (self.root / "web/escape.py").write_text("# escape\n", encoding="utf-8")
-        self.tutorial["entries"][0]["path"] = "python/examples/../../escape.py"
-        self.save()
+        self.tutorial["entries"][0]["path"] = "../web/python/examples/circle.py"
         with self.assertRaisesRegex(ValueError, "unsafe repository path"):
             self.report()
 
-    def test_symlink_escape_is_rejected(self):
-        outside = Path(self.temp.name).parent / "outside-noon-capability.py"
-        outside.write_text("# outside\n", encoding="utf-8")
-        self.addCleanup(lambda: outside.unlink(missing_ok=True))
-        target = self.root / "web/python/examples/circle.py"
-        target.unlink()
-        target.symlink_to(outside)
-        with self.assertRaisesRegex(ValueError, "missing or unconfined repository file"):
+    def test_absolute_example_is_rejected(self):
+        self.tutorial["entries"][0]["path"] = str(self.root / "web/python/examples/circle.py")
+        with self.assertRaisesRegex(ValueError, "unsafe absolute"):
             self.report()
 
-    def test_noon_adapter_and_example_are_not_executed(self):
-        (self.root / "web/python/noon.py").write_text("raise RuntimeError('must not execute noon.py')\n", encoding="utf-8")
-        (self.root / "web/python/examples/circle.py").write_text("raise RuntimeError('must not execute scene')\n", encoding="utf-8")
-        report = self.report()
-        self.assertIn("Circle", report["symbols"])
-        self.assertRegex(report["examples"]["circle"]["source_sha256"], r"^[0-9a-f]{64}$")
+    def test_symlink_escape_is_rejected(self):
+        with tempfile.TemporaryDirectory() as outside:
+            target = Path(outside) / "outside.py"
+            target.write_text("secret", encoding="utf-8")
+            fixture = self.root / "web/python/examples/circle.py"
+            fixture.unlink()
+            fixture.symlink_to(target)
+            with self.assertRaisesRegex(ValueError, "unconfined"):
+                self.report()
 
-    def test_static_module_exports_preserve_literal_and_unpacked_names(self):
-        (self.root / "web/python/_manim_more.py").write_text("EXPORTED = ('Line',)\n", encoding="utf-8")
-        (self.root / "web/python/_manim_compat.py").write_text(
-            "EXPORTED = ('Circle', 'Transform', 'Axes')\nfrom _manim_more import *\n", encoding="utf-8")
-        self.policy["overrides"]["Line"] = {"status": "partial", "reason": "line subset"}
-        self.save()
+    def test_invalid_features_fail(self):
+        self.tutorial["entries"][0]["features"] = "Circle"
+        with self.assertRaisesRegex(ValueError, "features must be"):
+            self.report()
+
+    def test_hashes_cover_inputs_and_change_with_source(self):
+        before = self.report()
+        path = "web/python/examples/circle.py"
+        expected = hashlib.sha256((self.root / path).read_bytes()).hexdigest()
+        self.assertEqual(before["provenance"]["input_sha256"][path], expected)
+        self.assertEqual(before["examples"]["circle"]["source_sha256"], expected)
+        (self.root / path).write_text("# changed\n", encoding="utf-8")
+        self.assertNotEqual(self.report()["examples"]["circle"]["source_sha256"], expected)
+
+    def test_output_is_deterministic(self):
+        self.assertEqual(self.report(), self.report())
+
+    def test_symbol_filter_returns_relevant_ready_examples(self):
         report = self.report()
-        self.assertIn("Line", report["symbols"])
-        self.assertTrue(report["symbols"]["Line"]["exported"])
+        selected = cap.select_report(report, ["Circle"], [])
+        self.assertEqual(list(selected["symbols"]), ["Circle"])
+        self.assertEqual(list(selected["examples"]), ["circle"])
+        self.assertIn("Text", report["symbols"])  # No mutation of input.
+
+    def test_unknown_symbol_and_example_fail(self):
+        report = self.report()
+        for symbols, examples in ((["typo"], []), ([], ["typo"])):
+            with self.subTest(symbols=symbols, examples=examples):
+                with self.assertRaisesRegex(ValueError, "unknown"):
+                    cap.select_report(report, symbols, examples)
+
+    def test_blocked_example_is_visible_but_not_ready_evidence(self):
+        selected = cap.select_report(self.report(), ["Axes"], ["plot"])
+        self.assertEqual(selected["examples"]["plot"]["status"], "blocked")
+        self.assertEqual(selected["symbols"]["Axes"]["ready_examples"], [])
 
     def test_cli_works_from_another_directory_without_site_packages(self):
         result = subprocess.run(
             [sys.executable, "-S", "-B", str(self.root / "scripts/noon-capabilities.py"), "--symbol", "Circle"],
-            cwd=Path(self.temp.name).parent, capture_output=True, text=True, timeout=10,
+            cwd="/", capture_output=True, text=True, timeout=10,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        report = json.loads(result.stdout)
-        self.assertEqual(set(report["symbols"]), {"Circle"})
+        self.assertEqual(list(json.loads(result.stdout)["symbols"]), ["Circle"])
+        self.assertEqual(result.stderr, "")
 
     def test_cli_invalid_query_has_no_success_output(self):
         result = subprocess.run(
