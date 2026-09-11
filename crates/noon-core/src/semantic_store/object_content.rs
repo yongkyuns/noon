@@ -91,8 +91,10 @@ impl SemanticArrowShaftRole {
 
 impl PartialEq for SemanticArrowShaftRole {
     fn eq(&self, other: &Self) -> bool {
-        self.initial_stroke_width == other.initial_stroke_width
-            && self.max_stroke_width_to_length_ratio == other.max_stroke_width_to_length_ratio
+        Self::canonical_bits(self.initial_stroke_width)
+            == Self::canonical_bits(other.initial_stroke_width)
+            && Self::canonical_bits(self.max_stroke_width_to_length_ratio)
+                == Self::canonical_bits(other.max_stroke_width_to_length_ratio)
     }
 }
 
@@ -353,6 +355,10 @@ mod tests {
         assert_eq!(policy.initial_stroke_width(), 0.06);
         assert_eq!(policy.max_stroke_width_to_length_ratio(), 0.05);
         assert!(state.role().is_valid());
+
+        let invalid = SemanticArrowShaftRole::new(f64::NAN, 0.05);
+        assert_eq!(invalid, invalid);
+        assert!(!invalid.is_valid());
     }
 
     #[test]
