@@ -92,6 +92,7 @@ mod rounded_rectangle_authoring;
 mod scalar_authoring;
 mod scene;
 mod scene_membership;
+mod scene_ordering;
 mod sector_authoring;
 mod semantic_mobject;
 mod state_replacement;
