@@ -99,6 +99,7 @@ mod state_replacement;
 mod text_authoring;
 #[cfg(any(feature = "native-text", feature = "typst"))]
 mod text_part_authoring;
+mod vector_field_authoring;
 mod z_index;
 
 pub use animation_authoring::DeclaredAnimation;
@@ -156,6 +157,10 @@ pub use noon_core::{
     RED_E, RIGHT, SMALL_BUFF, TAU, TEAL, TEAL_A, TEAL_B, TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE,
     YELLOW, YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D, YELLOW_E,
 };
+pub use noon_geometry::{
+    StaticVectorFieldError, StaticVectorFieldPlan, VectorFieldAxis, VectorFieldAxisRange,
+    VectorFieldPoint, VectorFieldRanges2D, VectorFieldSample, DEFAULT_VECTOR_FIELD_STEP,
+};
 pub use noon_runtime::EvaluationError;
 pub use path_queries::PathQuery;
 pub use rotation_authoring::ManimRotationPivot;
@@ -175,18 +180,19 @@ pub use text_authoring::{
 };
 #[cfg(any(feature = "native-text", feature = "typst"))]
 pub use text_part_authoring::TextPartAuthoringError;
+pub use vector_field_authoring::{ArrowVectorFieldAuthoringError, ManimArrowVectorField};
 
 /// Common imports for direct typed semantic authoring and live publication.
 /// Host integration and mutable arena access must be imported explicitly.
 pub mod prelude {
     pub use crate::{
-        AnimationOptions, AuthoringError, BooleanOperation, Color, ContinuationStep,
-        DeclaredAnimation, DrawBorderThenFillOptions, EffectiveMobjectState, ExecutionSession,
-        FadeEndpoint, FadeTranslation, LiveContinuation, LiveProgram, LiveSession,
-        LiveSessionError, ManimArrow, ManimArrowOptions, Mobject, MobjectFamily,
-        MobjectFamilyMember, NativeBoolSignal, NativeVectorSignal, RateFunction, Scene,
-        SemanticObjectState, SemanticStyle, StoredGeometry, TrackerPosition, ValueTracker, Vec2,
-        VectorPath,
+        AnimationOptions, ArrowVectorFieldAuthoringError, AuthoringError, BooleanOperation, Color,
+        ContinuationStep, DeclaredAnimation, DrawBorderThenFillOptions, EffectiveMobjectState,
+        ExecutionSession, FadeEndpoint, FadeTranslation, LiveContinuation, LiveProgram,
+        LiveSession, LiveSessionError, ManimArrow, ManimArrowOptions, ManimArrowVectorField, Mobject,
+        MobjectFamily, MobjectFamilyMember, NativeBoolSignal, NativeVectorSignal, RateFunction,
+        Scene, SemanticObjectState, SemanticStyle, StoredGeometry, TrackerPosition, ValueTracker,
+        Vec2, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, VectorPath,
     };
 }
 
