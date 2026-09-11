@@ -4,7 +4,18 @@ use crate::{WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle, WasmAuthoring
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
-use crate::authoring_error::js_error;
+use crate::authoring_error::{js_error, AuthoringFailure};
+
+fn arrow_scale_js_error(error: noon::ArrowScaleError) -> JsValue {
+    match error {
+        noon::ArrowScaleError::Authoring(cause) => js_error(cause),
+        other => js_error(AuthoringFailure::new(
+            "unsupported_operation",
+            "arrow.invalid_topology",
+            other,
+        )),
+    }
+}
 
 /// Inert typed Arrow-family constructor intent. No semantic identity exists
 /// until `WasmAuthoringStore::create_manim_arrow` consumes the whole request.
@@ -232,6 +243,12 @@ impl WasmAuthoringArrowHandle {
             .manim_unit_vector()
             .map(|vector| vector.1)
             .map_err(js_error)
+    }
+
+    pub fn scale(&self, factor: f64, scale_tips: bool) -> Result<(), JsValue> {
+        self.arrow
+            .scale(factor, scale_tips)
+            .map_err(arrow_scale_js_error)
     }
 }
 
