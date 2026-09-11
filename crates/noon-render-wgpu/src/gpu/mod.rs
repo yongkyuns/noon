@@ -4,13 +4,15 @@ use bytemuck::{Pod, Zeroable};
 use noon_core::Vec2;
 use wgpu::util::DeviceExt;
 
+mod derived_display;
 mod presentation;
+use derived_display::DerivedDisplayGpu;
 pub use presentation::OutputTransfer;
 use presentation::PresentationBridge;
 
 use crate::{
-    CircleInstance, LineInstance, PathBatch, PathInstance, PathVertex, PreparedFrame,
-    RectangleInstance, RenderPrimitive,
+    CircleInstance, LineInstance, PathBatch, PathInstance, PathVertex, PreparedDerivedDisplay,
+    PreparedFrame, RectangleInstance, RenderPrimitive,
 };
 
 const QUAD_VERTICES: [[f32; 2]; 6] = [
@@ -350,6 +352,7 @@ pub struct GpuRenderer {
     path_instance_buffer: wgpu::Buffer,
     mega_path_index_buffer: wgpu::Buffer,
     mega_path_vertex_instance_buffer: wgpu::Buffer,
+    derived_display: DerivedDisplayGpu,
     path_render_bundle: Option<wgpu::RenderBundle>,
     path_render_bundle_batches: Vec<PathBatch>,
     path_render_bundle_rebuilds: usize,
@@ -532,6 +535,7 @@ impl GpuRenderer {
         );
         let mega_path_vertex_instance_buffer =
             empty_instance_buffer(device, "Noon packed path vertex attributes");
+        let derived_display = DerivedDisplayGpu::new(device);
         let (path_msaa_texture, path_msaa_view) =
             create_path_msaa_target(device, target_format, viewport_size);
 
@@ -561,6 +565,7 @@ impl GpuRenderer {
             path_instance_buffer,
             mega_path_index_buffer,
             mega_path_vertex_instance_buffer,
+            derived_display,
             path_render_bundle: None,
             path_render_bundle_batches: Vec::new(),
             path_render_bundle_rebuilds: 0,
@@ -907,7 +912,7 @@ impl GpuRenderer {
         prepared: &PreparedFrame<'_>,
         clear_color: wgpu::Color,
     ) -> DrawStats {
-        self.encode_inner(encoder, view, prepared, clear_color, None)
+        self.encode_inner(encoder, view, prepared, clear_color, None, None)
     }
 
     /// Encodes a render pass with beginning/end GPU timestamp writes.
@@ -919,7 +924,7 @@ impl GpuRenderer {
         clear_color: wgpu::Color,
         query_set: &wgpu::QuerySet,
     ) -> DrawStats {
-        self.encode_inner(encoder, view, prepared, clear_color, Some(query_set))
+        self.encode_inner(encoder, view, prepared, clear_color, None, Some(query_set))
     }
 
     fn encode_inner(
@@ -928,6 +933,7 @@ impl GpuRenderer {
         view: &wgpu::TextureView,
         prepared: &PreparedFrame<'_>,
         clear_color: wgpu::Color,
+        derived: Option<&PreparedDerivedDisplay>,
         query_set: Option<&wgpu::QuerySet>,
     ) -> DrawStats {
         let scene_view = self.presentation.scene_view(view);
@@ -958,7 +964,10 @@ impl GpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            self.draw_ordered(&mut pass, prepared, true)
+            match derived {
+                Some(derived) => self.draw_with_derived(&mut pass, prepared, derived, true),
+                None => self.draw_ordered(&mut pass, prepared, true),
+            }
         } else {
             // Mixed vector/analytic content still shares one 4x multisampled target so
             // pipeline switches follow semantic painter order. Splitting these primitives
@@ -985,7 +994,10 @@ impl GpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            self.draw_ordered(&mut pass, prepared, false)
+            match derived {
+                Some(derived) => self.draw_with_derived(&mut pass, prepared, derived, false),
+                None => self.draw_ordered(&mut pass, prepared, false),
+            }
         };
         self.presentation.encode_present(encoder, view);
         stats
