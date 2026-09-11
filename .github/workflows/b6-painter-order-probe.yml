@@ -1,0 +1,44 @@
+name: B6 painter-order probe
+
+on:
+  pull_request:
+    paths:
+      - "crates/noon-core/**"
+      - "crates/noon/**"
+      - ".github/workflows/b6-painter-order-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  focused-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run focused diagnostics
+        id: probe
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          status=0
+          {
+            echo '=== noon-core focused test ==='
+            cargo test -p noon-core explicit_root_bring_to_back_prepends_after_family_promotion_in_caller_order -- --nocapture || status=$?
+            echo '=== noon crate check ==='
+            cargo check -p noon || status=$?
+            echo '=== noon crate clippy ==='
+            cargo clippy -p noon --lib -- -D warnings || status=$?
+          } > b6-painter-order-probe.log 2>&1
+          cat b6-painter-order-probe.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+      - name: Upload diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: b6-painter-order-probe
+          path: b6-painter-order-probe.log
+          if-no-files-found: error
+      - name: Fail on diagnostic error
+        if: steps.probe.outputs.status != '0'
+        run: exit 1
