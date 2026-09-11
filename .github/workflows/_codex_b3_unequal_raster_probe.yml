@@ -16,6 +16,8 @@ jobs:
       NOON_WASM_SKIP_OPT: "1"
     steps:
       - uses: actions/checkout@v4
+      - name: Remove branch-only probe from build checkout
+        run: rm .github/workflows/_codex_b3_unequal_raster_probe.yml
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
