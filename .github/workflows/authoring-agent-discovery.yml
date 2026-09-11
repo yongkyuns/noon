@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - "tools/noon-mcp/**"
+      - "skills/noon-authoring/**"
       - "scripts/noon-capabilities.py"
       - "scripts/manim-api-coverage.py"
       - "compat/manim-v0.21.0.json"
@@ -19,6 +20,7 @@ on:
     branches: [master]
     paths:
       - "tools/noon-mcp/**"
+      - "skills/noon-authoring/**"
       - "scripts/noon-capabilities.py"
       - "scripts/manim-api-coverage.py"
       - "compat/manim-v0.21.0.json"
@@ -64,6 +66,56 @@ jobs:
         run: npm test
       - name: Preserve explicit CI topology registration
         run: node ../../web/ci-workflow-topology.test.mjs
+
+  packaging:
+    name: Clean agent package setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tools/noon-mcp
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tools/noon-mcp/package-lock.json
+      - name: Prove setup starts without ambient package state
+        run: |
+          test ! -e node_modules
+          test ! -e ../../node_modules
+      - name: Install only the exact lockfile without lifecycle hooks
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Emit deterministic package, skill, capability and runner identity
+        env:
+          NOON_REPO: ${{ github.workspace }}
+        run: |
+          export NOON_PYTHON="$(python3 -I -S -c 'import sys; print(sys.executable)')"
+          node scripts/package-manifest.mjs > "$RUNNER_TEMP/noon-agent-distribution.json"
+          node -e '
+            const fs = require("node:fs");
+            const value = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/noon-agent-distribution.json", "utf8"));
+            if (value.kind !== "noon-agent-distribution" || value.schemaVersion !== 1) process.exit(1);
+            if (value.runner.versions.loadedBuildIdentity !== null) process.exit(1);
+            if (value.environment.preview.implicitLifecycleHooks !== false) process.exit(1);
+          '
+      - name: Exercise real SDK discovery from the clean setup
+        env:
+          NOON_REPO: ${{ github.workspace }}
+        run: |
+          export NOON_PYTHON="$(python3 -I -S -c 'import sys; print(sys.executable)')"
+          node scripts/clean-setup-smoke.mjs
+      - name: Upload package identity evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon-agent-distribution
+          path: ${{ runner.temp }}/noon-agent-distribution.json
+          if-no-files-found: error
+          retention-days: 14
 
   preview-isolation:
     name: Docker-isolated real browser preview

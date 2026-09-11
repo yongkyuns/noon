@@ -263,6 +263,7 @@ class SkillTests(unittest.TestCase):
         for name in self.checker.COMMANDS:
             path = self.root / name
             if not path.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("# fixture entrypoint\n", encoding="utf-8")
 
     def test_skill_valid_references(self):

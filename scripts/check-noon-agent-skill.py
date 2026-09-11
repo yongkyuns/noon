@@ -14,6 +14,10 @@ SKILL = "skills/noon-authoring"
 COMMANDS = (
     "scripts/noon-capabilities.py", "scripts/build-web-demo.sh",
     "scripts/check.sh", "scripts/manim-tutorial-smoke.mjs",
+    "tools/noon-mcp/bin/noon-preview.mjs",
+    "tools/noon-mcp/src/server.mjs",
+    "tools/noon-mcp/scripts/setup-preview-runtime.mjs",
+    "tools/noon-mcp/scripts/package-manifest.mjs",
 )
 
 
