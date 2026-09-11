@@ -600,6 +600,14 @@ class Scene:
         leaves = [member for value in mobjects for member in _leaf_mobjects(value)]
         return leaves[0] if len(leaves) == 1 else self
 
+    def bring_to_front(self, *mobjects: object) -> Scene:
+        self.add(*mobjects)
+        return self
+
+    def bring_to_back(self, *mobjects: object) -> Scene:
+        self._edit_membership("bring_to_back", mobjects)
+        return self
+
     def remove(self, *mobjects: object) -> Scene:
         self._edit_membership("remove", mobjects)
         return self
