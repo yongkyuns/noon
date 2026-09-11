@@ -9047,7 +9047,8 @@ mod tests {
             .scene
             .family(&[(&left_target).into(), (&right_target).into()])
             .unwrap();
-        let invalid_target = context.scene.family(&[(&left_target).into()]).unwrap();
+        let invalid_nested = context.scene.family(&[(&left_target).into()]).unwrap();
+        let invalid_target = context.scene.family(&[(&invalid_nested).into()]).unwrap();
         let transform_options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear)
