@@ -618,7 +618,10 @@ mod tests {
         .unwrap();
         let unrelated = scene.circle(0.5).unwrap();
         let unrelated_before = unrelated.state().unwrap();
-        let before_revision = scene.integration_store().borrow().scene_revision();
+        let before_revision = scene
+            .integration_store()
+            .borrow()
+            .scene_revision();
 
         assert!(arrow.scale(f64::NAN, false).is_err());
 
