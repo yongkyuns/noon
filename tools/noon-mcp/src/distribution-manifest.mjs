@@ -15,14 +15,30 @@ export const DISTRIBUTION_MANIFEST_SCHEMA_VERSION = 1;
 const PACKAGE_SOURCES = Object.freeze([
   "package.json",
   "package-lock.json",
+  "README.md",
   "preview.Dockerfile",
   "THIRD_PARTY_NOTICES.md",
-  "src/server.mjs",
+  "bin/noon-preview.mjs",
+  "src/discovery.mjs",
+  "src/distribution-manifest.mjs",
+  "src/preview-cli.mjs",
   "src/preview-isolation.mjs",
+  "src/preview-pyodide.mjs",
   "src/preview-runner.mjs",
+  "src/preview-seccomp.mjs",
   "src/preview-service.mjs",
   "src/preview-worker.mjs",
+  "src/rendering-contract.mjs",
+  "src/rendering-tools.mjs",
+  "src/server.mjs",
+  "scripts/clean-setup-smoke.mjs",
+  "scripts/package-manifest.mjs",
   "scripts/setup-preview-runtime.mjs",
+]);
+
+const CHECKOUT_RUNNER_SOURCES = Object.freeze([
+  "scripts/agent-preview-artifacts.mjs",
+  "scripts/agent-preview-sessions.mjs",
 ]);
 
 function sha256(bytes) {
@@ -136,12 +152,6 @@ export async function buildDistributionManifest({
 } = {}) {
   const packageReal = await realpath(packageRoot);
   const repoReal = await realpath(repoRoot);
-  const expectedPackage = await realpath(path.join(repoReal, "tools", "noon-mcp")).catch(() => null);
-  // A staged clean package copy is supported; the trusted checkout remains the
-  // capability/source authority and is always identified separately below.
-  if (expectedPackage === packageReal && !packageReal.startsWith(`${repoReal}${path.sep}`)) {
-    throw new Error("invalid checkout-bound package location");
-  }
 
   const packageJson = await jsonFile(packageReal, "package.json");
   const lock = await jsonFile(packageReal, "package-lock.json");
@@ -180,6 +190,7 @@ export async function buildDistributionManifest({
 
   const sourceSha256 = {};
   for (const relative of PACKAGE_SOURCES) sourceSha256[`tools/noon-mcp/${relative}`] = await fileSha256(packageReal, relative);
+  for (const relative of CHECKOUT_RUNNER_SOURCES) sourceSha256[relative] = await fileSha256(repoReal, relative);
   sourceSha256[skillPath] = await fileSha256(repoReal, skillPath);
   sourceSha256["scripts/noon-capabilities.py"] = await fileSha256(repoReal, "scripts/noon-capabilities.py");
 
