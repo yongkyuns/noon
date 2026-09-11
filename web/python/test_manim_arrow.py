@@ -113,6 +113,21 @@ class ManimArrowFacadeTests(unittest.TestCase):
                     calls.append(("double_arrow", float(sx), float(sy), float(ex), float(ey)))
                     return FakeOptions("double", (sx, sy), (ex, ey))
 
+            def boundary_options(kind, mode, *values):
+                encoded = tuple(
+                    value.semanticSlot if isinstance(value, FakeLeafHandle) else float(value)
+                    for value in values
+                )
+                calls.append((f"boundary_{kind}_{mode}", *encoded))
+                return FakeOptions(kind, None, None)
+
+            fake_js.noonAuthoringArrowFromMobjects = lambda start, end: boundary_options("arrow", "both", start, end)
+            fake_js.noonAuthoringArrowFromMobject = lambda start, ex, ey: boundary_options("arrow", "start", start, ex, ey)
+            fake_js.noonAuthoringArrowToMobject = lambda sx, sy, end: boundary_options("arrow", "end", sx, sy, end)
+            fake_js.noonAuthoringDoubleArrowFromMobjects = lambda start, end: boundary_options("double", "both", start, end)
+            fake_js.noonAuthoringDoubleArrowFromMobject = lambda start, ex, ey: boundary_options("double", "start", start, ex, ey)
+            fake_js.noonAuthoringDoubleArrowToMobject = lambda sx, sy, end: boundary_options("double", "end", sx, sy, end)
+
             def create_arrow(options):
                 calls.append(("publish", options.kind))
                 return FakeCreatedArrow(options.kind == "double")
@@ -160,6 +175,25 @@ class ManimArrowFacadeTests(unittest.TestCase):
             assert ("publish", "vector") in calls
             assert ("double_arrow", -1.0, 0.0, 1.0, 0.0) in calls
             assert ("publish", "double") in calls
+
+            # Python passes opaque Mobject handles into the Rust boundary constructor;
+            # it never queries centers, anchors, or boundary coordinates itself.
+            def endpoint(slot):
+                wrapper = object.__new__(noon.Mobject)
+                arrows._shared._attach_shared_handle(wrapper, FakeLeafHandle(slot))
+                return wrapper
+
+            start_mobject = endpoint(20)
+            end_mobject = endpoint(21)
+            bounded = arrows.Arrow(start_mobject, end_mobject, buff=0.0)
+            bounded_from = arrows.Arrow(start_mobject, (5.0, 2.0), buff=0.0)
+            bounded_to = arrows.DoubleArrow((-4.0, 1.0), end_mobject, buff=0.0)
+            assert ("boundary_arrow_both", 20, 21) in calls
+            assert ("boundary_arrow_start", 20, 5.0, 2.0) in calls
+            assert ("boundary_double_end", -4.0, 1.0, 21) in calls
+            assert len(bounded.submobjects) == 2
+            assert len(bounded_from.submobjects) == 2
+            assert len(bounded_to.submobjects) == 3
 
             # Python does not recompute family geometry. Supported whole-object edits
             # route through the existing shared family handle.
