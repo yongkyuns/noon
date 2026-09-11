@@ -33,6 +33,7 @@ enum SceneMembershipBatchKind {
     Remove,
     Clear,
     Replace,
+    BringToBack,
 }
 
 struct SceneMembershipBatch {
@@ -2270,6 +2271,9 @@ impl CanonicalAuthoringScene {
         let request = match batch.kind {
             SceneMembershipBatchKind::Add => noon::SceneMembershipRequest::Add(&borrowed),
             SceneMembershipBatchKind::Remove => noon::SceneMembershipRequest::Remove(&borrowed),
+            SceneMembershipBatchKind::BringToBack => {
+                noon::SceneMembershipRequest::BringToBack(&borrowed)
+            }
             SceneMembershipBatchKind::Clear => {
                 if !borrowed.is_empty() {
                     return Err(AuthoringFailure::new(
@@ -2732,9 +2736,10 @@ mod wasm {
                 "remove" => SceneMembershipBatchKind::Remove,
                 "clear" => SceneMembershipBatchKind::Clear,
                 "replace" => SceneMembershipBatchKind::Replace,
+                "bring_to_back" => SceneMembershipBatchKind::BringToBack,
                 _ => {
                     return Err(js_error(format!(
-                        "membership batch kind must be add, remove, clear, or replace; got {kind:?}"
+                        "membership batch kind must be add, remove, clear, replace, or bring_to_back; got {kind:?}"
                     )))
                 }
             };

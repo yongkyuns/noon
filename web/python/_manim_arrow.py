@@ -461,6 +461,7 @@ class DoubleArrow(Arrow):
 
 
 _DEFAULT_VECTOR_FIELD_LENGTH = object()
+_DEFAULT_VECTOR_FIELD_COLORS = (_base.BLUE_E, _base.GREEN, _base.YELLOW, _base.RED)
 
 
 def _vector_field_range(name: str, value: object) -> tuple[list[float], list[float]]:
@@ -486,6 +487,20 @@ def _vector_field_range(name: str, value: object) -> tuple[list[float], list[flo
 
 def _default_vector_field_length(norm: float) -> float:
     return 0.45 / (1.0 + _base.math.exp(-float(norm)))
+
+
+def _vector_field_colors(colors: object | None) -> tuple[_base.Color, ...]:
+    source = _DEFAULT_VECTOR_FIELD_COLORS if colors is None else colors
+    try:
+        result = tuple(
+            _compat._as_color(f"colors[{index}]", value)
+            for index, value in enumerate(source)  # type: ignore[arg-type]
+        )
+    except TypeError as error:
+        raise TypeError("ArrowVectorField colors must be an iterable of colors") from error
+    if not result:
+        raise ValueError("ArrowVectorField colors must contain at least one color")
+    return result
 
 
 def _attach_vector_field_member(created: object, index: int) -> Vector:
@@ -534,14 +549,6 @@ class ArrowVectorField(_compat.VGroup):
             )
         if not callable(func):
             raise TypeError("ArrowVectorField func must be callable")
-        if color is not None:
-            raise NotImplementedError("ArrowVectorField single-color mode is not part of this B5 slice")
-        if color_scheme is not None:
-            raise NotImplementedError("custom ArrowVectorField color_scheme is not part of this B5 slice")
-        if float(min_color_scheme_value) != 0.0 or float(max_color_scheme_value) != 2.0:
-            raise NotImplementedError("custom ArrowVectorField color-scheme bounds are not part of this B5 slice")
-        if colors is not None:
-            raise NotImplementedError("custom ArrowVectorField color lists are not part of this B5 slice")
         if z_range is not None or three_dimensions:
             raise NotImplementedError("3D ArrowVectorField requires the Phase B6/C 3D field contract")
         opacity_value = _ir._finite_number("opacity", opacity)
@@ -561,6 +568,36 @@ class ArrowVectorField(_compat.VGroup):
         if custom_length and not callable(length_func):
             raise TypeError("ArrowVectorField length_func must be callable")
 
+        single_color = color is not None
+        field_color = _compat._as_color("color", color) if single_color else None
+        custom_color_scheme = False
+        gradient_colors: tuple[_base.Color, ...] | None = None
+        min_color_value = 0.0
+        max_color_value = 2.0
+        configure_gradient = False
+        if not single_color:
+            if color_scheme is not None and not callable(color_scheme):
+                raise TypeError("ArrowVectorField color_scheme must be callable")
+            custom_color_scheme = color_scheme is not None
+            min_color_value = _ir._finite_number(
+                "min_color_scheme_value", min_color_scheme_value
+            )
+            max_color_value = _ir._finite_number(
+                "max_color_scheme_value", max_color_scheme_value
+            )
+            if max_color_value <= min_color_value:
+                raise ValueError(
+                    "ArrowVectorField max_color_scheme_value must be greater than min_color_scheme_value"
+                )
+            configure_gradient = (
+                custom_color_scheme
+                or colors is not None
+                or min_color_value != 0.0
+                or max_color_value != 2.0
+            )
+            if configure_gradient:
+                gradient_colors = _vector_field_colors(colors)
+
         draft = engine_call(
             _arrow_options.vectorField,
             x_nominal[0],
@@ -572,6 +609,31 @@ class ArrowVectorField(_compat.VGroup):
             custom_length,
         )
         try:
+            if field_color is not None:
+                engine_call(
+                    draft.setFieldColor,
+                    field_color.red,
+                    field_color.green,
+                    field_color.blue,
+                    field_color.alpha,
+                )
+            elif configure_gradient:
+                assert gradient_colors is not None
+                engine_call(
+                    draft.setColorGradient,
+                    min_color_value,
+                    max_color_value,
+                    custom_color_scheme,
+                )
+                for gradient_color in gradient_colors:
+                    engine_call(
+                        draft.addColorGradientStop,
+                        gradient_color.red,
+                        gradient_color.green,
+                        gradient_color.blue,
+                        gradient_color.alpha,
+                    )
+
             sample_count = int(draft.sampleCount)
             for index in range(sample_count):
                 x = float(engine_call(draft.sampleX, index))
@@ -585,6 +647,12 @@ class ArrowVectorField(_compat.VGroup):
                             "length_func result", length_func(norm)
                         )
                         engine_call(draft.setDisplayLength, index, display_length)
+                if custom_color_scheme:
+                    color_value = _ir._finite_number(
+                        "color_scheme result",
+                        color_scheme((raw.x, raw.y, 0.0)),
+                    )
+                    engine_call(draft.setColorValue, index, color_value)
 
             created = engine_call(_create_arrow_handle, draft)
         finally:
@@ -616,7 +684,12 @@ class ArrowVectorField(_compat.VGroup):
         )
         self.opacity = opacity_value
         self.vector_config = {}
-        self.single_color = False
+        self.single_color = single_color
+        if field_color is not None:
+            self.color = field_color
+        else:
+            self.color_scheme = color_scheme
+            self.colors = gradient_colors or _DEFAULT_VECTOR_FIELD_COLORS
 
 
 __all__ = ["Arrow", "Vector", "DoubleArrow", "ArrowVectorField"]
