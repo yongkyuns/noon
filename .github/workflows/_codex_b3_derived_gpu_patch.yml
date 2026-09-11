@@ -1,0 +1,108 @@
+name: codex b3 derived GPU submission patch
+
+on:
+  push:
+    branches: [codex/b3-derived-display-gpu-submit]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Wire transient GPU buffers into GpuRenderer
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one match, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          path = "crates/noon-render-wgpu/src/gpu/mod.rs"
+          replace_once(
+              path,
+              "mod presentation;\npub use presentation::OutputTransfer;\n",
+              "mod derived_display;\nmod presentation;\npub use presentation::OutputTransfer;\nuse derived_display::DerivedDisplayGpu;\n",
+          )
+          replace_once(
+              path,
+              "    CircleInstance, LineInstance, PathBatch, PathInstance, PathVertex, PreparedFrame,\n    RectangleInstance, RenderPrimitive,\n",
+              "    CircleInstance, LineInstance, PathBatch, PathInstance, PathVertex, PreparedDerivedDisplay,\n    PreparedFrame, RectangleInstance, RenderPrimitive,\n",
+          )
+          replace_once(
+              path,
+              "    mega_path_vertex_instance_buffer: wgpu::Buffer,\n    path_render_bundle: Option<wgpu::RenderBundle>,\n",
+              "    mega_path_vertex_instance_buffer: wgpu::Buffer,\n    derived_display: DerivedDisplayGpu,\n    path_render_bundle: Option<wgpu::RenderBundle>,\n",
+          )
+          replace_once(
+              path,
+              "        let mega_path_vertex_instance_buffer =\n            empty_instance_buffer(device, \"Noon packed path vertex attributes\");\n        let (path_msaa_texture, path_msaa_view) =\n",
+              "        let mega_path_vertex_instance_buffer =\n            empty_instance_buffer(device, \"Noon packed path vertex attributes\");\n        let derived_display = DerivedDisplayGpu::new(device);\n        let (path_msaa_texture, path_msaa_view) =\n",
+          )
+          replace_once(
+              path,
+              "            mega_path_vertex_instance_buffer,\n            path_render_bundle: None,\n",
+              "            mega_path_vertex_instance_buffer,\n            derived_display,\n            path_render_bundle: None,\n",
+          )
+          replace_once(
+              path,
+              "        self.encode_inner(encoder, view, prepared, clear_color, None)\n",
+              "        self.encode_inner(encoder, view, prepared, clear_color, None, None)\n",
+          )
+          replace_once(
+              path,
+              "        self.encode_inner(encoder, view, prepared, clear_color, Some(query_set))\n",
+              "        self.encode_inner(\n            encoder,\n            view,\n            prepared,\n            clear_color,\n            None,\n            Some(query_set),\n        )\n",
+          )
+          replace_once(
+              path,
+              "        prepared: &PreparedFrame<'_>,\n        clear_color: wgpu::Color,\n        query_set: Option<&wgpu::QuerySet>,\n    ) -> DrawStats {\n",
+              "        prepared: &PreparedFrame<'_>,\n        clear_color: wgpu::Color,\n        derived: Option<&PreparedDerivedDisplay>,\n        query_set: Option<&wgpu::QuerySet>,\n    ) -> DrawStats {\n",
+          )
+          old_draw = "            self.draw_ordered(&mut pass, prepared, true)\n"
+          new_draw = "            match derived {\n                Some(derived) => self.draw_with_derived(&mut pass, prepared, derived, true),\n                None => self.draw_ordered(&mut pass, prepared, true),\n            }\n"
+          replace_once(path, old_draw, new_draw)
+          old_draw = "            self.draw_ordered(&mut pass, prepared, false)\n"
+          new_draw = "            match derived {\n                Some(derived) => self.draw_with_derived(&mut pass, prepared, derived, false),\n                None => self.draw_ordered(&mut pass, prepared, false),\n            }\n"
+          replace_once(path, old_draw, new_draw)
+
+          child = Path("crates/noon-render-wgpu/src/gpu/derived_display.rs")
+          text = child.read_text()
+          marker = '''    /// Upload renderer-owned transient analytic instances without changing stable\n    /// prepared-frame buffers or slot identity.\n    pub fn upload_derived(\n'''
+          method = '''    /// Encode one painter-coherent frame containing stable slots plus identity-free\n    /// derived analytic occurrences. Derived buffers must have been uploaded with\n    /// `upload_derived` for this exact publication.\n    pub fn encode_with_derived(\n        &self,\n        encoder: &mut wgpu::CommandEncoder,\n        view: &wgpu::TextureView,\n        stable: &PreparedFrame<'_>,\n        derived: &PreparedDerivedDisplay,\n        clear_color: wgpu::Color,\n    ) -> DrawStats {\n        self.encode_inner(\n            encoder,\n            view,\n            stable,\n            clear_color,\n            Some(derived),\n            None,\n        )\n    }\n\n'''
+          if text.count(marker) != 1:
+              raise SystemExit("derived display module: upload marker mismatch")
+          child.write_text(text.replace(marker, method + marker, 1))
+      - name: Format
+        run: cargo fmt --all
+      - name: Mixed submission ordering test
+        run: cargo test -p noon-render-wgpu mixed_draw_resolution_preserves_anchor_copy_order_without_new_stable_slots --lib
+      - name: Derived display preparation tests
+        run: cargo test -p noon-render-wgpu derived_display --lib
+      - name: Renderer compile check
+        run: cargo check -p noon-render-wgpu
+      - name: Renderer lint
+        run: cargo clippy -p noon-render-wgpu --lib -- -D warnings
+      - name: Commit production patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Yongkyun Shin"
+          git config user.email "yongkyuns@gmail.com"
+          git add crates/noon-render-wgpu/src/gpu/mod.rs crates/noon-render-wgpu/src/gpu/derived_display.rs
+          git commit -m "Submit identity-free derived analytic display rows"
+          git push origin HEAD:codex/b3-derived-display-gpu-submit
