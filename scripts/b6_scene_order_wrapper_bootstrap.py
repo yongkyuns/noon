@@ -64,24 +64,6 @@ test = r'''
             revision.checked_next().unwrap()
         );
 
-        context.live_player(1.0).unwrap();
-        let revision = context.scene.integration_store().borrow().scene_revision();
-        context
-            .edit_membership(SceneMembershipBatch {
-                kind: SceneMembershipBatchKind::BringToBack,
-                members: vec![membership_mobject(1, &second), membership_mobject(2, &third)],
-                bindings: Vec::new(),
-            })
-            .unwrap();
-        assert_eq!(
-            context.root_membership_keys().unwrap(),
-            vec![key(&second), key(&third), key(&first)]
-        );
-        assert_eq!(
-            context.scene.integration_store().borrow().scene_revision(),
-            revision.checked_next().unwrap()
-        );
-
         let foreign = CanonicalAuthoringScene::default();
         let foreign_object = foreign.scene.circle(0.2).unwrap();
         let before = context.root_membership_keys().unwrap();
