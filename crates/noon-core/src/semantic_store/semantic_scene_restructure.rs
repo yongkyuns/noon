@@ -221,10 +221,19 @@ fn plan_explicit_root_projection(
         }
     }
 
-    let first_replacement_by_root = plans
-        .iter()
-        .map(|(root, replacements, _)| (*root, replacements.first().copied()))
-        .collect::<HashMap<_, _>>();
+    let head_anchor = if placement == ExplicitPlacement::Head {
+        let first_replacement_by_root = plans
+            .iter()
+            .map(|(root, replacements, _)| (*root, replacements.first().copied()))
+            .collect::<HashMap<_, _>>();
+        first_projected_root_after_restructure(
+            root_node,
+            &affected_roots,
+            &first_replacement_by_root,
+        )
+    } else {
+        None
+    };
     let retained_roots: HashSet<_> = explicit
         .iter()
         .copied()
@@ -257,11 +266,7 @@ fn plan_explicit_root_projection(
     }
     let mut anchor = match placement {
         ExplicitPlacement::Tail => None,
-        ExplicitPlacement::Head => first_projected_root_after_restructure(
-            root_node,
-            &affected_roots,
-            &first_replacement_by_root,
-        ),
+        ExplicitPlacement::Head => head_anchor,
     };
     for member in explicit.iter().rev() {
         transaction.reorder_member(scene_root, *member, anchor);
