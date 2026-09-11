@@ -1,0 +1,6 @@
+{
+  "id": "text-range-colors",
+  "scene": "TextRangeColors",
+  "source": "parity/manim-v0.21/text_range_colors.py",
+  "expected_duration": 1.0
+}

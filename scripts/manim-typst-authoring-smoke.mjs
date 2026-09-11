@@ -27,6 +27,22 @@ class MultilineText(Scene):
         self.add(text)
 `;
 
+const rangeColorSource = `from noon import *
+
+
+class RangeColorText(Scene):
+    def construct(self):
+        text = Text(
+            "Noon blue Noon",
+            font="DejaVu Sans Mono",
+            font_size=48,
+            t2c={"Noon": RED, "[5:9]": BLUE},
+        )
+        parts = text.source_parts_for("Noon")
+        assert [(part.source_start, part.source_end) for part in parts] == [(0, 4), (10, 14)]
+        self.add(text)
+`;
+
 const nativeTextLayoutSource = `from noon import *
 
 
@@ -78,6 +94,7 @@ class MixedPainterOrder(Scene):
 const cases = [
   { name: "native-text", source: helloTextSource, count: 1 },
   { name: "multiline", source: multilineTextSource, count: 1 },
+  { name: "range-color", source: rangeColorSource, count: 1 },
   { name: "native-layout", source: nativeTextLayoutSource, count: 2 },
   { name: "typst", source: helloTypstSource, count: 1 },
   { name: "math-typst", source: helloMathTypstSource, count: 1 },

@@ -99,6 +99,8 @@ mod state_replacement;
 mod text_authoring;
 #[cfg(any(feature = "native-text", feature = "typst"))]
 mod text_part_authoring;
+#[cfg(any(feature = "native-text", feature = "typst"))]
+mod text_style_authoring;
 mod z_index;
 
 pub use animation_authoring::DeclaredAnimation;
@@ -175,6 +177,8 @@ pub use text_authoring::{
 };
 #[cfg(any(feature = "native-text", feature = "typst"))]
 pub use text_part_authoring::TextPartAuthoringError;
+#[cfg(any(feature = "native-text", feature = "typst"))]
+pub use text_style_authoring::TextStyleAuthoringError;
 
 /// Common imports for direct typed semantic authoring and live publication.
 /// Host integration and mutable arena access must be imported explicitly.

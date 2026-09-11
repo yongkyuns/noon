@@ -7,6 +7,12 @@ on:
       - "parity/manim-v0.21/core-examples/**"
       - "web/semantic-preview-session*"
       - "web/manim-raster-host.js"
+      - "web/python/_manim_typst.py"
+      - "web/python/examples/text_range_colors.py"
+      - "crates/noon-core/src/resources/text*.rs"
+      - "crates/noon/src/text*.rs"
+      - "crates/noon-web/src/text_parts.rs"
+      - "parity/manim-v0.21/text_range_colors*"
       - "scripts/semantic-preview-*"
       - "scripts/agent-preview-capture*.mjs"
       - "scripts/manim-differential.py"
@@ -137,6 +143,21 @@ jobs:
           path: manim-raster-artifacts/retained-typst
           if-no-files-found: warn
           retention-days: 14
+      - name: Register native Text range-color raster fixture
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest_path = Path("parity/manim-v0.21/manifest.json")
+          fixture_path = Path("parity/manim-v0.21/text_range_colors.fixture.json")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+          if any(item.get("id") == fixture["id"] for item in manifest["fixtures"]):
+              raise SystemExit(f"duplicate raster fixture id: {fixture['id']}")
+          manifest["fixtures"].append(fixture)
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          PY
       - name: Render and compare canonical Manim scenes
         env:
           NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
