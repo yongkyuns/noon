@@ -3,9 +3,7 @@ use noon::{ManimGeometryOptions, Scene};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
 
-    let mut circle_options = ManimGeometryOptions::circle(2.0)?;
-    circle_options.set_color(1.0, 1.0, 1.0, 1.0)?;
-    let circle = scene.geometry(circle_options)?;
+    let circle = scene.geometry(ManimGeometryOptions::circle(2.0)?)?;
 
     let mut first_options = circle.manim_tangent_line_options(0.0, 4.0, 1.0e-6)?;
     first_options.set_color(41.0 / 255.0, 171.0 / 255.0, 202.0 / 255.0, 1.0)?;
