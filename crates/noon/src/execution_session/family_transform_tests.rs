@@ -19,6 +19,30 @@ fn family(store: &mut SemanticStore, members: &[SemanticNodeId]) -> SemanticNode
     family
 }
 
+fn expansion_session() -> (ExecutionSession, ExecutionSegment) {
+    let mut store = SemanticStore::new();
+    let s0 = object(&mut store, 0.0);
+    let s1 = object(&mut store, 2.0);
+    let source = family(&mut store, &[s0, s1]);
+    let t0 = object(&mut store, 10.0);
+    let t1 = object(&mut store, 12.0);
+    let t2 = object(&mut store, 14.0);
+    let target = family(&mut store, &[t0, t1, t2]);
+
+    let mut session = ExecutionSession::from_semantic_root(&store, source).unwrap();
+    let request = SemanticCompositionRequest::FamilyTransformTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear),
+    };
+    let segment = session
+        .declare_and_activate_composition(&mut store, source, &request, AnimationOptions::new())
+        .unwrap();
+    (session, segment)
+}
+
 #[test]
 fn unequal_family_transform_publishes_one_identity_free_expansion_copy() {
     let mut store = SemanticStore::new();
@@ -87,6 +111,41 @@ fn unequal_family_transform_publishes_one_identity_free_expansion_copy() {
     assert_eq!(
         store.semantic_family_members_checked(source).unwrap(),
         source_members
+    );
+}
+
+#[test]
+fn unequal_family_transform_direct_seek_matches_forward_playback() {
+    let (mut forward, forward_segment) = expansion_session();
+    forward.advance_segment_to(forward_segment, 0.25).unwrap();
+    assert_eq!(
+        forward
+            .take_renderer_publication()
+            .derived_display_objects()
+            .len(),
+        1
+    );
+    forward.advance_segment_to(forward_segment, 0.5).unwrap();
+    let forward_frame = forward.frame().clone();
+    let forward_derived = forward
+        .take_renderer_publication()
+        .derived_display_objects()
+        .to_vec();
+
+    let (mut direct, _direct_segment) = expansion_session();
+    direct.seek(0.5).unwrap();
+    let direct_frame = direct.frame().clone();
+    let direct_derived = direct
+        .take_renderer_publication()
+        .derived_display_objects()
+        .to_vec();
+
+    assert_eq!(forward_frame, direct_frame);
+    assert_eq!(forward_derived, direct_derived);
+    assert_eq!(forward_derived.len(), 1);
+    assert_eq!(forward_derived[0].anchor_object_index(), 0);
+    assert!(
+        forward_derived[0].state().appearance > 0.0 && forward_derived[0].state().appearance < 1.0
     );
 }
 
