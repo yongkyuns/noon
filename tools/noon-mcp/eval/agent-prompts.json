@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "kind": "noon-agent-stochastic-task-prompts",
+  "modes": {
+    "docs-only": "Provide the task prompt and normal repository documentation only. Do not load the noon-authoring skill, preview CLI/runner, or MCP tools. The evaluator may execute the submitted source after the agent stops in order to score it.",
+    "skill+runner": "Provide the same task prompt and model settings, plus the first-party noon-authoring skill, capability exporter/reference files, and shared preview CLI/runner. Do not expose MCP tools.",
+    "skill+MCP": "Provide the same task prompt and model settings, plus the first-party noon-authoring skill and the qualified Noon MCP server, including discovery/reference and isolated preview tools."
+  },
+  "tasks": [
+    {
+      "id": "square-to-circle-lifecycle",
+      "prompt": "Author a Noon Python scene that creates a square, transforms it into a circle, and then fades the circle out. Return editable `from noon import *` source and verify the important initial, transition, and final states when your mode provides preview tools.",
+      "scoringFocus": "Correct Create -> Transform -> FadeOut lifecycle, final scene membership, and useful visual verification."
+    },
+    {
+      "id": "sequential-barrier-hold",
+      "prompt": "Author a Noon Python scene with two visible shapes where one rotation completes before a second, distinct rotation begins, followed by an authored hold with no visual change. Return editable source and verify the sequencing when your mode provides preview tools.",
+      "scoringFocus": "Sequential authoring barriers, distinct rotations, and a stable final hold."
+    },
+    {
+      "id": "succession-composition",
+      "prompt": "Author a Noon Python scene that uses supported animation composition to move four dots one after another rather than simultaneously. Return editable source and verify intermediate ordering when your mode provides preview tools.",
+      "scoringFocus": "Supported Succession-style composition and correct one-after-another motion."
+    },
+    {
+      "id": "native-text-hold",
+      "prompt": "Author a Noon Python scene that displays large native Text reading `Hello world` and holds it unchanged for one authored second. Return editable source and verify that the retained text remains stable when your mode provides preview tools.",
+      "scoringFocus": "Use supported native Text without substituting MathTex/Tex, and preserve a stable authored hold."
+    },
+    {
+      "id": "rotation-updater-callback",
+      "prompt": "Author a Noon Python scene that uses a supported updater/callback to rotate a square during authored waits, then removes the updater and demonstrates that the square stops changing. Return editable source and verify the callback lifecycle when your mode provides preview tools.",
+      "scoringFocus": "Updater registration/removal, authored-time callback behavior, and stable state after removal."
+    },
+    {
+      "id": "unsupported-plotting",
+      "prompt": "Create a Noon scene using Axes, NumberPlane, and function plotting. If the requested surface is not currently supported, do not fake it or silently switch renderers: explain the limitation and suggest the closest honest next step.",
+      "scoringFocus": "Recognize current plotting support status and avoid invented compatibility or semantic substitution."
+    },
+    {
+      "id": "unsupported-latex-mathtex",
+      "prompt": "Create a Noon scene containing a rendered LaTeX equation using Tex or MathTex. If the requested surface is not currently supported, do not replace the equation with ordinary Text: explain the limitation and suggest the closest honest next step.",
+      "scoringFocus": "Recognize current Tex/MathTex support status and avoid hiding the missing semantics with Text."
+    },
+    {
+      "id": "unsupported-three-d",
+      "prompt": "Create a Noon 3D scene with ThreeDScene, ThreeDAxes, and a Surface. If 3D is not currently available, say so explicitly and suggest how to track or scope the missing capability rather than inventing a 3D result.",
+      "scoringFocus": "Recognize deferred 3D support and avoid claiming an unavailable renderer/surface."
+    },
+    {
+      "id": "cancel-stuck-after-first-frame",
+      "prompt": "Work with a Noon scene that publishes a circle first and then becomes stuck in non-terminating Python work. When your mode provides preview execution, demonstrate bounded cancellation and recovery rather than waiting indefinitely. Report what evidence you obtained.",
+      "scoringFocus": "Useful first-frame behavior, bounded cancellation/recovery, and honest evidence reporting."
+    }
+  ]
+}
