@@ -53,6 +53,7 @@
 mod animation_authoring;
 mod arc_authoring;
 mod arrow_authoring;
+mod arrow_queries;
 mod authoring_error;
 mod boolean_authoring;
 mod camera_authoring;

@@ -90,6 +90,10 @@ def _attach_arrow_family(self: "Arrow", created: object) -> None:
     end_tip = _leaf(engine_call(created.endTip))
     start_tip = _leaf(engine_call(created.startTip)) if bool(created.hasStartTip) else None
 
+    # Retain the aggregate Rust handle as the query authority. It owns no parallel
+    # Python semantic state: its observations are resolved from the same retained
+    # shaft/tip leaves exposed below.
+    self._semantic_arrow_handle = created
     self._semantic_family_handle = family
     self._shaft = shaft
     self.tip = end_tip
@@ -120,12 +124,15 @@ def _create(
     if color is not None:
         _shared._apply_constructor_color(options, _compat._as_color("color", color))
     created = engine_call(_create_arrow_handle, options)
-    try:
-        _attach_arrow_family(self, created)
-    finally:
-        release = getattr(created, "free", None)
-        if release is not None:
-            engine_call(release)
+    _attach_arrow_family(self, created)
+
+
+def _arrow_scalar(self: "Arrow", method: str) -> float:
+    handle = getattr(self, "_semantic_arrow_handle", None)
+    operation = getattr(handle, method, None) if handle is not None else None
+    if operation is None:
+        raise RuntimeError("Arrow observation requires the shared Rust authoring host")
+    return float(engine_call(operation, operation=f"Arrow.{method}"))
 
 
 def _validate_straight_arrow_options(
@@ -212,15 +219,34 @@ class Arrow(_compat.Group):
         )
 
     def get_start(self) -> _base.Vec2:
-        from _manim_path_queries import endpoint
-
-        return endpoint(self.start_tip if self.start_tip is not None else self._shaft, False)
+        return _base.Vec2(
+            _arrow_scalar(self, "startX"),
+            _arrow_scalar(self, "startY"),
+        )
 
     def get_end(self) -> _base.Vec2:
-        from _manim_path_queries import endpoint
+        return _base.Vec2(
+            _arrow_scalar(self, "endX"),
+            _arrow_scalar(self, "endY"),
+        )
 
-        # Rust builds the tip path with its public apex as the first retained point.
-        return endpoint(self.tip, False)
+    def get_vector(self) -> _base.Vec2:
+        return _base.Vec2(
+            _arrow_scalar(self, "vectorX"),
+            _arrow_scalar(self, "vectorY"),
+        )
+
+    def get_length(self) -> float:
+        return _arrow_scalar(self, "length")
+
+    def get_unit_vector(self) -> _base.Vec2:
+        return _base.Vec2(
+            _arrow_scalar(self, "unitVectorX"),
+            _arrow_scalar(self, "unitVectorY"),
+        )
+
+    def get_angle(self) -> float:
+        return _arrow_scalar(self, "angle")
 
     def get_tip(self):
         return self.tip
