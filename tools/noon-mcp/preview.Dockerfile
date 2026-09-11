@@ -4,7 +4,10 @@ FROM mcr.microsoft.com/playwright@sha256:dcc5531e97840b9b5e794f2814476b21571c512
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ARG PYODIDE_VERSION=314.0.5
 ARG PYODIDE_CORE_SHA256=f528dccea95fa8ec54295fd65bf86dd61183d11f0e52563dc8eadda45e0f78d6
-RUN npm install --global --ignore-scripts --no-audit --no-fund playwright@1.62.1 \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bzip2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install --global --ignore-scripts --no-audit --no-fund playwright@1.62.1 \
     && mkdir -p /opt/noon-runner/pyodide /tmp/pyodide-core \
     && ln -s "$(npm root -g)/playwright" /opt/noon-runner/playwright \
     && curl --fail --location --retry 4 --retry-all-errors --connect-timeout 15 \
