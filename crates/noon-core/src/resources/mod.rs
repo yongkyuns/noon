@@ -25,5 +25,8 @@ pub use text::*;
 mod text_parts;
 pub use text_parts::*;
 
+mod text_styles;
+pub use text_styles::*;
+
 mod transaction;
 pub use transaction::*;

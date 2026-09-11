@@ -117,6 +117,64 @@ def _as_color(value: object) -> _base.Color:
     raise TypeError("text color must be a Noon/Manim Color")
 
 
+def _as_source_color(value: object) -> _base.Color:
+    """Coerce only color syntax; source selector meaning stays Rust-owned."""
+
+    if isinstance(value, _base.Color):
+        return value
+    if isinstance(value, (str, int)) and not isinstance(value, bool):
+        try:
+            return _base.color_from_hex(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError("invalid t2c color") from error
+    raise TypeError("t2c colors must be Noon/Manim Colors or #RRGGBB values")
+
+
+def _validated_source_colors(value: object) -> tuple[tuple[str, _base.Color], ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, dict):
+        raise TypeError("t2c/text2color must be a dict")
+    items: list[tuple[str, _base.Color]] = []
+    for selector, color in value.items():
+        if not isinstance(selector, str):
+            raise TypeError("t2c/text2color selectors must be strings")
+        items.append((selector, _as_source_color(color)))
+    return tuple(items)
+
+
+def _apply_source_colors(
+    handle: object,
+    items: tuple[tuple[str, _base.Color], ...],
+) -> None:
+    if not items:
+        return
+    if not hasattr(handle, "textSourceFillBatch") or not hasattr(
+        handle, "applyTextSourceFills"
+    ):
+        raise NotImplementedError(
+            "Text t2c requires the shared Rust source-style authoring handle"
+        )
+    batch = engine_call(handle.textSourceFillBatch)
+    try:
+        if not hasattr(batch, "appendSelector"):
+            raise NotImplementedError("Text t2c requires the typed Rust source-style batch")
+        for selector, color in items:
+            engine_call(
+                batch.appendSelector,
+                selector,
+                float(color.red),
+                float(color.green),
+                float(color.blue),
+                float(color.alpha),
+                operation="Text.t2c",
+            )
+        engine_call(handle.applyTextSourceFills, batch, operation="Text.t2c")
+    finally:
+        if hasattr(batch, "free"):
+            batch.free()
+
+
 def _native_layout_handle(handle: object):
     required = ("centerX", "centerY", "width", "height", "criticalX", "criticalY")
     if not all(hasattr(handle, name) for name in required):
@@ -349,9 +407,16 @@ class Text(_RetainedTextMobject):
         font_size: float = 48.0,
         line_spacing: float = -1.0,
         color: _base.Color = _base.WHITE,
+        t2c: dict[str, object] | None = None,
         **kwargs: Any,
     ) -> None:
         opacity = _validated_opacity(kwargs.pop("opacity", 1.0))
+        source_color_value: object = {} if t2c is None else t2c
+        if "text2color" in kwargs:
+            source_color_value = kwargs.pop("text2color")
+            if source_color_value is None:
+                raise AssertionError
+        source_colors = _validated_source_colors(source_color_value)
         if kwargs:
             unsupported = ", ".join(sorted(kwargs))
             raise NotImplementedError(f"unsupported Text option(s): {unsupported}")
@@ -360,6 +425,11 @@ class Text(_RetainedTextMobject):
         )
         color = _as_color(color)
         live_context = _live_text_context()
+        if live_context is not None and source_colors:
+            # Static content replacement must not bypass the owning live session.
+            raise NotImplementedError(
+                "Text t2c is not yet supported for Text constructed after live execution starts"
+            )
         if live_context is None:
             handle = _new_native_text_handle(text, font, font_size, line_spacing)
         else:
@@ -387,6 +457,7 @@ class Text(_RetainedTextMobject):
             opacity,
             presentation_applied=live_context is not None,
         )
+        _apply_source_colors(handle, source_colors)
 
     @property
     def text(self) -> str:
