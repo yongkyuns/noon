@@ -120,6 +120,7 @@ pub(super) fn preflight_add_node(
         || !state.transform.rotation_z.is_finite()
         || !state.style.is_finite()
         || !state.z_index().is_finite()
+        || !state.role().is_valid()
     {
         return Err(SemanticMutationTransactionError::InvalidNodeObjectState { index });
     }

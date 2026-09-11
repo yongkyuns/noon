@@ -54,6 +54,7 @@ mod animation_authoring;
 mod arc_authoring;
 mod arrow_authoring;
 mod arrow_queries;
+mod arrow_scale;
 mod authoring_error;
 mod boolean_authoring;
 mod camera_authoring;
@@ -110,6 +111,7 @@ pub use arrow_authoring::{
     ManimArrow, ManimArrowOptions, DEFAULT_ARROW_STROKE_WIDTH, DEFAULT_ARROW_STROKE_WIDTH_RATIO,
     DEFAULT_ARROW_TIP_LENGTH, DEFAULT_ARROW_TIP_LENGTH_RATIO,
 };
+pub use arrow_scale::ArrowScaleError;
 pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
 pub use boolean_authoring::{BooleanOperation, BooleanPathError};
 pub use dashed_line_authoring::DashedLineAuthoringError;
@@ -188,14 +190,14 @@ pub use vector_field_authoring::{ArrowVectorFieldAuthoringError, ManimArrowVecto
 /// Host integration and mutable arena access must be imported explicitly.
 pub mod prelude {
     pub use crate::{
-        AnimationOptions, ArrowVectorFieldAuthoringError, AuthoringError, BooleanOperation, Color,
-        ContinuationStep, DeclaredAnimation, DrawBorderThenFillOptions, EffectiveMobjectState,
-        ExecutionSession, FadeEndpoint, FadeTranslation, LiveContinuation, LiveProgram,
-        LiveSession, LiveSessionError, ManimArrow, ManimArrowOptions, ManimArrowVectorField,
-        Mobject, MobjectFamily, MobjectFamilyMember, NativeBoolSignal, NativeVectorSignal,
-        RateFunction, Scene, SemanticObjectState, SemanticStyle, StoredGeometry, TrackerPosition,
-        ValueTracker, Vec2, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D,
-        VectorPath,
+        AnimationOptions, ArrowScaleError, ArrowVectorFieldAuthoringError, AuthoringError,
+        BooleanOperation, Color, ContinuationStep, DeclaredAnimation, DrawBorderThenFillOptions,
+        EffectiveMobjectState, ExecutionSession, FadeEndpoint, FadeTranslation, LiveContinuation,
+        LiveProgram, LiveSession, LiveSessionError, ManimArrow, ManimArrowOptions,
+        ManimArrowVectorField, Mobject, MobjectFamily, MobjectFamilyMember, NativeBoolSignal,
+        NativeVectorSignal, RateFunction, Scene, SemanticObjectState, SemanticStyle,
+        StoredGeometry, TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange,
+        VectorFieldPoint, VectorFieldRanges2D, VectorPath,
     };
 }
 

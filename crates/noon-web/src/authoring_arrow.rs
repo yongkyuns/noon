@@ -6,6 +6,17 @@ use wasm_bindgen::prelude::*;
 
 use crate::authoring_error::{js_error, AuthoringFailure};
 
+fn arrow_scale_js_error(error: noon::ArrowScaleError) -> JsValue {
+    match error {
+        noon::ArrowScaleError::Authoring(cause) => js_error(cause),
+        other => js_error(AuthoringFailure::new(
+            "unsupported_operation",
+            "arrow.invalid_topology",
+            other,
+        )),
+    }
+}
+
 #[derive(Clone, Debug)]
 struct VectorFieldDraft {
     ranges: noon::VectorFieldRanges2D,
@@ -448,6 +459,12 @@ impl WasmAuthoringArrowHandle {
             .manim_unit_vector()
             .map(|vector| vector.1)
             .map_err(js_error)
+    }
+
+    pub fn scale(&self, factor: f64, scale_tips: bool) -> Result<(), JsValue> {
+        self.arrow()?
+            .scale(factor, scale_tips)
+            .map_err(arrow_scale_js_error)
     }
 
     #[wasm_bindgen(getter, js_name = vectorCount)]
