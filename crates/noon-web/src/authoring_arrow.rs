@@ -18,11 +18,24 @@ fn arrow_scale_js_error(error: noon::ArrowScaleError) -> JsValue {
 }
 
 #[derive(Clone, Debug)]
+enum VectorFieldColoringDraft {
+    Default,
+    Single(noon::Color),
+    Gradient {
+        colors: Vec<noon::Color>,
+        min: f64,
+        max: f64,
+        values: Option<Vec<Option<f64>>>,
+    },
+}
+
+#[derive(Clone, Debug)]
 struct VectorFieldDraft {
     ranges: noon::VectorFieldRanges2D,
     points: Vec<noon::VectorFieldPoint>,
     vectors: Vec<Option<noon::VectorFieldPoint>>,
     display_lengths: Option<Vec<Option<f64>>>,
+    coloring: VectorFieldColoringDraft,
 }
 
 #[derive(Clone, Debug)]
@@ -119,7 +132,7 @@ impl WasmManimArrowOptions {
     }
 
     /// Start one static 2D field draft. Rust computes the exact Manim-compatible
-    /// sample grid; the frontend only fills values returned by its Python callback.
+    /// sample grid; the frontend only fills values returned by its Python callbacks.
     #[wasm_bindgen(js_name = vectorField)]
     #[allow(clippy::too_many_arguments)]
     pub fn vector_field(
@@ -151,6 +164,7 @@ impl WasmManimArrowOptions {
                 points,
                 vectors,
                 display_lengths,
+                coloring: VectorFieldColoringDraft::Default,
             }),
         })
     }
@@ -199,6 +213,102 @@ impl WasmManimArrowOptions {
             ));
         };
         let slot = lengths.get_mut(index as usize).ok_or_else(|| {
+            invalid_input(
+                "vector_field.sample_index",
+                format!("vector-field sample index {index} is out of range"),
+            )
+        })?;
+        *slot = Some(value);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setFieldColor)]
+    pub fn set_field_color(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), JsValue> {
+        if [red, green, blue, alpha]
+            .iter()
+            .any(|value| !value.is_finite())
+        {
+            return Err(invalid_input(
+                "vector_field.invalid_color",
+                "vector-field color components must be finite",
+            ));
+        }
+        self.vector_field_draft_mut()?.coloring = VectorFieldColoringDraft::Single(
+            noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
+        );
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setColorGradient)]
+    pub fn set_color_gradient(
+        &mut self,
+        min: f64,
+        max: f64,
+        custom_scheme: bool,
+    ) -> Result<(), JsValue> {
+        let sample_count = self.vector_field_draft()?.points.len();
+        self.vector_field_draft_mut()?.coloring = VectorFieldColoringDraft::Gradient {
+            colors: Vec::new(),
+            min,
+            max,
+            values: custom_scheme.then(|| vec![None; sample_count]),
+        };
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = addColorGradientStop)]
+    pub fn add_color_gradient_stop(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), JsValue> {
+        if [red, green, blue, alpha]
+            .iter()
+            .any(|value| !value.is_finite())
+        {
+            return Err(invalid_input(
+                "vector_field.invalid_color",
+                "vector-field gradient color components must be finite",
+            ));
+        }
+        let draft = self.vector_field_draft_mut()?;
+        let VectorFieldColoringDraft::Gradient { colors, .. } = &mut draft.coloring else {
+            return Err(invalid_input(
+                "vector_field.not_gradient",
+                "gradient stops require an ArrowVectorField color gradient",
+            ));
+        };
+        colors.push(noon::Color::rgba(
+            red as f32,
+            green as f32,
+            blue as f32,
+            alpha as f32,
+        ));
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setColorValue)]
+    pub fn set_color_value(&mut self, index: u32, value: f64) -> Result<(), JsValue> {
+        let draft = self.vector_field_draft_mut()?;
+        let VectorFieldColoringDraft::Gradient {
+            values: Some(values),
+            ..
+        } = &mut draft.coloring
+        else {
+            return Err(invalid_input(
+                "vector_field.default_color_scheme",
+                "color values may only be supplied for a custom color scheme",
+            ));
+        };
+        let slot = values.get_mut(index as usize).ok_or_else(|| {
             invalid_input(
                 "vector_field.sample_index",
                 format!("vector-field sample index {index} is out of range"),
@@ -588,48 +698,186 @@ impl WasmAuthoringStore {
                     .map_err(js_error)
             }
             ArrowRequest::VectorField(draft) => {
-                let vectors = complete_vectors(&draft)?;
-                let semantics = Rc::clone(&self.semantics);
-                let field = if let Some(lengths) = draft.display_lengths {
-                    validate_custom_lengths(&vectors, &lengths)?;
-                    let cursor = Cell::new(0usize);
-                    let points = &draft.points;
-                    noon::ManimArrowVectorField::create_with_length(
-                        semantics,
-                        |point| {
-                            let index = cursor.get();
-                            cursor.set(index + 1);
-                            debug_assert_eq!(points[index], point);
-                            vectors[index]
-                        },
-                        draft.ranges,
-                        |_| {
-                            let index = cursor.get() - 1;
-                            lengths[index].expect("custom non-zero vector length was preflighted")
-                        },
-                    )
-                    .map_err(vector_field_authoring_error)?
-                } else {
-                    let cursor = Cell::new(0usize);
-                    let points = &draft.points;
-                    noon::ManimArrowVectorField::create(
-                        semantics,
-                        |point| {
-                            let index = cursor.get();
-                            cursor.set(index + 1);
-                            debug_assert_eq!(points[index], point);
-                            vectors[index]
-                        },
-                        draft.ranges,
-                    )
-                    .map_err(vector_field_authoring_error)?
-                };
-                Ok(WasmAuthoringArrowHandle {
-                    published: PublishedArrowRequest::VectorField(field),
+                publish_vector_field(Rc::clone(&self.semantics), draft).map(|field| {
+                    WasmAuthoringArrowHandle {
+                        published: PublishedArrowRequest::VectorField(field),
+                    }
                 })
             }
         }
     }
+}
+
+fn publish_vector_field(
+    semantics: Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    draft: VectorFieldDraft,
+) -> Result<noon::ManimArrowVectorField, JsValue> {
+    let vectors = complete_vectors(&draft)?;
+    let VectorFieldDraft {
+        ranges,
+        points,
+        vectors: _,
+        display_lengths,
+        coloring,
+    } = draft;
+
+    match (display_lengths, coloring) {
+        (None, VectorFieldColoringDraft::Default) => {
+            let cursor = Cell::new(0usize);
+            noon::ManimArrowVectorField::create(
+                semantics,
+                |point| prepared_vector(&cursor, &points, &vectors, point),
+                ranges,
+            )
+            .map_err(vector_field_authoring_error)
+        }
+        (Some(lengths), VectorFieldColoringDraft::Default) => {
+            validate_custom_lengths(&vectors, &lengths)?;
+            let cursor = Cell::new(0usize);
+            noon::ManimArrowVectorField::create_with_length(
+                semantics,
+                |point| prepared_vector(&cursor, &points, &vectors, point),
+                ranges,
+                |_| prepared_length(&cursor, &lengths),
+            )
+            .map_err(vector_field_authoring_error)
+        }
+        (None, VectorFieldColoringDraft::Single(color)) => {
+            let cursor = Cell::new(0usize);
+            noon::ManimArrowVectorField::create_with_color(
+                semantics,
+                |point| prepared_vector(&cursor, &points, &vectors, point),
+                ranges,
+                color,
+            )
+            .map_err(vector_field_authoring_error)
+        }
+        (Some(lengths), VectorFieldColoringDraft::Single(color)) => {
+            validate_custom_lengths(&vectors, &lengths)?;
+            let cursor = Cell::new(0usize);
+            noon::ManimArrowVectorField::create_with_length_and_color(
+                semantics,
+                |point| prepared_vector(&cursor, &points, &vectors, point),
+                ranges,
+                |_| prepared_length(&cursor, &lengths),
+                color,
+            )
+            .map_err(vector_field_authoring_error)
+        }
+        (
+            None,
+            VectorFieldColoringDraft::Gradient {
+                colors,
+                min,
+                max,
+                values: None,
+            },
+        ) => {
+            let cursor = Cell::new(0usize);
+            noon::ManimArrowVectorField::create_with_gradient(
+                semantics,
+                |point| prepared_vector(&cursor, &points, &vectors, point),
+                ranges,
+                &colors,
+                min,
+                max,
+            )
+            .map_err(vector_field_authoring_error)
+        }
+        (
+            Some(lengths),
+            VectorFieldColoringDraft::Gradient {
+                colors,
+                min,
+                max,
+                values: None,
+            },
+        ) => {
+            validate_custom_lengths(&vectors, &lengths)?;
+            let cursor = Cell::new(0usize);
+            noon::ManimArrowVectorField::create_with_length_and_gradient(
+                semantics,
+                |point| prepared_vector(&cursor, &points, &vectors, point),
+                ranges,
+                |_| prepared_length(&cursor, &lengths),
+                &colors,
+                min,
+                max,
+            )
+            .map_err(vector_field_authoring_error)
+        }
+        (
+            None,
+            VectorFieldColoringDraft::Gradient {
+                colors,
+                min,
+                max,
+                values: Some(values),
+            },
+        ) => {
+            validate_custom_color_values(&values)?;
+            let cursor = Cell::new(0usize);
+            let color_cursor = Cell::new(0usize);
+            noon::ManimArrowVectorField::create_with_color_scheme(
+                semantics,
+                |point| prepared_vector(&cursor, &points, &vectors, point),
+                ranges,
+                &colors,
+                min,
+                max,
+                |_| prepared_color_value(&color_cursor, &values),
+            )
+            .map_err(vector_field_authoring_error)
+        }
+        (
+            Some(lengths),
+            VectorFieldColoringDraft::Gradient {
+                colors,
+                min,
+                max,
+                values: Some(values),
+            },
+        ) => {
+            validate_custom_lengths(&vectors, &lengths)?;
+            validate_custom_color_values(&values)?;
+            let cursor = Cell::new(0usize);
+            let color_cursor = Cell::new(0usize);
+            noon::ManimArrowVectorField::create_with_length_and_color_scheme(
+                semantics,
+                |point| prepared_vector(&cursor, &points, &vectors, point),
+                ranges,
+                |_| prepared_length(&cursor, &lengths),
+                &colors,
+                min,
+                max,
+                |_| prepared_color_value(&color_cursor, &values),
+            )
+            .map_err(vector_field_authoring_error)
+        }
+    }
+}
+
+fn prepared_vector(
+    cursor: &Cell<usize>,
+    points: &[noon::VectorFieldPoint],
+    vectors: &[noon::VectorFieldPoint],
+    point: noon::VectorFieldPoint,
+) -> noon::VectorFieldPoint {
+    let index = cursor.get();
+    cursor.set(index + 1);
+    debug_assert_eq!(points[index], point);
+    vectors[index]
+}
+
+fn prepared_length(cursor: &Cell<usize>, lengths: &[Option<f64>]) -> f64 {
+    let index = cursor.get() - 1;
+    lengths[index].expect("custom non-zero vector length was preflighted")
+}
+
+fn prepared_color_value(cursor: &Cell<usize>, values: &[Option<f64>]) -> f64 {
+    let index = cursor.get();
+    cursor.set(index + 1);
+    values[index].expect("custom color value was preflighted")
 }
 
 fn complete_vectors(draft: &VectorFieldDraft) -> Result<Vec<noon::VectorFieldPoint>, JsValue> {
@@ -663,6 +911,18 @@ fn validate_custom_lengths(
     Ok(())
 }
 
+fn validate_custom_color_values(values: &[Option<f64>]) -> Result<(), JsValue> {
+    for (index, value) in values.iter().enumerate() {
+        if value.is_none() {
+            return Err(invalid_input(
+                "vector_field.missing_color_value",
+                format!("vector-field sample {index} has no custom color-scheme value"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn vector_field_planning_error(error: noon::StaticVectorFieldError) -> JsValue {
     use noon::StaticVectorFieldError as E;
     let code = match error {
@@ -678,6 +938,20 @@ fn vector_field_authoring_error(error: noon::ArrowVectorFieldAuthoringError) -> 
     match error {
         noon::ArrowVectorFieldAuthoringError::Planning(cause) => vector_field_planning_error(cause),
         noon::ArrowVectorFieldAuthoringError::Authoring(cause) => js_error(cause),
+        noon::ArrowVectorFieldAuthoringError::InvalidColorConfiguration(reason) => {
+            js_error(AuthoringFailure::new(
+                "invalid_input",
+                "vector_field.invalid_color_configuration",
+                reason,
+            ))
+        }
+        noon::ArrowVectorFieldAuthoringError::NonFiniteColorSchemeOutput { sample_index } => {
+            js_error(AuthoringFailure::new(
+                "invalid_input",
+                "vector_field.non_finite_color_scheme",
+                format!("vector-field color scheme returned a non-finite value at sample {sample_index}"),
+            ))
+        }
     }
 }
 
