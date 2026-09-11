@@ -440,13 +440,11 @@ class ArrowVectorField(_compat.VGroup):
             custom_length,
         )
         try:
-            import numpy as np
-
             sample_count = int(draft.sampleCount)
             for index in range(sample_count):
                 x = float(engine_call(draft.sampleX, index))
                 y = float(engine_call(draft.sampleY, index))
-                raw = _base._as_vec2(func(np.array([x, y, 0.0], dtype=float)))
+                raw = _base._as_vec2(func((x, y, 0.0)))
                 engine_call(draft.setVector, index, raw.x, raw.y)
                 if custom_length:
                     norm = raw.length()
