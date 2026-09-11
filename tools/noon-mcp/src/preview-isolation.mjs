@@ -7,7 +7,7 @@ import { readFile, realpath, stat } from "node:fs/promises";
 
 export const PREVIEW_RUNTIME_SCHEMA_VERSION = 1;
 export const DEFAULT_PREVIEW_LIMITS = Object.freeze({
-  memoryBytes: 1_073_741_824,
+  memoryBytes: 2_147_483_648,
   cpuCount: 2,
   pids: 128,
   shmBytes: 268_435_456,

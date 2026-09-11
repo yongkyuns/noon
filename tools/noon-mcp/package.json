@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Optional local, read-only Noon capability and example discovery",
+  "description": "Optional local Noon discovery and isolated preview MCP tools",
   "engines": { "node": ">=22" },
   "scripts": {
     "start": "node src/server.mjs",
