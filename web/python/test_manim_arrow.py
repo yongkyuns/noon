@@ -58,6 +58,16 @@ class ManimArrowFacadeTests(unittest.TestCase):
                 def shaft(self): return self._shaft
                 def startTip(self): return self._start
                 def endTip(self): return self._end
+                def startX(self): calls.append(("query", "startX")); return -1.5
+                def startY(self): calls.append(("query", "startY")); return 0.5
+                def endX(self): calls.append(("query", "endX")); return 3.5
+                def endY(self): calls.append(("query", "endY")); return -2.5
+                def vectorX(self): calls.append(("query", "vectorX")); return 5.0
+                def vectorY(self): calls.append(("query", "vectorY")); return -3.0
+                def length(self): calls.append(("query", "length")); return 5.830951894845301
+                def unitVectorX(self): calls.append(("query", "unitVectorX")); return 0.8574929257125441
+                def unitVectorY(self): calls.append(("query", "unitVectorY")); return -0.5144957554275265
+                def angle(self): calls.append(("query", "angle")); return -0.5404195002705842
 
             class FakeOptions:
                 def __init__(self, kind, start, end):
@@ -122,13 +132,6 @@ class ManimArrowFacadeTests(unittest.TestCase):
             import _manim_arrow as arrows
             import noon
 
-            # Endpoint queries remain delegated to the established shared path-query module;
-            # replace only that projection in this native facade test.
-            import _manim_path_queries
-            _manim_path_queries.endpoint = lambda value, end: noon.Vec2(
-                float(value._semantic_handle.semanticSlot), 1.0 if end else 0.0
-            )
-
             arrow = arrows.Arrow(
                 (-2.0, 1.0),
                 (4.0, -3.0),
@@ -166,7 +169,27 @@ class ManimArrowFacadeTests(unittest.TestCase):
             assert double.has_start_tip()
             assert arrow.get_tip() is arrow.tip
             assert double.get_start_tip() is double.start_tip
-            assert arrow.get_end() == noon.Vec2(3.0, 0.0)
+
+            # Endpoint/vector/length/angle observations are also owned by the retained
+            # aggregate Rust handle, not recomputed from Python leaf geometry.
+            assert arrow.get_start() == noon.Vec2(-1.5, 0.5)
+            assert arrow.get_end() == noon.Vec2(3.5, -2.5)
+            assert arrow.get_vector() == noon.Vec2(5.0, -3.0)
+            assert abs(arrow.get_length() - 5.830951894845301) < 1e-12
+            assert arrow.get_unit_vector() == noon.Vec2(0.8574929257125441, -0.5144957554275265)
+            assert abs(arrow.get_angle() + 0.5404195002705842) < 1e-12
+            assert [call for call in calls if call[0] == "query"] == [
+                ("query", "startX"),
+                ("query", "startY"),
+                ("query", "endX"),
+                ("query", "endY"),
+                ("query", "vectorX"),
+                ("query", "vectorY"),
+                ("query", "length"),
+                ("query", "unitVectorX"),
+                ("query", "unitVectorY"),
+                ("query", "angle"),
+            ]
 
             # Unsupported ManimCE semantic breadth rejects rather than being approximated.
             before = list(calls)
