@@ -68,6 +68,8 @@ class ManimArrowFacadeTests(unittest.TestCase):
                 def unitVectorX(self): calls.append(("query", "unitVectorX")); return 0.8574929257125441
                 def unitVectorY(self): calls.append(("query", "unitVectorY")); return -0.5144957554275265
                 def angle(self): calls.append(("query", "angle")); return -0.5404195002705842
+                def scale(self, factor, scale_tips):
+                    calls.append(("arrow_scale", float(factor), bool(scale_tips)))
 
             class FakeOptions:
                 def __init__(self, kind, start, end):
@@ -191,6 +193,13 @@ class ManimArrowFacadeTests(unittest.TestCase):
                 ("query", "angle"),
             ]
 
+            # Arrow-specific dependent scaling is one Rust operation; Python does
+            # not pop/rebuild tips or retain the original stroke-width policy.
+            assert arrow.scale(2.0) is arrow
+            assert arrow.scale(0.5, scale_tips=True) is arrow
+            assert ("arrow_scale", 2.0, False) in calls
+            assert ("arrow_scale", 0.5, True) in calls
+
             # Unsupported ManimCE semantic breadth rejects rather than being approximated.
             before = list(calls)
             for thunk in (
@@ -198,8 +207,7 @@ class ManimArrowFacadeTests(unittest.TestCase):
                 lambda: arrows.Arrow(tip_shape=object()),
                 lambda: arrows.Arrow(tip_style={"fill_opacity": 0.0}),
                 lambda: arrows.DoubleArrow(tip_shape_start=object()),
-                lambda: arrow.scale(2.0),
-                lambda: arrow.scale(2.0, scale_tips=True),
+                lambda: arrow.scale(2.0, about_point=(0.0, 0.0)),
             ):
                 try:
                     thunk()
