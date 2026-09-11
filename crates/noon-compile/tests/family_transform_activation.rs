@@ -75,19 +75,19 @@ fn expansion_reuses_one_effective_capture_for_repeated_source_occurrence() {
     .unwrap();
 
     let samples = Cell::new(0_u32);
-    let activation = prepare_family_transform_activations(
-        &prepared,
-        &execution,
-        &schedule,
-        |object| {
+    let activation =
+        prepare_family_transform_activations(&prepared, &execution, &schedule, |object| {
             samples.set(samples.get() + 1);
             Some(effective(object))
-        },
-    )
-    .unwrap();
+        })
+        .unwrap();
 
     assert_eq!(activation.len(), 3);
-    assert_eq!(samples.get(), 2, "each distinct source row is captured once");
+    assert_eq!(
+        samples.get(),
+        2,
+        "each distinct source row is captured once"
+    );
     let occurrences = activation.occurrences();
     assert_eq!(occurrences[0].source, s0);
     assert_eq!(occurrences[0].target_state, t0);
@@ -102,7 +102,10 @@ fn expansion_reuses_one_effective_capture_for_repeated_source_occurrence() {
         occurrences[0].source_execution_object_id,
         occurrences[1].source_execution_object_id
     );
-    assert_eq!(occurrences[0].effective_source, occurrences[1].effective_source);
+    assert_eq!(
+        occurrences[0].effective_source,
+        occurrences[1].effective_source
+    );
     assert_eq!(occurrences[0].timing.start_time, 3.0);
     assert_eq!(occurrences[0].timing.duration, 2.0);
 }
@@ -135,20 +138,20 @@ fn contraction_marks_repeated_target_without_inventing_source_execution_identity
         AnimationOptions::new(),
     )
     .unwrap();
-    let activation = prepare_family_transform_activations(
-        &prepared,
-        &execution,
-        &schedule,
-        |object| Some(effective(object)),
-    )
-    .unwrap();
+    let activation =
+        prepare_family_transform_activations(&prepared, &execution, &schedule, |object| {
+            Some(effective(object))
+        })
+        .unwrap();
 
     let occurrences = activation.occurrences();
     assert_eq!(occurrences.len(), 3);
     assert!(!occurrences[0].target_padding);
     assert!(occurrences[1].target_padding);
     assert!(!occurrences[2].target_padding);
-    assert!(occurrences.iter().all(|occurrence| !occurrence.source_padding));
+    assert!(occurrences
+        .iter()
+        .all(|occurrence| !occurrence.source_padding));
     assert_ne!(
         occurrences[0].source_execution_object_id,
         occurrences[1].source_execution_object_id
