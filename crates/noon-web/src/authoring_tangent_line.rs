@@ -2,8 +2,8 @@
 
 use wasm_bindgen::prelude::*;
 
-use crate::{WasmAuthoringMobjectHandle, WasmManimGeometryOptions};
 use crate::authoring_error::js_error;
+use crate::{WasmAuthoringMobjectHandle, WasmManimGeometryOptions};
 
 #[wasm_bindgen]
 impl WasmAuthoringMobjectHandle {

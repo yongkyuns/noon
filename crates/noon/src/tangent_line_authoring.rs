@@ -69,11 +69,7 @@ mod tests {
         );
 
         let line = scene
-            .geometry(
-                circle
-                    .manim_tangent_line_options(0.0, 4.0, 1.0e-6)
-                    .unwrap(),
-            )
+            .geometry(circle.manim_tangent_line_options(0.0, 4.0, 1.0e-6).unwrap())
             .unwrap();
         let endpoints = line.manim_line_endpoints().unwrap();
         let dx = endpoints.end.0 - endpoints.start.0;
@@ -90,9 +86,7 @@ mod tests {
         let before = circle.state().unwrap();
         let revision = scene.revision();
 
-        let options = circle
-            .manim_tangent_line_options(0.4, 3.0, 1.0e-5)
-            .unwrap();
+        let options = circle.manim_tangent_line_options(0.4, 3.0, 1.0e-5).unwrap();
         assert_eq!(circle.state().unwrap(), before);
         assert_eq!(scene.revision(), revision);
 
@@ -111,9 +105,7 @@ mod tests {
             .geometry_resources()
             .stats();
 
-        assert!(circle
-            .manim_tangent_line_options(0.5, 1.0, 0.0)
-            .is_err());
+        assert!(circle.manim_tangent_line_options(0.5, 1.0, 0.0).is_err());
         assert_eq!(scene.revision(), revision);
         assert_eq!(
             scene

@@ -19,11 +19,7 @@ fn tangent_line_samples_generic_retained_paths_in_authored_world_space() {
     let expected_midpoint = midpoint(a, b);
 
     let tangent = scene
-        .geometry(
-            source
-                .manim_tangent_line_options(0.3, 3.5, 1.0e-4)
-                .unwrap(),
-        )
+        .geometry(source.manim_tangent_line_options(0.3, 3.5, 1.0e-4).unwrap())
         .unwrap();
     let endpoints = tangent.manim_line_endpoints().unwrap();
     let actual_midpoint = midpoint(endpoints.start, endpoints.end);
@@ -45,11 +41,7 @@ fn endpoint_alpha_clamps_like_manim() {
     let expected = midpoint(first, nearby);
 
     let tangent = scene
-        .geometry(
-            source
-                .manim_tangent_line_options(0.0, 4.0, 1.0e-6)
-                .unwrap(),
-        )
+        .geometry(source.manim_tangent_line_options(0.0, 4.0, 1.0e-6).unwrap())
         .unwrap();
     let endpoints = tangent.manim_line_endpoints().unwrap();
     let center = midpoint(endpoints.start, endpoints.end);
@@ -96,9 +88,7 @@ fn tangent_line_sampling_is_read_only_until_candidate_publication() {
         .geometry_resources()
         .stats();
 
-    let candidate = source
-        .manim_tangent_line_options(0.4, 2.5, 1.0e-5)
-        .unwrap();
+    let candidate = source.manim_tangent_line_options(0.4, 2.5, 1.0e-5).unwrap();
     assert_eq!(source.state().unwrap(), state);
     assert_eq!(scene.revision(), revision);
     assert_eq!(
@@ -130,11 +120,7 @@ fn zero_requested_length_is_a_valid_degenerate_line() {
     let scene = Scene::new();
     let source = scene.circle(2.0).unwrap();
     let tangent = scene
-        .geometry(
-            source
-                .manim_tangent_line_options(0.2, 0.0, 1.0e-5)
-                .unwrap(),
-        )
+        .geometry(source.manim_tangent_line_options(0.2, 0.0, 1.0e-5).unwrap())
         .unwrap();
     let endpoints = tangent.manim_line_endpoints().unwrap();
     assert_eq!(
