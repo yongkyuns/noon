@@ -5,10 +5,9 @@ use crate::{
     PreparedGeometryObjectOutcome, RenderPrimitive,
 };
 
-use super::{
-    empty_instance_buffer, ensure_capacity, DrawStats, GpuRenderer, UploadStats,
-};
+use super::{empty_instance_buffer, ensure_capacity, DrawStats, GpuRenderer, UploadStats};
 
+#[derive(Debug)]
 pub(super) struct DerivedDisplayGpu {
     circle_buffer: wgpu::Buffer,
     rectangle_buffer: wgpu::Buffer,
@@ -316,10 +315,11 @@ mod tests {
         let mut runtime = SceneInstance::new(compiled);
         let derived_rows = [
             DerivedDisplayObject::new(0, 7, state(GeometryRef::circle(0.5))),
-            DerivedDisplayObject::new(1, 8, state(GeometryRef::line(
-                noon_core::Vec2::ZERO,
-                noon_core::Vec2::ONE,
-            ))),
+            DerivedDisplayObject::new(
+                1,
+                8,
+                state(GeometryRef::line(noon_core::Vec2::ZERO, noon_core::Vec2::ONE)),
+            ),
         ];
         let publication = runtime
             .take_renderer_publication()
