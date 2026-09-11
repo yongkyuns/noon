@@ -45,7 +45,7 @@ test("distribution manifest pins package, skill, capability and runner identitie
   assert.equal(first.environment.trustedCheckoutRequired, true);
 
   assert.equal(first.skill.name, "noon-authoring");
-  assert.equal(first.skill.version, "0.1.0");
+  assert.equal(first.skill.version, "0.2.0");
   assertSha(first.skill.sha256, "skill");
 
   assert.equal(first.capabilities.schemaVersion, 1);
@@ -63,5 +63,12 @@ test("distribution manifest pins package, skill, capability and runner identitie
   assert.equal(first.runner.versions.loadedBuildIdentity, null,
     "source package manifest must not pretend a runtime build was loaded");
   for (const [name, digest] of Object.entries(first.runner.sourceSha256)) assertSha(digest, `runner source ${name}`);
+  for (const required of [
+    "tools/noon-mcp/src/distribution-manifest.mjs",
+    "tools/noon-mcp/src/server.mjs",
+    "scripts/agent-preview-sessions.mjs",
+    "scripts/agent-preview-artifacts.mjs",
+    "skills/noon-authoring/SKILL.md",
+  ]) assertSha(first.runner.sourceSha256[required], required);
   assertSha(first.notices.sha256, "third-party notices");
 });
