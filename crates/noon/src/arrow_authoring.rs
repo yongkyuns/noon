@@ -275,7 +275,11 @@ pub(crate) fn create_arrow_batch_family(
             .map(|options| options.prepare(&mut store_ref))
             .collect::<Result<Vec<_>, _>>()?;
         let mut paths = Vec::with_capacity(
-            prepared.len() + prepared.iter().filter(|arrow| arrow.start_tip.is_some()).count(),
+            prepared.len()
+                + prepared
+                    .iter()
+                    .filter(|arrow| arrow.start_tip.is_some())
+                    .count(),
         );
         for arrow in &prepared {
             paths.push(arrow.end_tip.clone());
@@ -299,12 +303,8 @@ pub(crate) fn create_arrow_batch_family(
                 } else {
                     None
                 };
-                let staged_arrow = stage_prepared_arrow(
-                    &mut transaction,
-                    arrow,
-                    end_tip_handle,
-                    start_tip_handle,
-                );
+                let staged_arrow =
+                    stage_prepared_arrow(&mut transaction, arrow, end_tip_handle, start_tip_handle);
                 transaction.add_member(family, staged_arrow.family);
                 staged.push(staged_arrow);
             }
@@ -382,12 +382,7 @@ fn commit_transaction(
     start_tip_handle: Option<noon_core::GeometryResourceHandle>,
 ) -> Result<CommittedArrow, AuthoringError> {
     let mut transaction = SemanticMutationTransaction::new();
-    let staged = stage_prepared_arrow(
-        &mut transaction,
-        prepared,
-        end_tip_handle,
-        start_tip_handle,
-    );
+    let staged = stage_prepared_arrow(&mut transaction, prepared, end_tip_handle, start_tip_handle);
     let result = transaction.apply(store).map_err(AuthoringError::from)?;
     resolve_staged_arrow(staged, |token| result.resolve(token))
 }
@@ -430,8 +425,7 @@ fn resolve_staged_arrow(
     Ok(CommittedArrow {
         family: resolve(staged.family)
             .ok_or(AuthoringError::UnresolvedCreatedNode(staged.family))?,
-        shaft: resolve(staged.shaft)
-            .ok_or(AuthoringError::UnresolvedCreatedNode(staged.shaft))?,
+        shaft: resolve(staged.shaft).ok_or(AuthoringError::UnresolvedCreatedNode(staged.shaft))?,
         end_tip: resolve(staged.end_tip)
             .ok_or(AuthoringError::UnresolvedCreatedNode(staged.end_tip))?,
         start_tip: staged
