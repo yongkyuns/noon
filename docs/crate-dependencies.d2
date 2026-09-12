@@ -1,19 +1,25 @@
 # Complete internal Cargo dependency map for the active workspace. docs/architecture.md remains normative.
-# D2 has no built-in Google Material theme; this source uses a Material-inspired palette.
-vars: {d2-config: {layout-engine: elk; theme-id: 0}}
+# Material-inspired palette.
+vars: {
+  d2-config: {
+    layout-engine: tala
+    theme-id: 0
+    data: {tala-seeds: [1; 2; 3; 4; 5; 6; 7; 8; 9; 10; 11; 12; 13; 14; 15; 16]}
+  }
+}
 style.fill: "#F8FAFD"
 classes: {
-  crate: {width: 300; height: 96; style: {font-size: 19; bold: true; font-color: "#202124"; fill: "#FFFFFF"; stroke: "#DADCE0"; border-radius: 12; stroke-width: 1; shadow: true}}
-  core: {width: 300; height: 96; style: {font-size: 19; bold: true; font-color: "#202124"; fill: "#E8F0FE"; stroke: "#1967D2"; border-radius: 12; stroke-width: 2; shadow: true}}
-  provider: {width: 300; height: 96; style: {font-size: 19; bold: true; font-color: "#202124"; fill: "#E6F4EA"; stroke: "#137333"; border-radius: 12; stroke-width: 1; shadow: true}}
-  host: {width: 300; height: 96; style: {font-size: 19; bold: true; font-color: "#202124"; fill: "#FEF7E0"; stroke: "#B06000"; border-radius: 12; stroke-width: 1; shadow: true}}
+  crate: {width: 360; height: 120; style: {font-size: 19; bold: true; font-color: "#202124"; fill: "#FFFFFF"; stroke: "#DADCE0"; border-radius: 12; stroke-width: 1; shadow: true}}
+  core: {width: 400; height: 140; style: {font-size: 19; bold: true; font-color: "#202124"; fill: "#E8F0FE"; stroke: "#1967D2"; border-radius: 12; stroke-width: 2; shadow: true}}
+  provider: {width: 360; height: 120; style: {font-size: 19; bold: true; font-color: "#202124"; fill: "#E6F4EA"; stroke: "#137333"; border-radius: 12; stroke-width: 1; shadow: true}}
+  host: {width: 360; height: 120; style: {font-size: 19; bold: true; font-color: "#202124"; fill: "#FEF7E0"; stroke: "#B06000"; border-radius: 12; stroke-width: 1; shadow: true}}
   edge: {style: {stroke: "#5F6368"; stroke-width: 2}}
   optional: {style: {stroke: "#7E57C2"; stroke-width: 2; stroke-dash: 5}}
 }
 
 direction: down
-horizontal-gap: 104
-vertical-gap: 66
+horizontal-gap: 140
+vertical-gap: 90
 
 native: "noon-native\nnative host / winit surface" {class: host}
 web: "noon-web\nWASM/browser host + transport" {class: host}
@@ -26,7 +32,6 @@ text: "noon-text\nshaping + glyph raster services" {class: provider}
 typst: "noon-typst\nTypst text/math layout provider" {class: provider}
 core: "noon-core\nsemantic identities/store/resources\nrenderer-independent contracts" {class: core}
 
-# Arrow direction means “depends on”. Repeated labels were removed to keep routing clean.
 native -> noon {class: edge}
 native -> renderer {class: edge}
 native -> core {class: edge}
