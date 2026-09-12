@@ -8,10 +8,10 @@
 use crate::{AuthoringError, MobjectFamily, Scene};
 use noon_core::{
     semantic_path_bounds, Color, SemanticMutationTransaction, SemanticNodeCreation,
-    SemanticObjectState, SemanticPaint, SemanticStyle, SemanticTransform2_5D, SemanticVec3,
-    StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Vec2, VectorPath,
+    SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle, SemanticTransform2_5D,
+    SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Vec2, VectorPath,
 };
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 const MANIM_DEFAULT_STROKE_WIDTH_SENTINEL: f32 = 0.000_001;
 const MANIM_CAIRO_LINE_WIDTH_MULTIPLE: f64 = 0.01;
@@ -156,24 +156,27 @@ struct PreparedSvg {
     transform: SemanticTransform2_5D,
 }
 
-impl Scene {
-    /// Parse one static SVG string into a detached semantic family.
+impl MobjectFamily {
+    /// Parse one static SVG string directly into one shared semantic store.
     ///
-    /// Supported content is normalized before one atomic semantic publication.
-    /// The returned family and its leaves are ordinary Noon identities backed by
-    /// immutable geometry resources; later transforms/styles never reparse SVG.
-    pub fn svg_from_str(&self, source: &str) -> Result<MobjectFamily, SvgAuthoringError> {
-        self.svg_from_str_with_options(source, SvgImportOptions::default())
+    /// This is the store-scoped form used by integration frontends. It publishes
+    /// no scene/root identity of its own; only the imported family, leaves, and
+    /// immutable geometry resources enter the supplied arena.
+    pub fn from_svg_str(
+        store: Rc<RefCell<SemanticStore>>,
+        source: &str,
+    ) -> Result<Self, SvgAuthoringError> {
+        Self::from_svg_str_with_options(store, source, SvgImportOptions::default())
     }
 
-    /// Parse one static SVG string with explicit post-import placement options.
-    pub fn svg_from_str_with_options(
-        &self,
+    /// Parse one static SVG string into a supplied semantic store with explicit
+    /// post-import placement options.
+    pub fn from_svg_str_with_options(
+        store_rc: Rc<RefCell<SemanticStore>>,
         source: &str,
         options: SvgImportOptions,
-    ) -> Result<MobjectFamily, SvgAuthoringError> {
+    ) -> Result<Self, SvgAuthoringError> {
         let prepared = prepare_svg(source, options)?;
-        let store_rc = Rc::clone(self.integration_store());
         let mut paths = Vec::with_capacity(prepared.leaves.len());
         let mut styles = Vec::with_capacity(prepared.leaves.len());
         for leaf in prepared.leaves {
@@ -203,7 +206,31 @@ impl Scene {
             })?
         };
 
-        MobjectFamily::from_node(store_rc, family_id).map_err(SvgAuthoringError::from)
+        Self::from_node(store_rc, family_id).map_err(SvgAuthoringError::from)
+    }
+}
+
+impl Scene {
+    /// Parse one static SVG string into a detached semantic family.
+    ///
+    /// Supported content is normalized before one atomic semantic publication.
+    /// The returned family and its leaves are ordinary Noon identities backed by
+    /// immutable geometry resources; later transforms/styles never reparse SVG.
+    pub fn svg_from_str(&self, source: &str) -> Result<MobjectFamily, SvgAuthoringError> {
+        MobjectFamily::from_svg_str(Rc::clone(self.integration_store()), source)
+    }
+
+    /// Parse one static SVG string with explicit post-import placement options.
+    pub fn svg_from_str_with_options(
+        &self,
+        source: &str,
+        options: SvgImportOptions,
+    ) -> Result<MobjectFamily, SvgAuthoringError> {
+        MobjectFamily::from_svg_str_with_options(
+            Rc::clone(self.integration_store()),
+            source,
+            options,
+        )
     }
 }
 
@@ -652,6 +679,26 @@ mod tests {
         assert!((bounds.height() - 2.0).abs() < 1e-5);
         assert!((bounds.min_x + bounds.max_x).abs() < 1e-5);
         assert!((bounds.min_y + bounds.max_y).abs() < 1e-5);
+    }
+
+    #[test]
+    fn store_scoped_svg_import_publishes_no_extra_scene_root() {
+        let store = Rc::new(RefCell::new(SemanticStore::new()));
+        let before = store.borrow().revision();
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+            <rect x="0" y="0" width="10" height="10" fill="#ff0000"/>
+        </svg>"##;
+
+        let family = MobjectFamily::from_svg_str(Rc::clone(&store), svg).unwrap();
+        assert_eq!(
+            store.borrow().revision(),
+            before.checked_next().expect("one SVG publication revision")
+        );
+        let members = store
+            .borrow()
+            .semantic_family_members_checked(family.node_id())
+            .unwrap();
+        assert_eq!(members.len(), 1);
     }
 
     #[test]
