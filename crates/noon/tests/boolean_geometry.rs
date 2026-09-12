@@ -83,14 +83,19 @@ fn live_boolean_constructor_observes_current_affine_without_copying_paint() {
     let mut live = scene.live(&mut session);
     let segment = live.play_animation(&animation).unwrap();
     live.advance_segment_to(segment, 1.).unwrap();
-    let options = live
+    let authored_options =
+        ManimGeometryOptions::boolean_geometry(Op::Union, &[a.clone(), b.clone()]).unwrap();
+    let live_options = live
         .boolean_geometry_options(Op::Union, &[a.clone(), b.clone()])
         .unwrap();
-    // Options are a snapshot; later execution cannot move the captured region.
+    // Options are snapshots; later execution cannot move either captured region.
     live.advance_segment_to(segment, 2.).unwrap();
     live.complete_segment(segment).unwrap();
-    let result = live.create_manim_geometry(options).unwrap();
+    let authored_result = live.create_manim_geometry(authored_options).unwrap();
+    let result = live.create_manim_geometry(live_options).unwrap();
+    let authored_bounds = authored_result.layout_bounds().unwrap().unwrap();
     let bounds = result.layout_bounds().unwrap().unwrap();
+    assert_eq!((authored_bounds.min_x, authored_bounds.max_x), (-1., 1.));
     assert_eq!((bounds.min_x, bounds.max_x), (-1., 3.));
     assert_eq!(a.layout_bounds().unwrap().unwrap().max_x, 5.);
     live.add(&result).unwrap();
