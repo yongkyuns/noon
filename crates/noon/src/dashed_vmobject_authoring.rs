@@ -43,6 +43,12 @@ pub(crate) fn prepare_dashed_vmobject(
     let dash_offset =
         crate::semantic_mobject::authoring_render_f64("dash_offset", options.dash_offset)?;
     let num_dashes = options.num_dashes.max(0) as usize;
+    if num_dashes == 0 {
+        return Ok((
+            crate::path_editing::path_replacement_state(state.clone())?,
+            VectorPath::new(),
+        ));
+    }
 
     let world_path = crate::path_editing::world_path(store, state)?;
     let closed = world_path.endpoints().is_some_and(|(start, end)| {
