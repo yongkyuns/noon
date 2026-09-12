@@ -1,6 +1,8 @@
 use noon_compile::{CompiledObject, CompiledScene, ExecutionPatch};
-use noon_core::{GeometryRef, ObjectId, Style, Transform2D, Vec2};
-use noon_runtime::{RuntimePatchStats, SceneInstance};
+use noon_core::{GeometryRef, ObjectContentRef, ObjectId, Style, Transform2D, Vec2};
+use noon_runtime::{
+    RuntimePatchStats, SceneInstance, TransientPresentationOccurrence, TransientPresentationState,
+};
 
 const OBJECT_COUNT: usize = 100_000;
 const TARGET_INDEX: usize = OBJECT_COUNT / 2;
@@ -70,20 +72,43 @@ fn transient_presentation_retirement_does_not_dirty_a_100k_stable_scene() {
     }
     assert!(live.take_spatial_changes().is_all());
 
+    let transient = [TransientPresentationOccurrence::new(
+        0,
+        7,
+        TransientPresentationState {
+            z_index: 0.0,
+            content: ObjectContentRef::Geometry(GeometryRef::circle(0.5)),
+            text_bounds: None,
+            transform: Transform2D::IDENTITY,
+            style: Style::default(),
+            appearance: 1.0,
+            presence: true,
+            reveal: 1.0,
+            morph: 0.0,
+            render_geometry: None,
+            render_transform: None,
+        },
+    )];
     {
-        let endpoint = live.take_renderer_publication_with_followup_invalidation();
+        let endpoint = live
+            .take_renderer_publication_with_followup_presentation_redraw()
+            .with_transient_presentations(&transient)
+            .expect("valid transient presentation");
         assert!(endpoint.changes().is_empty());
+        assert_eq!(endpoint.transient_presentations().len(), 1);
     }
 
     let retirement = live.take_renderer_publication();
     let changes = retirement.changes();
     assert!(!changes.is_all());
     assert!(changes.requires_presentation_redraw());
+    assert!(!changes.has_stable_changes());
     assert!(!changes.is_structural());
     assert!(!changes.has_painter_order_change());
     assert!(changes.object_indices().is_empty());
     assert!(changes.added_indices().is_empty());
     assert!(changes.removed_indices().is_empty());
     assert_eq!(retirement.frame().objects.len(), OBJECT_COUNT);
+    assert!(retirement.transient_presentations().is_empty());
     assert!(live.take_spatial_changes().is_empty());
 }

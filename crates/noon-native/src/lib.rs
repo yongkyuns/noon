@@ -572,7 +572,7 @@ impl NativeApp {
                 .map_err(|error| NativeHostError::Gpu(error.to_string()))?
         } else {
             gpu.renderer
-                .encode_retained_with_derived(
+                .encode_retained_with_transient_presentations(
                     &mut encoder,
                     &view,
                     &prepared,

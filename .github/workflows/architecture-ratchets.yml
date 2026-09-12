@@ -47,6 +47,8 @@ jobs:
             scripts/noon-core-module-ownership-ratchet.sh \
             scripts/noon-core-module-ownership-ratchet.test.sh \
             scripts/renderer-host-boundary-ratchet.sh \
+            scripts/transient-presentation-ratchet.sh \
+            scripts/transient-presentation-ratchet.test.sh \
             scripts/active-perf-frontend-ratchet.sh \
             scripts/active-perf-frontend-ratchet.test.sh; do
             bash -n "$script"
@@ -56,6 +58,7 @@ jobs:
         run: |
           bash scripts/architecture-ratchet.test.sh
           bash scripts/noon-core-module-ownership-ratchet.test.sh
+          bash scripts/transient-presentation-ratchet.test.sh
           bash scripts/active-perf-frontend-ratchet.test.sh
           bash scripts/layer-dependency-ratchet.test.sh
           python3 scripts/test_check_entrypoint.py
