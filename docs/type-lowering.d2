@@ -1,0 +1,94 @@
+# Reader-oriented implementation map. docs/architecture.md remains normative.
+vars: {d2-config: {layout-engine: elk; theme-id: 0}}
+style.fill: "#FFFFFF"
+classes: {
+  layer: {style: {font-size: 23; bold: true; font-color: "#263445"; fill: "#F6F8FB"; stroke: "#AEBBCB"; border-radius: 8; stroke-width: 1}}
+  authority: {style: {font-size: 19; bold: true; font-color: "#17202A"; fill: "#EEF4FF"; stroke: "#5271A3"; border-radius: 6; stroke-width: 2}}
+  type: {style: {font-size: 18; font-color: "#263445"; fill: "#FFFFFF"; stroke: "#AEBBCB"; border-radius: 6; stroke-width: 1}}
+  resource: {style: {font-size: 18; font-color: "#263445"; fill: "#F7FBF7"; stroke: "#75A478"; border-radius: 6; stroke-width: 1}}
+  derived: {style: {font-size: 18; font-color: "#263445"; fill: "#FFF9EF"; stroke: "#BE8A3A"; border-radius: 6; stroke-width: 1}}
+  edge: {style: {stroke: "#6B7F94"; stroke-width: 2}}
+  resource_edge: {style: {stroke: "#6C936E"; stroke-width: 2}}
+  derived_edge: {style: {stroke: "#A77936"; stroke-width: 2}}
+}
+direction: right
+horizontal-gap: 52
+vertical-gap: 28
+
+authoring: "noon — public authoring / orchestration" {
+  class: layer
+  scene: "Scene\nRc<RefCell<SemanticStore>>\nroot: SemanticNodeId · cursor" {class: type}
+  options: "ManimGeometryOptions\nGeometryRef · SemanticTransform2_5D\nSemanticStyle · z_index" {class: type}
+  mobject: "Mobject\nRc<RefCell<SemanticStore>>\nid: SemanticNodeId" {class: type}
+  session: "ExecutionSession\nderived index/slots/projections\n+ one SceneInstance" {class: derived}
+}
+
+semantic: "noon-core — Semantic Scene authority" {
+  class: layer
+  store: "SemanticStore\nscene-global authored truth" {class: authority}
+  node: "SemanticNodeId + SemanticNode\ngenerational identity · kind · membership" {class: type}
+  state: "SemanticObjectState\ncontent · f64/2.5D transform · style\npresentation · role · signal bindings" {class: type}
+  content: "SemanticObjectContent\nGeometry(StoredGeometry) | Text(handle)" {class: type}
+  stored: "StoredGeometry\nCircle | Rectangle | Line inline\nResource(GeometryResourceHandle)" {class: resource}
+  arena: "GeometryResourceArena\nGeometryResourceHandle = arena + id + version\nGeometryResource::VectorPath(Arc<VectorPath>)" {class: resource}
+  path: "VectorPath + PathCommand[]\nMove/Line/Quadratic/Cubic/Close" {class: resource}
+}
+
+compile: "noon-compile — Execution Plan authority" {
+  class: layer
+  index: "SemanticExecutionIndex\nSemanticNodeId → derived ObjectId\ncompatibility bridge" {class: derived}
+  projection: "SemanticExecutionObject\nsemantic_id · execution_id · content\nTransform2D · Style · presentation" {class: derived}
+  compiled_object: "CompiledObject\nObjectId · ObjectContentRef\nTransform2D · Style · dynamic/live" {class: authority}
+  compiled_scene: "CompiledScene\nstable/tombstoned object slots\ntracks · painter order · resources" {class: authority}
+}
+
+runtime: "noon-runtime — Runtime authority" {
+  class: layer
+  instance: "SceneInstance\nCompiledScene + scheduler/reactive state\n+ effective FrameState" {class: authority}
+  frame_object: "FrameObjectState\nObjectContentRef · Transform2D · Style\nappearance · z_index" {class: type}
+  frame: "FrameState\ntime · objects · presence/reveal/morph\nrender geometry/transform overrides" {class: authority}
+  publication: "RendererPublication<'a>\n&FrameState + FrameChanges\n+ immutable resource lookups/context" {class: derived}
+}
+
+render: "noon-geometry + noon-render-wgpu — derived geometry / Renderer authority" {
+  class: layer
+  geometry_ref: "GeometryRef\nCircle | Rectangle | Line\nVectorPath | External" {class: type}
+  preparer: "FramePreparer\nconsume effective frame + sparse changes" {class: authority}
+  analytic: "Packed analytic instances\nCircleInstance · RectangleInstance\nLineInstance" {class: derived}
+  tess: "noon-geometry::TessellatedPath\nMeshVertex[] · indices[] · bounds\nstroke length · morph/reveal data" {class: derived}
+  packed_path: "Packed path mesh\nPathVertex[] · index stream\nPathInstance · batches / residency" {class: derived}
+  gpu: "wgpu buffers + pipelines\nretained renderer state only" {class: authority}
+}
+
+authoring.scene -> authoring.mobject: "factory / shared store" {class: edge}
+authoring.options -> semantic.state: "into_state()" {class: edge}
+authoring.mobject -> semantic.store: "handle reads/edits by SemanticNodeId" {class: edge}
+semantic.store -> semantic.node: "owns arena nodes" {class: edge}
+semantic.node -> semantic.state: "object payload" {class: edge}
+semantic.state -> semantic.content: "owns" {class: edge}
+semantic.content -> semantic.stored: "geometry branch" {class: resource_edge}
+semantic.stored -> semantic.arena: "heavy path handle" {class: resource_edge}
+semantic.arena -> semantic.path: "immutable Arc payload" {class: resource_edge}
+semantic.store -> compile.index: "lower visible leaves" {class: derived_edge}
+compile.index -> compile.projection: "assign derived execution key" {class: derived_edge}
+semantic.state -> compile.projection: "lower f64 semantic values to compact execution values" {class: derived_edge}
+compile.projection -> compile.compiled_object: "resolve content/resource closure" {class: derived_edge}
+compile.compiled_object -> compile.compiled_scene: "stable execution slots" {class: derived_edge}
+compile.compiled_scene -> authoring.session: "bootstrap" {class: derived_edge}
+authoring.session -> runtime.instance: "orchestrates, does not mirror store" {class: derived_edge}
+runtime.instance -> runtime.frame: "evaluates" {class: edge}
+runtime.frame -> runtime.frame_object: "dense effective rows" {class: edge}
+runtime.instance -> runtime.publication: "take_renderer_publication()" {class: derived_edge}
+runtime.publication -> render.preparer: "coherent frame + changes" {class: derived_edge}
+runtime.frame_object -> render.geometry_ref: "ObjectContentRef::Geometry" {class: edge}
+render.geometry_ref -> render.analytic: "Circle / Rectangle / Line" {class: derived_edge}
+render.geometry_ref -> render.tess: "VectorPath → lyon tessellation" {class: derived_edge}
+render.tess -> render.packed_path: "pack mesh vertices/indices" {class: derived_edge}
+render.analytic -> render.gpu: "upload / dirty ranges" {class: derived_edge}
+render.packed_path -> render.gpu: "upload / mesh residency" {class: derived_edge}
+
+note: "Canonical rendering never lowers VectorPath to an SVG d-string.\nThe direct path stays typed: PathCommand → tessellated mesh → GPU buffers." {
+  shape: text
+  style: {font-size: 17; italic: true; font-color: "#4B5D70"}
+}
+render.tess -> note: {style.stroke-dash: 3; style.stroke: "#8D99A8"}

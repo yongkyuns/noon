@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2460" height="930" viewBox="0 0 2460 930" role="img" aria-label="Noon type ownership and lowering map">
+<title>Noon type ownership and lowering map</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7f94"/></marker><style>text{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;fill:#263445} .head{font-weight:700;font-size:19px} .body{font-size:14px} .small{font-size:12px} .layer{fill:#f6f8fb;stroke:#aebbcB;stroke-width:1.2} .auth{fill:#eef4ff;stroke:#5271a3;stroke-width:1.6} .box{fill:#fff;stroke:#aebbcB;stroke-width:1.1} .res{fill:#f7fbf7;stroke:#75a478;stroke-width:1.1} .derived{fill:#fff9ef;stroke:#be8a3a;stroke-width:1.1} .edge{fill:none;stroke:#6b7f94;stroke-width:1.6;marker-end:url(#arrow)} .dash{stroke-dasharray:5 4} </style></defs>
+<rect width="100%" height="100%" fill="#fff"/>
+<g><rect class="layer" x="20" y="20" width="450" height="875" rx="10"/><text class="head" x="32" y="47">noon — authoring / orchestration</text></g>
+<g><rect class="layer" x="500" y="20" width="450" height="875" rx="10"/><text class="head" x="512" y="47">noon-core — Semantic Scene</text></g>
+<g><rect class="layer" x="980" y="20" width="450" height="875" rx="10"/><text class="head" x="992" y="47">noon-compile — Execution Plan</text></g>
+<g><rect class="layer" x="1460" y="20" width="450" height="875" rx="10"/><text class="head" x="1472" y="47">noon-runtime — Runtime</text></g>
+<g><rect class="layer" x="1940" y="20" width="450" height="875" rx="10"/><text class="head" x="1952" y="47">geometry + WGPU — Renderer</text></g>
+<g><rect class="box" x="40" y="70" width="410" height="95" rx="7"/><text class="head" x="52" y="93">Scene</text><text class="body" x="52" y="113">store: Rc&lt;RefCell&lt;SemanticStore&gt;&gt;</text><text class="body" x="52" y="131">root: SemanticNodeId · cursor</text></g>
+<g><rect class="box" x="40" y="190" width="410" height="95" rx="7"/><text class="head" x="52" y="213">Mobject</text><text class="body" x="52" y="233">store: Rc&lt;RefCell&lt;SemanticStore&gt;&gt;</text><text class="body" x="52" y="251">id: SemanticNodeId</text></g>
+<g><rect class="box" x="40" y="310" width="410" height="95" rx="7"/><text class="head" x="52" y="333">ManimGeometryOptions</text><text class="body" x="52" y="353">GeometryRef · SemanticTransform2_5D</text><text class="body" x="52" y="371">SemanticStyle · z_index</text></g>
+<g><rect class="derived" x="40" y="705" width="410" height="120" rx="7"/><text class="head" x="52" y="728">ExecutionSession</text><text class="body" x="52" y="748">derived index / slots / projections</text><text class="body" x="52" y="766">one SceneInstance runtime</text></g>
+<g><rect class="auth" x="520" y="70" width="410" height="85" rx="7"/><text class="head" x="532" y="93">SemanticStore</text><text class="body" x="532" y="113">scene-global authored truth</text></g>
+<g><rect class="box" x="520" y="180" width="410" height="100" rx="7"/><text class="head" x="532" y="203">SemanticNodeId + SemanticNode</text><text class="body" x="532" y="223">generational identity · kind</text><text class="body" x="532" y="241">membership / parents / members</text></g>
+<g><rect class="box" x="520" y="305" width="410" height="120" rx="7"/><text class="head" x="532" y="328">SemanticObjectState</text><text class="body" x="532" y="348">content · f64/2.5D transform · style</text><text class="body" x="532" y="366">presentation · role · signal bindings</text></g>
+<g><rect class="box" x="520" y="450" width="410" height="90" rx="7"/><text class="head" x="532" y="473">SemanticObjectContent</text><text class="body" x="532" y="493">Geometry(StoredGeometry) | Text(handle)</text></g>
+<g><rect class="res" x="520" y="565" width="410" height="100" rx="7"/><text class="head" x="532" y="588">StoredGeometry</text><text class="body" x="532" y="608">analytic values inline</text><text class="body" x="532" y="626">Resource(GeometryResourceHandle)</text></g>
+<g><rect class="res" x="520" y="690" width="410" height="135" rx="7"/><text class="head" x="532" y="713">GeometryResourceArena</text><text class="body" x="532" y="733">handle = arena + GeometryId + version</text><text class="body" x="532" y="751">VectorPath payload stored as Arc</text></g>
+<g><rect class="derived" x="1000" y="70" width="410" height="105" rx="7"/><text class="head" x="1012" y="93">SemanticExecutionIndex</text><text class="body" x="1012" y="113">SemanticNodeId → derived ObjectId</text><text class="body" x="1012" y="131">compatibility bridge only</text></g>
+<g><rect class="derived" x="1000" y="205" width="410" height="120" rx="7"/><text class="head" x="1012" y="228">SemanticExecutionObject</text><text class="body" x="1012" y="248">semantic_id · execution_id · content</text><text class="body" x="1012" y="266">Transform2D · Style · presentation</text></g>
+<g><rect class="auth" x="1000" y="360" width="410" height="110" rx="7"/><text class="head" x="1012" y="383">CompiledObject</text><text class="body" x="1012" y="403">ObjectId · ObjectContentRef</text><text class="body" x="1012" y="421">Transform2D · Style · dynamic/live</text></g>
+<g><rect class="auth" x="1000" y="505" width="410" height="125" rx="7"/><text class="head" x="1012" y="528">CompiledScene</text><text class="body" x="1012" y="548">stable/tombstoned object slots</text><text class="body" x="1012" y="566">tracks · painter order · resources</text></g>
+<g><rect class="auth" x="1480" y="70" width="410" height="115" rx="7"/><text class="head" x="1492" y="93">SceneInstance</text><text class="body" x="1492" y="113">CompiledScene + scheduler/reactive</text><text class="body" x="1492" y="131">effective FrameState</text></g>
+<g><rect class="box" x="1480" y="225" width="410" height="120" rx="7"/><text class="head" x="1492" y="248">FrameObjectState</text><text class="body" x="1492" y="268">ObjectContentRef · Transform2D · Style</text><text class="body" x="1492" y="286">appearance · z_index</text></g>
+<g><rect class="auth" x="1480" y="385" width="410" height="130" rx="7"/><text class="head" x="1492" y="408">FrameState</text><text class="body" x="1492" y="428">time · objects · presence/reveal/morph</text><text class="body" x="1492" y="446">render geometry/transform overrides</text></g>
+<g><rect class="derived" x="1480" y="565" width="410" height="135" rx="7"/><text class="head" x="1492" y="588">RendererPublication&lt;'a&gt;</text><text class="body" x="1492" y="608">&amp;FrameState + FrameChanges</text><text class="body" x="1492" y="626">resource lookups · publication context</text></g>
+<g><rect class="box" x="1960" y="70" width="410" height="95" rx="7"/><text class="head" x="1972" y="93">GeometryRef</text><text class="body" x="1972" y="113">analytic | VectorPath | External</text></g>
+<g><rect class="auth" x="1960" y="195" width="410" height="100" rx="7"/><text class="head" x="1972" y="218">FramePreparer</text><text class="body" x="1972" y="238">effective frame + sparse changes</text></g>
+<g><rect class="derived" x="1960" y="325" width="410" height="100" rx="7"/><text class="head" x="1972" y="348">Analytic instances</text><text class="body" x="1972" y="368">Circle · Rectangle · Line</text></g>
+<g><rect class="derived" x="1960" y="455" width="410" height="115" rx="7"/><text class="head" x="1972" y="478">TessellatedPath</text><text class="body" x="1972" y="498">MeshVertex[] · indices[] · bounds</text><text class="body" x="1972" y="516">stroke/reveal/morph data</text></g>
+<g><rect class="derived" x="1960" y="600" width="410" height="115" rx="7"/><text class="head" x="1972" y="623">Packed path mesh</text><text class="body" x="1972" y="643">PathVertex[] · index stream</text><text class="body" x="1972" y="661">PathInstance · batches / residency</text></g>
+<g><rect class="auth" x="1960" y="745" width="410" height="80" rx="7"/><text class="head" x="1972" y="768">WGPU buffers + pipelines</text><text class="body" x="1972" y="788">retained renderer state only</text></g>
+<path class="edge" d="M 450 235 L 520 120"/>
+<path class="edge" d="M 450 355 L 520 365"/>
+<path class="edge" d="M 930 365 L 1000 255"/>
+<path class="edge" d="M 1410 415 L 1480 285"/>
+<path class="edge" d="M 1890 285 L 1960 117"/>
+<path class="edge" d="M 1890 630 L 1960 245"/>
+<path class="edge" d="M 2165 295 L 2165 325"/>
+<path class="edge" d="M 2165 425 L 2165 455"/>
+<path class="edge" d="M 2165 570 L 2165 600"/>
+<path class="edge" d="M 2165 715 L 2165 745"/>
+<path class="edge" d="M 725 155 L 725 180"/>
+<path class="edge" d="M 725 280 L 725 305"/>
+<path class="edge" d="M 725 425 L 725 450"/>
+<path class="edge" d="M 725 540 L 725 565"/>
+<path class="edge" d="M 725 665 L 725 690"/>
+<path class="edge" d="M 1205 175 L 1205 205"/>
+<path class="edge" d="M 1205 325 L 1205 360"/>
+<path class="edge" d="M 1205 470 L 1205 505"/>
+<path class="edge" d="M 1685 185 L 1685 225"/>
+<path class="edge" d="M 1685 345 L 1685 385"/>
+<path class="edge" d="M 1685 515 L 1685 565"/>
+<path class="edge" d="M 930 755 L 1000 565"/><text class="small" x="965.0" y="655.0" text-anchor="middle">lower / resolve</text>
+<path class="edge" d="M 1410 565 L 1480 125"/><text class="small" x="1445.0" y="340.0" text-anchor="middle">bootstrap</text>
+<path class="edge dash" d="M 450 765 L 1480 125"/><text class="small" x="965.0" y="440.0" text-anchor="middle">orchestrates</text>
+<text class="small" x="1230" y="875" text-anchor="middle">Canonical vector rendering stays typed: PathCommand → VectorPath/resource handle → GeometryRef → TessellatedPath → packed GPU buffers (no SVG d-string).</text>
+</svg>

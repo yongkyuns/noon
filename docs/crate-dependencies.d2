@@ -1,0 +1,58 @@
+# Complete internal Cargo dependency map for the active workspace. docs/architecture.md remains normative.
+vars: {d2-config: {layout-engine: elk; theme-id: 0}}
+style.fill: "#FFFFFF"
+classes: {
+  crate: {width: 260; height: 92; style: {font-size: 19; bold: true; font-color: "#263445"; fill: "#FFFFFF"; stroke: "#AEBBCB"; border-radius: 7; stroke-width: 1}}
+  core: {width: 260; height: 92; style: {font-size: 19; bold: true; font-color: "#17202A"; fill: "#EEF4FF"; stroke: "#5271A3"; border-radius: 7; stroke-width: 2}}
+  provider: {width: 260; height: 92; style: {font-size: 19; bold: true; font-color: "#263445"; fill: "#F7FBF7"; stroke: "#75A478"; border-radius: 7; stroke-width: 1}}
+  host: {width: 260; height: 92; style: {font-size: 19; bold: true; font-color: "#263445"; fill: "#FFF9EF"; stroke: "#BE8A3A"; border-radius: 7; stroke-width: 1}}
+  edge: {style: {stroke: "#6B7F94"; stroke-width: 2}}
+  optional: {style: {stroke: "#6B7F94"; stroke-width: 2; stroke-dash: 5}}
+  dev: {style: {stroke: "#9AA6B3"; stroke-width: 1; stroke-dash: 3}}
+}
+direction: down
+horizontal-gap: 60
+vertical-gap: 38
+
+native: "noon-native\nnative host / winit surface" {class: host}
+web: "noon-web\nWASM/browser host + transport" {class: host}
+noon: "noon\npublic Rust API + session orchestration" {class: crate}
+renderer: "noon-render-wgpu\nretained wgpu renderer" {class: crate}
+runtime: "noon-runtime\ndeterministic effective runtime" {class: core}
+compile: "noon-compile\nsemantic → execution lowering" {class: core}
+geometry: "noon-geometry\npath algorithms + tessellation" {class: provider}
+text: "noon-text\nshaping + glyph raster services" {class: provider}
+typst: "noon-typst\nTypst text/math layout provider" {class: provider}
+core: "noon-core\nsemantic identities/store/resources\nrenderer-independent contracts" {class: core}
+
+native -> noon: "depends on" {class: edge}
+native -> renderer: "depends on" {class: edge}
+native -> core: "depends on" {class: edge}
+web -> noon: "depends on" {class: edge}
+web -> compile: "depends on" {class: edge}
+web -> runtime: "depends on" {class: edge}
+web -> geometry: "depends on" {class: edge}
+web -> core: "depends on" {class: edge}
+web -> renderer: "renderer feature / wasm32" {class: optional}
+noon -> compile: "depends on" {class: edge}
+noon -> runtime: "depends on" {class: edge}
+noon -> geometry: "depends on" {class: edge}
+noon -> core: "depends on" {class: edge}
+noon -> text: "native-text feature" {class: optional}
+noon -> typst: "typst feature" {class: optional}
+renderer -> runtime: "depends on" {class: edge}
+renderer -> geometry: "depends on" {class: edge}
+renderer -> text: "depends on" {class: edge}
+renderer -> core: "depends on" {class: edge}
+runtime -> compile: "depends on" {class: edge}
+runtime -> core: "depends on" {class: edge}
+compile -> geometry: "depends on" {class: edge}
+compile -> core: "depends on" {class: edge}
+geometry -> core: "depends on" {class: edge}
+text -> core: "depends on" {class: edge}
+typst -> core: "depends on" {class: edge}
+
+legend: "Solid = normal internal Cargo dependency\nDashed = feature/target-conditional dependency\nDev-dependencies omitted from arrows; listed in the reader guide." {
+  shape: text
+  style: {font-size: 17; italic: true; font-color: "#4B5D70"}
+}

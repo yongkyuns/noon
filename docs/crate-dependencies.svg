@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="850" viewBox="0 0 1600 850" role="img" aria-label="Noon internal Cargo dependency map">
+<title>Noon internal Cargo dependency map</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7f94"/></marker><style>text{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;fill:#263445} .head{font-weight:700;font-size:19px} .body{font-size:14px} .small{font-size:12px} .layer{fill:#f6f8fb;stroke:#aebbcB;stroke-width:1.2} .auth{fill:#eef4ff;stroke:#5271a3;stroke-width:1.6} .box{fill:#fff;stroke:#aebbcB;stroke-width:1.1} .res{fill:#f7fbf7;stroke:#75a478;stroke-width:1.1} .derived{fill:#fff9ef;stroke:#be8a3a;stroke-width:1.1} .edge{fill:none;stroke:#6b7f94;stroke-width:1.6;marker-end:url(#arrow)} .dash{stroke-dasharray:5 4} </style></defs>
+<rect width="100%" height="100%" fill="#fff"/>
+<g><rect class="derived" x="40" y="45" width="300" height="78" rx="7"/><text class="head" x="52" y="68">noon-native</text><text class="body" x="52" y="88">native host / winit surface</text></g>
+<g><rect class="derived" x="1180" y="45" width="300" height="78" rx="7"/><text class="head" x="1192" y="68">noon-web</text><text class="body" x="1192" y="88">WASM/browser host + transport</text></g>
+<g><rect class="box" x="320" y="190" width="300" height="78" rx="7"/><text class="head" x="332" y="213">noon</text><text class="body" x="332" y="233">public API + session orchestration</text></g>
+<g><rect class="box" x="880" y="190" width="300" height="78" rx="7"/><text class="head" x="892" y="213">noon-render-wgpu</text><text class="body" x="892" y="233">retained wgpu renderer</text></g>
+<g><rect class="auth" x="600" y="340" width="300" height="78" rx="7"/><text class="head" x="612" y="363">noon-runtime</text><text class="body" x="612" y="383">deterministic effective runtime</text></g>
+<g><rect class="auth" x="400" y="495" width="300" height="78" rx="7"/><text class="head" x="412" y="518">noon-compile</text><text class="body" x="412" y="538">semantic → execution lowering</text></g>
+<g><rect class="res" x="750" y="640" width="300" height="78" rx="7"/><text class="head" x="762" y="663">noon-geometry</text><text class="body" x="762" y="683">path algorithms + tessellation</text></g>
+<g><rect class="res" x="1040" y="495" width="300" height="78" rx="7"/><text class="head" x="1052" y="518">noon-text</text><text class="body" x="1052" y="538">shaping + glyph raster</text></g>
+<g><rect class="res" x="1260" y="640" width="300" height="78" rx="7"/><text class="head" x="1272" y="663">noon-typst</text><text class="body" x="1272" y="683">Typst layout provider</text></g>
+<g><rect class="auth" x="160" y="640" width="300" height="78" rx="7"/><text class="head" x="172" y="663">noon-core</text><text class="body" x="172" y="683">semantic store/resources/contracts</text></g>
+<path class="edge" style="opacity:.52" d="M 190 123 C 190 156.5, 470 156.5, 470 190"/>
+<path class="edge" style="opacity:.52" d="M 190 123 C 190 156.5, 1030 156.5, 1030 190"/>
+<path class="edge" style="opacity:.52" d="M 190 123 C 190 381.5, 310 381.5, 310 640"/>
+<path class="edge" style="opacity:.52" d="M 1330 123 C 1330 156.5, 470 156.5, 470 190"/>
+<path class="edge" style="opacity:.52" d="M 1330 123 C 1330 309.0, 550 309.0, 550 495"/>
+<path class="edge" style="opacity:.52" d="M 1330 123 C 1330 231.5, 750 231.5, 750 340"/>
+<path class="edge" style="opacity:.52" d="M 1330 123 C 1330 381.5, 900 381.5, 900 640"/>
+<path class="edge" style="opacity:.52" d="M 1330 123 C 1330 381.5, 310 381.5, 310 640"/>
+<path class="edge dash" style="opacity:.52" d="M 1330 123 C 1330 156.5, 1030 156.5, 1030 190"/>
+<path class="edge" style="opacity:.52" d="M 470 268 C 470 381.5, 550 381.5, 550 495"/>
+<path class="edge" style="opacity:.52" d="M 470 268 C 470 304.0, 750 304.0, 750 340"/>
+<path class="edge" style="opacity:.52" d="M 470 268 C 470 454.0, 900 454.0, 900 640"/>
+<path class="edge" style="opacity:.52" d="M 470 268 C 470 454.0, 310 454.0, 310 640"/>
+<path class="edge dash" style="opacity:.52" d="M 470 268 C 470 381.5, 1190 381.5, 1190 495"/>
+<path class="edge dash" style="opacity:.52" d="M 470 268 C 470 454.0, 1410 454.0, 1410 640"/>
+<path class="edge" style="opacity:.52" d="M 1030 268 C 1030 304.0, 750 304.0, 750 340"/>
+<path class="edge" style="opacity:.52" d="M 1030 268 C 1030 454.0, 900 454.0, 900 640"/>
+<path class="edge" style="opacity:.52" d="M 1030 268 C 1030 381.5, 1190 381.5, 1190 495"/>
+<path class="edge" style="opacity:.52" d="M 1030 268 C 1030 454.0, 310 454.0, 310 640"/>
+<path class="edge" style="opacity:.52" d="M 750 418 C 750 456.5, 550 456.5, 550 495"/>
+<path class="edge" style="opacity:.52" d="M 750 418 C 750 529.0, 310 529.0, 310 640"/>
+<path class="edge" style="opacity:.52" d="M 550 573 C 550 606.5, 900 606.5, 900 640"/>
+<path class="edge" style="opacity:.52" d="M 550 573 C 550 606.5, 310 606.5, 310 640"/>
+<path class="edge" style="opacity:.52" d="M 900 718 C 900 679.0, 310 679.0, 310 640"/>
+<path class="edge" style="opacity:.52" d="M 1190 573 C 1190 606.5, 310 606.5, 310 640"/>
+<path class="edge" style="opacity:.52" d="M 1410 718 C 1410 679.0, 310 679.0, 310 640"/>
+<text class="small" x="800" y="805" text-anchor="middle">Solid = normal internal dependency · dashed = feature/target-conditional · dev-dependency arrows omitted (listed in type-map.md)</text>
+</svg>
