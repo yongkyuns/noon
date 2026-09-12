@@ -98,6 +98,58 @@ fn live_boolean_constructor_observes_current_affine_without_copying_paint() {
 }
 
 #[test]
+fn live_boolean_constructor_rejects_active_content_override_atomically() {
+    use noon::{AnimationOptions, AuthoringError, LiveSessionError, UnsupportedAuthoringOperation};
+
+    let scene = Scene::new();
+    let a = scene.circle(1.).unwrap();
+    let b = scene.square(2.).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut session);
+    live.declare_and_activate_create(&a, AnimationOptions::new())
+        .unwrap();
+    let revision = scene.revision();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+
+    let error = live
+        .boolean_geometry_options(Op::Union, &[a, b])
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        LiveSessionError::Authoring(AuthoringError::Unsupported(
+            UnsupportedAuthoringOperation::EffectivePathRenderOverride
+        ))
+    ));
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
+}
+
+#[test]
+fn live_boolean_constructor_preserves_foreign_store_error() {
+    let scene = Scene::new();
+    let a = scene.square(2.).unwrap();
+    let foreign = Scene::new().square(2.).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let live = scene.live(&mut session);
+
+    assert!(matches!(
+        live.boolean_geometry_options(Op::Union, &[a, foreign]),
+        Err(noon::LiveSessionError::ForeignMobjectStore)
+    ));
+}
+
+#[test]
 fn paired_boolean_example_executes_through_shared_runtime() {
     let mut session = noon::example_scenes::boolean_geometry::session().unwrap();
     session.seek(0.1).unwrap();
