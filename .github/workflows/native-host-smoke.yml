@@ -41,9 +41,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Use stable Rust
+      - name: Use repository-pinned Rust
         run: |
-          rustup default stable
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose
 
       - name: Install virtual display and software Vulkan
         run: |
