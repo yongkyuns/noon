@@ -286,16 +286,18 @@ impl SceneInstance {
         )
     }
 
-    /// Consume one renderer publication while queueing a renderer-only full
-    /// invalidation for the immediately following publication.
+    /// Consume one renderer publication while queueing a presentation-only redraw
+    /// for the immediately following publication.
     ///
-    /// This supports transient overlays whose exact endpoint must be presented once
-    /// and then removed on the next redraw without mutating scene or spatial state.
+    /// This supports identity-free transient occurrences whose exact endpoint must
+    /// be presented once and then removed from the next presented surface. Stable
+    /// frame rows, painter order, resources, and spatial state remain resident and
+    /// are not marked dirty merely to erase the transient occurrence.
     pub fn take_renderer_publication_with_followup_invalidation(
         &mut self,
     ) -> RendererPublication<'_> {
         let changes = self.take_frame_changes();
-        self.changes.invalidate_all();
+        self.changes = FrameChanges::presentation_redraw();
         RendererPublication::new(
             self.publication,
             &self.frame,
@@ -530,7 +532,7 @@ impl SceneInstance {
                 self.painter_order.push(object_index as u32);
                 self.reposition_painter_row(object_index);
                 self.rebind_reactive_object(object.id, object_index);
-                self.reapply_reactive_for_object(object_index);
+                self.reapply_reactive_for_object(object.id, object_index);
             }
             ExecutionPatch::RemoveObject(_) => {
                 let (object_index, old_channels) = removed.expect("remove context captured above");
@@ -1927,9 +1929,6 @@ fn set_geometry_if_changed(current: &mut GeometryRef, next: &GeometryRef) -> boo
     true
 }
 
-// Compiled resources must recover their registered identity after a temporary
-// affine-driver conversion, even when the owned points happen to be identical.
-// Only dynamically rebuilt, unregistered geometry may retain a content-equal Arc.
 fn set_optional_geometry_if_changed(
     current: &mut Option<Arc<GeometryRef>>,
     next: Option<&Arc<GeometryRef>>,
@@ -3148,8 +3147,6 @@ mod tests {
         instance.take_spatial_changes();
         instance.seek(0.5).expect("historical seek remains valid");
         assert_eq!(instance.frame().objects[0].style.stroke_width, 0.5);
-        // Historical seek may invalidate the full frame; both forms must cover
-        // the changed width. Normal forward updates above remain strictly local.
         assert!(instance.take_frame_changes().contains_object(0));
         assert!(instance.take_spatial_changes().contains_object(0));
     }
