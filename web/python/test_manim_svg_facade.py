@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+import noon
 import _manim_compat as compat
 import _manim_svg as svg
 
@@ -24,6 +25,10 @@ class _FamilyHandle:
 
 
 class SvgFacadeTests(unittest.TestCase):
+    def test_public_noon_export_is_lazy_svg_facade(self):
+        self.assertIs(noon.SVGMobject, svg.SVGMobject)
+        self.assertIn("SVGMobject", noon.__all__)
+
     def test_from_string_wraps_authoritative_family_members_without_geometry_copy(self):
         calls = []
         family = _FamilyHandle()
