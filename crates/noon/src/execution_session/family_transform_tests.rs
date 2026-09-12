@@ -1,12 +1,24 @@
 use noon_core::{
-    AnimationOptions, RateFunction, SemanticObjectState, SemanticStore, SemanticVec3,
-    StoredGeometry,
+    AnimationOptions, GeometryRef, RateFunction, SemanticObjectState, SemanticStore, SemanticVec3,
+    StoredGeometry, Vec2, VectorPath,
 };
 
 use super::*;
 
 fn object(store: &mut SemanticStore, x: f64) -> SemanticNodeId {
     let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+    state.transform.translation = SemanticVec3::new(x, 0.0, 0.0);
+    store.insert_semantic_object(state)
+}
+
+fn path_object(store: &mut SemanticStore, x: f64, height: f32) -> SemanticNodeId {
+    let path = VectorPath::new()
+        .move_to(Vec2::new(-0.6, -0.5))
+        .line_to(Vec2::new(0.6, -0.5))
+        .line_to(Vec2::new(0.0, height))
+        .close();
+    let handle = store.insert_geometry_path(path).unwrap();
+    let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
     state.transform.translation = SemanticVec3::new(x, 0.0, 0.0);
     store.insert_semantic_object(state)
 }
@@ -27,6 +39,30 @@ fn expansion_session() -> (ExecutionSession, ExecutionSegment) {
     let t0 = object(&mut store, 10.0);
     let t1 = object(&mut store, 12.0);
     let t2 = object(&mut store, 14.0);
+    let target = family(&mut store, &[t0, t1, t2]);
+
+    let mut session = ExecutionSession::from_semantic_root(&store, source).unwrap();
+    let request = SemanticCompositionRequest::FamilyTransformTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear),
+    };
+    let segment = session
+        .declare_and_activate_composition(&mut store, source, &request, AnimationOptions::new())
+        .unwrap();
+    (session, segment)
+}
+
+fn path_expansion_session() -> (ExecutionSession, ExecutionSegment) {
+    let mut store = SemanticStore::new();
+    let s0 = path_object(&mut store, 0.0, 0.7);
+    let s1 = path_object(&mut store, 2.0, 0.9);
+    let source = family(&mut store, &[s0, s1]);
+    let t0 = path_object(&mut store, 10.0, 1.1);
+    let t1 = path_object(&mut store, 12.0, 0.6);
+    let t2 = path_object(&mut store, 14.0, 1.3);
     let target = family(&mut store, &[t0, t1, t2]);
 
     let mut session = ExecutionSession::from_semantic_root(&store, source).unwrap();
@@ -153,6 +189,45 @@ fn unequal_family_transform_direct_seek_matches_forward_playback() {
     assert!(
         forward_derived[0].state().appearance > 0.0 && forward_derived[0].state().appearance < 1.0
     );
+}
+
+#[test]
+fn unequal_path_family_transform_direct_seek_matches_forward_playback() {
+    let (mut forward, forward_segment) = path_expansion_session();
+    forward.advance_segment_to(forward_segment, 0.25).unwrap();
+    assert_eq!(
+        forward
+            .take_renderer_publication()
+            .transient_presentations()
+            .len(),
+        1
+    );
+    forward.advance_segment_to(forward_segment, 0.5).unwrap();
+    let forward_frame = forward.frame().clone();
+    let forward_presentations = forward
+        .take_renderer_publication()
+        .transient_presentations()
+        .to_vec();
+
+    let (mut direct, _direct_segment) = path_expansion_session();
+    direct.seek(0.5).unwrap();
+    let direct_frame = direct.frame().clone();
+    let direct_presentations = direct
+        .take_renderer_publication()
+        .transient_presentations()
+        .to_vec();
+
+    assert_eq!(forward_frame, direct_frame);
+    assert_eq!(forward_presentations, direct_presentations);
+    assert_eq!(forward_presentations.len(), 1);
+    let copy = &forward_presentations[0];
+    assert_eq!(copy.anchor_object_index(), 0);
+    assert!(copy.state().appearance > 0.0 && copy.state().appearance < 1.0);
+    assert!(copy.state().morph > 0.0 && copy.state().morph < 1.0);
+    assert!(copy
+        .state()
+        .effective_render_geometry()
+        .is_some_and(|geometry| matches!(geometry, GeometryRef::VectorPath(_))));
 }
 
 #[test]
