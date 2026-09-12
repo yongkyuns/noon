@@ -85,3 +85,5 @@ jobs:
           npx playwright install chromium
       - name: Test retained Typst Python authoring
         run: node scripts/manim-typst-authoring-smoke.mjs
+
+# Diagnostic-only no-op: trigger this workflow against the current master integration baseline.
