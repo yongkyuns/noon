@@ -66,6 +66,7 @@ mod wasm {
         preload_bytes_uploaded: usize,
         gpu_generation: u32,
         gpu_diagnostics: GpuDiagnosticMailbox,
+        gpu_validation_scope: Option<wgpu::ErrorScopeGuard>,
         pending_renderer_observation: Option<RendererObservationRequest>,
         last_renderer_observation: Option<RendererObservationOutcome>,
         presentation_sequence: u64,
@@ -125,6 +126,8 @@ mod wasm {
             let gpu_generation = 1;
             let gpu_diagnostics = GpuDiagnosticMailbox::default();
             install_wgpu_error_handler(&device, gpu_generation, backend, gpu_diagnostics.clone());
+            let gpu_validation_scope = (backend == wgpu::Backend::BrowserWebGpu)
+                .then(|| device.push_error_scope(wgpu::ErrorFilter::Validation));
 
             let width = canvas.width().max(1);
             let height = canvas.height().max(1);
@@ -185,6 +188,7 @@ mod wasm {
                 preload_bytes_uploaded,
                 gpu_generation,
                 gpu_diagnostics,
+                gpu_validation_scope,
                 pending_renderer_observation: None,
                 last_renderer_observation: None,
                 presentation_sequence: 0,
@@ -450,6 +454,29 @@ mod wasm {
         #[wasm_bindgen(js_name = gpuGeneration)]
         pub fn gpu_generation(&self) -> u32 {
             self.gpu_generation
+        }
+
+        /// Flush one WebGPU validation error scope into the shared diagnostic mailbox.
+        ///
+        /// Browser worker uncaptured-error delivery is not a reliable scheduling
+        /// boundary. Keep validation recoverable by explicitly closing the current
+        /// device scope at an async host-control boundary, re-arming it immediately,
+        /// and publishing any captured error through the same generation-aware mailbox
+        /// used by direct hosts. OOM/internal errors remain on the uncaptured fatal path.
+        #[wasm_bindgen(js_name = flushGpuDiagnostics)]
+        pub async fn flush_gpu_diagnostics(&mut self) -> Result<bool, JsValue> {
+            let Some(scope) = self.gpu_validation_scope.take() else {
+                return Ok(false);
+            };
+            let pending = scope.pop();
+            self.gpu_validation_scope =
+                Some(self.device.push_error_scope(wgpu::ErrorFilter::Validation));
+            let Some(error) = pending.await else {
+                return Ok(false);
+            };
+            self.gpu_diagnostics
+                .record_wgpu(self.gpu_generation, self.backend, error);
+            Ok(true)
         }
 
         #[wasm_bindgen(js_name = takeGpuDiagnosticJson)]
