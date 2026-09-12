@@ -17,6 +17,25 @@ except ImportError:  # Native CPython tests install explicit bridge fixtures.
     _arrow_options = None
     _create_arrow_handle = None
 
+try:
+    from js import noonAuthoringArrowFromMobject as _arrow_from_mobject
+    from js import noonAuthoringArrowFromMobjects as _arrow_from_mobjects
+    from js import noonAuthoringArrowToMobject as _arrow_to_mobject
+    from js import noonAuthoringDoubleArrowFromMobject as _double_arrow_from_mobject
+    from js import noonAuthoringDoubleArrowFromMobjects as _double_arrow_from_mobjects
+    from js import noonAuthoringDoubleArrowToMobject as _double_arrow_to_mobject
+except ImportError:  # Normal worker hosts expose these on the typed Arrow options bridge.
+    _arrow_from_mobject = getattr(_arrow_options, "arrowFromMobject", None)
+    _arrow_from_mobjects = getattr(_arrow_options, "arrowFromMobjects", None)
+    _arrow_to_mobject = getattr(_arrow_options, "arrowToMobject", None)
+    _double_arrow_from_mobject = getattr(
+        _arrow_options, "doubleArrowFromMobject", None
+    )
+    _double_arrow_from_mobjects = getattr(
+        _arrow_options, "doubleArrowFromMobjects", None
+    )
+    _double_arrow_to_mobject = getattr(_arrow_options, "doubleArrowToMobject", None)
+
 
 _ARROW_CONSTRUCTOR_OPTIONS = frozenset(
     {
@@ -52,6 +71,71 @@ def _numeric_endpoint(name: str, value: object) -> _base.Vec2:
             f"{name} Mobject endpoints require the shared Rust boundary-point constructor"
         )
     return _base._as_vec2(value)
+
+
+def _mobject_endpoint_handle(name: str, value: object):
+    if isinstance(value, _compat.Group):
+        raise NotImplementedError(
+            f"{name} Group endpoints require shared family boundary-point semantics"
+        )
+    if not isinstance(value, _base.Mobject):
+        return None
+    handle = _shared._handle_for(value)
+    if handle is None:
+        raise RuntimeError(f"{name} Mobject endpoint requires a current shared Rust handle")
+    return handle
+
+
+def _arrow_endpoint_options(start: object, end: object, *, double_arrow: bool):
+    start_handle = _mobject_endpoint_handle("start", start)
+    end_handle = _mobject_endpoint_handle("end", end)
+
+    if start_handle is not None and end_handle is not None:
+        operation = (
+            _double_arrow_from_mobjects if double_arrow else _arrow_from_mobjects
+        )
+        if operation is None:
+            raise RuntimeError("Arrow Mobject endpoints require the shared Rust boundary host")
+        return engine_call(operation, start_handle, end_handle, operation="Arrow.boundaryEndpoints")
+
+    if start_handle is not None:
+        end_point = _numeric_endpoint("end", end)
+        operation = (
+            _double_arrow_from_mobject if double_arrow else _arrow_from_mobject
+        )
+        if operation is None:
+            raise RuntimeError("Arrow Mobject endpoints require the shared Rust boundary host")
+        return engine_call(
+            operation,
+            start_handle,
+            end_point.x,
+            end_point.y,
+            operation="Arrow.boundaryEndpoints",
+        )
+
+    if end_handle is not None:
+        start_point = _numeric_endpoint("start", start)
+        operation = _double_arrow_to_mobject if double_arrow else _arrow_to_mobject
+        if operation is None:
+            raise RuntimeError("Arrow Mobject endpoints require the shared Rust boundary host")
+        return engine_call(
+            operation,
+            start_point.x,
+            start_point.y,
+            end_handle,
+            operation="Arrow.boundaryEndpoints",
+        )
+
+    start_point = _numeric_endpoint("start", start)
+    end_point = _numeric_endpoint("end", end)
+    factory = _arrow_options.doubleArrow if double_arrow else _arrow_options.arrow
+    return engine_call(
+        factory,
+        start_point.x,
+        start_point.y,
+        end_point.x,
+        end_point.y,
+    )
 
 
 def _apply_constructor_options(options: object, kwargs: dict[str, Any]) -> None:
@@ -211,15 +295,7 @@ class Arrow(_compat.Group):
             tip_shape=tip_shape,
             tip_style=tip_style,
         )
-        start_point = _numeric_endpoint("start", start)
-        end_point = _numeric_endpoint("end", end)
-        options = engine_call(
-            _arrow_options.arrow,
-            start_point.x,
-            start_point.y,
-            end_point.x,
-            end_point.y,
-        )
+        options = _arrow_endpoint_options(start, end, double_arrow=False)
         _apply_arrow_parameters(
             options,
             buff=buff,
@@ -371,15 +447,7 @@ class DoubleArrow(Arrow):
             tip_shape=tip_shape,
             tip_style=tip_style,
         )
-        start_point = _numeric_endpoint("start", start)
-        end_point = _numeric_endpoint("end", end)
-        options = engine_call(
-            _arrow_options.doubleArrow,
-            start_point.x,
-            start_point.y,
-            end_point.x,
-            end_point.y,
-        )
+        options = _arrow_endpoint_options(start, end, double_arrow=True)
         _apply_arrow_parameters(
             options,
             buff=buff,
@@ -396,9 +464,11 @@ _DEFAULT_VECTOR_FIELD_LENGTH = object()
 _DEFAULT_VECTOR_FIELD_COLORS = (_base.BLUE_E, _base.GREEN, _base.YELLOW, _base.RED)
 
 
-def _vector_field_range(name: str, value: object) -> list[float] | None:
+def _vector_field_range(name: str, value: object) -> tuple[list[float], list[float]]:
     if value is None:
-        return None
+        raise NotImplementedError(
+            f"ArrowVectorField {name}=None requires shared frame-derived default ranges"
+        )
     try:
         values = [float(component) for component in value]  # type: ignore[arg-type]
     except (TypeError, ValueError) as error:
@@ -409,31 +479,10 @@ def _vector_field_range(name: str, value: object) -> list[float] | None:
         raise ValueError(f"{name} must contain [min, max] or [min, max, step]")
     if any(not _base.math.isfinite(component) for component in values):
         raise ValueError(f"{name} must contain finite values")
-    return values
-
-
-def _vector_field_public_range(values: list[float]) -> list[float]:
+    nominal = values.copy()
     public = values.copy()
     public[1] += public[2]
-    return public
-
-
-def _default_vector_field_range(axis: str) -> list[float]:
-    if axis == "x":
-        operations = (
-            _arrow_options.defaultVectorFieldXStart,
-            _arrow_options.defaultVectorFieldXEnd,
-            _arrow_options.defaultVectorFieldXStep,
-        )
-    elif axis == "y":
-        operations = (
-            _arrow_options.defaultVectorFieldYStart,
-            _arrow_options.defaultVectorFieldYEnd,
-            _arrow_options.defaultVectorFieldYStep,
-        )
-    else:  # pragma: no cover - private helper callers use only x/y.
-        raise ValueError(f"unknown vector-field axis {axis!r}")
-    return [float(engine_call(operation)) for operation in operations]
+    return nominal, public
 
 
 def _default_vector_field_length(norm: float) -> float:
@@ -513,8 +562,8 @@ class ArrowVectorField(_compat.VGroup):
                 + ", ".join(sorted(kwargs))
             )
 
-        x_nominal = _vector_field_range("x_range", x_range)
-        y_nominal = _vector_field_range("y_range", y_range)
+        x_nominal, x_public = _vector_field_range("x_range", x_range)
+        y_nominal, y_public = _vector_field_range("y_range", y_range)
         custom_length = length_func is not _DEFAULT_VECTOR_FIELD_LENGTH
         if custom_length and not callable(length_func):
             raise TypeError("ArrowVectorField length_func must be callable")
@@ -549,42 +598,16 @@ class ArrowVectorField(_compat.VGroup):
             if configure_gradient:
                 gradient_colors = _vector_field_colors(colors)
 
-        default_x = x_nominal is None
-        default_y = y_nominal is None
-        if default_x or default_y:
-            x_input = x_nominal or [0.0, 0.0, 1.0]
-            y_input = y_nominal or [0.0, 0.0, 1.0]
-            draft = engine_call(
-                _arrow_options.vectorFieldWithDefaultRanges,
-                default_x,
-                x_input[0],
-                x_input[1],
-                x_input[2],
-                default_y,
-                y_input[0],
-                y_input[1],
-                y_input[2],
-                custom_length,
-            )
-            if default_x:
-                x_nominal = _default_vector_field_range("x")
-            if default_y:
-                y_nominal = _default_vector_field_range("y")
-        else:
-            draft = engine_call(
-                _arrow_options.vectorField,
-                x_nominal[0],
-                x_nominal[1],
-                x_nominal[2],
-                y_nominal[0],
-                y_nominal[1],
-                y_nominal[2],
-                custom_length,
-            )
-        assert x_nominal is not None and y_nominal is not None
-        x_public = _vector_field_public_range(x_nominal)
-        y_public = _vector_field_public_range(y_nominal)
-
+        draft = engine_call(
+            _arrow_options.vectorField,
+            x_nominal[0],
+            x_nominal[1],
+            x_nominal[2],
+            y_nominal[0],
+            y_nominal[1],
+            y_nominal[2],
+            custom_length,
+        )
         try:
             if field_color is not None:
                 engine_call(

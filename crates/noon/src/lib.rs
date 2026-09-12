@@ -53,6 +53,7 @@
 mod animation_authoring;
 mod arc_authoring;
 mod arrow_authoring;
+mod arrow_endpoints;
 mod arrow_queries;
 mod arrow_scale;
 mod authoring_error;
@@ -111,6 +112,10 @@ pub use arrow_authoring::{
     ManimArrow, ManimArrowOptions, DEFAULT_ARROW_STROKE_WIDTH, DEFAULT_ARROW_STROKE_WIDTH_RATIO,
     DEFAULT_ARROW_TIP_LENGTH, DEFAULT_ARROW_TIP_LENGTH_RATIO,
 };
+pub use arrow_endpoints::{
+    manim_arrow_endpoints_from_mobject, manim_arrow_endpoints_from_mobjects,
+    manim_arrow_endpoints_to_mobject,
+};
 pub use arrow_scale::ArrowScaleError;
 pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
 pub use boolean_authoring::{BooleanOperation, BooleanPathError};
@@ -162,8 +167,8 @@ pub use noon_core::{
     YELLOW, YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D, YELLOW_E,
 };
 pub use noon_geometry::{
-    manim_default_vector_field_ranges_2d, StaticVectorFieldError, VectorFieldAxis,
-    VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, DEFAULT_VECTOR_FIELD_STEP,
+    StaticVectorFieldError, VectorFieldAxis, VectorFieldAxisRange, VectorFieldPoint,
+    VectorFieldRanges2D, DEFAULT_VECTOR_FIELD_STEP,
 };
 pub use noon_runtime::EvaluationError;
 pub use path_queries::PathQuery;
@@ -190,14 +195,14 @@ pub use vector_field_authoring::{ArrowVectorFieldAuthoringError, ManimArrowVecto
 /// Host integration and mutable arena access must be imported explicitly.
 pub mod prelude {
     pub use crate::{
-        manim_default_vector_field_ranges_2d, AnimationOptions, ArrowScaleError,
-        ArrowVectorFieldAuthoringError, AuthoringError, BooleanOperation, Color, ContinuationStep,
-        DeclaredAnimation, DrawBorderThenFillOptions, EffectiveMobjectState, ExecutionSession,
-        FadeEndpoint, FadeTranslation, LiveContinuation, LiveProgram, LiveSession,
-        LiveSessionError, ManimArrow, ManimArrowOptions, ManimArrowVectorField, Mobject,
-        MobjectFamily, MobjectFamilyMember, NativeBoolSignal, NativeVectorSignal, RateFunction,
-        Scene, SemanticObjectState, SemanticStyle, StoredGeometry, TrackerPosition, ValueTracker,
-        Vec2, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, VectorPath,
+        AnimationOptions, ArrowScaleError, ArrowVectorFieldAuthoringError, AuthoringError,
+        BooleanOperation, Color, ContinuationStep, DeclaredAnimation, DrawBorderThenFillOptions,
+        EffectiveMobjectState, ExecutionSession, FadeEndpoint, FadeTranslation, LiveContinuation,
+        LiveProgram, LiveSession, LiveSessionError, ManimArrow, ManimArrowOptions,
+        ManimArrowVectorField, Mobject, MobjectFamily, MobjectFamilyMember, NativeBoolSignal,
+        NativeVectorSignal, RateFunction, Scene, SemanticObjectState, SemanticStyle,
+        StoredGeometry, TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange,
+        VectorFieldPoint, VectorFieldRanges2D, VectorPath,
     };
 }
 
