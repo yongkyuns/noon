@@ -36,10 +36,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Use stable Rust
+      - name: Use repository-pinned Rust
         run: |
-          rustup default stable
-          rustup component add rustfmt clippy
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose
 
       - name: Cache Cargo sources
         uses: actions/cache@v6
