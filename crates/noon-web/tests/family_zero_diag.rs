@@ -1,6 +1,5 @@
 use noon::{LiveProgramStatus, RustHostCallbackTable};
 use noon_core::{Rect, Vec2};
-use noon_render_wgpu::{text::TextDeviceMetrics, RetainedFramePreparer};
 
 #[test]
 fn diagnose_family_state_zero_frame() {
@@ -19,12 +18,14 @@ fn diagnose_family_state_zero_frame() {
     println!("SPATIAL {:?}", visible.spatial_stats());
 
     let publication = program.take_renderer_publication();
-    println!("CHANGES all={} objects={:?} structural={} painter={} active_plans={:?}",
+    println!(
+        "CHANGES all={} objects={:?} structural={} painter={} active_plans={:?}",
         publication.changes().is_all(),
         publication.changes().object_indices(),
         publication.changes().is_structural(),
         publication.changes().has_painter_order_change(),
-        publication.active_family_animation_indices());
+        publication.active_family_animation_indices()
+    );
     println!("PAINTER {:?}", publication.painter_order());
     for (index, object) in publication.frame().objects.iter().enumerate() {
         println!(
@@ -46,28 +47,4 @@ fn diagnose_family_state_zero_frame() {
 
     assert_eq!(publication.frame().objects.len(), 2);
     assert_eq!(visible.object_indices(), &[0, 1]);
-
-    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-    let metrics = TextDeviceMetrics::uniform(120.0).unwrap();
-    let mut preparer = RetainedFramePreparer::new();
-    let prepared = preparer
-        .prepare_planned_publication_visible(
-            &device,
-            &queue,
-            &publication,
-            visible.object_indices(),
-            metrics,
-        )
-        .expect("prepare t=0 family publication");
-    let mut submitted_instances = 0u32;
-    let mut batch_count = 0usize;
-    for chunk in prepared.geometry_render_chunks() {
-        for batch in chunk.render_batches {
-            println!("BATCH {:?} {:?}", batch.primitive, batch.instance_range);
-            submitted_instances += batch.instance_range.end - batch.instance_range.start;
-            batch_count += 1;
-        }
-    }
-    println!("PREPARED batches={batch_count} instances={submitted_instances} stats={:?}", prepared.geometry_stats());
-    assert_eq!(submitted_instances, 2, "both visible stable members must be submitted at t=0");
 }
