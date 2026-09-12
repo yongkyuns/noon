@@ -863,6 +863,29 @@ def _manim_effective_morph_path():
     return _morph_path_observation(shape)
 
 
+def _noon_effective_reveal_path():
+    scene = noon.Scene()
+    shape = noon.Circle(radius=1).stretch(1.5, 0).shift(noon.RIGHT)
+    scene.play(noon.Create(shape), run_time=1, rate_func=noon.linear)
+    live = scene.live_execution()
+    observations = []
+    for t in (0., .25, .625, 1.):
+        live.evaluate(t)
+        observations.append(_morph_path_observation(shape))
+    return observations
+
+
+def _manim_effective_reveal_path():
+    shape = manim.Circle(radius=1).stretch(1.5, 0).shift(manim.RIGHT)
+    animation = manim.Create(shape, run_time=1, rate_func=manim.linear)
+    animation.begin()
+    observations = []
+    for t in (0., .25, .625, 1.):
+        animation.interpolate(t)
+        observations.append(_morph_path_observation(shape))
+    return observations
+
+
 def _world_stretch(api):
     shape = api.Square(side_length=2).rotate(.37).shift(api.RIGHT - api.UP)
     shape.stretch(-1.5, 0, about_point=2 * api.RIGHT)
@@ -1004,6 +1027,7 @@ def _point_matching(api):
 
 
 FIXTURES = [
+    Fixture("effective_reveal_path", _noon_effective_reveal_path, _manim_effective_reveal_path, 1e-5),
     Fixture("effective_morph_path", _noon_effective_morph_path, _manim_effective_morph_path, 1e-5),
     Fixture("world_stretch", lambda: _world_stretch(noon), lambda: _world_stretch(manim), 1e-5),
     Fixture("path_alignment", lambda: _path_alignment(noon), lambda: _path_alignment(manim), 1e-5),
