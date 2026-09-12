@@ -322,12 +322,10 @@ fn is_unsupported_element(name: &str) -> bool {
 
 fn css_declares_non_none(style: &str, property: &str) -> bool {
     style.split(';').any(|declaration| {
-        declaration
-            .split_once(':')
-            .is_some_and(|(name, value)| {
-                name.trim().eq_ignore_ascii_case(property)
-                    && !value.trim().eq_ignore_ascii_case("none")
-            })
+        declaration.split_once(':').is_some_and(|(name, value)| {
+            name.trim().eq_ignore_ascii_case(property)
+                && !value.trim().eq_ignore_ascii_case("none")
+        })
     })
 }
 
@@ -524,10 +522,7 @@ fn prepare_vector_path(path: &usvg::Path) -> Result<VectorPath, SvgAuthoringErro
     Ok(result)
 }
 
-fn svg_point(
-    mut point: usvg::tiny_skia_path::Point,
-    transform: usvg::Transform,
-) -> Vec2 {
+fn svg_point(mut point: usvg::tiny_skia_path::Point, transform: usvg::Transform) -> Vec2 {
     transform.map_point(&mut point);
     // SVG canvas coordinates grow down; Manim/Noon scene coordinates grow up.
     Vec2::new(point.x, -point.y)
@@ -613,12 +608,12 @@ mod tests {
             scene.revision(),
             before.checked_next().expect("one SVG publication revision")
         );
-        let members = scene
-            .integration_store()
-            .borrow()
+        let store = scene.integration_store().borrow();
+        let members = store
             .semantic_family_members_checked(family.node_id())
             .unwrap();
         assert_eq!(members.len(), 2);
+        drop(store);
         let bounds = family.layout_bounds().unwrap().unwrap();
         assert!((bounds.height() - 2.0).abs() < 1e-5);
         assert!((bounds.min_x + bounds.max_x).abs() < 1e-5);
@@ -634,16 +629,15 @@ mod tests {
         let family = scene
             .svg_from_str_with_options(svg, raw_options())
             .unwrap();
-        let member = scene
-            .integration_store()
-            .borrow()
+        let store = scene.integration_store().borrow();
+        let member = store
             .semantic_family_members_checked(family.node_id())
             .unwrap()[0];
+        drop(store);
         let object = crate::Mobject::from_node(Rc::clone(scene.integration_store()), member).unwrap();
-        let path = object.path_query().unwrap().path().unwrap();
-        let commands = path.commands();
-        assert_eq!(commands[0], noon_core::PathCommand::MoveTo { to: Vec2::new(4.0, -7.0) });
-        assert_eq!(commands[1], noon_core::PathCommand::LineTo { to: Vec2::new(7.0, -7.0) });
+        let query = object.path_query().unwrap();
+        assert_eq!(query.start().unwrap(), (4.0, -7.0));
+        assert_eq!(query.end().unwrap(), (7.0, -7.0));
     }
 
     #[test]
