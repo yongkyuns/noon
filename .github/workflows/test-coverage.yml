@@ -48,8 +48,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-      - name: Use stable Rust
-        run: rustup default stable
+      - name: Use repository-pinned Rust
+        run: |
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
         with:
