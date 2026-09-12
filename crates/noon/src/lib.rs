@@ -53,6 +53,7 @@
 mod animation_authoring;
 mod arc_authoring;
 mod arrow_authoring;
+mod arrow_endpoints;
 mod arrow_queries;
 mod arrow_scale;
 mod authoring_error;
@@ -110,6 +111,10 @@ pub use arc_authoring::ArcAuthoringError;
 pub use arrow_authoring::{
     ManimArrow, ManimArrowOptions, DEFAULT_ARROW_STROKE_WIDTH, DEFAULT_ARROW_STROKE_WIDTH_RATIO,
     DEFAULT_ARROW_TIP_LENGTH, DEFAULT_ARROW_TIP_LENGTH_RATIO,
+};
+pub use arrow_endpoints::{
+    manim_arrow_endpoints_from_mobject, manim_arrow_endpoints_from_mobjects,
+    manim_arrow_endpoints_to_mobject,
 };
 pub use arrow_scale::ArrowScaleError;
 pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
