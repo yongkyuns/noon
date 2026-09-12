@@ -75,15 +75,17 @@ impl GpuDiagnostic {
     }
 }
 
-/// Bounded, generation-aware handoff from wgpu's asynchronous error callback.
+/// Bounded, generation-aware handoff from wgpu's asynchronous error and
+/// device-loss callbacks.
 ///
 /// At most one diagnostic is retained. A newer GPU generation replaces an older
 /// pending diagnostic, and a fatal diagnostic may replace a recoverable diagnostic
-/// from the same generation. This prevents validation-error bursts from growing
-/// memory or delaying an out-of-memory/internal failure behind recoverable noise.
+/// from the same generation. Device loss is tracked separately because it requires
+/// replacing platform GPU state rather than surfacing a validation diagnostic.
 #[derive(Clone, Default)]
 pub(crate) struct GpuDiagnosticMailbox {
     pending: Arc<Mutex<Option<GpuDiagnostic>>>,
+    lost_generation: Arc<Mutex<Option<u32>>>,
 }
 
 impl GpuDiagnosticMailbox {
@@ -120,8 +122,43 @@ impl GpuDiagnosticMailbox {
         })
     }
 
+    pub(crate) fn record_device_loss(&self, generation: u32) {
+        self.with_lost_generation(|pending| {
+            if pending.is_none_or(|current| generation > current) {
+                *pending = Some(generation);
+            }
+        });
+    }
+
+    pub(crate) fn device_loss_pending(&self, generation: u32) -> bool {
+        self.with_lost_generation(|pending| match *pending {
+            Some(current) if current < generation => {
+                *pending = None;
+                false
+            }
+            Some(current) => current == generation,
+            None => false,
+        })
+    }
+
+    pub(crate) fn clear_device_loss(&self, generation: u32) {
+        self.with_lost_generation(|pending| {
+            if *pending == Some(generation) {
+                *pending = None;
+            }
+        });
+    }
+
     fn with_slot<R>(&self, operation: impl FnOnce(&mut Option<GpuDiagnostic>) -> R) -> R {
         let mut pending = self.lock();
+        operation(&mut pending)
+    }
+
+    fn with_lost_generation<R>(&self, operation: impl FnOnce(&mut Option<u32>) -> R) -> R {
+        let mut pending = self
+            .lost_generation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         operation(&mut pending)
     }
 
@@ -139,6 +176,10 @@ pub(crate) fn install_wgpu_error_handler(
     backend: wgpu::Backend,
     mailbox: GpuDiagnosticMailbox,
 ) {
+    let loss_mailbox = mailbox.clone();
+    device.set_device_lost_callback(move |_reason, _message| {
+        loss_mailbox.record_device_loss(generation);
+    });
     device.on_uncaptured_error(Arc::new(move |error| {
         mailbox.record_wgpu(generation, backend, error);
     }));
@@ -207,5 +248,20 @@ mod tests {
 
         assert!(mailbox.take_for_generation(1).is_some());
         assert!(mailbox.take_for_generation(1).is_none());
+    }
+
+    #[test]
+    fn device_loss_is_generation_aware_and_cleared_after_recovery() {
+        let mailbox = GpuDiagnosticMailbox::default();
+        mailbox.record_device_loss(2);
+        assert!(mailbox.device_loss_pending(2));
+        assert!(!mailbox.device_loss_pending(1));
+
+        mailbox.record_device_loss(3);
+        assert!(!mailbox.device_loss_pending(2));
+        assert!(mailbox.device_loss_pending(3));
+
+        mailbox.clear_device_loss(3);
+        assert!(!mailbox.device_loss_pending(3));
     }
 }

@@ -1,0 +1,121 @@
+# Reader-oriented implementation map. docs/architecture.md remains normative.
+# D2 has no built-in Google Material theme; this source uses a Material-inspired palette.
+vars: {d2-config: {layout-engine: elk; theme-id: 0}}
+style.fill: "#F8FAFD"
+classes: {
+  layer: {style: {font-size: 22; bold: true; font-color: "#202124"; fill: "#F1F3F4"; stroke: "#DADCE0"; border-radius: 12; stroke-width: 1; shadow: true}}
+  authority: {width: 330; style: {font-size: 18; bold: true; font-color: "#202124"; fill: "#E8F0FE"; stroke: "#1967D2"; border-radius: 10; stroke-width: 2; shadow: true}}
+  type: {width: 330; style: {font-size: 18; font-color: "#202124"; fill: "#FFFFFF"; stroke: "#DADCE0"; border-radius: 10; stroke-width: 1; shadow: true}}
+  resource: {width: 330; style: {font-size: 18; font-color: "#202124"; fill: "#E6F4EA"; stroke: "#137333"; border-radius: 10; stroke-width: 1; shadow: true}}
+  derived: {width: 330; style: {font-size: 18; font-color: "#202124"; fill: "#FEF7E0"; stroke: "#B06000"; border-radius: 10; stroke-width: 1; shadow: true}}
+  bridge: {width: 300; style: {font-size: 18; bold: true; font-color: "#202124"; fill: "#F3E8FD"; stroke: "#7E57C2"; border-radius: 10; stroke-width: 2; shadow: true}}
+  edge: {style: {stroke: "#5F6368"; stroke-width: 2}}
+  resource_edge: {style: {stroke: "#137333"; stroke-width: 2}}
+  derived_edge: {style: {stroke: "#B06000"; stroke-width: 2}}
+  orchestration_edge: {style: {stroke: "#7E57C2"; stroke-width: 2}}
+}
+
+direction: down
+horizontal-gap: 76
+vertical-gap: 62
+
+# Keep authoring and orchestration distinct so the main execution flow never routes backwards.
+authoring: "noon — authoring API" {
+  class: layer
+  grid-rows: 1
+  horizontal-gap: 44
+  scene: "Scene\nshared SemanticStore · root SemanticNodeId\ncursor / factories" {class: type}
+  mobject: "Mobject\nRc<RefCell<SemanticStore>>\nid: SemanticNodeId\n(aliasing handle, no owned object state)" {class: type}
+  options: "ManimGeometryOptions\nGeometryRef · SemanticTransform2_5D\nSemanticStyle · z_index" {class: type}
+}
+
+semantic: "noon-core — Semantic Scene authority" {
+  class: layer
+  grid-rows: 1
+  horizontal-gap: 40
+  store: "SemanticStore\nscene-global authored truth\nnodes + resource arenas" {class: authority}
+  node: "SemanticNodeId + SemanticNode\ngenerational identity · kind\nmembership / parents / members" {class: type}
+  state: "SemanticObjectState\ncontent · f64/2.5D transform · style\npresentation · role · signal bindings" {class: type}
+  content: "SemanticObjectContent\nGeometry(StoredGeometry) | Text(handle)" {class: type}
+  stored: "StoredGeometry\nCircle | Rectangle | Line inline\nResource(GeometryResourceHandle)" {class: resource}
+  arena: "GeometryResourceArena\nhandle = arena + GeometryId + version\nVectorPath stored as immutable Arc" {class: resource}
+  path: "VectorPath + PathCommand[]\nMove / Line / Quadratic / Cubic / Close" {class: resource}
+}
+
+compile: "noon-compile — Execution Plan authority" {
+  class: layer
+  grid-rows: 1
+  horizontal-gap: 44
+  index: "SemanticExecutionIndex\nSemanticNodeId → derived ObjectId\ncompatibility bridge" {class: derived}
+  projection: "SemanticExecutionObject\nsemantic_id · execution_id · content\nTransform2D · Style · presentation" {class: derived}
+  compiled_object: "CompiledObject\nObjectId · ObjectContentRef\nTransform2D · Style · dynamic/live" {class: authority}
+  compiled_scene: "CompiledScene\nstable/tombstoned slots · tracks\npainter order · resources" {class: authority}
+}
+
+orchestration: "noon — execution orchestration" {
+  class: layer
+  session: "ExecutionSession\nderived index / slots / projections\n+ exactly one SceneInstance" {class: bridge}
+}
+
+runtime: "noon-runtime — Runtime authority" {
+  class: layer
+  instance: "SceneInstance\nCompiledScene + scheduler/reactive state\n+ effective FrameState" {class: authority}
+  frame: "FrameState\ntime · effective object rows\npresence / reveal / morph · render overrides" {class: authority}
+  frame_object: "FrameObjectState\nObjectContentRef · Transform2D · Style\nappearance · z_index" {class: type}
+  publication: "RendererPublication<'a>\n&FrameState + FrameChanges\nresource lookups + publication context" {class: derived}
+}
+
+render: "noon-geometry + noon-render-wgpu — geometry / Renderer" {
+  class: layer
+  preparer: "FramePreparer\nconsume coherent publication\n+ sparse changes" {class: authority}
+  geometry_ref: "GeometryRef\nCircle | Rectangle | Line\nVectorPath | External" {class: type}
+  analytic: "Packed analytic instances\nCircleInstance · RectangleInstance\nLineInstance" {class: derived}
+  tess: "TessellatedPath\nMeshVertex[] · indices[] · bounds\nstroke length · morph/reveal data" {class: derived}
+  packed_path: "Packed path mesh\nPathVertex[] · index stream\nPathInstance · batches / residency" {class: derived}
+  gpu: "wgpu buffers + pipelines\nretained renderer state only" {class: authority}
+}
+
+# Authoring → semantic authority. Parallel edges are ordered to keep routing local.
+authoring.scene -> authoring.mobject: "factory / same store" {class: edge}
+authoring.mobject -> semantic.store: "read/edit by SemanticNodeId" {class: edge}
+authoring.options -> semantic.state: "into_state()" {class: edge}
+
+# Semantic ownership spine.
+semantic.store -> semantic.node: "owns" {class: edge}
+semantic.node -> semantic.state: "object payload" {class: edge}
+semantic.state -> semantic.content: "owns" {class: edge}
+semantic.content -> semantic.stored: "geometry" {class: resource_edge}
+semantic.stored -> semantic.arena: "resource handle" {class: resource_edge}
+semantic.arena -> semantic.path: "Arc payload" {class: resource_edge}
+
+# Semantic → execution lowering. Keep identity and object-state projection as parallel lanes.
+semantic.store -> compile.index: "visible-leaf identity lowering" {class: derived_edge}
+semantic.state -> compile.projection: "f64 semantic → compact execution values" {class: derived_edge}
+compile.index -> compile.projection: "assign execution key" {class: derived_edge}
+compile.projection -> compile.compiled_object: "resolve ObjectContentRef / resource closure" {class: derived_edge}
+compile.compiled_object -> compile.compiled_scene: "stable execution slot" {class: derived_edge}
+
+# Orchestration is its own bridge between compile and runtime; no backward cross-layer edge.
+compile.compiled_scene -> orchestration.session: "bootstrap" {class: orchestration_edge}
+orchestration.session -> runtime.instance: "owns/orchestrates runtime instance" {class: orchestration_edge}
+
+# Runtime effective-state publication.
+runtime.instance -> runtime.frame: "evaluate" {class: edge}
+runtime.frame -> runtime.frame_object: "contains effective rows" {class: edge}
+runtime.frame -> runtime.publication: "borrow coherently" {class: derived_edge}
+
+# Renderer boundary and geometry branches.
+runtime.publication -> render.preparer: "publication + sparse changes" {class: derived_edge}
+runtime.frame_object -> render.geometry_ref: "ObjectContentRef::Geometry" {class: edge}
+render.preparer -> render.geometry_ref: "prepare effective geometry" {class: edge}
+render.geometry_ref -> render.analytic: "analytic primitives" {class: derived_edge}
+render.geometry_ref -> render.tess: "VectorPath → lyon tessellation" {class: resource_edge}
+render.tess -> render.packed_path: "pack vertices / indices" {class: derived_edge}
+render.analytic -> render.gpu: "upload dirty ranges" {class: derived_edge}
+render.packed_path -> render.gpu: "upload / mesh residency" {class: derived_edge}
+
+note: "Canonical VectorPath rendering stays typed end-to-end:\nPathCommand → VectorPath/resource handle → GeometryRef → TessellatedPath → packed GPU buffers.\nNo SVG d-string is introduced on the direct renderer path." {
+  shape: text
+  near: bottom-center
+  style: {font-size: 17; italic: true; font-color: "#5F6368"}
+}

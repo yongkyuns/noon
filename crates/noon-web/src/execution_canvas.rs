@@ -450,11 +450,85 @@ mod wasm {
             Ok(true)
         }
 
+        /// Replace only WebGPU-owned platform state after the browser loses the
+        /// current device. Semantic execution/session state remains authoritative.
+        #[wasm_bindgen(js_name = recoverWebGpuDevice)]
+        pub async fn recover_webgpu_device(&mut self) -> Result<bool, JsValue> {
+            if self.backend != wgpu::Backend::BrowserWebGpu
+                || !self
+                    .gpu_diagnostics
+                    .device_loss_pending(self.gpu_generation)
+            {
+                return Ok(false);
+            }
+
+            let lost_generation = self.gpu_generation;
+            let next_generation = lost_generation
+                .checked_add(1)
+                .ok_or_else(|| js_message("GPU recovery generation exhausted"))?;
+            let profiling_enabled = self.timestamp_profiler.is_some();
+            let InitializedGpu {
+                instance,
+                surface,
+                device,
+                queue,
+                backend,
+                config,
+                timestamp_query_supported,
+            } = initialize_webgpu(&self.canvas, self.config.width, self.config.height)
+                .await
+                .map_err(|error| js_message(&format!("WebGPU device recovery failed: {error}")))?;
+            if backend != wgpu::Backend::BrowserWebGpu {
+                return Err(js_message(
+                    "WebGPU device recovery unexpectedly selected a different GPU backend",
+                ));
+            }
+
+            install_wgpu_error_handler(
+                &device,
+                next_generation,
+                backend,
+                self.gpu_diagnostics.clone(),
+            );
+            let renderer = GpuRenderer::new(&device, config.format);
+            let direct_text_gpu = renderer.create_retained_text_state(&device, &queue);
+
+            self.instance = instance;
+            self.surface = surface;
+            self.device = device;
+            self.queue = queue;
+            self.backend = backend;
+            self.config = config;
+            self.timestamp_query_supported = timestamp_query_supported;
+            self.renderer = renderer;
+            self.direct_text_gpu = direct_text_gpu;
+            self.direct_preparer = RetainedFramePreparer::new();
+            self.timestamp_profiler =
+                profiling_enabled.then(|| GpuTimestampProfiler::new(&self.device, &self.queue));
+            self.gpu_generation = next_generation;
+            self.surface_frame_pending = true;
+            self.last_draw_calls = 0;
+            self.last_text_draw_calls = 0;
+            self.last_instances_drawn = 0;
+            self.last_bytes_uploaded = 0;
+            self.last_geometry_cache_misses = 0;
+            self.update_camera()?;
+            self.gpu_diagnostics.clear_device_loss(lost_generation);
+            Ok(true)
+        }
+
         pub fn render(&mut self) -> Result<bool, JsValue> {
             if self.webgl_context_lost.get() {
                 return Ok(false);
             }
             if self.webgl_recovery_pending.get() {
+                return Ok(false);
+            }
+            if self.backend == wgpu::Backend::BrowserWebGpu
+                && self
+                    .gpu_diagnostics
+                    .device_loss_pending(self.gpu_generation)
+            {
                 return Ok(false);
             }
             let changes_pending =

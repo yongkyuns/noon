@@ -109,6 +109,11 @@ let page = null;
 const pageErrors = [];
 const consoleErrors = [];
 const diagnostics = {};
+const stringifyDiagnostics = (value) => JSON.stringify(
+  value,
+  (_key, item) => typeof item === "bigint" ? item.toString() : item,
+  2,
+);
 
 try {
   await waitForServer();
@@ -267,7 +272,7 @@ try {
   diagnostics.diagnosticMetrics = diagnosticMetrics;
   assert.ok(
     recoverableCount >= 1,
-    `worker control boundaries never surfaced the WebGPU validation diagnostic; last metrics=${JSON.stringify(diagnosticMetrics)}`,
+    `worker control boundaries never surfaced the WebGPU validation diagnostic; last metrics=${stringifyDiagnostics(diagnosticMetrics)}`,
   );
 
   // Cross several additional public worker boundaries to prove the mailbox is
@@ -336,7 +341,7 @@ try {
   diagnostics.consoleErrors = consoleErrors;
   await writeFile(
     path.join(artifactDir, "diagnostics.json"),
-    `${JSON.stringify(diagnostics, null, 2)}\n`,
+    `${stringifyDiagnostics(diagnostics)}\n`,
   );
 } catch (error) {
   diagnostics.failure = String(error?.stack ?? error);
@@ -345,7 +350,7 @@ try {
   diagnostics.serverOutput = serverOutput;
   await writeFile(
     path.join(artifactDir, "diagnostics.json"),
-    `${JSON.stringify(diagnostics, null, 2)}\n`,
+    `${stringifyDiagnostics(diagnostics)}\n`,
   );
   throw error;
 } finally {

@@ -99,6 +99,7 @@ export function createAuthoringRenderController(host) {
     try {
       validateMainMessage(message);
       if (webglRecoveryPromise !== null) await webglRecoveryPromise;
+      if (!(await flushGpuDiagnostics())) return;
       switch (message.type) {
         case "init":
           await initialize(message);
@@ -859,6 +860,17 @@ export function createAuthoringRenderController(host) {
       renderPort?.postMessage({ type: "tick", timestamp });
     }
     scheduleFrame(generation);
+  }
+
+  async function flushGpuDiagnostics() {
+    if (renderer === null) return true;
+    try {
+      await renderer.flushGpuDiagnostics?.();
+      return drainGpuDiagnostics();
+    } catch (error) {
+      fail(error, null);
+      return false;
+    }
   }
 
   function drainGpuDiagnostics() {
