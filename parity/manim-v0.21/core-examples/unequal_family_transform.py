@@ -79,3 +79,38 @@ class UnequalFamilyTransformContraction(Scene):
         )
         self.add(source)
         self.play(Transform(source, target), run_time=1.0, rate_func=linear)
+
+
+class UnequalFamilyPathTransformExpansion(Scene):
+    def construct(self):
+        source = VGroup(
+            Triangle(
+                fill_color=PURPLE,
+                fill_opacity=1.0,
+                stroke_opacity=0.0,
+            ).scale(0.8).move_to(2.5 * LEFT),
+            Triangle(
+                fill_color=PURPLE,
+                fill_opacity=1.0,
+                stroke_opacity=0.0,
+            ).scale(0.8).move_to(2.5 * RIGHT),
+        )
+        target = VGroup(
+            Triangle(
+                fill_color=PURPLE,
+                fill_opacity=1.0,
+                stroke_opacity=0.0,
+            ).scale(0.8).move_to(3.0 * LEFT),
+            Triangle(
+                fill_color=PURPLE,
+                fill_opacity=1.0,
+                stroke_opacity=0.0,
+            ).scale(0.8),
+            Triangle(
+                fill_color=PURPLE,
+                fill_opacity=1.0,
+                stroke_opacity=0.0,
+            ).scale(0.8).move_to(3.0 * RIGHT),
+        )
+        self.add(source)
+        self.play(Transform(source, target), run_time=1.0, rate_func=linear)
