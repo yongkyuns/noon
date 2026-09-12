@@ -35,6 +35,7 @@ impl From<noon::SvgAuthoringError> for AuthoringFailure {
                     cause: Some(Box::new(nested)),
                 }
             }
+            _ => Self::new("invalid_input", "svg.authoring", message),
         }
     }
 }
