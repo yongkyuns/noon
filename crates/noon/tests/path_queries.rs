@@ -117,3 +117,112 @@ fn paired_query_example_uses_the_normal_execution_session() {
     let session = noon::example_scenes::path_queries::session().unwrap();
     assert_eq!(session.frame().objects.len(), 10);
 }
+
+#[test]
+fn effective_morph_queries_interpolate_controls_and_keep_snapshot_and_seek_coherent() {
+    let mut scene = Scene::new();
+    let mut object = scene.square(2.).unwrap();
+    object.rotate(0.37).unwrap();
+    object.shift(-1., 2.).unwrap();
+    scene.add(&object).unwrap();
+    let target = object.target_editor().unwrap();
+    noon::LayoutAnchor::from(&target)
+        .stretch(
+            2.,
+            noon::LayoutDimension::Width,
+            noon::ManimRotationPivot::Center,
+        )
+        .unwrap();
+    let source_query = object.path_query().unwrap();
+    let target_query = target.path_query().unwrap();
+    let animation = scene
+        .declare_transform_to(
+            &object,
+            &target,
+            AnimationOptions::new()
+                .run_time(2.)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let midpoint;
+    {
+        let mut live = scene.live(&mut session);
+        let segment = live.play_animation(&animation).unwrap();
+        live.advance_segment_to(segment, 1.).unwrap();
+        midpoint = live.effective_path_query(&object).unwrap();
+        assert_eq!(midpoint.curve_count(), 4);
+        for index in 0..4 {
+            let start = source_query.curve_points(index).unwrap();
+            let end = target_query.curve_points(index).unwrap();
+            for (point, (a, b)) in midpoint
+                .curve_points(index)
+                .unwrap()
+                .into_iter()
+                .zip(start.into_iter().zip(end))
+            {
+                near(point, ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5));
+            }
+        }
+        live.advance_segment_to(segment, 2.).unwrap();
+        live.complete_segment(segment).unwrap();
+        near(
+            live.effective_path_query(&object).unwrap().start().unwrap(),
+            target_query.start().unwrap(),
+        );
+    }
+    session.seek(1.).unwrap();
+    let replay = scene
+        .live(&mut session)
+        .effective_path_query(&object)
+        .unwrap();
+    for index in 0..4 {
+        assert_eq!(
+            replay.curve_points(index).unwrap(),
+            midpoint.curve_points(index).unwrap()
+        );
+    }
+}
+
+#[test]
+fn native_object_scaled_strokes_use_the_same_morph_controls() {
+    let mut scene = Scene::new();
+    let path = VectorPath::new()
+        .move_to(Vec2::new(-1., -1.))
+        .line_to(Vec2::new(1., -1.))
+        .line_to(Vec2::new(1., 1.))
+        .line_to(Vec2::new(-1., 1.))
+        .line_to(Vec2::new(-1., -1.))
+        .close();
+    let object = scene
+        .path(path, noon_core::SemanticStyle::default())
+        .unwrap();
+    scene.add(&object).unwrap();
+    let mut target = object.target_editor().unwrap();
+    target
+        .set_points_as_corners(&[
+            Vec2::new(-2., -1.),
+            Vec2::new(2., -1.),
+            Vec2::new(2., 1.),
+            Vec2::new(-2., 1.),
+            Vec2::new(-2., -1.),
+        ])
+        .unwrap();
+    let animation = scene
+        .declare_transform_to(
+            &object,
+            &target,
+            AnimationOptions::new()
+                .run_time(2.)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut session);
+    let segment = live.play_animation(&animation).unwrap();
+    live.advance_segment_to(segment, 1.).unwrap();
+    near(
+        live.effective_path_query(&object).unwrap().start().unwrap(),
+        (-1.5, -1.),
+    );
+}

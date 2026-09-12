@@ -1815,9 +1815,9 @@ impl FramePreparer {
         } else {
             path
         };
-        let mesh = if style.stroke_width_mode == StrokeWidthMode::ScreenSpace
-            && tessellation_path.morph_target().is_some()
-        {
+        // Correspondence is established by shared transform preparation. Stroke
+        // scaling affects tessellation coordinates, never semantic point pairing.
+        let mesh = if tessellation_path.morph_target().is_some() {
             noon_geometry::tessellate_styled_with_fill_preserving_morph_order(
                 tessellation_path,
                 style.stroke_width,

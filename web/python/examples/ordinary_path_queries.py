@@ -12,8 +12,17 @@ class OrdinaryPathQueries(Scene):
             assert shape.get_arc_length() > 0
             for alpha in (0.125, 0.375, 0.625, 0.875):
                 self.add(Dot(shape.point_from_proportion(alpha), color="#ffcc44"))
-        before = rectangle.get_start()
-        self.wait(0.2)
-        after = rectangle.get_start()
-        assert abs(before[0] - after[0]) < 1e-6
-        assert abs(before[1] - after[1]) < 1e-6
+        target = rectangle.copy().stretch(1.2, 0)
+        start, end = rectangle.get_start(), target.get_start()
+        animation = self.declare_live_transform_to(rectangle, target, run_time=1, rate_func=linear)
+        live = self.live_execution()
+        finish = live.play(animation)
+        live.advance_to(0.5)
+        midpoint = rectangle.get_start()
+        assert abs(midpoint[0] - (start[0] + end[0]) * 0.5) < 2e-6
+        assert abs(midpoint[1] - (start[1] + end[1]) * 0.5) < 2e-6
+        live.advance_to(finish)
+        live.complete()
+        wait_end = live.wait(0.2)
+        live.advance_to(wait_end)
+        live.complete()

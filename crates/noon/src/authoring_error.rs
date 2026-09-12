@@ -181,6 +181,8 @@ pub enum AuthoringError {
     GeometryResource(noon_core::GeometryResourceError),
     /// A path observation received invalid geometry or sampling parameters.
     PathQuery(noon_geometry::PathProportionError),
+    /// Current path controls cannot be observed with the active correspondence.
+    MorphQuery(noon_geometry::MorphError),
     /// Filled-region construction failed before publication.
     Boolean(noon_geometry::BooleanPathError),
     /// The shared arc constructor rejected its inputs.
@@ -288,6 +290,7 @@ impl std::fmt::Display for AuthoringError {
             Self::VectorLowering(error) => error.fmt(f),
             Self::GeometryResource(error) => error.fmt(f),
             Self::PathQuery(error) => error.fmt(f),
+            Self::MorphQuery(error) => error.fmt(f),
             Self::Boolean(error) => error.fmt(f),
             Self::Arc(error) => error.fmt(f),
             Self::Elbow(error) => error.fmt(f),
@@ -310,6 +313,7 @@ impl std::error::Error for AuthoringError {
             Self::VectorLowering(error) => Some(error),
             Self::GeometryResource(error) => Some(error),
             Self::PathQuery(error) => Some(error),
+            Self::MorphQuery(error) => Some(error),
             Self::Boolean(error) => Some(error),
             Self::Arc(error) => Some(error),
             Self::Elbow(error) => Some(error),

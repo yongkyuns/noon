@@ -28,6 +28,8 @@ try {
   const observations = await page.evaluate(async ({ modules, probes, pyodideUrl }) => {
     const wasm = await import("/web/pkg/noon_web.js");
     await wasm.default();
+    const { resolveAnimationOptionsPlain } = await import("/web/animation-options.js");
+    globalThis.noonResolveAnimationOptions = (...args) => resolveAnimationOptionsPlain(wasm.resolveAnimationOptions, ...args);
     const { loadPyodide } = await import(pyodideUrl);
     const pyodide = await loadPyodide();
     const store = new wasm.WasmAuthoringStore();

@@ -6,25 +6,9 @@ pub(super) fn plan(
     target: &VectorPath,
     options: MorphOptions,
 ) -> Result<MorphPlan, MorphError> {
-    let (source, target) = crate::align_paths(source, target).map_err(MorphError::PathAlignment)?;
-    let source = crate::partial::cubic_contours(&source);
-    let target = crate::partial::cubic_contours(&target);
-    if source.len() != target.len() {
-        return Err(MorphError::ContourCountMismatch {
-            source: source.len(),
-            target: target.len(),
-        });
-    }
-    let mut contours = Vec::with_capacity(source.len());
-    for (index, (source, target)) in source.into_iter().zip(target).enumerate() {
-        if source.closed != target.closed {
-            return Err(MorphError::ClosureMismatch {
-                contour: index,
-                source_closed: source.closed,
-                target_closed: target.closed,
-            });
-        }
-        debug_assert_eq!(source.curves.len(), target.curves.len());
+    let pairs = aligned_contours(source, target)?;
+    let mut contours = Vec::with_capacity(pairs.len());
+    for (source, target) in pairs {
         let samples = options.samples_per_contour.div_ceil(source.curves.len());
         let minimum_depth = samples.clamp(1, 1 << 16).next_power_of_two().ilog2();
         let mut result = MorphContourPlan {
@@ -55,6 +39,64 @@ pub(super) fn plan(
         contours.push(result);
     }
     Ok(MorphPlan { contours })
+}
+
+fn aligned_contours(
+    source: &VectorPath,
+    target: &VectorPath,
+) -> Result<Vec<(crate::partial::CubicContour, crate::partial::CubicContour)>, MorphError> {
+    let (source, target) = crate::align_paths(source, target).map_err(MorphError::PathAlignment)?;
+    let source = crate::partial::cubic_contours(&source);
+    let target = crate::partial::cubic_contours(&target);
+    if source.len() != target.len() {
+        return Err(MorphError::ContourCountMismatch {
+            source: source.len(),
+            target: target.len(),
+        });
+    }
+    source
+        .into_iter()
+        .zip(target)
+        .enumerate()
+        .map(|(index, (source, target))| {
+            if source.closed != target.closed {
+                return Err(MorphError::ClosureMismatch {
+                    contour: index,
+                    source_closed: source.closed,
+                    target_closed: target.closed,
+                });
+            }
+            debug_assert_eq!(source.curves.len(), target.curves.len());
+            Ok((source, target))
+        })
+        .collect()
+}
+
+pub(super) fn interpolate(
+    source: &VectorPath,
+    target: &VectorPath,
+    progress: f32,
+) -> Result<VectorPath, MorphError> {
+    if !progress.is_finite() || !(0.0..=1.0).contains(&progress) {
+        return Err(MorphError::PathAlignment(
+            crate::PathProportionError::InvalidProportion(progress),
+        ));
+    }
+    let mut path = VectorPath::new();
+    for (source, target) in aligned_contours(source, target)? {
+        for (index, (a, b)) in source.curves.into_iter().zip(target.curves).enumerate() {
+            let p: [Vec2; 4] =
+                std::array::from_fn(|index| a[index] * (1.0 - progress) + b[index] * progress);
+            if index == 0 {
+                path = path.move_to(p[0]);
+            }
+            path = path.cubic_to(p[1], p[2], p[3]);
+        }
+        if source.closed {
+            path = path.close();
+        }
+    }
+    Ok(path)
 }
 
 fn split(p: [Vec2; 4]) -> ([Vec2; 4], [Vec2; 4]) {
