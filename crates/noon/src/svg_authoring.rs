@@ -13,6 +13,8 @@ use noon_core::{
 };
 use std::rc::Rc;
 
+const MANIM_DEFAULT_STROKE_WIDTH_SENTINEL: f32 = 0.000_001;
+
 /// Positioning applied after SVG parsing.
 ///
 /// The default mirrors Manim's `SVGMobject` placement contract: flip SVG's Y axis,
@@ -221,10 +223,10 @@ fn with_manim_svg_defaults(source: &str, document: &usvg::roxmltree::Document<'_
         return source.to_owned();
     }
 
-    // Manim wraps the source SVG in a group whose fallback stroke width is zero.
-    // Adding the same inherited presentation value to the original root retains
-    // viewBox/viewport behavior while allowing every explicit descendant, inline
-    // style, and stylesheet declaration to override the fallback normally.
+    // `usvg` intentionally discards a stroke whose width resolves to zero, which
+    // can also discard an otherwise fill-less path. Manim still retains that path
+    // as a submobject. Use a tiny inherited parse-only sentinel so normalization
+    // keeps the geometry, then lower that sentinel back to Manim's zero fallback.
     let root_start = root.range().start;
     let after_angle = root_start.saturating_add(1);
     let Some(name_end) = source[after_angle..]
@@ -233,9 +235,9 @@ fn with_manim_svg_defaults(source: &str, document: &usvg::roxmltree::Document<'_
     else {
         return source.to_owned();
     };
-    let mut normalized = String::with_capacity(source.len() + 17);
+    let mut normalized = String::with_capacity(source.len() + 24);
     normalized.push_str(&source[..name_end]);
-    normalized.push_str(" stroke-width=\"0\"");
+    normalized.push_str(" stroke-width=\"0.000001\"");
     normalized.push_str(&source[name_end..]);
     normalized
 }
@@ -480,10 +482,16 @@ fn prepare_style(path: &usvg::Path) -> Result<SemanticStyle, SvgAuthoringError> 
                 usvg::LineCap::Butt => StrokeCap::Butt,
                 usvg::LineCap::Square => StrokeCap::Square,
             };
+            let resolved_width = stroke.width().get();
+            let width = if resolved_width == MANIM_DEFAULT_STROKE_WIDTH_SENTINEL {
+                0.0
+            } else {
+                f64::from(resolved_width)
+            };
             (
                 Some(SemanticPaint::Solid(solid_paint(stroke.paint())?)),
                 f64::from(stroke.opacity().get()),
-                f64::from(stroke.width().get()),
+                width,
                 join,
                 cap,
             )
