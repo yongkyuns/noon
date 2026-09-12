@@ -598,10 +598,10 @@ mod tests {
     fn static_svg_paths_publish_as_one_retained_family_transaction() {
         let scene = Scene::new();
         let before = scene.revision();
-        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">
             <rect x="0" y="0" width="10" height="10" fill="#ff0000"/>
             <path d="M 10 0 L 20 0 L 20 10 Z" fill="#00ff00"/>
-        </svg>"#;
+        </svg>"##;
 
         let family = scene.svg_from_str(svg).unwrap();
         assert_eq!(
@@ -623,9 +623,9 @@ mod tests {
     #[test]
     fn svg_transform_and_y_flip_are_baked_into_retained_path() {
         let scene = Scene::new();
-        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
             <path d="M 1 2 L 4 2" transform="translate(3 5)" fill="none" stroke="#112233"/>
-        </svg>"#;
+        </svg>"##;
         let family = scene
             .svg_from_str_with_options(svg, raw_options())
             .unwrap();
@@ -643,11 +643,11 @@ mod tests {
     #[test]
     fn inherited_solid_style_reaches_semantic_leaf() {
         let scene = Scene::new();
-        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
             <g fill="#123456" fill-opacity="0.25" stroke="#abcdef" stroke-opacity="0.5" stroke-width="2">
                 <path d="M 0 0 L 10 0 L 10 10 Z"/>
             </g>
-        </svg>"#;
+        </svg>"##;
         let family = scene
             .svg_from_str_with_options(svg, raw_options())
             .unwrap();
@@ -671,10 +671,10 @@ mod tests {
     fn unsupported_svg_fails_before_semantic_publication() {
         let scene = Scene::new();
         let before = scene.revision();
-        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
             <defs><linearGradient id="g"><stop offset="0" stop-color="red"/></linearGradient></defs>
             <rect width="10" height="10" fill="url(#g)"/>
-        </svg>"#;
+        </svg>"##;
 
         assert!(matches!(
             scene.svg_from_str(svg),
@@ -689,9 +689,9 @@ mod tests {
     fn group_compositing_is_rejected_instead_of_flattened() {
         let scene = Scene::new();
         let before = scene.revision();
-        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
             <g opacity="0.5"><rect width="10" height="10" fill="red"/></g>
-        </svg>"#;
+        </svg>"##;
         assert!(matches!(
             scene.svg_from_str(svg),
             Err(SvgAuthoringError::Unsupported(
