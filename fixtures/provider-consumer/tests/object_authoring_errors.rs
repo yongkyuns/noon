@@ -8,9 +8,9 @@ use noon::integration::{
 };
 use noon::{
     AnimationOptions, AuthoringError, ExecutionSession, ExecutionSessionCallbackError,
-    LayoutAnchor, LiveSessionError, Mobject, MobjectTarget, RateFunction, Scene,
-    SceneRevision, SemanticNodeId, SemanticObjectProperty, SemanticObjectState, SemanticVec3,
-    StoredGeometry, UnsupportedAuthoringOperation, Vec2, VectorPath,
+    LayoutAnchor, LiveSessionError, Mobject, MobjectTarget, RateFunction, Scene, SceneRevision,
+    SemanticNodeId, SemanticObjectProperty, SemanticObjectState, SemanticVec3, StoredGeometry,
+    UnsupportedAuthoringOperation, Vec2, VectorPath,
 };
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -237,10 +237,7 @@ fn layout_and_copy_failures_leave_all_family_leaves_unchanged() -> TestResult {
     let scene = Scene::new();
     let left = scene.circle(1.0)?;
     let right = scene.square(1.0)?;
-    let family = scene.family(&[
-        MobjectTarget::Object(&left),
-        MobjectTarget::Object(&right),
-    ])?;
+    let family = scene.family(&[MobjectTarget::Object(&left), MobjectTarget::Object(&right)])?;
     let before = snapshot(&scene, &[&left, &right]);
     assert_eq!(
         LayoutAnchor::from(&family).member(-3).layout().unwrap_err(),
