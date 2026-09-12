@@ -16,7 +16,7 @@ for (const backend of backends) {
 const suites = list(process.env.NOON_PERF_SUITES ?? "frame,corpus");
 for (const suite of suites) {
   assert.ok(
-    suite === "frame" || suite === "authoring" || suite === "corpus",
+    suite === "frame" || suite === "authoring" || suite === "corpus" || suite === "dynamic-stress",
     `unknown suite: ${suite}`,
   );
 }
@@ -52,6 +52,19 @@ for (const backend of backends) {
     });
     artifacts.push({ suite: "authoring", backend, path: relative });
   }
+  if (suites.includes("dynamic-stress")) {
+    const relative = path.join(relativeDir, `dynamic-stress-${backend}.json`);
+    const webgpuMinimumFps = process.env.NOON_PERF_DYNAMIC_STRESS_WEBGPU_MIN_FPS?.trim();
+    run("scripts/retained-dynamic-stress-perf.mjs", {
+      NOON_RETAINED_STRESS_BACKEND: backend,
+      NOON_RETAINED_STRESS_ARTIFACT: relative,
+      NOON_RETAINED_STRESS_SAMPLE_HZ: process.env.NOON_PERF_TARGET_HZ ?? "60",
+      ...(backend === "webgpu" && webgpuMinimumFps
+        ? { NOON_RETAINED_STRESS_MIN_EFFECTIVE_FPS: webgpuMinimumFps }
+        : {}),
+    });
+    artifacts.push({ suite: "dynamic-stress", backend, path: relative });
+  }
 }
 
 const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" });
@@ -69,6 +82,7 @@ const bundle = {
     height: process.env.NOON_PERF_HEIGHT ?? "540",
     devicePixelRatio: process.env.NOON_PERF_DPR ?? "1",
     targetHz: process.env.NOON_PERF_TARGET_HZ ?? "60",
+    dynamicStressWebgpuMinimumFps: process.env.NOON_PERF_DYNAMIC_STRESS_WEBGPU_MIN_FPS ?? null,
   },
   artifacts,
 };
