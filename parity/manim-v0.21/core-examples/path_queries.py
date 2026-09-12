@@ -12,8 +12,6 @@ class OrdinaryPathQueries(Scene):
             assert shape.get_arc_length() > 0
             for alpha in (0.125, 0.375, 0.625, 0.875):
                 self.add(Dot(shape.point_from_proportion(alpha), color="#ffcc44"))
-        before = rectangle.get_start()
+        target = rectangle.copy().stretch(1.2, 0)
+        self.play(Transform(rectangle, target), run_time=1, rate_func=linear)
         self.wait(0.2)
-        after = rectangle.get_start()
-        assert abs(before[0] - after[0]) < 1e-6
-        assert abs(before[1] - after[1]) < 1e-6

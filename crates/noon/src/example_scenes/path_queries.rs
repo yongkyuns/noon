@@ -28,8 +28,32 @@ pub fn session() -> Result<ExecutionSession, String> {
                 scene.add(&marker)?;
             }
         }
+        let target = rectangle.target_editor()?;
+        crate::LayoutAnchor::from(&target).stretch(
+            1.2,
+            crate::LayoutDimension::Width,
+            crate::ManimRotationPivot::Center,
+        )?;
+        let start = rectangle.path_query()?.start()?;
+        let end = target.path_query()?.start()?;
+        let animation = scene.declare_transform_to(
+            &rectangle,
+            &target,
+            crate::AnimationOptions::new()
+                .run_time(1.)
+                .rate_func(crate::RateFunction::Linear),
+        )?;
         let mut session = scene.execution_session()?;
         let mut live = scene.live(&mut session);
+        let segment = live.play_animation(&animation)?;
+        live.advance_segment_to(segment, 0.5)?;
+        let captured = live.effective_path_query(&rectangle)?;
+        let midpoint = captured.start()?;
+        assert!((midpoint.0 - (start.0 + end.0) * 0.5).abs() < 2e-6);
+        assert!((midpoint.1 - (start.1 + end.1) * 0.5).abs() < 2e-6);
+        live.advance_segment_to(segment, segment.end_time())?;
+        live.complete_segment(segment)?;
+        assert_eq!(captured.start()?, midpoint);
         let before = live.effective_path_query(&rectangle)?.start()?;
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;

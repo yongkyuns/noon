@@ -833,6 +833,36 @@ def _canonical_curve_layout(api):
     return [_object_observation(obj) for obj in (circle, ellipse, circle.copy(), family)]
 
 
+def _morph_path_observation(shape):
+    return {"start": _point_observation(shape.get_start()),
+            "controls": [[_point_observation(p) for p in shape.get_nth_curve_points(i)]
+                         for i in range(shape.get_num_curves())]}
+
+
+def _noon_effective_morph_path():
+    scene = noon.Scene()
+    shape = noon.Square(side_length=2).rotate(.37).shift(noon.LEFT)
+    target = shape.copy().stretch(1.8, 0)
+    scene.add(shape)
+    animation = scene.declare_live_transform_to(shape, target, run_time=1, rate_func=noon.linear)
+    live = scene.live_execution()
+    end = live.play(animation)
+    live.advance_to(.5)
+    result = _morph_path_observation(shape)
+    live.advance_to(end)
+    live.complete()
+    return result
+
+
+def _manim_effective_morph_path():
+    shape = manim.Square(side_length=2).rotate(.37).shift(manim.LEFT)
+    target = shape.copy().stretch(1.8, 0)
+    animation = manim.Transform(shape, target, run_time=1, rate_func=manim.linear)
+    animation.begin()
+    animation.interpolate(.5)
+    return _morph_path_observation(shape)
+
+
 def _world_stretch(api):
     shape = api.Square(side_length=2).rotate(.37).shift(api.RIGHT - api.UP)
     shape.stretch(-1.5, 0, about_point=2 * api.RIGHT)
@@ -974,6 +1004,7 @@ def _point_matching(api):
 
 
 FIXTURES = [
+    Fixture("effective_morph_path", _noon_effective_morph_path, _manim_effective_morph_path, 1e-5),
     Fixture("world_stretch", lambda: _world_stretch(noon), lambda: _world_stretch(manim), 1e-5),
     Fixture("path_alignment", lambda: _path_alignment(noon), lambda: _path_alignment(manim), 1e-5),
     Fixture("boolean_geometry", lambda: _boolean_geometry(noon), lambda: _boolean_geometry(manim), 1e-5),

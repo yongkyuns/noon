@@ -111,6 +111,10 @@ pub struct EffectiveSemanticObject<'a> {
     pub object: &'a FrameObjectState,
     pub publication: PublicationContext,
     authored_content_layout_applicable: bool,
+    pub(crate) render_geometry: Option<&'a noon_core::GeometryRef>,
+    pub(crate) render_transform: Option<noon_core::Transform2D>,
+    pub(crate) reveal: f32,
+    pub(crate) morph: f32,
 }
 
 impl EffectiveSemanticObject<'_> {
@@ -538,6 +542,10 @@ impl ExecutionSession {
             object,
             publication: self.publication_context(),
             authored_content_layout_applicable,
+            render_geometry: frame.render_geometries[object_index].as_deref(),
+            render_transform: frame.render_transforms[object_index],
+            reveal: frame.reveals[object_index],
+            morph: frame.morphs[object_index],
         })
     }
 }
