@@ -1,0 +1,71 @@
+name: Qualify #1366 final renderer recovery
+
+on:
+  push:
+    branches:
+      - codex/1366-webgpu-device-loss
+    paths:
+      - ".github/workflows/codex-1366-final-qualify.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      NOON_SKIP_WEB_PREFLIGHT: "1"
+      NOON_WASM_SKIP_OPT: "1"
+      NOON_RENDERER_SMOKE: "1"
+    steps:
+      - name: Checkout exact integration head
+        uses: actions/checkout@v7
+        with:
+          ref: codex/1366-webgpu-device-loss
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Use repository-pinned Rust and WASM target
+        run: |
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose
+          rustup target add wasm32-unknown-unknown
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Build fixture-enabled browser package
+        run: bash scripts/build-web-demo.sh
+
+      - name: Install Chromium smoke dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+
+      - name: Renderer initialization and fallback
+        run: node scripts/renderer-init-failure-smoke.mjs
+
+      - name: WebGL context loss and recovery
+        run: node scripts/renderer-webgl-context-loss-smoke.mjs
+
+      - name: WebGPU device loss twice with preserved output
+        run: node scripts/renderer-webgpu-device-loss-smoke.mjs
+
+      - name: Direct recoverable WebGPU validation diagnostic
+        run: node scripts/renderer-webgpu-validation-error-smoke.mjs
+
+      - name: Worker recoverable WebGPU validation diagnostic
+        run: node scripts/renderer-worker-webgpu-validation-error-smoke.mjs
+
+      - name: Remove qualification helper after green evidence
+        run: |
+          git rm .github/workflows/codex-1366-final-qualify.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "test: retain #1366 final browser qualification"
+          git push origin HEAD:codex/1366-webgpu-device-loss
