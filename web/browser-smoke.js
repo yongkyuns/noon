@@ -123,8 +123,17 @@ function flushPending() {
   presentPending();
 }
 
+async function recoverWebGpuIfNeeded() {
+  const recovered = await renderer.recoverWebGpuDevice();
+  if (recovered) {
+    drainGpuDiagnostics();
+  }
+  return recovered;
+}
+
 async function presentAt(timeSeconds) {
   const time = validateRenderTime(timeSeconds);
+  await recoverWebGpuIfNeeded();
   flushPending();
   renderer.seekDirect(time);
   // These diagnostic calls explicitly request a fresh platform frame at the
@@ -138,6 +147,7 @@ async function presentAt(timeSeconds) {
 async function resizeBacking(width, height) {
   backingWidth = validateBackingDimension("backing width", width);
   backingHeight = validateBackingDimension("backing height", height);
+  await recoverWebGpuIfNeeded();
   renderer.resize(backingWidth, backingHeight);
   const directive = JSON.parse(renderer.directWakeDirectiveJson(performance.now()));
   const presented = directive.presentNow && presentPending();

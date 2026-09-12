@@ -56,11 +56,13 @@ async function waitForServer() {
 function collectBrowserErrors(page) {
   const pageErrors = [];
   const consoleErrors = [];
+  const consoleWarnings = [];
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
+    if (message.type() === "warning") consoleWarnings.push(message.text());
   });
-  return { pageErrors, consoleErrors };
+  return { pageErrors, consoleErrors, consoleWarnings };
 }
 
 async function waitForHarness(page) {
@@ -96,22 +98,18 @@ async function triggerValidationError(page) {
   });
 }
 
-async function waitForHostGpuError(page) {
-  let lastSuccess = null;
+async function waitForHostGpuDiagnostic(page, browserErrors) {
+  let lastMetrics = null;
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    const result = await page.evaluate(async (time) => {
-      try {
-        return { ok: true, metrics: await window.noonSmoke.renderAt(time) };
-      } catch (error) {
-        return { ok: false, error: String(error) };
-      }
-    }, sampleTime);
-    if (!result.ok) return result.error;
-    lastSuccess = result.metrics;
+    lastMetrics = await page.evaluate((time) => window.noonSmoke.renderAt(time), sampleTime);
+    const warning = browserErrors.consoleWarnings.find((message) =>
+      /WebGPU generation 1 validation:/i.test(message),
+    );
+    if (warning) return { warning, metrics: lastMetrics };
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(
-    `uncaptured WebGPU validation error never reached renderFrame; last metrics=${JSON.stringify(lastSuccess)}`,
+    `recoverable WebGPU validation diagnostic never reached the host; last metrics=${JSON.stringify(lastMetrics)}`,
   );
 }
 
@@ -173,11 +171,11 @@ try {
 
   const baseline = await renderAndCapture(page, "baseline");
   await triggerValidationError(page);
-  const hostError = await waitForHostGpuError(page);
+  const hostDiagnostic = await waitForHostGpuDiagnostic(page, browserErrors);
   assert.match(
-    hostError,
-    /WebGPU generation 1 validation error:/,
-    `host GPU error lacks backend/generation context: ${hostError}`,
+    hostDiagnostic.warning,
+    /WebGPU generation 1 validation:/,
+    `host GPU diagnostic lacks backend/generation context: ${hostDiagnostic.warning}`,
   );
 
   const afterErrorMetrics = await page.evaluate(() => window.noonSmoke.metrics());
@@ -219,7 +217,7 @@ try {
     browserVersion: browser.version(),
     initial,
     baseline: baseline.metrics,
-    hostError,
+    hostDiagnostic,
     afterErrorMetrics,
     recovered: recovered.metrics,
     captureBefore,
