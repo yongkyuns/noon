@@ -1,7 +1,7 @@
 //! Target-neutral ownership for realtime Rust authoring continuations.
 //!
-//! A [`LiveProgram`] keeps the consumed semantic [`Scene`] paired with the one
-//! [`ExecutionSession`] lowered from it. It owns only the control-plane state
+//! A [`LiveProgram`] drives the one execution component owned by its consumed
+//! semantic [`Scene`]. It owns only the continuation control-plane state
 //! needed to await one existing [`ExecutionSegment`]. Timeline evaluation,
 //! callback ordering, semantic publication, and renderer-facing invalidation
 //! remain in their existing owners.
@@ -136,7 +136,6 @@ impl<E: Error + 'static> Error for LiveProgramError<E> {
 /// one existing segment and never creates another timeline or cursor.
 pub struct LiveProgram<C> {
     scene: Scene,
-    session: ExecutionSession,
     continuation: C,
     phase: LiveProgramPhase,
 }
@@ -147,13 +146,13 @@ impl Scene {
     /// Lowering happens once before the continuation starts. All later semantic
     /// work is available only through the program's temporary [`LiveSession`].
     pub fn into_live_program<C: LiveContinuation>(
-        self,
+        mut self,
         continuation: C,
     ) -> Result<LiveProgram<C>, noon_compile::SemanticExecutionLoweringError> {
-        let session = self.execution_session()?;
+        let execution = self.execution_session()?;
+        self.install_execution(execution);
         Ok(LiveProgram {
             scene: self,
-            session,
             continuation,
             phase: LiveProgramPhase::ReadyToResume,
         })
@@ -163,7 +162,7 @@ impl Scene {
 impl<C: LiveContinuation> LiveProgram<C> {
     /// Borrow the authoritative runtime for frame, wake, camera, and query observations.
     pub const fn session(&self) -> &ExecutionSession {
-        &self.session
+        self.scene.owned_execution()
     }
 
     /// Derive host cadence from the runtime and this program's one continuation barrier.
@@ -172,7 +171,7 @@ impl<C: LiveContinuation> LiveProgram<C> {
     /// callbacks and shared completion cannot be skipped merely because the
     /// underlying tokenless wait already reports a complete interval.
     pub fn wake_state(&self) -> noon_runtime::RuntimeWakeState {
-        let wake = self.session.wake_state();
+        let wake = self.session().wake_state();
         let LiveProgramPhase::Awaiting(segment) = self.phase else {
             // Only an awaited segment authorizes authored-time advancement.
             // Endpoint presentation, authoring resumption, and a finished source
@@ -180,17 +179,17 @@ impl<C: LiveContinuation> LiveProgram<C> {
             // callback registrations beyond the source's logical interval.
             return wake.without_timeline_wake();
         };
-        let timeline = if self.session.frame().time >= segment.end_time() {
-            noon_runtime::TimelineWakeState::Deadline(self.session.frame().time)
+        let timeline = if self.session().frame().time >= segment.end_time() {
+            noon_runtime::TimelineWakeState::Deadline(self.session().frame().time)
         } else {
-            self.session.segment_state(segment).timeline()
+            self.session().segment_state(segment).timeline()
         };
         wake.with_additional_timeline(timeline)
     }
 
     /// Query candidate frame rows through the session-owned derived spatial index.
     pub fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {
-        self.session.query_viewport(bounds)
+        self.scene.owned_execution_mut().query_viewport(bounds)
     }
 
     /// Deliver one normalized sampled native value without exposing mutable session authority.
@@ -200,11 +199,12 @@ impl<C: LiveContinuation> LiveProgram<C> {
         value: NativeInputValue,
     ) -> Result<&FrameState, LiveProgramError<C::Error>> {
         self.ensure_host_input_available("deliver native state input")?;
-        self.session
+        self.scene
+            .owned_execution_mut()
             .set_native_state_input(source, value)
             .map_err(LiveProgramError::Input)?;
         self.refresh_pending_publication();
-        Ok(self.session.frame())
+        Ok(self.session().frame())
     }
 
     /// Deliver one ordered native event without exposing mutable session authority.
@@ -213,23 +213,24 @@ impl<C: LiveContinuation> LiveProgram<C> {
         occurrence: NativeEventOccurrence,
     ) -> Result<&FrameState, LiveProgramError<C::Error>> {
         self.ensure_host_input_available("deliver a native event")?;
-        self.session
+        self.scene
+            .owned_execution_mut()
             .emit_native_event(occurrence)
             .map_err(LiveProgramError::Input)?;
         self.refresh_pending_publication();
-        Ok(self.session.frame())
+        Ok(self.session().frame())
     }
 
     /// Consume the runtime's current renderer-facing invalidation without copying state.
     pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
-        self.session.take_renderer_publication()
+        self.scene.owned_execution_mut().take_renderer_publication()
     }
 
     pub fn status(&self) -> LiveProgramStatus {
         match self.phase {
             LiveProgramPhase::ReadyToResume => LiveProgramStatus::ReadyToResume,
             LiveProgramPhase::Awaiting(segment) => {
-                LiveProgramStatus::Awaiting(self.session.segment_state(segment))
+                LiveProgramStatus::Awaiting(self.session().segment_state(segment))
             }
             LiveProgramPhase::PublicationPending(publication) => {
                 LiveProgramStatus::PublicationPending(publication)
@@ -248,12 +249,13 @@ impl<C: LiveContinuation> LiveProgram<C> {
             return Err(self.invalid_state("resume authoring"));
         }
         let result = {
-            let mut live = self.scene.live(&mut self.session);
-            self.continuation.resume(&mut live)
+            let continuation = &mut self.continuation;
+            let mut live = self.scene.owned_live();
+            continuation.resume(&mut live)
         };
         match result {
             Ok(ContinuationStep::Await(segment)) => {
-                match self.session.validate_segment_for_advance(segment) {
+                match self.session().validate_segment_for_advance(segment) {
                     Ok(false) => {}
                     Ok(true) => {
                         self.phase = LiveProgramPhase::Terminal;
@@ -292,27 +294,28 @@ impl<C: LiveContinuation> LiveProgram<C> {
         let LiveProgramPhase::Awaiting(segment) = self.phase else {
             return Err(self.invalid_state("drive a segment"));
         };
-        if let Err(error) = callbacks.advance_segment_to(&mut self.session, segment, requested_time)
+        if let Err(error) =
+            callbacks.advance_segment_to(self.scene.owned_execution_mut(), segment, requested_time)
         {
             self.phase = LiveProgramPhase::Terminal;
             return Err(LiveProgramError::Callback(error));
         }
-        if self.session.frame().time < segment.end_time() {
+        if self.session().frame().time < segment.end_time() {
             return Ok(self.status());
         }
 
         let completion = {
-            let mut live = self.scene.live(&mut self.session);
+            let mut live = self.scene.owned_live();
             live.complete_segment(segment)
         };
         if let Err(error) = completion {
             self.phase = LiveProgramPhase::Terminal;
             return Err(LiveProgramError::Completion(error));
         }
-        debug_assert!(self.session.segment_state(segment).is_complete());
+        debug_assert!(self.session().segment_state(segment).is_complete());
 
-        self.phase = if self.session.wake_state().frame_pending() {
-            LiveProgramPhase::PublicationPending(self.session.publication_context())
+        self.phase = if self.session().wake_state().frame_pending() {
+            LiveProgramPhase::PublicationPending(self.session().publication_context())
         } else {
             LiveProgramPhase::ReadyToResume
         };
@@ -337,7 +340,7 @@ impl<C: LiveContinuation> LiveProgram<C> {
                 actual: publication,
             });
         }
-        if self.session.wake_state().frame_pending() {
+        if self.session().wake_state().frame_pending() {
             return Err(LiveProgramError::PublicationStillPending { expected });
         }
         self.phase = LiveProgramPhase::ReadyToResume;
@@ -363,7 +366,8 @@ impl<C: LiveContinuation> LiveProgram<C> {
 
     fn refresh_pending_publication(&mut self) {
         if matches!(self.phase, LiveProgramPhase::PublicationPending(_)) {
-            self.phase = LiveProgramPhase::PublicationPending(self.session.publication_context());
+            let publication = self.session().publication_context();
+            self.phase = LiveProgramPhase::PublicationPending(publication);
         }
     }
 }
@@ -567,7 +571,7 @@ mod tests {
         ));
         assert_eq!(foreign_program.status(), LiveProgramStatus::Terminal);
 
-        let (scene, session, pending) = scene_with_pending_segment();
+        let (mut scene, session, pending) = scene_with_pending_segment();
         let pending_token = pending.token().unwrap();
         let stale_sequence = crate::execution_segment::ExecutionSegmentSequence::new(
             pending_token.sequence().get().checked_add(1).unwrap(),
@@ -578,9 +582,9 @@ mod tests {
                 session.runtime_identity(),
                 stale_sequence,
             ));
+        scene.install_execution(session);
         let mut stale_program = LiveProgram {
             scene,
-            session,
             continuation: ReturnSegment(stale),
             phase: LiveProgramPhase::ReadyToResume,
         };
