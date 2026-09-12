@@ -464,11 +464,9 @@ _DEFAULT_VECTOR_FIELD_LENGTH = object()
 _DEFAULT_VECTOR_FIELD_COLORS = (_base.BLUE_E, _base.GREEN, _base.YELLOW, _base.RED)
 
 
-def _vector_field_range(name: str, value: object) -> tuple[list[float], list[float]]:
+def _vector_field_range(name: str, value: object) -> list[float] | None:
     if value is None:
-        raise NotImplementedError(
-            f"ArrowVectorField {name}=None requires shared frame-derived default ranges"
-        )
+        return None
     try:
         values = [float(component) for component in value]  # type: ignore[arg-type]
     except (TypeError, ValueError) as error:
@@ -479,10 +477,31 @@ def _vector_field_range(name: str, value: object) -> tuple[list[float], list[flo
         raise ValueError(f"{name} must contain [min, max] or [min, max, step]")
     if any(not _base.math.isfinite(component) for component in values):
         raise ValueError(f"{name} must contain finite values")
-    nominal = values.copy()
+    return values
+
+
+def _vector_field_public_range(values: list[float]) -> list[float]:
     public = values.copy()
     public[1] += public[2]
-    return nominal, public
+    return public
+
+
+def _default_vector_field_range(axis: str) -> list[float]:
+    if axis == "x":
+        operations = (
+            _arrow_options.defaultVectorFieldXStart,
+            _arrow_options.defaultVectorFieldXEnd,
+            _arrow_options.defaultVectorFieldXStep,
+        )
+    elif axis == "y":
+        operations = (
+            _arrow_options.defaultVectorFieldYStart,
+            _arrow_options.defaultVectorFieldYEnd,
+            _arrow_options.defaultVectorFieldYStep,
+        )
+    else:  # pragma: no cover - private helper callers use only x/y.
+        raise ValueError(f"unknown vector-field axis {axis!r}")
+    return [float(engine_call(operation)) for operation in operations]
 
 
 def _default_vector_field_length(norm: float) -> float:
@@ -562,8 +581,8 @@ class ArrowVectorField(_compat.VGroup):
                 + ", ".join(sorted(kwargs))
             )
 
-        x_nominal, x_public = _vector_field_range("x_range", x_range)
-        y_nominal, y_public = _vector_field_range("y_range", y_range)
+        x_nominal = _vector_field_range("x_range", x_range)
+        y_nominal = _vector_field_range("y_range", y_range)
         custom_length = length_func is not _DEFAULT_VECTOR_FIELD_LENGTH
         if custom_length and not callable(length_func):
             raise TypeError("ArrowVectorField length_func must be callable")
@@ -598,16 +617,42 @@ class ArrowVectorField(_compat.VGroup):
             if configure_gradient:
                 gradient_colors = _vector_field_colors(colors)
 
-        draft = engine_call(
-            _arrow_options.vectorField,
-            x_nominal[0],
-            x_nominal[1],
-            x_nominal[2],
-            y_nominal[0],
-            y_nominal[1],
-            y_nominal[2],
-            custom_length,
-        )
+        default_x = x_nominal is None
+        default_y = y_nominal is None
+        if default_x or default_y:
+            x_input = x_nominal or [0.0, 0.0, 1.0]
+            y_input = y_nominal or [0.0, 0.0, 1.0]
+            draft = engine_call(
+                _arrow_options.vectorFieldWithDefaultRanges,
+                default_x,
+                x_input[0],
+                x_input[1],
+                x_input[2],
+                default_y,
+                y_input[0],
+                y_input[1],
+                y_input[2],
+                custom_length,
+            )
+            if default_x:
+                x_nominal = _default_vector_field_range("x")
+            if default_y:
+                y_nominal = _default_vector_field_range("y")
+        else:
+            draft = engine_call(
+                _arrow_options.vectorField,
+                x_nominal[0],
+                x_nominal[1],
+                x_nominal[2],
+                y_nominal[0],
+                y_nominal[1],
+                y_nominal[2],
+                custom_length,
+            )
+        assert x_nominal is not None and y_nominal is not None
+        x_public = _vector_field_public_range(x_nominal)
+        y_public = _vector_field_public_range(y_nominal)
+
         try:
             if field_color is not None:
                 engine_call(
