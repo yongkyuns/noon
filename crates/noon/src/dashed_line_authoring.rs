@@ -84,16 +84,13 @@ fn dashed_line_path(
     }
     let num_dashes = requested as usize;
 
-    // DashedVMobject's default equal-length path is exact for a straight line.
-    // Open curves start and end with a dash, so n dashes have n-1 equal gaps.
-    let dash_fraction = dashed_ratio / num_dashes as f64;
-    let gap_fraction = (1.0 - dashed_ratio) / (num_dashes - 1) as f64;
-    let period = dash_fraction + gap_fraction;
-
+    // Straight DashedLine is the simple open-path specialization of the generic
+    // Manim v0.21 dash-pattern planner. Arc-length and curve-count parameters are
+    // identical for one analytic line, so no second segmentation policy exists.
     let mut path = VectorPath::new();
-    for index in 0..num_dashes {
-        let start_fraction = index as f64 * period;
-        let end_fraction = (start_fraction + dash_fraction).min(1.0);
+    for (start_fraction, end_fraction) in
+        noon_geometry::dash_intervals(num_dashes, dashed_ratio, 0.0, false)
+    {
         path = path
             .move_to(interpolate(start, end, start_fraction))
             .line_to(interpolate(start, end, end_fraction));
