@@ -25,6 +25,17 @@ except ImportError:  # Native CPython tests do not have the browser bridge.
     _create_svg_handle = None
 
 
+_MANIM_DEFAULT_SVG_STYLE = {
+    "color": None,
+    "opacity": None,
+    "fill_color": None,
+    "fill_opacity": None,
+    "stroke_width": 0,
+    "stroke_color": None,
+    "stroke_opacity": None,
+}
+
+
 def _read_svg_file(file_name: object) -> tuple[Path, str]:
     if file_name is None:
         raise ValueError("Must specify file for SVGMobject")
@@ -55,7 +66,7 @@ def _validate_parser_options(svg_default: object, path_string_config: object) ->
 def _wrap_imported_family(owner: "SVGMobject", family: object) -> None:
     owner._semantic_family_handle = family
     wrappers: dict[str, _compat.VMobject] = {}
-    count = int(engine_call(getattr, family, "memberCount"))
+    count = int(family.memberCount)
     for index in range(count):
         leaf = object.__new__(_compat.VMobject)
         _attach_shared_handle(leaf, engine_call(family.memberMobject, index))
@@ -127,7 +138,7 @@ class SVGMobject(_compat.VGroup):
         self.stroke_color = stroke_color
         self.stroke_opacity = stroke_opacity
         self.stroke_width = 0 if stroke_width is None else float(stroke_width)
-        self.svg_default = svg_default
+        self.svg_default = dict(_MANIM_DEFAULT_SVG_STYLE)
         self.path_string_config = {} if path_string_config is None else path_string_config
         self.id_to_vgroup_dict = {}
 
