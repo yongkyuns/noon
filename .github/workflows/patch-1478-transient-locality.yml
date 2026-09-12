@@ -19,7 +19,7 @@ jobs:
           fetch-depth: 0
 
       - name: Apply patch
-        run: python3 .github/patch-1478.py
+        run: python3 .github/patch-1478-current.py
 
       - name: Format and focused qualification
         run: |
@@ -36,9 +36,9 @@ jobs:
         run: |
           git config user.name "Noon CI"
           git config user.email "noon-ci@users.noreply.github.com"
-          rm .github/workflows/patch-1478-transient-locality.yml .github/patch-1478.py
+          rm .github/workflows/patch-1478-transient-locality.yml .github/patch-1478.py .github/patch-1478-current.py
           chmod +x scripts/transient-presentation-ratchet.sh scripts/transient-presentation-ratchet.test.sh
           git add -A
           git status --short
-          git commit -m "Localize transient presentation retirement"
+          git commit -m "Complete transient presentation locality"
           git push origin HEAD:codex/b3-transient-presentation-locality
