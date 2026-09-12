@@ -1,0 +1,120 @@
+name: Static SVG Manim raster qualification
+
+on:
+  pull_request:
+    paths:
+      - "crates/noon/src/svg_authoring.rs"
+      - "crates/noon-web/src/authoring_svg.rs"
+      - "web/python/_manim_svg.py"
+      - "web/python/noon.py"
+      - "parity/manim-v0.21/core-examples/svg_static_import.py"
+      - "parity/manim-v0.21/svg-manifest.json"
+      - "scripts/manim-raster-differential.mjs"
+      - "scripts/manim-raster-enforce.mjs"
+      - ".github/workflows/manim-svg-raster-differential.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manim-svg-raster-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  NOON_WASM_SKIP_OPT: "1"
+
+jobs:
+  svg-raster:
+    name: Static SVG vs ManimCE 0.21.0
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install Manim system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg \
+            libcairo2-dev \
+            libpango1.0-dev \
+            pkg-config
+
+      - name: Install pinned ManimCE reference
+        run: python -m pip install --disable-pip-version-check "manim[typst]==0.21.0" "typst==0.15.0"
+
+      - name: Use repository-pinned Rust and WASM target
+        run: |
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose
+          rustup target add wasm32-unknown-unknown
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Build browser package
+        run: bash scripts/build-web-demo.sh
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+
+      - name: Install raster harness dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+
+      - name: Select bounded SVG qualification manifest
+        run: |
+          cp parity/manim-v0.21/manifest.json "$RUNNER_TEMP/full-manim-manifest.json"
+          cp parity/manim-v0.21/svg-manifest.json parity/manim-v0.21/manifest.json
+
+      - name: Render canonical SVG with Manim and Noon
+        env:
+          NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
+          NOON_MANIM_RASTER_ARTIFACTS: manim-svg-raster-artifacts
+        run: |
+          status=0
+          node scripts/manim-raster-differential.mjs > "$RUNNER_TEMP/noon-svg-raster.log" 2>&1 || status=$?
+          tail -n 120 "$RUNNER_TEMP/noon-svg-raster.log"
+          exit "$status"
+
+      - name: Capture semantic state at Manim frame times
+        env:
+          NOON_MANIM_RASTER_ARTIFACTS: manim-svg-raster-artifacts
+        run: node scripts/manim-raster-semantic-state.mjs
+
+      - name: Enforce canonical SVG raster ratchet
+        env:
+          NOON_MANIM_RASTER_ARTIFACTS: manim-svg-raster-artifacts
+        run: node scripts/manim-raster-enforce.mjs
+
+      - name: Verify sparse and dense playback at Manim frame times
+        env:
+          NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
+          NOON_MANIM_RASTER_ARTIFACTS: manim-svg-raster-artifacts
+        run: node scripts/shared-playback-raster.mjs
+
+      - name: Upload SVG qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: static-svg-manim-raster
+          path: |
+            manim-svg-raster-artifacts
+            ${{ runner.temp }}/noon-svg-raster.log
+          if-no-files-found: warn
+          retention-days: 14
