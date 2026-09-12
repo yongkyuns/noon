@@ -1,0 +1,97 @@
+name: 1366 retained-package diagnostic probe
+
+on:
+  push:
+    branches:
+      - codex/1366-webgpu-device-loss
+    paths:
+      - ".github/workflows/codex-1366-observation-probe.yml"
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/1366-webgpu-device-loss
+          fetch-depth: 1
+
+      - name: Download retained renderer package
+        uses: actions/download-artifact@v8
+        with:
+          name: renderer-recovery-web-runtime
+          path: web
+          github-token: ${{ github.token }}
+          run-id: 34399817109
+
+      - name: Apply observation-only candidates
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('scripts/renderer-webgpu-validation-error-smoke.mjs')
+          s = p.read_text()
+          s = s.replace(
+          '''  const consoleErrors = [];\n  page.on("pageerror", (error) => pageErrors.push(String(error)));\n  page.on("console", (message) => {\n    if (message.type() === "error") consoleErrors.push(message.text());\n  });\n  return { pageErrors, consoleErrors };''',
+          '''  const consoleErrors = [];\n  const consoleWarnings = [];\n  page.on("pageerror", (error) => pageErrors.push(String(error)));\n  page.on("console", (message) => {\n    if (message.type() === "error") consoleErrors.push(message.text());\n    if (message.type() === "warning") consoleWarnings.push(message.text());\n  });\n  return { pageErrors, consoleErrors, consoleWarnings };''',
+          1)
+          a = s.index('async function waitForHostGpuError(page) {')
+          b = s.index('\nfunction changedPixelCount', a)
+          s = s[:a] + '''async function waitForHostGpuDiagnostic(page, browserErrors) {\n  let lastMetrics = null;\n  for (let attempt = 0; attempt < 40; attempt += 1) {\n    lastMetrics = await page.evaluate((time) => window.noonSmoke.renderAt(time), sampleTime);\n    const warning = browserErrors.consoleWarnings.find((message) =>\n      /WebGPU generation 1 validation:/i.test(message),\n    );\n    if (warning) return { warning, metrics: lastMetrics };\n    await new Promise((resolve) => setTimeout(resolve, 10));\n  }\n  throw new Error(\n    `recoverable WebGPU validation diagnostic never reached the host; last metrics=${JSON.stringify(lastMetrics)}`,\n  );\n}\n''' + s[b:]
+          s = s.replace(
+          '''  const hostError = await waitForHostGpuError(page);\n  assert.match(\n    hostError,\n    /WebGPU generation 1 validation error:/,\n    `host GPU error lacks backend/generation context: ${hostError}`,\n  );''',
+          '''  const hostDiagnostic = await waitForHostGpuDiagnostic(page, browserErrors);\n  assert.match(\n    hostDiagnostic.warning,\n    /WebGPU generation 1 validation:/,\n    `host GPU diagnostic lacks backend/generation context: ${hostDiagnostic.warning}`,\n  );''',
+          1)
+          s = s.replace('    hostError,\n    afterErrorMetrics,', '    hostDiagnostic,\n    afterErrorMetrics,', 1)
+          p.write_text(s)
+
+          p = Path('scripts/renderer-worker-webgpu-validation-error-smoke.mjs')
+          s = p.read_text()
+          s = s.replace('const diagnostics = {};\n', '''const diagnostics = {};\nconst stringifyDiagnostics = (value) => JSON.stringify(\n  value,\n  (_key, item) => typeof item === "bigint" ? item.toString() : item,\n  2,\n);\n''', 1)
+          s = s.replace('JSON.stringify(diagnosticMetrics)', 'stringifyDiagnostics(diagnosticMetrics)')
+          s = s.replace('JSON.stringify(diagnostics, null, 2)', 'stringifyDiagnostics(diagnostics)')
+          p.write_text(s)
+          PY
+          node --check scripts/renderer-webgpu-validation-error-smoke.mjs
+          node --check scripts/renderer-worker-webgpu-validation-error-smoke.mjs
+          git diff --check
+
+      - name: Install Chromium
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+
+      - name: Direct recoverable diagnostic
+        id: direct
+        continue-on-error: true
+        env:
+          NOON_RENDERER_VALIDATION_ERROR_ARTIFACTS: browser-smoke-artifacts/1366-retained-direct
+        run: node scripts/renderer-webgpu-validation-error-smoke.mjs
+
+      - name: Worker recoverable diagnostic
+        id: worker
+        continue-on-error: true
+        env:
+          NOON_RENDERER_VALIDATION_ARTIFACTS: browser-smoke-artifacts/1366-retained-worker
+        run: node scripts/renderer-worker-webgpu-validation-error-smoke.mjs
+
+      - name: Report
+        if: always()
+        run: |
+          echo "direct=${{ steps.direct.outcome }}"
+          echo "worker=${{ steps.worker.outcome }}"
+          test "${{ steps.direct.outcome }}" = success
+          test "${{ steps.worker.outcome }}" = success
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: codex-1366-retained-diagnostic-probe
+          path: browser-smoke-artifacts/1366-retained-*
+          if-no-files-found: warn
+          retention-days: 3
