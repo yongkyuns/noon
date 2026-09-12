@@ -93,7 +93,10 @@ fn live_self_alignment_is_noop_before_unsupported_current_capture() {
     let revision = scene.revision();
     let resources = geometry_resource_count(&scene);
 
-    scene.live(&mut session).align_points(&object, &object).unwrap();
+    scene
+        .live(&mut session)
+        .align_points(&object, &object)
+        .unwrap();
 
     assert_eq!(scene.revision(), revision);
     assert_eq!(geometry_resource_count(&scene), resources);
@@ -112,7 +115,10 @@ fn live_foreign_alignment_fails_before_resource_or_frame_publication() {
     let revision = scene.revision();
     let resources = geometry_resource_count(&scene);
 
-    assert!(scene.live(&mut session).align_points(&object, &foreign).is_err());
+    assert!(scene
+        .live(&mut session)
+        .align_points(&object, &foreign)
+        .is_err());
 
     assert_eq!(object.state().unwrap(), before);
     assert_eq!(scene.revision(), revision);
