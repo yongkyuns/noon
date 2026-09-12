@@ -1,5 +1,6 @@
 use noon::{LiveProgramStatus, RustHostCallbackTable};
 use noon_core::{Rect, Vec2};
+use noon_render_wgpu::{text::TextDeviceMetrics, RetainedFramePreparer};
 
 #[test]
 fn diagnose_family_state_zero_frame() {
@@ -47,4 +48,29 @@ fn diagnose_family_state_zero_frame() {
 
     assert_eq!(publication.frame().objects.len(), 2);
     assert_eq!(visible.object_indices(), &[0, 1]);
+
+    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let metrics = TextDeviceMetrics::uniform(120.0).unwrap();
+    let mut preparer = RetainedFramePreparer::new();
+    let prepared = preparer
+        .prepare_planned_publication_visible(
+            &device,
+            &queue,
+            &publication,
+            visible.object_indices(),
+            metrics,
+        )
+        .expect("prepare t=0 family publication");
+
+    let mut submitted_instances = 0u32;
+    let mut batches = Vec::new();
+    for chunk in prepared.geometry_render_chunks() {
+        for batch in chunk.render_batches {
+            submitted_instances += batch.instance_range.end - batch.instance_range.start;
+            batches.push((format!("{:?}", batch.primitive), batch.instance_range.clone()));
+        }
+    }
+    println!("BATCHES {:?}", batches);
+    println!("PREPARED stats={:?} instances={submitted_instances}", prepared.geometry_stats());
+    assert_eq!(submitted_instances, 2, "both visible stable members must be submitted at t=0");
 }
