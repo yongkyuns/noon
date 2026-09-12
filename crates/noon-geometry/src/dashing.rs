@@ -179,11 +179,28 @@ impl SampledLengthParameterMap {
 
 fn cubic_point(points: [SemanticVec3; 4], t: f64) -> SemanticVec3 {
     let omt = 1.0 - t;
-    let weights = [omt * omt * omt, 3.0 * omt * omt * t, 3.0 * omt * t * t, t * t * t];
+    let weights = [
+        omt * omt * omt,
+        3.0 * omt * omt * t,
+        3.0 * omt * t * t,
+        t * t * t,
+    ];
     SemanticVec3::new(
-        points.iter().zip(weights).map(|(point, weight)| point.x * weight).sum(),
-        points.iter().zip(weights).map(|(point, weight)| point.y * weight).sum(),
-        points.iter().zip(weights).map(|(point, weight)| point.z * weight).sum(),
+        points
+            .iter()
+            .zip(weights)
+            .map(|(point, weight)| point.x * weight)
+            .sum(),
+        points
+            .iter()
+            .zip(weights)
+            .map(|(point, weight)| point.y * weight)
+            .sum(),
+        points
+            .iter()
+            .zip(weights)
+            .map(|(point, weight)| point.z * weight)
+            .sum(),
     )
 }
 
@@ -235,18 +252,12 @@ mod tests {
             .move_to(Vec2::ZERO)
             .line_to(Vec2::new(1.0, 0.0))
             .line_to(Vec2::new(10.0, 0.0));
-        let equal = dashed_path(&path, false, 2, 0.5, 0.0, true).unwrap();
-        let legacy = dashed_path(&path, false, 2, 0.5, 0.0, false).unwrap();
-        let equal_first_end = match equal.commands()[1] {
-            PathCommand::LineTo { to } => to,
-            _ => panic!("first dash must contain a line"),
-        };
-        let legacy_first_end = match legacy.commands()[1] {
-            PathCommand::LineTo { to } => to,
-            _ => panic!("first dash must contain a line"),
-        };
-        assert!((equal_first_end.x - 2.5).abs() < 1e-5);
-        assert!((legacy_first_end.x - 0.5).abs() < 1e-5);
+        let equal = dashed_path(&path, false, 1, 0.25, 0.0, true).unwrap();
+        let legacy = dashed_path(&path, false, 1, 0.25, 0.0, false).unwrap();
+        let equal_end = equal.endpoints().unwrap().1;
+        let legacy_end = legacy.endpoints().unwrap().1;
+        assert!((equal_end.x - 2.5).abs() < 1e-5);
+        assert!((legacy_end.x - 0.5).abs() < 1e-5);
     }
 
     #[test]
