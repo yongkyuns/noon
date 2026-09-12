@@ -14,6 +14,7 @@ use noon_core::{
 use std::rc::Rc;
 
 const MANIM_DEFAULT_STROKE_WIDTH_SENTINEL: f32 = 0.000_001;
+const MANIM_CAIRO_LINE_WIDTH_MULTIPLE: f64 = 0.01;
 
 /// Positioning applied after SVG parsing.
 ///
@@ -486,7 +487,7 @@ fn prepare_style(path: &usvg::Path) -> Result<SemanticStyle, SvgAuthoringError> 
             let width = if resolved_width == MANIM_DEFAULT_STROKE_WIDTH_SENTINEL {
                 0.0
             } else {
-                f64::from(resolved_width)
+                f64::from(resolved_width) * MANIM_CAIRO_LINE_WIDTH_MULTIPLE
             };
             (
                 Some(SemanticPaint::Solid(solid_paint(stroke.paint())?)),
@@ -696,7 +697,7 @@ mod tests {
         );
         assert!((state.style.fill_opacity - 0.25).abs() < 1e-6);
         assert!((state.style.stroke_opacity - 0.5).abs() < 1e-6);
-        assert!((state.style.stroke_width - 2.0).abs() < 1e-6);
+        assert!((state.style.stroke_width - 0.02).abs() < 1e-6);
     }
 
     #[test]
@@ -715,7 +716,7 @@ mod tests {
         let defaulted = store.semantic_object_state_checked(members[0]).unwrap();
         let explicit = store.semantic_object_state_checked(members[1]).unwrap();
         assert_eq!(defaulted.style.stroke_width, 0.0);
-        assert_eq!(explicit.style.stroke_width, 3.0);
+        assert!((explicit.style.stroke_width - 0.03).abs() < 1e-6);
     }
 
     #[test]
