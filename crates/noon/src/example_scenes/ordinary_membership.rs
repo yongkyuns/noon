@@ -3,7 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject, MobjectFamily,
-    MobjectFamilyMember::{Family, Mobject as Leaf},
+    MobjectTarget::{Family, Object as Leaf},
     Scene, SemanticNodeId,
 };
 use noon_core::SemanticStore;

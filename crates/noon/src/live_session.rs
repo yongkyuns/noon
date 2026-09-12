@@ -28,7 +28,7 @@ use crate::{
     DeclaredAnimation, ExecutionSegment, ExecutionSegmentAdvanceError,
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError,
-    ManimBecomeOptions, ManimLineEndpoints, Mobject, MobjectFamily, MobjectFamilyMember,
+    ManimBecomeOptions, ManimLineEndpoints, Mobject, MobjectFamily, MobjectTarget,
     SceneMembershipRequest, ValueTracker,
 };
 use noon_core::{
@@ -598,9 +598,9 @@ impl<'a> LiveSession<'a> {
         &mut self,
         mobject: &Mobject,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_membership(SceneMembershipRequest::Add(&[
-            MobjectFamilyMember::Mobject(mobject),
-        ]))
+        self.edit_membership(SceneMembershipRequest::Add(&[MobjectTarget::Object(
+            mobject,
+        )]))
     }
 
     /// Remove an existing object from this live scene root without deleting identity.
@@ -608,9 +608,9 @@ impl<'a> LiveSession<'a> {
         &mut self,
         mobject: &Mobject,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_membership(SceneMembershipRequest::Remove(&[
-            MobjectFamilyMember::Mobject(mobject),
-        ]))
+        self.edit_membership(SceneMembershipRequest::Remove(&[MobjectTarget::Object(
+            mobject,
+        )]))
     }
 
     pub fn edit_membership(
@@ -624,14 +624,14 @@ impl<'a> LiveSession<'a> {
 
     pub fn add_many(
         &mut self,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.edit_membership(SceneMembershipRequest::Add(members))
     }
 
     pub fn remove_many(
         &mut self,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.edit_membership(SceneMembershipRequest::Remove(members))
     }
@@ -642,8 +642,8 @@ impl<'a> LiveSession<'a> {
 
     pub fn replace(
         &mut self,
-        old: MobjectFamilyMember<'_>,
-        new: MobjectFamilyMember<'_>,
+        old: MobjectTarget<'_>,
+        new: MobjectTarget<'_>,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.edit_membership(SceneMembershipRequest::Replace { old, new })
     }
@@ -729,7 +729,7 @@ impl<'a> LiveSession<'a> {
     pub fn copy_family_with_references(
         &mut self,
         source: &MobjectFamily,
-        references: &[crate::MobjectFamilyMember<'_>],
+        references: &[crate::MobjectTarget<'_>],
     ) -> Result<crate::FamilyCopy, LiveSessionError> {
         self.require_family(source)?;
         self.require_target_capture()?;
@@ -839,7 +839,7 @@ impl<'a> LiveSession<'a> {
     /// Publish one detached ordered family through this session's semantic owner.
     pub fn family(
         &mut self,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
     ) -> Result<MobjectFamily, LiveSessionError> {
         self.family_with_z_index(members, 0.0)
     }
@@ -847,7 +847,7 @@ impl<'a> LiveSession<'a> {
     /// Atomically create a detached family with root-only painter priority.
     pub fn family_with_z_index(
         &mut self,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
         z_index: f64,
     ) -> Result<MobjectFamily, LiveSessionError> {
         let (transaction, family) =
@@ -864,7 +864,7 @@ impl<'a> LiveSession<'a> {
     pub fn add_family_members(
         &mut self,
         family: &MobjectFamily,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
     ) -> Result<Vec<bool>, LiveSessionError> {
         self.edit_family_members(family, members, true)
     }
@@ -872,7 +872,7 @@ impl<'a> LiveSession<'a> {
     pub fn remove_family_members(
         &mut self,
         family: &MobjectFamily,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
     ) -> Result<Vec<bool>, LiveSessionError> {
         self.edit_family_members(family, members, false)
     }
@@ -880,7 +880,7 @@ impl<'a> LiveSession<'a> {
     fn edit_family_members(
         &mut self,
         family: &MobjectFamily,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
         adding: bool,
     ) -> Result<Vec<bool>, LiveSessionError> {
         self.require_family(family)?;
@@ -4419,8 +4419,8 @@ mod tests {
             .unwrap();
         let _family = live
             .family(&[
-                MobjectFamilyMember::Mobject(&first),
-                MobjectFamilyMember::Mobject(&second),
+                MobjectTarget::Object(&first),
+                MobjectTarget::Object(&second),
             ])
             .unwrap();
         let request = AnimationCompositionRequest::Composition {
@@ -4461,9 +4461,7 @@ mod tests {
             let family = scene.family(&[(&shape).into()]).unwrap();
             let mut session = scene.execution_session().unwrap();
             let mut live = scene.live(&mut session);
-            let outer = live
-                .family(&[MobjectFamilyMember::Family(&family)])
-                .unwrap();
+            let outer = live.family(&[MobjectTarget::Family(&family)]).unwrap();
             let segment = if nested_family {
                 live.declare_and_activate_family_fade(
                     &family,
@@ -5318,9 +5316,7 @@ mod recursive_composition_tests {
         let family = scene
             .family(&[(&fading_text).into(), (&fading_shape).into()])
             .unwrap();
-        scene
-            .add_many(&[MobjectFamilyMember::Family(&family)])
-            .unwrap();
+        scene.add_many(&[MobjectTarget::Family(&family)]).unwrap();
         let written = scene.text(crate::Text::new("new")).unwrap();
         let mut session = scene.execution_session().unwrap();
         let request = AnimationCompositionRequest::Composition {
@@ -5360,9 +5356,7 @@ mod recursive_composition_tests {
         let mut scene = Scene::new();
         let label = scene.text(crate::Text::new("same")).unwrap();
         let family = scene.family(&[(&label).into()]).unwrap();
-        scene
-            .add_many(&[MobjectFamilyMember::Family(&family)])
-            .unwrap();
+        scene.add_many(&[MobjectTarget::Family(&family)]).unwrap();
         let mut session = scene.execution_session().unwrap();
         let before = session.publication_context();
         let request = AnimationCompositionRequest::Composition {
@@ -5889,8 +5883,8 @@ mod recursive_composition_tests {
             .unwrap();
         let family = live
             .family(&[
-                MobjectFamilyMember::Mobject(&first),
-                MobjectFamilyMember::Mobject(&second),
+                MobjectTarget::Object(&first),
+                MobjectTarget::Object(&second),
             ])
             .unwrap();
 

@@ -941,7 +941,7 @@ mod tests {
 
     #[test]
     fn accepted_public_operations_project_real_rust_causes_and_retry() {
-        use noon::{LayoutAnchor, MobjectFamilyMember, Scene};
+        use noon::{LayoutAnchor, MobjectTarget, Scene};
         let scene = Scene::new();
         let mut first = scene.circle(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
@@ -988,7 +988,7 @@ mod tests {
         let foreign = Scene::new().circle(1.0).unwrap();
         assert_authoring_projection(
             family
-                .copy_with_references(&[MobjectFamilyMember::Mobject(&foreign)])
+                .copy_with_references(&[MobjectTarget::Object(&foreign)])
                 .unwrap_err(),
             "foreign_handle",
             &["authoring.foreign_store"],

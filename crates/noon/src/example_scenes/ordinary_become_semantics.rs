@@ -2,7 +2,7 @@
 
 use crate::{
     ContinuationStep, LiveContinuation, LiveProgram, LiveSession, ManimBecomeOptions,
-    ManimGeometryOptions, Mobject, MobjectFamilyMember, Scene,
+    ManimGeometryOptions, Mobject, MobjectTarget, Scene,
 };
 use std::rc::Rc;
 
@@ -233,9 +233,9 @@ pub fn program() -> Result<LiveProgram<OrdinaryBecomeSemantics>, String> {
     }
     scene
         .add_many(&[
-            MobjectFamilyMember::Mobject(&fitted),
-            MobjectFamilyMember::Mobject(&stretched),
-            MobjectFamilyMember::Mobject(&ellipse),
+            MobjectTarget::Object(&fitted),
+            MobjectTarget::Object(&stretched),
+            MobjectTarget::Object(&ellipse),
         ])
         .map_err(|error| error.to_string())?;
     scene

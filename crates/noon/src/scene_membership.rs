@@ -5,18 +5,18 @@ use noon_core::{
     SemanticNodeId, SemanticSceneMembershipRequest, SemanticStore,
 };
 
-use crate::{AuthoringError, MobjectFamilyMember};
+use crate::{AuthoringError, MobjectTarget};
 
 /// One ordered, atomic membership edit over a Scene's authoritative root family.
 #[derive(Clone, Copy)]
 pub enum SceneMembershipRequest<'a> {
-    Add(&'a [MobjectFamilyMember<'a>]),
-    BringToBack(&'a [MobjectFamilyMember<'a>]),
-    Remove(&'a [MobjectFamilyMember<'a>]),
+    Add(&'a [MobjectTarget<'a>]),
+    BringToBack(&'a [MobjectTarget<'a>]),
+    Remove(&'a [MobjectTarget<'a>]),
     Clear,
     Replace {
-        old: MobjectFamilyMember<'a>,
-        new: MobjectFamilyMember<'a>,
+        old: MobjectTarget<'a>,
+        new: MobjectTarget<'a>,
     },
 }
 
@@ -25,13 +25,7 @@ pub(crate) fn prepare_scene_membership(
     root: SemanticNodeId,
     request: SceneMembershipRequest<'_>,
 ) -> Result<SemanticMutationTransaction, AuthoringError> {
-    let validate = |member: MobjectFamilyMember<'_>| -> Result<SemanticNodeId, AuthoringError> {
-        if !Rc::ptr_eq(owner, member.integration_store()) {
-            return Err(AuthoringError::ForeignStore);
-        }
-        member.validate()?;
-        Ok(member.node_id())
-    };
+    let validate = |target: MobjectTarget<'_>| target.require_store(owner);
     let store = owner.borrow();
     match request {
         SceneMembershipRequest::Add(members) => {

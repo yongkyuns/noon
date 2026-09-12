@@ -154,7 +154,7 @@ fn active_segment_path_creation_is_resource_atomic_and_recovers() -> TestResult 
 
 #[test]
 fn invalid_publication_context_rejects_before_resource_import() -> TestResult {
-    use noon::{LiveSession, MobjectFamilyMember};
+    use noon::{LiveSession, MobjectTarget};
     use noon_core::{SemanticNodeCreation, SemanticNodeId};
     for case in [
         "foreign",
@@ -166,7 +166,7 @@ fn invalid_publication_context_rejects_before_resource_import() -> TestResult {
         let mut scene = Scene::new();
         let object = scene.circle(1.0)?;
         scene.add(&object)?;
-        let other = scene.family(&[MobjectFamilyMember::Mobject(&object)])?;
+        let other = scene.family(&[MobjectTarget::Object(&object)])?;
         let foreign = Scene::new();
         let mut session = scene.execution_session()?;
         let root = match case {

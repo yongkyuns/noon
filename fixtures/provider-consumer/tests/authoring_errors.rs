@@ -7,8 +7,7 @@ use noon::integration::{
 };
 use noon::{
     AnimationOptions, AuthoringError, ExecutionSession, ExecutionSessionPublicationError,
-    LiveSessionError, MobjectFamilyMember, RateFunction, Scene, SceneRevision, SemanticNodeId,
-    Vec2,
+    LiveSessionError, MobjectTarget, RateFunction, Scene, SceneRevision, SemanticNodeId, Vec2,
 };
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -59,8 +58,8 @@ fn foreign_handle_in_authored_batch_is_typed_and_atomic() -> TestResult {
     let before = authored_snapshot(&scene);
     let error: noon::prelude::AuthoringError = scene
         .add_many(&[
-            MobjectFamilyMember::Mobject(&local),
-            MobjectFamilyMember::Mobject(&foreign),
+            MobjectTarget::Object(&local),
+            MobjectTarget::Object(&foreign),
         ])
         .unwrap_err();
     assert_eq!(error, AuthoringError::ForeignStore);
@@ -111,7 +110,7 @@ fn stale_object_and_family_generations_retain_the_rejected_identity() -> TestRes
     let before = authored_snapshot(&scene);
     assert_eq!(
         scene
-            .add_many(&[MobjectFamilyMember::Family(&stale_family)])
+            .add_many(&[MobjectTarget::Family(&stale_family)])
             .unwrap_err(),
         expected
     );
@@ -127,10 +126,7 @@ fn authored_membership_preserves_duplicate_missing_and_ambiguous_causes() -> Tes
     let replacement = scene.rectangle(1.0, 2.0)?;
     let before = authored_snapshot(&scene);
     let error = scene
-        .add_many(&[
-            MobjectFamilyMember::Mobject(&leaf),
-            MobjectFamilyMember::Mobject(&leaf),
-        ])
+        .add_many(&[MobjectTarget::Object(&leaf), MobjectTarget::Object(&leaf)])
         .unwrap_err();
     assert_eq!(
         error
@@ -143,18 +139,15 @@ fn authored_membership_preserves_duplicate_missing_and_ambiguous_causes() -> Tes
     );
     assert_eq!(authored_snapshot(&scene), before);
 
-    let left = scene.family(&[MobjectFamilyMember::Mobject(&leaf)])?;
-    let right = scene.family(&[MobjectFamilyMember::Mobject(&leaf)])?;
-    scene.add_many(&[
-        MobjectFamilyMember::Family(&left),
-        MobjectFamilyMember::Family(&right),
-    ])?;
+    let left = scene.family(&[MobjectTarget::Object(&leaf)])?;
+    let right = scene.family(&[MobjectTarget::Object(&leaf)])?;
+    scene.add_many(&[MobjectTarget::Family(&left), MobjectTarget::Family(&right)])?;
     let before = authored_snapshot(&scene);
     assert_eq!(
         scene
             .replace(
-                MobjectFamilyMember::Mobject(&missing),
-                MobjectFamilyMember::Mobject(&replacement)
+                MobjectTarget::Object(&missing),
+                MobjectTarget::Object(&replacement),
             )
             .unwrap_err(),
         AuthoringError::Semantic(SemanticSceneOperationError::MissingMembershipTarget(
@@ -164,8 +157,8 @@ fn authored_membership_preserves_duplicate_missing_and_ambiguous_causes() -> Tes
     assert_eq!(
         scene
             .replace(
-                MobjectFamilyMember::Mobject(&leaf),
-                MobjectFamilyMember::Mobject(&replacement)
+                MobjectTarget::Object(&leaf),
+                MobjectTarget::Object(&replacement),
             )
             .unwrap_err(),
         AuthoringError::Semantic(SemanticSceneOperationError::AmbiguousMembershipTarget(
@@ -193,10 +186,7 @@ fn live_membership_retains_semantic_cause_and_recovers_without_partial_work() ->
     let anchor_execution = session.execution_object_id(anchor.node_id());
     let error = scene
         .live(&mut session)
-        .add_many(&[
-            MobjectFamilyMember::Mobject(&next),
-            MobjectFamilyMember::Mobject(&next),
-        ])
+        .add_many(&[MobjectTarget::Object(&next), MobjectTarget::Object(&next)])
         .unwrap_err();
     assert!(
         matches!(&error, LiveSessionError::Authoring(AuthoringError::Semantic(

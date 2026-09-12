@@ -69,7 +69,7 @@ impl SceneMembershipBatch {
         }
     }
 
-    fn family_members(&self) -> Result<Vec<noon::MobjectFamilyMember<'_>>, String> {
+    fn family_members(&self) -> Result<Vec<noon::MobjectTarget<'_>>, String> {
         if !self.bindings.is_empty() {
             return Err("family membership does not accept scene binding reservations".into());
         }
@@ -1995,7 +1995,7 @@ impl CanonicalAuthoringScene {
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_family(
         &mut self,
-        members: &[noon::MobjectFamilyMember<'_>],
+        members: &[noon::MobjectTarget<'_>],
         z_index: f64,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         match &mut self.player_ownership {
@@ -2246,7 +2246,7 @@ impl CanonicalAuthoringScene {
                             "added membership mobject has no wrapper binding",
                         ));
                     }
-                    borrowed.push(noon::MobjectFamilyMember::Mobject(handle));
+                    borrowed.push(noon::MobjectTarget::Object(handle));
                 }
                 OwnedSceneMembershipMember::Family(family) => {
                     if !std::rc::Rc::ptr_eq(
@@ -2264,7 +2264,7 @@ impl CanonicalAuthoringScene {
                             "membership batch contains a duplicate family",
                         ));
                     }
-                    borrowed.push(noon::MobjectFamilyMember::Family(family));
+                    borrowed.push(noon::MobjectTarget::Family(family));
                 }
             }
         }
@@ -2704,7 +2704,7 @@ mod wasm {
     }
 
     impl WasmSceneMembershipBatch {
-        pub(crate) fn copy_references(&self) -> Result<Vec<noon::MobjectFamilyMember<'_>>, String> {
+        pub(crate) fn copy_references(&self) -> Result<Vec<noon::MobjectTarget<'_>>, String> {
             if self.inner.kind != SceneMembershipBatchKind::Add {
                 return Err("copy references require an add batch".into());
             }
@@ -7854,10 +7854,10 @@ mod tests {
         context.live_player(1.0).unwrap();
         let target = context.live_target_editor(&circle).unwrap();
         let family = context
-            .live_family(&[noon::MobjectFamilyMember::Mobject(&target)], 0.0)
+            .live_family(&[noon::MobjectTarget::Object(&target)], 0.0)
             .unwrap();
         let nested = context
-            .live_family(&[noon::MobjectFamilyMember::Family(&family)], 0.0)
+            .live_family(&[noon::MobjectTarget::Family(&family)], 0.0)
             .unwrap();
         assert_eq!(
             context
@@ -7871,7 +7871,7 @@ mod tests {
         let foreign = noon::Scene::new().circle(0.2).unwrap();
         let revision = context.scene.integration_store().borrow().scene_revision();
         assert!(context
-            .live_family(&[noon::MobjectFamilyMember::Mobject(&foreign)], 0.0)
+            .live_family(&[noon::MobjectTarget::Object(&foreign)], 0.0)
             .is_err());
         assert_eq!(
             context.scene.integration_store().borrow().scene_revision(),
