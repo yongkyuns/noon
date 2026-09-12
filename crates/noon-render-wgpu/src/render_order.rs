@@ -810,6 +810,7 @@ pub enum DerivedDisplayPrimitive {
     Circle,
     Rectangle,
     Line,
+    Path { batch: usize },
 }
 
 /// One lookup row into the transient derived-instance buffers.
@@ -829,7 +830,7 @@ pub enum DisplayPainterItem {
     Derived { occurrence_index: u32 },
 }
 
-/// Transient packed analytic geometry for one renderer publication.
+/// Transient packed geometry for one renderer publication.
 ///
 /// These arrays deliberately contain no `ObjectId` side tables. They are rebuilt
 /// from the publication's identity-free derived rows and discarded independently of
@@ -839,6 +840,10 @@ pub struct PreparedDerivedDisplay {
     pub circles: Vec<crate::CircleInstance>,
     pub rectangles: Vec<crate::RectangleInstance>,
     pub lines: Vec<crate::LineInstance>,
+    pub paths: Vec<crate::PathInstance>,
+    pub path_vertices: Vec<crate::PathVertex>,
+    pub path_indices: Vec<u32>,
+    pub path_batches: Vec<crate::PathBatch>,
     pub slots: Vec<PreparedDerivedDisplaySlot>,
     pub painter_items: Vec<DisplayPainterItem>,
 }
@@ -882,7 +887,7 @@ impl std::fmt::Display for DerivedDisplayRenderError {
             ),
             Self::UnsupportedGeometry(occurrence) => write!(
                 formatter,
-                "derived display occurrence {occurrence} requires transient path/external geometry packing"
+                "derived display occurrence {occurrence} could not be prepared as transient geometry"
             ),
         }
     }
@@ -893,9 +898,9 @@ impl std::error::Error for DerivedDisplayRenderError {}
 /// Pack analytic derived display rows and merge their occurrence order immediately
 /// after each stable source anchor without modifying the stable frame preparer.
 ///
-/// Vector paths, external geometry and text intentionally fail closed in this first
-/// renderer slice. Those need the renderer's retained resource/tessellation lanes;
-/// assigning a fake `ObjectId` merely to reuse stable slot packing is forbidden.
+/// Vector paths reuse the renderer's shared tessellation semantics and ordinary path
+/// pipeline without receiving stable identity. External geometry and text still fail
+/// closed rather than fabricating a stable `ObjectId` merely to reuse retained slots.
 pub fn prepare_derived_display(
     publication: &noon_runtime::RendererPublication<'_>,
 ) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
@@ -986,7 +991,8 @@ fn pack_derived_display_object(
     let geometry = state
         .effective_render_geometry()
         .ok_or(DerivedDisplayRenderError::UnsupportedContent(occurrence))?;
-    let transform: crate::PackedTransform = state.effective_render_transform().into();
+    let render_transform = state.effective_render_transform();
+    let transform: crate::PackedTransform = render_transform.into();
     let style = pack_derived_display_style(state);
     let (primitive, instance_index) = match geometry {
         noon_core::GeometryRef::Circle { radius } => {
@@ -1027,7 +1033,45 @@ fn pack_derived_display_object(
             });
             (DerivedDisplayPrimitive::Line, index)
         }
-        noon_core::GeometryRef::VectorPath(_) | noon_core::GeometryRef::External(_) => {
+        noon_core::GeometryRef::VectorPath(path) => {
+            let mesh = crate::tessellate_path_mesh(path, state.style, render_transform)
+                .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;
+            let vertex_start = u32::try_from(prepared.path_vertices.len())
+                .expect("transient path vertex count exceeds renderer limits");
+            prepared
+                .path_vertices
+                .extend(mesh.vertices.iter().map(|vertex| crate::PathVertex {
+                    position: [vertex.position.x, vertex.position.y],
+                    target_position: [vertex.target_position.x, vertex.target_position.y],
+                    surface: crate::pack_path_surface(vertex.surface, vertex.path_progress),
+                }));
+            let index_start = u32::try_from(prepared.path_indices.len())
+                .expect("transient path index count exceeds renderer limits");
+            prepared
+                .path_indices
+                .extend(mesh.indices.iter().map(|index| {
+                    index
+                        .checked_add(vertex_start)
+                        .expect("transient path index exceeds renderer limits")
+                }));
+            let index_end = u32::try_from(prepared.path_indices.len())
+                .expect("transient path index count exceeds renderer limits");
+            let index = prepared.paths.len();
+            prepared.paths.push(crate::PathInstance {
+                transform: crate::packed_path_transform(state.style, render_transform),
+                style,
+                path_params: [state.reveal.clamp(0.0, 1.0), state.morph.clamp(0.0, 1.0)],
+            });
+            let instance_start = u32::try_from(index)
+                .expect("transient path instance count exceeds renderer limits");
+            let batch = prepared.path_batches.len();
+            prepared.path_batches.push(crate::PathBatch {
+                index_range: index_start..index_end,
+                instance_range: instance_start..instance_start + 1,
+            });
+            (DerivedDisplayPrimitive::Path { batch }, index)
+        }
+        noon_core::GeometryRef::External(_) => {
             return Err(DerivedDisplayRenderError::UnsupportedGeometry(occurrence));
         }
     };
@@ -1153,24 +1197,37 @@ mod derived_display_tests {
     }
 
     #[test]
-    fn transient_renderer_fails_closed_for_path_without_synthetic_id() {
+    fn transient_renderer_packs_path_without_synthetic_id() {
         let mut runtime = runtime(vec![GeometryRef::circle(1.0)]);
         let path = noon_core::VectorPath::new()
-            .move_to(Vec2::ZERO)
-            .line_to(Vec2::ONE);
-        let derived = [DerivedDisplayObject::new(
-            0,
-            3,
-            state(GeometryRef::path(path)),
-        )];
+            .move_to(Vec2::new(-0.5, -0.5))
+            .line_to(Vec2::new(0.5, -0.5))
+            .line_to(Vec2::new(0.0, 0.5))
+            .close();
+        let mut path_state = state(GeometryRef::path(path));
+        path_state.style.fill = Some(noon_core::Color::WHITE);
+        path_state.style.stroke = None;
+        path_state.morph = 0.25;
+        let derived = [DerivedDisplayObject::new(0, 3, path_state)];
         let publication = runtime
             .take_renderer_publication()
             .with_derived_display_objects(&derived)
             .unwrap();
 
+        let prepared = prepare_derived_display(&publication).unwrap();
+        assert_eq!(prepared.paths.len(), 1);
+        assert!(!prepared.path_vertices.is_empty());
+        assert!(!prepared.path_indices.is_empty());
+        assert_eq!(prepared.path_batches.len(), 1);
+        assert_eq!(prepared.paths[0].path_params, [1.0, 0.25]);
         assert_eq!(
-            prepare_derived_display(&publication).unwrap_err(),
-            DerivedDisplayRenderError::UnsupportedGeometry(3)
+            prepared.slot_for_occurrence(3),
+            Some(PreparedDerivedDisplaySlot {
+                anchor_object_index: 0,
+                occurrence_index: 3,
+                primitive: DerivedDisplayPrimitive::Path { batch: 0 },
+                instance_index: 0,
+            })
         );
     }
 
