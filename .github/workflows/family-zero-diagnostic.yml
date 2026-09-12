@@ -1,0 +1,20 @@
+name: Direct family zero diagnostic
+
+on:
+  push:
+    branches:
+      - codex/b3-family-zero-diagnostic
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/b3-family-zero-diagnostic
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Diagnose runtime and retained preparation
+        run: cargo test -p noon-web --test family_zero_diag -- --nocapture
