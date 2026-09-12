@@ -1047,6 +1047,16 @@ impl SemanticExecutionPlayer {
         })
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_scale_arrow(
+        &mut self,
+        arrow: &noon::ManimArrow,
+        factor: f64,
+        scale_tips: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|session| session.scale_arrow(arrow, factor, scale_tips))
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_scale_family(
         &mut self,
