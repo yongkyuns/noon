@@ -36,7 +36,7 @@ jobs:
         run: |
           git config user.name "Noon CI"
           git config user.email "noon-ci@users.noreply.github.com"
-          rm .github/workflows/qualify-1466-locality.yml .github/patch-1466-locality.py
+          rm .github/workflows/qualify-1466-locality.yml .github/patch-1466-locality.py .github/LOCALITY_NOTE .github/CLEANUP_NOTE
           chmod +x scripts/transient-presentation-ratchet.sh scripts/transient-presentation-ratchet.test.sh
           git add -A
           git status --short
