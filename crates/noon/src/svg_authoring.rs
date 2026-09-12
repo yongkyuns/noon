@@ -120,9 +120,8 @@ impl std::fmt::Display for SvgAuthoringError {
             Self::InvalidTargetDimension { name, .. } => {
                 write!(formatter, "SVG target {name} must be finite and positive")
             }
-            Self::InvalidImportKey => formatter.write_str(
-                "SVG import key must contain at least one non-whitespace character",
-            ),
+            Self::InvalidImportKey => formatter
+                .write_str("SVG import key must contain at least one non-whitespace character"),
             Self::Authoring(error) => error.fmt(formatter),
         }
     }
@@ -238,9 +237,7 @@ impl MobjectFamily {
                 let family_creation =
                     with_svg_source_identity(SemanticNodeCreation::family(), import_key, "root");
                 let family = transaction.create_node(family_creation);
-                for (handle, (style, identity_locator)) in
-                    handles.iter().copied().zip(metadata)
-                {
+                for (handle, (style, identity_locator)) in handles.iter().copied().zip(metadata) {
                     let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
                     state.transform = prepared.transform;
                     state.style = style;
@@ -808,7 +805,10 @@ mod tests {
         }
     }
 
-    fn source_identity_for(store: &SemanticStore, node: noon_core::SemanticNodeId) -> SourceIdentity {
+    fn source_identity_for(
+        store: &SemanticStore,
+        node: noon_core::SemanticNodeId,
+    ) -> SourceIdentity {
         store
             .node(node)
             .and_then(|node| node.source_identity())
@@ -913,14 +913,18 @@ mod tests {
             identities(&first_borrowed, &first_family),
             identities(&second_borrowed, &second_family)
         );
-        assert!(identities(&first_borrowed, &first_family).contains(&svg_source_identity(
-            "icons/status.svg",
-            &explicit_id_locator("left")
-        )));
-        assert!(identities(&first_borrowed, &first_family).contains(&svg_source_identity(
-            "icons/status.svg",
-            &explicit_id_locator("right")
-        )));
+        assert!(
+            identities(&first_borrowed, &first_family).contains(&svg_source_identity(
+                "icons/status.svg",
+                &explicit_id_locator("left")
+            ))
+        );
+        assert!(
+            identities(&first_borrowed, &first_family).contains(&svg_source_identity(
+                "icons/status.svg",
+                &explicit_id_locator("right")
+            ))
+        );
     }
 
     #[test]
