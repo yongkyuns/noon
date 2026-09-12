@@ -9,8 +9,8 @@ use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    authoring_error::{js_error, AuthoringFailure}, WasmAuthoringFamilyHandle,
-    WasmAuthoringMobjectHandle, WasmAuthoringStore,
+    authoring_error::{js_error, AuthoringFailure},
+    WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle, WasmAuthoringStore,
 };
 
 impl From<noon::SvgAuthoringError> for AuthoringFailure {
@@ -20,9 +20,7 @@ impl From<noon::SvgAuthoringError> for AuthoringFailure {
         match error {
             E::Xml(_) => Self::new("invalid_input", "svg.invalid_xml", message),
             E::Parse(_) => Self::new("invalid_input", "svg.parse", message),
-            E::Unsupported(_) => {
-                Self::new("unsupported_operation", "svg.unsupported", message)
-            }
+            E::Unsupported(_) => Self::new("unsupported_operation", "svg.unsupported", message),
             E::InvalidTargetDimension { .. } => {
                 Self::new("invalid_input", "svg.invalid_target_dimension", message)
             }
