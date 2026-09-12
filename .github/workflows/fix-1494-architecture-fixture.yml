@@ -1,0 +1,126 @@
+name: Fix 1494 architecture fixture
+
+on:
+  push:
+    branches:
+      - codex/1494-architecture-fixture-fix
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-qualify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v7
+        with:
+          ref: codex/1494-architecture-fixture-fix
+          fetch-depth: 0
+
+      - name: Patch common architecture fixture
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/check-architecture.test.sh')
+          text = path.read_text()
+
+          old = """             'noon-core-module-ownership-ratchet.sh', 'renderer-host-boundary-ratchet.sh',
+             'active-perf-frontend-ratchet.sh']
+"""
+          new = """             'noon-core-module-ownership-ratchet.sh', 'renderer-host-boundary-ratchet.sh',
+             'transient-presentation-ratchet.sh', 'active-perf-frontend-ratchet.sh']
+"""
+          if text.count(old) != 1:
+              raise SystemExit('guard inventory anchor changed')
+          text = text.replace(old, new, 1)
+
+          old = """    (root / 'crates/noon-web/src/clock.rs').write_text('struct PlaybackClock;\\n')
+    (root / 'web').mkdir()
+"""
+          new = """    (root / 'crates/noon-web/src/clock.rs').write_text('struct PlaybackClock;\\n')
+
+    # The common gate fixture must satisfy the transient-presentation architecture
+    # contract now enforced by check-architecture.sh. These are structural source
+    # probes only; architecture mode does not compile the fixture crates.
+    (root / 'crates/noon-runtime/src/frame.rs').write_text('''
+struct FrameChanges;
+impl FrameChanges {
+    pub fn presentation_redraw() -> Self { Self }
+    pub const fn has_stable_changes(&self) -> bool { false }
+}
+''')
+    (root / 'crates/noon-runtime/src/lib.rs').write_text('''
+pub fn take_renderer_publication_with_followup_presentation_redraw() {
+    let _changes = FrameChanges::presentation_redraw();
+}
+/// Consume derived spatial invalidation.
+pub fn spatial() {}
+''')
+    (root / 'crates/noon/src/execution_session.rs').write_text('''
+fn publish(self) { let _ = self.with_transient_presentations(&self.derived_display_objects); }
+''')
+    (root / 'crates/noon-runtime/src/renderer_publication.rs').write_text('''
+pub struct DerivedDisplayObject {
+    anchor_object_index: u32,
+    occurrence_index: u32,
+}
+impl DerivedDisplayObject {}
+pub const fn transient_presentations(&self) {}
+pub fn with_transient_presentations(&self) {}
+''')
+    gpu = root / 'crates/noon-render-wgpu/src/gpu'
+    gpu.mkdir()
+    (gpu / 'retained_text.rs').write_text('''
+fn prepare(changes: Changes) {
+    let _stable = (changes.requires_presentation_redraw() && !changes.has_stable_changes())
+        .then(FrameChanges::default);
+}
+pub fn encode_retained_with_transient_presentations(&self) {}
+''')
+    (gpu / 'derived_display.rs').write_text('pub fn upload_transient() {}\\n')
+    (root / 'crates/noon-render-wgpu/src/render_order.rs').write_text('pub fn prepare_transient() {}\\n')
+    (root / 'crates/noon-native/src/lib.rs').write_text('''
+fn draw(renderer: Renderer) { renderer.encode_retained_with_transient_presentations(); }
+''')
+    (root / 'crates/noon-web/src/execution_canvas.rs').write_text('''
+fn draw(renderer: Renderer) { renderer.encode_retained_with_transient_presentations(); }
+''')
+
+    (root / 'web').mkdir()
+"""
+          if text.count(old) != 1:
+              raise SystemExit('fixture setup anchor changed')
+          text = text.replace(old, new, 1)
+
+          old = """        ('renderer host', 'crates/noon-render-wgpu/src/new host.rs', 'use winit::event_loop;\\n', 'renderer host-boundary ratchet failed'),
+        ('performance frontend', 'web/perf-profile.js', '\\nconst bad = demoSceneJson();\\n', 'active perf frontend ratchet:'),
+"""
+          new = """        ('renderer host', 'crates/noon-render-wgpu/src/new host.rs', 'use winit::event_loop;\\n', 'renderer host-boundary ratchet failed'),
+        ('transient host coupling', 'crates/noon-native/src/lib.rs', '\\nfn legacy(renderer: Renderer) { renderer.encode_retained_with_derived(); }\\n', 'regained derived-display host coupling'),
+        ('performance frontend', 'web/perf-profile.js', '\\nconst bad = demoSceneJson();\\n', 'active perf frontend ratchet:'),
+"""
+          if text.count(old) != 1:
+              raise SystemExit('violation cases anchor changed')
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Qualify architecture harness
+        run: |
+          bash scripts/check-architecture.test.sh
+          bash scripts/transient-presentation-ratchet.test.sh
+          python3 scripts/test_check_entrypoint.py
+          bash scripts/check-architecture.sh 9c373a41fe509941bf20dd0ec04cfb2c952fb20c
+          git diff --check
+
+      - name: Publish clean fixture fix
+        run: |
+          git config user.name "Noon CI"
+          git config user.email "noon-ci@users.noreply.github.com"
+          rm .github/workflows/fix-1494-architecture-fixture.yml
+          git add -A
+          git status --short
+          git commit -m "test: seed transient guard in architecture fixture"
+          git push origin HEAD:codex/1494-architecture-fixture-fix
