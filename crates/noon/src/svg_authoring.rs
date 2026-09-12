@@ -204,19 +204,52 @@ impl Scene {
     }
 }
 
+fn parse_xml(source: &str) -> Result<usvg::roxmltree::Document<'_>, SvgAuthoringError> {
+    usvg::roxmltree::Document::parse_with_options(
+        source,
+        usvg::roxmltree::ParsingOptions {
+            allow_dtd: true,
+            ..Default::default()
+        },
+    )
+    .map_err(SvgAuthoringError::Xml)
+}
+
+fn with_manim_svg_defaults(source: &str, document: &usvg::roxmltree::Document<'_>) -> String {
+    let root = document.root_element();
+    if root.tag_name().name() != "svg" || root.has_attribute("stroke-width") {
+        return source.to_owned();
+    }
+
+    // Manim wraps the source SVG in a group whose fallback stroke width is zero.
+    // Adding the same inherited presentation value to the original root retains
+    // viewBox/viewport behavior while allowing every explicit descendant, inline
+    // style, and stylesheet declaration to override the fallback normally.
+    let root_start = root.range().start;
+    let after_angle = root_start.saturating_add(1);
+    let Some(name_end) = source[after_angle..]
+        .find(|character: char| character.is_ascii_whitespace() || matches!(character, '>' | '/'))
+        .map(|offset| after_angle + offset)
+    else {
+        return source.to_owned();
+    };
+    let mut normalized = String::with_capacity(source.len() + 17);
+    normalized.push_str(&source[..name_end]);
+    normalized.push_str(" stroke-width=\"0\"");
+    normalized.push_str(&source[name_end..]);
+    normalized
+}
+
 fn prepare_svg(source: &str, options: SvgImportOptions) -> Result<PreparedSvg, SvgAuthoringError> {
     validate_target_dimension("height", options.height)?;
     validate_target_dimension("width", options.width)?;
 
-    let xml_options = usvg::roxmltree::ParsingOptions {
-        allow_dtd: true,
-        ..Default::default()
-    };
-    let document = usvg::roxmltree::Document::parse_with_options(source, xml_options)
-        .map_err(SvgAuthoringError::Xml)?;
+    let document = parse_xml(source)?;
     reject_source_features(&document)?;
+    let normalized_source = with_manim_svg_defaults(source, &document);
+    let normalized_document = parse_xml(&normalized_source)?;
 
-    let tree = usvg::Tree::from_xmltree(&document, &usvg::Options::default())
+    let tree = usvg::Tree::from_xmltree(&normalized_document, &usvg::Options::default())
         .map_err(SvgAuthoringError::Parse)?;
     let mut leaves = Vec::new();
     collect_group(tree.root(), &mut leaves)?;
@@ -656,6 +689,25 @@ mod tests {
         assert!((state.style.fill_opacity - 0.25).abs() < 1e-6);
         assert!((state.style.stroke_opacity - 0.5).abs() < 1e-6);
         assert!((state.style.stroke_width - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn manim_default_stroke_width_is_zero_and_explicit_width_wins() {
+        let scene = Scene::new();
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">
+            <rect x="0" y="0" width="10" height="10" fill="#ffffff" stroke="#ff0000"/>
+            <rect x="10" y="0" width="10" height="10" fill="#ffffff" stroke="#00ff00" stroke-width="3"/>
+        </svg>"##;
+        let family = scene.svg_from_str_with_options(svg, raw_options()).unwrap();
+        let store = scene.integration_store().borrow();
+        let members = store
+            .semantic_family_members_checked(family.node_id())
+            .unwrap();
+        assert_eq!(members.len(), 2);
+        let defaulted = store.semantic_object_state_checked(members[0]).unwrap();
+        let explicit = store.semantic_object_state_checked(members[1]).unwrap();
+        assert_eq!(defaulted.style.stroke_width, 0.0);
+        assert_eq!(explicit.style.stroke_width, 3.0);
     }
 
     #[test]
