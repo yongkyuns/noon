@@ -73,6 +73,21 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
+      - name: A/B restore pre-1410 morph tessellator selection
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/noon-render-wgpu/src/lib.rs')
+          source = path.read_text()
+          current = '''        let mesh = if tessellation_path.morph_target().is_some() {\n            noon_geometry::tessellate_styled_with_fill_preserving_morph_order(\n'''
+          prior = '''        let mesh = if style.stroke_width_mode == StrokeWidthMode::ScreenSpace\n            && tessellation_path.morph_target().is_some()\n        {\n            noon_geometry::tessellate_styled_with_fill_preserving_morph_order(\n'''
+          if current not in source:
+              raise SystemExit('post-1410 morph tessellator shape changed')
+          path.write_text(source.replace(current, prior, 1))
+          PY
+          git diff --check
+          git diff -- crates/noon-render-wgpu/src/lib.rs
       - name: Build optimized production WASM
         run: bash scripts/build-web-demo.sh
       - name: Record named physical-device bundle
