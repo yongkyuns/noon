@@ -458,25 +458,29 @@ mod wasm {
 
         /// Flush one WebGPU validation error scope into the shared diagnostic mailbox.
         ///
-        /// Browser worker uncaptured-error delivery is not a reliable scheduling
-        /// boundary. Keep validation recoverable by explicitly closing the current
-        /// device scope at an async host-control boundary, re-arming it immediately,
-        /// and publishing any captured error through the same generation-aware mailbox
-        /// used by direct hosts. OOM/internal errors remain on the uncaptured fatal path.
+        /// Pop and re-arm the scope synchronously so the wasm-bindgen `&mut self`
+        /// borrow ends before JavaScript awaits the result. The returned promise owns
+        /// only the popped wgpu future and immutable diagnostic metadata, allowing
+        /// engine-port delta/render messages to use this renderer while the browser
+        /// resolves `popErrorScope()`.
         #[wasm_bindgen(js_name = flushGpuDiagnostics)]
-        pub async fn flush_gpu_diagnostics(&mut self) -> Result<bool, JsValue> {
+        pub fn flush_gpu_diagnostics(&mut self) -> js_sys::Promise {
             let Some(scope) = self.gpu_validation_scope.take() else {
-                return Ok(false);
+                return js_sys::Promise::resolve(&JsValue::from_bool(false));
             };
             let pending = scope.pop();
             self.gpu_validation_scope =
                 Some(self.device.push_error_scope(wgpu::ErrorFilter::Validation));
-            let Some(error) = pending.await else {
-                return Ok(false);
-            };
-            self.gpu_diagnostics
-                .record_wgpu(self.gpu_generation, self.backend, error);
-            Ok(true)
+            let diagnostics = self.gpu_diagnostics.clone();
+            let generation = self.gpu_generation;
+            let backend = self.backend;
+            wasm_bindgen_futures::future_to_promise(async move {
+                let Some(error) = pending.await else {
+                    return Ok(JsValue::from_bool(false));
+                };
+                diagnostics.record_wgpu(generation, backend, error);
+                Ok(JsValue::from_bool(true))
+            })
         }
 
         #[wasm_bindgen(js_name = takeGpuDiagnosticJson)]
