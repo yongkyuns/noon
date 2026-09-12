@@ -44,7 +44,7 @@
 //! fn raw(object: &noon::Mobject) { let _ = object.store(); }
 //! ```
 //!
-//! ```compile_fail,E0599
+//! ```compile_fail,E0593
 //! fn raw(family: &noon::MobjectFamily) { let _ = family.store(); }
 //! ```
 
@@ -204,8 +204,9 @@ pub mod prelude {
         LiveProgram, LiveSession, LiveSessionError, ManimArrow, ManimArrowOptions,
         ManimArrowVectorField, Mobject, MobjectFamily, MobjectFamilyMember, NativeBoolSignal,
         NativeVectorSignal, RateFunction, Scene, SemanticObjectState, SemanticStyle,
-        StoredGeometry, SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature, TrackerPosition,
-        ValueTracker, Vec2, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, VectorPath,
+        StoredGeometry, SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature,
+        TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange, VectorFieldPoint,
+        VectorFieldRanges2D, VectorPath,
     };
 }
 
