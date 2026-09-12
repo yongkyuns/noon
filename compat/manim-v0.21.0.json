@@ -85,7 +85,7 @@
     "StreamLines": {"status": "blocked", "category": "visualization", "dependency": "#88"},
     "BarChart": {"status": "blocked", "category": "visualization", "dependency": "#88/#85"},
     "SampleSpace": {"status": "blocked", "category": "visualization", "dependency": "#88"},
-    "SVGMobject": {"status": "blocked", "category": "asset-import", "dependency": "#79"},
+    "SVGMobject": {"status": "partial", "category": "asset-import", "dependency": "#79", "evidence": "parity/manim-v0.21/core-examples/svg_static_import.py; parity/manim-v0.21/svg-manifest.json; scripts/svg-authoring-smoke.mjs; canonical SVG semantic/raster differential fixtures", "reason": "Static vector SVG import is implemented through shared Rust and parity-qualified for the supported subset: paths/common primitives, groups/use, viewBox/transforms, solid fill/stroke/opacity, and string/bytes/file/URL authoring into retained semantic families. SVG text/images, gradients/patterns, clips/masks/filters/group compositing, dashed/even-odd/stroke-first/miter-clip cases, broader parser configuration, and remaining mobile qualification are still pending under #79."},
     "ImageMobject": {"status": "blocked", "category": "asset-import", "dependency": "#79"}
   },
   "module_rules": [
