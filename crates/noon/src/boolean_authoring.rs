@@ -9,7 +9,10 @@ pub(crate) fn boolean_options<E: From<AuthoringError>>(
     operands: &[Mobject],
     snapshot: impl FnMut(&Mobject) -> Result<SemanticObjectState, E>,
 ) -> Result<ManimGeometryOptions, E> {
-    let states = operands.iter().map(snapshot).collect::<Result<Vec<_>, _>>()?;
+    let states = operands
+        .iter()
+        .map(snapshot)
+        .collect::<Result<Vec<_>, _>>()?;
     let paths = states
         .iter()
         .map(|state| crate::path_editing::world_path(store, state).map_err(E::from))
