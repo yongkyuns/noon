@@ -36,3 +36,4 @@ noon-text = { path = "../noon-text", optional = true }
 noon-typst = { path = "../noon-typst", optional = true, default-features = false }
 swash = { version = "=0.2.10", optional = true }
 typst-assets = { version = "=0.15.1", features = ["fonts"], optional = true }
+usvg = { version = "=0.48.1", default-features = false }
