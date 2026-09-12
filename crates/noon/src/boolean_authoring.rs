@@ -2,35 +2,23 @@
 use crate::{AuthoringError, ManimGeometryOptions, Mobject};
 use noon_core::{SemanticObjectState, SemanticStore};
 pub use noon_geometry::{BooleanOperation, BooleanPathError};
-use std::{cell::RefCell, rc::Rc};
 
-/// Prepare one inert boolean result while leaving authored-vs-effective snapshot policy to the
-/// caller. Provenance, handle validation, world-path extraction and boolean construction are shared.
-pub(crate) fn prepare_boolean_options<E>(
-    store: &Rc<RefCell<SemanticStore>>,
+pub(crate) fn boolean_options<E>(
+    store: &SemanticStore,
     operation: BooleanOperation,
     operands: &[Mobject],
-    mut foreign_store: impl FnMut() -> E,
-    mut snapshot: impl FnMut(
-        &SemanticStore,
-        &Mobject,
-        SemanticObjectState,
-    ) -> Result<SemanticObjectState, E>,
+    snapshot: impl FnMut(&Mobject) -> Result<SemanticObjectState, E>,
 ) -> Result<ManimGeometryOptions, E>
 where
     E: From<AuthoringError>,
 {
-    let store_ref = store.borrow();
-    let paths = operands
+    let states = operands
         .iter()
-        .map(|object| {
-            if !Rc::ptr_eq(store, object.integration_store()) {
-                return Err(foreign_store());
-            }
-            let state = object.state().map_err(E::from)?;
-            let state = snapshot(&store_ref, object, state)?;
-            crate::path_editing::world_path(&store_ref, &state).map_err(E::from)
-        })
+        .map(snapshot)
+        .collect::<Result<Vec<_>, _>>()?;
+    let paths = states
+        .iter()
+        .map(|state| crate::path_editing::world_path(store, state).map_err(E::from))
         .collect::<Result<Vec<_>, _>>()?;
     let path = noon_geometry::boolean_paths(operation, &paths)
         .map_err(|error| E::from(AuthoringError::Boolean(error)))?;
@@ -54,12 +42,12 @@ impl ManimGeometryOptions {
                     operation,
                     count: 0,
                 }))?;
-        prepare_boolean_options(
-            first.integration_store(),
-            operation,
-            operands,
-            || AuthoringError::ForeignStore,
-            |_, _, state| Ok(state),
-        )
+        let store = first.integration_store();
+        boolean_options(&store.borrow(), operation, operands, |object| {
+            if !std::rc::Rc::ptr_eq(store, object.integration_store()) {
+                return Err(AuthoringError::ForeignStore);
+            }
+            object.state()
+        })
     }
 }
