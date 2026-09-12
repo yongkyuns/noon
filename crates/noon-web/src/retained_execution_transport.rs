@@ -423,6 +423,17 @@ impl RetainedExecutionDeltaEncoder {
         if changes.is_empty() {
             return Ok(None);
         }
+        // FrameChanges accumulates structural history until the worker acquires it.
+        // Collapse remove/re-add pairs against authoritative final painter membership:
+        // final-live rows remain ordinary updates while final-absent rows become removals.
+        let final_live_indices = painter_order
+            .map(|order| {
+                order
+                    .iter()
+                    .map(|&index| index as usize)
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
         let removed_rows = changes
             .removed_indices()
             .iter()
@@ -431,16 +442,16 @@ impl RetainedExecutionDeltaEncoder {
                 self.transport_object(frame, index)
                     .map(|object| (index, object.slot))
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|(index, _)| !final_live_indices.contains(index))
+            .collect::<Vec<_>>();
         let excluded_indices = removed_rows
             .iter()
             .map(|(index, _)| *index)
             .collect::<HashSet<_>>();
-        // Several semantic publications may accumulate before the next worker
-        // delta. An object can therefore be re-added and removed again while its
-        // worker row remains absent throughout. Publish only removals that were
-        // live in the encoder's last worker state; still exclude every final
-        // removal from the changed-row payload below.
+        // Several semantic publications may accumulate before the next worker.
+        // Publish only final removals that were live in the encoder's last worker state.
         let removed_rows = removed_rows
             .into_iter()
             .filter(|(index, _)| {
@@ -1530,6 +1541,45 @@ mod tests {
         mirror.apply(later).unwrap();
         assert_eq!(mirror.painter_order(), &[2]);
         assert_eq!(mirror.frame().unwrap().objects[2].appearance, 0.5);
+    }
+
+    #[test]
+    fn coalesced_remove_readd_of_live_row_publishes_final_live_state() {
+        let frame = mixed_frame();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(31);
+        let initial = encoder
+            .encode_snapshot(&frame, Camera2DState::default())
+            .unwrap();
+        let mut mirror = test_mirror();
+        mirror.apply(initial).unwrap();
+
+        let mut readded = frame.clone();
+        readded.time = 0.5;
+        readded.reveals[0] = 0.5;
+        // The source removed and re-added row 0 before the worker acquired changes.
+        // FrameChanges therefore retains row 0 in both structural histories even
+        // though authoritative final painter membership still contains it.
+        let structural =
+            FrameChanges::with_structure(vec![0], vec![0], vec![0]).with_painter_order(0..1);
+        let delta = encoder
+            .encode_incremental_with_painter_order(
+                &readded,
+                &structural,
+                Camera2DState::default(),
+                &[0, 1],
+            )
+            .unwrap()
+            .unwrap();
+
+        assert!(delta.removed_slots.is_empty());
+        assert_eq!(delta.objects.len(), 1);
+        assert_eq!(delta.objects[0].object, ObjectId::new(11));
+        assert_eq!(delta.objects[0].reveal, 0.5);
+        let (_, applied) = mirror.apply(delta).unwrap();
+        assert!(applied.added_indices().is_empty());
+        assert!(applied.removed_indices().is_empty());
+        assert_eq!(mirror.painter_order(), &[0, 1]);
+        assert_eq!(mirror.frame().unwrap().reveals[0], 0.5);
     }
 
     #[test]
