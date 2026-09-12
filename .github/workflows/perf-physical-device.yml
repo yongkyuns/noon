@@ -13,9 +13,9 @@ on:
         default: webgpu,webgl
         type: string
       suites:
-        description: Comma-separated suites (frame,corpus,authoring)
+        description: Comma-separated suites (frame,corpus,authoring,dynamic-stress)
         required: true
-        default: frame,corpus,authoring
+        default: frame,corpus,authoring,dynamic-stress
         type: string
       width:
         description: Canvas backing width
@@ -36,6 +36,11 @@ on:
         description: Target refresh rate used for frame-budget reporting
         required: true
         default: '60'
+        type: string
+      dynamic_stress_webgpu_min_fps:
+        description: Minimum effective FPS required for Dynamic Load on physical WebGPU
+        required: true
+        default: '55'
         type: string
       notes:
         description: Power/thermal/browser/device notes
@@ -79,6 +84,7 @@ jobs:
           NOON_PERF_HEIGHT: ${{ inputs.height }}
           NOON_PERF_DPR: ${{ inputs.dpr }}
           NOON_PERF_TARGET_HZ: ${{ inputs.target_hz }}
+          NOON_PERF_DYNAMIC_STRESS_WEBGPU_MIN_FPS: ${{ inputs.dynamic_stress_webgpu_min_fps }}
           NOON_PERF_DEVICE_NOTES: ${{ inputs.notes }}
           NOON_PERF_RUN_DIR: perf-artifacts/physical-dispatch
         run: node scripts/perf-device-run.mjs
