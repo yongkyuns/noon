@@ -16,12 +16,14 @@ impl LiveSession<'_> {
         let left = (left.node_id(), self.capture_mobject_state(left)?);
         let right = (right.node_id(), self.capture_mobject_state(right)?);
         let mut store = self.store.borrow_mut();
-        crate::path_alignment::prepare_alignment(&store, left, right)?
-            .publish(&mut store, |store, transaction| {
+        crate::path_alignment::prepare_alignment(&store, left, right)?.publish(
+            &mut store,
+            |store, transaction| {
                 self.session
                     .apply_semantic_transaction_at_root(store, self.root, transaction)
                     .map_err(LiveSessionError::from)
-            })?;
+            },
+        )?;
         Ok(())
     }
 }
