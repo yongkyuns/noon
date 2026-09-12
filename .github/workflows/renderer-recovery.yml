@@ -70,6 +70,7 @@ jobs:
       - name: Build browser package
         env:
           NOON_WASM_SKIP_OPT: "1"
+          NOON_RENDERER_SMOKE: "1"
         run: bash scripts/build-web-demo.sh
       - name: Cache Playwright Chromium
         uses: actions/cache@v6
