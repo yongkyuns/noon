@@ -8,7 +8,7 @@ use noon::integration::{
 };
 use noon::{
     AnimationOptions, AuthoringError, ExecutionSession, ExecutionSessionCallbackError,
-    LayoutAnchor, LiveSessionError, Mobject, MobjectFamilyMember, RateFunction, Scene,
+    LayoutAnchor, LiveSessionError, Mobject, MobjectTarget, RateFunction, Scene,
     SceneRevision, SemanticNodeId, SemanticObjectProperty, SemanticObjectState, SemanticVec3,
     StoredGeometry, UnsupportedAuthoringOperation, Vec2, VectorPath,
 };
@@ -238,8 +238,8 @@ fn layout_and_copy_failures_leave_all_family_leaves_unchanged() -> TestResult {
     let left = scene.circle(1.0)?;
     let right = scene.square(1.0)?;
     let family = scene.family(&[
-        MobjectFamilyMember::Mobject(&left),
-        MobjectFamilyMember::Mobject(&right),
+        MobjectTarget::Object(&left),
+        MobjectTarget::Object(&right),
     ])?;
     let before = snapshot(&scene, &[&left, &right]);
     assert_eq!(
@@ -272,7 +272,7 @@ fn layout_and_copy_failures_leave_all_family_leaves_unchanged() -> TestResult {
     let foreign = Scene::new().circle(1.0)?;
     assert_eq!(
         family
-            .copy_with_references(&[MobjectFamilyMember::Mobject(&foreign)])
+            .copy_with_references(&[MobjectTarget::Object(&foreign)])
             .unwrap_err(),
         AuthoringError::ForeignStore
     );
@@ -306,8 +306,8 @@ fn layout_and_copy_failures_leave_all_family_leaves_unchanged() -> TestResult {
 fn pending_callback_capture_keeps_token_and_recovers_without_rebuilding() -> TestResult {
     let mut scene = Scene::new();
     let object = scene.circle(1.0)?;
-    let family = scene.family(&[MobjectFamilyMember::Mobject(&object)])?;
-    scene.add_many(&[MobjectFamilyMember::Family(&family)])?;
+    let family = scene.family(&[MobjectTarget::Object(&object)])?;
+    scene.add_many(&[MobjectTarget::Family(&family)])?;
     let mut callbacks = SemanticMutationTransaction::new();
     callbacks.add_updater(object.node_id(), HostCallbackId::new(9), 0.0, None);
     callbacks.apply(&mut scene.integration_store().borrow_mut())?;
@@ -347,10 +347,10 @@ fn live_family_callback_failure_preserves_effective_and_authored_separation() ->
     let mut scene = Scene::new();
     let object = scene.circle(1.0)?;
     let unaffected = scene.square(1.0)?;
-    let family = scene.family(&[MobjectFamilyMember::Mobject(&object)])?;
+    let family = scene.family(&[MobjectTarget::Object(&object)])?;
     let mut target = object.target_editor()?;
     target.set_translation(4.0, 0.0)?;
-    scene.add_many(&[MobjectFamilyMember::Family(&family)])?;
+    scene.add_many(&[MobjectTarget::Family(&family)])?;
     scene.add(&unaffected)?;
     let animation = scene.declare_transform_to(
         &object,

@@ -118,8 +118,8 @@ fn batch_membership_uses_authoritative_root_order_and_one_revision() {
     let before = scene.integration_store().borrow().scene_revision();
     scene
         .add_many(&[
-            MobjectFamilyMember::Mobject(&first),
-            MobjectFamilyMember::Mobject(&second),
+            MobjectTarget::Object(&first),
+            MobjectTarget::Object(&second),
         ])
         .unwrap();
     assert_eq!(
@@ -138,8 +138,8 @@ fn batch_membership_uses_authoritative_root_order_and_one_revision() {
 
     scene
         .replace(
-            MobjectFamilyMember::Mobject(&first),
-            MobjectFamilyMember::Mobject(&replacement),
+            MobjectTarget::Object(&first),
+            MobjectTarget::Object(&replacement),
         )
         .unwrap();
     assert_eq!(

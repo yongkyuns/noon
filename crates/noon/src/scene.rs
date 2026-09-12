@@ -1,6 +1,6 @@
 //! Direct authoring scope over one family in the shared semantic store.
 use crate::{
-    AuthoringError, ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectFamilyMember,
+    AuthoringError, ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectTarget,
     SceneMembershipRequest,
 };
 use noon_core::{
@@ -119,9 +119,9 @@ impl Scene {
         Mobject::from_geometry(Rc::clone(&self.store), GeometryRef::path(path), style)
     }
     pub fn add(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
-        self.edit_membership(SceneMembershipRequest::Add(&[
-            MobjectFamilyMember::Mobject(object),
-        ]))
+        self.edit_membership(SceneMembershipRequest::Add(&[MobjectTarget::Object(
+            object,
+        )]))
         .map(|_| ())
     }
 
@@ -141,14 +141,14 @@ impl Scene {
 
     pub fn add_many(
         &mut self,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
     ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Add(members))
     }
 
     pub fn remove_many(
         &mut self,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
     ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Remove(members))
     }
@@ -161,8 +161,8 @@ impl Scene {
 
     pub fn replace(
         &mut self,
-        old: MobjectFamilyMember<'_>,
-        new: MobjectFamilyMember<'_>,
+        old: MobjectTarget<'_>,
+        new: MobjectTarget<'_>,
     ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Replace { old, new })
     }
@@ -170,7 +170,7 @@ impl Scene {
     /// Create one detached semantic family with authoritative ordered members.
     pub fn family(
         &self,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
     ) -> Result<MobjectFamily, crate::AuthoringError> {
         self.family_with_z_index(members, 0.0)
     }
@@ -178,15 +178,15 @@ impl Scene {
     /// Construct a detached family with priority on its root only.
     pub fn family_with_z_index(
         &self,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
         z_index: f64,
     ) -> Result<MobjectFamily, crate::AuthoringError> {
         MobjectFamily::create_with_z_index(Rc::clone(&self.store), members, z_index)
     }
     pub fn remove(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
-        self.edit_membership(SceneMembershipRequest::Remove(&[
-            MobjectFamilyMember::Mobject(object),
-        ]))
+        self.edit_membership(SceneMembershipRequest::Remove(&[MobjectTarget::Object(
+            object,
+        )]))
         .map(|_| ())
     }
     pub(crate) fn require_object(&self, object: &Mobject) -> Result<(), crate::AuthoringError> {

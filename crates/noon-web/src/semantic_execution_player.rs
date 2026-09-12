@@ -1072,7 +1072,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_copy_family(
         &mut self,
         source: &noon::MobjectFamily,
-        references: &[noon::MobjectFamilyMember<'_>],
+        references: &[noon::MobjectTarget<'_>],
     ) -> Result<noon::FamilyCopy, AuthoringFailure> {
         self.with_live_session(|live| live.copy_family_with_references(source, references))
     }
@@ -1612,7 +1612,7 @@ impl SemanticExecutionPlayer {
     pub(crate) fn live_edit_family_members(
         &mut self,
         family: &noon::MobjectFamily,
-        members: &[noon::MobjectFamilyMember<'_>],
+        members: &[noon::MobjectTarget<'_>],
         adding: bool,
     ) -> Result<Vec<bool>, AuthoringFailure> {
         let semantics = self
@@ -1637,7 +1637,7 @@ impl SemanticExecutionPlayer {
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_family(
         &mut self,
-        members: &[noon::MobjectFamilyMember<'_>],
+        members: &[noon::MobjectTarget<'_>],
         z_index: f64,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         let semantics = self

@@ -1,4 +1,4 @@
-use noon::{MobjectFamilyMember, Scene};
+use noon::{MobjectTarget, Scene};
 
 #[test]
 fn nested_creation_and_membership_edits_preserve_identity_order_and_atomicity() {
@@ -72,7 +72,7 @@ fn foreign_and_stale_members_cannot_create_or_edit_a_family() {
         .remove_node(stale.node_id())
         .unwrap();
     let revision = scene.integration_store().borrow().scene_revision();
-    for member in [MobjectFamilyMember::from(&foreign), (&stale).into()] {
+    for member in [MobjectTarget::from(&foreign), (&stale).into()] {
         assert!(scene.family(&[(&local).into(), member]).is_err());
         assert!(root.add(member).is_err());
         assert!(root.remove(member).is_err());

@@ -133,7 +133,7 @@ pub use execution_session::{
     ExecutionSessionPublicationError, SignalTimelineAppendError,
 };
 pub use family_arrangement::FamilyArrangeOptions;
-pub use family_authoring::{MobjectFamily, MobjectFamilyMember};
+pub use family_authoring::{MobjectFamily, MobjectTarget};
 pub use family_callback_paint::{FamilyCallbackPaintError, FamilyPaint};
 pub use family_callback_translation::{CallbackFamilyTranslation, FamilyCallbackTranslationError};
 pub use family_copy::FamilyCopy;
@@ -200,7 +200,7 @@ pub mod prelude {
         BooleanOperation, Color, ContinuationStep, DeclaredAnimation, DrawBorderThenFillOptions,
         EffectiveMobjectState, ExecutionSession, FadeEndpoint, FadeTranslation, LiveContinuation,
         LiveProgram, LiveSession, LiveSessionError, ManimArrow, ManimArrowOptions,
-        ManimArrowVectorField, Mobject, MobjectFamily, MobjectFamilyMember, NativeBoolSignal,
+        ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget, NativeBoolSignal,
         NativeVectorSignal, RateFunction, Scene, SemanticObjectState, SemanticStyle,
         StoredGeometry, TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange,
         VectorFieldPoint, VectorFieldRanges2D, VectorPath,

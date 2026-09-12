@@ -112,50 +112,54 @@ pub struct MobjectFamily {
     node: SemanticNodeId,
 }
 
-/// One borrowed direct member used by authored and live family operations.
+/// One borrowed object-or-family target over canonical semantic identity.
 #[derive(Clone, Copy)]
-pub enum MobjectFamilyMember<'a> {
-    Mobject(&'a crate::Mobject),
+pub enum MobjectTarget<'a> {
+    Object(&'a crate::Mobject),
     Family(&'a MobjectFamily),
 }
 
-impl<'a> From<&'a crate::Mobject> for MobjectFamilyMember<'a> {
+impl<'a> From<&'a crate::Mobject> for MobjectTarget<'a> {
     fn from(value: &'a crate::Mobject) -> Self {
-        Self::Mobject(value)
+        Self::Object(value)
     }
 }
 
-impl<'a> From<&'a MobjectFamily> for MobjectFamilyMember<'a> {
+impl<'a> From<&'a MobjectFamily> for MobjectTarget<'a> {
     fn from(value: &'a MobjectFamily) -> Self {
         Self::Family(value)
     }
 }
 
-impl MobjectFamilyMember<'_> {
-    fn require_store(&self, store: &Rc<RefCell<SemanticStore>>) -> Result<(), AuthoringError> {
+impl MobjectTarget<'_> {
+    pub(crate) fn require_store(
+        &self,
+        store: &Rc<RefCell<SemanticStore>>,
+    ) -> Result<SemanticNodeId, AuthoringError> {
         if !Rc::ptr_eq(self.integration_store(), store) {
             return Err(AuthoringError::ForeignStore);
         }
-        self.validate()
+        self.validate()?;
+        Ok(self.node_id())
     }
 
     pub(crate) fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
         match self {
-            Self::Mobject(member) => member.integration_store(),
+            Self::Object(member) => member.integration_store(),
             Self::Family(member) => member.integration_store(),
         }
     }
 
     pub(crate) fn node_id(&self) -> SemanticNodeId {
         match self {
-            Self::Mobject(member) => member.node_id(),
+            Self::Object(member) => member.node_id(),
             Self::Family(member) => member.node_id(),
         }
     }
 
     pub(crate) fn validate(&self) -> Result<(), AuthoringError> {
         match self {
-            Self::Mobject(member) => member.validate(),
+            Self::Object(member) => member.validate(),
             Self::Family(member) => member.validate(),
         }
     }
@@ -163,7 +167,7 @@ impl MobjectFamilyMember<'_> {
 
 /// Select the last occurrence of each incoming identity, preserving batch order.
 /// This only visits the input batch, never the existing family's siblings.
-fn last_occurrences(members: &[MobjectFamilyMember<'_>]) -> Vec<usize> {
+fn last_occurrences(members: &[MobjectTarget<'_>]) -> Vec<usize> {
     let mut seen = BTreeSet::new();
     let mut indices: Vec<_> = members
         .iter()
@@ -178,7 +182,7 @@ fn last_occurrences(members: &[MobjectFamilyMember<'_>]) -> Vec<usize> {
 /// Construct the same pending semantic family for authored and live publication.
 pub(crate) fn family_creation_transaction(
     store: &Rc<RefCell<SemanticStore>>,
-    members: &[MobjectFamilyMember<'_>],
+    members: &[MobjectTarget<'_>],
     z_index: f64,
 ) -> Result<
     (
@@ -201,10 +205,10 @@ pub(crate) fn family_creation_transaction(
     Ok((transaction, family))
 }
 
-/// Prepare a local direct-member batch, returning one decision per input wrapper.
+/// Prepare a local direct-member batch, returning one decision per input target.
 pub(crate) fn family_membership_transaction(
     family: &MobjectFamily,
-    members: &[MobjectFamilyMember<'_>],
+    members: &[MobjectTarget<'_>],
     adding: bool,
 ) -> Result<(SemanticMutationTransaction, Vec<bool>), AuthoringError> {
     family.validate()?;
@@ -238,7 +242,7 @@ impl MobjectFamily {
     /// Create a detached family, including empty and nested families, atomically.
     pub fn create(
         store: Rc<RefCell<SemanticStore>>,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
     ) -> Result<Self, AuthoringError> {
         Self::create_with_z_index(store, members, 0.0)
     }
@@ -246,7 +250,7 @@ impl MobjectFamily {
     /// Construct a family with its own priority; member priorities are preserved.
     pub fn create_with_z_index(
         store: Rc<RefCell<SemanticStore>>,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
         z_index: f64,
     ) -> Result<Self, AuthoringError> {
         let (transaction, family) = family_creation_transaction(&store, members, z_index)?;
@@ -261,33 +265,27 @@ impl MobjectFamily {
 
     /// Add one direct member, moving an existing member to the tail.
     /// Returns whether membership was new; a false result can still reorder it.
-    pub fn add(&self, member: MobjectFamilyMember<'_>) -> Result<bool, AuthoringError> {
+    pub fn add(&self, member: MobjectTarget<'_>) -> Result<bool, AuthoringError> {
         Ok(self.add_many(&[member])?[0])
     }
 
     /// Remove one direct member without changing that member's semantic identity.
-    pub fn remove(&self, member: MobjectFamilyMember<'_>) -> Result<bool, AuthoringError> {
+    pub fn remove(&self, member: MobjectTarget<'_>) -> Result<bool, AuthoringError> {
         Ok(self.remove_many(&[member])?[0])
     }
 
     /// Commit a whole direct-member addition before returning per-input decisions.
-    pub fn add_many(
-        &self,
-        members: &[MobjectFamilyMember<'_>],
-    ) -> Result<Vec<bool>, AuthoringError> {
+    pub fn add_many(&self, members: &[MobjectTarget<'_>]) -> Result<Vec<bool>, AuthoringError> {
         self.edit_members(members, true)
     }
 
-    pub fn remove_many(
-        &self,
-        members: &[MobjectFamilyMember<'_>],
-    ) -> Result<Vec<bool>, AuthoringError> {
+    pub fn remove_many(&self, members: &[MobjectTarget<'_>]) -> Result<Vec<bool>, AuthoringError> {
         self.edit_members(members, false)
     }
 
     fn edit_members(
         &self,
-        members: &[MobjectFamilyMember<'_>],
+        members: &[MobjectTarget<'_>],
         adding: bool,
     ) -> Result<Vec<bool>, AuthoringError> {
         let (transaction, changed) = family_membership_transaction(self, members, adding)?;

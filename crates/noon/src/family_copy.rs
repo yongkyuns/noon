@@ -1,6 +1,6 @@
 //! Atomic copies of the authoritative semantic family graph.
 use crate::AuthoringError;
-use crate::{Mobject, MobjectFamily, MobjectFamilyMember};
+use crate::{Mobject, MobjectFamily, MobjectTarget};
 use noon_core::{
     SemanticLocalNodeToken, SemanticMutationTransaction, SemanticMutationTransactionResult,
     SemanticNodeCreation, SemanticNodeId, SemanticNodeKind, SemanticObjectState, SemanticStore,
@@ -86,7 +86,7 @@ impl PendingFamilyCopy {
 /// Shared aliases allocate once; traversal and temporary work stay family-local.
 pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
     source: &MobjectFamily,
-    references: &[MobjectFamilyMember<'_>],
+    references: &[MobjectTarget<'_>],
     mut capture: impl FnMut(&Mobject) -> Result<SemanticObjectState, E>,
 ) -> Result<(SemanticMutationTransaction, PendingFamilyCopy), E> {
     source.validate()?;
@@ -95,12 +95,8 @@ pub(crate) fn prepare_family_copy<E: From<AuthoringError>>(
     let mut copied = BTreeMap::new();
     let mut edges = Vec::new();
     let mut queue = Vec::with_capacity(references.len() + 1);
-    for member in references {
-        if !Rc::ptr_eq(store, member.integration_store()) {
-            return Err(AuthoringError::ForeignStore.into());
-        }
-        member.validate()?;
-        queue.push(member.node_id());
+    for target in references {
+        queue.push(target.require_store(store)?);
     }
     queue.push(source.node_id());
     while let Some(id) = queue.pop() {
@@ -166,7 +162,7 @@ impl MobjectFamily {
     /// copied once, including aliases into the family, but never added as members.
     pub fn copy_with_references(
         &self,
-        references: &[MobjectFamilyMember<'_>],
+        references: &[MobjectTarget<'_>],
     ) -> Result<FamilyCopy, AuthoringError> {
         let (transaction, pending) = prepare_family_copy(self, references, Mobject::state)?;
         let result = transaction

@@ -2,7 +2,7 @@
 
 use std::{f64::consts::PI, rc::Rc};
 
-use crate::{ExecutionSession, Mobject, MobjectFamilyMember, Scene};
+use crate::{ExecutionSession, Mobject, MobjectTarget, Scene};
 
 /// A grid of nine geometry constructors, paired with `specialized_geometry.py`.
 pub fn session() -> Result<ExecutionSession, String> {
@@ -64,7 +64,7 @@ pub fn session() -> Result<ExecutionSession, String> {
         .add_many(
             &objects
                 .iter()
-                .map(MobjectFamilyMember::Mobject)
+                .map(MobjectTarget::Object)
                 .collect::<Vec<_>>(),
         )
         .map_err(|error| error.to_string())?;

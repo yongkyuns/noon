@@ -1,7 +1,7 @@
 //! Analytic workloads for native/direct-WASM profiling, paired with `analytic_profile.py`.
 
 use crate::{
-    AnimationOptions, ExecutionSession, MobjectFamilyMember, RateFunction, Scene,
+    AnimationOptions, ExecutionSession, MobjectTarget, RateFunction, Scene,
     SemanticAnimationCompositionKind, SemanticVec3,
 };
 use noon_core::{
@@ -107,7 +107,7 @@ pub fn session(
         .add_many(
             &circles
                 .iter()
-                .map(MobjectFamilyMember::Mobject)
+                .map(MobjectTarget::Object)
                 .collect::<Vec<_>>(),
         )
         .map_err(|error| error.to_string())?;
