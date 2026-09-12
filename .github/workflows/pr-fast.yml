@@ -209,6 +209,17 @@ jobs:
           echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
           exit "$status"
 
+      - name: Check SVG authoring
+        id: svg-authoring
+        run: |
+          SECONDS=0
+          set +e
+          node scripts/svg-authoring-smoke.mjs
+          status=$?
+          set -e
+          echo "seconds=$SECONDS" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
       - name: Check shared mixed execution and recovery
         if: steps.browser-risk.outputs.retained_execution == 'true'
         id: retained-execution
@@ -271,6 +282,7 @@ jobs:
           COLD_START_SECONDS: ${{ steps.cold-start.outputs.seconds }}
           REPLAY_SECONDS: ${{ steps.deterministic-replay.outputs.seconds }}
           AUTHORING_SECONDS: ${{ steps.manim-authoring.outputs.seconds }}
+          SVG_SECONDS: ${{ steps.svg-authoring.outputs.seconds }}
           RETAINED_REQUIRED: ${{ steps.browser-risk.outputs.retained_execution }}
           RETAINED_SECONDS: ${{ steps.retained-execution.outputs.seconds }}
           WEBGPU_SECONDS: ${{ steps.webgpu-smoke.outputs.seconds }}
@@ -316,6 +328,7 @@ jobs:
             echo "| Preloaded cold start | $cold_start_duration |"
             echo "| Deterministic replay | $(display_seconds "$REPLAY_SECONDS") |"
             echo "| Manim authoring | $(display_seconds "$AUTHORING_SECONDS") |"
+            echo "| SVG authoring | $(display_seconds "$SVG_SECONDS") |"
             echo "| Shared mixed execution and recovery | $retained_duration |"
             echo "| WebGPU smoke | $(display_seconds "$WEBGPU_SECONDS") |"
             echo "| WebGL renderer-risk smoke | $webgl_duration |"
