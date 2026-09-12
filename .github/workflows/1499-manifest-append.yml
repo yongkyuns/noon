@@ -1,0 +1,56 @@
+name: Append transient path raster fixture
+
+on:
+  push:
+    branches:
+      - codex/1499-transient-path-presentation
+
+permissions:
+  contents: write
+
+jobs:
+  append:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/1499-transient-path-presentation
+      - name: Append manifest entry
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('parity/manim-v0.21/manifest.json')
+          text = path.read_text()
+          marker = '''    {
+            "id": "unequal-family-transform-contraction",
+            "scene": "UnequalFamilyTransformContraction",
+            "source": "parity/manim-v0.21/core-examples/unequal_family_transform.py",
+            "expected_duration": 1.0
+          }
+          '''
+          replacement = marker.rstrip() + ''',
+              {
+                "id": "unequal-family-path-transform-expansion",
+                "scene": "UnequalFamilyPathTransformExpansion",
+                "source": "parity/manim-v0.21/core-examples/unequal_family_transform.py",
+                "expected_duration": 1.0
+              }
+          '''
+          if text.count(marker) != 1:
+              raise SystemExit(f'expected one contraction manifest marker, found {text.count(marker)}')
+          text = text.replace(marker, replacement, 1)
+          path.write_text(text)
+          PY
+          python3 -m json.tool parity/manim-v0.21/manifest.json >/dev/null
+          git diff --check
+      - name: Commit manifest only
+        shell: bash
+        run: |
+          rm .github/workflows/1499-manifest-append.yml
+          git config user.name "Yongkyun Shin"
+          git config user.email "yongkyuns@gmail.com"
+          git add parity/manim-v0.21/manifest.json .github/workflows/1499-manifest-append.yml
+          git commit -m "Register unequal-family path raster fixture"
+          git push origin HEAD:codex/1499-transient-path-presentation
