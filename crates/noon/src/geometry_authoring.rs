@@ -420,7 +420,7 @@ impl RawBracePath {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{MobjectFamilyMember, DOWN, RIGHT};
+    use crate::{MobjectTarget, DOWN, RIGHT};
 
     const EPSILON: f64 = 2.0e-5;
 
@@ -457,8 +457,8 @@ mod tests {
         right.shift(1.0, 0.0).unwrap();
         let family = scene
             .family(&[
-                MobjectFamilyMember::Mobject(&left),
-                MobjectFamilyMember::Mobject(&right),
+                MobjectTarget::Object(&left),
+                MobjectTarget::Object(&right),
             ])
             .unwrap();
         let left_before = left.state().unwrap();
