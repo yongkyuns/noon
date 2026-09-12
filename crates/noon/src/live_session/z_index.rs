@@ -29,11 +29,9 @@ impl LiveSession<'_> {
         value: f64,
         family: bool,
     ) -> Result<(), LiveSessionError> {
-        if !Rc::ptr_eq(self.store, source.integration_store()) {
-            return Err(crate::AuthoringError::ForeignStore.into());
-        }
+        let transaction =
+            source.z_index_transaction(self.store.borrow().identity(), value, family)?;
         self.session.require_published_store(&self.store.borrow())?;
-        let transaction = source.z_index_transaction(value, family)?;
         self.apply(transaction).map(|_| ())
     }
 }
