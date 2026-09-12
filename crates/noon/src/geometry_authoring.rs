@@ -456,10 +456,7 @@ mod tests {
         left.shift(-1.0, 0.0).unwrap();
         right.shift(1.0, 0.0).unwrap();
         let family = scene
-            .family(&[
-                MobjectTarget::Object(&left),
-                MobjectTarget::Object(&right),
-            ])
+            .family(&[MobjectTarget::Object(&left), MobjectTarget::Object(&right)])
             .unwrap();
         let left_before = left.state().unwrap();
         let right_before = right.state().unwrap();
