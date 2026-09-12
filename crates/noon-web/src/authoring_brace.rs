@@ -17,8 +17,8 @@ impl WasmAuthoringMobjectHandle {
         buff: f64,
         sharpness: f64,
     ) -> Result<WasmManimGeometryOptions, JsValue> {
-        let object = self.semantic_mobject()?;
-        let target = noon::LayoutAnchor::from(&object);
+        let object = self.semantic_mobject();
+        let target = noon::LayoutAnchor::from(object);
         noon::ManimGeometryOptions::brace(
             &target,
             (direction_x, direction_y),
