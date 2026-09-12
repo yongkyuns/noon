@@ -3,17 +3,23 @@ use crate::{AuthoringError, ManimGeometryOptions, Mobject};
 use noon_core::{SemanticObjectState, SemanticStore};
 pub use noon_geometry::{BooleanOperation, BooleanPathError};
 
-pub(crate) fn boolean_options(
+pub(crate) fn boolean_options<E: From<AuthoringError>>(
     store: &SemanticStore,
     operation: BooleanOperation,
-    states: &[SemanticObjectState],
-) -> Result<ManimGeometryOptions, AuthoringError> {
+    operands: &[Mobject],
+    snapshot: impl FnMut(&Mobject) -> Result<SemanticObjectState, E>,
+) -> Result<ManimGeometryOptions, E> {
+    let states = operands
+        .iter()
+        .map(snapshot)
+        .collect::<Result<Vec<_>, _>>()?;
     let paths = states
         .iter()
-        .map(|state| crate::path_editing::world_path(store, state))
+        .map(|state| crate::path_editing::world_path(store, state).map_err(E::from))
         .collect::<Result<Vec<_>, _>>()?;
-    let path = noon_geometry::boolean_paths(operation, &paths).map_err(AuthoringError::Boolean)?;
-    ManimGeometryOptions::path(path)
+    let path = noon_geometry::boolean_paths(operation, &paths)
+        .map_err(|error| E::from(AuthoringError::Boolean(error)))?;
+    ManimGeometryOptions::path(path).map_err(E::from)
 }
 
 impl ManimGeometryOptions {
@@ -34,13 +40,11 @@ impl ManimGeometryOptions {
                     count: 0,
                 }))?;
         let store = first.integration_store();
-        let mut states = Vec::with_capacity(operands.len());
-        for object in operands {
+        boolean_options(&store.borrow(), operation, operands, |object| {
             if !std::rc::Rc::ptr_eq(store, object.integration_store()) {
                 return Err(AuthoringError::ForeignStore);
             }
-            states.push(object.state()?);
-        }
-        boolean_options(&store.borrow(), operation, &states)
+            object.state()
+        })
     }
 }
