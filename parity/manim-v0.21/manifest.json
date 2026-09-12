@@ -640,7 +640,7 @@
       "id": "path-queries",
       "scene": "OrdinaryPathQueries",
       "source": "parity/manim-v0.21/core-examples/path_queries.py",
-      "expected_duration": 1.2,
+      "expected_duration": 2.2,
       "raster_tolerance": {
         "max_bounds_delta_px": 1,
         "max_differing_ratio": 0.0036,

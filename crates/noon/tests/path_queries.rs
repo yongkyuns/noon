@@ -102,14 +102,58 @@ fn effective_queries_capture_one_live_affine_publication() {
 }
 
 #[test]
-fn current_queries_reject_active_content_overrides() {
+fn effective_reveal_queries_keep_curve_boundaries_transforms_and_snapshots() {
     let scene = Scene::new();
-    let object = scene.circle(1.).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    live.declare_and_activate_create(&object, AnimationOptions::new())
+    let mut object = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(4., 0.))
+                .move_to(Vec2::new(10., 0.))
+                .line_to(Vec2::new(10., 2.)),
+            Default::default(),
+        )
         .unwrap();
-    assert!(live.effective_path_query(&object).is_err());
+    object.set_scale(2., 1.).unwrap();
+    object.shift(1., 3.).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let snapshot;
+    {
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_create(
+                &object,
+                AnimationOptions::new()
+                    .run_time(2.)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        let initial = live.effective_path_query(&object).unwrap();
+        near(initial.start().unwrap(), (1., 3.));
+        near(initial.end().unwrap(), (1., 3.));
+        live.advance_segment_to(segment, 1.5).unwrap();
+        snapshot = live.effective_path_query(&object).unwrap();
+        assert_eq!(snapshot.curve_count(), 2);
+        assert_eq!(snapshot.subpaths().len(), 2);
+        near(snapshot.end().unwrap(), (21., 4.));
+        assert!((snapshot.arc_length(None).unwrap() - 9.).abs() < 1e-6);
+        live.advance_segment_to(segment, 2.).unwrap();
+        live.complete_segment(segment).unwrap();
+        near(
+            live.effective_path_query(&object).unwrap().end().unwrap(),
+            (21., 5.),
+        );
+        near(snapshot.end().unwrap(), (21., 4.));
+    }
+    let committed_revision = scene.revision();
+    session.seek(1.5).unwrap();
+    let replay = scene
+        .live(&mut session)
+        .effective_path_query(&object)
+        .unwrap();
+    assert_eq!(replay.anchors_and_handles(), snapshot.anchors_and_handles());
+    assert_eq!(scene.revision(), committed_revision);
+    near(object.path_query().unwrap().end().unwrap(), (21., 5.));
 }
 
 #[test]

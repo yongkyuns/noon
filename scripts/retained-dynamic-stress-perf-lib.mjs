@@ -51,7 +51,10 @@ export function summarizeStressPhases(samples) {
   });
 }
 
-export function validateStressReport(report, { transportMode, rendererBackend, sampleHz }) {
+export function validateStressReport(
+  report,
+  { transportMode, rendererBackend, sampleHz, minimumEffectiveFps = null },
+) {
   assert.equal(report.schemaVersion, 2);
   assert.equal(report.execution.mode, "semantic");
   assert.equal(report.execution.transportMode, transportMode);
@@ -68,6 +71,21 @@ export function validateStressReport(report, { transportMode, rendererBackend, s
   // must cover the unchanged source on the requested grid through its endpoint.
   assert.equal(report.samples.length, times.length, "complete sample grid is required");
   assert.equal(report.cadence.frames, times.length);
+  if (minimumEffectiveFps !== null) {
+    assert.ok(
+      Number.isFinite(minimumEffectiveFps) && minimumEffectiveFps > 0,
+      "minimum effective FPS must be positive and finite",
+    );
+    const effectiveFps = report.cadence.effective?.effectiveFps;
+    assert.ok(
+      Number.isFinite(effectiveFps),
+      "effective FPS must be available when a minimum is requested",
+    );
+    assert.ok(
+      effectiveFps >= minimumEffectiveFps,
+      `effective FPS ${effectiveFps.toFixed(2)} is below required ${minimumEffectiveFps.toFixed(2)}`,
+    );
+  }
   assert.equal(report.execution.firstMeasuredTime, times[0]);
   report.samples.forEach((sample, index) => {
     assert.ok(Math.abs(sample.sceneTime - times[index]) < 1e-9, `wrong sample time at ${index}`);
