@@ -39,12 +39,8 @@ impl Mobject {
         let mut store = self.integration_store().borrow_mut();
         prepare_alignment(&store, (self.node_id(), left), (other.node_id(), right))?.publish(
             &mut store,
-            |store, transaction| {
-                transaction
-                    .apply(store)
-                    .map(|_| ())
-                    .map_err(AuthoringError::from)
-            },
-        )
+            |store, transaction| transaction.apply(store).map_err(AuthoringError::from),
+        )?;
+        Ok(())
     }
 }

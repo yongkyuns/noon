@@ -20,8 +20,8 @@ impl LiveSession<'_> {
             .publish(&mut store, |store, transaction| {
                 self.session
                     .apply_semantic_transaction_at_root(store, self.root, transaction)
-                    .map(|_| ())
                     .map_err(LiveSessionError::from)
-            })
+            })?;
+        Ok(())
     }
 }

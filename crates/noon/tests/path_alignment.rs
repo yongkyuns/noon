@@ -1,4 +1,4 @@
-use noon::{ManimGeometryOptions, Scene, Vec2, VectorPath};
+use noon::{AnimationOptions, ManimGeometryOptions, Scene, Vec2, VectorPath};
 
 #[test]
 fn alignment_changes_only_selected_content_and_preserves_identity_style_and_bounds() {
@@ -56,10 +56,23 @@ fn foreign_or_nonvector_operand_cannot_partially_publish() {
     let a = scene.square(1.).unwrap();
     let foreign = Scene::new().circle(1.).unwrap();
     let revision = scene.revision();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
     let before = a.state().unwrap();
     assert!(a.align_points(&foreign).is_err());
     assert_eq!(a.state().unwrap(), before);
     assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
 }
 
 #[test]
@@ -79,6 +92,74 @@ fn live_alignment_publishes_both_operands_coherently() {
         live.effective_path_query(&a).unwrap().start().unwrap(),
         (1., 2.)
     );
+}
+
+#[test]
+fn live_self_alignment_is_noop_before_unsupported_current_capture() {
+    let scene = Scene::new();
+    let object = scene.circle(1.).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    scene
+        .live(&mut session)
+        .declare_and_activate_create(&object, AnimationOptions::new())
+        .unwrap();
+    session.take_frame_changes();
+    let revision = scene.revision();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+
+    scene
+        .live(&mut session)
+        .align_points(&object, &object)
+        .unwrap();
+
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
+    assert!(session.take_frame_changes().is_empty());
+}
+
+#[test]
+fn live_foreign_alignment_fails_before_resource_or_frame_publication() {
+    let mut scene = Scene::new();
+    let object = scene.line((0., 0.), (3., 0.)).unwrap();
+    scene.add(&object).unwrap();
+    let foreign = Scene::new().square(2.).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    session.take_frame_changes();
+    let before = object.state().unwrap();
+    let revision = scene.revision();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+
+    assert!(scene
+        .live(&mut session)
+        .align_points(&object, &foreign)
+        .is_err());
+
+    assert_eq!(object.state().unwrap(), before);
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
+    assert!(session.take_frame_changes().is_empty());
 }
 
 #[test]
