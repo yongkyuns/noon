@@ -154,7 +154,7 @@ fn authored_membership_preserves_duplicate_missing_and_ambiguous_causes() -> Tes
         scene
             .replace(
                 MobjectTarget::Object(&missing),
-                MobjectTarget::Object(&replacement)
+                MobjectTarget::Object(&replacement),
             )
             .unwrap_err(),
         AuthoringError::Semantic(SemanticSceneOperationError::MissingMembershipTarget(
@@ -165,7 +165,7 @@ fn authored_membership_preserves_duplicate_missing_and_ambiguous_causes() -> Tes
         scene
             .replace(
                 MobjectTarget::Object(&leaf),
-                MobjectTarget::Object(&replacement)
+                MobjectTarget::Object(&replacement),
             )
             .unwrap_err(),
         AuthoringError::Semantic(SemanticSceneOperationError::AmbiguousMembershipTarget(
