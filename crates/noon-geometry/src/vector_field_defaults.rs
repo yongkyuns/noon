@@ -6,7 +6,8 @@ use noon_core::{DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH};
 /// Manim derives omitted x/y ranges from `floor(-frame / 2)` and
 /// `ceil(frame / 2)`, then inserts the ordinary 0.5 vector-field step. Keeping
 /// this derivation in shared Rust prevents language frontends from owning frame
-/// geometry or a second sampling contract.
+/// geometry or a second sampling contract. These are construction-time defaults
+/// for Noon's default authoring frame, not observations of live camera state.
 pub fn manim_default_vector_field_ranges_2d() -> VectorFieldRanges2D {
     let frame_width = f64::from(DEFAULT_FRAME_WIDTH);
     let frame_height = f64::from(DEFAULT_FRAME_HEIGHT);
