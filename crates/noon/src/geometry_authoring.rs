@@ -338,21 +338,9 @@ impl RawBracePath {
         path.line_rel(linear_section_length, 0.0);
         path.cubic_rel(0.05077, 0.0, 0.1629, -0.02346, 0.2307, -0.1455);
         path.line_rel(0.0, -0.007762);
+        path.cubic_rel(-1.78e-6, -0.0125, -0.0006365, -0.01311, -0.01216, -0.01311);
         path.cubic_rel(
-            -1.78e-6,
-            -0.0125,
-            -0.0006365,
-            -0.01311,
-            -0.01216,
-            -0.01311,
-        );
-        path.cubic_rel(
-            -0.006444,
-            -3.919e-8,
-            -0.009348,
-            2.448e-5,
-            -0.01091,
-            0.002563,
+            -0.006444, -3.919e-8, -0.009348, 2.448e-5, -0.01091, 0.002563,
         );
         path.cubic_rel(-0.0123, 0.01953, -0.03278, 0.05074, -0.08648, 0.07769);
         path.cubic_rel(-0.04491, 0.02187, -0.09416, 0.02597, -0.1246, 0.02636);
@@ -360,22 +348,10 @@ impl RawBracePath {
         path.cubic_rel(-0.04786, 0.0, -0.1502, 0.02094, -0.2185, 0.1256);
         path.cubic_rel(-0.06833, -0.1046, -0.1706, -0.1256, -0.2185, -0.1256);
         path.line_rel(-linear_section_length, 0.0);
-        path.cubic_rel(
-            -0.03046,
-            -0.0003899,
-            -0.07972,
-            -0.004491,
-            -0.1246,
-            -0.02636,
-        );
+        path.cubic_rel(-0.03046, -0.0003899, -0.07972, -0.004491, -0.1246, -0.02636);
         path.cubic_rel(-0.0537, -0.02695, -0.07418, -0.05816, -0.08648, -0.07769);
         path.cubic_rel(
-            -0.001562,
-            -0.002538,
-            -0.004467,
-            -0.002563,
-            -0.01091,
-            -0.002563,
+            -0.001562, -0.002538, -0.004467, -0.002563, -0.01091, -0.002563,
         );
         path.commands.push(RawPathCommand::Close);
         path
@@ -534,12 +510,7 @@ mod tests {
         let square = scene.square(2.0).unwrap();
         let revision = scene.revision();
         let error = scene
-            .brace(
-                &LayoutAnchor::from(&square),
-                (0.0, f64::NAN),
-                0.2,
-                2.0,
-            )
+            .brace(&LayoutAnchor::from(&square), (0.0, f64::NAN), 0.2, 2.0)
             .unwrap_err();
         assert!(matches!(error, AuthoringError::InvalidRenderNumber { .. }));
         assert_eq!(scene.revision(), revision);
