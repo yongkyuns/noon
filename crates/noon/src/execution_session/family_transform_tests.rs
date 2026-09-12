@@ -121,6 +121,42 @@ fn unequal_family_transform_publishes_one_identity_free_expansion_copy() {
 }
 
 #[test]
+fn unequal_family_transform_scene_root_member_publishes_expansion_copy() {
+    let mut store = SemanticStore::new();
+    let s0 = object(&mut store, 0.0);
+    let s1 = object(&mut store, 2.0);
+    let source = family(&mut store, &[s0, s1]);
+    let scene_root = family(&mut store, &[source]);
+    let t0 = object(&mut store, 10.0);
+    let t1 = object(&mut store, 12.0);
+    let t2 = object(&mut store, 14.0);
+    let target = family(&mut store, &[t0, t1, t2]);
+
+    let mut session = ExecutionSession::from_semantic_root(&store, scene_root).unwrap();
+    let request = SemanticCompositionRequest::FamilyTransformTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear),
+    };
+    let segment = session
+        .declare_and_activate_composition(
+            &mut store,
+            scene_root,
+            &request,
+            AnimationOptions::new(),
+        )
+        .unwrap();
+
+    session.advance_segment_to(segment, 0.5).unwrap();
+    let publication = session.take_renderer_publication();
+    assert_eq!(publication.transient_presentations().len(), 1);
+    let copy = &publication.transient_presentations()[0];
+    assert!(copy.state().appearance > 0.0 && copy.state().appearance < 1.0);
+}
+
+#[test]
 fn unequal_family_transform_direct_seek_matches_forward_playback() {
     let (mut forward, forward_segment) = expansion_session();
     forward.advance_segment_to(forward_segment, 0.25).unwrap();
