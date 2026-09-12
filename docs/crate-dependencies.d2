@@ -1,18 +1,19 @@
 # Complete internal Cargo dependency map for the active workspace. docs/architecture.md remains normative.
+# D2 has no built-in Google Material theme; this source uses a Material-inspired palette.
 vars: {d2-config: {layout-engine: elk; theme-id: 0}}
-style.fill: "#FFFFFF"
+style.fill: "#F8FAFD"
 classes: {
-  crate: {width: 260; height: 92; style: {font-size: 19; bold: true; font-color: "#263445"; fill: "#FFFFFF"; stroke: "#AEBBCB"; border-radius: 7; stroke-width: 1}}
-  core: {width: 260; height: 92; style: {font-size: 19; bold: true; font-color: "#17202A"; fill: "#EEF4FF"; stroke: "#5271A3"; border-radius: 7; stroke-width: 2}}
-  provider: {width: 260; height: 92; style: {font-size: 19; bold: true; font-color: "#263445"; fill: "#F7FBF7"; stroke: "#75A478"; border-radius: 7; stroke-width: 1}}
-  host: {width: 260; height: 92; style: {font-size: 19; bold: true; font-color: "#263445"; fill: "#FFF9EF"; stroke: "#BE8A3A"; border-radius: 7; stroke-width: 1}}
-  edge: {style: {stroke: "#6B7F94"; stroke-width: 2}}
-  optional: {style: {stroke: "#6B7F94"; stroke-width: 2; stroke-dash: 5}}
-  dev: {style: {stroke: "#9AA6B3"; stroke-width: 1; stroke-dash: 3}}
+  crate: {width: 300; height: 96; style: {font-size: 19; bold: true; font-color: "#202124"; fill: "#FFFFFF"; stroke: "#DADCE0"; border-radius: 12; stroke-width: 1; shadow: true}}
+  core: {width: 300; height: 96; style: {font-size: 19; bold: true; font-color: "#202124"; fill: "#E8F0FE"; stroke: "#1967D2"; border-radius: 12; stroke-width: 2; shadow: true}}
+  provider: {width: 300; height: 96; style: {font-size: 19; bold: true; font-color: "#202124"; fill: "#E6F4EA"; stroke: "#137333"; border-radius: 12; stroke-width: 1; shadow: true}}
+  host: {width: 300; height: 96; style: {font-size: 19; bold: true; font-color: "#202124"; fill: "#FEF7E0"; stroke: "#B06000"; border-radius: 12; stroke-width: 1; shadow: true}}
+  edge: {style: {stroke: "#5F6368"; stroke-width: 2}}
+  optional: {style: {stroke: "#7E57C2"; stroke-width: 2; stroke-dash: 5}}
 }
+
 direction: down
-horizontal-gap: 60
-vertical-gap: 38
+horizontal-gap: 104
+vertical-gap: 66
 
 native: "noon-native\nnative host / winit surface" {class: host}
 web: "noon-web\nWASM/browser host + transport" {class: host}
@@ -25,34 +26,36 @@ text: "noon-text\nshaping + glyph raster services" {class: provider}
 typst: "noon-typst\nTypst text/math layout provider" {class: provider}
 core: "noon-core\nsemantic identities/store/resources\nrenderer-independent contracts" {class: core}
 
-native -> noon: "depends on" {class: edge}
-native -> renderer: "depends on" {class: edge}
-native -> core: "depends on" {class: edge}
-web -> noon: "depends on" {class: edge}
-web -> compile: "depends on" {class: edge}
-web -> runtime: "depends on" {class: edge}
-web -> geometry: "depends on" {class: edge}
-web -> core: "depends on" {class: edge}
+# Arrow direction means “depends on”. Repeated labels were removed to keep routing clean.
+native -> noon {class: edge}
+native -> renderer {class: edge}
+native -> core {class: edge}
+web -> noon {class: edge}
+web -> compile {class: edge}
+web -> runtime {class: edge}
+web -> geometry {class: edge}
+web -> core {class: edge}
 web -> renderer: "renderer feature / wasm32" {class: optional}
-noon -> compile: "depends on" {class: edge}
-noon -> runtime: "depends on" {class: edge}
-noon -> geometry: "depends on" {class: edge}
-noon -> core: "depends on" {class: edge}
+noon -> compile {class: edge}
+noon -> runtime {class: edge}
+noon -> geometry {class: edge}
+noon -> core {class: edge}
 noon -> text: "native-text feature" {class: optional}
 noon -> typst: "typst feature" {class: optional}
-renderer -> runtime: "depends on" {class: edge}
-renderer -> geometry: "depends on" {class: edge}
-renderer -> text: "depends on" {class: edge}
-renderer -> core: "depends on" {class: edge}
-runtime -> compile: "depends on" {class: edge}
-runtime -> core: "depends on" {class: edge}
-compile -> geometry: "depends on" {class: edge}
-compile -> core: "depends on" {class: edge}
-geometry -> core: "depends on" {class: edge}
-text -> core: "depends on" {class: edge}
-typst -> core: "depends on" {class: edge}
+renderer -> runtime {class: edge}
+renderer -> geometry {class: edge}
+renderer -> text {class: edge}
+renderer -> core {class: edge}
+runtime -> compile {class: edge}
+runtime -> core {class: edge}
+compile -> geometry {class: edge}
+compile -> core {class: edge}
+geometry -> core {class: edge}
+text -> core {class: edge}
+typst -> core {class: edge}
 
-legend: "Solid = normal internal Cargo dependency\nDashed = feature/target-conditional dependency\nDev-dependencies omitted from arrows; listed in the reader guide." {
+legend: "Arrow direction = Cargo dependency\nSolid gray = normal internal dependency\nDashed purple = feature/target-conditional dependency\nDev-dependencies are omitted here and listed in the reader guide." {
   shape: text
-  style: {font-size: 17; italic: true; font-color: "#4B5D70"}
+  near: bottom-right
+  style: {font-size: 17; italic: true; font-color: "#5F6368"}
 }
