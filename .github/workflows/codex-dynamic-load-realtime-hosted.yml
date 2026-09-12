@@ -1,0 +1,168 @@
+name: Dynamic Load hosted realtime gallery A/B
+
+on:
+  push:
+    branches:
+      - codex/dynamic-load-ab-no-validation-scope
+    paths:
+      - .github/workflows/codex-dynamic-load-realtime-hosted.yml
+
+permissions:
+  contents: read
+
+jobs:
+  realtime-ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Install pinned browser tooling
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Write realtime gallery probe
+        run: |
+          cat > /tmp/noon-realtime-gallery-probe.mjs <<'NODE'
+          import { writeFile } from 'node:fs/promises';
+          import path from 'node:path';
+          import { pathToFileURL } from 'node:url';
+          const root = process.cwd();
+          const { default: playwright } = await import('playwright');
+          const { serveRepository } = await import(pathToFileURL(path.join(root, 'scripts/browser-test-server.mjs')));
+          const { browserArgs } = await import(pathToFileURL(path.join(root, 'scripts/manim-raster-support.mjs')));
+          const artifact = path.resolve(process.env.NOON_REALTIME_ARTIFACT);
+          const server = await serveRepository(root, Number(process.env.NOON_REALTIME_PORT ?? 4204), { crossOriginIsolated: true });
+          let browser;
+          try {
+            browser = await playwright.chromium.launch({ channel: 'chromium', headless: true, args: browserArgs('webgpu') });
+            const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+            const errors = [];
+            page.on('pageerror', error => errors.push(String(error)));
+            page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+            await page.goto(`${server.baseUrl}/web/index.html?example=manim-parity-stress-grid`);
+            await page.waitForFunction(() => {
+              const button = document.querySelector('#replace-scene');
+              return button && !button.disabled;
+            }, null, { timeout: 180000 });
+            await page.click('#replace-scene');
+            await page.waitForFunction(() => {
+              const status = document.querySelector('#status');
+              return status?.dataset.state === 'running'
+                && status.dataset.rendererBackend === 'WebGPU'
+                && Number(status.dataset.presentedFrames ?? 0) >= 4;
+            }, null, { timeout: 180000 });
+            const observation = await page.evaluate(() => new Promise((resolve) => {
+              const status = document.querySelector('#status');
+              const samples = [];
+              const capture = () => {
+                const frames = Number(status.dataset.presentedFrames ?? NaN);
+                if (!Number.isFinite(frames)) return;
+                const last = samples.at(-1);
+                if (!last || last.frames !== frames) {
+                  samples.push({
+                    wallMs: performance.now(),
+                    frames,
+                    missedDeadlines: Number(status.dataset.hostMissedDeadlines ?? 0),
+                    droppedLateResults: Number(status.dataset.hostDroppedLateResults ?? 0),
+                  });
+                }
+              };
+              capture();
+              const observer = new MutationObserver(capture);
+              observer.observe(status, { attributes: true, attributeFilter: ['data-presented-frames'] });
+              const deadline = performance.now() + 3400;
+              const poll = setInterval(() => {
+                capture();
+                if (samples.length >= 7 || performance.now() >= deadline) {
+                  clearInterval(poll);
+                  observer.disconnect();
+                  resolve({
+                    samples,
+                    rendererBackend: status.dataset.rendererBackend,
+                    executionMode: status.dataset.executionMode,
+                    state: status.dataset.state,
+                    objects: document.querySelector('#metric-objects')?.value,
+                  });
+                }
+              }, 50);
+            }));
+            if (errors.length) throw new Error(`browser errors: ${errors.join(' | ')}`);
+            if (observation.samples.length < 4) throw new Error(`insufficient realtime samples: ${JSON.stringify(observation)}`);
+            const first = observation.samples[0];
+            const last = observation.samples.at(-1);
+            const frameDelta = last.frames - first.frames;
+            const wallMs = last.wallMs - first.wallMs;
+            const effectiveFps = frameDelta * 1000 / wallMs;
+            const result = { ...observation, frameDelta, wallMs, effectiveFps };
+            await writeFile(artifact, JSON.stringify(result, null, 2));
+            console.log('NOON_REALTIME_GALLERY', JSON.stringify(result, null, 2));
+            await page.close();
+          } finally {
+            await browser?.close();
+            await server.close();
+          }
+          NODE
+      - name: Measure exact master realtime gallery
+        run: |
+          git checkout --detach fe3a654eade65be4cd9a338520cb9808fbf7761f
+          bash scripts/build-web-demo.sh
+          mkdir -p perf-artifacts/realtime-gallery-ab
+          NOON_REALTIME_PORT=4204 \
+          NOON_REALTIME_ARTIFACT=perf-artifacts/realtime-gallery-ab/master.json \
+          node /tmp/noon-realtime-gallery-probe.mjs
+      - name: Measure no-validation-scope realtime gallery
+        run: |
+          git reset --hard fe3a654eade65be4cd9a338520cb9808fbf7761f
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon-web/src/retained_execution_canvas.rs')
+          source = path.read_text()
+          old = '''            let gpu_validation_scope = (backend == wgpu::Backend::BrowserWebGpu)\n                .then(|| device.push_error_scope(wgpu::ErrorFilter::Validation));\n'''
+          new = '''            let gpu_validation_scope: Option<wgpu::ErrorScopeGuard> = None;\n'''
+          if old not in source:
+              raise SystemExit('persistent WebGPU validation scope shape changed')
+          path.write_text(source.replace(old, new, 1))
+          PY
+          git diff --check
+          bash scripts/build-web-demo.sh
+          NOON_REALTIME_PORT=4205 \
+          NOON_REALTIME_ARTIFACT=perf-artifacts/realtime-gallery-ab/no-validation-scope.json \
+          node /tmp/noon-realtime-gallery-probe.mjs
+      - name: Summarize realtime A/B
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('perf-artifacts/realtime-gallery-ab')
+          master = json.loads((root / 'master.json').read_text())
+          variant = json.loads((root / 'no-validation-scope.json').read_text())
+          summary = {
+              'master_fps': master['effectiveFps'],
+              'no_validation_scope_fps': variant['effectiveFps'],
+              'delta_fps': variant['effectiveFps'] - master['effectiveFps'],
+              'delta_percent': 100 * (variant['effectiveFps'] - master['effectiveFps']) / master['effectiveFps'],
+              'master_missed_deadlines': master['samples'][-1]['missedDeadlines'] - master['samples'][0]['missedDeadlines'],
+              'variant_missed_deadlines': variant['samples'][-1]['missedDeadlines'] - variant['samples'][0]['missedDeadlines'],
+          }
+          (root / 'comparison.json').write_text(json.dumps(summary, indent=2) + '\n')
+          print(json.dumps(summary, indent=2))
+          PY
+      - name: Upload realtime A/B evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon-dynamic-load-realtime-gallery-${{ github.run_id }}
+          path: perf-artifacts/realtime-gallery-ab
+          if-no-files-found: error
+          retention-days: 7
