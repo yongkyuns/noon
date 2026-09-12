@@ -684,14 +684,14 @@ mod tests {
     #[test]
     fn store_scoped_svg_import_publishes_no_extra_scene_root() {
         let store = Rc::new(RefCell::new(SemanticStore::new()));
-        let before = store.borrow().revision();
+        let before = store.borrow().scene_revision();
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
             <rect x="0" y="0" width="10" height="10" fill="#ff0000"/>
         </svg>"##;
 
         let family = MobjectFamily::from_svg_str(Rc::clone(&store), svg).unwrap();
         assert_eq!(
-            store.borrow().revision(),
+            store.borrow().scene_revision(),
             before.checked_next().expect("one SVG publication revision")
         );
         let members = store
