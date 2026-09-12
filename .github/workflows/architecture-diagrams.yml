@@ -51,7 +51,7 @@ jobs:
         run: python3 scripts/architecture_diagrams.py --check
       - name: Preserve diagram sources and checked-in SVGs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: architecture-diagrams-${{ github.sha }}
           path: |
