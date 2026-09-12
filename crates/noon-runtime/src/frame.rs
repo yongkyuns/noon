@@ -446,6 +446,7 @@ pub(super) fn frame_row_mut(frame: &mut FrameState, object_index: usize) -> Fram
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FrameChanges {
     pub(super) all: bool,
+    pub(super) presentation_redraw: bool,
     pub(super) object_indices: Vec<usize>,
     pub(super) added_indices: Vec<usize>,
     pub(super) removed_indices: Vec<usize>,
@@ -456,6 +457,23 @@ impl FrameChanges {
     pub fn all() -> Self {
         Self {
             all: true,
+            presentation_redraw: false,
+            object_indices: Vec::new(),
+            added_indices: Vec::new(),
+            removed_indices: Vec::new(),
+            painter_order_range: None,
+        }
+    }
+
+    /// Request one renderer/presentation redraw without claiming any stable frame
+    /// object, structure, painter order, or spatial state changed.
+    ///
+    /// This is intended for removing or replacing identity-free transient
+    /// presentation occurrences after their stable anchor state is already resident.
+    pub fn presentation_redraw() -> Self {
+        Self {
+            all: false,
+            presentation_redraw: true,
             object_indices: Vec::new(),
             added_indices: Vec::new(),
             removed_indices: Vec::new(),
@@ -467,6 +485,7 @@ impl FrameChanges {
         sort_dedup(&mut object_indices);
         Self {
             all: false,
+            presentation_redraw: false,
             object_indices,
             added_indices: Vec::new(),
             removed_indices: Vec::new(),
@@ -482,6 +501,7 @@ impl FrameChanges {
         sort_dedup(&mut object_indices);
         Self {
             all: false,
+            presentation_redraw: false,
             object_indices,
             added_indices,
             removed_indices,
@@ -514,6 +534,7 @@ impl FrameChanges {
         sort_dedup(&mut object_indices);
         Self {
             all: false,
+            presentation_redraw: false,
             object_indices,
             added_indices,
             removed_indices,
@@ -541,6 +562,10 @@ impl FrameChanges {
         self.all
     }
 
+    pub const fn requires_presentation_redraw(&self) -> bool {
+        self.presentation_redraw
+    }
+
     pub fn object_indices(&self) -> &[usize] {
         &self.object_indices
     }
@@ -562,7 +587,10 @@ impl FrameChanges {
     }
 
     pub const fn is_empty(&self) -> bool {
-        !self.all && self.object_indices.is_empty() && self.painter_order_range.is_none()
+        !self.all
+            && !self.presentation_redraw
+            && self.object_indices.is_empty()
+            && self.painter_order_range.is_none()
     }
 
     pub fn painter_order_range(&self) -> Option<std::ops::Range<usize>> {
@@ -571,6 +599,7 @@ impl FrameChanges {
 
     pub(super) fn invalidate_all(&mut self) {
         self.all = true;
+        self.presentation_redraw = false;
         self.object_indices.clear();
         self.added_indices.clear();
         self.removed_indices.clear();
@@ -605,6 +634,34 @@ impl FrameChanges {
             Some(existing) => existing.start.min(range.start)..existing.end.max(range.end),
             None => range,
         });
+    }
+}
+
+#[cfg(test)]
+mod frame_changes_tests {
+    use super::FrameChanges;
+
+    #[test]
+    fn presentation_redraw_is_non_full_non_structural_and_has_no_stable_rows() {
+        let changes = FrameChanges::presentation_redraw();
+
+        assert!(!changes.is_all());
+        assert!(!changes.is_structural());
+        assert!(!changes.has_painter_order_change());
+        assert!(changes.requires_presentation_redraw());
+        assert!(!changes.is_empty());
+        assert!(changes.object_indices().is_empty());
+        assert!(changes.added_indices().is_empty());
+        assert!(changes.removed_indices().is_empty());
+    }
+
+    #[test]
+    fn full_invalidation_supersedes_presentation_redraw() {
+        let mut changes = FrameChanges::presentation_redraw();
+        changes.invalidate_all();
+
+        assert!(changes.is_all());
+        assert!(!changes.requires_presentation_redraw());
     }
 }
 
