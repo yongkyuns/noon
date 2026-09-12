@@ -1,0 +1,48 @@
+name: Restack 1494 on current 1478
+
+on:
+  push:
+    branches:
+      - codex/1494-current-base-restack
+
+permissions:
+  contents: write
+
+jobs:
+  restack-and-qualify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout current parent
+        uses: actions/checkout@v7
+        with:
+          ref: codex/1494-current-base-restack
+          fetch-depth: 0
+
+      - name: Replay #1494 delta
+        run: |
+          git config user.name "Noon CI"
+          git config user.email "noon-ci@users.noreply.github.com"
+          git cherry-pick e178f825729f0cb871230b5477636b7a9e65d83a
+          git cherry-pick c78a3d29444584abd656a5ab4150946e10081375
+          git cherry-pick 3b18902ffc09becd2b1abdd3e03c8113e3498f25
+
+      - name: Focused qualification
+        run: |
+          cargo fmt --all -- --check
+          cargo test -p noon-runtime frame_changes_tests
+          cargo test -p noon-runtime --test geometry_patch_locality
+          cargo test -p noon-render-wgpu --lib presentation_only_redraw_reuses_mixed_retained_preparation
+          cargo test -p noon --lib execution_session::family_transform_tests
+          bash scripts/transient-presentation-ratchet.test.sh
+          bash scripts/transient-presentation-ratchet.sh
+          bash scripts/check-architecture.sh 9c373a41fe509941bf20dd0ec04cfb2c952fb20c
+          git diff --check 9c373a41fe509941bf20dd0ec04cfb2c952fb20c..HEAD
+
+      - name: Publish clean restack
+        run: |
+          rm .github/workflows/restack-1494.yml
+          git reset --soft 9c373a41fe509941bf20dd0ec04cfb2c952fb20c
+          git add -A
+          git commit -m "Complete transient presentation locality and ratchets"
+          git push --force-with-lease=refs/heads/codex/1466-transient-retained-locality-restacked:3b18902ffc09becd2b1abdd3e03c8113e3498f25 \
+            origin HEAD:refs/heads/codex/1466-transient-retained-locality-restacked
