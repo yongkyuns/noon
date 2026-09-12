@@ -1142,6 +1142,14 @@ impl RetainedFramePreparer {
         allow_geometry_only: bool,
         visible_object_indices: Option<&[usize]>,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
+        // A presentation-only publication still wakes the host, but stable retained
+        // preparation must see an empty delta so resident geometry/text is reused.
+        // If stable dirtiness accumulated alongside the redraw request, preserve it.
+        let stable_changes = (changes.requires_presentation_redraw()
+            && !changes.has_stable_changes())
+        .then(FrameChanges::default);
+        let changes = stable_changes.as_ref().unwrap_or(changes);
+
         if changes.is_all() || changes.is_structural() {
             self.geometry_only_classification = None;
         }
@@ -3341,6 +3349,62 @@ mod tests {
                 candidates_projected: 0,
                 render_items_projected: 0,
             }
+        );
+    }
+
+    #[test]
+    fn presentation_only_redraw_reuses_mixed_retained_preparation() {
+        let (frame, texts, fonts, geometries) = geometry_and_fast_text_frame();
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedFramePreparer::new();
+        let initial_text_generation;
+
+        {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::all(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                )
+                .unwrap();
+            initial_text_generation = prepared.text_generation;
+        }
+        let baseline = preparer.incremental_stats();
+        let baseline_generation_reuses = preparer.prepared_generation_reuses;
+
+        {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::presentation_redraw(),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                )
+                .unwrap();
+            assert_eq!(prepared.geometry_stats().full_rebuilds, 0);
+            assert_eq!(prepared.geometry_stats().instances_repacked, 0);
+            assert_eq!(prepared.geometry_stats().dirty_instance_count, 0);
+            assert_eq!(prepared.text_generation, initial_text_generation);
+        }
+
+        let after = preparer.incremental_stats();
+        assert_eq!(after.scratch_rebuilds, baseline.scratch_rebuilds);
+        assert_eq!(after.scratch_reuses, baseline.scratch_reuses + 1);
+        assert_eq!(after.text_snapshot_copies, baseline.text_snapshot_copies);
+        assert_eq!(after.mixed_order_rebuilds, baseline.mixed_order_rebuilds);
+        assert_eq!(
+            preparer.prepared_generation_reuses,
+            baseline_generation_reuses + 1
         );
     }
 
