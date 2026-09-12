@@ -18,6 +18,7 @@ const backend = process.env.NOON_RETAINED_STRESS_BACKEND ?? "webgpu";
 assert.ok(["webgpu", "webgl"].includes(backend), "unsupported backend");
 const sampleHz = integer("SAMPLE_HZ", STRESS_SAMPLE_HZ);
 const loops = integer("WORKER_LOOPS", 2);
+const minimumEffectiveFps = optionalPositiveNumber("MIN_EFFECTIVE_FPS");
 const transports = (process.env.NOON_RETAINED_STRESS_TRANSPORTS ?? "transferable,shared").split(",");
 assert.ok(transports.length > 0 && new Set(transports).size === transports.length
   && transports.every(mode => ["transferable", "shared"].includes(mode)), "invalid transports");
@@ -29,6 +30,7 @@ const report = {
   commit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
   generatedAt: new Date().toISOString(), sourcePath, sourceSha256, backend, sampleHz,
   loopsPerTransport: loops,
+  minimumEffectiveFps,
   measurement: "Fresh source per loop; sample round trip includes source continuation, worker, runtime and rendering",
   performanceBudgets: { status: "unavailable", reason: "Isolated CPU/GPU, morph activation and warm replay metrics are not measured by shared source execution" },
   runs: [],
@@ -55,10 +57,14 @@ try {
         assert.equal(result.state, "complete", result.status);
         assert.deepEqual(errors, [], "browser errors");
         const phases = validateStressReport(result.profile, {
-          transportMode, rendererBackend: backend === "webgpu" ? "WebGPU" : "WebGL2", sampleHz,
+          transportMode,
+          rendererBackend: backend === "webgpu" ? "WebGPU" : "WebGL2",
+          sampleHz,
+          minimumEffectiveFps,
         });
         report.runs.push({ transportMode, loop, phases, profile: result.profile });
-        console.log(`PASS ${backend} ${transportMode} fresh source ${loop + 1}/${loops}: ${sampleHz} Hz, ${phases.length} phases`);
+        const effectiveFps = result.profile.cadence.effective?.effectiveFps;
+        console.log(`PASS ${backend} ${transportMode} fresh source ${loop + 1}/${loops}: ${format(effectiveFps)} FPS, ${phases.length} phases`);
       } finally { await page.close(); }
     }
   }
@@ -71,4 +77,16 @@ function integer(name, fallback) {
   const value = Number(process.env[`NOON_RETAINED_STRESS_${name}`] ?? fallback);
   assert.ok(Number.isSafeInteger(value) && value > 0, `${name} must be a positive integer`);
   return value;
+}
+
+function optionalPositiveNumber(name) {
+  const raw = process.env[`NOON_RETAINED_STRESS_${name}`];
+  if (raw === undefined || raw.trim() === "") return null;
+  const value = Number(raw);
+  assert.ok(Number.isFinite(value) && value > 0, `${name} must be positive and finite`);
+  return value;
+}
+
+function format(value) {
+  return Number.isFinite(value) ? Number(value).toFixed(2) : "—";
 }

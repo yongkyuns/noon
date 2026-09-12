@@ -7,7 +7,7 @@ function complete() {
     environment: { rendererBackend: "WebGPU", targetHz: 60 },
     execution: { mode: "semantic", transportMode: "shared", sourceContinuation: true,
       sourceCompleted: true, authoredDuration: 5, firstMeasuredTime: 1 / 60, lastMeasuredTime: 5 },
-    cadence: { frames: 300 },
+    cadence: { frames: 300, effective: { effectiveFps: 59.8 } },
     samples: fixedStressSampleTimes().slice(1).map(sceneTime => ({ sceneTime, advanceRoundTripMs: 3 })) };
 }
 test("complete fixed samples preserve all ten authored phases and measured timings", () => {
@@ -18,6 +18,15 @@ test("complete fixed samples preserve all ten authored phases and measured timin
   assert.equal(classifyStressPhase(0.35), "create-grid");
   assert.equal(classifyStressPhase(5), "final-wave");
   assert.equal(classifyStressPhase(5.01), null);
+});
+test("optional physical cadence floor rejects an FPS regression", () => {
+  validateStressReport(complete(), { ...options, minimumEffectiveFps: 55 });
+  const report = complete();
+  report.cadence.effective.effectiveFps = 54.9;
+  assert.throws(
+    () => validateStressReport(report, { ...options, minimumEffectiveFps: 55 }),
+    /below required 55\.00/,
+  );
 });
 test("reject truncated, misrouted, incomplete, malformed and cheaper workloads", () => {
   const mutations = [
