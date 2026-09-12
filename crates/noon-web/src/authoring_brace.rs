@@ -19,14 +19,9 @@ impl WasmAuthoringMobjectHandle {
     ) -> Result<WasmManimGeometryOptions, JsValue> {
         let object = self.semantic_mobject();
         let target = noon::LayoutAnchor::from(object);
-        noon::ManimGeometryOptions::brace(
-            &target,
-            (direction_x, direction_y),
-            buff,
-            sharpness,
-        )
-        .map(WasmManimGeometryOptions::from_options)
-        .map_err(js_error)
+        noon::ManimGeometryOptions::brace(&target, (direction_x, direction_y), buff, sharpness)
+            .map(WasmManimGeometryOptions::from_options)
+            .map_err(js_error)
     }
 }
 
@@ -43,14 +38,9 @@ impl WasmAuthoringFamilyHandle {
     ) -> Result<WasmManimGeometryOptions, JsValue> {
         let family = self.semantic_family()?;
         let target = noon::LayoutAnchor::from(&family);
-        noon::ManimGeometryOptions::brace(
-            &target,
-            (direction_x, direction_y),
-            buff,
-            sharpness,
-        )
-        .map(WasmManimGeometryOptions::from_options)
-        .map_err(js_error)
+        noon::ManimGeometryOptions::brace(&target, (direction_x, direction_y), buff, sharpness)
+            .map(WasmManimGeometryOptions::from_options)
+            .map_err(js_error)
     }
 }
 
