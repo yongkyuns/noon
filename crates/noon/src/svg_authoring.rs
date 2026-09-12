@@ -9,12 +9,14 @@ use crate::{AuthoringError, MobjectFamily, Scene};
 use noon_core::{
     semantic_path_bounds, Color, SemanticMutationTransaction, SemanticNodeCreation,
     SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle, SemanticTransform2_5D,
-    SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Vec2, VectorPath,
+    SemanticVec3, SourceIdentity, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Vec2,
+    VectorPath,
 };
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 const MANIM_DEFAULT_STROKE_WIDTH_SENTINEL: f32 = 0.000_001;
 const MANIM_CAIRO_LINE_WIDTH_MULTIPLE: f64 = 0.01;
+const SVG_SOURCE_IDENTITY_PREFIX: &str = "noon.svg.v1";
 
 /// Positioning applied after SVG parsing.
 ///
@@ -105,6 +107,7 @@ pub enum SvgAuthoringError {
     Parse(usvg::Error),
     Unsupported(SvgUnsupportedFeature),
     InvalidTargetDimension { name: &'static str, value: f64 },
+    InvalidImportKey,
     Authoring(AuthoringError),
 }
 
@@ -117,6 +120,8 @@ impl std::fmt::Display for SvgAuthoringError {
             Self::InvalidTargetDimension { name, .. } => {
                 write!(formatter, "SVG target {name} must be finite and positive")
             }
+            Self::InvalidImportKey => formatter
+                .write_str("SVG import key must contain at least one non-whitespace character"),
             Self::Authoring(error) => error.fmt(formatter),
         }
     }
@@ -129,7 +134,7 @@ impl std::error::Error for SvgAuthoringError {
             Self::Parse(error) => Some(error),
             Self::Unsupported(error) => Some(error),
             Self::Authoring(error) => Some(error),
-            Self::InvalidTargetDimension { .. } => None,
+            Self::InvalidTargetDimension { .. } | Self::InvalidImportKey => None,
         }
     }
 }
@@ -149,6 +154,8 @@ impl From<noon_core::GeometryResourceError> for SvgAuthoringError {
 struct PreparedSvgLeaf {
     path: VectorPath,
     style: SemanticStyle,
+    explicit_id: Option<String>,
+    identity_locator: String,
 }
 
 struct PreparedSvg {
@@ -176,24 +183,70 @@ impl MobjectFamily {
         source: &str,
         options: SvgImportOptions,
     ) -> Result<Self, SvgAuthoringError> {
+        Self::from_svg_str_internal(store_rc, source, options, None)
+    }
+
+    /// Parse one SVG using a caller-stable import key for root/leaf reconciliation.
+    ///
+    /// The key namespaces the existing semantic `SourceIdentity` mechanism. It is
+    /// intentionally explicit: two ordinary imports of the same SVG may coexist,
+    /// while callers that need source re-execution or hot-reload matching can opt
+    /// into stable root/leaf source keys without creating another identity model.
+    pub fn from_svg_str_with_import_key(
+        store: Rc<RefCell<SemanticStore>>,
+        source: &str,
+        import_key: &str,
+    ) -> Result<Self, SvgAuthoringError> {
+        Self::from_svg_str_with_options_and_import_key(
+            store,
+            source,
+            SvgImportOptions::default(),
+            import_key,
+        )
+    }
+
+    /// Parse one SVG with explicit placement and caller-stable import identity.
+    pub fn from_svg_str_with_options_and_import_key(
+        store_rc: Rc<RefCell<SemanticStore>>,
+        source: &str,
+        options: SvgImportOptions,
+        import_key: &str,
+    ) -> Result<Self, SvgAuthoringError> {
+        validate_import_key(import_key)?;
+        Self::from_svg_str_internal(store_rc, source, options, Some(import_key))
+    }
+
+    fn from_svg_str_internal(
+        store_rc: Rc<RefCell<SemanticStore>>,
+        source: &str,
+        options: SvgImportOptions,
+        import_key: Option<&str>,
+    ) -> Result<Self, SvgAuthoringError> {
         let prepared = prepare_svg(source, options)?;
         let mut paths = Vec::with_capacity(prepared.leaves.len());
-        let mut styles = Vec::with_capacity(prepared.leaves.len());
+        let mut metadata = Vec::with_capacity(prepared.leaves.len());
         for leaf in prepared.leaves {
             paths.push(leaf.path);
-            styles.push(leaf.style);
+            metadata.push((leaf.style, leaf.identity_locator));
         }
 
         let family_id = {
             let mut store = store_rc.borrow_mut();
             store.with_geometry_paths(paths, |store, handles| {
                 let mut transaction = SemanticMutationTransaction::new();
-                let family = transaction.create_node(SemanticNodeCreation::family());
-                for (handle, style) in handles.iter().copied().zip(styles) {
+                let family_creation =
+                    with_svg_source_identity(SemanticNodeCreation::family(), import_key, "root");
+                let family = transaction.create_node(family_creation);
+                for (handle, (style, identity_locator)) in handles.iter().copied().zip(metadata) {
                     let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
                     state.transform = prepared.transform;
                     state.style = style;
-                    let object = transaction.create_node(SemanticNodeCreation::object(state));
+                    let creation = with_svg_source_identity(
+                        SemanticNodeCreation::object(state),
+                        import_key,
+                        &identity_locator,
+                    );
+                    let object = transaction.create_node(creation);
                     transaction.add_member(family, object);
                 }
                 let result = transaction
@@ -231,6 +284,61 @@ impl Scene {
             source,
             options,
         )
+    }
+
+    /// Parse one SVG with a stable caller-owned import key.
+    pub fn svg_from_str_with_import_key(
+        &self,
+        source: &str,
+        import_key: &str,
+    ) -> Result<MobjectFamily, SvgAuthoringError> {
+        MobjectFamily::from_svg_str_with_import_key(
+            Rc::clone(self.integration_store()),
+            source,
+            import_key,
+        )
+    }
+
+    /// Parse one SVG with explicit placement and stable caller-owned import key.
+    pub fn svg_from_str_with_options_and_import_key(
+        &self,
+        source: &str,
+        options: SvgImportOptions,
+        import_key: &str,
+    ) -> Result<MobjectFamily, SvgAuthoringError> {
+        MobjectFamily::from_svg_str_with_options_and_import_key(
+            Rc::clone(self.integration_store()),
+            source,
+            options,
+            import_key,
+        )
+    }
+}
+
+fn with_svg_source_identity(
+    creation: SemanticNodeCreation,
+    import_key: Option<&str>,
+    locator: &str,
+) -> SemanticNodeCreation {
+    match import_key {
+        Some(import_key) => creation.with_source_identity(svg_source_identity(import_key, locator)),
+        None => creation,
+    }
+}
+
+fn svg_source_identity(import_key: &str, locator: &str) -> SourceIdentity {
+    SourceIdentity::ExplicitKey(format!(
+        "{SVG_SOURCE_IDENTITY_PREFIX}:{}:{import_key}:{}:{locator}",
+        import_key.len(),
+        locator.len(),
+    ))
+}
+
+fn validate_import_key(import_key: &str) -> Result<(), SvgAuthoringError> {
+    if import_key.trim().is_empty() {
+        Err(SvgAuthoringError::InvalidImportKey)
+    } else {
+        Ok(())
     }
 }
 
@@ -282,7 +390,8 @@ fn prepare_svg(source: &str, options: SvgImportOptions) -> Result<PreparedSvg, S
     let tree = usvg::Tree::from_xmltree(&normalized_document, &usvg::Options::default())
         .map_err(SvgAuthoringError::Parse)?;
     let mut leaves = Vec::new();
-    collect_group(tree.root(), &mut leaves)?;
+    collect_group(tree.root(), &mut Vec::new(), &mut leaves)?;
+    resolve_leaf_identity_locators(&mut leaves);
     let bounds = aggregate_path_bounds(&leaves);
     let transform = placement_transform(bounds, options);
     Ok(PreparedSvg { leaves, transform })
@@ -395,6 +504,7 @@ fn css_declares_non_none(style: &str, property: &str) -> bool {
 
 fn collect_group(
     group: &usvg::Group,
+    tree_path: &mut Vec<usize>,
     leaves: &mut Vec<PreparedSvgLeaf>,
 ) -> Result<(), SvgAuthoringError> {
     if group.opacity().get() != 1.0 {
@@ -426,12 +536,13 @@ fn collect_group(
         ));
     }
 
-    for node in group.children() {
+    for (child_index, node) in group.children().iter().enumerate() {
+        tree_path.push(child_index);
         match node {
-            usvg::Node::Group(group) => collect_group(group, leaves)?,
+            usvg::Node::Group(group) => collect_group(group, tree_path, leaves)?,
             usvg::Node::Path(path) => {
                 if path.is_visible() {
-                    leaves.push(prepare_path(path)?);
+                    leaves.push(prepare_path(path, tree_locator(tree_path))?);
                 }
             }
             usvg::Node::Image(_) => {
@@ -441,11 +552,44 @@ fn collect_group(
                 return Err(SvgAuthoringError::Unsupported(SvgUnsupportedFeature::Text));
             }
         }
+        tree_path.pop();
     }
     Ok(())
 }
 
-fn prepare_path(path: &usvg::Path) -> Result<PreparedSvgLeaf, SvgAuthoringError> {
+fn tree_locator(tree_path: &[usize]) -> String {
+    let mut locator = String::from("tree");
+    for index in tree_path {
+        locator.push('/');
+        locator.push_str(&index.to_string());
+    }
+    locator
+}
+
+fn explicit_id_locator(id: &str) -> String {
+    format!("element:{}:{id}", id.len())
+}
+
+fn resolve_leaf_identity_locators(leaves: &mut [PreparedSvgLeaf]) {
+    let mut id_counts = HashMap::<String, usize>::new();
+    for leaf in leaves.iter() {
+        if let Some(id) = &leaf.explicit_id {
+            *id_counts.entry(id.clone()).or_default() += 1;
+        }
+    }
+    for leaf in leaves.iter_mut() {
+        if let Some(id) = &leaf.explicit_id {
+            if id_counts.get(id).copied() == Some(1) {
+                leaf.identity_locator = explicit_id_locator(id);
+            }
+        }
+    }
+}
+
+fn prepare_path(
+    path: &usvg::Path,
+    identity_locator: String,
+) -> Result<PreparedSvgLeaf, SvgAuthoringError> {
     if path.paint_order() == usvg::PaintOrder::StrokeAndFill
         && path.fill().is_some()
         && path.stroke().is_some()
@@ -461,8 +605,14 @@ fn prepare_path(path: &usvg::Path) -> Result<PreparedSvgLeaf, SvgAuthoringError>
     }
 
     let style = prepare_style(path)?;
+    let explicit_id = (!path.id().is_empty()).then(|| path.id().to_owned());
     let path = prepare_vector_path(path)?;
-    Ok(PreparedSvgLeaf { path, style })
+    Ok(PreparedSvgLeaf {
+        path,
+        style,
+        explicit_id,
+        identity_locator,
+    })
 }
 
 fn prepare_style(path: &usvg::Path) -> Result<SemanticStyle, SvgAuthoringError> {
@@ -655,6 +805,17 @@ mod tests {
         }
     }
 
+    fn source_identity_for(
+        store: &SemanticStore,
+        node: noon_core::SemanticNodeId,
+    ) -> SourceIdentity {
+        store
+            .node(node)
+            .and_then(|node| node.source_identity())
+            .cloned()
+            .expect("identity-aware SVG node must carry source identity")
+    }
+
     #[test]
     fn static_svg_paths_publish_as_one_retained_family_transaction() {
         let scene = Scene::new();
@@ -699,6 +860,145 @@ mod tests {
             .semantic_family_members_checked(family.node_id())
             .unwrap();
         assert_eq!(members.len(), 1);
+    }
+
+    #[test]
+    fn explicit_svg_ids_are_stable_source_identity_across_reordering() {
+        let first_store = Rc::new(RefCell::new(SemanticStore::new()));
+        let second_store = Rc::new(RefCell::new(SemanticStore::new()));
+        let first = r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">
+            <rect id="left" x="0" y="0" width="10" height="10" fill="#ff0000"/>
+            <path id="right" d="M 10 0 L 20 0 L 20 10 Z" fill="#00ff00"/>
+        </svg>"##;
+        let reordered = r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">
+            <path id="right" d="M 10 0 L 20 0 L 20 10 Z" fill="#00ff00"/>
+            <rect id="left" x="0" y="0" width="10" height="10" fill="#ff0000"/>
+        </svg>"##;
+
+        let first_family = MobjectFamily::from_svg_str_with_import_key(
+            Rc::clone(&first_store),
+            first,
+            "icons/status.svg",
+        )
+        .unwrap();
+        let second_family = MobjectFamily::from_svg_str_with_import_key(
+            Rc::clone(&second_store),
+            reordered,
+            "icons/status.svg",
+        )
+        .unwrap();
+
+        let identities = |store: &SemanticStore, family: &MobjectFamily| {
+            let mut identities = store
+                .semantic_family_members_checked(family.node_id())
+                .unwrap()
+                .iter()
+                .map(|member| source_identity_for(store, *member))
+                .collect::<Vec<_>>();
+            identities.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
+            identities
+        };
+
+        let first_borrowed = first_store.borrow();
+        let second_borrowed = second_store.borrow();
+        assert_eq!(
+            source_identity_for(&first_borrowed, first_family.node_id()),
+            svg_source_identity("icons/status.svg", "root")
+        );
+        assert_eq!(
+            source_identity_for(&second_borrowed, second_family.node_id()),
+            svg_source_identity("icons/status.svg", "root")
+        );
+        assert_eq!(
+            identities(&first_borrowed, &first_family),
+            identities(&second_borrowed, &second_family)
+        );
+        assert!(
+            identities(&first_borrowed, &first_family).contains(&svg_source_identity(
+                "icons/status.svg",
+                &explicit_id_locator("left")
+            ))
+        );
+        assert!(
+            identities(&first_borrowed, &first_family).contains(&svg_source_identity(
+                "icons/status.svg",
+                &explicit_id_locator("right")
+            ))
+        );
+    }
+
+    #[test]
+    fn anonymous_svg_leaves_use_deterministic_normalized_tree_identity() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">
+            <g transform="translate(1 0)">
+                <rect x="0" y="0" width="5" height="5" fill="#ff0000"/>
+                <path d="M 5 0 L 10 0 L 10 5 Z" fill="#00ff00"/>
+            </g>
+        </svg>"##;
+        let identities_for_fresh_store = || {
+            let store = Rc::new(RefCell::new(SemanticStore::new()));
+            let family = MobjectFamily::from_svg_str_with_import_key(
+                Rc::clone(&store),
+                svg,
+                "anonymous.svg",
+            )
+            .unwrap();
+            let borrowed = store.borrow();
+            borrowed
+                .semantic_family_members_checked(family.node_id())
+                .unwrap()
+                .iter()
+                .map(|member| source_identity_for(&borrowed, *member))
+                .collect::<Vec<_>>()
+        };
+
+        let first = identities_for_fresh_store();
+        let second = identities_for_fresh_store();
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 2);
+        assert_ne!(first[0], first[1]);
+    }
+
+    #[test]
+    fn duplicate_import_key_fails_atomically() {
+        let scene = Scene::new();
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+            <rect id="box" width="10" height="10" fill="#ff0000"/>
+        </svg>"##;
+        scene
+            .svg_from_str_with_import_key(svg, "shared/icon.svg")
+            .unwrap();
+        let before = scene.revision();
+
+        assert!(matches!(
+            scene.svg_from_str_with_import_key(svg, "shared/icon.svg"),
+            Err(SvgAuthoringError::Authoring(_))
+        ));
+        assert_eq!(scene.revision(), before);
+    }
+
+    #[test]
+    fn ordinary_duplicate_imports_remain_allowed_without_import_key() {
+        let scene = Scene::new();
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+            <rect id="box" width="10" height="10" fill="#ff0000"/>
+        </svg>"##;
+
+        scene.svg_from_str(svg).unwrap();
+        scene.svg_from_str(svg).unwrap();
+    }
+
+    #[test]
+    fn empty_import_key_is_rejected_before_publication() {
+        let scene = Scene::new();
+        let before = scene.revision();
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0 L1 0"/></svg>"##;
+
+        assert!(matches!(
+            scene.svg_from_str_with_import_key(svg, "   "),
+            Err(SvgAuthoringError::InvalidImportKey)
+        ));
+        assert_eq!(scene.revision(), before);
     }
 
     #[test]
