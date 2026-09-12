@@ -775,6 +775,8 @@ _PUBLIC_EXPORTS = {
     "IN": "_manim_compat",
     "Arc": "_manim_arc",
     "ArcBetweenPoints": "_manim_arc",
+    "Brace": "_manim_brace",
+    "BraceBetweenPoints": "_manim_brace",
     "Arrow": "_manim_arrow",
     "Vector": "_manim_arrow",
     "DoubleArrow": "_manim_arrow",
