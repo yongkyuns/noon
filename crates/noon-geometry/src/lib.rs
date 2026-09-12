@@ -3,8 +3,10 @@
 #![forbid(unsafe_code)]
 
 mod boolean;
+mod dashing;
 mod flatten;
 pub use boolean::{boolean_paths, BooleanOperation, BooleanPathError, BOOLEAN_FLATTEN_TOLERANCE};
+pub use dashing::{dash_intervals, dashed_path};
 mod geometry_proportion;
 mod isoline;
 mod morph;
