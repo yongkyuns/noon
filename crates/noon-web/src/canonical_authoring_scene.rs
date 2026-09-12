@@ -2376,6 +2376,18 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    fn live_scale_arrow(
+        &mut self,
+        arrow: &noon::ManimArrow,
+        factor: f64,
+        scale_tips: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.active_live_player()
+            .map_err(AuthoringFailure::from)?
+            .live_scale_arrow(arrow, factor, scale_tips)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn live_replace_content(
         &mut self,
         target: &noon::Mobject,
@@ -6842,6 +6854,19 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveScaleArrow)]
+        pub fn live_scale_arrow(
+            &mut self,
+            handle: &crate::WasmAuthoringArrowHandle,
+            factor: f64,
+            scale_tips: bool,
+        ) -> Result<(), JsValue> {
+            let arrow = handle.arrow()?;
+            self.inner
+                .live_scale_arrow(arrow, factor, scale_tips)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveScaleFamily)]
         pub fn live_scale_family(
             &mut self,
@@ -8075,6 +8100,32 @@ mod tests {
         );
         context.return_execution_player(resumed).unwrap();
         assert_eq!(context.live_execution_ownership(), "returned");
+    }
+
+    #[test]
+    fn arrow_scale_rejects_a_transferred_player_without_authored_fallback() {
+        let mut context = CanonicalAuthoringScene::default();
+        let mut options = noon::ManimArrowOptions::arrow(-1.0, 0.0, 1.0, 0.0).unwrap();
+        options.set_buff(0.0).unwrap();
+        let arrow = context.scene.manim_arrow(options).unwrap();
+        context.scene.add_many(&[arrow.family().into()]).unwrap();
+        context.live_player(1.0).unwrap();
+        let player = context.take_execution_player(1.0, 17).unwrap();
+        let revision = context.scene.integration_store().borrow().scene_revision();
+        let before_shaft = arrow.shaft().state().unwrap();
+        let before_tip = arrow.end_tip().state().unwrap();
+
+        assert!(context.live_scale_arrow(&arrow, 0.5, false).is_err());
+        assert_eq!(
+            context.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+        assert_eq!(arrow.shaft().state().unwrap(), before_shaft);
+        assert_eq!(arrow.end_tip().state().unwrap(), before_tip);
+
+        context.return_execution_player(player).unwrap();
+        context.live_scale_arrow(&arrow, 0.5, false).unwrap();
+        assert!((arrow.manim_length().unwrap() - 1.0).abs() < 1e-5);
     }
 
     #[test]
