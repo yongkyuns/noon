@@ -3,9 +3,6 @@ from noon import *
 
 def sparse_default_field(point):
     x = point[0]
-    y = point[1]
-    if y not in (-3.0, 0.0, 3.0):
-        return ORIGIN
     if x == -6.0:
         return 0.25 * RIGHT
     if x == 0.0:
@@ -17,6 +14,9 @@ def sparse_default_field(point):
 
 class ArrowVectorFieldStatic(Scene):
     def construct(self):
-        field = ArrowVectorField(sparse_default_field)
+        field = ArrowVectorField(
+            sparse_default_field,
+            y_range=[0.0, 0.0, 1.0],
+        )
         self.add(field)
         self.wait(0.2)
