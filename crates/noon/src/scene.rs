@@ -10,14 +10,16 @@ use noon_core::{
 };
 use std::{cell::RefCell, rc::Rc};
 
-/// A scene owns only its shared semantic store, root identity, and authoring cursor.
-/// Direct membership edits prepare a subsequent execution session. Use
-/// [`LiveSession`] to publish supported membership changes into an existing session.
+/// A scene owns its shared semantic store/root and, after bootstrap, the one
+/// execution component lowered from them. The optional execution slot is control
+/// ownership only; Runtime state remains owned by the contained [`ExecutionSession`].
+/// Direct integration callers may still create standalone sessions during migration.
 #[derive(Debug)]
 pub struct Scene {
     store: Rc<RefCell<SemanticStore>>,
     root: SemanticNodeId,
     cursor: f64,
+    execution: Option<ExecutionSession>,
 }
 impl Default for Scene {
     fn default() -> Self {
@@ -45,6 +47,7 @@ impl Scene {
             store,
             root: *root,
             cursor: 0.0,
+            execution: None,
         }
     }
     /// Raw shared arena access for explicit integration, not live mutation.
@@ -257,6 +260,42 @@ impl Scene {
             origin,
         )
         .map_err(|error| error.to_string())
+    }
+
+    /// Install the execution component lowered from this exact Scene.
+    ///
+    /// This is private migration plumbing for the Scene-owned live path. External
+    /// integration entry points may still construct standalone sessions until the
+    /// broader control-surface migration removes that compatibility shape.
+    pub(crate) fn install_execution(&mut self, execution: ExecutionSession) {
+        assert!(
+            self.execution.is_none(),
+            "scene execution component may only be installed once"
+        );
+        self.execution = Some(execution);
+    }
+
+    pub(crate) const fn owned_execution(&self) -> &ExecutionSession {
+        match &self.execution {
+            Some(execution) => execution,
+            None => panic!("scene execution component is not initialized"),
+        }
+    }
+
+    pub(crate) fn owned_execution_mut(&mut self) -> &mut ExecutionSession {
+        self.execution
+            .as_mut()
+            .expect("scene execution component is not initialized")
+    }
+
+    pub(crate) fn owned_live(&mut self) -> LiveSession<'_> {
+        let root = self.root;
+        let store = &self.store;
+        let execution = self
+            .execution
+            .as_mut()
+            .expect("scene execution component is not initialized");
+        LiveSession::new(store, root, execution)
     }
 
     /// Borrow the already-published execution session for supported live membership,
