@@ -8,6 +8,7 @@ on:
       - "crates/noon-web/src/authoring_mobject.rs"
       - "crates/noon-web/src/canonical_authoring_scene.rs"
       - "crates/noon-web/src/semantic_execution_player.rs"
+      - "crates/noon-web/src/retained_execution_canvas.rs"
       - "web/authoring-client.js"
       - "web/authoring-execution-client.js"
       - "web/execution-worker-client.js"
@@ -23,6 +24,7 @@ on:
       - "crates/noon-web/src/authoring_mobject.rs"
       - "crates/noon-web/src/canonical_authoring_scene.rs"
       - "crates/noon-web/src/semantic_execution_player.rs"
+      - "crates/noon-web/src/retained_execution_canvas.rs"
       - "web/authoring-client.js"
       - "web/authoring-execution-client.js"
       - "web/execution-worker-client.js"
@@ -85,5 +87,3 @@ jobs:
           npx playwright install chromium
       - name: Test retained Typst Python authoring
         run: node scripts/manim-typst-authoring-smoke.mjs
-
-# Temporary qualification trigger for the retained renderer aliasing fix; remove before merge.
