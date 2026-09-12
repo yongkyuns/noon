@@ -73,6 +73,21 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
+      - name: A/B disable persistent worker WebGPU validation scope
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/noon-web/src/retained_execution_canvas.rs')
+          source = path.read_text()
+          old = '''            let gpu_validation_scope = (backend == wgpu::Backend::BrowserWebGpu)\n                .then(|| device.push_error_scope(wgpu::ErrorFilter::Validation));\n'''
+          new = '''            // Dynamic Load A/B only: preserve #1477 recovery/mailbox behavior but\n            // do not keep every normal WebGPU submission inside a validation scope.\n            let gpu_validation_scope: Option<wgpu::ErrorScopeGuard> = None;\n'''
+          if old not in source:
+              raise SystemExit('persistent WebGPU validation scope shape changed')
+          path.write_text(source.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- crates/noon-web/src/retained_execution_canvas.rs
       - name: Build optimized production WASM
         run: bash scripts/build-web-demo.sh
       - name: Record named physical-device bundle

@@ -1,0 +1,118 @@
+name: Dynamic Load physical A/B - validation scope
+
+on:
+  push:
+    branches:
+      - codex/dynamic-load-ab-no-validation-scope
+    paths:
+      - .github/workflows/codex-dynamic-load-ab-physical.yml
+
+permissions:
+  contents: read
+
+jobs:
+  ab:
+    runs-on: self-hosted
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Install pinned browser tooling
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Measure exact master
+        run: |
+          git checkout --detach fe3a654eade65be4cd9a338520cb9808fbf7761f
+          bash scripts/build-web-demo.sh
+          NOON_RETAINED_STRESS_BACKEND=webgpu \
+          NOON_RETAINED_STRESS_SAMPLE_HZ=60 \
+          NOON_RETAINED_STRESS_WORKER_LOOPS=2 \
+          NOON_RETAINED_STRESS_TRANSPORTS=transferable,shared \
+          NOON_RETAINED_STRESS_ARTIFACT=perf-artifacts/physical-ab/master.json \
+          node scripts/retained-dynamic-stress-perf.mjs
+      - name: Measure master without persistent validation scope
+        run: |
+          git reset --hard fe3a654eade65be4cd9a338520cb9808fbf7761f
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon-web/src/retained_execution_canvas.rs')
+          source = path.read_text()
+          old = '''            let gpu_validation_scope = (backend == wgpu::Backend::BrowserWebGpu)\n                .then(|| device.push_error_scope(wgpu::ErrorFilter::Validation));\n'''
+          new = '''            // Physical A/B only: preserve recovery and the diagnostic mailbox,\n            // but do not keep normal WebGPU submissions inside a validation scope.\n            let gpu_validation_scope: Option<wgpu::ErrorScopeGuard> = None;\n'''
+          if old not in source:
+              raise SystemExit('persistent WebGPU validation scope shape changed')
+          path.write_text(source.replace(old, new, 1))
+          PY
+          git diff --check
+          bash scripts/build-web-demo.sh
+          NOON_RETAINED_STRESS_BACKEND=webgpu \
+          NOON_RETAINED_STRESS_SAMPLE_HZ=60 \
+          NOON_RETAINED_STRESS_WORKER_LOOPS=2 \
+          NOON_RETAINED_STRESS_TRANSPORTS=transferable,shared \
+          NOON_RETAINED_STRESS_ARTIFACT=perf-artifacts/physical-ab/no-validation-scope.json \
+          node scripts/retained-dynamic-stress-perf.mjs
+      - name: Summarize A/B
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('perf-artifacts/physical-ab')
+          reports = {
+              'master': json.loads((root / 'master.json').read_text()),
+              'no_validation_scope': json.loads((root / 'no-validation-scope.json').read_text()),
+          }
+          def summarize(report):
+              rows = []
+              for run in report['runs']:
+                  fps = run['profile']['cadence']['effective']['effectiveFps']
+                  rows.append({'transport': run['transportMode'], 'loop': run['loop'], 'fps': fps})
+              values = [row['fps'] for row in rows]
+              by_transport = {}
+              for transport in sorted({row['transport'] for row in rows}):
+                  sample = [row['fps'] for row in rows if row['transport'] == transport]
+                  by_transport[transport] = {
+                      'mean_fps': sum(sample) / len(sample),
+                      'min_fps': min(sample),
+                      'max_fps': max(sample),
+                  }
+              return {
+                  'runs': rows,
+                  'mean_fps': sum(values) / len(values),
+                  'min_fps': min(values),
+                  'max_fps': max(values),
+                  'by_transport': by_transport,
+              }
+          summary = {name: summarize(report) for name, report in reports.items()}
+          summary['delta_mean_fps'] = (
+              summary['no_validation_scope']['mean_fps'] - summary['master']['mean_fps']
+          )
+          summary['delta_percent'] = (
+              100.0 * summary['delta_mean_fps'] / summary['master']['mean_fps']
+          )
+          (root / 'comparison.json').write_text(json.dumps(summary, indent=2) + '\n')
+          print(json.dumps(summary, indent=2))
+          with open(Path(__import__('os').environ['GITHUB_STEP_SUMMARY']), 'a') as out:
+              out.write('## Dynamic Load physical A/B\n\n')
+              out.write(f"- master mean: {summary['master']['mean_fps']:.2f} FPS\n")
+              out.write(f"- no validation scope mean: {summary['no_validation_scope']['mean_fps']:.2f} FPS\n")
+              out.write(f"- delta: {summary['delta_mean_fps']:+.2f} FPS ({summary['delta_percent']:+.1f}%)\n")
+          PY
+      - name: Upload A/B evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon-dynamic-load-validation-scope-ab-${{ github.run_id }}
+          path: perf-artifacts/physical-ab
+          if-no-files-found: error
+          retention-days: 30
