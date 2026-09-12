@@ -61,6 +61,7 @@ mod boolean_authoring;
 mod camera_authoring;
 mod compact_value_authoring;
 mod dashed_line_authoring;
+mod dashed_vmobject_authoring;
 #[cfg(feature = "diagnostics")]
 pub mod diagnostics;
 mod dimension_fit;
@@ -121,6 +122,7 @@ pub use arrow_scale::ArrowScaleError;
 pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
 pub use boolean_authoring::{BooleanOperation, BooleanPathError};
 pub use dashed_line_authoring::DashedLineAuthoringError;
+pub use dashed_vmobject_authoring::DashedVMobjectOptions;
 pub use dimension_fit::LayoutDimension;
 pub use elbow_authoring::ElbowAuthoringError;
 pub use execution_segment::{

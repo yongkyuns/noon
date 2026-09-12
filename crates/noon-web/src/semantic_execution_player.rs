@@ -927,6 +927,15 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn live_dashed_vmobject(
+        &mut self,
+        source: &noon::Mobject,
+        options: noon::DashedVMobjectOptions,
+    ) -> Result<noon::Mobject, AuthoringFailure> {
+        self.with_live_session(|live| live.dashed_vmobject(source, options))
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn with_live_session<T>(
         &mut self,
         operation: impl FnOnce(&mut noon::LiveSession<'_>) -> Result<T, noon::LiveSessionError>,

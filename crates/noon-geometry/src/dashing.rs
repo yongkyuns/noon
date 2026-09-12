@@ -123,9 +123,8 @@ impl SampledLengthParameterMap {
             Err(PathProportionError::EmptyPath) => return Ok(None),
             Err(error) => return Err(error),
         };
-        let mut cumulative = Vec::with_capacity(
-            1 + plan.curve_count() * (MANIM_LENGTH_SAMPLE_POINTS - 1),
-        );
+        let mut cumulative =
+            Vec::with_capacity(1 + plan.curve_count() * (MANIM_LENGTH_SAMPLE_POINTS - 1));
         cumulative.push(0.0);
         let mut total = 0.0;
         for curve in 0..plan.curve_count() {

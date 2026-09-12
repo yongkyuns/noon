@@ -32,20 +32,16 @@ pub(crate) fn prepare_dashed_vmobject(
     state: &SemanticObjectState,
     options: DashedVMobjectOptions,
 ) -> Result<(SemanticObjectState, VectorPath), AuthoringError> {
-    let dashed_ratio = crate::semantic_mobject::authoring_render_f64(
-        "dashed_ratio",
-        options.dashed_ratio,
-    )?;
+    let dashed_ratio =
+        crate::semantic_mobject::authoring_render_f64("dashed_ratio", options.dashed_ratio)?;
     if !(0.0..=1.0).contains(&dashed_ratio) {
         return Err(AuthoringError::InvalidOpacity {
             name: "dashed_ratio".to_owned(),
             value: dashed_ratio,
         });
     }
-    let dash_offset = crate::semantic_mobject::authoring_render_f64(
-        "dash_offset",
-        options.dash_offset,
-    )?;
+    let dash_offset =
+        crate::semantic_mobject::authoring_render_f64("dash_offset", options.dash_offset)?;
     let num_dashes = options.num_dashes.max(0) as usize;
 
     let world_path = crate::path_editing::world_path(store, state)?;
@@ -64,7 +60,10 @@ pub(crate) fn prepare_dashed_vmobject(
         options.equal_lengths,
     )
     .map_err(AuthoringError::PathQuery)?;
-    Ok((crate::path_editing::path_replacement_state(state.clone())?, path))
+    Ok((
+        crate::path_editing::path_replacement_state(state.clone())?,
+        path,
+    ))
 }
 
 impl Mobject {
@@ -72,10 +71,7 @@ impl Mobject {
     ///
     /// The source is never mutated. The result preserves semantic style and
     /// priority while receiving a new identity and immutable vector-path content.
-    pub fn dashed_vmobject(
-        &self,
-        options: DashedVMobjectOptions,
-    ) -> Result<Self, AuthoringError> {
+    pub fn dashed_vmobject(&self, options: DashedVMobjectOptions) -> Result<Self, AuthoringError> {
         let state = self.state()?;
         let mut store = self.integration_store().borrow_mut();
         let (mut state, path) = prepare_dashed_vmobject(&store, &state, options)?;
@@ -127,7 +123,10 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        assert_eq!(dashed.path_query().unwrap().curve_count(), 0);
+        assert!(matches!(
+            dashed.state().unwrap().content,
+            noon_core::SemanticObjectContent::Geometry(StoredGeometry::Resource(_))
+        ));
     }
 
     #[test]

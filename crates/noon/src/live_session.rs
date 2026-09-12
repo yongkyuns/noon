@@ -7,6 +7,7 @@
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
 mod boolean_geometry;
+mod dashed_vmobject;
 mod family_layout;
 mod path_alignment;
 mod path_editing;

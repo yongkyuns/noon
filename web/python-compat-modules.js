@@ -14,6 +14,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_manim_arc.py", runtimePath: "/tmp/_manim_arc.py", label: "Noon shared Rust Arc adapter" },
   { sourcePath: "python/_manim_arrow.py", runtimePath: "/tmp/_manim_arrow.py", label: "Noon shared Rust Arrow adapter" },
   { sourcePath: "python/_manim_dashed_line.py", runtimePath: "/tmp/_manim_dashed_line.py", label: "Noon shared DashedLine adapter" },
+  { sourcePath: "python/_manim_dashed_vmobject.py", runtimePath: "/tmp/_manim_dashed_vmobject.py", label: "Noon shared DashedVMobject adapter" },
   { sourcePath: "python/_manim_animation_options.py", runtimePath: "/tmp/_manim_animation_options.py", label: "Noon Manim animation options" },
   { sourcePath: "python/_manim_animate.py", runtimePath: "/tmp/_manim_animate.py", label: "Noon Manim animate layer" },
   { sourcePath: "python/_manim_rotate.py", runtimePath: "/tmp/_manim_rotate.py", label: "Noon Manim Rotate layer" },

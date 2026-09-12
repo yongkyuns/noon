@@ -1523,6 +1523,25 @@ mod wasm {
                 .map(Self::from_semantic_mobject)
                 .map_err(js_error)
         }
+
+        #[wasm_bindgen(js_name = dashedVmobject)]
+        pub fn dashed_vmobject(
+            &self,
+            num_dashes: i32,
+            dashed_ratio: f64,
+            dash_offset: f64,
+            equal_lengths: bool,
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            self.handle
+                .dashed_vmobject(noon::DashedVMobjectOptions {
+                    num_dashes,
+                    dashed_ratio,
+                    dash_offset,
+                    equal_lengths,
+                })
+                .map(Self::from_semantic_mobject)
+                .map_err(js_error)
+        }
         #[wasm_bindgen(js_name = alignPoints)]
         pub fn align_points(&self, other: &WasmAuthoringMobjectHandle) -> Result<(), JsValue> {
             self.handle.align_points(&other.handle).map_err(js_error)

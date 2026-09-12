@@ -759,6 +759,7 @@ _PUBLIC_EXPORTS = {
     "NativeVectorSignal": "_manim_reactive",
     "NativeBoolSignal": "_manim_reactive",
     "DashedLine": "_manim_dashed_line",
+    "DashedVMobject": "_manim_dashed_vmobject",
     "MovingCameraScene": "_manim_camera",
     "Write": "_manim_family_creation",
     "Unwrite": "_manim_family_creation",
