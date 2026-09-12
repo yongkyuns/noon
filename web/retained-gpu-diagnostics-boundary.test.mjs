@@ -36,15 +36,25 @@ test("WebGPU diagnostic flush re-arms synchronously before detaching validation 
   const rearmIndex = flushSource.indexOf("self.device.push_error_scope");
   const detachIndex = flushSource.indexOf("future_to_promise(async move");
   assert.ok(popIndex >= 0 && rearmIndex > popIndex && detachIndex > rearmIndex);
-  for (const captured of [
-    "let gpu_diagnostics = self.gpu_diagnostics.clone();",
-    "let gpu_generation = self.gpu_generation;",
-    "let backend = self.backend;",
+
+  for (const [capture, description] of [
+    [/let\s+\w+\s*=\s*self\.gpu_diagnostics\.clone\(\);/, "diagnostic mailbox"],
+    [/let\s+\w+\s*=\s*self\.gpu_generation;/, "GPU generation"],
+    [/let\s+\w+\s*=\s*self\.backend;/, "GPU backend"],
   ]) {
-    const captureIndex = flushSource.indexOf(captured);
+    const match = capture.exec(flushSource);
+    assert.ok(match, `detached validation delivery must capture ${description}`);
     assert.ok(
-      captureIndex > rearmIndex && captureIndex < detachIndex,
-      `detached validation delivery must capture ${captured}`,
+      match.index > rearmIndex && match.index < detachIndex,
+      `${description} must be captured after re-arm and before the detached await`,
     );
   }
+
+  const detachedSource = flushSource.slice(detachIndex);
+  assert.doesNotMatch(
+    detachedSource,
+    /self\./,
+    "detached validation delivery must not retain the wasm renderer borrow",
+  );
+  assert.match(detachedSource, /\.record_wgpu\([^;]+error\);/);
 });
