@@ -3,19 +3,13 @@ use crate::{AuthoringError, ManimGeometryOptions, Mobject};
 use noon_core::{SemanticObjectState, SemanticStore};
 pub use noon_geometry::{BooleanOperation, BooleanPathError};
 
-pub(crate) fn boolean_options<E>(
+pub(crate) fn boolean_options<E: From<AuthoringError>>(
     store: &SemanticStore,
     operation: BooleanOperation,
     operands: &[Mobject],
     snapshot: impl FnMut(&Mobject) -> Result<SemanticObjectState, E>,
-) -> Result<ManimGeometryOptions, E>
-where
-    E: From<AuthoringError>,
-{
-    let states = operands
-        .iter()
-        .map(snapshot)
-        .collect::<Result<Vec<_>, _>>()?;
+) -> Result<ManimGeometryOptions, E> {
+    let states = operands.iter().map(snapshot).collect::<Result<Vec<_>, _>>()?;
     let paths = states
         .iter()
         .map(|state| crate::path_editing::world_path(store, state).map_err(E::from))
