@@ -24,10 +24,11 @@ impl LiveSession<'_> {
                     )
                     .into());
                 }
-                state.transform = crate::semantic_mobject::semantic_transform_with_effective_affine(
-                    state.transform,
-                    observed.object.transform,
-                );
+                state.transform =
+                    crate::semantic_mobject::semantic_transform_with_effective_affine(
+                        state.transform,
+                        observed.object.transform,
+                    );
             }
             Ok(state)
         })
