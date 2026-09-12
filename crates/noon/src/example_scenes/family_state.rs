@@ -53,10 +53,11 @@ pub fn program() -> Result<LiveProgram<FamilyState>, String> {
         let replacement = source.copy_family()?.root().clone();
         replacement.shift(1.0, 0.0)?;
         replacement.scale(1.5, 1.5)?;
+        replacement.rotate(0.3, crate::ManimRotationPivot::Center)?;
         source.become_family(
             &replacement,
             ManimBecomeOptions {
-                match_width: true,
+                stretch: true,
                 ..Default::default()
             },
         )?;

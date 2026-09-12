@@ -1705,11 +1705,19 @@ class SelectedAlignment(Scene):
   await startSampledSource(page, familyStateSource, "scene-shared-family-state");
   try {
     const canvas = page.locator("#scene-shared-family-state");
-    for (const [time, leftX, rightX, y] of [[0, -1, 1, 0], [0.2, -0.5, 1.5, 0.5], [0.4, -2, 0, 0], [0.6000000000000001, -2, 0, 0]]) {
+    // Aggregate bounds of two 0.6 squares, separated by 2, scaled 1.5 and
+    // rotated 0.3 before becoming the original 2.6-by-0.6 family.
+    const c = Math.cos(0.3), s = Math.sin(0.3);
+    const x = 1.5 * c * 2.6 / (3.9 * c + 0.9 * s);
+    const y = 1.5 * s * 0.6 / (3.9 * s + 0.9 * c);
+    for (const [time, leftX, rightX, leftY, rightY] of [
+      [0, -x, x, -y, y], [0.2, 0.5 - x, 0.5 + x, 0.5 - y, 0.5 + y],
+      [0.4, -2, 0, 0, 0], [0.6000000000000001, -2, 0, 0, 0],
+    ]) {
       await page.evaluate(time => window.sharedAuthoringSmoke.sampledProof.execution.sampleToAuthoredTime(time), time);
       const frame = await canvas.screenshot();
-      const left = renderedWorldPixel(frame, leftX, y);
-      const right = renderedWorldPixel(frame, rightX, y);
+      const left = renderedWorldPixel(frame, leftX, leftY);
+      const right = renderedWorldPixel(frame, rightX, rightY);
       assert.ok(left.red > 180 && left.blue < 50, `family state at ${time}s missed red member`);
       assert.ok(right.blue > 180 && right.red < 50, `family state at ${time}s missed blue member`);
     }

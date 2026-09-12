@@ -886,6 +886,20 @@ def _manim_effective_reveal_path():
     return observations
 
 
+def _rotated_become(api):
+    source = api.Rectangle(width=4, height=1).shift(api.LEFT)
+    target = api.Square(side_length=2).rotate(.37).shift(api.RIGHT + api.UP)
+    source.become(target, stretch=True, match_center=True)
+    leaf = _morph_path_observation(source)
+    a = api.Square(side_length=.6).shift(2 * api.LEFT)
+    b = api.Square(side_length=.6)
+    family = api.VGroup(a, api.VGroup(a, b))
+    replacement = family.copy().rotate(.3).shift(api.RIGHT)
+    family.become(replacement, stretch=True)
+    return {"leaf": leaf, "family": [_morph_path_observation(obj) for obj in (a, b)],
+            "bounds": _object_observation(family)}
+
+
 def _world_stretch(api):
     shape = api.Square(side_length=2).rotate(.37).shift(api.RIGHT - api.UP)
     shape.stretch(-1.5, 0, about_point=2 * api.RIGHT)
@@ -1029,6 +1043,7 @@ def _point_matching(api):
 FIXTURES = [
     Fixture("effective_reveal_path", _noon_effective_reveal_path, _manim_effective_reveal_path, 1e-5),
     Fixture("effective_morph_path", _noon_effective_morph_path, _manim_effective_morph_path, 1e-5),
+    Fixture("rotated_become", lambda: _rotated_become(noon), lambda: _rotated_become(manim), 1e-5),
     Fixture("world_stretch", lambda: _world_stretch(noon), lambda: _world_stretch(manim), 1e-5),
     Fixture("path_alignment", lambda: _path_alignment(noon), lambda: _path_alignment(manim), 1e-5),
     Fixture("boolean_geometry", lambda: _boolean_geometry(noon), lambda: _boolean_geometry(manim), 1e-5),

@@ -76,7 +76,7 @@ impl LiveSession<'_> {
             &leaves,
             boundary,
         )?;
-        self.publish_affine(prepared).map(|_| ())
+        self.publish_path_edits(prepared).map(|_| ())
     }
 
     /// Match the effective target dimension; no wrapper computes layout ratios.
@@ -154,7 +154,7 @@ impl LiveSession<'_> {
             stretch,
         )
         .map_err(LiveSessionError::from)?;
-        self.publish_affine(prepared).map(|_| ())
+        self.publish_path_edits(prepared).map(|_| ())
     }
 
     /// Publish one alias-aware family scale after validating every local member.
@@ -303,23 +303,7 @@ impl LiveSession<'_> {
             self.placement_authored_transform(&object)?;
         }
         let prepared = operation.prepare(&self.store.borrow(), &leaves, bounds)?;
-        self.publish_affine(prepared)
-    }
-
-    fn publish_affine(
-        &mut self,
-        prepared: crate::path_editing::PreparedPathEdits,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let mut store = self.store.borrow_mut();
-        if prepared.creates_resources() {
-            self.session
-                .require_resource_creation_at_root(&store, self.root)?;
-        }
-        prepared.publish(&mut store, |store, transaction| {
-            self.session
-                .apply_semantic_transaction_at_root(store, self.root, transaction)
-                .map_err(LiveSessionError::from)
-        })
+        self.publish_path_edits(prepared)
     }
 
     /// Observe this family's effective bounds, including detached authored members.
