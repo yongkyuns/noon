@@ -1,0 +1,95 @@
+name: 1366 focused renderer qualification
+
+on:
+  push:
+    branches:
+      - codex/1366-webgpu-device-loss
+    paths:
+      - ".github/workflows/codex-1366-qualify.yml"
+      - ".github/workflows/renderer-recovery.yml"
+      - "crates/noon-web/**"
+      - "crates/noon-render-wgpu/**"
+      - "web/browser-smoke.js"
+      - "web/authoring-render-controller.js"
+      - "scripts/renderer-webgpu-device-loss-smoke.mjs"
+      - "scripts/renderer-webgpu-validation-error-smoke.mjs"
+      - "scripts/renderer-worker-webgpu-validation-error-smoke.mjs"
+      - "scripts/webgpu-device-capture.mjs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-1366-focused-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      NOON_RENDERER_SMOKE: "1"
+      NOON_WASM_SKIP_OPT: "1"
+      NOON_SKIP_WEB_PREFLIGHT: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Use repository Rust toolchain
+        run: |
+          rustup show
+          rustup target add wasm32-unknown-unknown
+
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+
+      - name: Build fixture-enabled browser package
+        run: bash scripts/build-web-demo.sh
+
+      - name: Install Chromium smoke dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+
+      - name: Direct WebGPU device-loss recovery
+        id: device_loss
+        continue-on-error: true
+        env:
+          NOON_RENDERER_DEVICE_LOSS_ARTIFACTS: browser-smoke-artifacts/1366-device-loss
+        run: node scripts/renderer-webgpu-device-loss-smoke.mjs
+
+      - name: Direct WebGPU validation diagnostic
+        id: direct_validation
+        continue-on-error: true
+        env:
+          NOON_RENDERER_VALIDATION_ERROR_ARTIFACTS: browser-smoke-artifacts/1366-direct-validation
+        run: node scripts/renderer-webgpu-validation-error-smoke.mjs
+
+      - name: Worker WebGPU validation diagnostic
+        id: worker_validation
+        continue-on-error: true
+        env:
+          NOON_RENDERER_VALIDATION_ARTIFACTS: browser-smoke-artifacts/1366-worker-validation
+        run: node scripts/renderer-worker-webgpu-validation-error-smoke.mjs
+
+      - name: Report focused outcomes
+        if: always()
+        run: |
+          echo "device_loss=${{ steps.device_loss.outcome }}"
+          echo "direct_validation=${{ steps.direct_validation.outcome }}"
+          echo "worker_validation=${{ steps.worker_validation.outcome }}"
+          test "${{ steps.device_loss.outcome }}" = success
+          test "${{ steps.direct_validation.outcome }}" = success
+          test "${{ steps.worker_validation.outcome }}" = success
+
+      - name: Upload focused diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: codex-1366-focused-diagnostics
+          path: browser-smoke-artifacts/1366-*
+          if-no-files-found: warn
+          retention-days: 3
