@@ -286,16 +286,18 @@ impl SceneInstance {
         )
     }
 
-    /// Consume one renderer publication while queueing a renderer-only full
-    /// invalidation for the immediately following publication.
+    /// Consume one renderer publication while queueing a presentation-only redraw
+    /// for the immediately following publication.
     ///
-    /// This supports transient overlays whose exact endpoint must be presented once
-    /// and then removed on the next redraw without mutating scene or spatial state.
+    /// This supports identity-free transient occurrences whose exact endpoint must
+    /// be presented once and then removed from the next presented surface. Stable
+    /// frame rows, painter order, resources, and spatial state remain resident and
+    /// are not marked dirty merely to erase the transient occurrence.
     pub fn take_renderer_publication_with_followup_invalidation(
         &mut self,
     ) -> RendererPublication<'_> {
         let changes = self.take_frame_changes();
-        self.changes.invalidate_all();
+        self.changes = FrameChanges::presentation_redraw();
         RendererPublication::new(
             self.publication,
             &self.frame,
