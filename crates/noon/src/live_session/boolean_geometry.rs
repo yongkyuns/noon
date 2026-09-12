@@ -10,16 +10,16 @@ impl LiveSession<'_> {
         operation: BooleanOperation,
         operands: &[Mobject],
     ) -> Result<ManimGeometryOptions, LiveSessionError> {
-        let states = operands
-            .iter()
-            .map(|object| {
-                self.require_mobject(object)?;
-                let mut state = object.state()?;
+        crate::boolean_authoring::prepare_boolean_options(
+            self.store,
+            operation,
+            operands,
+            || LiveSessionError::ForeignMobjectStore,
+            |store, object, mut state| {
                 if self.session.semantic_object_is_reachable(object.node_id()) {
-                    let store = self.store.borrow();
                     let observed = self
                         .session
-                        .effective_semantic_object(&store, object.node_id())?;
+                        .effective_semantic_object(store, object.node_id())?;
                     if !observed.authored_content_layout_applicable() {
                         return Err(crate::AuthoringError::Unsupported(
                             crate::UnsupportedAuthoringOperation::EffectivePathRenderOverride,
@@ -33,9 +33,7 @@ impl LiveSession<'_> {
                         );
                 }
                 Ok(state)
-            })
-            .collect::<Result<Vec<_>, LiveSessionError>>()?;
-        crate::boolean_authoring::boolean_options(&self.store.borrow(), operation, &states)
-            .map_err(Into::into)
+            },
+        )
     }
 }
