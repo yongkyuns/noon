@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   patch-and-qualify:
-    if: contains(github.event.head_commit.message, 'ci: publish transient retained-locality')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout child branch
@@ -19,10 +18,21 @@ jobs:
           ref: codex/1466-transient-retained-locality
           fetch-depth: 0
 
+      - name: Detect unpublished patch
+        id: guard
+        run: |
+          if grep -q 'take_renderer_publication_with_followup_invalidation' crates/noon-runtime/src/lib.rs; then
+            echo 'apply=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'apply=false' >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Apply retained-locality patch
+        if: steps.guard.outputs.apply == 'true'
         run: python3 .github/patch-1466-locality.py
 
       - name: Format and focused qualification
+        if: steps.guard.outputs.apply == 'true'
         run: |
           cargo fmt --all
           cargo test -p noon-runtime frame_changes_tests
@@ -35,6 +45,7 @@ jobs:
           git diff --check
 
       - name: Publish qualified code and ratchets
+        if: steps.guard.outputs.apply == 'true'
         run: |
           git config user.name "Noon CI"
           git config user.email "noon-ci@users.noreply.github.com"
