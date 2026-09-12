@@ -102,12 +102,17 @@ fn unequal_family_transform_publishes_one_identity_free_expansion_copy() {
         );
     }
     // Completion grants the endpoint one coherent publication, then queues one
-    // renderer-only follow-up so the synthetic alignment occurrence is actually
-    // removed from a presented surface.
+    // presentation-only follow-up. Stable rows and spatial state remain resident
+    // while the transient occurrence is removed from the presented surface.
     assert!(session.wake_state().frame_pending());
     let removal = session.take_renderer_publication();
-    assert!(removal.changes().is_all());
-    assert!(removal.derived_display_objects().is_empty());
+    assert!(!removal.changes().is_all());
+    assert!(removal.changes().is_presentation_only());
+    assert!(removal.changes().object_indices().is_empty());
+    assert!(removal.changes().added_indices().is_empty());
+    assert!(removal.changes().removed_indices().is_empty());
+    assert!(!removal.changes().has_painter_order_change());
+    assert!(removal.transient_presentations().is_empty());
     assert_eq!(
         store.semantic_family_members_checked(source).unwrap(),
         source_members

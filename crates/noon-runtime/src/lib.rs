@@ -293,7 +293,7 @@ impl SceneInstance {
     /// be presented once and then removed from the next presented surface. Stable
     /// frame rows, painter order, resources, and spatial state remain resident and
     /// are not marked dirty merely to erase the transient occurrence.
-    pub fn take_renderer_publication_with_followup_invalidation(
+    pub fn take_renderer_publication_with_followup_presentation_redraw(
         &mut self,
     ) -> RendererPublication<'_> {
         let changes = self.take_frame_changes();

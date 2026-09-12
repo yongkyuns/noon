@@ -566,6 +566,17 @@ impl FrameChanges {
         self.presentation_redraw
     }
 
+    /// True when this change set requests presentation work but carries no stable
+    /// frame, structure, painter-order, or spatial dirtiness.
+    pub fn is_presentation_only(&self) -> bool {
+        self.presentation_redraw
+            && !self.all
+            && self.object_indices.is_empty()
+            && self.added_indices.is_empty()
+            && self.removed_indices.is_empty()
+            && self.painter_order_range.is_none()
+    }
+
     pub fn object_indices(&self) -> &[usize] {
         &self.object_indices
     }
@@ -649,6 +660,7 @@ mod frame_changes_tests {
         assert!(!changes.is_structural());
         assert!(!changes.has_painter_order_change());
         assert!(changes.requires_presentation_redraw());
+        assert!(changes.is_presentation_only());
         assert!(!changes.is_empty());
         assert!(changes.object_indices().is_empty());
         assert!(changes.added_indices().is_empty());
@@ -662,6 +674,7 @@ mod frame_changes_tests {
 
         assert!(changes.is_all());
         assert!(!changes.requires_presentation_redraw());
+        assert!(!changes.is_presentation_only());
     }
 }
 
