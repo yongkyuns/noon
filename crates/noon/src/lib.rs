@@ -99,6 +99,7 @@ mod scene_ordering;
 mod sector_authoring;
 mod semantic_mobject;
 mod state_replacement;
+mod tangent_line_authoring;
 #[cfg(any(feature = "native-text", feature = "typst"))]
 mod text_authoring;
 #[cfg(any(feature = "native-text", feature = "typst"))]

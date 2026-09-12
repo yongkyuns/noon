@@ -795,6 +795,7 @@ _PUBLIC_EXPORTS = {
     "Dot": "_manim_geometry",
     "Ellipse": "_manim_geometry",
     "Triangle": "_manim_geometry",
+    "TangentLine": "_manim_geometry",
     "ApplyMethod": "_manim_geometry",
     "DEFAULT_DOT_RADIUS": "_manim_geometry",
     "PURE_YELLOW": "_manim_geometry",
