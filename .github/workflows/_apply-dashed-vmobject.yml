@@ -106,39 +106,39 @@ jobs:
           replace_once(
               "crates/noon-web/src/canonical_authoring_scene.rs",
               '''        #[wasm_bindgen(js_name = liveReplaceContent)]
-              pub fn live_replace_content(
+                  pub fn live_replace_content(
           ''',
               '''        #[wasm_bindgen(js_name = liveDashedVMobject)]
-              pub fn live_dashed_vmobject(
-                  &mut self,
-                  source: &crate::WasmAuthoringMobjectHandle,
-                  num_dashes: i32,
-                  dashed_ratio: f64,
-                  dash_offset: f64,
-                  equal_lengths: bool,
-              ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
-                  source.id_in_store(
-                      self.inner.scene.integration_store(),
-                      "live execution context",
-                  )?;
-                  self.inner
-                      .active_live_player()
-                      .map_err(typed_js_error)?
-                      .live_dashed_vmobject(
-                          source.semantic_mobject(),
-                          noon::DashedVMobjectOptions {
-                              num_dashes,
-                              dashed_ratio,
-                              dash_offset,
-                              equal_lengths,
-                          },
-                      )
-                      .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
-                      .map_err(typed_js_error)
-              }
+                  pub fn live_dashed_vmobject(
+                      &mut self,
+                      source: &crate::WasmAuthoringMobjectHandle,
+                      num_dashes: i32,
+                      dashed_ratio: f64,
+                      dash_offset: f64,
+                      equal_lengths: bool,
+                  ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+                      source.id_in_store(
+                          self.inner.scene.integration_store(),
+                          "live execution context",
+                      )?;
+                      self.inner
+                          .active_live_player()
+                          .map_err(typed_js_error)?
+                          .live_dashed_vmobject(
+                              source.semantic_mobject(),
+                              noon::DashedVMobjectOptions {
+                                  num_dashes,
+                                  dashed_ratio,
+                                  dash_offset,
+                                  equal_lengths,
+                              },
+                          )
+                          .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                          .map_err(typed_js_error)
+                  }
 
-              #[wasm_bindgen(js_name = liveReplaceContent)]
-              pub fn live_replace_content(
+                  #[wasm_bindgen(js_name = liveReplaceContent)]
+                  pub fn live_replace_content(
           ''',
           )
 
