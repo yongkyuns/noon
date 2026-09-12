@@ -18,13 +18,11 @@ jobs:
           ref: codex/1494-current-base-restack
           fetch-depth: 0
 
-      - name: Replay #1494 delta
+      - name: Apply semantic #1494 delta
         run: |
-          git config user.name "Noon CI"
-          git config user.email "noon-ci@users.noreply.github.com"
-          git cherry-pick e178f825729f0cb871230b5477636b7a9e65d83a
-          git cherry-pick c78a3d29444584abd656a5ab4150946e10081375
-          git cherry-pick 3b18902ffc09becd2b1abdd3e03c8113e3498f25
+          python3 .github/restack-1494-current.py
+          chmod +x scripts/transient-presentation-ratchet.sh scripts/transient-presentation-ratchet.test.sh
+          cargo fmt --all
 
       - name: Focused qualification
         run: |
@@ -33,16 +31,21 @@ jobs:
           cargo test -p noon-runtime --test geometry_patch_locality
           cargo test -p noon-render-wgpu --lib presentation_only_redraw_reuses_mixed_retained_preparation
           cargo test -p noon --lib execution_session::family_transform_tests
+          node web/gpu-timestamp-host.test.mjs
           bash scripts/transient-presentation-ratchet.test.sh
           bash scripts/transient-presentation-ratchet.sh
+          python3 scripts/test_check_entrypoint.py
           bash scripts/check-architecture.sh 9c373a41fe509941bf20dd0ec04cfb2c952fb20c
-          git diff --check 9c373a41fe509941bf20dd0ec04cfb2c952fb20c..HEAD
+          git diff --check 9c373a41fe509941bf20dd0ec04cfb2c952fb20c
 
       - name: Publish clean restack
         run: |
-          rm .github/workflows/restack-1494.yml
+          git config user.name "Noon CI"
+          git config user.email "noon-ci@users.noreply.github.com"
+          rm .github/workflows/restack-1494.yml .github/restack-1494-current.py
           git reset --soft 9c373a41fe509941bf20dd0ec04cfb2c952fb20c
           git add -A
+          git status --short
           git commit -m "Complete transient presentation locality and ratchets"
           git push --force-with-lease=refs/heads/codex/1466-transient-retained-locality-restacked:3b18902ffc09becd2b1abdd3e03c8113e3498f25 \
             origin HEAD:refs/heads/codex/1466-transient-retained-locality-restacked
