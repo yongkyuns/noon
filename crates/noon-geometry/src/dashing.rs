@@ -44,7 +44,10 @@ pub fn dash_intervals(
     }
 
     // Pinned Manim gives open paths special handling at the trailing overflow so
-    // their pattern still starts/ends on visible dash geometry.
+    // their pattern still starts/ends on visible dash geometry. Manim's VGroup
+    // representation may also append a redundant zero-length seam child when a
+    // solid pattern lands exactly on 1.0. Noon retains visible path geometry rather
+    // than dash-submobject identity, so omit only that extra zero-length seam child.
     if !closed {
         let last = starts.len() - 1;
         if ends[last] > 1.0 && starts[last] > 1.0 {
@@ -52,10 +55,12 @@ pub fn dash_intervals(
             ends.pop();
         } else if ends[last] < dash_len {
             if starts[last] < 1.0 {
-                starts.push(0.0);
                 let wrapped_end = ends[last];
-                ends.push(wrapped_end);
                 ends[last] = 1.0;
+                if wrapped_end != 0.0 {
+                    starts.push(0.0);
+                    ends.push(wrapped_end);
+                }
             } else {
                 starts[last] = 0.0;
             }
@@ -243,6 +248,21 @@ mod tests {
         // period=.25 and a -0.5 offset wraps to +0.125 phase.
         assert!((intervals[0].0 - 0.125).abs() < 1e-12);
         assert!((intervals[0].1 - 0.25).abs() < 1e-12);
+    }
+
+    #[test]
+    fn solid_open_pattern_omits_only_the_redundant_wrapped_seam_child() {
+        let intervals = dash_intervals(4, 1.0, 0.0, false);
+        assert_eq!(
+            intervals,
+            vec![(0.0, 0.25), (0.25, 0.5), (0.5, 0.75), (0.75, 1.0)]
+        );
+    }
+
+    #[test]
+    fn zero_ratio_keeps_requested_degenerate_dash_geometry() {
+        let intervals = dash_intervals(2, 0.0, 0.0, false);
+        assert_eq!(intervals, vec![(0.0, 0.0), (1.0, 1.0)]);
     }
 
     #[test]
