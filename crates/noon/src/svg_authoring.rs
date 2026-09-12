@@ -70,7 +70,9 @@ impl std::fmt::Display for SvgUnsupportedFeature {
             Self::ClipPath => formatter.write_str("SVG clip paths are not supported"),
             Self::Mask => formatter.write_str("SVG masks are not supported"),
             Self::Filter => formatter.write_str("SVG filters are not supported"),
-            Self::Image => formatter.write_str("SVG image nodes are not supported in vector import"),
+            Self::Image => {
+                formatter.write_str("SVG image nodes are not supported in vector import")
+            }
             Self::Text => formatter.write_str("SVG text nodes are not supported in vector import"),
             Self::GradientPaint => formatter.write_str("SVG gradient paints are not supported"),
             Self::PatternPaint => formatter.write_str("SVG pattern paints are not supported"),
@@ -323,8 +325,7 @@ fn is_unsupported_element(name: &str) -> bool {
 fn css_declares_non_none(style: &str, property: &str) -> bool {
     style.split(';').any(|declaration| {
         declaration.split_once(':').is_some_and(|(name, value)| {
-            name.trim().eq_ignore_ascii_case(property)
-                && !value.trim().eq_ignore_ascii_case("none")
+            name.trim().eq_ignore_ascii_case(property) && !value.trim().eq_ignore_ascii_case("none")
         })
     })
 }
@@ -354,9 +355,7 @@ fn collect_group(
         ));
     }
     if group.mask().is_some() {
-        return Err(SvgAuthoringError::Unsupported(
-            SvgUnsupportedFeature::Mask,
-        ));
+        return Err(SvgAuthoringError::Unsupported(SvgUnsupportedFeature::Mask));
     }
     if !group.filters().is_empty() {
         return Err(SvgAuthoringError::Unsupported(
@@ -373,14 +372,10 @@ fn collect_group(
                 }
             }
             usvg::Node::Image(_) => {
-                return Err(SvgAuthoringError::Unsupported(
-                    SvgUnsupportedFeature::Image,
-                ));
+                return Err(SvgAuthoringError::Unsupported(SvgUnsupportedFeature::Image));
             }
             usvg::Node::Text(_) => {
-                return Err(SvgAuthoringError::Unsupported(
-                    SvgUnsupportedFeature::Text,
-                ));
+                return Err(SvgAuthoringError::Unsupported(SvgUnsupportedFeature::Text));
             }
         }
     }
@@ -504,8 +499,9 @@ fn prepare_vector_path(path: &usvg::Path) -> Result<VectorPath, SvgAuthoringErro
         result = match segment {
             PathSegment::MoveTo(point) => result.move_to(svg_point(point, transform)),
             PathSegment::LineTo(point) => result.line_to(svg_point(point, transform)),
-            PathSegment::QuadTo(control, point) => result
-                .quadratic_to(svg_point(control, transform), svg_point(point, transform)),
+            PathSegment::QuadTo(control, point) => {
+                result.quadratic_to(svg_point(control, transform), svg_point(point, transform))
+            }
             PathSegment::CubicTo(control1, control2, point) => result.cubic_to(
                 svg_point(control1, transform),
                 svg_point(control2, transform),
@@ -569,11 +565,7 @@ fn placement_transform(
     let translation = if options.should_center {
         SemanticVec3::new(-center_x * scale, -center_y * scale, 0.0)
     } else {
-        SemanticVec3::new(
-            center_x * (1.0 - scale),
-            center_y * (1.0 - scale),
-            0.0,
-        )
+        SemanticVec3::new(center_x * (1.0 - scale), center_y * (1.0 - scale), 0.0)
     };
     SemanticTransform2_5D {
         translation,
@@ -626,15 +618,14 @@ mod tests {
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
             <path d="M 1 2 L 4 2" transform="translate(3 5)" fill="none" stroke="#112233"/>
         </svg>"##;
-        let family = scene
-            .svg_from_str_with_options(svg, raw_options())
-            .unwrap();
+        let family = scene.svg_from_str_with_options(svg, raw_options()).unwrap();
         let store = scene.integration_store().borrow();
         let member = store
             .semantic_family_members_checked(family.node_id())
             .unwrap()[0];
         drop(store);
-        let object = crate::Mobject::from_node(Rc::clone(scene.integration_store()), member).unwrap();
+        let object =
+            crate::Mobject::from_node(Rc::clone(scene.integration_store()), member).unwrap();
         let query = object.path_query().unwrap();
         assert_eq!(query.start().unwrap(), (4.0, -7.0));
         assert_eq!(query.end().unwrap(), (7.0, -7.0));
@@ -648,11 +639,11 @@ mod tests {
                 <path d="M 0 0 L 10 0 L 10 10 Z"/>
             </g>
         </svg>"##;
-        let family = scene
-            .svg_from_str_with_options(svg, raw_options())
-            .unwrap();
+        let family = scene.svg_from_str_with_options(svg, raw_options()).unwrap();
         let store = scene.integration_store().borrow();
-        let member = store.semantic_family_members_checked(family.node_id()).unwrap()[0];
+        let member = store
+            .semantic_family_members_checked(family.node_id())
+            .unwrap()[0];
         let state = store.semantic_object_state_checked(member).unwrap();
         assert_eq!(
             state.style.fill,
