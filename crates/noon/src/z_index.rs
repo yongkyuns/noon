@@ -1,6 +1,6 @@
 //! Shared authored painter priority; the renderer consumes only derived order.
 use crate::{AuthoringError, LayoutAnchor, Mobject, MobjectFamily};
-use noon_core::SemanticMutationTransaction;
+use noon_core::{SemanticMutationTransaction, SemanticStoreIdentity};
 
 impl LayoutAnchor {
     /// Read the selected root's own priority, including non-rendered family roots.
@@ -18,7 +18,8 @@ impl LayoutAnchor {
 
     /// Set priority on the selected root and optionally all unique descendants.
     pub fn set_z_index(&self, value: f64, family: bool) -> Result<(), AuthoringError> {
-        self.z_index_transaction(value, family)?
+        let store = self.integration_store().borrow().identity();
+        self.z_index_transaction(store, value, family)?
             .apply(&mut self.integration_store().borrow_mut())
             .map(|_| ())
             .map_err(AuthoringError::from)
@@ -26,11 +27,14 @@ impl LayoutAnchor {
 
     pub(crate) fn z_index_transaction(
         &self,
+        store: SemanticStoreIdentity,
         value: f64,
         family: bool,
     ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        if self.integration_store().borrow().identity() != store {
+            return Err(AuthoringError::ForeignStore);
+        }
         let id = self.resolve()?;
-        self.z_index()?;
         let mut transaction = SemanticMutationTransaction::new();
         if family {
             for node in self
