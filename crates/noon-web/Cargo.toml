@@ -39,3 +39,4 @@ wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl"
 
 [dev-dependencies]
 noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["ci-noop"] }
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "noop"] }
