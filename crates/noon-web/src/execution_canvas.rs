@@ -23,8 +23,8 @@ mod wasm {
     };
     use noon_render_wgpu::text::TextDeviceMetrics;
     use noon_render_wgpu::{
-        prepare_derived_display_visible, Camera2D, GpuRenderer, RetainedFramePreparer,
-        RetainedTextGpuState,
+        Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState,
+        TransientPresentationPreparer,
     };
     use serde::Serialize;
     use wasm_bindgen::{prelude::*, JsCast};
@@ -371,6 +371,7 @@ mod wasm {
         source: DirectExecutionSource,
         direct_wake_clock: BrowserExecutionWakeClock,
         direct_preparer: RetainedFramePreparer,
+        direct_transient_preparer: TransientPresentationPreparer,
         renderer: GpuRenderer,
         direct_text_gpu: RetainedTextGpuState,
         timestamp_query_supported: bool,
@@ -439,6 +440,7 @@ mod wasm {
             self.renderer = renderer;
             self.direct_text_gpu = direct_text_gpu;
             self.direct_preparer = RetainedFramePreparer::new();
+            self.direct_transient_preparer = TransientPresentationPreparer::new();
             self.timestamp_profiler =
                 profiling_enabled.then(|| GpuTimestampProfiler::new(&self.device, &self.queue));
             self.gpu_generation = next_generation;
@@ -1076,6 +1078,7 @@ mod wasm {
                 source,
                 direct_wake_clock: BrowserExecutionWakeClock::default(),
                 direct_preparer: RetainedFramePreparer::new(),
+                direct_transient_preparer: TransientPresentationPreparer::new(),
                 renderer,
                 direct_text_gpu,
                 timestamp_query_supported,
@@ -1124,9 +1127,10 @@ mod wasm {
                 ));
                 let publication = direct.take_renderer_publication();
                 publication_context = publication.context();
-                let derived =
-                    prepare_derived_display_visible(&publication, visibility.object_indices())
-                        .map_err(js_error)?;
+                let derived = self
+                    .direct_transient_preparer
+                    .prepare_visible(&publication, visibility.object_indices())
+                    .map_err(js_error)?;
                 let prepared = self
                     .direct_preparer
                     .prepare_planned_publication_visible(

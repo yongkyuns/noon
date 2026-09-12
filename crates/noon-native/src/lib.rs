@@ -23,8 +23,8 @@ use noon_core::{
 };
 use noon_render_wgpu::text::TextDeviceMetrics;
 use noon_render_wgpu::{
-    prepare_derived_display_visible, Camera2D, GpuRenderer, RetainedFramePreparer,
-    RetainedTextGpuState,
+    Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState,
+    TransientPresentationPreparer,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -533,7 +533,9 @@ impl NativeApp {
             .as_mut()
             .expect("drawable native host must own GPU state");
         let metrics = gpu.text_metrics(camera)?;
-        let derived = prepare_derived_display_visible(&publication, visibility.object_indices())
+        let derived = gpu
+            .transient_preparer
+            .prepare_visible(&publication, visibility.object_indices())
             .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
         let prepared = gpu
             .preparer
@@ -791,6 +793,7 @@ struct NativeGpu {
     config: wgpu::SurfaceConfiguration,
     drawable: bool,
     preparer: RetainedFramePreparer,
+    transient_preparer: TransientPresentationPreparer,
     text_state: RetainedTextGpuState,
     renderer: GpuRenderer,
 }
@@ -842,6 +845,7 @@ impl NativeGpu {
             config,
             drawable: size.width > 0 && size.height > 0,
             preparer: RetainedFramePreparer::new(),
+            transient_preparer: TransientPresentationPreparer::new(),
             text_state,
             renderer,
         })

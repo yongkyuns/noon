@@ -5,16 +5,25 @@ use crate::{
     PreparedGeometryObjectOutcome, RenderPrimitive,
 };
 
-use super::{empty_instance_buffer, ensure_capacity, DrawStats, GpuRenderer, UploadStats};
+use super::{
+    empty_buffer, empty_instance_buffer, ensure_capacity, ensure_capacity_with_usage, DrawStats,
+    GpuRenderer, UploadStats,
+};
 
 #[derive(Debug)]
 pub(super) struct DerivedDisplayGpu {
     circle_buffer: wgpu::Buffer,
     rectangle_buffer: wgpu::Buffer,
     line_buffer: wgpu::Buffer,
+    path_vertex_buffer: wgpu::Buffer,
+    path_index_buffer: wgpu::Buffer,
+    path_instance_buffer: wgpu::Buffer,
     circle_capacity_bytes: usize,
     rectangle_capacity_bytes: usize,
     line_capacity_bytes: usize,
+    path_vertex_capacity_bytes: usize,
+    path_index_capacity_bytes: usize,
+    path_instance_capacity_bytes: usize,
 }
 
 impl DerivedDisplayGpu {
@@ -23,9 +32,23 @@ impl DerivedDisplayGpu {
             circle_buffer: empty_instance_buffer(device, "Noon derived circle instances"),
             rectangle_buffer: empty_instance_buffer(device, "Noon derived rectangle instances"),
             line_buffer: empty_instance_buffer(device, "Noon derived line instances"),
+            path_vertex_buffer: empty_buffer(
+                device,
+                "Noon transient path vertices",
+                wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            ),
+            path_index_buffer: empty_buffer(
+                device,
+                "Noon transient path indices",
+                wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            ),
+            path_instance_buffer: empty_instance_buffer(device, "Noon transient path instances"),
             circle_capacity_bytes: 0,
             rectangle_capacity_bytes: 0,
             line_capacity_bytes: 0,
+            path_vertex_capacity_bytes: 0,
+            path_index_capacity_bytes: 0,
+            path_instance_capacity_bytes: 0,
         }
     }
 
@@ -38,6 +61,9 @@ impl DerivedDisplayGpu {
         let circle_bytes = std::mem::size_of_val(prepared.circles.as_slice());
         let rectangle_bytes = std::mem::size_of_val(prepared.rectangles.as_slice());
         let line_bytes = std::mem::size_of_val(prepared.lines.as_slice());
+        let path_vertex_bytes = std::mem::size_of_val(prepared.path_vertices.as_slice());
+        let path_index_bytes = std::mem::size_of_val(prepared.path_indices.as_slice());
+        let path_instance_bytes = std::mem::size_of_val(prepared.paths.as_slice());
         let mut buffer_reallocations = 0;
 
         buffer_reallocations += usize::from(ensure_capacity(
@@ -61,11 +87,37 @@ impl DerivedDisplayGpu {
             line_bytes,
             "Noon derived line instances",
         ));
+        buffer_reallocations += usize::from(ensure_capacity_with_usage(
+            device,
+            &mut self.path_vertex_buffer,
+            &mut self.path_vertex_capacity_bytes,
+            path_vertex_bytes,
+            "Noon transient path vertices",
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        ));
+        buffer_reallocations += usize::from(ensure_capacity_with_usage(
+            device,
+            &mut self.path_index_buffer,
+            &mut self.path_index_capacity_bytes,
+            path_index_bytes,
+            "Noon transient path indices",
+            wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        ));
+        buffer_reallocations += usize::from(ensure_capacity(
+            device,
+            &mut self.path_instance_buffer,
+            &mut self.path_instance_capacity_bytes,
+            path_instance_bytes,
+            "Noon transient path instances",
+        ));
 
         let mut bytes_uploaded = 0;
         bytes_uploaded += upload_all(queue, &self.circle_buffer, &prepared.circles);
         bytes_uploaded += upload_all(queue, &self.rectangle_buffer, &prepared.rectangles);
         bytes_uploaded += upload_all(queue, &self.line_buffer, &prepared.lines);
+        bytes_uploaded += upload_all(queue, &self.path_vertex_buffer, &prepared.path_vertices);
+        bytes_uploaded += upload_all(queue, &self.path_index_buffer, &prepared.path_indices);
+        bytes_uploaded += upload_all(queue, &self.path_instance_buffer, &prepared.paths);
         UploadStats {
             bytes_uploaded,
             buffer_reallocations,
@@ -332,6 +384,44 @@ impl GpuRenderer {
                     &self.derived_display.line_buffer,
                     instance_index,
                 ),
+                MixedDrawItem::Derived {
+                    primitive: DerivedDisplayPrimitive::Path { batch, reveal_head },
+                    instance_index,
+                } => {
+                    let path = &derived.path_batches[batch];
+                    if !path.index_range.is_empty() {
+                        pass.set_pipeline(&self.path_pipeline);
+                        pass.set_vertex_buffer(
+                            0,
+                            self.derived_display.path_vertex_buffer.slice(..),
+                        );
+                        pass.set_vertex_buffer(
+                            1,
+                            self.derived_display.path_instance_buffer.slice(..),
+                        );
+                        pass.set_index_buffer(
+                            self.derived_display.path_index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint32,
+                        );
+                        let start = u32::try_from(instance_index)
+                            .expect("transient path instance count exceeds wgpu limits");
+                        pass.draw_indexed(path.index_range.clone(), 0, start..start + 1);
+                        stats.draw_calls += 1;
+                        stats.instances_drawn += 1;
+                    }
+                    if let Some(head_index) = reveal_head {
+                        draw_analytic(
+                            pass,
+                            line_pipeline,
+                            &self.quad_buffer,
+                            &self.derived_display.line_buffer,
+                            head_index,
+                        );
+                        stats.draw_calls += 1;
+                        stats.instances_drawn += 1;
+                    }
+                    continue;
+                }
             }
             stats.draw_calls += 1;
             stats.instances_drawn += 1;

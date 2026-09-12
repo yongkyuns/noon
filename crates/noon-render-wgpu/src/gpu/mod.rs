@@ -937,7 +937,16 @@ impl GpuRenderer {
         query_set: Option<&wgpu::QuerySet>,
     ) -> DrawStats {
         let scene_view = self.presentation.scene_view(view);
-        let sample_count = ordered_render_sample_count(prepared.path_batches);
+        let sample_count = if derived.is_some_and(|presentation| {
+            presentation
+                .path_batches
+                .iter()
+                .any(|batch| !batch.index_range.is_empty())
+        }) {
+            PATH_SAMPLE_COUNT
+        } else {
+            ordered_render_sample_count(prepared.path_batches)
+        };
         let stats = if sample_count == 1 {
             // Analytic SDF primitives already use derivative-based edge coverage. When
             // no visible vector path participates in painter order, avoid 4x sample

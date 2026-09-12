@@ -486,6 +486,125 @@ struct CachedPathMesh {
     last_used: u64,
 }
 
+impl CachedPathMesh {
+    fn matches(&self, path: &VectorPath, style: Style, transform: Transform2D) -> bool {
+        self.path == *path
+            && self.stroke_transform == path_stroke_transform_key(style, transform)
+            && self.stroke_width_bits == style.stroke_width.to_bits()
+            && self.stroke_join == style.stroke_join
+            && self.stroke_cap == style.stroke_cap
+            && self.fill_enabled == style.fill.is_some()
+    }
+}
+
+/// Renderer-local preparation reuse for identity-free transient paths.
+///
+/// Entries use the exact same key and tessellation function as stable retained
+/// paths, but their lifetime is independent so transient retirement never moves
+/// or invalidates stable renderer residency.
+#[derive(Debug, Default)]
+pub(crate) struct TransientPathMeshCache {
+    entries: Vec<CachedPathMesh>,
+    lookup: HashMap<PathMeshKey, Vec<usize>>,
+    clock: u64,
+    hits: u64,
+    misses: u64,
+}
+
+impl TransientPathMeshCache {
+    pub(crate) fn mesh(
+        &mut self,
+        path: &VectorPath,
+        style: Style,
+        transform: Transform2D,
+    ) -> Result<&TessellatedPath, noon_geometry::GeometryError> {
+        let stroke_transform = path_stroke_transform_key(style, transform);
+        let key = path_mesh_key(
+            path,
+            stroke_transform,
+            style.stroke_width.to_bits(),
+            style.stroke_join,
+            style.stroke_cap,
+            style.fill.is_some(),
+        );
+        let existing = self.lookup.get(&key).and_then(|candidates| {
+            candidates
+                .iter()
+                .copied()
+                .find(|&index| self.entries[index].matches(path, style, transform))
+        });
+        if let Some(index) = existing {
+            let last_used = self.next_use();
+            self.entries[index].last_used = last_used;
+            self.hits = self.hits.saturating_add(1);
+            return Ok(&self.entries[index].mesh);
+        }
+
+        if self.entries.len() >= DEFAULT_PATH_MESH_CACHE_LIMIT {
+            self.evict_oldest();
+        }
+        let mesh = tessellate_path_mesh(path, style, transform)?;
+        let last_used = self.next_use();
+        let index = self.entries.len();
+        self.entries.push(CachedPathMesh {
+            path: path.clone(),
+            stroke_transform,
+            stroke_width_bits: style.stroke_width.to_bits(),
+            stroke_join: style.stroke_join,
+            stroke_cap: style.stroke_cap,
+            fill_enabled: style.fill.is_some(),
+            mesh,
+            resident: None,
+            last_used,
+        });
+        self.lookup.entry(key).or_default().push(index);
+        self.misses = self.misses.saturating_add(1);
+        Ok(&self.entries[index].mesh)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(crate) fn hits(&self) -> u64 {
+        self.hits
+    }
+
+    pub(crate) fn misses(&self) -> u64 {
+        self.misses
+    }
+
+    fn next_use(&mut self) -> u64 {
+        self.clock = self.clock.saturating_add(1);
+        self.clock
+    }
+
+    fn evict_oldest(&mut self) {
+        let Some(index) = self
+            .entries
+            .iter()
+            .enumerate()
+            .min_by_key(|(index, entry)| (entry.last_used, *index))
+            .map(|(index, _)| index)
+        else {
+            return;
+        };
+        self.entries.remove(index);
+        self.lookup.clear();
+        for (index, entry) in self.entries.iter().enumerate() {
+            let key = path_mesh_key(
+                &entry.path,
+                entry.stroke_transform,
+                entry.stroke_width_bits,
+                entry.stroke_join,
+                entry.stroke_cap,
+                entry.fill_enabled,
+            );
+            self.lookup.entry(key).or_default().push(index);
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct PathReplacementStats {
     cache_miss: bool,
@@ -1808,32 +1927,7 @@ impl FramePreparer {
             return Ok((index, false));
         }
 
-        let transformed_path;
-        let tessellation_path = if style.stroke_width_mode == StrokeWidthMode::ScreenSpace {
-            transformed_path = transform_path_without_translation(path, transform);
-            &transformed_path
-        } else {
-            path
-        };
-        // Correspondence is established by shared transform preparation. Stroke
-        // scaling affects tessellation coordinates, never semantic point pairing.
-        let mesh = if tessellation_path.morph_target().is_some() {
-            noon_geometry::tessellate_styled_with_fill_preserving_morph_order(
-                tessellation_path,
-                style.stroke_width,
-                style.stroke_join,
-                style.stroke_cap,
-                fill_enabled,
-            )?
-        } else {
-            noon_geometry::tessellate_styled_with_fill(
-                tessellation_path,
-                style.stroke_width,
-                style.stroke_join,
-                style.stroke_cap,
-                fill_enabled,
-            )?
-        };
+        let mesh = tessellate_path_mesh(path, style, transform)?;
         let index = self.path_mesh_cache.len();
         let last_used = self.next_path_mesh_use();
         self.path_mesh_cache.push(CachedPathMesh {
@@ -2077,6 +2171,41 @@ fn transform_path_without_translation(path: &VectorPath, transform: Transform2D)
     })
 }
 
+/// Canonical path tessellation used by both stable retained paths and
+/// identity-free transient path presentation.
+pub(crate) fn tessellate_path_mesh(
+    path: &VectorPath,
+    style: Style,
+    transform: Transform2D,
+) -> Result<TessellatedPath, noon_geometry::GeometryError> {
+    let transformed_path;
+    let tessellation_path = if style.stroke_width_mode == StrokeWidthMode::ScreenSpace {
+        transformed_path = transform_path_without_translation(path, transform);
+        &transformed_path
+    } else {
+        path
+    };
+    // Correspondence is established by shared transform preparation. Stroke
+    // scaling affects tessellation coordinates, never semantic point pairing.
+    if tessellation_path.morph_target().is_some() {
+        noon_geometry::tessellate_styled_with_fill_preserving_morph_order(
+            tessellation_path,
+            style.stroke_width,
+            style.stroke_join,
+            style.stroke_cap,
+            style.fill.is_some(),
+        )
+    } else {
+        noon_geometry::tessellate_styled_with_fill(
+            tessellation_path,
+            style.stroke_width,
+            style.stroke_join,
+            style.stroke_cap,
+            style.fill.is_some(),
+        )
+    }
+}
+
 fn packed_path_transform(style: Style, transform: Transform2D) -> PackedTransform {
     if style.stroke_width_mode == StrokeWidthMode::ScreenSpace {
         PackedTransform {
@@ -2154,10 +2283,14 @@ fn hash_vec2(value: noon_core::Vec2, hasher: &mut impl Hasher) {
     value.y.to_bits().hash(hasher);
 }
 
+fn pack_style_values(style: Style, appearance: f32) -> PackedStyle {
+    let mut packed: PackedStyle = style.into();
+    packed.opacity *= appearance.clamp(0.0, 1.0);
+    packed
+}
+
 fn pack_style(object: &FrameObjectState) -> PackedStyle {
-    let mut style: PackedStyle = object.style.into();
-    style.opacity *= object.appearance.clamp(0.0, 1.0);
-    style
+    pack_style_values(object.style, object.appearance)
 }
 
 fn pack_circle(object: &FrameObjectState, reveal: f32) -> CircleInstance {
@@ -2208,10 +2341,14 @@ fn pack_line(object: &FrameObjectState, reveal: f32) -> LineInstance {
 }
 
 fn should_create_path_reveal_head(object: &FrameObjectState, reveal: f32) -> bool {
+    should_create_path_reveal_head_for_style(object.style, reveal)
+}
+
+fn should_create_path_reveal_head_for_style(style: Style, reveal: f32) -> bool {
     reveal < 1.0
-        && object.style.stroke_cap == StrokeCap::Round
-        && object.style.stroke_width > 0.0
-        && (object.style.stroke.is_some() || object.style.fill.is_some())
+        && style.stroke_cap == StrokeCap::Round
+        && style.stroke_width > 0.0
+        && (style.stroke.is_some() || style.fill.is_some())
 }
 
 fn pack_path_reveal_head(
@@ -2220,14 +2357,41 @@ fn pack_path_reveal_head(
     mesh: &TessellatedPath,
     reveal: f32,
 ) -> LineInstance {
+    pack_path_reveal_head_values(
+        object.style,
+        object.appearance,
+        render_transform,
+        mesh,
+        reveal,
+    )
+}
+
+pub(crate) fn pack_transient_path_reveal_head(
+    style: Style,
+    appearance: f32,
+    render_transform: Transform2D,
+    mesh: &TessellatedPath,
+    reveal: f32,
+) -> Option<LineInstance> {
+    should_create_path_reveal_head_for_style(style, reveal)
+        .then(|| pack_path_reveal_head_values(style, appearance, render_transform, mesh, reveal))
+}
+
+fn pack_path_reveal_head_values(
+    source_style: Style,
+    appearance: f32,
+    render_transform: Transform2D,
+    mesh: &TessellatedPath,
+    reveal: f32,
+) -> LineInstance {
     let reveal = reveal.clamp(0.0, 1.0);
     let point = mesh.reveal_head_position(reveal).unwrap_or(Vec2::ZERO);
-    let mut transform = packed_path_transform(object.style, render_transform);
+    let mut transform = packed_path_transform(source_style, render_transform);
     transform.padding = 1.0;
-    let mut style = pack_style(object);
+    let mut style = pack_style_values(source_style, appearance);
     style.fill = [0.0; 4];
     style.fill_enabled = 0;
-    if let Some(color) = object.style.stroke.or(object.style.fill) {
+    if let Some(color) = source_style.stroke.or(source_style.fill) {
         style.stroke = [color.red, color.green, color.blue, color.alpha];
         style.stroke_enabled = (style.stroke_enabled & 2) | 1;
     } else {
@@ -2236,7 +2400,7 @@ fn pack_path_reveal_head(
     }
     let active = reveal > 0.0 && reveal < 1.0;
     style.opacity *= f32::from(active);
-    if object.style.stroke.is_none() {
+    if source_style.stroke.is_none() {
         style.opacity *= 1.0 - smoothstep(0.75, 1.0, reveal);
     }
     LineInstance {
@@ -2261,14 +2425,30 @@ fn pack_path(
     reveal: f32,
     morph: f32,
 ) -> PathInstance {
+    pack_transient_path_instance(
+        object.style,
+        object.appearance,
+        render_transform,
+        reveal,
+        morph,
+    )
+}
+
+pub(crate) fn pack_transient_path_instance(
+    style: Style,
+    appearance: f32,
+    render_transform: Transform2D,
+    reveal: f32,
+    morph: f32,
+) -> PathInstance {
     PathInstance {
-        transform: packed_path_transform(object.style, render_transform),
-        style: pack_style(object),
+        transform: packed_path_transform(style, render_transform),
+        style: pack_style_values(style, appearance),
         path_params: [reveal.clamp(0.0, 1.0), morph.clamp(0.0, 1.0)],
     }
 }
 
-fn pack_path_surface(surface: PathSurface, progress: f32) -> u32 {
+pub(crate) fn pack_path_surface(surface: PathSurface, progress: f32) -> u32 {
     let progress = (progress.clamp(0.0, 1.0) * PATH_PROGRESS_MAX as f32).round() as u32;
     (progress << 1)
         | match surface {
