@@ -183,7 +183,7 @@ impl Scene {
             store.with_geometry_paths(paths, |store, handles| {
                 let mut transaction = SemanticMutationTransaction::new();
                 let family = transaction.create_node(SemanticNodeCreation::family());
-                for (handle, style) in handles.iter().copied().zip(styles.into_iter()) {
+                for (handle, style) in handles.iter().copied().zip(styles) {
                     let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
                     state.transform = prepared.transform;
                     state.style = style;
@@ -194,9 +194,9 @@ impl Scene {
                     .apply(store)
                     .map_err(AuthoringError::from)
                     .map_err(SvgAuthoringError::from)?;
-                result.resolve(family).ok_or_else(|| {
-                    SvgAuthoringError::Authoring(AuthoringError::UnresolvedCreatedNode(family))
-                })
+                result.resolve(family).ok_or(SvgAuthoringError::Authoring(
+                    AuthoringError::UnresolvedCreatedNode(family),
+                ))
             })?
         };
 
