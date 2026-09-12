@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   patch-and-qualify:
+    if: contains(github.event.head_commit.message, 'ci: publish transient retained-locality')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout child branch
@@ -33,11 +34,12 @@ jobs:
           bash scripts/check-architecture.sh 02e9ad8dec69a68b6a5794e141e9f73763b4ef2d
           git diff --check
 
-      - name: Publish clean production commit
+      - name: Publish qualified code and ratchets
         run: |
           git config user.name "Noon CI"
           git config user.email "noon-ci@users.noreply.github.com"
-          rm .github/workflows/patch-1466-retained-locality.yml .github/patch-1466-locality.py
+          git checkout HEAD -- .github/workflows/architecture-ratchets.yml
+          rm .github/patch-1466-locality.py
           chmod +x scripts/transient-presentation-ratchet.sh scripts/transient-presentation-ratchet.test.sh
           git add -A
           git status --short
