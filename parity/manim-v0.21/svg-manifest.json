@@ -1,0 +1,43 @@
+{
+  "reference": {
+    "project": "Manim Community",
+    "version": "0.21.0",
+    "renderer": "cairo",
+    "frame_format": "png",
+    "pixel_width": 960,
+    "pixel_height": 540,
+    "frame_rate": 30,
+    "source": "parity/manim-v0.21/core-examples/svg_static_import.py"
+  },
+  "fixtures": [
+    {
+      "id": "svg-static-import",
+      "scene": "SvgStaticImport",
+      "source": "parity/manim-v0.21/core-examples/svg_static_import.py",
+      "expected_duration": 0.2
+    }
+  ],
+  "sample_fractions": [
+    0.0,
+    0.25,
+    0.5,
+    0.75,
+    0.9,
+    0.95,
+    0.98,
+    0.99,
+    1.0
+  ],
+  "policy": {
+    "source_adaptation": "replace only `from manim import *` with `from noon import *`, then append a scene-selection wrapper for the browser authoring worker",
+    "reference_frames": "compare Noon screenshots against Manim Cairo's native lossless PNG frame sequence; never derive parity references from compressed video",
+    "blocking": "tooling failures and per-fixture raster tolerance regressions are blocking; known unconverged metrics must be explicitly exempted",
+    "raster_tolerance": {
+      "max_duration_delta_seconds": 0.034,
+      "max_background_channel_delta_sum": 0,
+      "max_bounds_delta_px": 2,
+      "max_differing_ratio": 0.006,
+      "max_mean_absolute_channel_error": 0.5
+    }
+  }
+}

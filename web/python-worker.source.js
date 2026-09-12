@@ -128,6 +128,8 @@ async function initializePyodide() {
     authoringStore.createManimGeometry(options);
   self.noonCreateAuthoringArrowHandle = (options) =>
     authoringStore.createManimArrow(options);
+  self.noonCreateAuthoringSvgHandle = (source, shouldCenter, height, width) =>
+    authoringStore.createSvgFromString(source, shouldCenter, height, width);
   self.noonCreateAuthoringTextHandle = (source, fontFamily, fontSize, lineSpacing) =>
     authoringStore.createManimText(source, fontFamily, fontSize, lineSpacing);
   self.noonCreateAuthoringTypstHandle = (source, math, fontSize) =>
