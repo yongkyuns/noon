@@ -29,6 +29,7 @@ runs:
       shell: bash
       run: |
         node .github/ci/wasm-build.mjs measure toolchain bash -euo pipefail -c '
+          rustup install
           rustup show active-toolchain
           rustup target add wasm32-unknown-unknown
         '

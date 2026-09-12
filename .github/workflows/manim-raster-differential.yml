@@ -61,9 +61,11 @@ jobs:
             pkg-config
       - name: Install pinned ManimCE reference
         run: python -m pip install --disable-pip-version-check "manim[typst]==0.21.0" "typst==0.15.0"
-      - name: Use stable Rust
+      - name: Use repository-pinned Rust and WASM target
         run: |
-          rustup default stable
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose
           rustup target add wasm32-unknown-unknown
       - name: Cache Cargo sources
         uses: actions/cache@v6
