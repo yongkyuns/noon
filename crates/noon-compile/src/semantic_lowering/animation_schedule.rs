@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use noon_core::{
     continuous_time_map_interval, resolve_add_animation_options, resolve_animation_options,
-    resolve_composition_schedule, AnimationDefaults, AnimationOptions, AnimationOptionsError,
-    CompositionError, CompositionInterval, CompositionTimeMap, CompositionTimeMapStep, ObjectId,
-    PreparedSemanticMutationTransaction, RateFunction, ResolvedAnimationOptions,
-    SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
-    SemanticAnimationCompositionKind, SemanticAnimationError, SemanticAnimationIntent,
-    SemanticFadeDirection, SemanticNodeId, SemanticScalarSignalQueryError,
+    resolve_composition_schedule, resolve_transform_animation_options, AnimationDefaults,
+    AnimationOptions, AnimationOptionsError, CompositionError, CompositionInterval,
+    CompositionTimeMap, CompositionTimeMapStep, ObjectId, PreparedSemanticMutationTransaction,
+    RateFunction, ResolvedAnimationOptions, SemanticAffineLifecycleDirection,
+    SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationError,
+    SemanticAnimationIntent, SemanticFadeDirection, SemanticNodeId, SemanticScalarSignalQueryError,
     SemanticScalarSignalTrack, SemanticStore, SemanticTransactionAnimationIntent,
     SemanticTransactionNodeRef, SemanticTransactionReadError, SemanticTransformInterpolation,
     TrackTiming,
@@ -1868,9 +1868,12 @@ where
                 .execution_object_id(target)
                 .or_else(|| lookup.entering_execution_object_id(target))
                 .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
-            let options =
-                resolve_animation_options(AnimationDefaults::MANIM, state.options, play_options)
-                    .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            let options = resolve_transform_animation_options(
+                AnimationDefaults::MANIM,
+                state.options,
+                play_options,
+            )
+            .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
 
             Ok(PlannedAnimation {
                 animation,

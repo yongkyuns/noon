@@ -187,6 +187,15 @@ pub enum TrackValues {
         from: Vec2,
         to: Vec2,
     },
+    /// A deterministic Manim-style circular path for one 2D position channel.
+    ///
+    /// This remains renderer-independent execution data. The source and target
+    /// endpoints are exact; `arc_angle` only changes interpolation between them.
+    ArcVec2 {
+        from: Vec2,
+        to: Vec2,
+        arc_angle: f64,
+    },
     Color {
         from: Option<crate::Color>,
         to: Option<crate::Color>,
@@ -213,7 +222,7 @@ impl TrackValues {
             Self::Bool { .. } => ValueKind::Bool,
             Self::ZIndex { .. } => ValueKind::ZIndex,
             Self::Scalar { .. } => ValueKind::Scalar,
-            Self::Vec2 { .. } => ValueKind::Vec2,
+            Self::Vec2 { .. } | Self::ArcVec2 { .. } => ValueKind::Vec2,
             Self::Color { .. } => ValueKind::Color,
             Self::PreparedMorph { .. } => ValueKind::Scalar,
             Self::Object { .. } => ValueKind::Object,
@@ -247,7 +256,7 @@ impl TrackValues {
                     to: *to,
                 })
             }
-            Self::Vec2 { from, to }
+            Self::Vec2 { from, to } | Self::ArcVec2 { from, to, .. }
                 if !from.x.is_finite()
                     || !from.y.is_finite()
                     || !to.x.is_finite()
@@ -257,6 +266,12 @@ impl TrackValues {
                     property,
                     from: *from,
                     to: *to,
+                })
+            }
+            Self::ArcVec2 { arc_angle, .. } if !arc_angle.is_finite() => {
+                Err(TimelineError::InvalidPathArcValue {
+                    property,
+                    value: *arc_angle,
                 })
             }
             Self::Color { from, to } => {
@@ -388,6 +403,7 @@ pub enum TimelineError {
         actual: ValueKind,
     },
     PreparedMorphPropertyMismatch(Property),
+    ArcVec2PropertyMismatch(Property),
     InvalidScalarValues {
         property: Property,
         from: f32,
@@ -401,6 +417,10 @@ pub enum TimelineError {
         property: Property,
         from: Vec2,
         to: Vec2,
+    },
+    InvalidPathArcValue {
+        property: Property,
+        value: f64,
     },
     InvalidColorValue {
         property: Property,
@@ -436,6 +456,10 @@ impl std::fmt::Display for TimelineError {
                 formatter,
                 "prepared morph execution data cannot drive {property:?}"
             ),
+            Self::ArcVec2PropertyMismatch(property) => write!(
+                formatter,
+                "curved vector execution data can only drive Position, not {property:?}"
+            ),
             Self::InvalidZIndexValues { from, to } => write!(
                 formatter,
                 "painter priorities must be finite: {from} -> {to}"
@@ -453,6 +477,9 @@ impl std::fmt::Display for TimelineError {
                 "non-finite vector values for {property:?}: from=({}, {}), to=({}, {})",
                 from.x, from.y, to.x, to.y
             ),
+            Self::InvalidPathArcValue { property, value } => {
+                write!(formatter, "non-finite path arc for {property:?}: {value}")
+            }
             Self::InvalidColorValue { property, endpoint } => write!(
                 formatter,
                 "non-finite color in {endpoint} value for {property:?}"
@@ -531,6 +558,10 @@ pub fn validate_track_definition(track: &TrackDefinition) -> Result<(), Timeline
         && track.property != Property::Morph
     {
         return Err(TimelineError::PreparedMorphPropertyMismatch(track.property));
+    }
+    if matches!(&track.values, TrackValues::ArcVec2 { .. }) && track.property != Property::Position
+    {
+        return Err(TimelineError::ArcVec2PropertyMismatch(track.property));
     }
     track
         .values
@@ -620,6 +651,40 @@ mod tests {
         assert_eq!(RateFunction::Linear.evaluate(2.0), 1.0);
         assert_eq!(RateFunction::Smooth.evaluate(-1.0), 0.0);
         assert_eq!(RateFunction::Smooth.evaluate(2.0), 1.0);
+    }
+
+    #[test]
+    fn curved_vector_tracks_are_position_only_and_require_finite_arcs() {
+        let mut track = TrackDefinition {
+            id: TrackId::new(0),
+            object: ObjectId::new(1),
+            property: Property::Position,
+            values: TrackValues::ArcVec2 {
+                from: Vec2::ZERO,
+                to: Vec2::new(2.0, 0.0),
+                arc_angle: std::f64::consts::PI,
+            },
+            timing: timing(),
+            time_map: CompositionTimeMap::identity(),
+        };
+        assert_eq!(validate_track_definition(&track), Ok(()));
+
+        track.property = Property::Scale;
+        assert_eq!(
+            validate_track_definition(&track),
+            Err(TimelineError::ArcVec2PropertyMismatch(Property::Scale))
+        );
+
+        track.property = Property::Position;
+        track.values = TrackValues::ArcVec2 {
+            from: Vec2::ZERO,
+            to: Vec2::new(2.0, 0.0),
+            arc_angle: f64::NAN,
+        };
+        assert!(matches!(
+            validate_track_definition(&track),
+            Err(TimelineError::InvalidPathArcValue { value, .. }) if value.is_nan()
+        ));
     }
 
     #[test]

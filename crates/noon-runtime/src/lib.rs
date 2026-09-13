@@ -38,6 +38,7 @@ use noon_core::{
 use noon_core::{
     Color, GeometryRef, ObjectId, PathCommand, Property, StrokeWidthMode, Style, TrackDefinition,
     TrackValues, Transform2D, TransformTrackEndpoint, Vec2, VectorPath,
+    MANIM_STRAIGHT_PATH_ARC_THRESHOLD,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1361,7 +1362,10 @@ fn affine_base_at_time(
             continue;
         }
         match (property, &track.values) {
-            (Property::Position, TrackValues::Vec2 { from, .. }) => transform.translation = *from,
+            (
+                Property::Position,
+                TrackValues::Vec2 { from, .. } | TrackValues::ArcVec2 { from, .. },
+            ) => transform.translation = *from,
             (Property::Rotation, TrackValues::Scalar { from, .. }) => transform.rotation = *from,
             (Property::Scale, TrackValues::Vec2 { from, .. }) => transform.scale = *from,
             _ => unreachable!("validated affine track must carry matching values"),
@@ -2085,6 +2089,13 @@ fn interpolate_track_values(values: &TrackValues, progress: f32) -> Option<Evalu
             lerp(from.x, to.x, progress),
             lerp(from.y, to.y, progress),
         ))),
+        TrackValues::ArcVec2 {
+            from,
+            to,
+            arc_angle,
+        } => Some(EvaluatedValue::Vec2(interpolate_arc_vec2(
+            *from, *to, *arc_angle, progress,
+        ))),
         TrackValues::Color { from, to } => Some(EvaluatedValue::Color(interpolate_optional_color(
             *from, *to, progress,
         ))),
@@ -2093,6 +2104,41 @@ fn interpolate_track_values(values: &TrackValues, progress: f32) -> Option<Evalu
         | TrackValues::Object { .. }
         | TrackValues::PreparedMorph { .. } => None,
     }
+}
+
+fn interpolate_arc_vec2(from: Vec2, to: Vec2, arc_angle: f64, progress: f32) -> Vec2 {
+    if progress <= 0.0 {
+        return from;
+    }
+    if progress >= 1.0 {
+        return to;
+    }
+    if arc_angle.abs() < MANIM_STRAIGHT_PATH_ARC_THRESHOLD {
+        return Vec2::new(lerp(from.x, to.x, progress), lerp(from.y, to.y, progress));
+    }
+
+    let from_x = f64::from(from.x);
+    let from_y = f64::from(from.y);
+    let dx = f64::from(to.x) - from_x;
+    let dy = f64::from(to.y) - from_y;
+    let mut center_x = from_x + 0.5 * dx;
+    let mut center_y = from_y + 0.5 * dy;
+    // Match ManimCE v0.21 `path_along_arc`: only +PI takes the explicit
+    // semicircle shortcut; -PI follows the tangent expression.
+    if arc_angle != std::f64::consts::PI {
+        let tangent = (arc_angle * 0.5).tan();
+        center_x -= 0.5 * dy / tangent;
+        center_y += 0.5 * dx / tangent;
+    }
+
+    let theta = f64::from(progress) * arc_angle;
+    let (sin, cos) = theta.sin_cos();
+    let relative_x = from_x - center_x;
+    let relative_y = from_y - center_y;
+    Vec2::new(
+        (center_x + cos * relative_x - sin * relative_y) as f32,
+        (center_y + sin * relative_x + cos * relative_y) as f32,
+    )
 }
 
 const fn lerp(from: f32, to: f32, progress: f32) -> f32 {
@@ -2264,6 +2310,67 @@ mod tests {
         assert!(instance.take_frame_changes().is_empty());
         assert!(instance.active_family_animation_indices().is_empty());
         assert!(instance.frame().family_animations[0].is_none());
+    }
+
+    #[test]
+    fn manim_path_arc_interpolation_matches_direction_threshold_and_endpoints() {
+        let from = Vec2::ZERO;
+        let to = Vec2::new(2.0, 0.0);
+        assert_eq!(
+            interpolate_arc_vec2(from, to, std::f64::consts::PI, 0.0),
+            from
+        );
+        assert_eq!(
+            interpolate_arc_vec2(from, to, std::f64::consts::PI, 1.0),
+            to
+        );
+
+        let positive = interpolate_arc_vec2(from, to, std::f64::consts::PI, 0.5);
+        assert!((positive.x - 1.0).abs() < 1e-6);
+        assert!((positive.y + 1.0).abs() < 1e-6);
+        let negative = interpolate_arc_vec2(from, to, -std::f64::consts::PI, 0.5);
+        assert!((negative.x - 1.0).abs() < 1e-6);
+        assert!((negative.y - 1.0).abs() < 1e-6);
+
+        let straight = interpolate_arc_vec2(from, to, 0.009, 0.5);
+        assert_eq!(straight, Vec2::new(1.0, 0.0));
+    }
+
+    #[test]
+    fn path_arc_direct_seek_matches_forward_playback() {
+        let object = CompiledObject::new(
+            ObjectId::new(0),
+            GeometryRef::circle(1.0),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        let track = TrackDefinition {
+            id: TrackId::new(0),
+            object: object.id,
+            property: Property::Position,
+            values: TrackValues::ArcVec2 {
+                from: Vec2::ZERO,
+                to: Vec2::new(2.0, 0.0),
+                arc_angle: std::f64::consts::PI,
+            },
+            timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let compiled = CompiledScene::compile_objects(vec![object], &[track]).unwrap();
+        let mut seek = SceneInstance::new(compiled.clone());
+        let mut forward = SceneInstance::new(compiled);
+        let seek_mid = seek.seek(1.0).unwrap().objects[0].transform.translation;
+        forward.advance_to(0.5).unwrap();
+        let forward_mid = forward.advance_to(1.0).unwrap().objects[0]
+            .transform
+            .translation;
+        assert_eq!(seek_mid, forward_mid);
+        assert!((seek_mid.x - 1.0).abs() < 1e-6);
+        assert!((seek_mid.y + 1.0).abs() < 1e-6);
+        assert_eq!(
+            seek.seek(2.0).unwrap().objects[0].transform.translation,
+            Vec2::new(2.0, 0.0)
+        );
     }
 
     #[test]
