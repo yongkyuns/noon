@@ -317,13 +317,6 @@ impl LiveSession<'_> {
             .map_err(LiveSessionError::from)
     }
 
-    fn family_layout_members(
-        &self,
-        family: &MobjectFamily,
-    ) -> Result<(Vec<noon_core::SemanticNodeId>, Option<Bounds2D64>), LiveSessionError> {
-        self.family_layout_measure(family, false)
-    }
-
     fn family_layout_measure(
         &self,
         family: &MobjectFamily,
