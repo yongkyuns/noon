@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use crate::{RetainedFamilyExecutionDeltaEnvelope, RetainedResourceBundle, SemanticExecutionPlayer};
+    use crate::{
+        RetainedFamilyExecutionDeltaEnvelope, RetainedResourceBundle, SemanticExecutionPlayer,
+    };
     use noon::{AnimationCompositionRequest, TransformToRequest};
     use noon_core::{AnimationOptions, RateFunction};
 
