@@ -128,10 +128,8 @@ impl InstalledRetainedResources {
 impl PreparedRetainedResourceAdditionsWithRender {
     pub(crate) fn text_handle_remap(
         &self,
-    ) -> std::collections::HashMap<
-        crate::TransportTextResourceHandle,
-        noon_core::TextResourceHandle,
-    > {
+    ) -> std::collections::HashMap<crate::TransportTextResourceHandle, noon_core::TextResourceHandle>
+    {
         self.ordinary.text_handle_remap()
     }
 
@@ -167,10 +165,10 @@ fn validate_render_geometry_resources(
         }
     }
     for (index, preparation) in resources.preparations.iter().enumerate() {
-        if preparation.resource as usize >= resources.geometries.len()
-            || !preparation.is_finite()
-        {
-            return Err(RetainedResourceTransportError::InvalidRenderPreparation(index));
+        if preparation.resource as usize >= resources.geometries.len() || !preparation.is_finite() {
+            return Err(RetainedResourceTransportError::InvalidRenderPreparation(
+                index,
+            ));
         }
     }
     Ok(())
