@@ -37,7 +37,6 @@ struct StagedPlanMappings {
 }
 
 impl RetainedFamilyExecutionDeltaEncoder {
-    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) const fn session(&self) -> u32 {
         self.retained.session()
     }
@@ -55,6 +54,8 @@ impl RetainedFamilyExecutionDeltaEncoder {
     }
 
     pub(crate) fn new_with_resources(session: u32, resources: &RetainedResourceBundle) -> Self {
+        let next_render_geometry_resource = u32::try_from(resources.render_geometry_count())
+            .expect("retained render geometry resources exceed u32 transport index space");
         Self {
             retained: RetainedExecutionDeltaEncoder::new(session),
             plan_index_remap: HashMap::new(),
@@ -62,7 +63,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
             observed_plan_count: 0,
             resources: resources.inventory(),
             render_geometry_resources: HashMap::new(),
-            next_render_geometry_resource: 0,
+            next_render_geometry_resource,
         }
     }
 
@@ -476,9 +477,9 @@ impl From<RetainedFamilyExecutionTransportError> for RetainedFamilyExecutionEnco
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        FamilyAnimationMode, FamilyAnimationState, GeometryRef, ObjectContentRef, ObjectId,
-        RateFunction, RetainedFamilyAnimationPlanBuilder, SemanticStore, Style, TextResourceArena,
-        Transform2D,
+        FamilyAnimationMode, FamilyAnimationState, FontResourceArena, GeometryRef,
+        GeometryResourceArena, ObjectContentRef, ObjectId, RateFunction,
+        RetainedFamilyAnimationPlanBuilder, SemanticStore, Style, TextResourceArena, Transform2D,
     };
     use noon_runtime::{FrameObjectState, FrameState};
 
@@ -565,6 +566,27 @@ mod tests {
             render_transforms: vec![None, None],
         };
         (plan, frame, vec![Some(state(0.5)), Some(state(0.5))])
+    }
+
+    #[test]
+    fn resource_backed_encoder_starts_after_installed_render_geometry_prefix() {
+        let texts = TextResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let mut resources =
+            RetainedResourceBundle::capture([], &texts, &geometries, &fonts).unwrap();
+        resources.set_render_geometries(
+            29,
+            vec![Arc::new(GeometryRef::circle(1.0))].into(),
+            vec![RenderGeometryPreparation {
+                resource: 0,
+                style: Style::default(),
+                transform: Transform2D::IDENTITY,
+            }],
+        );
+
+        let encoder = RetainedFamilyExecutionDeltaEncoder::new_with_resources(29, &resources);
+        assert_eq!(encoder.next_render_geometry_resource, 1);
     }
 
     #[test]
