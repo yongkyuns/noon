@@ -1,0 +1,53 @@
+name: Temporary 1544 restack cleanup Windows
+
+on:
+  push:
+    branches:
+      - codex/1533-scene-family-layout-restacked
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/1533-scene-family-layout-restacked
+          fetch-depth: 0
+      - name: Remove dead family-layout delegate and temporary workflows
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          path = Path("crates/noon/src/live_session/family_layout.rs")
+          text = path.read_text()
+          block = """    fn family_layout_members(
+              &self,
+              family: &MobjectFamily,
+          ) -> Result<(Vec<noon_core::SemanticNodeId>, Option<Bounds2D64>), LiveSessionError> {
+              self.family_layout_measure(family, false)
+          }
+
+          """
+          if text.count(block) != 1:
+              raise SystemExit(f"expected one dead delegate, found {text.count(block)}")
+          text = text.replace(block, "", 1)
+          if "fn family_layout_members(" in text:
+              raise SystemExit("dead delegate still present after replacement")
+          path.write_text(text)
+          '@ | Set-Content -Encoding utf8 patch1544.py
+          python patch1544.py
+          Remove-Item patch1544.py
+          Remove-Item .github/workflows/tmp-1544-restack-clean.yml -ErrorAction SilentlyContinue
+          Remove-Item .github/workflows/tmp-1544-restack-clean-windows.yml -ErrorAction SilentlyContinue
+          git diff --check
+          $names = (git diff --name-only | Sort-Object)
+          if ($names -notcontains 'crates/noon/src/live_session/family_layout.rs') { throw 'live family layout file was not changed' }
+          if ($names -notcontains '.github/workflows/tmp-1544-restack-clean-windows.yml') { throw 'windows temporary workflow was not removed' }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Remove dead family layout delegate"
+          git push origin HEAD:codex/1533-scene-family-layout-restacked
