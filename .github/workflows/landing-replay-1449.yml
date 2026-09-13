@@ -1,0 +1,48 @@
+name: Landing replay 1449
+
+on:
+  push:
+    branches:
+      - codex/landing-replay-1449
+
+permissions:
+  contents: write
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Replay exact #1449 delta
+        env:
+          BASE_SHA: fe731c1d1ef587614f176172d7d1f92d2887c1c7
+          SOURCE_COMMIT: 21587c9f9e6ed273bed42a20f3c1426107892ec9
+          TARGET_BRANCH: codex/b3-derived-display-direct-hosts
+          EXPECTED_OLD_HEAD: 21587c9f9e6ed273bed42a20f3c1426107892ec9
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+          test "$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")" = "${EXPECTED_OLD_HEAD}"
+          git config user.name "Yongkyun Shin"
+          git config user.email "yongkyuns@gmail.com"
+          git checkout --detach "${BASE_SHA}"
+          git cherry-pick "${SOURCE_COMMIT}"
+          test "$(git rev-list --count "${BASE_SHA}"..HEAD)" = "1"
+          expected="$(printf '%s\n' \
+            crates/noon-native/src/lib.rs \
+            crates/noon-render-wgpu/src/gpu/derived_display.rs \
+            crates/noon-render-wgpu/src/gpu/retained_text.rs \
+            crates/noon-render-wgpu/src/render_order.rs \
+            crates/noon-web/src/execution_canvas.rs \
+            web/gpu-timestamp-host.test.mjs | sort)"
+          actual="$(git diff --name-only "${BASE_SHA}"..HEAD | sort)"
+          test "${actual}" = "${expected}"
+          git diff --check "${BASE_SHA}"..HEAD
+          git push --force-with-lease="refs/heads/${TARGET_BRANCH}:${EXPECTED_OLD_HEAD}" origin "HEAD:refs/heads/${TARGET_BRANCH}"
+      - name: Remove temporary replay branch
+        if: success()
+        shell: bash
+        run: git push origin --delete "${GITHUB_REF_NAME}" || true
