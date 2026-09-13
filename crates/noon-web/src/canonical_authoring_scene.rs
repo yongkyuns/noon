@@ -3036,6 +3036,7 @@ mod wasm {
             complete_priority: bool,
             child_run_time: f64,
             rate_function: &str,
+            path_arc: Option<f64>,
         ) -> Result<(), JsValue> {
             let rate_function = noon_core::RateFunction::from_semantic_id(rate_function)
                 .ok_or_else(|| {
@@ -3043,15 +3044,19 @@ mod wasm {
                         "unsupported animation rate function semantic ID {rate_function:?}"
                     ))
                 })?;
+            let mut options = noon_core::AnimationOptions::new()
+                .run_time(child_run_time)
+                .rate_func(rate_function);
+            if let Some(path_arc) = path_arc {
+                options = options.path_arc(path_arc);
+            }
             self.children.push(OrdinaryCompositionChild::TransformTo {
                 entering_id,
                 source: source.semantic_mobject().clone(),
                 target: target.semantic_mobject().clone(),
                 interpolation,
                 complete_priority,
-                options: noon_core::AnimationOptions::new()
-                    .run_time(child_run_time)
-                    .rate_func(rate_function),
+                options,
             });
             Ok(())
         }
@@ -3239,6 +3244,7 @@ mod wasm {
             point_correspondence: bool,
             child_run_time: f64,
             rate_function: &str,
+            path_arc: Option<f64>,
         ) -> Result<(), JsValue> {
             let entering = entering_id
                 .as_deref()
@@ -3257,6 +3263,7 @@ mod wasm {
                 true,
                 child_run_time,
                 rate_function,
+                path_arc,
             )
         }
 
@@ -3267,6 +3274,7 @@ mod wasm {
             target: &crate::WasmAuthoringMobjectHandle,
             child_run_time: f64,
             rate_function: &str,
+            path_arc: Option<f64>,
         ) -> Result<(), JsValue> {
             self.push_transform(
                 None,
@@ -3276,6 +3284,7 @@ mod wasm {
                 false,
                 child_run_time,
                 rate_function,
+                path_arc,
             )
         }
 
@@ -3286,6 +3295,7 @@ mod wasm {
             target: &crate::WasmAuthoringMobjectHandle,
             child_run_time: f64,
             rate_function: &str,
+            path_arc: Option<f64>,
         ) -> Result<(), JsValue> {
             self.push_transform(
                 None,
@@ -3295,6 +3305,7 @@ mod wasm {
                 false,
                 child_run_time,
                 rate_function,
+                path_arc,
             )
         }
 
@@ -3306,6 +3317,7 @@ mod wasm {
             target: &crate::WasmAuthoringMobjectHandle,
             child_run_time: f64,
             rate_function: &str,
+            path_arc: Option<f64>,
         ) -> Result<(), JsValue> {
             self.push_transform(
                 Some(parse_object_id("object ID", object_id)?),
@@ -3315,6 +3327,7 @@ mod wasm {
                 false,
                 child_run_time,
                 rate_function,
+                path_arc,
             )
         }
 
@@ -3326,6 +3339,7 @@ mod wasm {
             target: &crate::WasmAuthoringMobjectHandle,
             child_run_time: f64,
             rate_function: &str,
+            path_arc: Option<f64>,
         ) -> Result<(), JsValue> {
             self.push_transform(
                 Some(parse_object_id("object ID", object_id)?),
@@ -3335,6 +3349,7 @@ mod wasm {
                 false,
                 child_run_time,
                 rate_function,
+                path_arc,
             )
         }
 

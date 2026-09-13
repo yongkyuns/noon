@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::RateFunction;
 
+/// ManimCE treats smaller path arcs as the ordinary straight interpolation path.
+pub const MANIM_STRAIGHT_PATH_ARC_THRESHOLD: f64 = 0.01;
+
 /// Partial authoring-time animation options shared by every frontend.
 ///
 /// This is transient authoring state. Resolved values are lowered into ordinary
@@ -159,14 +162,11 @@ impl std::fmt::Display for AnimationOptionsError {
 
 impl std::error::Error for AnimationOptionsError {}
 
-/// Apply the shared authoring precedence rule:
-///
-/// `defaults < animation-local options < Scene.play options`.
-pub fn resolve_animation_options(
+fn resolve_animation_options_unchecked(
     defaults: AnimationDefaults,
     animation: AnimationOptions,
     play: AnimationOptions,
-) -> Result<ResolvedAnimationOptions, AnimationOptionsError> {
+) -> ResolvedAnimationOptions {
     ResolvedAnimationOptions {
         run_time: play
             .run_time
@@ -197,7 +197,34 @@ pub fn resolve_animation_options(
             .or(animation.introducer)
             .unwrap_or(defaults.introducer),
     }
-    .validate()
+}
+
+/// Apply the shared authoring precedence rule:
+///
+/// `defaults < animation-local options < Scene.play options`.
+///
+/// The generic resolver deliberately rejects non-zero `path_arc`; only the
+/// Transform-specific resolver below owns curved-path admission.
+pub fn resolve_animation_options(
+    defaults: AnimationDefaults,
+    animation: AnimationOptions,
+    play: AnimationOptions,
+) -> Result<ResolvedAnimationOptions, AnimationOptionsError> {
+    resolve_animation_options_unchecked(defaults, animation, play).validate()
+}
+
+/// Resolve options for an ordinary Transform leaf.
+///
+/// This preserves the same precedence and validation as the generic resolver,
+/// but admits finite `path_arc` so Transform lowering can enforce its narrower
+/// deterministic payload contract. Other animation kinds continue to use
+/// `resolve_animation_options` and therefore remain fail-closed.
+pub fn resolve_transform_animation_options(
+    defaults: AnimationDefaults,
+    animation: AnimationOptions,
+    play: AnimationOptions,
+) -> Result<ResolvedAnimationOptions, AnimationOptionsError> {
+    resolve_animation_options_unchecked(defaults, animation, play).validate_transform()
 }
 
 /// Resolve timing for targetless/structural instant leaves. The shared precedence rule is
@@ -207,36 +234,7 @@ pub fn resolve_add_animation_options(
     animation: AnimationOptions,
     play: AnimationOptions,
 ) -> Result<ResolvedAnimationOptions, AnimationOptionsError> {
-    let options = ResolvedAnimationOptions {
-        run_time: play
-            .run_time
-            .or(animation.run_time)
-            .unwrap_or(defaults.run_time),
-        rate_func: play
-            .rate_func
-            .or(animation.rate_func)
-            .unwrap_or(defaults.rate_func),
-        lag_ratio: play
-            .lag_ratio
-            .or(animation.lag_ratio)
-            .unwrap_or(defaults.lag_ratio),
-        path_arc: play
-            .path_arc
-            .or(animation.path_arc)
-            .unwrap_or(defaults.path_arc),
-        reverse_rate_function: play
-            .reverse_rate_function
-            .or(animation.reverse_rate_function)
-            .unwrap_or(defaults.reverse_rate_function),
-        remover: play
-            .remover
-            .or(animation.remover)
-            .unwrap_or(defaults.remover),
-        introducer: play
-            .introducer
-            .or(animation.introducer)
-            .unwrap_or(defaults.introducer),
-    };
+    let options = resolve_animation_options_unchecked(defaults, animation, play);
     if !options.run_time.is_finite() || options.run_time < 0.0 {
         return Err(AnimationOptionsError::InvalidRunTime(options.run_time));
     }
@@ -245,21 +243,40 @@ pub fn resolve_add_animation_options(
 
 impl ResolvedAnimationOptions {
     pub fn validate(self) -> Result<Self, AnimationOptionsError> {
+        self.validate_positive_timing()?;
+        let options = self.validate_common_non_timing()?;
+        if options.path_arc.abs() > 1e-12 {
+            return Err(AnimationOptionsError::UnsupportedPathArc(options.path_arc));
+        }
+        Ok(options)
+    }
+
+    pub fn validate_transform(self) -> Result<Self, AnimationOptionsError> {
+        self.validate_positive_timing()?;
+        self.validate_common_non_timing()
+    }
+
+    fn validate_positive_timing(self) -> Result<(), AnimationOptionsError> {
         if !self.run_time.is_finite() || self.run_time <= 0.0 {
             return Err(AnimationOptionsError::InvalidRunTime(self.run_time));
         }
-        self.validate_non_timing()
+        Ok(())
     }
 
     fn validate_non_timing(self) -> Result<Self, AnimationOptionsError> {
+        let options = self.validate_common_non_timing()?;
+        if options.path_arc.abs() > 1e-12 {
+            return Err(AnimationOptionsError::UnsupportedPathArc(options.path_arc));
+        }
+        Ok(options)
+    }
+
+    fn validate_common_non_timing(self) -> Result<Self, AnimationOptionsError> {
         if !self.lag_ratio.is_finite() || self.lag_ratio < 0.0 {
             return Err(AnimationOptionsError::InvalidLagRatio(self.lag_ratio));
         }
         if !self.path_arc.is_finite() {
             return Err(AnimationOptionsError::InvalidPathArc(self.path_arc));
-        }
-        if self.path_arc.abs() > 1e-12 {
-            return Err(AnimationOptionsError::UnsupportedPathArc(self.path_arc));
         }
         if self.reverse_rate_function {
             return Err(AnimationOptionsError::UnsupportedReverseRateFunction);
@@ -357,6 +374,34 @@ mod tests {
         ));
         assert_eq!(
             resolve_animation_options(
+                AnimationDefaults::MANIM,
+                AnimationOptions::new().reverse_rate_function(true),
+                AnimationOptions::new(),
+            ),
+            Err(AnimationOptionsError::UnsupportedReverseRateFunction)
+        );
+    }
+
+    #[test]
+    fn transform_options_admit_finite_path_arcs_with_shared_precedence() {
+        let resolved = resolve_transform_animation_options(
+            AnimationDefaults::MANIM,
+            AnimationOptions::new().path_arc(0.5),
+            AnimationOptions::new().path_arc(-0.75),
+        )
+        .unwrap();
+        assert_eq!(resolved.path_arc, -0.75);
+
+        assert!(matches!(
+            resolve_transform_animation_options(
+                AnimationDefaults::MANIM,
+                AnimationOptions::new().path_arc(f64::NAN),
+                AnimationOptions::new(),
+            ),
+            Err(AnimationOptionsError::InvalidPathArc(value)) if value.is_nan()
+        ));
+        assert_eq!(
+            resolve_transform_animation_options(
                 AnimationDefaults::MANIM,
                 AnimationOptions::new().reverse_rate_function(true),
                 AnimationOptions::new(),

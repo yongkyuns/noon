@@ -7,6 +7,11 @@ from typing import Any
 
 from js import noonResolveAnimationOptions as _resolve_shared_animation_options
 
+try:
+    from js import noonResolveTransformAnimationOptions as _resolve_transform_animation_options
+except ImportError:  # Test doubles predating the Transform-only bridge.
+    _resolve_transform_animation_options = None
+
 import _manim_rate_functions as _rate_functions
 from _noon_errors import engine_call
 
@@ -90,6 +95,60 @@ def resolve(
         operation="animation.options",
     )
 
+    return ResolvedAnimationOptions(
+        run_time=float(result.runTime),
+        rate_func=str(result.rateFunc),
+        lag_ratio=float(result.lagRatio),
+        path_arc=float(result.pathArc),
+        reverse_rate_function=bool(result.reverseRateFunction),
+    )
+
+
+def resolve_transform(
+    *,
+    builder_args: dict[str, Any],
+    default_lag_ratio: float,
+    play_run_time: float | None,
+    play_easing: str | None,
+    play_rate_func: object | None,
+    play_lag_ratio: float | None,
+    play_path_arc: float | None,
+) -> ResolvedAnimationOptions:
+    if _resolve_transform_animation_options is None:
+        animation_path_arc = float(builder_args.get("path_arc", 0.0))
+        effective_path_arc = (
+            float(play_path_arc) if play_path_arc is not None else animation_path_arc
+        )
+        if effective_path_arc != 0.0:
+            raise NotImplementedError("Transform path-arc option bridge is unavailable")
+        return resolve(
+            builder_args=builder_args,
+            default_lag_ratio=default_lag_ratio,
+            play_run_time=play_run_time,
+            play_easing=play_easing,
+            play_rate_func=play_rate_func,
+            play_lag_ratio=play_lag_ratio,
+        )
+    play_rate_id = ""
+    if play_easing is not None:
+        play_rate_id = str(play_easing)
+    elif play_rate_func is not None:
+        play_rate_id = _rate_functions.easing_from_rate_func(play_rate_func)
+
+    result = engine_call(
+        _resolve_transform_animation_options,
+        float(default_lag_ratio),
+        _optional_number(builder_args, "run_time"),
+        _optional_rate_func(builder_args),
+        _optional_number(builder_args, "lag_ratio"),
+        _optional_number(builder_args, "path_arc"),
+        _optional_reverse(builder_args),
+        float("nan") if play_run_time is None else float(play_run_time),
+        play_rate_id,
+        float("nan") if play_lag_ratio is None else float(play_lag_ratio),
+        float("nan") if play_path_arc is None else float(play_path_arc),
+        operation="animation.transform_options",
+    )
     return ResolvedAnimationOptions(
         run_time=float(result.runTime),
         rate_func=str(result.rateFunc),

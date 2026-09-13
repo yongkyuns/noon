@@ -736,8 +736,15 @@ where
             captures.insert(leaf.execution_object_id, captured);
             captured
         };
-        let channels = lower_transform_channels(store, source, target, from, interpolation)
-            .map_err(|issue| existing_payload_error(leaf, target_state, issue))?;
+        let channels = lower_transform_channels(
+            store,
+            source,
+            target,
+            from,
+            interpolation,
+            leaf.options.path_arc,
+        )
+        .map_err(|issue| existing_payload_error(leaf, target_state, issue))?;
         for channel in channels {
             push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
         }
@@ -1063,6 +1070,7 @@ impl From<TransformPayloadValidationIssue> for AffinePayloadIssue {
                 remover,
                 introducer,
             },
+            TransformPayloadValidationIssue::PathArcPayload => Self::UnsupportedPointCorrespondence,
         }
     }
 }
@@ -1923,7 +1931,52 @@ pub(super) fn lower_transform_channels(
     target: &noon_core::SemanticObjectState,
     from: EffectiveAnimationProperties,
     interpolation: noon_core::SemanticTransformInterpolation,
+    path_arc: f64,
 ) -> Result<Vec<LoweredAffineChannel>, AffinePayloadIssue> {
+    if path_arc.abs() >= noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD {
+        if interpolation != noon_core::SemanticTransformInterpolation::Affine
+            || source.content != target.content
+        {
+            return Err(AffinePayloadIssue::UnsupportedPointCorrespondence);
+        }
+        if !transform_is_finite(from.transform) {
+            return Err(AffinePayloadIssue::InvalidEffectiveTransform);
+        }
+        if !style_is_finite(from.style) {
+            return Err(AffinePayloadIssue::InvalidEffectiveStyle);
+        }
+        let target_transform = lower_semantic_transform_value(target)
+            .map_err(|_| AffinePayloadIssue::InvalidEffectiveTransform)?;
+        let target_style =
+            lower_semantic_style_value(target).map_err(AffinePayloadIssue::InvalidTargetStyle)?;
+        if from.transform.scale != target_transform.scale
+            || from.transform.rotation != target_transform.rotation
+            || from.style != target_style
+            || from.z_index != target.z_index()
+        {
+            return Err(AffinePayloadIssue::UnsupportedPointCorrespondence);
+        }
+        let mut channels = lower_affine_channels(source, target, from)?;
+        if channels
+            .iter()
+            .any(|channel| channel.property != Property::Position)
+        {
+            return Err(AffinePayloadIssue::UnsupportedPointCorrespondence);
+        }
+        for channel in &mut channels {
+            let (from, to) = match &channel.values {
+                TrackValues::Vec2 { from, to } => (*from, *to),
+                _ => return Err(AffinePayloadIssue::UnsupportedPointCorrespondence),
+            };
+            channel.values = TrackValues::ArcVec2 {
+                from,
+                to,
+                arc_angle: path_arc,
+            };
+        }
+        return Ok(channels);
+    }
+
     let point_transform = matches!(
         (source.content.geometry(), target.content.geometry()),
         (
@@ -2376,6 +2429,65 @@ mod tests {
     ) -> SemanticAnimationScheduleProjection {
         lower_semantic_animation_schedule(store, index, animation, 4.0, AnimationOptions::new())
             .unwrap()
+    }
+
+    #[test]
+    fn transform_path_arc_lowers_only_a_translation_channel() {
+        let store = SemanticStore::new();
+        let source = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        let mut target = source.clone();
+        target.transform.translation = SemanticVec3::new(2.0, 0.0, 0.0);
+        let channels = lower_transform_channels(
+            &store,
+            &source,
+            &target,
+            effective(Transform2D::default()),
+            noon_core::SemanticTransformInterpolation::Affine,
+            std::f64::consts::PI,
+        )
+        .unwrap();
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0].property, Property::Position);
+        assert_eq!(
+            channels[0].values,
+            TrackValues::ArcVec2 {
+                from: Vec2::ZERO,
+                to: Vec2::new(2.0, 0.0),
+                arc_angle: std::f64::consts::PI,
+            }
+        );
+    }
+
+    #[test]
+    fn transform_path_arc_fails_closed_for_mixed_affine_payload() {
+        let store = SemanticStore::new();
+        let source = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        let mut target = source.clone();
+        target.transform.translation = SemanticVec3::new(2.0, 0.0, 0.0);
+        target.transform.scale = SemanticVec3::new(2.0, 2.0, 1.0);
+        assert_eq!(
+            lower_transform_channels(
+                &store,
+                &source,
+                &target,
+                effective(Transform2D::default()),
+                noon_core::SemanticTransformInterpolation::Affine,
+                std::f64::consts::PI,
+            ),
+            Err(AffinePayloadIssue::UnsupportedPointCorrespondence)
+        );
+
+        // Manim's own threshold treats a sufficiently small arc as straight, so
+        // the established mixed-affine lowering remains unchanged in that case.
+        assert!(lower_transform_channels(
+            &store,
+            &source,
+            &target,
+            effective(Transform2D::default()),
+            noon_core::SemanticTransformInterpolation::Affine,
+            0.009,
+        )
+        .is_ok());
     }
 
     #[test]

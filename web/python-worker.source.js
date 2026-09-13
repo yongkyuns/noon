@@ -5,6 +5,7 @@ import initNoonWeb, {
   WasmManimGeometryOptions,
   WasmSceneMembershipBatch,
   resolveAnimationOptions,
+  resolveTransformAnimationOptions,
 } from "./pkg/noon_web.js";
 import { resolveAnimationOptionsPlain } from "./animation-options.js";
 import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
@@ -137,6 +138,8 @@ async function initializePyodide() {
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
   self.noonCreateAuthoringFamilyHandle = (batch, zIndex) => authoringStore.createFamily(batch, zIndex);
   self.noonResolveAnimationOptions = (...args) => resolveAnimationOptionsPlain(resolveAnimationOptions, ...args);
+  self.noonResolveTransformAnimationOptions = (...args) =>
+    resolveAnimationOptionsPlain(resolveTransformAnimationOptions, ...args);
   const bindingsReadyAt = performance.now();
 
   for (const [index, descriptor] of PYTHON_COMPAT_MODULES.entries()) {

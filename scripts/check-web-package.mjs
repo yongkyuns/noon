@@ -176,6 +176,7 @@ const expectedJavascriptSurface = [
   "appendCreate(",
   "appendRotate(",
   "export function resolveAnimationOptions(",
+  "export function resolveTransformAnimationOptions(",
 ];
 const expectedTypeSurface = [
   "constructor()",
@@ -285,10 +286,10 @@ const expectedTypeSurface = [
   "export class WasmAnimationCompositionBuilder",
   "setCompositionRateFunction(rate_function: string): void",
   "setPlayRateFunction(rate_function: string): void",
-  "appendTransformTo(source: WasmAuthoringMobjectHandle, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string): void",
-  "appendPointTransformTo(source: WasmAuthoringMobjectHandle, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string): void",
-  "appendEnteringTransformTo(object_id: string, source: WasmAuthoringMobjectHandle, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string): void",
-  "appendEnteringPointTransformTo(object_id: string, source: WasmAuthoringMobjectHandle, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string): void",
+  "appendTransformTo(source: WasmAuthoringMobjectHandle, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string, path_arc?: number | null): void",
+  "appendPointTransformTo(source: WasmAuthoringMobjectHandle, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string, path_arc?: number | null): void",
+  "appendEnteringTransformTo(object_id: string, source: WasmAuthoringMobjectHandle, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string, path_arc?: number | null): void",
+  "appendEnteringPointTransformTo(object_id: string, source: WasmAuthoringMobjectHandle, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string, path_arc?: number | null): void",
   "appendRotate(object_id: string, target: WasmAuthoringMobjectHandle, angle: number, child_run_time: number, rate_function: string): void",
   "appendBoundRotate(target: WasmAuthoringMobjectHandle, angle: number, child_run_time: number, rate_function: string): void",
   "appendWait(child_run_time: number): void",
@@ -377,6 +378,7 @@ const expectedTypeSurface = [
   "manimMoveToHandle(",
   "manimMoveToPoint(",
   "export function resolveAnimationOptions(",
+  "export function resolveTransformAnimationOptions(",
 ];
 
 // Direct example factories are compiled only with Rust debug assertions.

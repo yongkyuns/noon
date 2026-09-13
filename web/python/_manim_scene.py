@@ -873,6 +873,41 @@ def _canonical_affine_options(
     return resolved
 
 
+def _canonical_transform_options(animation: object, kwargs: dict[str, object]) -> object | None:
+    """Resolve Transform path/timing options through the Transform-only Rust policy."""
+    duration = kwargs.get("duration")
+    run_time = kwargs.get("run_time")
+    easing = kwargs.get("easing")
+    rate_func = kwargs.get("rate_func")
+    lag_ratio = kwargs.get("lag_ratio")
+    path_arc = kwargs.get("path_arc")
+    if duration is not None and run_time is not None:
+        raise ValueError("use either duration or run_time, not both")
+    if easing is not None and rate_func is not None:
+        raise ValueError("use either rate_func or the low-level easing alias, not both")
+    if kwargs.keys() - {
+        "duration", "run_time", "start_time", "easing", "rate_func", "lag_ratio", "path_arc"
+    }:
+        return None
+    if kwargs.get("start_time") is not None:
+        return None
+    try:
+        resolved = _options.resolve_transform(
+            builder_args=_options.builder_args(animation),
+            default_lag_ratio=0.0,
+            play_run_time=(run_time if run_time is not None else duration),
+            play_easing=easing,
+            play_rate_func=rate_func,
+            play_lag_ratio=lag_ratio,
+            play_path_arc=path_arc,
+        )
+    except NotImplementedError:
+        return None
+    if resolved.lag_ratio != 0.0 or resolved.reverse_rate_function:
+        return None
+    return resolved
+
+
 def _canonical_affine_lifecycle_animation(
     scene: _base.Scene, animation: object
 ) -> tuple[_base.Mobject, object] | None:
@@ -1428,7 +1463,12 @@ def _build_canonical_composition_candidate(
     """Build one inert recursive composition tree owned by the WASM context."""
     import _manim_rotate as _rotate
 
-    play_run_time = _canonical_play_options(dict(kwargs))
+    root_play_kwargs = dict(kwargs)
+    if group is None:
+        # Flat Transform leaves resolve `path_arc` through their Transform-only
+        # Rust option policy; it is not a composition-root timing option.
+        root_play_kwargs.pop("path_arc", None)
+    play_run_time = _canonical_play_options(root_play_kwargs)
     composition_run_time = None if group is None else group.run_time
     composition_lag_ratio = 0.0 if group is None else float(group.lag_ratio)
     context = _context(self)
@@ -1914,7 +1954,9 @@ def _build_canonical_composition_candidate(
         affine = _canonical_affine_animation(self, animation)
         if affine is not None:
             source, target, leaf = affine
-            child = _canonical_composition_child_options(leaf, child_kwargs)
+            child = _canonical_transform_options(leaf, child_kwargs)
+            if child is None:
+                raise NotImplementedError("unsupported canonical Transform options")
             source_handle = getattr(source, "_semantic_handle")
             target_handle = getattr(target, "_semantic_handle")
             # Resource-backed text has no vector point correspondence. Its
@@ -1932,16 +1974,22 @@ def _build_canonical_composition_candidate(
                 entering_id = str(reserve(source).object.id) if source._scene is None else None
                 builder.appendMethodTransformTo(
                     entering_id, source_handle, target_handle, point_correspondence,
-                    float(child.run_time), str(child.rate_func),
+                    float(child.run_time), str(child.rate_func), float(child.path_arc),
                 )
                 return
             if source._scene is None:
                 reservation = reserve(source)
                 method = builder.appendEnteringPointTransformTo if point_correspondence else builder.appendEnteringTransformTo
-                method(str(reservation.object.id), source_handle, target_handle, float(child.run_time), str(child.rate_func))
+                method(
+                    str(reservation.object.id), source_handle, target_handle,
+                    float(child.run_time), str(child.rate_func), float(child.path_arc),
+                )
             else:
                 method = builder.appendPointTransformTo if point_correspondence else builder.appendTransformTo
-                method(source_handle, target_handle, float(child.run_time), str(child.rate_func))
+                method(
+                    source_handle, target_handle, float(child.run_time),
+                    str(child.rate_func), float(child.path_arc),
+                )
             return
         if type(animation) in (_rotate.Rotate, _rotate.Rotating):
             target = animation.mobject
