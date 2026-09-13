@@ -1,0 +1,43 @@
+name: B3 one-shot test contract repair
+
+on:
+  push:
+    branches:
+      - codex/b3-family-transform-session
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/b3-family-transform-session
+          fetch-depth: 0
+      - name: Apply exact nested-family rejection repair
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('crates/noon-web/src/canonical_authoring_scene.rs')
+          text = path.read_text()
+          old = "        let invalid_target = context.scene.family(&[(&left_target).into()]).unwrap();\n"
+          new = (
+              "        let invalid_nested = context.scene.family(&[(&left_target).into()]).unwrap();\n"
+              "        let invalid_target = context.scene.family(&[(&invalid_nested).into()]).unwrap();\n"
+          )
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected exactly one repair site, found {count}')
+          path.write_text(text.replace(old, new, 1))
+      - name: Self-remove workflow and commit repair
+        shell: bash
+        run: |
+          rm .github/workflows/tmp-b3-test-contract-repair.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/noon-web/src/canonical_authoring_scene.rs .github/workflows/tmp-b3-test-contract-repair.yml
+          git commit -m "Fix nested unequal-family rejection fixture"
+          git push origin HEAD:codex/b3-family-transform-session
