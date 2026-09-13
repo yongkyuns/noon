@@ -56,6 +56,55 @@ class SvgFacadeTests(unittest.TestCase):
             )],
         )
 
+    def test_custom_svg_default_uses_effective_typed_transport(self):
+        create_calls = []
+        transport_calls = []
+        family = _FamilyHandle(count=1)
+
+        class Options:
+            @staticmethod
+            def svgDefaultTransport(*args):
+                transport_calls.append(args)
+                return ("svg-default-transport", *args)
+
+        def create(source, should_center, height, width_or_defaults):
+            create_calls.append((source, should_center, height, width_or_defaults))
+            return family
+
+        defaults = {
+            "color": "#010203",
+            "opacity": 0.2,
+            "fill_color": "#112233",
+            "fill_opacity": None,
+            "stroke_width": None,
+            "stroke_color": None,
+            "stroke_opacity": 0.8,
+        }
+        source = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0 L1 0"/></svg>'
+        with (
+            patch.object(svg, "_svg_transport_options", Options),
+            patch.object(svg, "_create_svg_handle", create),
+        ):
+            value = svg.SVGMobject.from_string(source, width=4.0, height=None, svg_default=defaults)
+
+        self.assertIs(value._semantic_family_handle, family)
+        self.assertEqual(
+            transport_calls,
+            [(4.0, 0x112233, 0.2, 0x010203, 0.8, None)],
+        )
+        self.assertEqual(create_calls[0][:3], (source, True, None))
+        self.assertEqual(create_calls[0][3], ("svg-default-transport", *transport_calls[0]))
+        self.assertEqual(value.svg_default, defaults)
+
+    def test_custom_svg_default_requires_all_manim_keys_before_rust_call(self):
+        calls = []
+        defaults = dict(svg._MANIM_DEFAULT_SVG_STYLE)
+        defaults.pop("stroke_opacity")
+        with patch.object(svg, "_create_svg_handle", lambda *args: calls.append(args)):
+            with self.assertRaisesRegex(KeyError, "stroke_opacity"):
+                svg.SVGMobject.from_string("<svg/>", svg_default=defaults)
+        self.assertEqual(calls, [])
+
     def test_unsupported_parser_configuration_fails_before_rust_call(self):
         calls = []
         with patch.object(svg, "_create_svg_handle", lambda *args: calls.append(args)):

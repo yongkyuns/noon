@@ -15,6 +15,12 @@
       "scene": "SvgStaticImport",
       "source": "parity/manim-v0.21/core-examples/svg_static_import.py",
       "expected_duration": 0.2
+    },
+    {
+      "id": "svg-default-fallback",
+      "scene": "SvgDefaultFallback",
+      "source": "parity/manim-v0.21/core-examples/svg_default_fallback.py",
+      "expected_duration": 0.2
     }
   ],
   "sample_fractions": [
