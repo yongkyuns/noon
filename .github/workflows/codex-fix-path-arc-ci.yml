@@ -1,0 +1,140 @@
+name: Codex fix path arc qualification
+
+on:
+  push:
+    branches:
+      - codex/b3-transform-path-arc
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Patch exact qualification contracts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          schedule = Path("crates/noon-compile/src/semantic_lowering/animation_schedule.rs")
+          text = schedule.read_text()
+          old = '''    #[test]
+              fn unsupported_timing_capabilities_fail_closed_with_animation_identity() {
+                  let mut store = SemanticStore::new();
+                  let target = visible_target(&mut store, 1.0);
+                  let target_state = object(&mut store, 2.0);
+                  let animation = store
+                      .insert_semantic_transform_animation(
+                          target,
+                          target_state,
+                          AnimationOptions::new().path_arc(0.5),
+                      )
+                      .unwrap();
+                  let index = prepare_index(&store);
+
+                  assert_eq!(
+                      lower_semantic_animation_schedule(
+                          &store,
+                          &index,
+                          animation,
+                          0.0,
+                          AnimationOptions::new(),
+                      ),
+                      Err(SemanticAnimationScheduleError::Options {
+                          animation,
+                          error: AnimationOptionsError::UnsupportedPathArc(0.5),
+                      })
+                  );
+              }
+          '''
+          new = '''    #[test]
+              fn transform_path_arc_is_scheduled_while_other_unsupported_timing_stays_fail_closed() {
+                  let mut store = SemanticStore::new();
+                  let target = visible_target(&mut store, 1.0);
+                  let target_state = object(&mut store, 2.0);
+                  let path_arc = store
+                      .insert_semantic_transform_animation(
+                          target,
+                          target_state,
+                          AnimationOptions::new().path_arc(0.5),
+                      )
+                      .unwrap();
+                  let unsupported = store
+                      .insert_semantic_transform_animation(
+                          target,
+                          target_state,
+                          AnimationOptions::new().reverse_rate_function(true),
+                      )
+                      .unwrap();
+                  let index = prepare_index(&store);
+
+                  let schedule = lower_semantic_animation_schedule(
+                      &store,
+                      &index,
+                      path_arc,
+                      0.0,
+                      AnimationOptions::new(),
+                  )
+                  .unwrap();
+                  assert_eq!(schedule.leaves()[0].options.path_arc, 0.5);
+
+                  assert_eq!(
+                      lower_semantic_animation_schedule(
+                          &store,
+                          &index,
+                          unsupported,
+                          0.0,
+                          AnimationOptions::new(),
+                      ),
+                      Err(SemanticAnimationScheduleError::Options {
+                          animation: unsupported,
+                          error: AnimationOptionsError::UnsupportedReverseRateFunction,
+                      })
+                  );
+              }
+          '''
+          old = old.replace("              ", "    ", 1)
+          new = new.replace("              ", "    ", 1)
+          assert text.count(old) == 1, "stale scheduler-test block changed"
+          schedule.write_text(text.replace(old, new, 1))
+
+          package = Path("scripts/check-web-package.mjs")
+          text = package.read_text()
+          resolver = '  "export function resolveAnimationOptions(",\n'
+          assert text.count(resolver) == 2, "animation option surface count changed"
+          text = text.replace(
+              resolver,
+              resolver + '  "export function resolveTransformAnimationOptions(",\n',
+          )
+          replacements = {
+              '  "appendTransformTo(source: WasmAuthoringMobjectHandle, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string): void",':
+              '  "appendTransformTo(source: WasmAuthoringMobjectHandle, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string, path_arc?: number | null): void",',
+              '  "appendPointTransformTo(source: WasmAuthoringMobjectHandle, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string): void",':
+              '  "appendPointTransformTo(source: WasmAuthoringMobjectHandle, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string, path_arc?: number | null): void",',
+              '  "appendEnteringTransformTo(object_id: string, source: WasmAuthoringMobjectHandle, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string): void",':
+              '  "appendEnteringTransformTo(object_id: string, source: WasmAuthoringMobjectHandle, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string, path_arc?: number | null): void",',
+              '  "appendEnteringPointTransformTo(object_id: string, source: WasmAuthoringMobjectHandle, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string): void",':
+              '  "appendEnteringPointTransformTo(object_id: string, source: WasmAuthoringMobjectHandle, target: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string, path_arc?: number | null): void",',
+          }
+          for before, after in replacements.items():
+              assert text.count(before) == 1, f"surface signature changed: {before}"
+              text = text.replace(before, after, 1)
+          package.write_text(text)
+          PY
+
+          node --check scripts/check-web-package.mjs
+          git diff --check
+
+      - name: Commit fixes and remove helper workflow
+        run: |
+          rm .github/workflows/codex-fix-path-arc-ci.yml
+          git config user.name "Yongkyun Shin"
+          git config user.email "yongkyuns@gmail.com"
+          git add crates/noon-compile/src/semantic_lowering/animation_schedule.rs scripts/check-web-package.mjs .github/workflows/codex-fix-path-arc-ci.yml
+          git commit -m "Fix path arc qualification contracts"
+          git push origin HEAD:refs/heads/codex/b3-transform-path-arc
