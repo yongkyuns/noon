@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "crates/noon/src/svg_authoring.rs"
+      - "crates/noon/src/svg_default_style.rs"
       - "crates/noon-web/src/authoring_svg.rs"
       - "web/python/_manim_svg.py"
       - "web/python/noon.py"
