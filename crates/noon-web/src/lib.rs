@@ -35,6 +35,8 @@ mod gpu_timestamps;
 mod manim_scale_bridge;
 #[cfg(target_arch = "wasm32")]
 mod manim_shape_matcher_handle_bridge;
+#[cfg(test)]
+mod morph_preload_cases;
 mod renderer_observation;
 #[cfg(all(
     feature = "renderer",
