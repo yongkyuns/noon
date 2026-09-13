@@ -162,6 +162,76 @@ fn batch_membership_uses_authoritative_root_order_and_one_revision() {
 }
 
 #[test]
+fn scene_owned_membership_publishes_running_edits_and_rejects_stale_state_atomically() {
+    let mut scene = Scene::new();
+    let first = scene.circle(1.0).unwrap();
+    let candidate = scene.rectangle(2.0, 1.0).unwrap();
+    let mut detached_editor = scene.square(1.0).unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+
+    let before = scene.revision();
+    scene.add(&first).unwrap();
+    assert_eq!(scene.revision().get(), before.get() + 1);
+    assert!(scene
+        .owned_execution()
+        .execution_object_id(first.node_id())
+        .is_some());
+    assert_eq!(
+        scene
+            .owned_execution()
+            .publication_context()
+            .scene_revision(),
+        scene.revision()
+    );
+
+    scene.remove(&first).unwrap();
+    assert!(!scene
+        .owned_execution()
+        .semantic_object_is_reachable(first.node_id()));
+    assert!(scene
+        .integration_store()
+        .borrow()
+        .node(scene.root())
+        .unwrap()
+        .members()
+        .is_empty());
+
+    detached_editor.set_translation(1.0, 0.0).unwrap();
+    let stale_revision = scene.revision();
+    let publication = scene.owned_execution().publication_context();
+    let members = scene
+        .integration_store()
+        .borrow()
+        .node(scene.root())
+        .unwrap()
+        .members()
+        .to_vec();
+    let error = scene.add(&candidate).unwrap_err();
+    assert!(matches!(
+        error,
+        crate::LiveSessionError::Publication(
+            crate::ExecutionSessionPublicationError::StaleSceneRevision { .. }
+        )
+    ));
+    assert_eq!(scene.revision(), stale_revision);
+    assert_eq!(scene.owned_execution().publication_context(), publication);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .node(scene.root())
+            .unwrap()
+            .members(),
+        members.as_slice()
+    );
+    assert!(scene
+        .owned_execution()
+        .execution_object_id(candidate.node_id())
+        .is_none());
+}
+
+#[test]
 fn initial_animation_root_rejects_foreign_and_stale_declaration_handles() {
     fn root(scene: &Scene) -> crate::DeclaredAnimation {
         scene

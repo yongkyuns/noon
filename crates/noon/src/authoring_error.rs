@@ -1,8 +1,9 @@
 //! Structured failures produced by shared Rust authoring operations.
 //!
-//! Existing semantic, resource and transaction causes remain intact. These errors
-//! do not replace live publication, segment or activation errors, and never infer
-//! categories from diagnostics.
+//! Existing semantic, resource and transaction causes remain intact. Scene-owned
+//! running edits retain execution-publication causes explicitly; dedicated live
+//! segment and activation errors remain separate and no category is inferred from
+//! diagnostics.
 
 /// A concrete unsupported payload or operation in ordinary shared authoring.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,6 +176,8 @@ pub enum AuthoringError {
     Semantic(noon_core::SemanticSceneOperationError),
     /// Transaction preflight failed before commit.
     Transaction(noon_core::SemanticMutationTransactionError),
+    /// Scene-owned running authoring failed during execution publication.
+    ExecutionPublication(crate::ExecutionSessionPublicationError),
     /// A high-precision value cannot lower to renderer coordinates.
     VectorLowering(noon_core::SemanticLoweringError),
     /// Immutable geometry resource validation failed.
@@ -287,6 +290,7 @@ impl std::fmt::Display for AuthoringError {
             Self::EmptyInputName { kind } => write!(f, "native input {kind} must not be empty"),
             Self::Semantic(error) => error.fmt(f),
             Self::Transaction(error) => error.fmt(f),
+            Self::ExecutionPublication(error) => error.fmt(f),
             Self::VectorLowering(error) => error.fmt(f),
             Self::GeometryResource(error) => error.fmt(f),
             Self::PathQuery(error) => error.fmt(f),
@@ -310,6 +314,7 @@ impl std::error::Error for AuthoringError {
             Self::FamilyPairing(error) => Some(error),
             Self::Semantic(error) => Some(error),
             Self::Transaction(error) => Some(error),
+            Self::ExecutionPublication(error) => Some(error),
             Self::VectorLowering(error) => Some(error),
             Self::GeometryResource(error) => Some(error),
             Self::PathQuery(error) => Some(error),
@@ -337,6 +342,12 @@ impl From<noon_core::SemanticSceneOperationError> for AuthoringError {
 impl From<noon_core::SemanticMutationTransactionError> for AuthoringError {
     fn from(error: noon_core::SemanticMutationTransactionError) -> Self {
         Self::Transaction(error)
+    }
+}
+
+impl From<crate::ExecutionSessionPublicationError> for AuthoringError {
+    fn from(error: crate::ExecutionSessionPublicationError) -> Self {
+        Self::ExecutionPublication(error)
     }
 }
 
