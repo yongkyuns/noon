@@ -64,6 +64,7 @@ mod dashed_line_authoring;
 #[cfg(feature = "diagnostics")]
 pub mod diagnostics;
 mod dimension_fit;
+mod effective_capture;
 mod elbow_authoring;
 pub mod example_scenes;
 mod execution_segment;

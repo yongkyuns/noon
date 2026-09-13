@@ -581,7 +581,15 @@ impl SemanticExecutionPlayer {
         source: &noon::Mobject,
         target: &noon::Mobject,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.match_points(source, target))
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        let root = self
+            .semantic_root
+            .expect("live semantic store has one scene root");
+        noon::integration::publish_match_points(&semantics, root, &mut self.session, source, target)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

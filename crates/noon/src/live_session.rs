@@ -10,10 +10,11 @@ mod boolean_geometry;
 mod family_layout;
 mod path_alignment;
 mod path_editing;
-mod point_matching;
 mod z_index;
 pub use family_layout::LiveLayoutTarget;
 
+#[cfg(test)]
+use crate::effective_capture::target_style_from_effective;
 use crate::execution_session::EffectiveSemanticObject;
 use crate::{
     family_arrangement::FamilyArrangePlan,
@@ -174,79 +175,6 @@ impl IndicateOptions {
 impl Default for IndicateOptions {
     fn default() -> Self {
         Self::new(1.2, noon_core::YELLOW)
-    }
-}
-
-/// Reconstruct the supported authored target style directly from one effective
-/// runtime row. Preserve exact authored values when their lowered values match.
-/// Changed runtime colors already contain evaluated paint opacity, so capture
-/// those as solid paints with unit paint opacity. Resource paints are not
-/// represented by `Style` and must remain explicitly unavailable here.
-pub(crate) fn target_style_from_effective(
-    authored: &SemanticStyle,
-    effective: Style,
-) -> Result<SemanticStyle, LiveSessionError> {
-    if matches!(
-        authored.fill.as_ref(),
-        Some(noon_core::SemanticPaint::Resource(_))
-    ) || matches!(
-        authored.stroke.as_ref(),
-        Some(noon_core::SemanticPaint::Resource(_))
-    ) {
-        return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::CaptureResourcePaint,
-        )));
-    }
-    let (fill, fill_opacity) =
-        if lowered_solid_color(authored.fill.as_ref(), authored.fill_opacity) == effective.fill {
-            (authored.fill.clone(), authored.fill_opacity)
-        } else {
-            (effective.fill.map(noon_core::SemanticPaint::Solid), 1.0)
-        };
-    let (stroke, stroke_opacity) =
-        if lowered_solid_color(authored.stroke.as_ref(), authored.stroke_opacity)
-            == effective.stroke
-        {
-            (authored.stroke.clone(), authored.stroke_opacity)
-        } else {
-            (effective.stroke.map(noon_core::SemanticPaint::Solid), 1.0)
-        };
-    Ok(SemanticStyle {
-        fill,
-        fill_opacity,
-        stroke,
-        stroke_opacity,
-        // Retain authored precision when runtime lowering did not change width.
-        // An f32 round trip must not invent a structural style change.
-        stroke_width: if authored.stroke_width as f32 == effective.stroke_width {
-            authored.stroke_width
-        } else {
-            f64::from(effective.stroke_width)
-        },
-        stroke_width_mode: effective.stroke_width_mode,
-        stroke_join: effective.stroke_join,
-        stroke_cap: effective.stroke_cap,
-        object_opacity: if authored.object_opacity as f32 == effective.opacity {
-            authored.object_opacity
-        } else {
-            f64::from(effective.opacity)
-        },
-    })
-}
-
-fn lowered_solid_color(paint: Option<&noon_core::SemanticPaint>, opacity: f64) -> Option<Color> {
-    let noon_core::SemanticPaint::Solid(color) = paint? else {
-        return None;
-    };
-    Some(Color {
-        alpha: (f64::from(color.alpha) * f64::from(opacity as f32)) as f32,
-        ..*color
-    })
-}
-
-fn preserve_or_capture_f32(authored: &mut f64, effective: f32) {
-    if *authored as f32 != effective {
-        *authored = f64::from(effective);
     }
 }
 
@@ -782,55 +710,8 @@ impl<'a> LiveSession<'a> {
         &self,
         source: &Mobject,
     ) -> Result<SemanticObjectState, LiveSessionError> {
-        // A reachable object starts from the coherent effective row rather than
-        // an authored base superseded by a driver. A detached object has no row,
-        // so its authored state is the exact capture. Immutable content remains
-        // authored because effective render-content overrides are rejected.
-        let mut state = source.state().map_err(LiveSessionError::from)?;
-        if !state.signal_bindings().is_empty() {
-            return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
-                crate::UnsupportedAuthoringOperation::CaptureReactiveBinding,
-            )));
-        }
-        if self.session.semantic_object_is_reachable(source.node_id()) {
-            let store = self.store.borrow();
-            let observed = self
-                .session
-                .effective_semantic_object(&store, source.node_id())?;
-            if !observed.authored_content_layout_applicable() {
-                return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
-                    crate::UnsupportedAuthoringOperation::CaptureRenderOverride,
-                )));
-            }
-            if observed.object.appearance != 1.0 {
-                return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
-                    crate::UnsupportedAuthoringOperation::CaptureNonUnitAppearance,
-                )));
-            }
-            preserve_or_capture_f32(
-                &mut state.transform.translation.x,
-                observed.object.transform.translation.x,
-            );
-            preserve_or_capture_f32(
-                &mut state.transform.translation.y,
-                observed.object.transform.translation.y,
-            );
-            preserve_or_capture_f32(
-                &mut state.transform.scale.x,
-                observed.object.transform.scale.x,
-            );
-            preserve_or_capture_f32(
-                &mut state.transform.scale.y,
-                observed.object.transform.scale.y,
-            );
-            preserve_or_capture_f32(
-                &mut state.transform.rotation_z,
-                observed.object.transform.rotation,
-            );
-            state.set_z_index(observed.object.z_index);
-            state.style = target_style_from_effective(&state.style, observed.object.style)?;
-        }
-        Ok(state)
+        crate::effective_capture::capture_mobject_state(self.store, self.session, source)
+            .map_err(LiveSessionError::from)
     }
 
     /// Publish one detached ordered family through this session's semantic owner.

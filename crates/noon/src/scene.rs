@@ -233,6 +233,28 @@ impl Scene {
         crate::path_queries::effective_path_query(&self.store, execution, object)
     }
 
+    /// Match one object's persistent geometry/transform against another object.
+    /// Cold Scenes use authored target state. Running Scenes capture the target
+    /// from one coherent Runtime publication and publish through the Scene-owned
+    /// execution component; unsupported derived presentation fails before commit.
+    pub fn match_points(
+        &mut self,
+        source: &Mobject,
+        target: &Mobject,
+    ) -> Result<(), AuthoringError> {
+        let root = self.root;
+        let store = &self.store;
+        if let Some(execution) = self.execution.as_mut() {
+            return crate::point_matching::publish_match_points(
+                store, root, execution, source, target,
+            );
+        }
+        self.require_object(source)?;
+        self.require_object(target)?;
+        let transaction = crate::point_matching::prepare_match_points(source, target.state()?)?;
+        self.apply_semantic_transaction(transaction).map(|_| ())
+    }
+
     pub(crate) fn require_object(&self, object: &Mobject) -> Result<(), crate::AuthoringError> {
         if !Rc::ptr_eq(&self.store, object.integration_store()) {
             return Err(crate::AuthoringError::ForeignStore);
