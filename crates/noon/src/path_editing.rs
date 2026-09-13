@@ -2,8 +2,8 @@
 mod transaction;
 use crate::{AuthoringError, Mobject};
 use noon_core::{
-    SemanticMutationTransaction, SemanticObjectContent, SemanticObjectState, SemanticStore,
-    StoredGeometry, Vec2, VectorPath,
+    SemanticMutationTransaction, SemanticNodeId, SemanticObjectContent, SemanticObjectState,
+    SemanticStore, StoredGeometry, Vec2, VectorPath,
 };
 pub(crate) use transaction::PreparedPathEdits;
 
@@ -52,18 +52,6 @@ pub(crate) fn path_is_unchanged(
     before.transform == after.transform
         && crate::path_queries::content_path(store, before.content)
             .is_ok_and(|old| old.as_ref() == path)
-}
-
-pub(crate) fn path_transaction(
-    object: noon_core::SemanticNodeId,
-    before: &SemanticObjectState,
-    mut after: SemanticObjectState,
-    handle: noon_core::GeometryResourceHandle,
-) -> SemanticMutationTransaction {
-    after.content = StoredGeometry::Resource(handle).into();
-    let mut transaction = SemanticMutationTransaction::new();
-    crate::semantic_mobject::stage_state_changes(&mut transaction, object, before, &after);
-    transaction
 }
 
 /// Inputs to shared authoring preparation, published using the normal content
@@ -190,6 +178,28 @@ impl PathEdit<'_> {
         }
         Ok(Some(path))
     }
+}
+
+/// Prepare one persistent path edit against an already-selected authored or
+/// coherent effective snapshot. This centralizes the exact single-object no-op
+/// contract used by cold and live authoring before either side publishes.
+pub(crate) fn prepare_object_edit(
+    store: &SemanticStore,
+    object: SemanticNodeId,
+    captured: SemanticObjectState,
+    edit: PathEdit<'_>,
+) -> Result<Option<PreparedPathEdits>, AuthoringError> {
+    let before = store
+        .semantic_object_state_checked(object)
+        .map_err(AuthoringError::from)?;
+    let after = path_replacement_state(captured.clone())?;
+    let Some(path) = edit.prepare(store, &captured)? else {
+        return Ok(None);
+    };
+    if path_is_unchanged(store, before, &after, &path) {
+        return Ok(None);
+    }
+    PreparedPathEdits::prepare(store, [(object, captured, path)]).map(Some)
 }
 
 pub(crate) fn world_path(
@@ -366,17 +376,13 @@ impl Mobject {
         })
     }
     fn edit_path(&mut self, edit: PathEdit<'_>) -> Result<(), AuthoringError> {
-        let before = self.state()?;
-        let after = path_replacement_state(before.clone())?;
+        let captured = self.state()?;
         let mut store = self.integration_store().borrow_mut();
-        let Some(path) = edit.prepare(&store, &before)? else {
+        let Some(prepared) = prepare_object_edit(&store, self.node_id(), captured, edit)? else {
             return Ok(());
         };
-        if path_is_unchanged(&store, &before, &after, &path) {
-            return Ok(());
-        }
-        store.with_geometry_path(path, |store, handle| {
-            path_transaction(self.node_id(), &before, after, handle)
+        prepared.publish(&mut store, |store, transaction| {
+            transaction
                 .apply(store)
                 .map(|_| ())
                 .map_err(AuthoringError::from)
