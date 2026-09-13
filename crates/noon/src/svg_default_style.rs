@@ -153,7 +153,21 @@ fn source_with_svg_default(
     let mut wrapped = String::with_capacity(source.len() + 256);
     wrapped.push_str("<svg xmlns=\"");
     wrapped.push_str(SVG_NAMESPACE);
-    wrapped.push_str("\" stroke-width=\"");
+    wrapped.push('"');
+    for namespace in root.namespaces() {
+        let Some(prefix) = namespace.name() else {
+            continue;
+        };
+        if prefix == "xml" {
+            continue;
+        }
+        push_attribute(
+            &mut wrapped,
+            &format!("xmlns:{prefix}"),
+            namespace.uri(),
+        );
+    }
+    wrapped.push_str(" stroke-width=\"");
     wrapped.push_str(&SVG_INITIAL_STROKE_WIDTH.to_string());
     wrapped.push_str("\"><g");
     push_config_attributes(&mut wrapped, svg_default);
@@ -423,6 +437,19 @@ mod tests {
             .unwrap();
         let style = member_styles(&scene, &family)[0].clone();
         assert!((style.stroke_width - 0.01).abs() < 1e-6);
+    }
+
+    #[test]
+    fn svg_default_preserves_prefixed_namespace_declarations() {
+        let source = r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:meta="urn:noon:test">
+            <path meta:label="shape" d="M0 0 L10 0 L10 10 Z"/>
+        </svg>"##;
+        let wrapped = source_with_svg_default(source, SvgDefaultStyle::default()).unwrap();
+        let document = parse_xml(&wrapped).unwrap();
+        assert_eq!(
+            document.root_element().lookup_namespace_uri(Some("meta")),
+            Some("urn:noon:test")
+        );
     }
 
     #[test]
