@@ -22,6 +22,7 @@ pub(crate) struct PreparedRetainedResourceAdditionsWithRender {
     ordinary: PreparedRetainedResourceAdditions,
     render_geometry_session: Option<u32>,
     render_geometries: Option<Arc<[Arc<GeometryRef>]>>,
+    #[cfg(any(target_arch = "wasm32", test))]
     render_geometry_suffix_start: usize,
     render_geometry_preparations: Vec<RenderGeometryPreparation>,
 }
@@ -78,6 +79,7 @@ impl InstalledRetainedResources {
                 ordinary,
                 render_geometry_session: None,
                 render_geometries: None,
+                #[cfg(any(target_arch = "wasm32", test))]
                 render_geometry_suffix_start,
                 render_geometry_preparations: Vec::new(),
             });
@@ -106,6 +108,7 @@ impl InstalledRetainedResources {
             ordinary,
             render_geometry_session: Some(resources.session),
             render_geometries: Some(next),
+            #[cfg(any(target_arch = "wasm32", test))]
             render_geometry_suffix_start,
             render_geometry_preparations: preparations,
         })
@@ -119,7 +122,8 @@ impl InstalledRetainedResources {
             ordinary,
             render_geometry_session,
             render_geometries,
-            render_geometry_suffix_start: _,
+            #[cfg(any(target_arch = "wasm32", test))]
+                render_geometry_suffix_start: _,
             render_geometry_preparations,
         } = additions;
         self.commit_additions(ordinary);
@@ -156,6 +160,7 @@ impl PreparedRetainedResourceAdditionsWithRender {
         self.render_geometries.clone()
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn render_geometry_suffix(&self) -> &[Arc<GeometryRef>] {
         self.render_geometries
             .as_deref()
