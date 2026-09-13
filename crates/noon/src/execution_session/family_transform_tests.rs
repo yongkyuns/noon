@@ -77,12 +77,13 @@ fn unequal_family_transform_publishes_one_identity_free_expansion_copy() {
             1.0
         );
     }
-    // Completion grants the endpoint one coherent publication, then the synthetic
-    // alignment occurrence disappears without changing semantic topology.
-    assert!(session
-        .take_renderer_publication()
-        .derived_display_objects()
-        .is_empty());
+    // Completion grants the endpoint one coherent publication, then queues one
+    // renderer-only follow-up so the synthetic alignment occurrence is actually
+    // removed from a presented surface.
+    assert!(session.wake_state().frame_pending());
+    let removal = session.take_renderer_publication();
+    assert!(removal.changes().is_all());
+    assert!(removal.derived_display_objects().is_empty());
     assert_eq!(
         store.semantic_family_members_checked(source).unwrap(),
         source_members
