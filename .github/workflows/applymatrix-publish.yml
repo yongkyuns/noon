@@ -1,0 +1,83 @@
+name: Publish ApplyMatrix implementation
+
+on:
+  push:
+    branches:
+      - codex/b3-apply-matrix-publish
+    paths:
+      - .github/applymatrix.patch.gz.b64
+      - .github/workflows/applymatrix-publish.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply, validate, and publish clean implementation
+        env:
+          EXPECTED_MASTER: 821e5319a06d9c5b4fa6ae7f4bc93b70d6037e98
+          EXPECTED_TARGET: 125ac8d44e315a43da3fb2ce5af3fe00f8c191ba
+        run: |
+          set -euo pipefail
+          base64 -d .github/applymatrix.patch.gz.b64 | gzip -d > /tmp/applymatrix.patch
+          git fetch origin master codex/b3-apply-matrix
+          test "$(git rev-parse origin/master)" = "$EXPECTED_MASTER"
+          test "$(git rev-parse origin/codex/b3-apply-matrix)" = "$EXPECTED_TARGET"
+          git switch --detach "$EXPECTED_MASTER"
+          git apply --check /tmp/applymatrix.patch
+          git apply /tmp/applymatrix.patch
+
+          cargo fmt --all
+          cargo test -p noon apply_matrix
+          cargo check -p noon-native --example ordinary_apply_matrix
+          python3 -m unittest \
+            web/python/test_manim_apply_matrix.py \
+            web/python/test_manim_animation_constructor_options.py \
+            web/python/test_manim_transform_path_arc_options.py \
+            web/python/test_manim_scale_in_place.py
+          node --check scripts/check-web-package.mjs
+          bash scripts/check.sh fast
+          git diff --check
+
+          git add -A
+          expected="$(cat <<'EOF'
+          crates/noon-native/examples/ordinary_apply_matrix.rs
+          crates/noon-web/src/authoring_mobject.rs
+          crates/noon-web/src/canonical_authoring_scene.rs
+          crates/noon-web/src/semantic_execution_player.rs
+          crates/noon/src/authoring_error.rs
+          crates/noon/src/example_scenes.rs
+          crates/noon/src/example_scenes/apply_matrix.rs
+          crates/noon/src/lib.rs
+          crates/noon/src/live_session/path_editing.rs
+          crates/noon/src/matrix_authoring.rs
+          scripts/check-web-package.mjs
+          web/python/_manim_animate.py
+          web/python/_manim_scene.py
+          web/python/examples/manim_parity_apply_matrix.py
+          web/python/noon.py
+          web/python/test_manim_animation_constructor_options.py
+          web/python/test_manim_apply_matrix.py
+          EOF
+          )"
+          actual="$(git diff --cached --name-only | LC_ALL=C sort)"
+          expected="$(printf '%s\n' "$expected" | sed 's/^[[:space:]]*//' | LC_ALL=C sort)"
+          test "$actual" = "$expected" || {
+            echo 'Unexpected changed-file surface'
+            echo 'Expected:'
+            printf '%s\n' "$expected"
+            echo 'Actual:'
+            printf '%s\n' "$actual"
+            exit 1
+          }
+
+          git config user.name 'Yongkyun Shin'
+          git config user.email '4311628+yongkyuns@users.noreply.github.com'
+          git commit -m 'Add deterministic ApplyMatrix geometry transforms'
+          git push --force-with-lease=refs/heads/codex/b3-apply-matrix:$EXPECTED_TARGET \
+            origin HEAD:refs/heads/codex/b3-apply-matrix
