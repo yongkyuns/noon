@@ -8,6 +8,8 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const deviceId = process.env.NOON_PERF_DEVICE_ID?.trim();
 assert.ok(deviceId, "NOON_PERF_DEVICE_ID is required for a physical-machine baseline");
 assert.match(deviceId, /^[a-zA-Z0-9._-]+$/, "device ID must be filesystem-safe");
+const gpuMode = process.env.NOON_PERF_GPU_MODE ?? "hardware";
+assert.ok(["hardware", "software"].includes(gpuMode), "NOON_PERF_GPU_MODE must be hardware or software");
 
 const backends = list(process.env.NOON_PERF_BACKENDS ?? "webgpu,webgl");
 for (const backend of backends) {
@@ -57,6 +59,7 @@ for (const backend of backends) {
     const webgpuMinimumFps = process.env.NOON_PERF_DYNAMIC_STRESS_WEBGPU_MIN_FPS?.trim();
     run("scripts/retained-dynamic-stress-perf.mjs", {
       NOON_RETAINED_STRESS_BACKEND: backend,
+      NOON_RETAINED_STRESS_GPU_MODE: gpuMode,
       NOON_RETAINED_STRESS_ARTIFACT: relative,
       NOON_RETAINED_STRESS_SAMPLE_HZ: process.env.NOON_PERF_TARGET_HZ ?? "60",
       ...(backend === "webgpu" && webgpuMinimumFps
@@ -69,7 +72,7 @@ for (const backend of backends) {
 
 const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" });
 const bundle = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   benchmark: "Noon named physical-device performance bundle",
   generatedAt: new Date().toISOString(),
   deviceId,
@@ -78,6 +81,7 @@ const bundle = {
   configuration: {
     backends,
     suites,
+    gpuMode,
     width: process.env.NOON_PERF_WIDTH ?? "960",
     height: process.env.NOON_PERF_HEIGHT ?? "540",
     devicePixelRatio: process.env.NOON_PERF_DPR ?? "1",

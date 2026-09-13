@@ -5,8 +5,23 @@ export function rasterFixtureSource(source, scene) {
   return `${adapted}\nfor _name, _cls in tuple(globals().items()):\n    if isinstance(_cls, type) and issubclass(_cls, Scene) and _cls is not ${scene}:\n        _cls.__module__ = "raster_fixture_library"\ndel _cls\n`;
 }
 
-export function browserArgs(backend) {
+export function browserArgs(backend, { gpuMode = "software" } = {}) {
+  if (!new Set(["software", "hardware"]).has(gpuMode)) {
+    throw new Error(`unsupported GPU mode: ${gpuMode}`);
+  }
   if (backend === "webgpu") {
+    if (gpuMode === "hardware") {
+      return [
+        "--enable-unsafe-webgpu",
+        "--use-gpu-in-tests",
+        "--ignore-gpu-blocklist",
+        "--enable-accelerated-2d-canvas",
+        "--use-webgpu-power-preference=default-high-performance",
+        "--force-high-performance-gpu",
+        "--disable-gpu-sandbox",
+        "--disable-dev-shm-usage",
+      ];
+    }
     return [
       "--enable-unsafe-webgpu",
       "--enable-unsafe-swiftshader",
@@ -21,6 +36,16 @@ export function browserArgs(backend) {
       "--disable-dev-shm-usage",
     ];
   }
+  if (gpuMode === "hardware") {
+    return [
+      "--disable-features=WebGPU",
+      "--use-gpu-in-tests",
+      "--ignore-gpu-blocklist",
+      "--force-high-performance-gpu",
+      "--disable-gpu-sandbox",
+      "--disable-dev-shm-usage",
+    ];
+  }
   return [
     "--disable-features=WebGPU",
     "--enable-unsafe-swiftshader",
@@ -30,6 +55,24 @@ export function browserArgs(backend) {
     "--disable-gpu-sandbox",
     "--disable-dev-shm-usage",
   ];
+}
+
+export function isIdentifiedGpuAdapter(info) {
+  if (!info || typeof info !== "object") return false;
+  return [info.vendor, info.architecture, info.device, info.description]
+    .some((value) => typeof value === "string" && value.trim() !== "")
+    || typeof info.isFallbackAdapter === "boolean";
+}
+
+export function isSoftwareGpuAdapter(info) {
+  if (!info || typeof info !== "object") return false;
+  if (info.isFallbackAdapter === true) return true;
+  const description = [info.vendor, info.architecture, info.device, info.description]
+    .filter((value) => typeof value === "string")
+    .join(" ")
+    .toLowerCase();
+  return ["swiftshader", "llvmpipe", "software rasterizer", "software adapter"]
+    .some((needle) => description.includes(needle));
 }
 
 // Runtime geometry uses f32. Absolute shared-property callbacks can round by a
