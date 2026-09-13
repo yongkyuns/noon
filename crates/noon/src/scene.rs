@@ -140,6 +140,19 @@ impl Scene {
         self.apply_semantic_transaction(transaction)
     }
 
+    /// Publish one canonical persistent transaction through a coherent running
+    /// Scene root. Compatibility live facades reuse this route instead of owning
+    /// another store/session publication branch.
+    pub(crate) fn publish_running_transaction(
+        store: &Rc<RefCell<SemanticStore>>,
+        root: SemanticNodeId,
+        execution: &mut ExecutionSession,
+        transaction: SemanticMutationTransaction,
+    ) -> Result<SemanticMutationTransactionResult, crate::ExecutionSessionPublicationError> {
+        let mut store = store.borrow_mut();
+        execution.apply_semantic_transaction_at_root(&mut store, root, transaction)
+    }
+
     /// Route one canonical persistent semantic transaction through the Scene's
     /// current control state. This is the ownership seam for ordinary mutation:
     /// cold Scenes commit authored state directly; running Scenes use the existing
@@ -148,10 +161,10 @@ impl Scene {
         &mut self,
         transaction: SemanticMutationTransaction,
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        let root = self.root;
+        let store = &self.store;
         if let Some(execution) = self.execution.as_mut() {
-            let mut store = self.store.borrow_mut();
-            return execution
-                .apply_semantic_transaction_at_root(&mut store, self.root, transaction)
+            return Self::publish_running_transaction(store, root, execution, transaction)
                 .map_err(AuthoringError::from);
         }
         transaction
