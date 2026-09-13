@@ -614,6 +614,12 @@
       "scene": "UnequalFamilyTransformContraction",
       "source": "parity/manim-v0.21/core-examples/unequal_family_transform.py",
       "expected_duration": 1.0
+    },
+    {
+      "id": "unequal-family-path-transform-expansion",
+      "scene": "UnequalFamilyPathTransformExpansion",
+      "source": "parity/manim-v0.21/core-examples/unequal_family_path_transform.py",
+      "expected_duration": 1.0
     }
   ],
   "sample_fractions": [

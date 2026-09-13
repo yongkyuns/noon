@@ -1,7 +1,16 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    sync::Arc,
+};
 
-use noon_core::{FamilyAnimationState, ObjectId, RetainedFamilyAnimationPlan, TextResourceLookup};
-use noon_runtime::{FrameChanges, FrameState, RetainedFamilyFrame, RetainedPlannedFamilyFrame};
+use noon_core::{
+    FamilyAnimationState, GeometryRef, ObjectContentRef, ObjectId, RetainedFamilyAnimationPlan,
+    Style, TextResourceLookup, Transform2D,
+};
+use noon_runtime::{
+    FrameChanges, FrameState, RetainedFamilyFrame, RetainedPlannedFamilyFrame,
+    TransientPresentationOccurrence, TransientPresentationState,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -10,6 +19,85 @@ use crate::{
 };
 
 pub(crate) type ValidatedFamilyStateUpdate = (usize, Option<FamilyAnimationState>, Option<u32>);
+
+/// One identity-free transient presentation occurrence crossing the genuine
+/// execution-worker to render-worker boundary. `anchor` is an existing stable
+/// source object used only to recover renderer-local painter placement; it never
+/// becomes the occurrence's semantic or retained identity.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RetainedTransientPresentationOccurrence {
+    pub anchor: ObjectId,
+    pub occurrence_index: u32,
+    pub z_index: f64,
+    pub geometry: GeometryRef,
+    pub transform: Transform2D,
+    pub style: Style,
+    pub appearance: f32,
+    pub presence: bool,
+    pub reveal: f32,
+    pub morph: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_geometry: Option<GeometryRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_transform: Option<Transform2D>,
+}
+
+impl RetainedTransientPresentationOccurrence {
+    fn from_runtime(
+        frame: &FrameState,
+        object: &TransientPresentationOccurrence,
+    ) -> Result<Self, RetainedFamilyExecutionTransportError> {
+        let anchor_index = object.anchor_object_index() as usize;
+        let anchor = frame.objects.get(anchor_index).ok_or(
+            RetainedFamilyExecutionTransportError::InvalidTransientAnchorIndex(anchor_index),
+        )?;
+        let state = object.state();
+        let geometry = match &state.content {
+            ObjectContentRef::Geometry(geometry) => geometry.clone(),
+            ObjectContentRef::Text(_) => {
+                return Err(
+                    RetainedFamilyExecutionTransportError::UnsupportedTransientContent(
+                        object.occurrence_index(),
+                    ),
+                );
+            }
+        };
+        Ok(Self {
+            anchor: anchor.id,
+            occurrence_index: object.occurrence_index(),
+            z_index: state.z_index,
+            geometry,
+            transform: state.transform,
+            style: state.style,
+            appearance: state.appearance,
+            presence: state.presence,
+            reveal: state.reveal,
+            morph: state.morph,
+            render_geometry: state.render_geometry.as_deref().cloned(),
+            render_transform: state.render_transform,
+        })
+    }
+
+    pub(crate) fn install(&self, anchor_object_index: u32) -> TransientPresentationOccurrence {
+        TransientPresentationOccurrence::new(
+            anchor_object_index,
+            self.occurrence_index,
+            TransientPresentationState {
+                z_index: self.z_index,
+                content: ObjectContentRef::Geometry(self.geometry.clone()),
+                text_bounds: None,
+                transform: self.transform,
+                style: self.style,
+                appearance: self.appearance,
+                presence: self.presence,
+                reveal: self.reveal,
+                morph: self.morph,
+                render_geometry: self.render_geometry.clone().map(Arc::new),
+                render_transform: self.render_transform,
+            },
+        )
+    }
+}
 
 /// Sparse per-object family scheduler state carried alongside an ordinary retained delta.
 ///
@@ -77,6 +165,8 @@ pub struct RetainedFamilyExecutionDeltaEnvelope {
     pub family_plans: Vec<RetainedFamilyPlanTransport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_additions: Option<RetainedResourceBundle>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transient_presentations: Vec<RetainedTransientPresentationOccurrence>,
 }
 
 impl RetainedFamilyExecutionDeltaEnvelope {
@@ -96,6 +186,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 .map(RetainedFamilyPlanTransport::from_plan)
                 .collect(),
             resource_additions: None,
+            transient_presentations: Vec::new(),
             retained,
         };
         envelope.validate()?;
@@ -128,6 +219,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 .map(RetainedFamilyPlanTransport::from_plan)
                 .collect(),
             resource_additions: None,
+            transient_presentations: Vec::new(),
             retained,
         };
         envelope.validate()?;
@@ -150,6 +242,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
             )?,
             family_plans: Vec::new(),
             resource_additions: None,
+            transient_presentations: Vec::new(),
             retained,
         };
         envelope.validate()?;
@@ -185,6 +278,7 @@ impl RetainedFamilyExecutionDeltaEnvelope {
                 .map(RetainedFamilyPlanTransport::from_plan)
                 .collect(),
             resource_additions: None,
+            transient_presentations: Vec::new(),
             retained,
         };
         envelope.validate()?;
@@ -205,7 +299,30 @@ impl RetainedFamilyExecutionDeltaEnvelope {
         for plan in &self.family_plans {
             plan.validate()?;
         }
+        let mut occurrences = HashSet::with_capacity(self.transient_presentations.len());
+        for object in &self.transient_presentations {
+            if !occurrences.insert(object.occurrence_index) {
+                return Err(
+                    RetainedFamilyExecutionTransportError::DuplicateTransientOccurrence(
+                        object.occurrence_index,
+                    ),
+                );
+            }
+        }
         Ok(())
+    }
+
+    pub fn replace_transient_presentations(
+        &mut self,
+        frame: &FrameState,
+        objects: &[TransientPresentationOccurrence],
+    ) -> Result<(), RetainedFamilyExecutionTransportError> {
+        let next = objects
+            .iter()
+            .map(|object| RetainedTransientPresentationOccurrence::from_runtime(frame, object))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.transient_presentations = next;
+        self.validate()
     }
 }
 
@@ -549,6 +666,10 @@ pub enum RetainedFamilyExecutionTransportError {
     },
     InvalidObjectIndex(usize),
     DuplicateStateObject(ObjectId),
+    InvalidTransientAnchorIndex(usize),
+    DuplicateTransientOccurrence(u32),
+    UnsupportedTransientContent(u32),
+    UnknownTransientAnchor(ObjectId),
     UnknownObject(ObjectId),
     StateWithoutPlan(ObjectId),
     PlanIndexWithoutState(ObjectId),
@@ -593,6 +714,23 @@ impl std::fmt::Display for RetainedFamilyExecutionTransportError {
             Self::DuplicateStateObject(object) => write!(
                 formatter,
                 "retained family delta repeats object {}",
+                object.get()
+            ),
+            Self::InvalidTransientAnchorIndex(index) => write!(
+                formatter,
+                "transient presentation anchor index {index} is outside the retained frame"
+            ),
+            Self::DuplicateTransientOccurrence(occurrence) => write!(
+                formatter,
+                "transient presentation occurrence {occurrence} is duplicated in one retained delta"
+            ),
+            Self::UnsupportedTransientContent(occurrence) => write!(
+                formatter,
+                "transient presentation occurrence {occurrence} requires unsupported retained text content"
+            ),
+            Self::UnknownTransientAnchor(object) => write!(
+                formatter,
+                "transient presentation occurrence references unknown stable anchor {}",
                 object.get()
             ),
             Self::UnknownObject(object) => write!(
@@ -765,6 +903,52 @@ mod tests {
     }
 
     #[test]
+    fn transient_path_occurrence_round_trips_with_only_real_anchor_identity() {
+        let path = noon_core::VectorPath::new()
+            .move_to(noon_core::Vec2::new(-1.0, 0.0))
+            .cubic_to(
+                noon_core::Vec2::new(-0.5, 1.0),
+                noon_core::Vec2::new(0.5, 1.0),
+                noon_core::Vec2::new(1.0, 0.0),
+            );
+        let frame = frame();
+        let occurrence = TransientPresentationOccurrence::new(
+            0,
+            7,
+            TransientPresentationState {
+                z_index: 0.0,
+                content: ObjectContentRef::Geometry(GeometryRef::VectorPath(path.clone())),
+                text_bounds: None,
+                transform: Transform2D::IDENTITY,
+                style: Style::default(),
+                appearance: 0.5,
+                presence: true,
+                reveal: 1.0,
+                morph: 0.25,
+                render_geometry: Some(Arc::new(GeometryRef::VectorPath(path))),
+                render_transform: None,
+            },
+        );
+        let wire =
+            RetainedTransientPresentationOccurrence::from_runtime(&frame, &occurrence).unwrap();
+        assert_eq!(wire.anchor, ObjectId::new(7));
+        assert_eq!(wire.occurrence_index, 7);
+        assert!(matches!(
+            wire.render_geometry,
+            Some(GeometryRef::VectorPath(_))
+        ));
+
+        let installed = wire.install(0);
+        assert_eq!(installed.anchor_object_index(), 0);
+        assert_eq!(installed.occurrence_index(), 7);
+        assert_eq!(installed.state().appearance, 0.5);
+        assert!(matches!(
+            installed.state().effective_render_geometry(),
+            Some(GeometryRef::VectorPath(_))
+        ));
+    }
+
+    #[test]
     fn ordinary_retained_json_decodes_with_empty_family_sidecar() {
         let json = serde_json::to_string(&retained(true, 0)).unwrap();
         let decoded: RetainedFamilyExecutionDeltaEnvelope = serde_json::from_str(&json).unwrap();
@@ -847,6 +1031,7 @@ mod tests {
                 RetainedFamilyPlanTransport::from_plan(&plan),
             ],
             resource_additions: None,
+            transient_presentations: Vec::new(),
         };
         let mut installed = InstalledRetainedFamilyExecutionState::default();
         installed
@@ -869,6 +1054,7 @@ mod tests {
             .unwrap()],
             family_plans: Vec::new(),
             resource_additions: None,
+            transient_presentations: Vec::new(),
         };
         assert_eq!(
             installed
@@ -900,6 +1086,7 @@ mod tests {
             .unwrap()],
             family_plans: vec![RetainedFamilyPlanTransport::from_plan(&geometry_plan())],
             resource_additions: None,
+            transient_presentations: Vec::new(),
         };
         installed
             .apply(&appended, &retained_frame, &TextResourceArena::new())
@@ -935,6 +1122,7 @@ mod tests {
             .unwrap()],
             family_plans: vec![RetainedFamilyPlanTransport::from_plan(&geometry_plan())],
             resource_additions: None,
+            transient_presentations: Vec::new(),
         };
         let index_lookups = Cell::new(0);
         let object_lookups = Cell::new(0);
@@ -992,6 +1180,7 @@ mod tests {
                 global_span: None,
             }],
             resource_additions: None,
+            transient_presentations: Vec::new(),
         };
 
         assert!(installed
@@ -1018,6 +1207,7 @@ mod tests {
             .unwrap()],
             family_plans: Vec::new(),
             resource_additions: None,
+            transient_presentations: Vec::new(),
         };
         let mut installed = InstalledRetainedFamilyExecutionState::default();
         installed
@@ -1027,6 +1217,7 @@ mod tests {
                     family_states: Vec::new(),
                     family_plans: Vec::new(),
                     resource_additions: None,
+                    transient_presentations: Vec::new(),
                 },
                 &frame(),
                 &TextResourceArena::new(),
@@ -1061,6 +1252,7 @@ mod tests {
             .unwrap()],
             family_plans: Vec::new(),
             resource_additions: None,
+            transient_presentations: Vec::new(),
         };
         assert_eq!(
             installed

@@ -924,6 +924,20 @@ impl RetainedFramePreparer {
         )
     }
 
+    pub fn prepare_transient_presentation_rows(
+        &mut self,
+        frame: &FrameState,
+        painter_order: &[u32],
+        presentations: &[noon_runtime::TransientPresentationOccurrence],
+    ) -> Result<crate::PreparedDerivedDisplay, crate::DerivedDisplayRenderError> {
+        crate::prepare_transient_presentation_rows_cached(
+            frame,
+            painter_order,
+            presentations,
+            &mut self.geometry,
+        )
+    }
+
     /// Install a transport-decoded painter permutation for a genuine worker
     /// boundary. Direct runtime publications use [`RendererPublication`] instead.
     pub fn set_painter_order(&mut self, order: &[u32]) {
