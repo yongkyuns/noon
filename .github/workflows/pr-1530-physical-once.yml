@@ -1,0 +1,60 @@
+name: PR 1530 physical dynamic-load once
+
+on:
+  push:
+    branches:
+      - codex/restore-morph-preload-residency
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: [self-hosted, macOS, noon-physical]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify physical macOS runner
+        shell: bash
+        run: |
+          test "$(uname -s)" = "Darwin"
+          echo "Runner: ${RUNNER_NAME:-unknown}"
+          system_profiler SPHardwareDataType SPDisplaysDataType || true
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Install pinned browser tooling
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Build optimized production WASM
+        run: bash scripts/build-web-demo.sh
+      - name: Record physical Dynamic Load bundle
+        env:
+          NOON_PERF_DEVICE_ID: yongkyun-mac
+          NOON_PERF_BACKENDS: webgpu
+          NOON_PERF_SUITES: dynamic-stress
+          NOON_PERF_GPU_MODE: hardware
+          NOON_PERF_WIDTH: '1920'
+          NOON_PERF_HEIGHT: '1080'
+          NOON_PERF_DPR: '1'
+          NOON_PERF_TARGET_HZ: '60'
+          NOON_PERF_DYNAMIC_STRESS_WEBGPU_MIN_FPS: '0'
+          NOON_PERF_DEVICE_NOTES: 'PR 1530 pre-regression recovery measurement'
+          NOON_PERF_RUN_DIR: perf-artifacts/pr-1530-physical
+        run: node scripts/perf-device-run.mjs
+      - name: Upload performance bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon-perf-pr-1530-${{ github.run_id }}
+          path: perf-artifacts/pr-1530-physical
+          if-no-files-found: error
+          retention-days: 30
