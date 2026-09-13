@@ -37,13 +37,21 @@ jobs:
 
           path = Path("crates/noon/src/matrix_authoring.rs")
           text = path.read_text()
+
           old = "        prepared.publish(&mut store.borrow_mut(), |store, transaction| {"
           new = (
               "        let mut store_mut = store.borrow_mut();\n"
               "        prepared.publish(&mut store_mut, |store, transaction| {"
           )
           assert text.count(old) == 1, "ApplyMatrix publish borrow site changed unexpectedly"
-          path.write_text(text.replace(old, new, 1))
+          text = text.replace(old, new, 1)
+
+          old = "                    GeometryResource::VectorPath(path) => path.clone(),"
+          new = "                    GeometryResource::VectorPath(path) => path.as_ref().clone(),"
+          assert text.count(old) == 1, "ApplyMatrix VectorPath test helper changed unexpectedly"
+          text = text.replace(old, new, 1)
+
+          path.write_text(text)
           PY
 
           cargo fmt --all
