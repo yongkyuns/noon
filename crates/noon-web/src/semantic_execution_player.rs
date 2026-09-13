@@ -2025,88 +2025,94 @@ impl SemanticExecutionPlayer {
         snapshot: bool,
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
         let camera = self.session.camera().map_err(|e| e.to_string())?;
-        let changes = self.session.take_frame_changes();
-        if snapshot || changes.is_all() || !self.snapshot_sent {
-            let indices = self
-                .session
-                .painter_order()
+        let publication = self.session.take_renderer_publication();
+        let changes = publication.changes().clone();
+        let frame = publication.frame();
+        let planned = publication.planned_family_frame();
+        let plans = publication.family_animation_plans();
+        let painter_order = publication.painter_order();
+
+        let mut delta = if snapshot || changes.is_all() || !self.snapshot_sent {
+            let indices = painter_order
                 .iter()
                 .map(|&index| index as usize)
                 .collect::<Vec<_>>();
             let text_handles = indices
                 .iter()
-                .filter_map(|&index| self.session.frame().objects[index].text())
+                .filter_map(|&index| frame.objects[index].text())
                 .collect::<Vec<_>>();
             let mut delta = self
                 .encoder
-                .encode_planned_snapshot_indices(
-                    &self.session.planned_family_frame(),
-                    self.session.family_animation_plans(),
-                    camera,
-                    indices,
-                )
+                .encode_planned_snapshot_indices(&planned, plans, camera, indices)
                 .map_err(|e| e.to_string())?;
-            self.attach_resource_additions(&mut delta, text_handles)?;
+            self.encoder
+                .attach_resource_additions(
+                    &mut delta,
+                    text_handles,
+                    publication.text_resources(),
+                    publication.geometry_resources(),
+                    publication.font_resources(),
+                )
+                .map_err(|error| error.to_string())?;
             self.snapshot_sent = true;
-            Ok(Some(delta))
+            delta
         } else if changes.is_structural() || changes.has_painter_order_change() {
             let text_handles = changes
                 .object_indices()
                 .iter()
-                .filter_map(|&index| self.session.frame().objects.get(index)?.text())
+                .filter_map(|&index| frame.objects.get(index)?.text())
                 .collect::<Vec<_>>();
             let Some(mut delta) = self
                 .encoder
                 .encode_planned_incremental_with_painter_order(
-                    &self.session.planned_family_frame(),
-                    self.session.family_animation_plans(),
+                    &planned,
+                    plans,
                     &changes,
                     camera,
-                    self.session.painter_order(),
+                    painter_order,
                 )
                 .map_err(|e| e.to_string())?
             else {
                 return Ok(None);
             };
-            self.attach_resource_additions(&mut delta, text_handles)?;
-            Ok(Some(delta))
+            self.encoder
+                .attach_resource_additions(
+                    &mut delta,
+                    text_handles,
+                    publication.text_resources(),
+                    publication.geometry_resources(),
+                    publication.font_resources(),
+                )
+                .map_err(|error| error.to_string())?;
+            delta
         } else {
             let text_handles = changes
                 .object_indices()
                 .iter()
-                .filter_map(|&index| self.session.frame().objects.get(index)?.text())
+                .filter_map(|&index| frame.objects.get(index)?.text())
                 .collect::<Vec<_>>();
             let Some(mut delta) = self
                 .encoder
-                .encode_planned_incremental(
-                    &self.session.planned_family_frame(),
-                    self.session.family_animation_plans(),
-                    &changes,
-                    camera,
-                )
+                .encode_planned_incremental(&planned, plans, &changes, camera)
                 .map_err(|e| e.to_string())?
             else {
                 return Ok(None);
             };
-            self.attach_resource_additions(&mut delta, text_handles)?;
-            Ok(Some(delta))
-        }
-    }
-
-    fn attach_resource_additions(
-        &mut self,
-        delta: &mut RetainedFamilyExecutionDeltaEnvelope,
-        text_handles: impl IntoIterator<Item = noon_core::TextResourceHandle>,
-    ) -> Result<(), String> {
-        self.encoder
-            .attach_resource_additions(
-                delta,
-                text_handles,
-                self.session.text_resources(),
-                self.session.geometry_resources(),
-                self.session.font_resources(),
-            )
-            .map_err(|error| error.to_string())
+            self.encoder
+                .attach_resource_additions(
+                    &mut delta,
+                    text_handles,
+                    publication.text_resources(),
+                    publication.geometry_resources(),
+                    publication.font_resources(),
+                )
+                .map_err(|error| error.to_string())?;
+            delta
+        };
+        delta
+            .replace_transient_presentations(frame, publication.transient_presentations())
+            .map_err(|error| error.to_string())?;
+        Ok(Some(delta))
     }
 
     fn encoded_delta(&mut self, snapshot: bool) -> Result<Option<String>, String> {

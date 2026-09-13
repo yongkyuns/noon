@@ -293,6 +293,16 @@ mod wasm {
                 self.preparer
                     .set_painter_order_range(self.mirror.painter_order(), range);
             }
+            let transient = self
+                .preparer
+                .prepare_transient_presentation_rows(
+                    self.mirror.frame().ok_or_else(|| {
+                        js_message("retained execution renderer has no frame snapshot")
+                    })?,
+                    self.mirror.painter_order(),
+                    self.mirror.transient_presentations(),
+                )
+                .map_err(js_error)?;
             let family_active = !self.mirror.active_family_animation_indices().is_empty();
             let prepared = if !family_active {
                 self.preparer.release_planned_family_realization();
@@ -360,10 +370,14 @@ mod wasm {
                     &mut self.text_gpu,
                 )
             };
+            let transient_upload =
+                self.renderer
+                    .upload_transient_presentations(&self.device, &self.queue, &transient);
             self.last_bytes_uploaded = upload
                 .geometry
                 .bytes_uploaded
-                .saturating_add(upload.text.bytes_uploaded);
+                .saturating_add(upload.text.bytes_uploaded)
+                .saturating_add(transient_upload.bytes_uploaded);
 
             let view = surface_texture
                 .texture
@@ -373,17 +387,29 @@ mod wasm {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Noon retained execution render worker frame"),
                 });
-            let draw = self
-                .renderer
-                .encode_retained(
-                    &mut encoder,
-                    &view,
-                    &prepared,
-                    &self.text_gpu,
-                    CLEAR_COLOR,
-                    None,
-                )
-                .map_err(js_error)?;
+            let draw = if transient.slots.is_empty() {
+                self.renderer
+                    .encode_retained(
+                        &mut encoder,
+                        &view,
+                        &prepared,
+                        &self.text_gpu,
+                        CLEAR_COLOR,
+                        None,
+                    )
+                    .map_err(js_error)?
+            } else {
+                self.renderer
+                    .encode_retained_with_transient_presentations(
+                        &mut encoder,
+                        &view,
+                        &prepared,
+                        &transient,
+                        CLEAR_COLOR,
+                        None,
+                    )
+                    .map_err(js_error)?
+            };
             self.queue.submit(Some(encoder.finish()));
             self.queue.present(surface_texture);
             self.presentation_sequence = self.presentation_sequence.saturating_add(1);
