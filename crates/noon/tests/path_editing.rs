@@ -54,12 +54,21 @@ fn corner_replacement_preserves_identity_paint_and_copies_with_local_publication
         assert_eq!(source.path_query().unwrap().end().unwrap(), (2., -1.));
         let revision = scene.revision();
         if live_mode {
-            let mut live = scene.live(&mut session);
             assert_eq!(
-                live.effective_path_query(&source).unwrap().end().unwrap(),
+                noon::integration::effective_path_query(
+                    scene.integration_store(),
+                    &session,
+                    &source
+                )
+                .unwrap()
+                .end()
+                .unwrap(),
                 (2., -1.)
             );
-            live.set_points_as_corners(&source, &corners).unwrap();
+            scene
+                .live(&mut session)
+                .set_points_as_corners(&source, &corners)
+                .unwrap();
         } else {
             source.set_points_as_corners(&corners).unwrap();
         }
@@ -119,11 +128,14 @@ fn rejected_live_edit_does_not_allocate_or_publish_and_completion_allows_edit() 
     let scene = Scene::new();
     let object = scene.square(1.).unwrap();
     let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    let segment = live
+    let segment = scene
+        .live(&mut session)
         .declare_and_activate_create(&object, AnimationOptions::new())
         .unwrap();
-    live.advance_segment_to(segment, 0.5).unwrap();
+    scene
+        .live(&mut session)
+        .advance_segment_to(segment, 0.5)
+        .unwrap();
     let before = object.state().unwrap();
     let revision = object.integration_store().borrow().scene_revision();
     let resources = object
@@ -132,7 +144,10 @@ fn rejected_live_edit_does_not_allocate_or_publish_and_completion_allows_edit() 
         .geometry_resources()
         .stats();
     let corners = [Vec2::ZERO, Vec2::new(1., 1.)];
-    assert!(live.set_points_as_corners(&object, &corners).is_err());
+    assert!(scene
+        .live(&mut session)
+        .set_points_as_corners(&object, &corners)
+        .is_err());
     assert_eq!(object.state().unwrap(), before);
     assert_eq!(
         object.integration_store().borrow().scene_revision(),
@@ -146,12 +161,20 @@ fn rejected_live_edit_does_not_allocate_or_publish_and_completion_allows_edit() 
             .stats(),
         resources
     );
-    live.advance_segment_to(segment, segment.end_time())
+    scene
+        .live(&mut session)
+        .advance_segment_to(segment, segment.end_time())
         .unwrap();
-    live.complete_segment(segment).unwrap();
-    live.set_points_as_corners(&object, &corners).unwrap();
+    scene.live(&mut session).complete_segment(segment).unwrap();
+    scene
+        .live(&mut session)
+        .set_points_as_corners(&object, &corners)
+        .unwrap();
     assert_eq!(
-        live.effective_path_query(&object).unwrap().end().unwrap(),
+        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+            .unwrap()
+            .end()
+            .unwrap(),
         (1., 1.)
     );
 }

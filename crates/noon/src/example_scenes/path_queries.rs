@@ -44,33 +44,62 @@ pub fn session() -> Result<ExecutionSession, String> {
                 .rate_func(crate::RateFunction::Linear),
         )?;
         let mut session = scene.execution_session()?;
-        let mut live = scene.live(&mut session);
-        let segment = live.play_animation(&animation)?;
-        live.advance_segment_to(segment, 0.5)?;
-        let captured = live.effective_path_query(&rectangle)?;
+        let segment = scene.live(&mut session).play_animation(&animation)?;
+        scene.live(&mut session).advance_segment_to(segment, 0.5)?;
+        let captured = crate::integration::effective_path_query(
+            scene.integration_store(),
+            &session,
+            &rectangle,
+        )?;
         let midpoint = captured.start()?;
         assert!((midpoint.0 - (start.0 + end.0) * 0.5).abs() < 2e-6);
         assert!((midpoint.1 - (start.1 + end.1) * 0.5).abs() < 2e-6);
-        live.advance_segment_to(segment, segment.end_time())?;
-        live.complete_segment(segment)?;
+        scene
+            .live(&mut session)
+            .advance_segment_to(segment, segment.end_time())?;
+        scene.live(&mut session).complete_segment(segment)?;
         assert_eq!(captured.start()?, midpoint);
-        let before = live.effective_path_query(&rectangle)?.start()?;
-        let wait = live.wait_segment(0.2)?;
-        live.advance_segment_to(wait, wait.end_time())?;
-        live.complete_segment(wait)?;
-        assert_eq!(live.effective_path_query(&rectangle)?.start()?, before);
-        live.remove(&ellipse)?;
-        let reveal = live.declare_and_activate_create(
+        let before = crate::integration::effective_path_query(
+            scene.integration_store(),
+            &session,
+            &rectangle,
+        )?
+        .start()?;
+        let wait = scene.live(&mut session).wait_segment(0.2)?;
+        scene
+            .live(&mut session)
+            .advance_segment_to(wait, wait.end_time())?;
+        scene.live(&mut session).complete_segment(wait)?;
+        assert_eq!(
+            crate::integration::effective_path_query(
+                scene.integration_store(),
+                &session,
+                &rectangle
+            )?
+            .start()?,
+            before
+        );
+        scene.live(&mut session).remove(&ellipse)?;
+        let reveal = scene.live(&mut session).declare_and_activate_create(
             &ellipse,
             crate::AnimationOptions::new()
                 .run_time(1.)
                 .rate_func(crate::RateFunction::Linear),
         )?;
-        live.advance_segment_to(reveal, reveal.end_time() - 0.5)?;
-        let endpoint = live.effective_path_query(&ellipse)?.end()?;
+        scene
+            .live(&mut session)
+            .advance_segment_to(reveal, reveal.end_time() - 0.5)?;
+        let endpoint = crate::integration::effective_path_query(
+            scene.integration_store(),
+            &session,
+            &ellipse,
+        )?
+        .end()?;
         assert!((endpoint.0 - 1.3).abs() < 2e-6 && endpoint.1.abs() < 2e-6);
-        live.advance_segment_to(reveal, reveal.end_time())?;
-        live.complete_segment(reveal)?;
+        scene
+            .live(&mut session)
+            .advance_segment_to(reveal, reveal.end_time())?;
+        scene.live(&mut session).complete_segment(reveal)?;
         Ok(session)
     };
     build().map_err(|error| error.to_string())

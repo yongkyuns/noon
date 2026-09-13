@@ -522,7 +522,7 @@ impl CanonicalAuthoringScene {
         self.mobject_observation(
             handle,
             noon::Mobject::path_query,
-            crate::SemanticExecutionPlayer::live_effective_path_query,
+            crate::SemanticExecutionPlayer::effective_path_query,
         )
     }
 

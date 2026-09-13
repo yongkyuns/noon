@@ -42,19 +42,27 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
     scene.add(&object).unwrap();
     let before = object.path_query().unwrap();
     let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    live.add_line_to(&object, Vec2::new(4., 3.)).unwrap();
-    live.add_quadratic_bezier_curve_to(&object, Vec2::new(5., 4.), Vec2::new(6., 3.))
+    scene
+        .live(&mut session)
+        .add_line_to(&object, Vec2::new(4., 3.))
         .unwrap();
-    live.add_cubic_bezier_curve_to(
-        &object,
-        Vec2::new(7., 3.),
-        Vec2::new(7., 1.),
-        Vec2::new(6., 1.),
-    )
-    .unwrap();
-    live.close_path(&object).unwrap();
-    let query = live.effective_path_query(&object).unwrap();
+    scene
+        .live(&mut session)
+        .add_quadratic_bezier_curve_to(&object, Vec2::new(5., 4.), Vec2::new(6., 3.))
+        .unwrap();
+    scene
+        .live(&mut session)
+        .add_cubic_bezier_curve_to(
+            &object,
+            Vec2::new(7., 3.),
+            Vec2::new(7., 1.),
+            Vec2::new(6., 1.),
+        )
+        .unwrap();
+    scene.live(&mut session).close_path(&object).unwrap();
+    let query =
+        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+            .unwrap();
     let start = before.start().unwrap();
     assert!((query.start().unwrap().0 - start.0).abs() < 1e-6);
     assert!((query.start().unwrap().1 - start.1).abs() < 1e-6);
@@ -65,7 +73,8 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
         .borrow()
         .geometry_resources()
         .stats();
-    assert!(live
+    assert!(scene
+        .live(&mut session)
         .add_line_to(&object, Vec2::new(f32::INFINITY, 0.))
         .is_err());
     assert_eq!(object.state().unwrap(), before);
@@ -77,10 +86,19 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
             .stats(),
         resources
     );
-    live.start_new_path(&object, Vec2::new(-2., -1.)).unwrap();
-    live.add_line_to(&object, Vec2::new(-1., 0.)).unwrap();
+    scene
+        .live(&mut session)
+        .start_new_path(&object, Vec2::new(-2., -1.))
+        .unwrap();
+    scene
+        .live(&mut session)
+        .add_line_to(&object, Vec2::new(-1., 0.))
+        .unwrap();
     assert_eq!(
-        live.effective_path_query(&object).unwrap().end().unwrap(),
+        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+            .unwrap()
+            .end()
+            .unwrap(),
         (-1., 0.)
     );
 }

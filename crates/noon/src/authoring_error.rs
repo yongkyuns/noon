@@ -23,6 +23,8 @@ pub enum UnsupportedAuthoringOperation {
     EffectiveLineRenderOverride,
     /// Effective path observations require a queryable retained content version.
     EffectivePathRenderOverride,
+    /// Effective observations require Scene-owned execution to be running.
+    EffectiveStateUnavailable,
     /// Text and external content do not expose a vector path.
     PathQueryContent,
     /// effective layout queries currently support affine and style drivers only.
@@ -62,6 +64,7 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::ResourcePaintColorQuery => "Manim color queries do not support resource paints",
             Self::ResourcePaintOpacityQuery => "Manim opacity queries do not support resource paints",
             Self::EffectivePathRenderOverride => "path queries require current retained content without active render overrides",
+            Self::EffectiveStateUnavailable => "effective state requires a running Scene",
             Self::PathQueryContent => "path queries require retained geometry",
             Self::ExternalGeometry => "external geometry must resolve to an immutable semantic resource",
             Self::PathEditContent => "point editing requires retained vector geometry",

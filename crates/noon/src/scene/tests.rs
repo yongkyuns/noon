@@ -316,3 +316,31 @@ fn exact_transform_track_preserves_constant_endpoints_that_differ_from_base() {
         "endpoint identities remain detached"
     );
 }
+
+#[test]
+fn effective_path_query_is_scene_owned_and_requires_running_execution() {
+    let mut scene = Scene::new();
+    let line = scene.line((1.0, 2.0), (4.0, 6.0)).unwrap();
+    scene.add(&line).unwrap();
+
+    let error = scene.effective_path_query(&line).unwrap_err();
+    assert!(matches!(
+        error,
+        crate::AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable
+        )
+    ));
+
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    let query = scene.effective_path_query(&line).unwrap();
+    assert_eq!(query.start().unwrap(), (1.0, 2.0));
+    assert_eq!(query.end().unwrap(), (4.0, 6.0));
+
+    let foreign_scene = Scene::new();
+    let foreign = foreign_scene.line((0.0, 0.0), (1.0, 0.0)).unwrap();
+    assert!(matches!(
+        scene.effective_path_query(&foreign),
+        Err(crate::AuthoringError::ForeignStore)
+    ));
+}

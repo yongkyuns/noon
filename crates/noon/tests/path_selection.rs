@@ -50,13 +50,19 @@ fn partial_uses_curve_count_and_preserves_destination_identity_and_style() {
         );
         assert_eq!(source.state().unwrap(), source_before);
         if live_mode {
-            let mut live = scene.live(&mut session);
-            live.reverse_direction(&destination).unwrap();
+            scene
+                .live(&mut session)
+                .reverse_direction(&destination)
+                .unwrap();
             assert_eq!(
-                live.effective_path_query(&destination)
-                    .unwrap()
-                    .start()
-                    .unwrap(),
+                noon::integration::effective_path_query(
+                    scene.integration_store(),
+                    &session,
+                    &destination
+                )
+                .unwrap()
+                .start()
+                .unwrap(),
                 (14., 2.)
             );
         } else {
@@ -153,17 +159,21 @@ fn live_partial_rejects_unrepresentable_source_before_allocating() {
     scene.add(&destination).unwrap();
     let mut session = scene.execution_session().unwrap();
     let before = destination.state().unwrap();
-    let mut live = scene.live(&mut session);
-    let segment = live
+    let segment = scene
+        .live(&mut session)
         .declare_and_activate_create(&source, AnimationOptions::new().run_time(1.))
         .unwrap();
-    live.advance_segment_to(segment, 0.5).unwrap();
+    scene
+        .live(&mut session)
+        .advance_segment_to(segment, 0.5)
+        .unwrap();
     let count = source
         .integration_store()
         .borrow()
         .geometry_resources()
         .len();
-    assert!(live
+    assert!(scene
+        .live(&mut session)
         .pointwise_become_partial(&destination, &source, 0.2, 0.8)
         .is_err());
     assert_eq!(destination.state().unwrap(), before);

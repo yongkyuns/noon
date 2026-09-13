@@ -85,11 +85,13 @@ fn refinement_preserves_shape_discontinuities_identity_and_live_publication() {
         assert_eq!(copy.state().unwrap().transform, old.transform);
         if live_mode {
             assert_eq!(
-                scene
-                    .live(&mut session)
-                    .effective_path_query(&object)
-                    .unwrap()
-                    .curve_count(),
+                noon::integration::effective_path_query(
+                    scene.integration_store(),
+                    &session,
+                    &object
+                )
+                .unwrap()
+                .curve_count(),
                 5
             );
         }

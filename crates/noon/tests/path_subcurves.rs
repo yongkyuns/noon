@@ -13,12 +13,17 @@ fn subcurve_copies_preserve_style_source_and_coherent_live_state() {
         let before = source.state().unwrap();
         let mut session = scene.execution_session().unwrap();
         let selected = if live_mode {
-            let mut live = scene.live(&mut session);
-            let copy = live.subcurve(&source, 0.25, 0.75).unwrap();
-            assert!(!live.contains(&copy).unwrap());
-            live.add(&copy).unwrap();
+            let copy = scene
+                .live(&mut session)
+                .subcurve(&source, 0.25, 0.75)
+                .unwrap();
+            assert!(!scene.live(&mut session).contains(&copy).unwrap());
+            scene.live(&mut session).add(&copy).unwrap();
             assert_eq!(
-                live.effective_path_query(&copy).unwrap().start().unwrap(),
+                noon::integration::effective_path_query(scene.integration_store(), &session, &copy)
+                    .unwrap()
+                    .start()
+                    .unwrap(),
                 (4., 3.)
             );
             copy
@@ -166,14 +171,22 @@ fn live_subcurve_captures_effective_transform_and_rejects_reveal_override() {
         )
         .unwrap();
     let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    let segment = live.play_animation(&animation).unwrap();
-    live.advance_segment_to(segment, 1.).unwrap();
+    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
+    scene
+        .live(&mut session)
+        .advance_segment_to(segment, 1.)
+        .unwrap();
     let revision = scene.revision();
-    assert!(live.subcurve(&source, 0.25, 0.75).is_err());
+    assert!(scene
+        .live(&mut session)
+        .subcurve(&source, 0.25, 0.75)
+        .is_err());
     assert_eq!(scene.revision(), revision);
-    live.advance_segment_to(segment, 2.).unwrap();
-    live.complete_segment(segment).unwrap();
+    scene
+        .live(&mut session)
+        .advance_segment_to(segment, 2.)
+        .unwrap();
+    scene.live(&mut session).complete_segment(segment).unwrap();
     session.seek(1.).unwrap();
     let selected = scene
         .live(&mut session)
@@ -187,10 +200,14 @@ fn live_subcurve_captures_effective_transform_and_rejects_reveal_override() {
     let scene = Scene::new();
     let source = scene.circle(1.).unwrap();
     let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    live.declare_and_activate_create(&source, AnimationOptions::new())
+    scene
+        .live(&mut session)
+        .declare_and_activate_create(&source, AnimationOptions::new())
         .unwrap();
     let revision = scene.revision();
-    assert!(live.subcurve(&source, 0.2, 0.8).is_err());
+    assert!(scene
+        .live(&mut session)
+        .subcurve(&source, 0.2, 0.8)
+        .is_err());
     assert_eq!(scene.revision(), revision);
 }

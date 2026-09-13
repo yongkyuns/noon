@@ -220,6 +220,19 @@ impl Scene {
         )]))
         .map(|_| ())
     }
+    /// Capture exact current path controls and transform from one coherent
+    /// Runtime publication. Cold Scenes fail explicitly rather than falling back
+    /// to authored geometry.
+    pub fn effective_path_query(
+        &self,
+        object: &Mobject,
+    ) -> Result<crate::PathQuery, AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::path_queries::effective_path_query(&self.store, execution, object)
+    }
+
     pub(crate) fn require_object(&self, object: &Mobject) -> Result<(), crate::AuthoringError> {
         if !Rc::ptr_eq(&self.store, object.integration_store()) {
             return Err(crate::AuthoringError::ForeignStore);

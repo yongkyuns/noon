@@ -69,13 +69,25 @@ fn live_alignment_publishes_both_operands_coherently() {
     scene.add(&a).unwrap();
     scene.add(&b).unwrap();
     let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    live.shift(&a, 1., 2.).unwrap();
-    live.align_points(&a, &b).unwrap();
-    assert_eq!(live.effective_path_query(&a).unwrap().curve_count(), 4);
-    assert_eq!(live.effective_path_query(&b).unwrap().curve_count(), 4);
+    scene.live(&mut session).shift(&a, 1., 2.).unwrap();
+    scene.live(&mut session).align_points(&a, &b).unwrap();
     assert_eq!(
-        live.effective_path_query(&a).unwrap().start().unwrap(),
+        noon::integration::effective_path_query(scene.integration_store(), &session, &a)
+            .unwrap()
+            .curve_count(),
+        4
+    );
+    assert_eq!(
+        noon::integration::effective_path_query(scene.integration_store(), &session, &b)
+            .unwrap()
+            .curve_count(),
+        4
+    );
+    assert_eq!(
+        noon::integration::effective_path_query(scene.integration_store(), &session, &a)
+            .unwrap()
+            .start()
+            .unwrap(),
         (1., 2.)
     );
 }
