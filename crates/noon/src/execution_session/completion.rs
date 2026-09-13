@@ -365,12 +365,11 @@ impl ExecutionSession {
             // their execution history. A kept reveal lifecycle likewise has no
             // semantic reveal field to receive its endpoint, so its completed
             // execution track remains the authoritative persistent reveal history.
-            if (!entry.property.is_instant() || entry.property == noon_core::Property::ZIndex)
-                && !matches!(
-                    &entry.completion,
-                    SemanticAnimationCompletion::RevealLifecycle { remove: false }
-                )
-            {
+            if should_reconcile_execution_track(
+                entry.property,
+                &entry.completion,
+                entry.retain_effective,
+            ) {
                 release.push(ExecutionPatch::ReconcileTrack {
                     track: entry.track,
                     object: entry.execution_object,
@@ -503,6 +502,48 @@ fn has_ancestor_in(
         }
     }
     false
+}
+
+fn should_reconcile_execution_track(
+    property: noon_core::Property,
+    completion: &SemanticAnimationCompletion,
+    retain_effective: bool,
+) -> bool {
+    !retain_effective
+        && (!property.is_instant() || property == noon_core::Property::ZIndex)
+        && !matches!(
+            completion,
+            SemanticAnimationCompletion::RevealLifecycle { remove: false }
+        )
+}
+
+#[cfg(test)]
+mod retain_effective_completion_tests {
+    use super::*;
+
+    #[test]
+    fn retained_presentation_endpoint_skips_only_execution_reconciliation() {
+        assert!(should_reconcile_execution_track(
+            noon_core::Property::Appearance,
+            &SemanticAnimationCompletion::Release,
+            false,
+        ));
+        assert!(!should_reconcile_execution_track(
+            noon_core::Property::Appearance,
+            &SemanticAnimationCompletion::Release,
+            true,
+        ));
+        assert!(!should_reconcile_execution_track(
+            noon_core::Property::Reveal,
+            &SemanticAnimationCompletion::RevealLifecycle { remove: false },
+            false,
+        ));
+        assert!(should_reconcile_execution_track(
+            noon_core::Property::ZIndex,
+            &SemanticAnimationCompletion::Priority { value: 3.0 },
+            false,
+        ));
+    }
 }
 
 #[cfg(test)]

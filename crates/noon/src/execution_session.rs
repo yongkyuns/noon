@@ -1219,6 +1219,7 @@ impl ExecutionSession {
                 property: track.property,
                 track: track_id,
                 end_time,
+                retain_effective: false,
             });
             definitions.push(definition);
             next_track_id = raw_id.checked_add(1);
@@ -3243,6 +3244,7 @@ impl ExecutionSession {
                             property,
                             track,
                             end_time,
+                            retain_effective: false,
                         }
                     },
                 )
