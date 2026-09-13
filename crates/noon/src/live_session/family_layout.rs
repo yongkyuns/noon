@@ -306,21 +306,15 @@ impl LiveSession<'_> {
         self.publish_path_edits(prepared)
     }
 
-    /// Observe this family's effective bounds, including detached authored members.
-    /// This query traverses only its semantic leaves and does not publish a revision.
+    /// Compatibility observation during the control-surface migration.
+    /// New application code should use [`crate::Scene::effective_family_layout`].
     pub fn effective_family_layout(
         &self,
         family: &MobjectFamily,
     ) -> Result<EffectiveMobjectLayout, LiveSessionError> {
-        let (_, bounds) = self.family_layout_members(family)?;
-        let (_, boundary) = self.family_layout_measure(family, true)?;
-        let b = bounds.unwrap_or_else(|| Bounds2D64::point(0.0, 0.0));
-        Ok(EffectiveMobjectLayout {
-            center: bounds_critical_point(boundary, 0.0, 0.0),
-            width: b.width(),
-            height: b.height(),
-            publication: self.session.publication_context(),
-        })
+        self.require_family(family)?;
+        crate::family_layout::effective_family_layout(self.store, self.session, family)
+            .map_err(LiveSessionError::from)
     }
 
     fn family_layout_members(
@@ -336,27 +330,13 @@ impl LiveSession<'_> {
         boundary: bool,
     ) -> Result<(Vec<noon_core::SemanticNodeId>, Option<Bounds2D64>), LiveSessionError> {
         self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        let leaves = self
-            .store
-            .borrow()
-            .ordered_leaf_nodes(family.node_id())
-            .map_err(crate::AuthoringError::from)?;
-        let mut bounds: Option<Bounds2D64> = None;
-        for &leaf in &leaves {
-            let mobject =
-                Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
-            let next = self.family_member_measure(&mobject, boundary)?;
-            if let Some(next) = next {
-                if let Some(total) = &mut bounds {
-                    total.include(next.min_x, next.min_y);
-                    total.include(next.max_x, next.max_y);
-                } else {
-                    bounds = Some(next);
-                }
-            }
-        }
-        Ok((leaves, bounds))
+        crate::family_layout::effective_family_layout_measure(
+            self.store,
+            self.session,
+            family,
+            boundary,
+        )
+        .map_err(LiveSessionError::from)
     }
 
     pub(super) fn family_member_bounds(
@@ -372,31 +352,12 @@ impl LiveSession<'_> {
         boundary: bool,
     ) -> Result<Option<Bounds2D64>, LiveSessionError> {
         self.require_mobject(mobject)?;
-        if !self.session.semantic_object_is_reachable(mobject.node_id()) {
-            return if boundary {
-                mobject.boundary_bounds()
-            } else {
-                mobject.layout_bounds()
-            }
-            .map_err(LiveSessionError::from);
-        }
-        let store = self.store.borrow();
-        let observed = self
-            .session
-            .effective_semantic_object(&store, mobject.node_id())?;
-        if !observed.authored_content_layout_applicable() {
-            return Err(crate::AuthoringError::Unsupported(
-                crate::UnsupportedAuthoringOperation::EffectiveFamilyLayoutRenderOverride,
-            )
-            .into());
-        }
-        let transform = observed.object.transform;
-        drop(store);
-        if boundary {
-            mobject.boundary_bounds_at(transform)
-        } else {
-            mobject.layout_bounds_at(transform)
-        }
+        crate::family_layout::effective_family_member_measure(
+            self.store,
+            self.session,
+            mobject,
+            boundary,
+        )
         .map_err(LiveSessionError::from)
     }
 
