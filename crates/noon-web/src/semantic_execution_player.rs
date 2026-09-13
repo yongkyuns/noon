@@ -1296,7 +1296,7 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_effective_path_query(
+    pub(crate) fn effective_path_query(
         &mut self,
         mobject: &noon::Mobject,
     ) -> Result<noon::PathQuery, AuthoringFailure> {
@@ -1304,14 +1304,8 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .expect("live semantic store has one scene root"),
-            &mut self.session,
-        )
-        .effective_path_query(mobject)
-        .map_err(AuthoringFailure::from)
+        noon::integration::effective_path_query(&semantics, &self.session, mobject)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

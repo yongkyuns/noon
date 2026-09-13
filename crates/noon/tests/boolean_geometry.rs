@@ -80,26 +80,41 @@ fn live_boolean_constructor_observes_current_affine_without_copying_paint() {
         )
         .unwrap();
     let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    let segment = live.play_animation(&animation).unwrap();
-    live.advance_segment_to(segment, 1.).unwrap();
+    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
+    scene
+        .live(&mut session)
+        .advance_segment_to(segment, 1.)
+        .unwrap();
     let authored_options =
         ManimGeometryOptions::boolean_geometry(Op::Union, &[a.clone(), b.clone()]).unwrap();
-    let live_options = live
+    let live_options = scene
+        .live(&mut session)
         .boolean_geometry_options(Op::Union, &[a.clone(), b.clone()])
         .unwrap();
     // Options are snapshots; later execution cannot move either captured region.
-    live.advance_segment_to(segment, 2.).unwrap();
-    live.complete_segment(segment).unwrap();
-    let authored_result = live.create_manim_geometry(authored_options).unwrap();
-    let result = live.create_manim_geometry(live_options).unwrap();
+    scene
+        .live(&mut session)
+        .advance_segment_to(segment, 2.)
+        .unwrap();
+    scene.live(&mut session).complete_segment(segment).unwrap();
+    let authored_result = scene
+        .live(&mut session)
+        .create_manim_geometry(authored_options)
+        .unwrap();
+    let result = scene
+        .live(&mut session)
+        .create_manim_geometry(live_options)
+        .unwrap();
     let authored_bounds = authored_result.layout_bounds().unwrap().unwrap();
     let bounds = result.layout_bounds().unwrap().unwrap();
     assert_eq!((authored_bounds.min_x, authored_bounds.max_x), (-1., 1.));
     assert_eq!((bounds.min_x, bounds.max_x), (-1., 3.));
     assert_eq!(a.layout_bounds().unwrap().unwrap().max_x, 5.);
-    live.add(&result).unwrap();
-    assert!(live.effective_path_query(&result).is_ok());
+    scene.live(&mut session).add(&result).unwrap();
+    assert!(
+        noon::integration::effective_path_query(scene.integration_store(), &session, &result)
+            .is_ok()
+    );
 }
 
 #[test]
@@ -110,8 +125,9 @@ fn live_boolean_constructor_rejects_active_content_override_atomically() {
     let a = scene.circle(1.).unwrap();
     let b = scene.square(2.).unwrap();
     let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    live.declare_and_activate_create(&a, AnimationOptions::new())
+    scene
+        .live(&mut session)
+        .declare_and_activate_create(&a, AnimationOptions::new())
         .unwrap();
     let revision = scene.revision();
     let resources = scene
@@ -120,7 +136,8 @@ fn live_boolean_constructor_rejects_active_content_override_atomically() {
         .geometry_resources()
         .len();
 
-    let error = live
+    let error = scene
+        .live(&mut session)
         .boolean_geometry_options(Op::Union, &[a, b])
         .unwrap_err();
     assert!(matches!(
@@ -146,10 +163,11 @@ fn live_boolean_constructor_preserves_foreign_store_error() {
     let a = scene.square(2.).unwrap();
     let foreign = Scene::new().square(2.).unwrap();
     let mut session = scene.execution_session().unwrap();
-    let live = scene.live(&mut session);
 
     assert!(matches!(
-        live.boolean_geometry_options(Op::Union, &[a, foreign]),
+        scene
+            .live(&mut session)
+            .boolean_geometry_options(Op::Union, &[a, foreign]),
         Err(noon::LiveSessionError::ForeignMobjectStore)
     ));
 }

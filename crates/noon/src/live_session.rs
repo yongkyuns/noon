@@ -10,7 +10,6 @@ mod boolean_geometry;
 mod family_layout;
 mod path_alignment;
 mod path_editing;
-mod path_queries;
 mod point_matching;
 mod z_index;
 pub use family_layout::LiveLayoutTarget;
