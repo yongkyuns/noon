@@ -14,7 +14,8 @@ mod wasm {
         finish_renderer_observation,
         gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
         resolve_renderer_observation_target, InstalledRetainedExecutionMirror,
-        RendererObservationOutcome, RendererObservationRequest, RetainedTransportApplyOutcome,
+        RendererObservationOutcome, RendererObservationRequest,
+        RetainedFamilyExecutionDeltaEnvelope, RetainedTransportApplyOutcome,
     };
 
     const CLEAR_COLOR: wgpu::Color = wgpu::Color {
@@ -204,7 +205,79 @@ mod wasm {
                     "render worker must present the retained execution delta before accepting another",
                 ));
             }
-            let (outcome, changes) = self.mirror.apply_json(json).map_err(js_error)?;
+
+            // Decode once so new immutable renderer resources can become resident
+            // before the retained state that references them is made renderable.
+            let delta: RetainedFamilyExecutionDeltaEnvelope =
+                serde_json::from_str(json).map_err(js_error)?;
+            let stale = self.mirror.transport_mirror().session() == Some(delta.retained.session)
+                && self
+                    .mirror
+                    .transport_mirror()
+                    .applied_sequence()
+                    .is_some_and(|sequence| delta.retained.sequence <= sequence);
+
+            if !stale {
+                delta.validate().map_err(js_error)?;
+                if let Some(bundle) = delta.resource_additions.as_ref() {
+                    if let Some(addition) = bundle.render_geometry_addition().map_err(js_error)? {
+                        if addition.session != delta.retained.session {
+                            return Err(js_message(
+                                "retained render geometry addition session does not match delta",
+                            ));
+                        }
+                        let next_render_geometry_count = self
+                            .mirror
+                            .resources()
+                            .render_geometries()
+                            .len()
+                            .saturating_add(addition.geometries.len());
+                        let next_preparation_count = self
+                            .mirror
+                            .resources()
+                            .render_geometry_preparation_count()
+                            .saturating_add(addition.preparations.len());
+                        self.preparer.set_scene_path_mesh_cache_budget(
+                            next_render_geometry_count.max(next_preparation_count),
+                            self.mirror
+                                .resources()
+                                .geometry_count()
+                                .saturating_add(bundle.geometry_count()),
+                        );
+                        let requests = addition
+                            .preparations
+                            .iter()
+                            .map(|preparation| PathMeshPreload {
+                                geometry: &addition.geometries[preparation.resource as usize],
+                                style: preparation.style,
+                                transform: preparation.transform,
+                            })
+                            .collect::<Vec<_>>();
+                        let preload = self
+                            .preparer
+                            .append_preload_path_meshes(
+                                &self.device,
+                                &self.queue,
+                                &mut self.renderer,
+                                &requests,
+                            )
+                            .map_err(js_error)?;
+                        self.preloaded_geometry_count = self
+                            .preloaded_geometry_count
+                            .saturating_add(preload.geometry.geometry_cache_misses);
+                        self.preload_bytes_uploaded = self
+                            .preload_bytes_uploaded
+                            .saturating_add(preload.upload.bytes_uploaded);
+                        // Queue writes from the admitted resource suffix precede any
+                        // first-frame uploads/draw submission that follows this call.
+                        if preload.upload.bytes_uploaded != 0 {
+                            self.queue.submit([]);
+                        }
+                    }
+                }
+            }
+
+            let (outcome, changes) = self.mirror.apply_family(delta).map_err(js_error)?;
             match outcome {
                 RetainedTransportApplyOutcome::Applied => {
                     let camera = self.mirror.camera();
@@ -482,13 +555,6 @@ mod wasm {
             self.gpu_generation
         }
 
-        /// Flush one WebGPU validation error scope into the shared diagnostic mailbox.
-        ///
-        /// Pop and re-arm the scope synchronously so the wasm-bindgen `&mut self`
-        /// borrow ends before JavaScript awaits the result. The returned promise owns
-        /// only the popped wgpu future and immutable diagnostic metadata, allowing
-        /// engine-port delta/render messages to use this renderer while the browser
-        /// resolves `popErrorScope()`.
         #[wasm_bindgen(js_name = flushGpuDiagnostics)]
         pub fn flush_gpu_diagnostics(&mut self) -> js_sys::Promise {
             let Some(scope) = self.gpu_validation_scope.take() else {
@@ -522,8 +588,6 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = objectCount)]
-        /// Live painter-order objects whose runtime presence is enabled.
-        /// Retired stable transport rows are intentionally excluded.
         pub fn object_count(&self) -> usize {
             self.mirror.frame().map_or(0, |frame| {
                 self.mirror

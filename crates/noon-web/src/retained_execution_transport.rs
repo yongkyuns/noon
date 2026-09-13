@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::TransportSlotId;
 
+pub(crate) mod incremental_render_resources;
+
 /// Resource-aware execution channel for the retained geometry/text runtime.
 ///
 /// Object content and family-plan semantic bindings are explicit so geometry and
@@ -26,9 +28,6 @@ pub struct TransportTextResourceHandle {
 }
 
 impl TransportTextResourceHandle {
-    /// Encode a source handle as an opaque key scoped to the paired resource bundle.
-    /// The worker must resolve this key through `InstalledRetainedResources`; it is
-    /// deliberately not a serializable core arena handle.
     pub(crate) const fn from_source_handle(value: TextResourceHandle) -> Self {
         Self {
             id: value.id.get(),
@@ -79,11 +78,6 @@ pub struct RetainedTransportObjectState {
     pub render_geometry_resource: Option<u32>,
 }
 
-/// One final-order splice over stable retained transport slots.
-///
-/// `slots` is the authoritative final segment beginning at `start`. Rows keep
-/// their dense mirror indices; only the renderer's derived painter permutation
-/// changes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetainedPainterOrderDelta {
     pub start: u32,
@@ -242,20 +236,13 @@ pub struct RetainedExecutionDeltaEncoder {
     session: u32,
     next_sequence: u64,
     initialized: bool,
-    // Explicit worker-boundary projection: runtime tombstones have no wire row.
     snapshot_orders: Vec<Option<u32>>,
-    // Retain the Arcs so pointer keys cannot be recycled during this encoder's lifetime.
     render_geometries: Option<Arc<[Arc<GeometryRef>]>>,
     render_geometry_indices: Option<HashMap<usize, u32>>,
-    // Retain the last transient render geometry published for each stable row.
-    // Keeping the Arc alive prevents allocator address reuse from aliasing a different path.
-    // Incrementals may omit an unchanged inline path and let the mirror reuse it.
     published_render_geometries: Vec<Option<Arc<GeometryRef>>>,
 }
 
 impl RetainedExecutionDeltaEncoder {
-    /// Observe the current transport incarnation without advancing its sequence.
-    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) const fn session(&self) -> u32 {
         self.session
     }
@@ -349,9 +336,6 @@ impl RetainedExecutionDeltaEncoder {
         self.encode_snapshot_indices(frame, camera, 0..frame.objects.len())
     }
 
-    /// Encode live runtime rows without copying or compacting the engine frame.
-    /// Indices are supplied in painter order; subsequent deltas retain their
-    /// original runtime slot and use the dense order established here.
     pub fn encode_snapshot_indices(
         &mut self,
         frame: &FrameState,
@@ -405,9 +389,6 @@ impl RetainedExecutionDeltaEncoder {
         self.encode_incremental_inner(frame, changes, camera, None)
     }
 
-    /// Encode a sparse structural/order publication over stable worker rows.
-    /// Only dirty/new object rows, removed slot identities, and the affected
-    /// final painter segment cross the genuine worker boundary.
     pub fn encode_incremental_with_painter_order(
         &mut self,
         frame: &FrameState,
@@ -447,9 +428,6 @@ impl RetainedExecutionDeltaEncoder {
         if changes.is_empty() {
             return Ok(None);
         }
-        // FrameChanges accumulates structural history until the worker acquires it.
-        // Collapse remove/re-add pairs against authoritative final painter membership:
-        // final-live rows remain ordinary updates while final-absent rows become removals.
         let final_live_indices = painter_order
             .map(|order| {
                 order
@@ -474,8 +452,6 @@ impl RetainedExecutionDeltaEncoder {
             .iter()
             .map(|(index, _)| *index)
             .collect::<HashSet<_>>();
-        // Several semantic publications may accumulate before the next worker.
-        // Publish only final removals that were live in the encoder's last worker state.
         let removed_rows = removed_rows
             .into_iter()
             .filter(|(index, _)| {
@@ -701,22 +677,18 @@ impl RetainedExecutionFrameMirror {
         self.session
     }
 
-    /// Sequence of the currently applied retained publication.
     pub fn applied_sequence(&self) -> Option<u64> {
         self.session.and_then(|_| self.next_sequence.checked_sub(1))
     }
 
-    /// Resolve one durable transport slot without searching the frame.
     pub fn frame_index_for_slot(&self, slot: TransportSlotId) -> Option<usize> {
         self.slot_indices.get(&slot).copied()
     }
 
-    /// Resolve one semantic execution identity without searching the dense frame.
     pub(crate) fn frame_index_for_object(&self, object: ObjectId) -> Option<usize> {
         self.object_indices.get(&object).copied()
     }
 
-    /// Resolve the authored fields of one sparse transport row without mutating the mirror.
     pub(crate) fn resolve_transport_object_state(
         &self,
         object: &RetainedTransportObjectState,
@@ -730,7 +702,6 @@ impl RetainedExecutionFrameMirror {
         self.camera
     }
 
-    /// Dense mirror-row indices in authoritative engine painter order.
     pub fn painter_order(&self) -> &[u32] {
         &self.painter_order
     }
@@ -961,10 +932,6 @@ impl RetainedExecutionFrameMirror {
             &seen_removed,
             &seen_slots,
         )?;
-        // `order` establishes the dense painter order of a snapshot. Incremental
-        // publications retain stable sparse rows, so their authoritative order is
-        // the painter-order splice validated above. In particular, a row may keep
-        // stable slot 2 while becoming the sole live row at painter rank 0.
         let added_indices = updates
             .iter()
             .filter_map(|(index, added, _, _, _)| {
@@ -973,7 +940,6 @@ impl RetainedExecutionFrameMirror {
             })
             .collect::<Vec<_>>();
         let removed_indices = _validated_removed_indices;
-        // Validate all rows and resource references before mutating the live mirror.
         let frame = self.frame.as_mut().expect("validated retained frame");
         let mut changed = Vec::with_capacity(updates.len());
         for (index, is_added, object, geometry, content) in updates {
@@ -998,11 +964,6 @@ impl RetainedExecutionFrameMirror {
             }
             changed.push(index);
         }
-        // Removed rows remain allocated so their stable transport slots can be
-        // reused safely, but they must stop contributing retained render state.
-        // Removed objects are intentionally omitted from an incremental row
-        // payload, so apply the authoritative absence here and discard any
-        // transient render override left by the preceding frame.
         for &index in &removed_indices {
             frame.presences[index] = false;
             frame.render_geometries[index] = None;
@@ -1579,9 +1540,6 @@ mod tests {
         replaced.morphs.push(0.0);
         replaced.render_geometries.push(None);
         replaced.render_transforms.push(None);
-        // Re-add the old pair and replace it before publishing another frame.
-        // The accumulated changes retain 0/1 in both added and removed sets,
-        // although those rows stayed absent at the worker boundary.
         let structural = FrameChanges::with_structure(vec![0, 1, 2], vec![0, 1, 2], vec![0, 1])
             .with_painter_order(0..2);
         let replacement = encoder
@@ -1606,8 +1564,6 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        // Incremental row order is legacy metadata. The sparse stable slot and
-        // the retained painter permutation remain separate identities.
         later.objects[0].order = 2;
         mirror.apply(later).unwrap();
         assert_eq!(mirror.painter_order(), &[2]);
@@ -1627,9 +1583,6 @@ mod tests {
         let mut readded = frame.clone();
         readded.time = 0.5;
         readded.reveals[0] = 0.5;
-        // The source removed and re-added row 0 before the worker acquired changes.
-        // FrameChanges therefore retains row 0 in both structural histories even
-        // though authoritative final painter membership still contains it.
         let structural =
             FrameChanges::with_structure(vec![0], vec![0], vec![0]).with_painter_order(0..1);
         let delta = encoder
@@ -1788,7 +1741,6 @@ mod tests {
         mirror.apply(changed).unwrap();
         assert_eq!(mirror.frame(), Some(&frame));
 
-        // Clearing the transient geometry invalidates the slot-local reuse identity.
         frame.time = 1.0;
         frame.morphs[0] = 1.0;
         frame.render_geometries[0] = None;
@@ -1806,7 +1758,6 @@ mod tests {
         mirror.apply(cleared).unwrap();
         assert_eq!(mirror.frame(), Some(&frame));
 
-        // Reusing a previously seen Arc after a clear must publish it again.
         frame.time = 1.25;
         frame.morphs[0] = 0.25;
         frame.render_geometries[0] = Some(path);

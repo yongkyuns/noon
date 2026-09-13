@@ -11,13 +11,6 @@ use crate::{
     RetainedTransportApplyOutcome, TransportObjectContent,
 };
 
-/// Render-side retained execution mirror with renderer-local resource handles.
-///
-/// `RetainedExecutionFrameMirror` deliberately stays in wire-handle space so its
-/// content-identity checks compare exactly what the engine sent. This layer owns the
-/// installed resource arenas and a separate resolved frame. Snapshots remap every
-/// text handle once; incrementals copy changed animated state and effective geometry
-/// while keeping already-resolved renderer-local text handles unchanged.
 #[derive(Clone, Debug)]
 pub struct InstalledRetainedExecutionMirror {
     wire: RetainedExecutionFrameMirror,
@@ -47,7 +40,6 @@ impl InstalledRetainedExecutionMirror {
         &self.resources
     }
 
-    /// Borrow the indexed transport publication behind this installed renderer view.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn transport_mirror(&self) -> &RetainedExecutionFrameMirror {
         &self.wire
@@ -107,8 +99,6 @@ impl InstalledRetainedExecutionMirror {
         self.wire.camera()
     }
 
-    /// Decode the additive family envelope. Ordinary retained JSON is accepted
-    /// unchanged because the flattened family fields default to empty.
     pub fn apply_json(
         &mut self,
         json: &str,
@@ -117,11 +107,6 @@ impl InstalledRetainedExecutionMirror {
         self.apply_family(delta)
     }
 
-    /// Apply a base retained delta without family metadata.
-    ///
-    /// A successfully applied snapshot is authoritative for the whole retained scene,
-    /// so it also clears any previously installed family sidecar. Incrementals preserve
-    /// the sidecar because they cannot change retained identity/content shape.
     pub fn apply(
         &mut self,
         delta: RetainedExecutionDeltaEnvelope,
@@ -156,7 +141,6 @@ impl InstalledRetainedExecutionMirror {
         Ok((outcome, changes))
     }
 
-    /// Transactionally apply retained execution plus generic family sidecar state.
     pub fn apply_family(
         &mut self,
         mut delta: RetainedFamilyExecutionDeltaEnvelope,
@@ -167,8 +151,6 @@ impl InstalledRetainedExecutionMirror {
                 .applied_sequence()
                 .is_some_and(|sequence| delta.retained.sequence <= sequence)
         {
-            // Preserve the base transport's header checks and stale-drop contract
-            // before revalidating already-installed resources or family plans.
             return Ok(self.wire.apply(delta.retained)?);
         }
         delta.validate()?;
@@ -195,14 +177,38 @@ impl InstalledRetainedExecutionMirror {
         delta: RetainedFamilyExecutionDeltaEnvelope,
         bundle: RetainedResourceBundle,
     ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
-        let additions = self.resources.prepare_additions(bundle)?;
+        let additions = self.resources.prepare_additions_with_render(bundle)?;
         let text_handles = additions.text_handle_remap();
         self.wire.extend_installed_text_handles(&text_handles);
+
+        let render_rollback = match (
+            additions.render_geometry_session(),
+            additions.render_geometries(),
+        ) {
+            (Some(session), Some(geometries)) => {
+                match self
+                    .wire
+                    .stage_installed_render_geometries(session, geometries)
+                {
+                    Ok(rollback) => Some(rollback),
+                    Err(error) => {
+                        self.wire.remove_installed_text_handles(text_handles.keys());
+                        return Err(error.into());
+                    }
+                }
+            }
+            (None, None) => None,
+            _ => unreachable!("prepared render additions are either complete or absent"),
+        };
+
         let text_lookup = additions.text_lookup(&self.resources);
         let prepared_family = match self.prepare_family_update(&delta, &text_lookup) {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.wire.remove_installed_text_handles(text_handles.keys());
+                if let Some(rollback) = render_rollback {
+                    self.wire.rollback_installed_render_geometries(rollback);
+                }
                 return Err(error);
             }
         };
@@ -218,15 +224,21 @@ impl InstalledRetainedExecutionMirror {
             Ok(applied) => applied,
             Err(error) => {
                 self.wire.remove_installed_text_handles(text_handles.keys());
+                if let Some(rollback) = render_rollback {
+                    self.wire.rollback_installed_render_geometries(rollback);
+                }
                 return Err(error);
             }
         };
         if outcome == RetainedTransportApplyOutcome::DroppedStale {
             self.wire.remove_installed_text_handles(text_handles.keys());
+            if let Some(rollback) = render_rollback {
+                self.wire.rollback_installed_render_geometries(rollback);
+            }
             return Ok((outcome, changes));
         }
 
-        self.resources.commit_additions(additions);
+        self.resources.commit_additions_with_render(additions);
         self.family.commit_prepared(prepared_family);
         self.transient_presentations = prepared_transient;
         Ok((outcome, changes))
@@ -297,10 +309,6 @@ impl InstalledRetainedExecutionMirror {
         delta: &RetainedFamilyExecutionDeltaEnvelope,
         texts: &(impl noon_core::TextResourceLookup + ?Sized),
     ) -> Result<PreparedInstalledFamilyUpdate, InstalledExecutionError> {
-        // Resolve only sparse changed rows. Family validation borrows unchanged rows
-        // through the mirror's ObjectId index and overlays rows that the retained
-        // delta will update or append. Neither resident family state nor the full
-        // retained frame is cloned before commit.
         let current = self.resolved.as_ref();
         let mut changed_objects = HashMap::with_capacity(delta.retained.objects.len());
         let mut next_indices = HashMap::with_capacity(delta.retained.objects.len());
@@ -394,9 +402,6 @@ impl InstalledRetainedExecutionMirror {
     }
 
     fn resolve_wire_frame(&self, wire: &FrameState) -> FrameState {
-        // The wire mirror resolves every transport key through this installed bundle
-        // before it constructs a `FrameState`; cloned snapshots therefore retain only
-        // checked renderer-local handles.
         wire.clone()
     }
 
@@ -440,10 +445,6 @@ impl InstalledRetainedExecutionMirror {
                 .get_mut(index)
                 .ok_or(InstalledExecutionError::InvalidObjectIndex(index))?;
 
-            // Text handles stay renderer-local. Geometry snapshots may change during
-            // Transform, and the wire mirror validates geometry-to-geometry updates.
-            // Publish that effective content too, especially when a morph endpoint
-            // clears its temporary render override.
             if let ObjectContentRef::Geometry(geometry) = &source.content {
                 target.content = ObjectContentRef::Geometry(geometry.clone());
             }
