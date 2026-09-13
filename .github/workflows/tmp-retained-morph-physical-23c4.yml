@@ -1,0 +1,52 @@
+name: Temporary retained morph physical qualification
+
+on:
+  push:
+    branches:
+      - codex/validate-retained-morph-23c4
+    paths:
+      - .github/workflows/tmp-retained-morph-physical-23c4.yml
+
+permissions:
+  contents: read
+
+jobs:
+  physical-dynamic-stress:
+    runs-on: self-hosted
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 23c4021d6b5c308e5322387b66429b5c0c650333
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Install pinned browser tooling
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Build optimized production WASM
+        run: bash scripts/build-web-demo.sh
+      - name: Qualify Dynamic Load on physical WebGPU
+        env:
+          NOON_RETAINED_STRESS_BACKEND: webgpu
+          NOON_RETAINED_STRESS_SAMPLE_HZ: '60'
+          NOON_RETAINED_STRESS_WORKER_LOOPS: '2'
+          NOON_RETAINED_STRESS_TRANSPORTS: transferable,shared
+          NOON_RETAINED_STRESS_MIN_EFFECTIVE_FPS: '55'
+          NOON_RETAINED_STRESS_ARTIFACT: perf-artifacts/dynamic-stress-23c4.json
+        run: node scripts/retained-dynamic-stress-perf.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: retained-morph-physical-23c4-${{ github.run_id }}
+          path: perf-artifacts/dynamic-stress-23c4.json
+          if-no-files-found: warn
+          retention-days: 7
