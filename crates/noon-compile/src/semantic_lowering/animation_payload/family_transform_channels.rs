@@ -8,7 +8,7 @@ use noon_core::{
 
 use super::affine::{
     completion_at_endpoint, driver_key, lower_transform_channels, transform_driver_conflict,
-    validate_affine_payload, AffinePayloadIssue,
+    validate_affine_payload, AffinePayloadIssue, LoweredAffineChannel, SemanticAnimationCompletion,
 };
 use super::family_transform_activation::{
     PreparedFamilyTransformActivationProjection, PreparedFamilyTransformOccurrence,
@@ -16,6 +16,19 @@ use super::family_transform_activation::{
 use super::prepared_composition::{
     PreparedSemanticAnimationLoweringError, PreparedSemanticAnimationTrack,
 };
+
+/// One ordinary stable-source family Transform track plus its completion policy.
+///
+/// `retain_effective` is execution-session release metadata, not authored animation
+/// meaning. It is used only for a real source occurrence that maps to a padded target:
+/// the padding fade has no authored property to receive its endpoint, so completion
+/// must leave that exact presentation value effective instead of reconciling it to
+/// the stable row's base appearance.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreparedFamilyTransformStableTrack {
+    pub track: PreparedSemanticAnimationTrack,
+    pub retain_effective: bool,
+}
 
 /// One identity-free execution channel for a repeated source occurrence.
 ///
@@ -52,12 +65,12 @@ pub struct PreparedDerivedFamilyTransformOccurrence {
 /// the stable object-slot domain.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PreparedFamilyTransformChannelProjection {
-    stable_tracks: Vec<PreparedSemanticAnimationTrack>,
+    stable_tracks: Vec<PreparedFamilyTransformStableTrack>,
     derived_occurrences: Vec<PreparedDerivedFamilyTransformOccurrence>,
 }
 
 impl PreparedFamilyTransformChannelProjection {
-    pub fn stable_tracks(&self) -> &[PreparedSemanticAnimationTrack] {
+    pub fn stable_tracks(&self) -> &[PreparedFamilyTransformStableTrack] {
         &self.stable_tracks
     }
 
@@ -84,17 +97,6 @@ pub enum PreparedFamilyTransformChannelError {
         target: SemanticNodeId,
         property: SemanticObjectProperty,
     },
-    /// Contraction requires the padded target's transparent endpoint to remain an
-    /// execution/effective state without becoming authored opacity. The existing
-    /// completion path reconciles `Release` tracks back to authored base state, so
-    /// this shape remains fail-closed until the effective-hold completion contract is
-    /// introduced.
-    TargetPaddingRequiresEffectiveHold {
-        animation: SemanticTransactionNodeRef,
-        source: SemanticNodeId,
-        target_state: SemanticNodeId,
-        occurrence_index: u32,
-    },
 }
 
 impl std::fmt::Display for PreparedFamilyTransformChannelError {
@@ -120,19 +122,6 @@ impl std::fmt::Display for PreparedFamilyTransformChannelError {
                 target.slot(),
                 target.generation()
             ),
-            Self::TargetPaddingRequiresEffectiveHold {
-                animation,
-                source,
-                target_state,
-                occurrence_index,
-            } => write!(
-                formatter,
-                "prepared family Transform {animation:?} contraction occurrence {occurrence_index} maps source {}:{} to padded target {}:{}; execution-only endpoint holding is not available yet",
-                source.slot(),
-                source.generation(),
-                target_state.slot(),
-                target_state.generation()
-            ),
         }
     }
 }
@@ -142,7 +131,7 @@ impl std::error::Error for PreparedFamilyTransformChannelError {
         match self {
             Self::Target { error, .. } => Some(error),
             Self::Payload(error) => Some(error),
-            Self::MultipleDrivers { .. } | Self::TargetPaddingRequiresEffectiveHold { .. } => None,
+            Self::MultipleDrivers { .. } => None,
         }
     }
 }
@@ -150,15 +139,18 @@ impl std::error::Error for PreparedFamilyTransformChannelError {
 /// Lower activation-effective family correspondence through the canonical Transform
 /// payload lowerer.
 ///
-/// Expansion is fully represented here: real source leaves become ordinary stable
-/// execution tracks, while repeated source occurrences receive identity-free derived
-/// channels plus a 0→1 appearance ramp matching Manim's faded padding copy. The
-/// function is pure and publishes nothing.
+/// Real source leaves become ordinary stable execution tracks. Repeated source
+/// occurrences receive identity-free derived channels. Manim's alignment fade is
+/// represented in the execution-only Appearance domain:
 ///
-/// Contraction remains explicitly rejected when correspondence introduces a padded
-/// target occurrence. Persisting that transparent endpoint in effective execution
-/// state requires a completion mode distinct from ordinary `Release`, which would
-/// otherwise restore authored visibility immediately after segment completion.
+/// - source padding starts at appearance 0;
+/// - target padding ends at appearance 0;
+/// - a real target ends at appearance 1.
+///
+/// For a real source mapping to target padding, the appearance channel is marked
+/// `retain_effective`; the session completion layer must keep only that presentation
+/// endpoint while canonical geometry/transform/style channels complete normally.
+/// This function remains pure and publishes nothing.
 pub fn lower_prepared_family_transform_channels(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     activation: &PreparedFamilyTransformActivationProjection,
@@ -168,17 +160,6 @@ pub fn lower_prepared_family_transform_channels(
     let mut driven = HashMap::<(u64, u8), SemanticTransactionNodeRef>::new();
 
     for occurrence in activation.occurrences() {
-        if occurrence.target_padding {
-            return Err(
-                PreparedFamilyTransformChannelError::TargetPaddingRequiresEffectiveHold {
-                    animation: occurrence.animation,
-                    source: occurrence.source,
-                    target_state: occurrence.target_state,
-                    occurrence_index: occurrence.occurrence_index,
-                },
-            );
-        }
-
         let source_ref: SemanticTransactionNodeRef = occurrence.source.into();
         let target_ref: SemanticTransactionNodeRef = occurrence.target_state.into();
         let source = prepared.object_state(source_ref).map_err(|error| {
@@ -207,6 +188,7 @@ pub fn lower_prepared_family_transform_channels(
         )
         .map_err(|issue| payload_error(occurrence, issue))?;
 
+        let target_appearance = if occurrence.target_padding { 0.0 } else { 1.0 };
         if occurrence.source_padding {
             let mut tracks = channels
                 .into_iter()
@@ -223,7 +205,10 @@ pub fn lower_prepared_family_transform_channels(
                 occurrence_index: occurrence.occurrence_index,
                 anchor_execution_object_id: occurrence.source_execution_object_id,
                 property: Property::Appearance,
-                values: TrackValues::Scalar { from: 0.0, to: 1.0 },
+                values: TrackValues::Scalar {
+                    from: 0.0,
+                    to: target_appearance,
+                },
                 timing: occurrence.timing,
                 time_map: occurrence.time_map.clone(),
             });
@@ -239,7 +224,24 @@ pub fn lower_prepared_family_transform_channels(
         }
 
         for channel in channels {
-            push_stable_channel(occurrence, channel, &mut driven, &mut stable_tracks)?;
+            push_stable_channel(occurrence, channel, false, &mut driven, &mut stable_tracks)?;
+        }
+        if occurrence.effective_source.appearance != target_appearance {
+            push_stable_channel(
+                occurrence,
+                LoweredAffineChannel {
+                    property: Property::Appearance,
+                    conflict_property: SemanticObjectProperty::Presence,
+                    completion: SemanticAnimationCompletion::Release,
+                    values: TrackValues::Scalar {
+                        from: occurrence.effective_source.appearance,
+                        to: target_appearance,
+                    },
+                },
+                occurrence.target_padding,
+                &mut driven,
+                &mut stable_tracks,
+            )?;
         }
     }
 
@@ -251,9 +253,10 @@ pub fn lower_prepared_family_transform_channels(
 
 fn push_stable_channel(
     occurrence: &PreparedFamilyTransformOccurrence,
-    channel: super::affine::LoweredAffineChannel,
+    channel: LoweredAffineChannel,
+    retain_effective: bool,
     driven: &mut HashMap<(u64, u8), SemanticTransactionNodeRef>,
-    tracks: &mut Vec<PreparedSemanticAnimationTrack>,
+    tracks: &mut Vec<PreparedFamilyTransformStableTrack>,
 ) -> Result<(), PreparedFamilyTransformChannelError> {
     if let Some(first_animation) = transform_driver_conflict(
         driven,
@@ -285,15 +288,18 @@ fn push_stable_channel(
         }
     }
 
-    tracks.push(PreparedSemanticAnimationTrack {
-        animation: occurrence.animation,
-        target: occurrence.source.into(),
-        execution_object_id: occurrence.source_execution_object_id,
-        property: channel.property,
-        completion: completion_at_endpoint(channel.completion, occurrence.timing.easing),
-        values: channel.values,
-        timing: occurrence.timing,
-        time_map: occurrence.time_map.clone(),
+    tracks.push(PreparedFamilyTransformStableTrack {
+        track: PreparedSemanticAnimationTrack {
+            animation: occurrence.animation,
+            target: occurrence.source.into(),
+            execution_object_id: occurrence.source_execution_object_id,
+            property: channel.property,
+            completion: completion_at_endpoint(channel.completion, occurrence.timing.easing),
+            values: channel.values,
+            timing: occurrence.timing,
+            time_map: occurrence.time_map.clone(),
+        },
+        retain_effective,
     });
     Ok(())
 }
@@ -397,8 +403,8 @@ fn payload_error(
 /// consumable by the live-session activation layer without inventing another track
 /// representation there.
 pub fn materialize_family_transform_stable_track(
-    track: &PreparedSemanticAnimationTrack,
+    track: &PreparedFamilyTransformStableTrack,
     id: TrackId,
 ) -> Result<TrackDefinition, TimelineError> {
-    track.with_track_id(id)
+    track.track.with_track_id(id)
 }
