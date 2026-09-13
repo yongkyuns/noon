@@ -22,7 +22,10 @@ use noon_core::{
     Vec2,
 };
 use noon_render_wgpu::text::TextDeviceMetrics;
-use noon_render_wgpu::{Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState};
+use noon_render_wgpu::{
+    prepare_derived_display_visible, Camera2D, GpuRenderer, RetainedFramePreparer,
+    RetainedTextGpuState,
+};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -530,6 +533,8 @@ impl NativeApp {
             .as_mut()
             .expect("drawable native host must own GPU state");
         let metrics = gpu.text_metrics(camera)?;
+        let derived = prepare_derived_display_visible(&publication, visibility.object_indices())
+            .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
         let prepared = gpu
             .preparer
             .prepare_planned_publication_visible(
@@ -542,6 +547,10 @@ impl NativeApp {
             .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
         gpu.renderer
             .upload_retained(&gpu.device, &gpu.queue, &prepared, &mut gpu.text_state);
+        if !derived.slots.is_empty() {
+            gpu.renderer
+                .upload_derived(&gpu.device, &gpu.queue, &derived);
+        }
         let view = surface_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -550,17 +559,29 @@ impl NativeApp {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Noon native frame"),
             });
-        let _draw = gpu
-            .renderer
-            .encode_retained(
-                &mut encoder,
-                &view,
-                &prepared,
-                &gpu.text_state,
-                CLEAR_COLOR,
-                None,
-            )
-            .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+        let _draw = if derived.slots.is_empty() {
+            gpu.renderer
+                .encode_retained(
+                    &mut encoder,
+                    &view,
+                    &prepared,
+                    &gpu.text_state,
+                    CLEAR_COLOR,
+                    None,
+                )
+                .map_err(|error| NativeHostError::Gpu(error.to_string()))?
+        } else {
+            gpu.renderer
+                .encode_retained_with_derived(
+                    &mut encoder,
+                    &view,
+                    &prepared,
+                    &derived,
+                    CLEAR_COLOR,
+                    None,
+                )
+                .map_err(|error| NativeHostError::Gpu(error.to_string()))?
+        };
         #[cfg(test)]
         {
             self.last_geometry_draw_calls = _draw.geometry.draw_calls;

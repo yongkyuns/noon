@@ -140,6 +140,27 @@ impl GpuRenderer {
         self.encode_inner(encoder, view, stable, clear_color, Some(derived), None)
     }
 
+    /// Profiled variant of [`Self::encode_with_derived`] using the same host-owned
+    /// two-entry timestamp query set as ordinary geometry encoding.
+    pub fn encode_with_derived_profiled(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        stable: &PreparedFrame<'_>,
+        derived: &PreparedDerivedDisplay,
+        clear_color: wgpu::Color,
+        query_set: &wgpu::QuerySet,
+    ) -> DrawStats {
+        self.encode_inner(
+            encoder,
+            view,
+            stable,
+            clear_color,
+            Some(derived),
+            Some(query_set),
+        )
+    }
+
     /// Upload renderer-owned transient analytic instances without changing stable
     /// prepared-frame buffers or slot identity.
     pub fn upload_derived(

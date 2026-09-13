@@ -32,11 +32,18 @@ for (const required of [
 ]) {
   assert.ok(timestamps.includes(required), `timestamp diagnostics must contain ${required}`);
 }
-assert.ok(
-  host.includes("self.renderer.encode_retained(")
-    && host.includes('timestamp_slot.map(|slot| profiler.expect("reserved profiler").query_set(slot))'),
-  "browser host must pass timestamp queries through the reusable retained renderer",
-);
+for (const required of [
+  "let query_set =",
+  'timestamp_slot.map(|slot| profiler.expect("reserved profiler").query_set(slot))',
+  ".encode_retained(",
+  ".encode_retained_with_derived(",
+  "query_set,",
+]) {
+  assert.ok(
+    host.includes(required),
+    `browser host must pass timestamp queries through retained geometry encoding: ${required}`,
+  );
+}
 assert.equal(
   timestamps.includes("device.poll("),
   false,
