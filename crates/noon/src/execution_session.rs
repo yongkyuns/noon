@@ -1,5 +1,8 @@
 mod callback;
 mod completion;
+mod family_transform;
+#[cfg(test)]
+mod family_transform_tests;
 mod publication;
 mod signal_timeline;
 pub use callback::{
@@ -27,13 +30,13 @@ use crate::execution_segment::{
 };
 use crate::live_session::{DrawBorderThenFillOptions, IndicateOptions, SubsetDisplayMode};
 use noon_compile::{
-    derive_prepared_scalar_animation_tracks,
+    derive_prepared_scalar_animation_tracks, lower_prepared_family_transform_channels,
     lower_prepared_scalar_signal_timeline_entries_with_resolver,
     lower_prepared_scalar_signal_timeline_entry, lower_prepared_semantic_animation_composition,
     lower_prepared_semantic_animation_schedule, lower_semantic_affine_animation_tracks,
     lower_semantic_animation_schedule, lower_semantic_execution, lower_semantic_execution_root,
-    lower_semantic_execution_root_with_animation_root_at, CompilePatchError,
-    EffectiveAnimationProperties, ExecutionMutationTransaction, ExecutionPatch,
+    lower_semantic_execution_root_with_animation_root_at, prepare_family_transform_activations,
+    CompilePatchError, EffectiveAnimationProperties, ExecutionMutationTransaction, ExecutionPatch,
     PreparedScalarAnimationTrackError, PreparedScalarSignalTimelineError,
     PreparedSemanticAnimationLoweringError, PreparedSemanticAnimationScheduleError,
     SemanticAffineAnimationTrackError, SemanticAnimationScheduleError, SemanticExecutionIndex,
@@ -50,8 +53,9 @@ use noon_core::{
     SemanticTransactionNodeRef, TimelineError, TrackDefinition, TrackId, TrackTiming,
 };
 use noon_runtime::{
-    EvaluationError, ExecutionSpatialIndex, FrameChanges, FrameState, RendererPublication,
-    RuntimeWakeState, SceneInstance, SpatialIndexUpdateStats, SpatialQueryStats,
+    DerivedDisplayAnimationPlan, DerivedDisplayObject, EvaluationError, ExecutionSpatialIndex,
+    FrameChanges, FrameState, RendererPublication, RuntimeWakeState, SceneInstance,
+    SpatialIndexUpdateStats, SpatialQueryStats,
 };
 
 const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
@@ -683,6 +687,9 @@ pub struct ExecutionSession {
     next_segment_sequence: Option<u64>,
     pending_segment_completion: Option<PendingSegmentCompletion>,
     completed_segment_sequence: Option<ExecutionSegmentSequence>,
+    derived_display_plan: Option<DerivedDisplayAnimationPlan>,
+    derived_display_objects: Vec<DerivedDisplayObject>,
+    derived_display_expire_after_publication: bool,
     last_callback_receipt: Option<CallbackPublicationReceipt>,
 }
 
@@ -715,6 +722,9 @@ impl Clone for ExecutionSession {
             next_segment_sequence: self.next_segment_sequence,
             pending_segment_completion: None,
             completed_segment_sequence: self.completed_segment_sequence,
+            derived_display_plan: None,
+            derived_display_objects: Vec::new(),
+            derived_display_expire_after_publication: false,
             last_callback_receipt: self.last_callback_receipt.clone(),
         }
     }
@@ -880,6 +890,9 @@ impl ExecutionSession {
             next_segment_sequence: Some(0),
             pending_segment_completion: None,
             completed_segment_sequence: None,
+            derived_display_plan: None,
+            derived_display_objects: Vec::new(),
+            derived_display_expire_after_publication: false,
             last_callback_receipt: None,
         }
     }
@@ -1095,7 +1108,21 @@ impl ExecutionSession {
 
     /// Consume one coherent renderer publication from this typed session.
     pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
-        self.runtime.take_renderer_publication()
+        if let Some(plan) = self.derived_display_plan.as_ref() {
+            self.derived_display_objects = plan
+                .evaluate(self.runtime.frame().time)
+                .expect("validated derived family Transform plan must evaluate at runtime time");
+            if self.derived_display_expire_after_publication {
+                self.derived_display_plan = None;
+                self.derived_display_expire_after_publication = false;
+            }
+        } else {
+            self.derived_display_objects.clear();
+        }
+        self.runtime
+            .take_renderer_publication()
+            .with_derived_display_objects(&self.derived_display_objects)
+            .expect("compiler-owned family Transform rows retain valid painter anchors")
     }
 
     /// Evaluate deterministically at an absolute time.
@@ -1763,38 +1790,62 @@ impl ExecutionSession {
                 source,
                 target_state,
                 options,
-            } => {
-                let pairs = store
-                    .ordered_family_leaf_pairs(*source, *target_state)
-                    .map_err(|error| {
-                        ExecutionSessionAnimationError::InvalidComposition(error.to_string())
-                    })?;
-                let expanded = SemanticCompositionRequest::Composition {
-                    kind: SemanticAnimationCompositionKind::Parallel,
-                    children: pairs
-                        .into_iter()
-                        .map(
-                            |(source, target_state)| SemanticCompositionRequest::TransformTo {
-                                source,
-                                target_state,
-                                interpolation: noon_core::SemanticTransformInterpolation::Affine,
-                                complete_priority: false,
-                                // The family composition applies authored easing once.
-                                options: AnimationOptions::new().rate_func(RateFunction::Linear),
-                            },
-                        )
-                        .collect(),
-                    options: *options,
-                };
-                self.stage_composition_request(
-                    store,
-                    root,
-                    &expanded,
-                    declaration,
-                    admitted,
-                    removals,
-                )
-            }
+            } => match store.ordered_family_leaf_pairs(*source, *target_state) {
+                Ok(pairs) => {
+                    let expanded = SemanticCompositionRequest::Composition {
+                        kind: SemanticAnimationCompositionKind::Parallel,
+                        children: pairs
+                            .into_iter()
+                            .map(
+                                |(source, target_state)| SemanticCompositionRequest::TransformTo {
+                                    source,
+                                    target_state,
+                                    interpolation:
+                                        noon_core::SemanticTransformInterpolation::Affine,
+                                    complete_priority: false,
+                                    options: AnimationOptions::new()
+                                        .rate_func(RateFunction::Linear),
+                                },
+                            )
+                            .collect(),
+                        options: *options,
+                    };
+                    self.stage_composition_request(
+                        store,
+                        root,
+                        &expanded,
+                        declaration,
+                        admitted,
+                        removals,
+                    )
+                }
+                Err(error) => {
+                    let is_flat_family = |family: SemanticNodeId| {
+                        store
+                            .semantic_family_members_checked(family)
+                            .is_ok_and(|members| {
+                                members.iter().all(|member| {
+                                    store.node(*member).is_some_and(|node| {
+                                        matches!(
+                                            node.kind(),
+                                            noon_core::SemanticNodeKind::AuthoringObject
+                                        )
+                                    })
+                                })
+                            })
+                    };
+                    if !is_flat_family(*source) || !is_flat_family(*target_state) {
+                        return Err(ExecutionSessionAnimationError::InvalidComposition(
+                            error.to_string(),
+                        ));
+                    }
+                    Ok(declaration.create_family_transform_animation(
+                        *source,
+                        *target_state,
+                        *options,
+                    ))
+                }
+            },
             SemanticCompositionRequest::Indicate {
                 target,
                 indication,
@@ -3020,6 +3071,43 @@ impl ExecutionSession {
                 )
             })?;
 
+        if schedule.family_transforms().len() > 1
+            || (!schedule.family_transforms().is_empty()
+                && (!schedule.leaves().is_empty() || !schedule.scalar_leaves().is_empty()))
+        {
+            return Err(ExecutionSessionAnimationError::InvalidComposition(
+                "this bounded unequal-family Transform slice supports one family Transform plus timing-only composition nodes per activation".into(),
+            ));
+        }
+        let family_transform_activation = prepare_family_transform_activations(
+            &prepared,
+            &self.execution_index,
+            &schedule,
+            |object| {
+                let index = self.runtime.frame_index_for_object(object)?;
+                let frame = self.runtime.frame();
+                let row = frame.objects.get(index)?;
+                Some(EffectiveAnimationProperties {
+                    z_index: row.z_index,
+                    transform: row.transform,
+                    style: row.style,
+                    appearance: row.appearance,
+                    reveal: *frame.reveals.get(index)?,
+                })
+            },
+        )
+        .map_err(|error| ExecutionSessionAnimationError::InvalidComposition(error.to_string()))?;
+        let family_transform_channels =
+            lower_prepared_family_transform_channels(&prepared, &family_transform_activation)
+                .map_err(|error| {
+                    ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                })?;
+        let derived_display_plan = family_transform::build_derived_family_transform_plan(
+            &self.runtime,
+            &family_transform_channels,
+        )
+        .map_err(ExecutionSessionAnimationError::InvalidComposition)?;
+
         let mut projection_enrollments = Vec::new();
         let mut runtime_enrollment_inputs = Vec::new();
         let mut prepared_execution_signals = HashMap::new();
@@ -3139,8 +3227,12 @@ impl ExecutionSession {
         let mut segment =
             ExecutionSegment::from_duration(projection.start_time(), projection.run_time())?;
         let mut next_track_id = self.next_activation_track_id;
-        let mut definitions = Vec::with_capacity(projection.tracks().len());
-        let mut completions = Vec::with_capacity(projection.tracks().len());
+        let track_capacity = projection
+            .tracks()
+            .len()
+            .saturating_add(family_transform_channels.stable_tracks().len());
+        let mut definitions = Vec::with_capacity(track_capacity);
+        let mut completions = Vec::with_capacity(track_capacity);
         for track in projection.tracks() {
             let raw_id = next_track_id.ok_or(ExecutionSessionAnimationError::TrackIdExhausted)?;
             let track_id = TrackId::new(raw_id);
@@ -3156,6 +3248,28 @@ impl ExecutionSession {
                 track.property,
                 track_id,
                 end_time,
+                false,
+            ));
+            definitions.push(definition);
+            next_track_id = raw_id.checked_add(1);
+        }
+        for family_track in family_transform_channels.stable_tracks() {
+            let track = &family_track.track;
+            let raw_id = next_track_id.ok_or(ExecutionSessionAnimationError::TrackIdExhausted)?;
+            let track_id = TrackId::new(raw_id);
+            let definition = track
+                .with_track_id(track_id)
+                .map_err(ExecutionSessionAnimationError::PreparedTrack)?;
+            let end_time = execution_track_end_time(&definition)
+                .map_err(ExecutionSessionAnimationError::PreparedTrack)?;
+            completions.push((
+                track.target,
+                track.completion.clone(),
+                track.execution_object_id,
+                track.property,
+                track_id,
+                end_time,
+                family_track.retain_effective,
             ));
             definitions.push(definition);
             next_track_id = raw_id.checked_add(1);
@@ -3182,6 +3296,7 @@ impl ExecutionSession {
         let (token, next_segment_sequence) = if definitions.is_empty()
             && projection.family_animations().is_empty()
             && scalar_completions.is_empty()
+            && derived_display_plan.is_none()
         {
             (None, self.next_segment_sequence)
         } else {
@@ -3232,11 +3347,22 @@ impl ExecutionSession {
         let activation_scene_revision = self.publication_context().scene_revision();
 
         self.next_activation_track_id = next_track_id;
+        self.derived_display_plan = derived_display_plan;
+        self.derived_display_objects.clear();
+        self.derived_display_expire_after_publication = false;
         if let Some(token) = token {
             let entries = completions
                 .into_iter()
                 .map(
-                    |(target, completion, execution_object, property, track, end_time)| {
+                    |(
+                        target,
+                        completion,
+                        execution_object,
+                        property,
+                        track,
+                        end_time,
+                        retain_effective,
+                    )| {
                         SegmentCompletionEntry {
                             semantic_object: resolve_committed_node(target, &result),
                             completion,
@@ -3244,7 +3370,7 @@ impl ExecutionSession {
                             property,
                             track,
                             end_time,
-                            retain_effective: false,
+                            retain_effective,
                         }
                     },
                 )
