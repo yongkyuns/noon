@@ -4,18 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       device_id:
-        description: Stable physical device ID (for example macbook-m4-pro)
+        description: Stable physical device ID (for example yongkyun-mac)
         required: true
+        default: yongkyun-mac
         type: string
       backends:
         description: Comma-separated renderer backends
         required: true
-        default: webgpu,webgl
+        default: webgpu
         type: string
       suites:
         description: Comma-separated suites (frame,corpus,authoring,dynamic-stress)
         required: true
-        default: frame,corpus,authoring,dynamic-stress
+        default: dynamic-stress
         type: string
       width:
         description: Canvas backing width
@@ -53,12 +54,18 @@ permissions:
 
 jobs:
   baseline:
-    # This workflow is intentionally physical-runner-only. Do not replace this
-    # with github-hosted runners or SwiftShader and call the result a P8 baseline.
-    runs-on: self-hosted
+    # Dedicated physical Mac runner. The custom label prevents this workload
+    # from landing on an unrelated self-hosted machine.
+    runs-on: [self-hosted, macOS, noon-physical]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
+      - name: Verify physical macOS runner
+        shell: bash
+        run: |
+          test "$(uname -s)" = "Darwin"
+          echo "Runner: ${RUNNER_NAME:-unknown}"
+          system_profiler SPHardwareDataType SPDisplaysDataType || true
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
@@ -80,6 +87,7 @@ jobs:
           NOON_PERF_DEVICE_ID: ${{ inputs.device_id }}
           NOON_PERF_BACKENDS: ${{ inputs.backends }}
           NOON_PERF_SUITES: ${{ inputs.suites }}
+          NOON_PERF_GPU_MODE: hardware
           NOON_PERF_WIDTH: ${{ inputs.width }}
           NOON_PERF_HEIGHT: ${{ inputs.height }}
           NOON_PERF_DPR: ${{ inputs.dpr }}
