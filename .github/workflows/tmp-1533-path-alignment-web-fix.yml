@@ -1,0 +1,108 @@
+name: Temporary 1533 path alignment web fix
+
+on:
+  push:
+    branches:
+      - codex/1533-scene-path-alignment-web-fix
+    paths:
+      - .github/workflows/tmp-1533-path-alignment-web-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/1533-scene-path-alignment-web-fix
+          fetch-depth: 0
+      - name: Route web alignment through integration seam
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              text = path.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one replacement anchor, found {count}')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          path = Path('crates/noon/src/path_alignment.rs')
+          replace_once(
+              path,
+              'pub(crate) fn publish_alignment(\n',
+              'pub fn publish_alignment(\n',
+          )
+
+          path = Path('crates/noon/src/integration.rs')
+          replace_once(
+              path,
+              'pub use crate::path_queries::effective_path_query;\n',
+              'pub use crate::path_alignment::publish_alignment;\npub use crate::path_queries::effective_path_query;\n',
+          )
+
+          path = Path('crates/noon-web/src/semantic_execution_player.rs')
+          old = '''    #[cfg(target_arch = "wasm32")]
+              pub(crate) fn live_align_points(
+                  &mut self,
+                  left: &noon::Mobject,
+                  right: &noon::Mobject,
+              ) -> Result<(), AuthoringFailure> {
+                  self.with_live_session(|live| live.align_points(left, right))
+              }
+          '''
+          new = '''    #[cfg(target_arch = "wasm32")]
+              pub(crate) fn live_align_points(
+                  &mut self,
+                  left: &noon::Mobject,
+                  right: &noon::Mobject,
+              ) -> Result<(), AuthoringFailure> {
+                  let semantics = self
+                      .semantics
+                      .clone()
+                      .ok_or("execution player has no live semantic store")?;
+                  let root = self
+                      .semantic_root
+                      .expect("live semantic store has one scene root");
+                  noon::integration::publish_alignment(
+                      &semantics,
+                      root,
+                      &mut self.session,
+                      left,
+                      right,
+                  )
+                  .map_err(AuthoringFailure::from)
+              }
+          '''
+          replace_once(path, old, new)
+          '@ | Set-Content -Encoding utf8 patch1533web.py
+          python patch1533web.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item patch1533web.py
+          cargo fmt --all
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item .github/workflows/tmp-1533-path-alignment-web-fix.yml
+          $changed = @(git diff --name-only | Sort-Object)
+          $expected = @(
+            '.github/workflows/tmp-1533-path-alignment-web-fix.yml',
+            'crates/noon-web/src/semantic_execution_player.rs',
+            'crates/noon/src/integration.rs',
+            'crates/noon/src/path_alignment.rs'
+          ) | Sort-Object
+          if (Compare-Object $changed $expected) {
+            Write-Error "unexpected changed-file set: $($changed -join ', ')"
+            exit 1
+          }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Route web path alignment through integration seam"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git push origin HEAD:codex/1533-scene-path-alignment-web-fix
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
