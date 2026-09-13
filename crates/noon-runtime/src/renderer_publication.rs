@@ -13,7 +13,7 @@ use crate::{FrameChanges, FrameState, RetainedPlannedFamilyFrame};
 /// Unlike [`crate::FrameObjectState`], this type deliberately has no `ObjectId` and
 /// therefore cannot enter the stable execution-slot domain. It can represent any
 /// plan-local visual occurrence whose lifetime is bounded by execution/publication,
-/// including the current unequal-family Transform padding copies. Content still
+/// including plan-local copies and other transient effects. Content still
 /// uses the same immutable retained resources as ordinary frame rows; there is no
 /// second geometry/text world.
 #[derive(Clone, Debug, PartialEq)]
@@ -149,8 +149,8 @@ impl std::error::Error for DerivedDisplayPublicationError {}
 
 /// Feature-neutral vocabulary for identity-free renderer presentation.
 ///
-/// The `DerivedDisplay*` names remain temporarily because the active unequal-family
-/// Transform stack already uses them. New renderer/runtime consumers should use the
+/// The `DerivedDisplay*` names remain temporarily as compatibility aliases for the
+/// active B3 stack. New renderer/runtime consumers should use the
 /// `TransientPresentation*` vocabulary so this lane does not encode its first
 /// authoring feature into the architecture.
 pub type TransientPresentationState = DerivedDisplayObjectState;
@@ -227,7 +227,7 @@ impl RendererPublication<'_> {
         self.derived_display_objects
     }
 
-    /// Migration accessor for the currently stacked unequal-family Transform work.
+    /// Migration accessor for the currently stacked B3 work.
     /// New generic renderer/runtime code should use [`Self::transient_presentations`].
     pub const fn derived_display_objects(&self) -> &[DerivedDisplayObject] {
         self.derived_display_objects
@@ -256,8 +256,8 @@ impl<'a> RendererPublication<'a> {
         Ok(self)
     }
 
-    /// Migration entry point for the currently stacked unequal-family Transform
-    /// implementation. It delegates to the feature-neutral publication contract.
+    /// Migration entry point for the currently stacked B3 implementation. It
+    /// delegates to the feature-neutral publication contract.
     pub fn with_derived_display_objects(
         self,
         derived_display_objects: &'a [DerivedDisplayObject],
