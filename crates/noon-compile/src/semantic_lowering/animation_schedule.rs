@@ -28,6 +28,7 @@ pub struct SemanticAnimationScheduleProjection {
     run_time: f64,
     leaves: Vec<SemanticScheduledAnimationLeaf>,
     scalar_leaves: Vec<SemanticScheduledScalarLeaf>,
+    family_transforms: Vec<SemanticScheduledFamilyTransform>,
 }
 
 impl SemanticAnimationScheduleProjection {
@@ -51,12 +52,16 @@ impl SemanticAnimationScheduleProjection {
         &self.scalar_leaves
     }
 
+    pub fn family_transforms(&self) -> &[SemanticScheduledFamilyTransform] {
+        &self.family_transforms
+    }
+
     pub fn len(&self) -> usize {
-        self.leaves.len() + self.scalar_leaves.len()
+        self.leaves.len() + self.scalar_leaves.len() + self.family_transforms.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.leaves.is_empty() && self.scalar_leaves.is_empty()
+        self.leaves.is_empty() && self.scalar_leaves.is_empty() && self.family_transforms.is_empty()
     }
 }
 
@@ -136,6 +141,19 @@ pub struct SemanticScheduledScalarLeaf {
     pub options: ResolvedAnimationOptions,
 }
 
+/// One scheduled family Transform. It carries shared timing and authored family
+/// references, but deliberately no stable execution object identity.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SemanticScheduledFamilyTransform {
+    pub finish_time_map: CompositionTimeMap,
+    pub animation: SemanticNodeId,
+    pub source: SemanticNodeId,
+    pub target_state: SemanticNodeId,
+    pub timing: TrackTiming,
+    pub time_map: CompositionTimeMap,
+    pub options: ResolvedAnimationOptions,
+}
+
 /// Compiler scheduling result for an animation graph held by one prepared semantic transaction.
 ///
 /// References remain transaction-local until the caller commits the prepared transaction. This
@@ -148,6 +166,7 @@ pub struct PreparedSemanticAnimationScheduleProjection {
     run_time: f64,
     leaves: Vec<PreparedSemanticScheduledAnimationLeaf>,
     scalar_leaves: Vec<PreparedSemanticScheduledScalarLeaf>,
+    family_transforms: Vec<PreparedSemanticScheduledFamilyTransform>,
 }
 
 impl PreparedSemanticAnimationScheduleProjection {
@@ -171,12 +190,16 @@ impl PreparedSemanticAnimationScheduleProjection {
         &self.scalar_leaves
     }
 
+    pub fn family_transforms(&self) -> &[PreparedSemanticScheduledFamilyTransform] {
+        &self.family_transforms
+    }
+
     pub fn len(&self) -> usize {
-        self.leaves.len() + self.scalar_leaves.len()
+        self.leaves.len() + self.scalar_leaves.len() + self.family_transforms.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.leaves.is_empty() && self.scalar_leaves.is_empty()
+        self.leaves.is_empty() && self.scalar_leaves.is_empty() && self.family_transforms.is_empty()
     }
 }
 
@@ -247,6 +270,18 @@ pub struct PreparedSemanticScheduledScalarLeaf {
     pub animation: SemanticTransactionNodeRef,
     pub signal: SemanticNodeId,
     pub target: f64,
+    pub timing: TrackTiming,
+    pub time_map: CompositionTimeMap,
+    pub options: ResolvedAnimationOptions,
+}
+
+/// Transaction-local scheduled family Transform with no execution object identity.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreparedSemanticScheduledFamilyTransform {
+    pub finish_time_map: CompositionTimeMap,
+    pub animation: SemanticTransactionNodeRef,
+    pub source: SemanticTransactionNodeRef,
+    pub target_state: SemanticTransactionNodeRef,
     pub timing: TrackTiming,
     pub time_map: CompositionTimeMap,
     pub options: ResolvedAnimationOptions,
@@ -544,6 +579,7 @@ pub fn lower_semantic_animation_schedule(
 
     let mut leaves = Vec::new();
     let mut scalar_leaves = Vec::new();
+    let mut family_transforms = Vec::new();
     for leaf in projection.leaves {
         match leaf {
             ScheduledAnimationLeaf::Object {
@@ -580,6 +616,23 @@ pub fn lower_semantic_animation_schedule(
                 time_map,
                 options,
             }),
+            ScheduledAnimationLeaf::FamilyTransform {
+                finish_time_map,
+                animation,
+                source,
+                target_state,
+                timing,
+                time_map,
+                options,
+            } => family_transforms.push(SemanticScheduledFamilyTransform {
+                finish_time_map,
+                animation,
+                source,
+                target_state,
+                timing,
+                time_map,
+                options,
+            }),
         }
     }
     Ok(SemanticAnimationScheduleProjection {
@@ -588,6 +641,7 @@ pub fn lower_semantic_animation_schedule(
         run_time: projection.run_time,
         leaves,
         scalar_leaves,
+        family_transforms,
     })
 }
 
@@ -612,6 +666,7 @@ pub fn lower_prepared_semantic_animation_schedule(
         .map_err(prepared_schedule_error)?;
     let mut leaves = Vec::new();
     let mut scalar_leaves = Vec::new();
+    let mut family_transforms = Vec::new();
     for leaf in projection.leaves {
         match leaf {
             ScheduledAnimationLeaf::Object {
@@ -648,6 +703,23 @@ pub fn lower_prepared_semantic_animation_schedule(
                 time_map,
                 options,
             }),
+            ScheduledAnimationLeaf::FamilyTransform {
+                finish_time_map,
+                animation,
+                source,
+                target_state,
+                timing,
+                time_map,
+                options,
+            } => family_transforms.push(PreparedSemanticScheduledFamilyTransform {
+                finish_time_map,
+                animation,
+                source,
+                target_state,
+                timing,
+                time_map,
+                options,
+            }),
         }
     }
     Ok(PreparedSemanticAnimationScheduleProjection {
@@ -656,6 +728,7 @@ pub fn lower_prepared_semantic_animation_schedule(
         run_time: projection.run_time,
         leaves,
         scalar_leaves,
+        family_transforms,
     })
 }
 
@@ -807,6 +880,10 @@ struct AnimationDeclaration<R> {
 
 #[derive(Clone, Debug)]
 enum AnimationDeclarationIntent<R> {
+    FamilyTransformTo {
+        source: R,
+        target_state: R,
+    },
     TransformTo {
         target: R,
         target_state: R,
@@ -957,6 +1034,21 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
         let intent = match state.intent() {
             SemanticAnimationIntent::ObjectPropertyTrack { .. } => {
                 return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+            }
+            SemanticAnimationIntent::FamilyTransformTo {
+                source,
+                target_state,
+            } => {
+                self.store
+                    .semantic_family_members_checked(*source)
+                    .map_err(SemanticAnimationError::Target)?;
+                self.store
+                    .semantic_family_members_checked(*target_state)
+                    .map_err(SemanticAnimationError::Target)?;
+                AnimationDeclarationIntent::FamilyTransformTo {
+                    source: *source,
+                    target_state: *target_state,
+                }
             }
             SemanticAnimationIntent::TransformTo {
                 target,
@@ -1198,6 +1290,13 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                             PreparedSemanticAnimationLookupError::InitialObjectPropertyTrack,
                         );
                     }
+                    SemanticAnimationIntent::FamilyTransformTo {
+                        source,
+                        target_state,
+                    } => AnimationDeclarationIntent::FamilyTransformTo {
+                        source: (*source).into(),
+                        target_state: (*target_state).into(),
+                    },
                     SemanticAnimationIntent::TransformTo {
                         target,
                         target_state,
@@ -1323,6 +1422,13 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                             PreparedSemanticAnimationLookupError::InitialObjectPropertyTrack,
                         );
                     }
+                    SemanticTransactionAnimationIntent::FamilyTransformTo {
+                        source,
+                        target_state,
+                    } => AnimationDeclarationIntent::FamilyTransformTo {
+                        source: *source,
+                        target_state: *target_state,
+                    },
                     SemanticTransactionAnimationIntent::TransformTo {
                         target,
                         target_state,
@@ -1437,6 +1543,7 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
             }
         };
         match &intent {
+            AnimationDeclarationIntent::FamilyTransformTo { .. } => {}
             AnimationDeclarationIntent::TransformTo {
                 target,
                 target_state,
@@ -1534,6 +1641,15 @@ struct AnimationScheduleProjection<R> {
 
 #[derive(Clone, Debug)]
 enum ScheduledAnimationLeaf<R> {
+    FamilyTransform {
+        finish_time_map: CompositionTimeMap,
+        animation: R,
+        source: R,
+        target_state: R,
+        timing: TrackTiming,
+        time_map: CompositionTimeMap,
+        options: ResolvedAnimationOptions,
+    },
     Object {
         finish_time_map: CompositionTimeMap,
         animation: R,
@@ -1682,6 +1798,11 @@ struct PlannedAnimation<R> {
 #[derive(Clone, Debug)]
 enum PlannedAnimationKind<R> {
     Wait,
+    FamilyTransform {
+        source: R,
+        target_state: R,
+        options: ResolvedAnimationOptions,
+    },
     Leaf {
         target: R,
         execution_object_id: ObjectId,
@@ -1719,6 +1840,23 @@ where
         .map_err(|error| AnimationSchedulePlanError::Lookup { animation, error })?;
 
     match state.intent {
+        AnimationDeclarationIntent::FamilyTransformTo {
+            source,
+            target_state,
+        } => {
+            let options =
+                resolve_animation_options(AnimationDefaults::MANIM, state.options, play_options)
+                    .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::FamilyTransform {
+                    source,
+                    target_state,
+                    options,
+                },
+            })
+        }
         AnimationDeclarationIntent::TransformTo {
             target,
             target_state,
@@ -2329,6 +2467,19 @@ fn collect_leaves<R: Copy>(
 ) {
     match &plan.kind {
         PlannedAnimationKind::Wait => {}
+        PlannedAnimationKind::FamilyTransform {
+            source,
+            target_state,
+            options,
+        } => leaves.push(ScheduledAnimationLeaf::FamilyTransform {
+            finish_time_map: finish_time_map.clone(),
+            animation: plan.animation,
+            source: *source,
+            target_state: *target_state,
+            timing: TrackTiming::new(root_start_time, root_run_time, options.rate_func),
+            time_map: CompositionTimeMap::from_steps(steps.clone()),
+            options: *options,
+        }),
         PlannedAnimationKind::Leaf {
             target,
             execution_object_id,
