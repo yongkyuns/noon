@@ -1,0 +1,48 @@
+name: PR 1530 cfg fix once
+
+on:
+  push:
+    branches:
+      - codex/restore-morph-preload-residency
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/restore-morph-preload-residency
+          fetch-depth: 0
+      - name: Patch native cfg surfaces
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          transport = Path('crates/noon-web/src/retained_execution_transport.rs')
+          text = transport.read_text()
+          old = '    #[cfg(any(target_arch = "wasm32", test))]\n    pub(crate) const fn session(&self) -> u32 {'
+          new = '    pub(crate) const fn session(&self) -> u32 {'
+          if text.count(old) != 1:
+              raise SystemExit(f'unexpected retained session cfg count: {text.count(old)}')
+          transport.write_text(text.replace(old, new, 1))
+
+          incremental = Path('crates/noon-web/src/retained_resource_transport/incremental_render.rs')
+          text = incremental.read_text()
+          old = '#[cfg(any(target_arch = "wasm32", test))]'
+          if text.count(old) != 2:
+              raise SystemExit(f'unexpected incremental render cfg count: {text.count(old)}')
+          incremental.write_text(text.replace(old, '#[cfg(target_arch = "wasm32")]'))
+          PY
+          cargo fmt --all
+          rm .github/workflows/pr-1530-cfg-fix-once.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/noon-web/src/retained_execution_transport.rs \
+                  crates/noon-web/src/retained_resource_transport/incremental_render.rs \
+                  .github/workflows/pr-1530-cfg-fix-once.yml
+          git commit -m 'Fix PR 1530 native cfg surfaces'
+          git push origin HEAD:codex/restore-morph-preload-residency
