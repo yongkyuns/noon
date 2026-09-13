@@ -1,0 +1,55 @@
+name: Inspect staged ApplyMatrix source
+
+on:
+  push:
+    branches:
+      - codex/b3-apply-matrix-publish
+    paths:
+      - .github/workflows/applymatrix-source-diagnostic.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Materialize staged source
+        env:
+          EXPECTED_MASTER: 98ee243425399712451b0c83d62e63ffc8b39fba
+        run: |
+          set -euo pipefail
+          base64 -d .github/applymatrix.patch.gz.b64 | gzip -d > /tmp/applymatrix.patch
+          git fetch origin master
+          test "$(git rev-parse origin/master)" = "$EXPECTED_MASTER"
+          git switch --detach "$EXPECTED_MASTER"
+          git apply /tmp/applymatrix.patch
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          path = Path('crates/noon/src/matrix_authoring.rs')
+          text = path.read_text()
+          old = '        prepared.publish(&mut store.borrow_mut(), |store, transaction| {'
+          assert text.count(old) == 1
+          text = text.replace(
+              old,
+              '        let mut store_mut = store.borrow_mut();\n'
+              '        prepared.publish(&mut store_mut, |store, transaction| {',
+              1,
+          )
+          pattern = re.compile(r'GeometryResource::VectorPath\(path\)\s*=>\s*path\.clone\(\),')
+          text, count = pattern.subn(
+              'GeometryResource::VectorPath(path) => path.as_ref().clone(),', text, count=1
+          )
+          assert count == 1
+          path.write_text(text)
+          PY
+          cargo fmt --all
+      - uses: actions/upload-artifact@v7
+        with:
+          name: staged-applymatrix-source
+          path: crates/noon/src/matrix_authoring.rs
+          retention-days: 1
