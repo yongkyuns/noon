@@ -255,6 +255,20 @@ impl Scene {
         self.apply_semantic_transaction(transaction).map(|_| ())
     }
 
+    /// Align two persistent paths using authored state while cold and one coherent
+    /// effective Runtime publication while running. Resource admission and publication
+    /// stay owned by this Scene; no borrowed LiveSession facade is created.
+    pub fn align_points(&mut self, left: &Mobject, right: &Mobject) -> Result<(), AuthoringError> {
+        let root = self.root;
+        let store = &self.store;
+        if let Some(execution) = self.execution.as_mut() {
+            return crate::path_alignment::publish_alignment(store, root, execution, left, right);
+        }
+        self.require_object(left)?;
+        self.require_object(right)?;
+        left.align_points(right)
+    }
+
     /// Observe one family's effective Runtime layout without creating a borrowed
     /// LiveSession control facade. Cold Scenes fail explicitly rather than returning
     /// authored bounds as if they were an effective publication.
