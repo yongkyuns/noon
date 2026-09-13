@@ -11,8 +11,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 GUARDS = ["layer-dependency-ratchet.sh", "noon-core-module-ownership-ratchet.sh",
-          "renderer-host-boundary-ratchet.sh", "active-perf-frontend-ratchet.sh",
-          "architecture-ratchet.sh"]
+          "renderer-host-boundary-ratchet.sh", "transient-presentation-ratchet.sh",
+          "active-perf-frontend-ratchet.sh", "architecture-ratchet.sh"]
 
 
 class EntrypointTests(unittest.TestCase):
