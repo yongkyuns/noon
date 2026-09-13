@@ -5306,6 +5306,71 @@ mod recursive_composition_tests {
     }
 
     #[test]
+    fn point_correspondence_reflection_crosses_singular_midpoint_and_releases_fixed_frame() {
+        let mut scene = Scene::new();
+        let mut square = scene.square(2.0).unwrap();
+        square
+            .set_fill(
+                f64::from(Color::BLUE.red),
+                f64::from(Color::BLUE.green),
+                f64::from(Color::BLUE.blue),
+                1.0,
+            )
+            .unwrap();
+        scene.add(&square).unwrap();
+        let mut target = square.target_editor().unwrap();
+        target.scale(-1.0, 1.0).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let options = linear(1.0);
+        let mut live = scene.live(&mut session);
+        let segment = live
+            .declare_and_activate_animation_composition(
+                SemanticAnimationCompositionKind::Parallel,
+                &[AnimationCompositionRequest::TransformTo(
+                    TransformToRequest::point_correspondence(&square, &target, options),
+                )],
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+
+        let midpoint = segment.start_time() + 0.5;
+        live.advance_segment_to(segment, midpoint).unwrap();
+        assert!(live.effective(&square).unwrap().transform.scale.x.abs() < 1.0e-6);
+        let forward_midpoint = live.session.frame().objects.clone();
+        live.session.seek(segment.start_time()).unwrap();
+        live.session.seek(midpoint).unwrap();
+        assert_eq!(live.session.frame().objects, forward_midpoint);
+
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+        assert!((square.state().unwrap().transform.scale.x + 1.0).abs() < 1.0e-12);
+        assert!((square.state().unwrap().transform.scale.y - 1.0).abs() < 1.0e-12);
+
+        let follow = live
+            .declare_and_activate_animation_composition(
+                SemanticAnimationCompositionKind::Parallel,
+                &[AnimationCompositionRequest::Rotate {
+                    target: &square,
+                    angle: 0.4,
+                    options,
+                }],
+                AnimationOptions::new(),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        live.advance_segment_to(follow, follow.start_time() + 0.5)
+            .unwrap();
+        let rotated = live.effective(&square).unwrap();
+        assert!(rotated.transform.rotation.is_finite());
+        assert!((rotated.transform.rotation - 0.2).abs() < 1.0e-5);
+        live.advance_segment_to(follow, follow.end_time()).unwrap();
+        live.complete_segment(follow).unwrap();
+        assert!((square.state().unwrap().transform.rotation_z - 0.4).abs() < 1.0e-12);
+    }
+
+    #[test]
     fn indicate_restores_the_activation_effective_source() {
         let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();

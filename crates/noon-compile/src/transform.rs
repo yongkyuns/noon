@@ -240,27 +240,15 @@ fn compile_path_pair(
         return Err(TransformCompileFailure::RequiresRetessellation);
     }
     let fill_topology_required = morph_requires_filled_topology(from_style, to_style);
-    if fill_topology_required
-        && noon_geometry::plan_filled_morph_preserving_order(
-            &source,
-            &target,
-            noon_geometry::MorphOptions::DEFAULT,
-        )
-        .is_err()
-    {
+    if fill_topology_required && !filled_morph_plan_is_safe(&source, &target) {
         return Err(TransformCompileFailure::UnsafeFilledPath);
     }
     // A fixed world frame keeps both stroke tessellation and path resource identity
-    // independent of animation progress. Preserve the current-relative lane when
-    // interpolation can become singular: later independent TRS drivers may need
-    // to invert the semantic transform to take ownership of this render geometry.
-    let same_nonzero_sign = |a: f32, b: f32| {
-        a.abs() > 1.0e-7 && b.abs() > 1.0e-7 && a.is_sign_positive() == b.is_sign_positive()
-    };
+    // independent of animation progress. Prepared morph evaluation owns this frame
+    // through an interior singular scale, so only the endpoint transforms need to be
+    // invertible when a later independent TRS driver takes ownership.
     if from_style.stroke_width_mode == StrokeWidthMode::ScreenSpace
         && to_style.stroke_width_mode == StrokeWidthMode::ScreenSpace
-        && same_nonzero_sign(from_transform.scale.x, to_transform.scale.x)
-        && same_nonzero_sign(from_transform.scale.y, to_transform.scale.y)
     {
         let world_source = source.transformed(from_transform);
         let world_target = target.transformed(to_transform);
@@ -274,13 +262,7 @@ fn compile_path_pair(
                 from_transform,
                 to_transform,
             )
-            && (!fill_topology_required
-                || noon_geometry::plan_filled_morph_preserving_order(
-                    &world_source,
-                    &world_target,
-                    noon_geometry::MorphOptions::DEFAULT,
-                )
-                .is_ok())
+            && (!fill_topology_required || filled_morph_plan_is_safe(&world_source, &world_target))
         {
             return Ok(TransformGeometryPlan::PathPair {
                 geometry: Arc::new(GeometryRef::path(
@@ -296,15 +278,39 @@ fn compile_path_pair(
     })
 }
 
+fn filled_morph_plan_is_safe(source: &VectorPath, target: &VectorPath) -> bool {
+    // Prefer exact ordered affine reflection when winding changes. The general
+    // planner remains the fallback for the established non-inverting class.
+    noon_geometry::plan_filled_affine_winding_flip_preserving_order(
+        source,
+        target,
+        noon_geometry::MorphOptions::DEFAULT,
+    )
+    .is_ok()
+        || noon_geometry::plan_filled_morph_preserving_order(
+            source,
+            target,
+            noon_geometry::MorphOptions::DEFAULT,
+        )
+        .is_ok()
+}
+
 // Independent drivers can take over a fixed frame only if its conversion back
-// to any interpolated semantic TRS is finite. Bound the inverse in f64 so valid
-// but extreme authored coordinates retain the original local-plan behavior.
+// to either nonsingular endpoint semantic TRS is finite. The prepared morph owns
+// the render frame at interior singular instants, so those instants need no inverse.
 fn fixed_frame_inverse_is_finite(
     source: &VectorPath,
     target: &VectorPath,
     from: Transform2D,
     to: Transform2D,
 ) -> bool {
+    const MIN_ENDPOINT_SCALE: f32 = 1.0e-7;
+    if [from.scale.x, from.scale.y, to.scale.x, to.scale.y]
+        .into_iter()
+        .any(|scale| !scale.is_finite() || scale.abs() <= MIN_ENDPOINT_SCALE)
+    {
+        return false;
+    }
     if !(to.rotation - from.rotation).is_finite()
         || !(to.translation.x - from.translation.x).is_finite()
         || !(to.translation.y - from.translation.y).is_finite()
@@ -385,7 +391,7 @@ mod tests {
         };
         for (scale, translation, fixed) in [
             (Vec2::new(2.0, 0.5), Vec2::ZERO, true),
-            (Vec2::new(-2.0, 0.5), Vec2::ZERO, false),
+            (Vec2::new(-2.0, 0.5), Vec2::ZERO, true),
             (Vec2::new(0.0, 1.0), Vec2::ZERO, false),
             (Vec2::new(1.0e-8, 1.0), Vec2::ZERO, false),
             (Vec2::ONE, Vec2::new(f32::MAX, 0.0), false),
@@ -413,6 +419,45 @@ mod tests {
             assert_eq!(render_transform.is_some(), fixed);
             assert!(geometry.is_finite());
         }
+    }
+
+    #[test]
+    fn screen_space_point_correspondence_accepts_affine_reflection_through_singular_midpoint() {
+        let style = Style {
+            fill: Some(Color::WHITE),
+            stroke: Some(Color::BLACK),
+            stroke_width: 0.08,
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            ..Style::default()
+        };
+        let reflection = Transform2D {
+            scale: Vec2::new(-1.0, 1.0),
+            ..Transform2D::IDENTITY
+        };
+        let (geometry, render_transform) = compile_content_morph(
+            &GeometryRef::rectangle(2.0, 1.0),
+            &GeometryRef::rectangle(2.0, 1.0),
+            style,
+            style,
+            Transform2D::IDENTITY,
+            reflection,
+        )
+        .expect("nonsingular reflected endpoints keep one fixed render frame");
+        assert_eq!(render_transform, Some(Transform2D::IDENTITY));
+        let GeometryRef::VectorPath(path) = geometry else {
+            panic!("point correspondence must compile to a path pair")
+        };
+        let target = path.morph_target().expect("prepared reflected target");
+        let fill = noon_geometry::plan_filled_affine_winding_flip_preserving_order(
+            &path,
+            target,
+            noon_geometry::MorphOptions::DEFAULT,
+        )
+        .expect("reflected fill must carry the affine winding proof");
+        assert!(fill
+            .interpolate_vertices(0.5)
+            .iter()
+            .all(|point| point.x.abs() < 1.0e-5));
     }
 
     #[test]
