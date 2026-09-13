@@ -1808,32 +1808,7 @@ impl FramePreparer {
             return Ok((index, false));
         }
 
-        let transformed_path;
-        let tessellation_path = if style.stroke_width_mode == StrokeWidthMode::ScreenSpace {
-            transformed_path = transform_path_without_translation(path, transform);
-            &transformed_path
-        } else {
-            path
-        };
-        // Correspondence is established by shared transform preparation. Stroke
-        // scaling affects tessellation coordinates, never semantic point pairing.
-        let mesh = if tessellation_path.morph_target().is_some() {
-            noon_geometry::tessellate_styled_with_fill_preserving_morph_order(
-                tessellation_path,
-                style.stroke_width,
-                style.stroke_join,
-                style.stroke_cap,
-                fill_enabled,
-            )?
-        } else {
-            noon_geometry::tessellate_styled_with_fill(
-                tessellation_path,
-                style.stroke_width,
-                style.stroke_join,
-                style.stroke_cap,
-                fill_enabled,
-            )?
-        };
+        let mesh = tessellate_path_mesh(path, style, transform)?;
         let index = self.path_mesh_cache.len();
         let last_used = self.next_path_mesh_use();
         self.path_mesh_cache.push(CachedPathMesh {
@@ -2058,6 +2033,39 @@ fn insert_free_range(free_ranges: &mut Vec<Range<u32>>, range: Range<u32>) {
     free_ranges.truncate(write);
 }
 
+pub(crate) fn tessellate_path_mesh(
+    path: &VectorPath,
+    style: Style,
+    transform: Transform2D,
+) -> Result<TessellatedPath, noon_geometry::GeometryError> {
+    let transformed_path;
+    let tessellation_path = if style.stroke_width_mode == StrokeWidthMode::ScreenSpace {
+        transformed_path = transform_path_without_translation(path, transform);
+        &transformed_path
+    } else {
+        path
+    };
+    // Correspondence is established by shared transform preparation. Stroke
+    // scaling affects tessellation coordinates, never semantic point pairing.
+    if tessellation_path.morph_target().is_some() {
+        noon_geometry::tessellate_styled_with_fill_preserving_morph_order(
+            tessellation_path,
+            style.stroke_width,
+            style.stroke_join,
+            style.stroke_cap,
+            style.fill.is_some(),
+        )
+    } else {
+        noon_geometry::tessellate_styled_with_fill(
+            tessellation_path,
+            style.stroke_width,
+            style.stroke_join,
+            style.stroke_cap,
+            style.fill.is_some(),
+        )
+    }
+}
+
 fn path_stroke_transform_key(style: Style, transform: Transform2D) -> PathStrokeTransformKey {
     if style.stroke_width_mode == StrokeWidthMode::ScreenSpace {
         PathStrokeTransformKey {
@@ -2077,7 +2085,7 @@ fn transform_path_without_translation(path: &VectorPath, transform: Transform2D)
     })
 }
 
-fn packed_path_transform(style: Style, transform: Transform2D) -> PackedTransform {
+pub(crate) fn packed_path_transform(style: Style, transform: Transform2D) -> PackedTransform {
     if style.stroke_width_mode == StrokeWidthMode::ScreenSpace {
         PackedTransform {
             translation: [transform.translation.x, transform.translation.y],
@@ -2268,7 +2276,7 @@ fn pack_path(
     }
 }
 
-fn pack_path_surface(surface: PathSurface, progress: f32) -> u32 {
+pub(crate) fn pack_path_surface(surface: PathSurface, progress: f32) -> u32 {
     let progress = (progress.clamp(0.0, 1.0) * PATH_PROGRESS_MAX as f32).round() as u32;
     (progress << 1)
         | match surface {
