@@ -1,3 +1,5 @@
+import math
+import xml.etree.ElementTree as ET
 from pathlib import Path as FilePath
 from tempfile import gettempdir
 
@@ -13,14 +15,6 @@ VELLO_TIGER_URL = (
     "1e63b4a40ccb484f82e1d85b83df97ab95bcfbe7/assets/Ghostscript_Tiger.svg"
 )
 
-TARGET_SVG = """\
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
-  <path d="M28 170V30h32v140z" fill="#58C4DD"/>
-  <path d="M140 170V30h32v140z" fill="#58C4DD"/>
-  <path d="M50 45 75 27 151 155 126 173z" fill="#F7D96F"/>
-</svg>
-"""
-
 
 def _fetch_tiger_svg():
     try:
@@ -33,22 +27,42 @@ def _fetch_tiger_svg():
     return open_url(VELLO_TIGER_URL).read()
 
 
+def _make_kaleidoscope_svg(source):
+    """Keep every tiger leaf/style while moving its geometry into a pinwheel."""
+    ET.register_namespace("", "http://www.w3.org/2000/svg")
+    root = ET.fromstring(source)
+    paths = [node for node in root.iter() if node.tag.rsplit("}", 1)[-1] == "path"]
+    count = max(1, len(paths))
+    for index, path in enumerate(paths):
+        phase = index / count
+        angle = 28.0 * math.sin(phase * math.tau * 3.0)
+        radius = 7.0 + 5.0 * math.sin(phase * math.tau * 5.0) ** 2
+        direction = phase * math.tau * 2.0
+        dx = radius * math.cos(direction)
+        dy = radius * math.sin(direction)
+        transform = f"translate({dx:.3f} {dy:.3f}) rotate({angle:.3f} 100 100)"
+        existing = path.attrib.get("transform", "").strip()
+        path.set("transform", f"{existing} {transform}".strip())
+    return ET.tostring(root, encoding="unicode")
+
+
 _DEMO_DIR = FilePath(gettempdir())
 _TIGER_PATH = _DEMO_DIR / "noon-vello-ghostscript-tiger.svg"
 _TARGET_PATH = _DEMO_DIR / "noon-svg-morph-target.svg"
-_TIGER_PATH.write_text(_fetch_tiger_svg(), encoding="utf-8")
-_TARGET_PATH.write_text(TARGET_SVG, encoding="utf-8")
+_TIGER_SOURCE = _fetch_tiger_svg()
+_TIGER_PATH.write_text(_TIGER_SOURCE, encoding="utf-8")
+_TARGET_PATH.write_text(_make_kaleidoscope_svg(_TIGER_SOURCE), encoding="utf-8")
 
 
 class GhostscriptTigerMorph(Scene):
     def construct(self):
         tiger = SVGMobject(str(_TIGER_PATH), height=5.2)
-        noon_mark = SVGMobject(str(_TARGET_PATH), height=5.2)
+        kaleidoscope = SVGMobject(str(_TARGET_PATH), height=5.2)
         tiger_return = SVGMobject(str(_TIGER_PATH), height=5.2)
 
         self.add(tiger)
         self.wait(0.5)
-        self.play(Transform(tiger, noon_mark), run_time=1.8)
+        self.play(Transform(tiger, kaleidoscope), run_time=1.8)
         self.wait(0.4)
         self.play(Transform(tiger, tiger_return), run_time=1.8)
         self.wait(0.5)
