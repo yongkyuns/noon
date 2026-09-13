@@ -480,3 +480,91 @@ fn effective_family_layout_preserves_detached_member_authored_bounds() {
     assert_eq!(layout.center, (1.0, 0.0));
     assert_eq!((layout.width, layout.height), (8.0, 2.0));
 }
+
+#[test]
+fn scene_path_alignment_publishes_effective_operands_coherently() {
+    let mut scene = Scene::new();
+    let left = scene.line((0.0, 0.0), (3.0, 0.0)).unwrap();
+    let right = scene.square(2.0).unwrap();
+    scene.add(&left).unwrap();
+    scene.add(&right).unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    {
+        let mut live = scene.owned_live();
+        live.shift(&left, 1.0, 2.0).unwrap();
+    }
+
+    scene.align_points(&left, &right).unwrap();
+
+    let left_query = scene.effective_path_query(&left).unwrap();
+    let right_query = scene.effective_path_query(&right).unwrap();
+    assert_eq!(left_query.curve_count(), 4);
+    assert_eq!(right_query.curve_count(), 4);
+    assert_eq!(left_query.start().unwrap(), (1.0, 2.0));
+}
+
+#[test]
+fn scene_path_alignment_self_alias_is_noop_before_unsupported_capture() {
+    let mut scene = Scene::new();
+    let object = scene.circle(1.0).unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    {
+        let mut live = scene.owned_live();
+        live.declare_and_activate_create(&object, AnimationOptions::new())
+            .unwrap();
+    }
+    scene.owned_execution_mut().take_frame_changes();
+    let revision = scene.revision();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+
+    scene.align_points(&object, &object).unwrap();
+
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
+    assert!(scene.owned_execution_mut().take_frame_changes().is_empty());
+}
+
+#[test]
+fn scene_path_alignment_rejects_foreign_before_resource_or_frame_publication() {
+    let mut scene = Scene::new();
+    let object = scene.line((0.0, 0.0), (3.0, 0.0)).unwrap();
+    scene.add(&object).unwrap();
+    let foreign = Scene::new().square(2.0).unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    scene.owned_execution_mut().take_frame_changes();
+    let before = object.state().unwrap();
+    let revision = scene.revision();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+
+    assert!(scene.align_points(&object, &foreign).is_err());
+
+    assert_eq!(object.state().unwrap(), before);
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
+    assert!(scene.owned_execution_mut().take_frame_changes().is_empty());
+}
