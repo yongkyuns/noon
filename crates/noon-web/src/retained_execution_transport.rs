@@ -17,7 +17,7 @@ use crate::TransportSlotId;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 3;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportTextResourceHandle {
@@ -247,6 +247,10 @@ pub struct RetainedExecutionDeltaEncoder {
     // Retain the Arcs so pointer keys cannot be recycled during this encoder's lifetime.
     render_geometries: Option<Arc<[Arc<GeometryRef>]>>,
     render_geometry_indices: Option<HashMap<usize, u32>>,
+    // Retain the last transient render geometry published for each stable row.
+    // Keeping the Arc alive prevents allocator address reuse from aliasing a different path.
+    // Incrementals may omit an unchanged inline path and let the mirror reuse it.
+    published_render_geometries: Vec<Option<Arc<GeometryRef>>>,
 }
 
 impl RetainedExecutionDeltaEncoder {
@@ -264,6 +268,7 @@ impl RetainedExecutionDeltaEncoder {
             snapshot_orders: Vec::new(),
             render_geometries: None,
             render_geometry_indices: None,
+            published_render_geometries: Vec::new(),
         }
     }
 
@@ -293,6 +298,7 @@ impl RetainedExecutionDeltaEncoder {
         &self,
         frame: &FrameState,
         index: usize,
+        reuse_inline_geometry: bool,
     ) -> Result<RetainedTransportObjectState, RetainedExecutionTransportError> {
         let resource = frame
             .render_geometries
@@ -309,7 +315,21 @@ impl RetainedExecutionDeltaEncoder {
                 .as_ref()
                 .is_some_and(|items| (index as usize) < items.len())
         }));
-        let object = transport_object(frame, index, resource)?;
+        let mut object = transport_object(frame, index, resource)?;
+        let render_geometry = render_geometry_identity(frame, index);
+        if reuse_inline_geometry
+            && resource.is_none()
+            && object.render_transform.is_some()
+            && object.render_geometry.is_some()
+            && self
+                .published_render_geometries
+                .get(index)
+                .and_then(Option::as_ref)
+                .zip(render_geometry.as_ref())
+                .is_some_and(|(published, current)| Arc::ptr_eq(published, current))
+        {
+            object.render_geometry = None;
+        }
         if self.render_geometry_indices.is_some()
             && object.render_transform.is_some()
             && object.render_geometry_resource.is_none()
@@ -340,24 +360,28 @@ impl RetainedExecutionDeltaEncoder {
     ) -> Result<RetainedExecutionDeltaEnvelope, RetainedExecutionTransportError> {
         validate_frame_shape(frame)?;
         validate_time(frame.time)?;
+        let indices = indices.into_iter().collect::<Vec<_>>();
         let mut orders = vec![None; frame.objects.len()];
+        let mut render_geometries = vec![None; frame.objects.len()];
         let objects = indices
             .into_iter()
             .enumerate()
             .map(|(order, index)| {
-                let mut object = self.transport_object(frame, index)?;
+                let mut object = self.transport_object(frame, index, false)?;
                 if orders[index].is_some() {
                     return Err(RetainedExecutionTransportError::DuplicateSlot(object.slot));
                 }
                 object.order = u32::try_from(order)
                     .map_err(|_| RetainedExecutionTransportError::InvalidObjectIndex(index))?;
                 orders[index] = Some(object.order);
+                render_geometries[index] = render_geometry_identity(frame, index);
                 Ok(object)
             })
             .collect::<Result<Vec<_>, _>>()?;
         let sequence = self.take_sequence()?;
         self.initialized = true;
         self.snapshot_orders = orders;
+        self.published_render_geometries = render_geometries;
         Ok(RetainedExecutionDeltaEnvelope {
             channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL.to_owned(),
             protocol_version: RETAINED_EXECUTION_TRANSPORT_VERSION,
@@ -439,7 +463,7 @@ impl RetainedExecutionDeltaEncoder {
             .iter()
             .copied()
             .map(|index| {
-                self.transport_object(frame, index)
+                self.transport_object(frame, index, true)
                     .map(|object| (index, object.slot))
             })
             .collect::<Result<Vec<_>, _>>()?
@@ -487,7 +511,7 @@ impl RetainedExecutionDeltaEncoder {
                                 RetainedExecutionTransportError::InvalidObjectIndex(index)
                             })?;
                             updates.push((index, rank));
-                            self.transport_object(frame, index)
+                            self.transport_object(frame, index, true)
                                 .map(|object| object.slot)
                         })
                         .collect::<Result<Vec<_>, _>>()?;
@@ -519,7 +543,7 @@ impl RetainedExecutionDeltaEncoder {
             .copied()
             .filter(|index| !excluded_indices.contains(index))
             .map(|index| {
-                let mut object = self.transport_object(frame, index)?;
+                let mut object = self.transport_object(frame, index, true)?;
                 object.order = order_update_map
                     .get(&index)
                     .copied()
@@ -539,6 +563,20 @@ impl RetainedExecutionDeltaEncoder {
         }
         for (index, rank) in order_updates {
             self.snapshot_orders[index] = Some(rank);
+        }
+        if self.published_render_geometries.len() < frame.objects.len() {
+            self.published_render_geometries
+                .resize(frame.objects.len(), None);
+        }
+        for &index in changes.object_indices() {
+            if !excluded_indices.contains(&index) {
+                self.published_render_geometries[index] = render_geometry_identity(frame, index);
+            }
+        }
+        for &index in &excluded_indices {
+            if let Some(geometry) = self.published_render_geometries.get_mut(index) {
+                *geometry = None;
+            }
         }
         Ok(Some(RetainedExecutionDeltaEnvelope {
             channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL.to_owned(),
@@ -778,6 +816,14 @@ impl RetainedExecutionFrameMirror {
                 ));
             }
             validate_object_state(object)?;
+            if object.render_transform.is_some()
+                && object.render_geometry.is_none()
+                && object.render_geometry_resource.is_none()
+            {
+                return Err(RetainedExecutionTransportError::InvalidRenderTransform(
+                    object.slot,
+                ));
+            }
         }
 
         let render_geometries = objects
@@ -844,7 +890,6 @@ impl RetainedExecutionFrameMirror {
             }
             validate_object_state(object)?;
             let content = self.resolve_content(&object.content)?;
-            let geometry = self.resolve_render_geometry(object, delta.session)?;
             let (index, added) = if let Some(&index) = self.slot_indices.get(&object.slot) {
                 let current = &frame.objects[index];
                 if current.id != object.object {
@@ -870,6 +915,28 @@ impl RetainedExecutionFrameMirror {
                 next_slot_count += 1;
                 added_slot_indices.insert(object.slot, index);
                 (index, true)
+            };
+            let geometry = if object.render_transform.is_some()
+                && object.render_geometry.is_none()
+                && object.render_geometry_resource.is_none()
+            {
+                if added {
+                    return Err(RetainedExecutionTransportError::InvalidRenderTransform(
+                        object.slot,
+                    ));
+                }
+                Some(
+                    frame
+                        .render_geometries
+                        .get(index)
+                        .cloned()
+                        .flatten()
+                        .ok_or(RetainedExecutionTransportError::InvalidRenderTransform(
+                            object.slot,
+                        ))?,
+                )
+            } else {
+                self.resolve_render_geometry(object, delta.session)?
             };
             updates.push((index, added, object, geometry, content));
         }
@@ -1097,6 +1164,11 @@ fn validate_frame_shape(frame: &FrameState) -> Result<(), RetainedExecutionTrans
     }
 }
 
+fn render_geometry_identity(frame: &FrameState, index: usize) -> Option<Arc<GeometryRef>> {
+    frame.render_transforms.get(index).copied().flatten()?;
+    frame.render_geometries.get(index).cloned().flatten()
+}
+
 fn transport_object(
     frame: &FrameState,
     index: usize,
@@ -1144,7 +1216,6 @@ fn validate_object_state(
             || !transform.scale.x.is_finite()
             || !transform.scale.y.is_finite()
             || !transform.rotation.is_finite()
-            || (object.render_geometry.is_none() && object.render_geometry_resource.is_none())
         {
             return Err(RetainedExecutionTransportError::InvalidRenderTransform(
                 object.slot,
@@ -1647,6 +1718,110 @@ mod tests {
             encoder.encode_snapshot(&frame, Camera2DState::default()),
             Err(RetainedExecutionTransportError::TextRenderGeometry(_))
         ));
+    }
+
+    #[test]
+    fn continuation_morph_geometry_is_inlined_once_then_reused_by_slot() {
+        let mut frame = mixed_frame();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(37);
+        let mut mirror = test_mirror();
+        let initial = encoder
+            .encode_snapshot(&frame, Camera2DState::default())
+            .unwrap();
+        mirror.apply(initial).unwrap();
+
+        let path = Arc::new(GeometryRef::path(
+            noon_core::VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1.0, 0.0)),
+        ));
+        frame.time = 0.25;
+        frame.morphs[0] = 0.25;
+        frame.render_geometries[0] = Some(path.clone());
+        frame.render_transforms[0] = Some(Transform2D::IDENTITY);
+        let first = encoder
+            .encode_incremental(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(first.objects[0].render_geometry.is_some());
+        assert!(serde_json::to_string(&first).unwrap().contains("line_to"));
+        mirror.apply(first).unwrap();
+        assert_eq!(mirror.frame(), Some(&frame));
+
+        frame.time = 0.5;
+        frame.morphs[0] = 0.5;
+        let reused = encoder
+            .encode_incremental(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(reused.objects[0].render_geometry.is_none());
+        assert!(reused.objects[0].render_geometry_resource.is_none());
+        assert!(reused.objects[0].render_transform.is_some());
+        assert!(!serde_json::to_string(&reused).unwrap().contains("line_to"));
+        mirror.apply(reused).unwrap();
+        assert_eq!(mirror.frame(), Some(&frame));
+
+        frame.time = 0.75;
+        frame.morphs[0] = 0.75;
+        frame.render_geometries[0] = Some(Arc::new(GeometryRef::path(
+            noon_core::VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(2.0, 0.0)),
+        )));
+        let changed = encoder
+            .encode_incremental(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(changed.objects[0].render_geometry.is_some());
+        mirror.apply(changed).unwrap();
+        assert_eq!(mirror.frame(), Some(&frame));
+
+        // Clearing the transient geometry invalidates the slot-local reuse identity.
+        frame.time = 1.0;
+        frame.morphs[0] = 1.0;
+        frame.render_geometries[0] = None;
+        frame.render_transforms[0] = None;
+        let cleared = encoder
+            .encode_incremental(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(cleared.objects[0].render_geometry.is_none());
+        assert!(cleared.objects[0].render_transform.is_none());
+        mirror.apply(cleared).unwrap();
+        assert_eq!(mirror.frame(), Some(&frame));
+
+        // Reusing a previously seen Arc after a clear must publish it again.
+        frame.time = 1.25;
+        frame.morphs[0] = 0.25;
+        frame.render_geometries[0] = Some(path);
+        frame.render_transforms[0] = Some(Transform2D::IDENTITY);
+        let reentered = encoder
+            .encode_incremental(
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                Camera2DState::default(),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(reentered.objects[0].render_geometry.is_some());
+        mirror.apply(reentered).unwrap();
+        assert_eq!(mirror.frame(), Some(&frame));
     }
 
     #[test]
