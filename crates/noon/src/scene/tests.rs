@@ -344,3 +344,72 @@ fn effective_path_query_is_scene_owned_and_requires_running_execution() {
         Err(crate::AuthoringError::ForeignStore)
     ));
 }
+
+#[test]
+fn effective_family_layout_is_scene_owned_and_requires_running_execution() {
+    let mut scene = Scene::new();
+    let mut left = scene.square(2.0).unwrap();
+    let mut right = scene.square(2.0).unwrap();
+    left.set_translation(-2.0, 0.0).unwrap();
+    right.set_translation(2.0, 0.0).unwrap();
+    let family = scene
+        .family(&[MobjectTarget::Object(&left), MobjectTarget::Object(&right)])
+        .unwrap();
+    scene
+        .add_many(&[MobjectTarget::Object(&left), MobjectTarget::Object(&right)])
+        .unwrap();
+
+    let error = scene.effective_family_layout(&family).unwrap_err();
+    assert!(matches!(
+        error,
+        crate::AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable
+        )
+    ));
+
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    let layout = scene.effective_family_layout(&family).unwrap();
+    assert_eq!(layout.center, (0.0, 0.0));
+    assert_eq!((layout.width, layout.height), (6.0, 2.0));
+    assert_eq!(
+        layout.publication,
+        scene.owned_execution().publication_context()
+    );
+
+    let foreign_scene = Scene::new();
+    let foreign_object = foreign_scene.square(1.0).unwrap();
+    let foreign_family = foreign_scene
+        .family(&[MobjectTarget::Object(&foreign_object)])
+        .unwrap();
+    assert!(matches!(
+        scene.effective_family_layout(&foreign_family),
+        Err(crate::AuthoringError::ForeignStore)
+    ));
+}
+
+#[test]
+fn effective_family_layout_preserves_detached_member_authored_bounds() {
+    let mut scene = Scene::new();
+    let mut live = scene.square(2.0).unwrap();
+    let mut detached = scene.square(2.0).unwrap();
+    live.set_translation(-2.0, 0.0).unwrap();
+    detached.set_translation(4.0, 0.0).unwrap();
+    let family = scene
+        .family(&[
+            MobjectTarget::Object(&live),
+            MobjectTarget::Object(&detached),
+        ])
+        .unwrap();
+    scene.add(&live).unwrap();
+
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    assert!(!scene
+        .owned_execution()
+        .semantic_object_is_reachable(detached.node_id()));
+
+    let layout = scene.effective_family_layout(&family).unwrap();
+    assert_eq!(layout.center, (1.0, 0.0));
+    assert_eq!((layout.width, layout.height), (8.0, 2.0));
+}

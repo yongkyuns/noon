@@ -5,7 +5,7 @@ use std::{cell::RefCell, rc::Rc};
 use crate::{
     family_authoring::FamilyTranslation,
     semantic_mobject::{authoring_render_f64, authoring_xy_f64, ManimNextToArgs},
-    Bounds2D64, Mobject, MobjectFamily, SemanticNodeId,
+    Bounds2D64, ExecutionSession, Mobject, MobjectFamily, SemanticNodeId,
 };
 use noon_core::SemanticStore;
 
@@ -399,5 +399,89 @@ pub(crate) fn union_bounds(total: &mut Option<Bounds2D64>, next: Option<Bounds2D
         } else {
             *total = Some(next);
         }
+    }
+}
+
+/// Observe one semantic family's effective layout from an existing coherent execution.
+///
+/// Reachable leaves use Runtime's current affine. Detached leaves preserve their exact
+/// authored layout. Render-content overrides remain explicit failures because authored
+/// geometry bounds no longer describe the visible result in that state.
+pub(crate) fn effective_family_layout(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    family: &MobjectFamily,
+) -> Result<crate::EffectiveMobjectLayout, AuthoringError> {
+    let (_, bounds) = effective_family_layout_measure(store, execution, family, false)?;
+    let (_, boundary) = effective_family_layout_measure(store, execution, family, true)?;
+    let layout = bounds.unwrap_or_else(|| Bounds2D64::point(0.0, 0.0));
+    Ok(crate::EffectiveMobjectLayout {
+        center: bounds_critical_point(boundary, 0.0, 0.0),
+        width: layout.width(),
+        height: layout.height(),
+        publication: execution.publication_context(),
+    })
+}
+
+pub(crate) fn effective_family_layout_measure(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    family: &MobjectFamily,
+    boundary: bool,
+) -> Result<(Vec<SemanticNodeId>, Option<Bounds2D64>), AuthoringError> {
+    if !Rc::ptr_eq(store, family.integration_store()) {
+        return Err(AuthoringError::ForeignStore);
+    }
+    family.validate()?;
+    execution
+        .require_published_store(&store.borrow())
+        .map_err(AuthoringError::from)?;
+    let leaves = store
+        .borrow()
+        .ordered_leaf_nodes(family.node_id())
+        .map_err(AuthoringError::from)?;
+    let mut bounds = None;
+    for &leaf in &leaves {
+        let object = Mobject::from_node(Rc::clone(store), leaf)?;
+        union_bounds(
+            &mut bounds,
+            effective_family_member_measure(store, execution, &object, boundary)?,
+        );
+    }
+    Ok((leaves, bounds))
+}
+
+pub(crate) fn effective_family_member_measure(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    object: &Mobject,
+    boundary: bool,
+) -> Result<Option<Bounds2D64>, AuthoringError> {
+    if !Rc::ptr_eq(store, object.integration_store()) {
+        return Err(AuthoringError::ForeignStore);
+    }
+    object.validate()?;
+    if !execution.semantic_object_is_reachable(object.node_id()) {
+        return if boundary {
+            object.boundary_bounds()
+        } else {
+            object.layout_bounds()
+        };
+    }
+    let store_ref = store.borrow();
+    let observed = execution
+        .effective_semantic_object(&store_ref, object.node_id())
+        .map_err(AuthoringError::from)?;
+    if !observed.authored_content_layout_applicable() {
+        return Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveFamilyLayoutRenderOverride,
+        ));
+    }
+    let transform = observed.object.transform;
+    drop(store_ref);
+    if boundary {
+        object.boundary_bounds_at(transform)
+    } else {
+        object.layout_bounds_at(transform)
     }
 }
