@@ -96,6 +96,12 @@ class SvgFacadeTests(unittest.TestCase):
         self.assertEqual(create_calls[0][3], ("svg-default-transport", *transport_calls[0]))
         self.assertEqual(value.svg_default, defaults)
 
+    def test_svg_default_float_color_matches_manim_hex_truncation(self):
+        self.assertEqual(
+            svg._rgb24("svg_default.fill_color", noon.Color(0.5, 0.1, 1.0)),
+            0x7F19FF,
+        )
+
     def test_custom_svg_default_requires_all_manim_keys_before_rust_call(self):
         calls = []
         defaults = dict(svg._MANIM_DEFAULT_SVG_STYLE)
