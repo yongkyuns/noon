@@ -803,3 +803,362 @@ mod tests {
         assert_eq!(preparer.visible_projection_stats().projections, 2);
     }
 }
+
+/// Packed primitive kind for one identity-free derived display occurrence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DerivedDisplayPrimitive {
+    Circle,
+    Rectangle,
+    Line,
+}
+
+/// One lookup row into the transient derived-instance buffers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreparedDerivedDisplaySlot {
+    pub anchor_object_index: u32,
+    pub occurrence_index: u32,
+    pub primitive: DerivedDisplayPrimitive,
+    pub instance_index: usize,
+}
+
+/// Painter-level merge descriptor. Stable entries retain their execution slot;
+/// derived entries retain only their plan-local occurrence ordinal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisplayPainterItem {
+    Stable { object_index: u32 },
+    Derived { occurrence_index: u32 },
+}
+
+/// Transient packed analytic geometry for one renderer publication.
+///
+/// These arrays deliberately contain no `ObjectId` side tables. They are rebuilt
+/// from the publication's identity-free derived rows and discarded independently of
+/// the stable `FramePreparer` storage.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PreparedDerivedDisplay {
+    pub circles: Vec<crate::CircleInstance>,
+    pub rectangles: Vec<crate::RectangleInstance>,
+    pub lines: Vec<crate::LineInstance>,
+    pub slots: Vec<PreparedDerivedDisplaySlot>,
+    pub painter_items: Vec<DisplayPainterItem>,
+}
+
+impl PreparedDerivedDisplay {
+    pub fn slot_for_occurrence(&self, occurrence_index: u32) -> Option<PreparedDerivedDisplaySlot> {
+        self.slots
+            .iter()
+            .copied()
+            .find(|slot| slot.occurrence_index == occurrence_index)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DerivedDisplayRenderError {
+    MissingAnchorInPainterOrder(u32),
+    ZIndexDiffersFromAnchor(u32),
+    DerivedObjectNotPresent(u32),
+    UnsupportedContent(u32),
+    UnsupportedGeometry(u32),
+}
+
+impl std::fmt::Display for DerivedDisplayRenderError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::MissingAnchorInPainterOrder(anchor) => write!(
+                formatter,
+                "derived display anchor {anchor} is absent from the stable painter order"
+            ),
+            Self::ZIndexDiffersFromAnchor(occurrence) => write!(
+                formatter,
+                "derived display occurrence {occurrence} changes z-index relative to its source anchor"
+            ),
+            Self::DerivedObjectNotPresent(occurrence) => write!(
+                formatter,
+                "derived display occurrence {occurrence} is not present"
+            ),
+            Self::UnsupportedContent(occurrence) => write!(
+                formatter,
+                "derived display occurrence {occurrence} requires non-geometry content packing"
+            ),
+            Self::UnsupportedGeometry(occurrence) => write!(
+                formatter,
+                "derived display occurrence {occurrence} requires transient path/external geometry packing"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DerivedDisplayRenderError {}
+
+/// Pack analytic derived display rows and merge their occurrence order immediately
+/// after each stable source anchor without modifying the stable frame preparer.
+///
+/// Vector paths, external geometry and text intentionally fail closed in this first
+/// renderer slice. Those need the renderer's retained resource/tessellation lanes;
+/// assigning a fake `ObjectId` merely to reuse stable slot packing is forbidden.
+pub fn prepare_derived_display(
+    publication: &noon_runtime::RendererPublication<'_>,
+) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
+    let mut by_anchor =
+        std::collections::BTreeMap::<u32, Vec<&noon_runtime::DerivedDisplayObject>>::new();
+    for object in publication.derived_display_objects() {
+        let anchor = object.anchor_object_index();
+        let state = object.state();
+        if state.z_index != publication.frame().objects[anchor as usize].z_index {
+            return Err(DerivedDisplayRenderError::ZIndexDiffersFromAnchor(
+                object.occurrence_index(),
+            ));
+        }
+        by_anchor.entry(anchor).or_default().push(object);
+    }
+    for objects in by_anchor.values_mut() {
+        objects.sort_unstable_by_key(|object| object.occurrence_index());
+    }
+
+    let mut prepared = PreparedDerivedDisplay::default();
+    let mut seen_anchors = HashSet::with_capacity(by_anchor.len());
+    for &object_index in publication.painter_order() {
+        prepared
+            .painter_items
+            .push(DisplayPainterItem::Stable { object_index });
+        let Some(objects) = by_anchor.get(&object_index) else {
+            continue;
+        };
+        seen_anchors.insert(object_index);
+        for &object in objects {
+            pack_derived_display_object(object, &mut prepared)?;
+            prepared.painter_items.push(DisplayPainterItem::Derived {
+                occurrence_index: object.occurrence_index(),
+            });
+        }
+    }
+    if let Some(&anchor) = by_anchor
+        .keys()
+        .find(|anchor| !seen_anchors.contains(anchor))
+    {
+        return Err(DerivedDisplayRenderError::MissingAnchorInPainterOrder(
+            anchor,
+        ));
+    }
+    Ok(prepared)
+}
+
+fn pack_derived_display_object(
+    object: &noon_runtime::DerivedDisplayObject,
+    prepared: &mut PreparedDerivedDisplay,
+) -> Result<(), DerivedDisplayRenderError> {
+    let state = object.state();
+    let occurrence = object.occurrence_index();
+    if !state.presence {
+        return Err(DerivedDisplayRenderError::DerivedObjectNotPresent(
+            occurrence,
+        ));
+    }
+    let geometry = state
+        .effective_render_geometry()
+        .ok_or(DerivedDisplayRenderError::UnsupportedContent(occurrence))?;
+    let transform: crate::PackedTransform = state.effective_render_transform().into();
+    let style = pack_derived_display_style(state);
+    let (primitive, instance_index) = match geometry {
+        noon_core::GeometryRef::Circle { radius } => {
+            let index = prepared.circles.len();
+            prepared.circles.push(crate::CircleInstance {
+                transform,
+                style,
+                radius: *radius,
+                padding: [state.reveal.clamp(0.0, 1.0), 0.0, 0.0],
+            });
+            (DerivedDisplayPrimitive::Circle, index)
+        }
+        noon_core::GeometryRef::Rectangle { size } => {
+            let index = prepared.rectangles.len();
+            prepared.rectangles.push(crate::RectangleInstance {
+                transform,
+                style,
+                size: [size.x, size.y],
+                padding: [0.0; 2],
+            });
+            (DerivedDisplayPrimitive::Rectangle, index)
+        }
+        noon_core::GeometryRef::Line { start, end } => {
+            let index = prepared.lines.len();
+            let mut transform = transform;
+            transform.padding = state.reveal.clamp(0.0, 1.0);
+            let mut style = style;
+            style.stroke_enabled |= match state.style.stroke_cap {
+                noon_core::StrokeCap::Round => 0,
+                noon_core::StrokeCap::Butt => 1 << 2,
+                noon_core::StrokeCap::Square => 2 << 2,
+            };
+            prepared.lines.push(crate::LineInstance {
+                transform,
+                style,
+                start: [start.x, start.y],
+                end: [end.x, end.y],
+            });
+            (DerivedDisplayPrimitive::Line, index)
+        }
+        noon_core::GeometryRef::VectorPath(_) | noon_core::GeometryRef::External(_) => {
+            return Err(DerivedDisplayRenderError::UnsupportedGeometry(occurrence));
+        }
+    };
+    prepared.slots.push(PreparedDerivedDisplaySlot {
+        anchor_object_index: object.anchor_object_index(),
+        occurrence_index: occurrence,
+        primitive,
+        instance_index,
+    });
+    Ok(())
+}
+
+fn pack_derived_display_style(
+    state: &noon_runtime::DerivedDisplayObjectState,
+) -> crate::PackedStyle {
+    let mut style: crate::PackedStyle = state.style.into();
+    style.opacity *= state.appearance.clamp(0.0, 1.0);
+    style
+}
+
+#[cfg(test)]
+mod derived_display_tests {
+    use noon_compile::{CompiledObject, CompiledScene};
+    use noon_core::{GeometryRef, ObjectContentRef, ObjectId, Style, Transform2D, Vec2};
+    use noon_runtime::{DerivedDisplayObject, DerivedDisplayObjectState, SceneInstance};
+
+    use super::*;
+
+    fn runtime(geometries: Vec<GeometryRef>) -> SceneInstance {
+        let objects = geometries
+            .into_iter()
+            .enumerate()
+            .map(|(index, geometry)| {
+                CompiledObject::new(
+                    ObjectId::new(index as u64 + 1),
+                    geometry,
+                    Transform2D::IDENTITY,
+                    Style::default(),
+                )
+            })
+            .collect();
+        SceneInstance::new(CompiledScene::compile_objects(objects, &[]).unwrap())
+    }
+
+    fn state(geometry: GeometryRef) -> DerivedDisplayObjectState {
+        DerivedDisplayObjectState {
+            z_index: 0.0,
+            content: ObjectContentRef::Geometry(geometry),
+            text_bounds: None,
+            transform: Transform2D::IDENTITY,
+            style: Style::default(),
+            appearance: 1.0,
+            presence: true,
+            reveal: 1.0,
+            morph: 0.0,
+            render_geometry: None,
+            render_transform: None,
+        }
+    }
+
+    #[test]
+    fn derived_circle_is_packed_without_object_id_storage() {
+        let mut runtime = runtime(vec![GeometryRef::circle(1.0)]);
+        let mut derived_state = state(GeometryRef::circle(0.5));
+        derived_state.appearance = 0.25;
+        derived_state.reveal = 0.5;
+        derived_state.transform.translation = Vec2::new(2.0, -1.0);
+        let derived = [DerivedDisplayObject::new(0, 7, derived_state)];
+        let publication = runtime
+            .take_renderer_publication()
+            .with_derived_display_objects(&derived)
+            .unwrap();
+
+        let prepared = prepare_derived_display(&publication).unwrap();
+        assert_eq!(prepared.circles.len(), 1);
+        assert_eq!(prepared.circles[0].transform.translation, [2.0, -1.0]);
+        assert_eq!(prepared.circles[0].style.opacity, 0.25);
+        assert_eq!(prepared.circles[0].padding[0], 0.5);
+        assert_eq!(
+            prepared.slot_for_occurrence(7),
+            Some(PreparedDerivedDisplaySlot {
+                anchor_object_index: 0,
+                occurrence_index: 7,
+                primitive: DerivedDisplayPrimitive::Circle,
+                instance_index: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn painter_projection_inserts_copies_after_stable_anchor_in_occurrence_order() {
+        let mut runtime = runtime(vec![
+            GeometryRef::circle(1.0),
+            GeometryRef::rectangle(1.0, 1.0),
+        ]);
+        let derived = [
+            DerivedDisplayObject::new(0, 4, state(GeometryRef::circle(0.4))),
+            DerivedDisplayObject::new(0, 2, state(GeometryRef::circle(0.2))),
+            DerivedDisplayObject::new(1, 8, state(GeometryRef::rectangle(0.5, 0.5))),
+        ];
+        let publication = runtime
+            .take_renderer_publication()
+            .with_derived_display_objects(&derived)
+            .unwrap();
+
+        let prepared = prepare_derived_display(&publication).unwrap();
+        assert_eq!(
+            prepared.painter_items,
+            vec![
+                DisplayPainterItem::Stable { object_index: 0 },
+                DisplayPainterItem::Derived {
+                    occurrence_index: 2
+                },
+                DisplayPainterItem::Derived {
+                    occurrence_index: 4
+                },
+                DisplayPainterItem::Stable { object_index: 1 },
+                DisplayPainterItem::Derived {
+                    occurrence_index: 8
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn transient_renderer_fails_closed_for_path_without_synthetic_id() {
+        let mut runtime = runtime(vec![GeometryRef::circle(1.0)]);
+        let path = noon_core::VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::ONE);
+        let derived = [DerivedDisplayObject::new(
+            0,
+            3,
+            state(GeometryRef::path(path)),
+        )];
+        let publication = runtime
+            .take_renderer_publication()
+            .with_derived_display_objects(&derived)
+            .unwrap();
+
+        assert_eq!(
+            prepare_derived_display(&publication).unwrap_err(),
+            DerivedDisplayRenderError::UnsupportedGeometry(3)
+        );
+    }
+
+    #[test]
+    fn painter_anchor_requires_source_z_index_and_stable_order_membership() {
+        let mut runtime = runtime(vec![GeometryRef::circle(1.0)]);
+        let mut different_z = state(GeometryRef::circle(0.5));
+        different_z.z_index = 1.0;
+        let derived = [DerivedDisplayObject::new(0, 9, different_z)];
+        let publication = runtime
+            .take_renderer_publication()
+            .with_derived_display_objects(&derived)
+            .unwrap();
+
+        assert_eq!(
+            prepare_derived_display(&publication).unwrap_err(),
+            DerivedDisplayRenderError::ZIndexDiffersFromAnchor(9)
+        );
+    }
+}
