@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::TransportTextResourceHandle;
 
+pub(crate) mod incremental_render;
+
 /// One-shot resource channel paired with `noon.execution.retained`.
 ///
 /// Frame deltas carry only small text handles. This bundle transfers the immutable
@@ -95,8 +97,6 @@ pub(crate) fn compiled_render_geometry_preparations(
             let noon_core::TrackValues::Object { from, to } = &track.values else {
                 return None;
             };
-            // Mixed stroke modes and current-relative paths can change their mesh
-            // key during playback. Keep them on the normal lazy preparation path.
             if from.style.stroke_width_mode != to.style.stroke_width_mode
                 || (render_transform.is_none()
                     && from.style.stroke_width_mode == noon_core::StrokeWidthMode::ScreenSpace)
@@ -127,8 +127,6 @@ pub(crate) fn compiled_render_geometries(
             else {
                 return None;
             };
-            // Current-relative screen-space fallback paths are rebuilt rather than
-            // published by identity. Local ScaleWithObject pairs remain stable.
             if render_transform.is_none()
                 && matches!(&track.values,
                 noon_core::TrackValues::Object { from, to }
@@ -768,9 +766,6 @@ impl TextResourceLookup for InstalledRetainedResources {
 
 impl GeometryResourceLookup for InstalledRetainedResources {
     fn current_handle(&self, id: noon_core::GeometryId) -> Option<GeometryResourceHandle> {
-        // A bare GeometryId has no arena scope and can alias the same slot in every
-        // additive layer. Incremental resources therefore resolve only by their
-        // qualified GeometryResourceHandle; this legacy helper remains base-only.
         self.geometries.current_handle(id)
     }
 
