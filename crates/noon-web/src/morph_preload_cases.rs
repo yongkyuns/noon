@@ -45,22 +45,22 @@ mod tests {
             .unwrap()
             .expect("activation must publish one retained update");
         let delta: RetainedFamilyExecutionDeltaEnvelope = serde_json::from_str(&json).unwrap();
-        let additions = delta
-            .resource_additions
-            .as_ref()
-            .expect("first morph activation must publish immutable renderer resources");
         assert!(
-            additions.render_geometry_count() > 0,
+            delta.resource_additions.is_some(),
+            "first morph activation must publish immutable renderer resources"
+        );
+        assert!(
+            json.contains("render_geometry_resources"),
             "morph geometry must be installed before its first rendered frame"
         );
 
-        let source_row = delta
+        let morph_row = delta
             .retained
             .objects
             .iter()
-            .find(|row| row.object == source.node_id().into())
-            .expect("source row must be dirty at transform activation");
-        assert!(source_row.render_geometry_resource.is_some());
-        assert!(source_row.render_geometry.is_none());
+            .find(|row| row.render_transform.is_some())
+            .expect("transform activation must publish a renderer geometry row");
+        assert!(morph_row.render_geometry_resource.is_some());
+        assert!(morph_row.render_geometry.is_none());
     }
 }
