@@ -1,0 +1,37 @@
+name: Temporary retained morph full validation
+
+on:
+  push:
+    branches:
+      - codex/validate-retained-morph-full
+    paths:
+      - .github/workflows/tmp-full-validation.yml
+
+permissions:
+  contents: read
+
+jobs:
+  full-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.after }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Install pinned browser tooling
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Full repository gate
+        run: bash scripts/check.sh full
