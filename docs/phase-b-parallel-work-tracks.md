@@ -42,6 +42,12 @@ A downstream feature lane may consume a B1 primitive when the relevant behavior 
 
 B2, B3, B4, and B6 do not need to wait for every B1 case to close. They wait only for the B1 primitives they actually consume.
 
+#### B1.4 family state/alignment handoff
+
+Unequal family topology has two deliberately separate contracts. Animation-side padding/alignment is derived correspondence and must not create Semantic Scene IDs or mutate authored membership merely to interpolate. Explicit persistent family `become`, by contrast, may reconcile authored topology, but the receiver owns the resulting identities and the entire topology/state change publishes through one semantic transaction. `ordered_family_leaf_pairs()` remains the strict animation-pairing primitive; persistent reconciliation does not weaken it.
+
+The focused application/qualification rules are recorded in [`unequal-family-become.md`](unequal-family-become.md). Downstream B3 work may therefore implement unequal visual Transform correspondence without waiting for persistent synthetic members, while B1.4 persistent `become` owns receiver-root preservation, fresh receiver IDs for genuinely new topology, target-ID non-transfer, alias reconciliation, and atomic publication.
+
 ### BH2 — retained path/content resource contract
 
 Owned by B2/#76/#77/#78/#79.
