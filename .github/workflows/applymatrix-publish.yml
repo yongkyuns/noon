@@ -33,8 +33,7 @@ jobs:
           test "$(git rev-parse origin/master)" = "$EXPECTED_MASTER"
           test "$(git rev-parse origin/codex/b3-apply-matrix)" = "$EXPECTED_TARGET"
           git switch --detach "$EXPECTED_MASTER"
-          git apply --check /tmp/applymatrix.patch
-          git apply /tmp/applymatrix.patch
+          git apply --3way /tmp/applymatrix.patch
 
           python3 - <<'PY'
           from pathlib import Path
