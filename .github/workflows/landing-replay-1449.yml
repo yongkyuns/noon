@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   replay:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
         with:
