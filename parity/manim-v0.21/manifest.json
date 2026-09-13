@@ -602,6 +602,18 @@
         "max_differing_ratio": 0.003,
         "max_mean_absolute_channel_error": 0.1
       }
+    },
+    {
+      "id": "unequal-family-transform-expansion",
+      "scene": "UnequalFamilyTransformExpansion",
+      "source": "parity/manim-v0.21/core-examples/unequal_family_transform.py",
+      "expected_duration": 1.0
+    },
+    {
+      "id": "unequal-family-transform-contraction",
+      "scene": "UnequalFamilyTransformContraction",
+      "source": "parity/manim-v0.21/core-examples/unequal_family_transform.py",
+      "expected_duration": 1.0
     }
   ],
   "sample_fractions": [
