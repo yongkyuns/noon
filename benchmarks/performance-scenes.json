@@ -135,16 +135,31 @@
       "classification": "scalability-only",
       "domains": ["P6", "P7"],
       "dimensions": ["warm-rerun", "one-object-edit", "identity-stabilization", "seek", "time-to-visible"]
+    },
+    {
+      "id": "retained-dynamic-stress",
+      "source": "web/python/examples/manim_parity_stress_grid.py",
+      "runner": "node scripts/retained-dynamic-stress-perf.mjs",
+      "classification": "adversarial",
+      "domains": ["P2", "P4", "P7"],
+      "dimensions": [
+        "source-continuation",
+        "600-object-morph",
+        "cold-morph-activation",
+        "steady-morph-locality",
+        "lifecycle-churn",
+        "worker-transport"
+      ]
     }
   ],
   "domainCoverage": {
     "P1": ["getting-started", "timed-composition", "tutorial-value-tracker"],
-    "P2": ["getting-started", "analytic-field-180", "painter-order-overlap"],
+    "P2": ["getting-started", "analytic-field-180", "painter-order-overlap", "retained-dynamic-stress"],
     "P3": ["analytic-field-180", "painter-order-overlap"],
-    "P4": ["create-shapes", "filled-path-transform"],
+    "P4": ["create-shapes", "filled-path-transform", "retained-dynamic-stress"],
     "P5": ["tutorial-value-tracker", "host-updater-follow"],
     "P6": ["getting-started", "authoring-edit-rerun-seek"],
-    "P7": ["analytic-field-180", "create-shapes", "host-updater-follow", "authoring-edit-rerun-seek"]
+    "P7": ["analytic-field-180", "create-shapes", "host-updater-follow", "authoring-edit-rerun-seek", "retained-dynamic-stress"]
   },
   "futureCoverage": [
     {
