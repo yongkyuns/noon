@@ -1,0 +1,165 @@
+name: Publish ApplyMatrix implementation on macOS
+
+on:
+  push:
+    branches:
+      - codex/b3-apply-matrix-publish
+    paths:
+      - .github/workflows/applymatrix-publish-macos.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-matrix-publish
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Apply, validate, and publish clean implementation
+        env:
+          EXPECTED_MASTER: c2861ff6ac1e54b09421bbf214534f610a050d9e
+          EXPECTED_TARGET: 125ac8d44e315a43da3fb2ce5af3fe00f8c191ba
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, gzip
+          encoded = Path('.github/applymatrix.patch.gz.b64').read_bytes()
+          Path('/tmp/applymatrix.patch').write_bytes(gzip.decompress(base64.b64decode(encoded)))
+          PY
+          git fetch origin master codex/b3-apply-matrix
+          test "$(git rev-parse origin/master)" = "$EXPECTED_MASTER"
+          test "$(git rev-parse origin/codex/b3-apply-matrix)" = "$EXPECTED_TARGET"
+          git switch --detach "$EXPECTED_MASTER"
+          git apply --3way /tmp/applymatrix.patch
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          matrix_path = Path('crates/noon/src/matrix_authoring.rs')
+          text = matrix_path.read_text()
+
+          old = '        prepared.publish(&mut store.borrow_mut(), |store, transaction| {'
+          assert text.count(old) == 1
+          text = text.replace(
+              old,
+              '        let mut store_mut = store.borrow_mut();\n'
+              '        prepared.publish(&mut store_mut, |store, transaction| {',
+              1,
+          )
+
+          pattern = re.compile(r'GeometryResource::VectorPath\(path\)\s*=>\s*path\.clone\(\),')
+          text, count = pattern.subn(
+              'GeometryResource::VectorPath(path) => path.as_ref().clone(),', text, count=1
+          )
+          assert count == 1
+
+          old = (
+              '    columns: usize,\n'
+              '    about_x: f64,\n'
+              '    about_y: f64,\n'
+              ') -> Result<Option<PreparedPathEdits>, AuthoringError> {\n'
+              '    let matrix = PlanarMatrix::parse(values, rows, columns)?;\n'
+              '    let about = authoring_xy_f64(about_x, about_y)?;'
+          )
+          new = (
+              '    columns: usize,\n'
+              '    about: (f64, f64),\n'
+              ') -> Result<Option<PreparedPathEdits>, AuthoringError> {\n'
+              '    let matrix = PlanarMatrix::parse(values, rows, columns)?;\n'
+              '    let about = authoring_xy_f64(about.0, about.1)?;'
+          )
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+
+          old = '                rows,\n                columns,\n                about_x,\n                about_y,\n'
+          new = '                rows,\n                columns,\n                (about_x, about_y),\n'
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+
+          old = (
+              '        let mut completion_session = scene.execution_session().unwrap();\n'
+              '        let mut live = scene.live(&mut completion_session);\n'
+              '        let segment = live.play_animation(&animation).unwrap();\n'
+              '        live.advance_segment_to(segment, segment.end_time()).unwrap();\n'
+              '        live.complete_segment(segment).unwrap();\n'
+              '        drop(live);\n'
+          )
+          new = (
+              '        let mut completion_session = scene.execution_session().unwrap();\n'
+              '        {\n'
+              '            let mut live = scene.live(&mut completion_session);\n'
+              '            let segment = live.play_animation(&animation).unwrap();\n'
+              '            live.advance_segment_to(segment, segment.end_time()).unwrap();\n'
+              '            live.complete_segment(segment).unwrap();\n'
+              '        }\n'
+          )
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+          matrix_path.write_text(text)
+
+          live_path = Path('crates/noon/src/live_session/path_editing.rs')
+          live_text = live_path.read_text()
+          old = '                rows,\n                columns,\n                about_x,\n                about_y,\n'
+          new = '                rows,\n                columns,\n                (about_x, about_y),\n'
+          assert live_text.count(old) == 1
+          live_path.write_text(live_text.replace(old, new, 1))
+          PY
+
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo test -p noon apply_matrix
+          cargo check -p noon-native --example ordinary_apply_matrix
+          cargo clippy -p noon --all-targets -- -D warnings
+          python3 -m unittest \
+            web/python/test_manim_apply_matrix.py \
+            web/python/test_manim_animation_constructor_options.py \
+            web/python/test_manim_transform_path_arc_options.py \
+            web/python/test_manim_scale_in_place.py
+          node --check scripts/check-web-package.mjs
+          git diff --check
+
+          git add -A
+          expected="$(cat <<'EOF'
+          crates/noon-native/examples/ordinary_apply_matrix.rs
+          crates/noon-web/src/authoring_mobject.rs
+          crates/noon-web/src/canonical_authoring_scene.rs
+          crates/noon-web/src/semantic_execution_player.rs
+          crates/noon/src/authoring_error.rs
+          crates/noon/src/example_scenes.rs
+          crates/noon/src/example_scenes/apply_matrix.rs
+          crates/noon/src/lib.rs
+          crates/noon/src/live_session/path_editing.rs
+          crates/noon/src/matrix_authoring.rs
+          scripts/check-web-package.mjs
+          web/python/_manim_animate.py
+          web/python/_manim_scene.py
+          web/python/examples/manim_parity_apply_matrix.py
+          web/python/noon.py
+          web/python/test_manim_animation_constructor_options.py
+          web/python/test_manim_apply_matrix.py
+          EOF
+          )"
+          actual="$(git diff --cached --name-only | LC_ALL=C sort)"
+          expected="$(printf '%s\n' "$expected" | sed 's/^[[:space:]]*//' | LC_ALL=C sort)"
+          test "$actual" = "$expected" || {
+            echo 'Unexpected changed-file surface'
+            echo 'Expected:'
+            printf '%s\n' "$expected"
+            echo 'Actual:'
+            printf '%s\n' "$actual"
+            exit 1
+          }
+
+          git config user.name 'Yongkyun Shin'
+          git config user.email '4311628+yongkyuns@users.noreply.github.com'
+          git commit -m 'Add deterministic ApplyMatrix geometry transforms'
+          git push --force-with-lease=refs/heads/codex/b3-apply-matrix:$EXPECTED_TARGET \
+            origin HEAD:refs/heads/codex/b3-apply-matrix
