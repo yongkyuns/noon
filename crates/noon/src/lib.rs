@@ -204,7 +204,7 @@ pub mod prelude {
         LiveProgram, LiveSession, LiveSessionError, ManimArrow, ManimArrowOptions,
         ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget, NativeBoolSignal,
         NativeVectorSignal, RateFunction, Scene, SemanticObjectState, SemanticStyle,
-        StoredGeometry, SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature,
+        StoredGeometry, StyleUpdate, SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature,
         TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange, VectorFieldPoint,
         VectorFieldRanges2D, VectorPath,
     };

@@ -5,7 +5,7 @@
 //! identities used by native geometry; no SVG-specific runtime or renderer state
 //! exists below this module.
 
-use crate::{AuthoringError, MobjectFamily, Scene};
+use crate::{AuthoringError, MobjectFamily, Scene, StyleUpdate};
 use noon_core::{
     semantic_path_bounds, Color, SemanticMutationTransaction, SemanticNodeCreation,
     SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle, SemanticTransform2_5D,
@@ -173,7 +173,12 @@ impl MobjectFamily {
         store: Rc<RefCell<SemanticStore>>,
         source: &str,
     ) -> Result<Self, SvgAuthoringError> {
-        Self::from_svg_str_with_options(store, source, SvgImportOptions::default())
+        Self::from_svg_str_with_options_and_style(
+            store,
+            source,
+            SvgImportOptions::default(),
+            StyleUpdate::default(),
+        )
     }
 
     /// Parse one static SVG string into a supplied semantic store with explicit
@@ -183,7 +188,29 @@ impl MobjectFamily {
         source: &str,
         options: SvgImportOptions,
     ) -> Result<Self, SvgAuthoringError> {
-        Self::from_svg_str_internal(store_rc, source, options, None)
+        Self::from_svg_str_with_options_and_style(store_rc, source, options, StyleUpdate::default())
+    }
+
+    /// Parse one static SVG string and override supplied paint fields on every leaf.
+    ///
+    /// Omitted fields preserve the parsed SVG style. Overrides are validated and
+    /// applied before the family is published, so a failure leaves the store unchanged.
+    pub fn from_svg_str_with_style(
+        store: Rc<RefCell<SemanticStore>>,
+        source: &str,
+        style: StyleUpdate,
+    ) -> Result<Self, SvgAuthoringError> {
+        Self::from_svg_str_with_options_and_style(store, source, SvgImportOptions::default(), style)
+    }
+
+    /// Parse one SVG with explicit placement and whole-import paint overrides.
+    pub fn from_svg_str_with_options_and_style(
+        store_rc: Rc<RefCell<SemanticStore>>,
+        source: &str,
+        options: SvgImportOptions,
+        style: StyleUpdate,
+    ) -> Result<Self, SvgAuthoringError> {
+        Self::from_svg_str_internal(store_rc, source, options, style, None)
     }
 
     /// Parse one SVG using a caller-stable import key for root/leaf reconciliation.
@@ -197,10 +224,27 @@ impl MobjectFamily {
         source: &str,
         import_key: &str,
     ) -> Result<Self, SvgAuthoringError> {
-        Self::from_svg_str_with_options_and_import_key(
+        Self::from_svg_str_with_options_and_style_and_import_key(
             store,
             source,
             SvgImportOptions::default(),
+            StyleUpdate::default(),
+            import_key,
+        )
+    }
+
+    /// Parse one SVG with paint overrides and a caller-stable import key.
+    pub fn from_svg_str_with_style_and_import_key(
+        store: Rc<RefCell<SemanticStore>>,
+        source: &str,
+        style: StyleUpdate,
+        import_key: &str,
+    ) -> Result<Self, SvgAuthoringError> {
+        Self::from_svg_str_with_options_and_style_and_import_key(
+            store,
+            source,
+            SvgImportOptions::default(),
+            style,
             import_key,
         )
     }
@@ -212,17 +256,36 @@ impl MobjectFamily {
         options: SvgImportOptions,
         import_key: &str,
     ) -> Result<Self, SvgAuthoringError> {
+        Self::from_svg_str_with_options_and_style_and_import_key(
+            store_rc,
+            source,
+            options,
+            StyleUpdate::default(),
+            import_key,
+        )
+    }
+
+    /// Parse one SVG with explicit placement, paint overrides, and stable identity.
+    pub fn from_svg_str_with_options_and_style_and_import_key(
+        store_rc: Rc<RefCell<SemanticStore>>,
+        source: &str,
+        options: SvgImportOptions,
+        style: StyleUpdate,
+        import_key: &str,
+    ) -> Result<Self, SvgAuthoringError> {
         validate_import_key(import_key)?;
-        Self::from_svg_str_internal(store_rc, source, options, Some(import_key))
+        Self::from_svg_str_internal(store_rc, source, options, style, Some(import_key))
     }
 
     fn from_svg_str_internal(
         store_rc: Rc<RefCell<SemanticStore>>,
         source: &str,
         options: SvgImportOptions,
+        style: StyleUpdate,
         import_key: Option<&str>,
     ) -> Result<Self, SvgAuthoringError> {
-        let prepared = prepare_svg(source, options)?;
+        let mut prepared = prepare_svg(source, options)?;
+        apply_style_update(&mut prepared.leaves, style)?;
         let mut paths = Vec::with_capacity(prepared.leaves.len());
         let mut metadata = Vec::with_capacity(prepared.leaves.len());
         for leaf in prepared.leaves {
@@ -286,6 +349,30 @@ impl Scene {
         )
     }
 
+    /// Parse one SVG and override supplied paint fields on every imported leaf.
+    pub fn svg_from_str_with_style(
+        &self,
+        source: &str,
+        style: StyleUpdate,
+    ) -> Result<MobjectFamily, SvgAuthoringError> {
+        MobjectFamily::from_svg_str_with_style(Rc::clone(self.integration_store()), source, style)
+    }
+
+    /// Parse one SVG with explicit placement and whole-import paint overrides.
+    pub fn svg_from_str_with_options_and_style(
+        &self,
+        source: &str,
+        options: SvgImportOptions,
+        style: StyleUpdate,
+    ) -> Result<MobjectFamily, SvgAuthoringError> {
+        MobjectFamily::from_svg_str_with_options_and_style(
+            Rc::clone(self.integration_store()),
+            source,
+            options,
+            style,
+        )
+    }
+
     /// Parse one SVG with a stable caller-owned import key.
     pub fn svg_from_str_with_import_key(
         &self,
@@ -295,6 +382,21 @@ impl Scene {
         MobjectFamily::from_svg_str_with_import_key(
             Rc::clone(self.integration_store()),
             source,
+            import_key,
+        )
+    }
+
+    /// Parse one SVG with paint overrides and a stable caller-owned import key.
+    pub fn svg_from_str_with_style_and_import_key(
+        &self,
+        source: &str,
+        style: StyleUpdate,
+        import_key: &str,
+    ) -> Result<MobjectFamily, SvgAuthoringError> {
+        MobjectFamily::from_svg_str_with_style_and_import_key(
+            Rc::clone(self.integration_store()),
+            source,
+            style,
             import_key,
         )
     }
@@ -313,6 +415,37 @@ impl Scene {
             import_key,
         )
     }
+
+    /// Parse one SVG with explicit placement, paint overrides, and stable identity.
+    pub fn svg_from_str_with_options_and_style_and_import_key(
+        &self,
+        source: &str,
+        options: SvgImportOptions,
+        style: StyleUpdate,
+        import_key: &str,
+    ) -> Result<MobjectFamily, SvgAuthoringError> {
+        MobjectFamily::from_svg_str_with_options_and_style_and_import_key(
+            Rc::clone(self.integration_store()),
+            source,
+            options,
+            style,
+            import_key,
+        )
+    }
+}
+
+fn apply_style_update(
+    leaves: &mut [PreparedSvgLeaf],
+    style: StyleUpdate,
+) -> Result<(), SvgAuthoringError> {
+    // Match ordinary family style authoring: validate arguments even when the
+    // imported SVG has no drawable leaves, before any semantic publication.
+    let mut validation = SemanticStyle::default();
+    style.apply(&mut validation)?;
+    for leaf in leaves {
+        style.apply(&mut leaf.style)?;
+    }
+    Ok(())
 }
 
 fn with_svg_source_identity(
@@ -1045,6 +1178,111 @@ mod tests {
         assert!((state.style.fill_opacity - 0.25).abs() < 1e-6);
         assert!((state.style.stroke_opacity - 0.5).abs() < 1e-6);
         assert!((state.style.stroke_width - 0.02).abs() < 1e-6);
+    }
+
+    #[test]
+    fn svg_style_overrides_apply_before_one_publication() {
+        let scene = Scene::new();
+        let before = scene.revision();
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">
+            <rect x="0" y="0" width="10" height="10" fill="#ff0000" stroke="none"/>
+            <path d="M 10 0 L 20 0 L 20 10 Z" fill="none" stroke="#00ff00" stroke-width="2"/>
+        </svg>"##;
+        let style = StyleUpdate {
+            fill_color: Some(Color::from_hex(0x336699)),
+            fill_opacity: Some(0.25),
+            stroke_color: Some(Color::from_hex(0xCC5500)),
+            stroke_width: Some(3.0),
+            stroke_opacity: Some(0.75),
+        };
+
+        let family = scene
+            .svg_from_str_with_options_and_style(svg, raw_options(), style)
+            .unwrap();
+        assert_eq!(
+            scene.revision(),
+            before.checked_next().expect("one SVG publication revision")
+        );
+
+        let store = scene.integration_store().borrow();
+        let members = store
+            .semantic_family_members_checked(family.node_id())
+            .unwrap();
+        assert_eq!(members.len(), 2);
+        for member in members {
+            let state = store.semantic_object_state_checked(member).unwrap();
+            assert_eq!(
+                state.style.fill,
+                Some(SemanticPaint::Solid(Color::from_hex(0x336699)))
+            );
+            assert_eq!(
+                state.style.stroke,
+                Some(SemanticPaint::Solid(Color::from_hex(0xCC5500)))
+            );
+            assert!((state.style.fill_opacity - 0.25).abs() < 1e-6);
+            assert!((state.style.stroke_opacity - 0.75).abs() < 1e-6);
+            assert!((state.style.stroke_width - 3.0).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn invalid_svg_style_override_fails_before_publication() {
+        let scene = Scene::new();
+        let before = scene.revision();
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+            <rect width="10" height="10" fill="#ff0000"/>
+        </svg>"##;
+
+        assert!(matches!(
+            scene.svg_from_str_with_style(
+                svg,
+                StyleUpdate {
+                    fill_opacity: Some(1.25),
+                    ..StyleUpdate::default()
+                }
+            ),
+            Err(SvgAuthoringError::Authoring(_))
+        ));
+        assert_eq!(scene.revision(), before);
+    }
+
+    #[test]
+    fn svg_style_overrides_compose_with_stable_import_identity() {
+        let scene = Scene::new();
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+            <rect id="box" width="10" height="10" fill="#ff0000"/>
+        </svg>"##;
+        let family = scene
+            .svg_from_str_with_options_and_style_and_import_key(
+                svg,
+                raw_options(),
+                StyleUpdate {
+                    fill_color: Some(Color::from_hex(0x123456)),
+                    ..StyleUpdate::default()
+                },
+                "icons/override.svg",
+            )
+            .unwrap();
+        let store = scene.integration_store().borrow();
+        assert_eq!(
+            source_identity_for(&store, family.node_id()),
+            svg_source_identity("icons/override.svg", "root")
+        );
+        let member = store
+            .semantic_family_members_checked(family.node_id())
+            .unwrap()[0];
+        assert_eq!(
+            source_identity_for(&store, member),
+            svg_source_identity("icons/override.svg", &explicit_id_locator("box"))
+        );
+        assert_eq!(
+            store
+                .semantic_object_state_checked(member)
+                .unwrap()
+                .style
+                .fill,
+            Some(SemanticPaint::Solid(Color::from_hex(0x123456)))
+        );
     }
 
     #[test]
