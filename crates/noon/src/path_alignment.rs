@@ -24,7 +24,7 @@ pub(crate) fn prepare_alignment(
     }
     PreparedPathEdits::prepare(store, replacements)
 }
-pub(crate) fn publish_alignment(
+pub fn publish_alignment(
     store: &Rc<RefCell<SemanticStore>>,
     root: SemanticNodeId,
     execution: &mut ExecutionSession,
