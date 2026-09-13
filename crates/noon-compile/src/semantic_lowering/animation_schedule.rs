@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use noon_core::{
     continuous_time_map_interval, resolve_add_animation_options, resolve_animation_options,
-    resolve_composition_schedule, AnimationDefaults, AnimationOptions, AnimationOptionsError,
-    CompositionError, CompositionInterval, CompositionTimeMap, CompositionTimeMapStep, ObjectId,
-    PreparedSemanticMutationTransaction, RateFunction, ResolvedAnimationOptions,
-    SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
-    SemanticAnimationCompositionKind, SemanticAnimationError, SemanticAnimationIntent,
-    SemanticFadeDirection, SemanticNodeId, SemanticScalarSignalQueryError,
+    resolve_composition_schedule, resolve_transform_animation_options, AnimationDefaults,
+    AnimationOptions, AnimationOptionsError, CompositionError, CompositionInterval,
+    CompositionTimeMap, CompositionTimeMapStep, ObjectId, PreparedSemanticMutationTransaction,
+    RateFunction, ResolvedAnimationOptions, SemanticAffineLifecycleDirection,
+    SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationError,
+    SemanticAnimationIntent, SemanticFadeDirection, SemanticNodeId, SemanticScalarSignalQueryError,
     SemanticScalarSignalTrack, SemanticStore, SemanticTransactionAnimationIntent,
     SemanticTransactionNodeRef, SemanticTransactionReadError, SemanticTransformInterpolation,
     TrackTiming,
@@ -1868,9 +1868,12 @@ where
                 .execution_object_id(target)
                 .or_else(|| lookup.entering_execution_object_id(target))
                 .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
-            let options =
-                resolve_animation_options(AnimationDefaults::MANIM, state.options, play_options)
-                    .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            let options = resolve_transform_animation_options(
+                AnimationDefaults::MANIM,
+                state.options,
+                play_options,
+            )
+            .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
 
             Ok(PlannedAnimation {
                 animation,
@@ -2983,30 +2986,47 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_timing_capabilities_fail_closed_with_animation_identity() {
+    fn transform_path_arc_is_scheduled_while_other_unsupported_timing_stays_fail_closed() {
         let mut store = SemanticStore::new();
         let target = visible_target(&mut store, 1.0);
         let target_state = object(&mut store, 2.0);
-        let animation = store
+        let path_arc = store
             .insert_semantic_transform_animation(
                 target,
                 target_state,
                 AnimationOptions::new().path_arc(0.5),
             )
             .unwrap();
+        let unsupported = store
+            .insert_semantic_transform_animation(
+                target,
+                target_state,
+                AnimationOptions::new().reverse_rate_function(true),
+            )
+            .unwrap();
         let index = prepare_index(&store);
+
+        let schedule = lower_semantic_animation_schedule(
+            &store,
+            &index,
+            path_arc,
+            0.0,
+            AnimationOptions::new(),
+        )
+        .unwrap();
+        assert_eq!(schedule.leaves()[0].options.path_arc, 0.5);
 
         assert_eq!(
             lower_semantic_animation_schedule(
                 &store,
                 &index,
-                animation,
+                unsupported,
                 0.0,
                 AnimationOptions::new(),
             ),
             Err(SemanticAnimationScheduleError::Options {
-                animation,
-                error: AnimationOptionsError::UnsupportedPathArc(0.5),
+                animation: unsupported,
+                error: AnimationOptionsError::UnsupportedReverseRateFunction,
             })
         );
     }

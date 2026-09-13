@@ -224,6 +224,7 @@ pub fn lower_prepared_family_transform_channels(
             target,
             occurrence.effective_source,
             noon_core::SemanticTransformInterpolation::Affine,
+            0.0,
         )
         .map_err(|issue| payload_error(occurrence, issue))?;
 

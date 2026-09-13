@@ -26,9 +26,10 @@ impl ScheduledCaptures {
             };
             match (property, values) {
                 (Property::ZIndex, TrackValues::ZIndex { to, .. }) => value.z_index = *to,
-                (Property::Position, TrackValues::Vec2 { from, to }) => {
-                    value.transform.translation = if *at_end { *to } else { *from }
-                }
+                (
+                    Property::Position,
+                    TrackValues::Vec2 { from, to } | TrackValues::ArcVec2 { from, to, .. },
+                ) => value.transform.translation = if *at_end { *to } else { *from },
                 (Property::Scale, TrackValues::Vec2 { from, to }) => {
                     value.transform.scale = if *at_end { *to } else { *from }
                 }

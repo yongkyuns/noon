@@ -1,6 +1,7 @@
 use noon_core::{
-    resolve_animation_options as resolve_core_animation_options, AnimationDefaults,
-    AnimationOptions, RateFunction, ResolvedAnimationOptions,
+    resolve_animation_options as resolve_core_animation_options,
+    resolve_transform_animation_options as resolve_core_transform_animation_options,
+    AnimationDefaults, AnimationOptions, RateFunction, ResolvedAnimationOptions,
 };
 
 use crate::authoring_error::AuthoringFailure;
@@ -71,11 +72,52 @@ pub fn resolve_frontend_animation_options(
     .map_err(AuthoringFailure::from)
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_frontend_transform_animation_options(
+    default_lag_ratio: f64,
+    animation_run_time: f64,
+    animation_rate_func: &str,
+    animation_lag_ratio: f64,
+    animation_path_arc: f64,
+    animation_reverse_rate_function: i32,
+    play_run_time: f64,
+    play_rate_func: &str,
+    play_lag_ratio: f64,
+    play_path_arc: f64,
+) -> Result<ResolvedAnimationOptions, AuthoringFailure> {
+    let animation_rate_func = parse_optional_rate_func(animation_rate_func)?;
+    let play_rate_func = parse_optional_rate_func(play_rate_func)?;
+    let animation = AnimationOptions {
+        run_time: optional_number(animation_run_time),
+        rate_func: animation_rate_func,
+        lag_ratio: optional_number(animation_lag_ratio),
+        path_arc: optional_number(animation_path_arc),
+        reverse_rate_function: optional_bool(animation_reverse_rate_function),
+        ..AnimationOptions::new()
+    };
+    let play = AnimationOptions {
+        run_time: optional_number(play_run_time),
+        rate_func: play_rate_func,
+        lag_ratio: optional_number(play_lag_ratio),
+        path_arc: optional_number(play_path_arc),
+        ..AnimationOptions::new()
+    };
+    resolve_core_transform_animation_options(
+        AnimationDefaults::MANIM.lag_ratio(default_lag_ratio),
+        animation,
+        play,
+    )
+    .map_err(AuthoringFailure::from)
+}
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use wasm_bindgen::prelude::*;
 
-    use super::{resolve_frontend_animation_options, ResolvedAnimationOptions};
+    use super::{
+        resolve_frontend_animation_options, resolve_frontend_transform_animation_options,
+        ResolvedAnimationOptions,
+    };
     use crate::authoring_error::js_error;
 
     #[wasm_bindgen]
@@ -136,6 +178,36 @@ mod wasm {
         .map(WasmAnimationOptionsResolution)
         .map_err(js_error)
     }
+
+    #[wasm_bindgen(js_name = resolveTransformAnimationOptions)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn resolve_transform_animation_options(
+        default_lag_ratio: f64,
+        animation_run_time: f64,
+        animation_rate_func: &str,
+        animation_lag_ratio: f64,
+        animation_path_arc: f64,
+        animation_reverse_rate_function: i32,
+        play_run_time: f64,
+        play_rate_func: &str,
+        play_lag_ratio: f64,
+        play_path_arc: f64,
+    ) -> Result<WasmAnimationOptionsResolution, JsValue> {
+        resolve_frontend_transform_animation_options(
+            default_lag_ratio,
+            animation_run_time,
+            animation_rate_func,
+            animation_lag_ratio,
+            animation_path_arc,
+            animation_reverse_rate_function,
+            play_run_time,
+            play_rate_func,
+            play_lag_ratio,
+            play_path_arc,
+        )
+        .map(WasmAnimationOptionsResolution)
+        .map_err(js_error)
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -163,6 +235,24 @@ mod tests {
         assert_eq!(resolved.run_time, 0.4);
         assert_eq!(resolved.rate_func.semantic_id(), "smooth");
         assert_eq!(resolved.lag_ratio, 0.5);
+    }
+
+    #[test]
+    fn transform_frontend_bridge_accepts_and_overrides_path_arc() {
+        let resolved = resolve_frontend_transform_animation_options(
+            0.0,
+            f64::NAN,
+            "",
+            f64::NAN,
+            0.5,
+            -1,
+            f64::NAN,
+            "",
+            f64::NAN,
+            -0.75,
+        )
+        .unwrap();
+        assert_eq!(resolved.path_arc, -0.75);
     }
 
     #[test]
