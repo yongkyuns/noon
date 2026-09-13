@@ -6,6 +6,8 @@ use noon_core::{
     TrackValues,
 };
 
+use crate::{transform::compile_transform_geometry_values, TransformGeometryPlan};
+
 use super::affine::{
     completion_at_endpoint, driver_key, lower_transform_channels, transform_driver_conflict,
     validate_affine_payload, AffinePayloadIssue, LoweredAffineChannel, SemanticAnimationCompletion,
@@ -42,6 +44,7 @@ pub struct PreparedDerivedFamilyTransformTrack {
     pub anchor_execution_object_id: ObjectId,
     pub property: Property,
     pub values: TrackValues,
+    pub transform_geometry_plan: Option<TransformGeometryPlan>,
     pub timing: noon_core::TrackTiming,
     pub time_map: noon_core::CompositionTimeMap,
 }
@@ -97,6 +100,34 @@ pub enum PreparedFamilyTransformChannelError {
         target: SemanticNodeId,
         property: SemanticObjectProperty,
     },
+    DerivedGeometryPlan {
+        occurrence_index: u32,
+        property: Property,
+        failure: PreparedDerivedTransformGeometryPlanFailure,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreparedDerivedTransformGeometryPlanFailure {
+    UnsupportedGeometry,
+    RequiresRetessellation,
+    UnsafeFilledPath,
+}
+
+impl From<crate::transform::TransformCompileFailure>
+    for PreparedDerivedTransformGeometryPlanFailure
+{
+    fn from(value: crate::transform::TransformCompileFailure) -> Self {
+        match value {
+            crate::transform::TransformCompileFailure::UnsupportedGeometry => {
+                Self::UnsupportedGeometry
+            }
+            crate::transform::TransformCompileFailure::RequiresRetessellation => {
+                Self::RequiresRetessellation
+            }
+            crate::transform::TransformCompileFailure::UnsafeFilledPath => Self::UnsafeFilledPath,
+        }
+    }
 }
 
 impl std::fmt::Display for PreparedFamilyTransformChannelError {
@@ -122,6 +153,14 @@ impl std::fmt::Display for PreparedFamilyTransformChannelError {
                 target.slot(),
                 target.generation()
             ),
+            Self::DerivedGeometryPlan {
+                occurrence_index,
+                property,
+                failure,
+            } => write!(
+                formatter,
+                "derived family Transform occurrence {occurrence_index} cannot prepare {property:?} geometry plan: {failure:?}"
+            ),
         }
     }
 }
@@ -131,7 +170,7 @@ impl std::error::Error for PreparedFamilyTransformChannelError {
         match self {
             Self::Target { error, .. } => Some(error),
             Self::Payload(error) => Some(error),
-            Self::MultipleDrivers { .. } => None,
+            Self::MultipleDrivers { .. } | Self::DerivedGeometryPlan { .. } => None,
         }
     }
 }
@@ -192,15 +231,27 @@ pub fn lower_prepared_family_transform_channels(
         if occurrence.source_padding {
             let mut tracks = channels
                 .into_iter()
-                .map(|channel| PreparedDerivedFamilyTransformTrack {
-                    occurrence_index: occurrence.occurrence_index,
-                    anchor_execution_object_id: occurrence.source_execution_object_id,
-                    property: channel.property,
-                    values: channel.values,
-                    timing: occurrence.timing,
-                    time_map: occurrence.time_map.clone(),
+                .map(|channel| {
+                    let transform_geometry_plan =
+                        compile_transform_geometry_values(channel.property, &channel.values)
+                            .map_err(|failure| {
+                                PreparedFamilyTransformChannelError::DerivedGeometryPlan {
+                                    occurrence_index: occurrence.occurrence_index,
+                                    property: channel.property,
+                                    failure: failure.into(),
+                                }
+                            })?;
+                    Ok(PreparedDerivedFamilyTransformTrack {
+                        occurrence_index: occurrence.occurrence_index,
+                        anchor_execution_object_id: occurrence.source_execution_object_id,
+                        property: channel.property,
+                        values: channel.values,
+                        transform_geometry_plan,
+                        timing: occurrence.timing,
+                        time_map: occurrence.time_map.clone(),
+                    })
                 })
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>, PreparedFamilyTransformChannelError>>()?;
             tracks.push(PreparedDerivedFamilyTransformTrack {
                 occurrence_index: occurrence.occurrence_index,
                 anchor_execution_object_id: occurrence.source_execution_object_id,
@@ -209,6 +260,7 @@ pub fn lower_prepared_family_transform_channels(
                     from: 0.0,
                     to: target_appearance,
                 },
+                transform_geometry_plan: None,
                 timing: occurrence.timing,
                 time_map: occurrence.time_map.clone(),
             });
