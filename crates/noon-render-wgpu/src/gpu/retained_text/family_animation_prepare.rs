@@ -406,9 +406,6 @@ mod operation_selection_tests {
         assert_eq!(upload.geometry.bytes_uploaded, expected);
         assert_eq!(upload.geometry.buffer_reallocations, 0);
 
-        // A same-slot structural replacement must retain its structural marker
-        // through the family baseline. Reusing the old scratch/source identity
-        // would draw object 99 instead of the replacement object 100.
         retained.objects[2].id = ObjectId::new(100);
         let frame = RetainedFamilyFrame {
             retained: &retained,
@@ -460,6 +457,7 @@ mod operation_selection_tests {
             }
         )));
     }
+
     #[test]
     fn compiled_morph_budget_keeps_inactive_phase_meshes_warm() {
         const PER_PHASE: usize = 300;
@@ -525,8 +523,6 @@ mod operation_selection_tests {
         }
         assert_eq!(preparer.geometry.cached_path_mesh_count(), 2 * PER_PHASE);
 
-        // Installing a smaller resource set resets the allowance; visible paths
-        // remain pinned while now-stale meshes return to the bounded cache policy.
         preparer.set_scene_path_mesh_cache_budget(0, 0);
         preparer
             .prepare_with_changes(
@@ -546,6 +542,7 @@ mod operation_selection_tests {
             crate::DEFAULT_PATH_MESH_CACHE_LIMIT
         );
     }
+
     #[test]
     fn preload_replacement_resets_prepared_state_and_failure_preserves_installation() {
         let (_, retained, _) = fixture();
@@ -629,8 +626,6 @@ mod operation_selection_tests {
             )
             .unwrap();
         assert_eq!(rebuilt.geometry_stats().full_rebuilds, 1);
-        // This fixture is geometry-only. Reinstalling path residency rebuilds
-        // geometry, but it must not manufacture a text upload generation.
         assert_eq!(rebuilt.text_generation, generation);
         assert!(rebuilt.geometry_only);
         assert_eq!(
@@ -645,6 +640,7 @@ mod operation_selection_tests {
         assert_eq!(preparer.geometry.resident_vertex_count, 0);
         assert_eq!(preparer.geometry.resident_index_count, 0);
     }
+
     #[test]
     fn oversized_preload_preserves_previous_cpu_and_gpu_installation() {
         let (_, mut retained, _) = fixture();
@@ -743,5 +739,51 @@ mod operation_selection_tests {
             assert!(prepared.geometry_only);
             assert!(prepared.render_items.is_empty());
         }
+    }
+}
+
+impl RetainedFramePreparer {
+    /// Append immutable path residency without replacing the retained preparer.
+    /// Only newly admitted mesh keys are tessellated and only the resident suffix
+    /// is uploaded unless GPU capacity growth requires rewriting the prefix.
+    pub fn append_preload_path_meshes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        renderer: &mut GpuRenderer,
+        requests: &[crate::PathMeshPreload<'_>],
+    ) -> Result<crate::PathMeshPreloadStats, crate::PathMeshPreloadError> {
+        let plan = self.geometry.prepare_path_mesh_append(requests)?;
+        if plan.is_empty() {
+            return Ok(crate::PathMeshPreloadStats {
+                geometry: self.geometry.commit_path_mesh_append(plan),
+                upload: UploadStats::default(),
+            });
+        }
+
+        let limit = device.limits().max_buffer_size;
+        super::super::validate_preload_allocation(
+            "path vertices",
+            plan.next_vertex_count()
+                .saturating_mul(std::mem::size_of::<crate::PathVertex>()),
+            renderer.path_vertex_capacity_bytes(),
+            limit,
+        )?;
+        super::super::validate_preload_allocation(
+            "path indices",
+            plan.next_index_count()
+                .saturating_mul(std::mem::size_of::<u32>()),
+            renderer.path_index_capacity_bytes(),
+            limit,
+        )?;
+
+        let geometry = self.geometry.commit_path_mesh_append(plan);
+        self.prepared_generation_ready = false;
+        let frame = self.geometry.resident_upload_frame(geometry);
+        let upload = renderer.upload_preloaded_paths(device, queue, &frame)?;
+        Ok(crate::PathMeshPreloadStats {
+            geometry: frame.stats,
+            upload,
+        })
     }
 }
