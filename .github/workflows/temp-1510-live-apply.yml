@@ -11,7 +11,7 @@ permissions:
 jobs:
   patch-live-apply:
     if: github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, noon-physical]
     steps:
       - uses: actions/checkout@v7
         with:
