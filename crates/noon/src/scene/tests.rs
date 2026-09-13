@@ -346,6 +346,73 @@ fn effective_path_query_is_scene_owned_and_requires_running_execution() {
 }
 
 #[test]
+fn scene_point_matching_captures_effective_target_and_blocks_pending_publication() {
+    let mut scene = Scene::new();
+    let source = scene.square(1.0).unwrap();
+    let target = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
+    let mut endpoint = target.target_editor().unwrap();
+    endpoint.shift(0.0, 2.0).unwrap();
+    scene
+        .add_many(&[(&source).into(), (&target).into()])
+        .unwrap();
+    let animation = scene
+        .declare_transform_to(
+            &target,
+            &endpoint,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    let segment = {
+        let mut live = scene.owned_live();
+        let segment = live.play_animation(&animation).unwrap();
+        live.advance_segment_to(segment, 1.0).unwrap();
+        segment
+    };
+    let before = source.state().unwrap();
+    assert!(scene.match_points(&source, &target).is_err());
+    assert_eq!(source.state().unwrap(), before);
+    {
+        let mut live = scene.owned_live();
+        live.advance_segment_to(segment, 2.0).unwrap();
+        live.complete_segment(segment).unwrap();
+    }
+    scene.owned_execution_mut().seek(1.0).unwrap();
+    scene.match_points(&source, &target).unwrap();
+    assert!((source.center().unwrap().1 - 1.0).abs() < 1e-6);
+    scene.owned_execution_mut().seek(2.0).unwrap();
+    let live = scene.owned_live();
+    assert!((live.effective_layout(&target).unwrap().center.1 - 2.0).abs() < 1e-6);
+    assert!((live.effective_layout(&source).unwrap().center.1 - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn scene_point_matching_rejects_active_render_override_before_mutating_source() {
+    let mut scene = Scene::new();
+    let source = scene.square(1.0).unwrap();
+    let target = scene.circle(1.0).unwrap();
+    scene.add(&source).unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    {
+        let mut live = scene.owned_live();
+        live.declare_and_activate_create(&target, AnimationOptions::new())
+            .unwrap();
+    }
+    let before = source.state().unwrap();
+    let revision = source.integration_store().borrow().scene_revision();
+    assert!(scene.match_points(&source, &target).is_err());
+    assert_eq!(source.state().unwrap(), before);
+    assert_eq!(
+        source.integration_store().borrow().scene_revision(),
+        revision
+    );
+}
+
+#[test]
 fn effective_family_layout_is_scene_owned_and_requires_running_execution() {
     let mut scene = Scene::new();
     let mut left = scene.square(2.0).unwrap();

@@ -39,6 +39,7 @@ pub use crate::host_callbacks::{
     effective_style_with_stroke_color, rotate_effective_transform_about_point,
 };
 pub use crate::path_queries::effective_path_query;
+pub use crate::point_matching::publish_match_points;
 pub use crate::semantic_mobject::{authoring_render_f64, authoring_xy_f64, line_match_transform};
 #[cfg(feature = "native-text")]
 pub use crate::text_authoring::NATIVE_POINT_TO_SCENE_SCALE;
