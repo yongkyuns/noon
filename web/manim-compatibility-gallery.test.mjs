@@ -157,6 +157,8 @@ assert.match(tigerEntry.upstream, /linebender\/vello\/blob\/1e63b4a40ccb484f82e1
 const tigerGalleryEntry = gallery.examples.find((entry) => entry.id === tigerEntry.id);
 assert.equal(tigerGalleryEntry.thumbnail, tigerEntry.thumbnail, "absolute HTTPS tiger thumbnail must remain absolute");
 const tigerSource = await readFile(new URL(`./${tigerEntry.path}`, import.meta.url), "utf8");
+assert.match(tigerSource, /from pathlib import Path as FilePath/, "tiger demo must not let Noon's Path export shadow pathlib.Path");
+assert.match(tigerSource, /_DEMO_DIR = FilePath\(gettempdir\(\)\)/, "tiger demo filesystem paths must use the pathlib alias");
 assert.match(tigerSource, /SVGMobject\(/, "tiger demo must construct SVG families");
 assert.equal((tigerSource.match(/SVGMobject\(/g) ?? []).length, 3, "tiger demo must prepare source, target, and return SVG families");
 assert.equal((tigerSource.match(/Transform\(/g) ?? []).length, 2, "tiger demo must morph to the SVG mark and back");
