@@ -1,0 +1,90 @@
+name: PR 1530 physical master-vs-candidate
+
+on:
+  push:
+    branches:
+      - bench/pr1530-e0dec67d
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: [self-hosted, macOS, noon-physical]
+    timeout-minutes: 90
+    env:
+      BASELINE_SHA: 8e085af12356263576b817263ad4e001544c4db5
+      CANDIDATE_SHA: ef62305c2762b5279b93522592f88d2f5d3755b8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Verify exact comparison revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          git fetch origin refs/pull/1530/merge:refs/remotes/origin/pr1530-merge
+          test "$(git rev-parse refs/remotes/origin/pr1530-merge)" = "$CANDIDATE_SHA"
+          git cat-file -e "$BASELINE_SHA^{commit}"
+          echo "baseline=$BASELINE_SHA"
+          echo "candidate=$CANDIDATE_SHA"
+      - name: Verify physical macOS runner
+        shell: bash
+        run: |
+          test "$(uname -s)" = "Darwin"
+          echo "Runner: ${RUNNER_NAME:-unknown}"
+          system_profiler SPHardwareDataType SPDisplaysDataType || true
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Record master and candidate Dynamic Load bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/noon-pr1530-physical
+          mkdir -p /tmp/noon-pr1530-physical
+
+          run_revision() {
+            local label="$1"
+            local sha="$2"
+            git checkout --force "$sha"
+            git clean -fdx
+            npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+            npx playwright install chromium
+            bash scripts/build-web-demo.sh
+            for round in 1 2 3; do
+              NOON_PERF_DEVICE_ID=yongkyun-mac \
+              NOON_PERF_BACKENDS=webgpu \
+              NOON_PERF_SUITES=dynamic-stress \
+              NOON_PERF_GPU_MODE=hardware \
+              NOON_PERF_WIDTH=1920 \
+              NOON_PERF_HEIGHT=1080 \
+              NOON_PERF_DPR=1 \
+              NOON_PERF_TARGET_HZ=60 \
+              NOON_PERF_DYNAMIC_STRESS_WEBGPU_MIN_FPS=0 \
+              NOON_PERF_DEVICE_NOTES="PR 1530 ${label} round ${round}" \
+              NOON_PERF_RUN_DIR="/tmp/noon-pr1530-physical/${label}-round-${round}" \
+              node scripts/perf-device-run.mjs
+            done
+          }
+
+          run_revision master "$BASELINE_SHA"
+          run_revision candidate "$CANDIDATE_SHA"
+
+          mkdir -p perf-artifacts/pr-1530-physical-compare
+          cp -R /tmp/noon-pr1530-physical/. perf-artifacts/pr-1530-physical-compare/
+      - name: Upload performance comparison
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon-perf-pr-1530-compare-${{ github.run_id }}
+          path: perf-artifacts/pr-1530-physical-compare
+          if-no-files-found: error
+          retention-days: 30
