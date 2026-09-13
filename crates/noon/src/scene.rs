@@ -233,6 +233,19 @@ impl Scene {
         crate::path_queries::effective_path_query(&self.store, execution, object)
     }
 
+    /// Observe one family's effective Runtime layout without creating a borrowed
+    /// LiveSession control facade. Cold Scenes fail explicitly rather than returning
+    /// authored bounds as if they were an effective publication.
+    pub fn effective_family_layout(
+        &self,
+        family: &MobjectFamily,
+    ) -> Result<crate::EffectiveMobjectLayout, AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::family_layout::effective_family_layout(&self.store, execution, family)
+    }
+
     pub(crate) fn require_object(&self, object: &Mobject) -> Result<(), crate::AuthoringError> {
         if !Rc::ptr_eq(&self.store, object.integration_store()) {
             return Err(crate::AuthoringError::ForeignStore);
