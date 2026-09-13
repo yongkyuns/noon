@@ -77,8 +77,8 @@ fn unequal_family_transform_publishes_one_identity_free_expansion_copy() {
     session.advance_segment_to(segment, 0.5).unwrap();
     {
         let publication = session.take_renderer_publication();
-        assert_eq!(publication.derived_display_objects().len(), 1);
-        let copy = &publication.derived_display_objects()[0];
+        assert_eq!(publication.transient_presentations().len(), 1);
+        let copy = &publication.transient_presentations()[0];
         assert!(copy.state().appearance > 0.0 && copy.state().appearance < 1.0);
         assert_eq!(copy.anchor_object_index(), 0);
     }
@@ -95,19 +95,25 @@ fn unequal_family_transform_publishes_one_identity_free_expansion_copy() {
     session.complete_segment(&mut store, segment).unwrap();
     {
         let publication = session.take_renderer_publication();
-        assert_eq!(publication.derived_display_objects().len(), 1);
+        assert_eq!(publication.transient_presentations().len(), 1);
         assert_eq!(
-            publication.derived_display_objects()[0].state().appearance,
+            publication.transient_presentations()[0].state().appearance,
             1.0
         );
     }
     // Completion grants the endpoint one coherent publication, then queues one
-    // renderer-only follow-up so the synthetic alignment occurrence is actually
-    // removed from a presented surface.
+    // presentation-only follow-up so the transient occurrence is erased without
+    // claiming stable frame, painter-order, or spatial dirtiness.
     assert!(session.wake_state().frame_pending());
     let removal = session.take_renderer_publication();
-    assert!(removal.changes().is_all());
-    assert!(removal.derived_display_objects().is_empty());
+    assert!(!removal.changes().is_all());
+    assert!(removal.changes().requires_presentation_redraw());
+    assert!(!removal.changes().is_structural());
+    assert!(!removal.changes().has_painter_order_change());
+    assert!(removal.changes().object_indices().is_empty());
+    assert!(removal.changes().added_indices().is_empty());
+    assert!(removal.changes().removed_indices().is_empty());
+    assert!(removal.transient_presentations().is_empty());
     assert_eq!(
         store.semantic_family_members_checked(source).unwrap(),
         source_members
@@ -121,7 +127,7 @@ fn unequal_family_transform_direct_seek_matches_forward_playback() {
     assert_eq!(
         forward
             .take_renderer_publication()
-            .derived_display_objects()
+            .transient_presentations()
             .len(),
         1
     );
@@ -129,7 +135,7 @@ fn unequal_family_transform_direct_seek_matches_forward_playback() {
     let forward_frame = forward.frame().clone();
     let forward_derived = forward
         .take_renderer_publication()
-        .derived_display_objects()
+        .transient_presentations()
         .to_vec();
 
     let (mut direct, _direct_segment) = expansion_session();
@@ -137,7 +143,7 @@ fn unequal_family_transform_direct_seek_matches_forward_playback() {
     let direct_frame = direct.frame().clone();
     let direct_derived = direct
         .take_renderer_publication()
-        .derived_display_objects()
+        .transient_presentations()
         .to_vec();
 
     assert_eq!(forward_frame, direct_frame);
@@ -178,7 +184,7 @@ fn unequal_family_contraction_retains_only_effective_padding_fade() {
     session.advance_segment_to(segment, 1.0).unwrap();
     assert!(session
         .take_renderer_publication()
-        .derived_display_objects()
+        .transient_presentations()
         .is_empty());
     session.complete_segment(&mut store, segment).unwrap();
 

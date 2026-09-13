@@ -127,8 +127,59 @@ fn resolve_mixed_draw_items(
 
 impl GpuRenderer {
     /// Encode one painter-coherent frame containing stable slots plus identity-free
-    /// derived analytic occurrences. Derived buffers must have been uploaded with
-    /// `upload_derived` for this exact publication.
+    /// transient analytic presentation occurrences. Transient buffers must have
+    /// been uploaded for this exact publication.
+    pub fn encode_with_transient_presentations(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        stable: &PreparedFrame<'_>,
+        presentations: &PreparedDerivedDisplay,
+        clear_color: wgpu::Color,
+    ) -> DrawStats {
+        self.encode_inner(
+            encoder,
+            view,
+            stable,
+            clear_color,
+            Some(presentations),
+            None,
+        )
+    }
+
+    /// Profiled variant of [`Self::encode_with_transient_presentations`] using the
+    /// same host-owned two-entry timestamp query set as ordinary geometry encoding.
+    pub fn encode_with_transient_presentations_profiled(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        stable: &PreparedFrame<'_>,
+        presentations: &PreparedDerivedDisplay,
+        clear_color: wgpu::Color,
+        query_set: &wgpu::QuerySet,
+    ) -> DrawStats {
+        self.encode_inner(
+            encoder,
+            view,
+            stable,
+            clear_color,
+            Some(presentations),
+            Some(query_set),
+        )
+    }
+
+    /// Upload renderer-owned transient presentation instances without changing
+    /// stable prepared-frame buffers or slot identity.
+    pub fn upload_transient_presentations(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        prepared: &PreparedDerivedDisplay,
+    ) -> UploadStats {
+        self.derived_display.upload(device, queue, prepared)
+    }
+
+    /// Migration entry point for the currently stacked B3 derived-display path.
     pub fn encode_with_derived(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -137,11 +188,10 @@ impl GpuRenderer {
         derived: &PreparedDerivedDisplay,
         clear_color: wgpu::Color,
     ) -> DrawStats {
-        self.encode_inner(encoder, view, stable, clear_color, Some(derived), None)
+        self.encode_with_transient_presentations(encoder, view, stable, derived, clear_color)
     }
 
-    /// Profiled variant of [`Self::encode_with_derived`] using the same host-owned
-    /// two-entry timestamp query set as ordinary geometry encoding.
+    /// Migration profiled entry point for the currently stacked B3 path.
     pub fn encode_with_derived_profiled(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -151,25 +201,24 @@ impl GpuRenderer {
         clear_color: wgpu::Color,
         query_set: &wgpu::QuerySet,
     ) -> DrawStats {
-        self.encode_inner(
+        self.encode_with_transient_presentations_profiled(
             encoder,
             view,
             stable,
+            derived,
             clear_color,
-            Some(derived),
-            Some(query_set),
+            query_set,
         )
     }
 
-    /// Upload renderer-owned transient analytic instances without changing stable
-    /// prepared-frame buffers or slot identity.
+    /// Migration upload entry point for the currently stacked B3 path.
     pub fn upload_derived(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         prepared: &PreparedDerivedDisplay,
     ) -> UploadStats {
-        self.derived_display.upload(device, queue, prepared)
+        self.upload_transient_presentations(device, queue, prepared)
     }
 
     pub(super) fn draw_with_derived<'a>(
@@ -309,13 +358,15 @@ fn draw_analytic<'a>(
 mod tests {
     use noon_compile::{CompiledObject, CompiledScene};
     use noon_core::{GeometryRef, ObjectId, Style, Transform2D};
-    use noon_runtime::{DerivedDisplayObject, DerivedDisplayObjectState, SceneInstance};
+    use noon_runtime::{
+        SceneInstance, TransientPresentationOccurrence, TransientPresentationState,
+    };
 
     use super::*;
     use crate::{prepare_derived_display, FramePreparer};
 
-    fn state(geometry: GeometryRef) -> DerivedDisplayObjectState {
-        DerivedDisplayObjectState {
+    fn state(geometry: GeometryRef) -> TransientPresentationState {
+        TransientPresentationState {
             z_index: 0.0,
             content: noon_core::ObjectContentRef::Geometry(geometry),
             text_bounds: None,
@@ -348,9 +399,9 @@ mod tests {
         ];
         let compiled = CompiledScene::compile_objects(objects, &[]).unwrap();
         let mut runtime = SceneInstance::new(compiled);
-        let derived_rows = [
-            DerivedDisplayObject::new(0, 7, state(GeometryRef::circle(0.5))),
-            DerivedDisplayObject::new(
+        let presentations = [
+            TransientPresentationOccurrence::new(0, 7, state(GeometryRef::circle(0.5))),
+            TransientPresentationOccurrence::new(
                 1,
                 8,
                 state(GeometryRef::line(
@@ -361,7 +412,7 @@ mod tests {
         ];
         let publication = runtime
             .take_renderer_publication()
-            .with_derived_display_objects(&derived_rows)
+            .with_transient_presentations(&presentations)
             .unwrap();
         let derived = prepare_derived_display(&publication).unwrap();
         let mut preparer = FramePreparer::new();
