@@ -34,6 +34,7 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path("crates/noon/src/matrix_authoring.rs")
           text = path.read_text()
@@ -46,10 +47,15 @@ jobs:
           assert text.count(old) == 1, "ApplyMatrix publish borrow site changed unexpectedly"
           text = text.replace(old, new, 1)
 
-          old = "                    GeometryResource::VectorPath(path) => path.clone(),"
-          new = "                    GeometryResource::VectorPath(path) => path.as_ref().clone(),"
-          assert text.count(old) == 1, "ApplyMatrix VectorPath test helper changed unexpectedly"
-          text = text.replace(old, new, 1)
+          pattern = re.compile(
+              r"GeometryResource::VectorPath\(path\)\s*=>\s*path\.clone\(\),"
+          )
+          text, count = pattern.subn(
+              "GeometryResource::VectorPath(path) => path.as_ref().clone(),",
+              text,
+              count=1,
+          )
+          assert count == 1, "ApplyMatrix VectorPath test helper changed unexpectedly"
 
           path.write_text(text)
           PY
