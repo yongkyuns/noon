@@ -47,3 +47,43 @@ fn geometry_patch_touches_only_one_object_in_a_100k_scene() {
     assert_eq!(live.frame().objects[UNTOUCHED_INDEX], untouched_before);
     assert_eq!(live.frame().objects.len(), OBJECT_COUNT);
 }
+
+#[test]
+fn transient_presentation_retirement_does_not_dirty_a_100k_stable_scene() {
+    let compiled_objects = (0..OBJECT_COUNT)
+        .map(|index| {
+            CompiledObject::new(
+                ObjectId::new(index as u64),
+                GeometryRef::circle(1.0),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )
+        })
+        .collect();
+    let compiled = CompiledScene::compile_objects(compiled_objects, &[])
+        .expect("static execution data compiles");
+    let mut live = SceneInstance::new(compiled);
+
+    {
+        let initial = live.take_renderer_publication();
+        assert!(initial.changes().is_all());
+    }
+    assert!(live.take_spatial_changes().is_all());
+
+    {
+        let endpoint = live.take_renderer_publication_with_followup_invalidation();
+        assert!(endpoint.changes().is_empty());
+    }
+
+    let retirement = live.take_renderer_publication();
+    let changes = retirement.changes();
+    assert!(!changes.is_all());
+    assert!(changes.requires_presentation_redraw());
+    assert!(!changes.is_structural());
+    assert!(!changes.has_painter_order_change());
+    assert!(changes.object_indices().is_empty());
+    assert!(changes.added_indices().is_empty());
+    assert!(changes.removed_indices().is_empty());
+    assert_eq!(retirement.frame().objects.len(), OBJECT_COUNT);
+    assert!(live.take_spatial_changes().is_empty());
+}
