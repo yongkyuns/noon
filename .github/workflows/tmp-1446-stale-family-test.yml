@@ -1,0 +1,52 @@
+name: Temporary 1446 stale family test fix
+
+on:
+  push:
+    branches:
+      - codex/b3-family-transform-session
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v7
+        with:
+          ref: codex/b3-family-transform-session
+          fetch-depth: 0
+
+      - name: Replace stale flat-contraction rejection fixture
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/noon-web/src/canonical_authoring_scene.rs")
+          text = path.read_text()
+          old = "        let invalid_target = context.scene.family(&[(&left_target).into()]).unwrap();\n"
+          new = """        let nested_invalid_member = context.scene.family(&[(&left_target).into()]).unwrap();\n        let invalid_target = context\n            .scene\n            .family(&[(&nested_invalid_member).into()])\n            .unwrap();\n"""
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f"expected exactly one stale fixture, found {count}")
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run canonical family composition regression
+        run: cargo test -p noon-web canonical_family_composition_rejects_crosswrites_and_captures_between_segments --lib
+
+      - name: Commit tested fixture update
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/noon-web/src/canonical_authoring_scene.rs
+          git diff --cached --quiet && exit 0
+          git commit -m "Update canonical family Transform rejection fixture"
+          git push origin HEAD:codex/b3-family-transform-session
