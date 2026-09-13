@@ -1,0 +1,44 @@
+name: Codex Restack Path Arc
+
+on:
+  push:
+    branches:
+      - codex/b3-transform-path-arc-restack-helper
+    paths:
+      - .github/workflows/codex-path-arc-restack.yml
+
+permissions:
+  contents: write
+
+jobs:
+  restack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Restack and qualify implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git reset --hard 8bbc81ce544a319ca768bc3c7281023ddfcad1e5
+          git clean -fdx
+          git cherry-pick a05c87ee34d8d0ba2305dd6fe894210f37ad5dda
+          cargo fmt --all
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit --amend --no-edit
+          fi
+          git diff HEAD^ --check
+          cargo check -p noon-core -p noon-compile -p noon-runtime -p noon-web --all-targets
+          cargo test -p noon-core transform_options_admit_finite_path_arcs_with_shared_precedence
+          cargo test -p noon-core curved_vector_tracks_are_position_only_and_require_finite_arcs
+          cargo test -p noon-compile transform_path_arc
+          cargo test -p noon-runtime path_arc
+          python3 web/python/test_manim_transform_path_arc_options.py
+          python3 web/python/test_manim_animation_constructor_options.py
+          python3 web/python/test_manim_animate_semantic_handles.py
+          node --check web/python-worker.source.js
+          git push --force origin HEAD:codex/b3-transform-path-arc
