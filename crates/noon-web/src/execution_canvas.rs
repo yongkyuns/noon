@@ -22,10 +22,7 @@ mod wasm {
         NativeStateSource, ReactiveValue, Rect, SemanticNodeId, Vec2,
     };
     use noon_render_wgpu::text::TextDeviceMetrics;
-    use noon_render_wgpu::{
-        prepare_derived_display_visible, Camera2D, GpuRenderer, RetainedFramePreparer,
-        RetainedTextGpuState,
-    };
+    use noon_render_wgpu::{Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState};
     use serde::Serialize;
     use wasm_bindgen::{prelude::*, JsCast};
     use web_sys::OffscreenCanvas;
@@ -1124,9 +1121,13 @@ mod wasm {
                 ));
                 let publication = direct.take_renderer_publication();
                 publication_context = publication.context();
-                let derived =
-                    prepare_derived_display_visible(&publication, visibility.object_indices())
-                        .map_err(js_error)?;
+                let derived = self
+                    .direct_preparer
+                    .prepare_transient_presentations_visible(
+                        &publication,
+                        visibility.object_indices(),
+                    )
+                    .map_err(js_error)?;
                 let prepared = self
                     .direct_preparer
                     .prepare_planned_publication_visible(

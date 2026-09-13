@@ -22,10 +22,7 @@ use noon_core::{
     Vec2,
 };
 use noon_render_wgpu::text::TextDeviceMetrics;
-use noon_render_wgpu::{
-    prepare_derived_display_visible, Camera2D, GpuRenderer, RetainedFramePreparer,
-    RetainedTextGpuState,
-};
+use noon_render_wgpu::{Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -533,7 +530,9 @@ impl NativeApp {
             .as_mut()
             .expect("drawable native host must own GPU state");
         let metrics = gpu.text_metrics(camera)?;
-        let derived = prepare_derived_display_visible(&publication, visibility.object_indices())
+        let derived = gpu
+            .preparer
+            .prepare_transient_presentations_visible(&publication, visibility.object_indices())
             .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
         let prepared = gpu
             .preparer

@@ -1826,6 +1826,21 @@ impl FramePreparer {
         Ok((index, true))
     }
 
+    pub(crate) fn cached_path_mesh(
+        &mut self,
+        path: &VectorPath,
+        style: Style,
+        transform: Transform2D,
+    ) -> Result<(&TessellatedPath, bool), noon_geometry::GeometryError> {
+        let (index, cache_miss) = self.cache_path_mesh(path, style, transform)?;
+        Ok((&self.path_mesh_cache[index].mesh, cache_miss))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn path_mesh_cache_len(&self) -> usize {
+        self.path_mesh_cache.len()
+    }
+
     fn next_path_mesh_use(&mut self) -> u64 {
         self.path_mesh_clock = self.path_mesh_clock.saturating_add(1);
         self.path_mesh_clock
