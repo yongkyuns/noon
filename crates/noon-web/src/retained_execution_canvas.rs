@@ -14,8 +14,8 @@ mod wasm {
         finish_renderer_observation,
         gpu_diagnostics::{install_wgpu_error_handler, GpuDiagnosticMailbox},
         resolve_renderer_observation_target, InstalledRetainedExecutionMirror,
-        RendererObservationOutcome, RendererObservationRequest, RetainedFamilyExecutionDeltaEnvelope,
-        RetainedTransportApplyOutcome,
+        RendererObservationOutcome, RendererObservationRequest,
+        RetainedFamilyExecutionDeltaEnvelope, RetainedTransportApplyOutcome,
     };
 
     const CLEAR_COLOR: wgpu::Color = wgpu::Color {

@@ -144,8 +144,7 @@ impl FramePreparer {
                 let (index, cache_miss) =
                     self.cache_path_mesh(path, request.style, request.transform)?;
                 geometry_cache_misses += usize::from(cache_miss);
-                if self.path_mesh_cache[index].resident.is_none()
-                    && !cache_indices.contains(&index)
+                if self.path_mesh_cache[index].resident.is_none() && !cache_indices.contains(&index)
                 {
                     cache_indices.push(index);
                 }
@@ -188,10 +187,7 @@ impl FramePreparer {
     /// Commit one already validated resident suffix. The previous frame's packed
     /// path suffix is disposable, so dropping it does not copy old geometry. The
     /// next prepare rebuilds that suffix after the immutable prefix has grown.
-    pub(crate) fn commit_path_mesh_append(
-        &mut self,
-        plan: PathMeshAppendPlan,
-    ) -> RenderStats {
+    pub(crate) fn commit_path_mesh_append(&mut self, plan: PathMeshAppendPlan) -> RenderStats {
         if plan.cache_indices.is_empty() {
             return RenderStats {
                 geometry_cache_misses: plan.geometry_cache_misses,
