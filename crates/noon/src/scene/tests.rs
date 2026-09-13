@@ -210,7 +210,7 @@ fn scene_owned_membership_publishes_running_edits_and_rejects_stale_state_atomic
     let error = scene.add(&candidate).unwrap_err();
     assert!(matches!(
         error,
-        crate::LiveSessionError::Publication(
+        crate::AuthoringError::ExecutionPublication(
             crate::ExecutionSessionPublicationError::StaleSceneRevision { .. }
         )
     ));
