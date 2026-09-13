@@ -748,6 +748,27 @@ impl SemanticMutationTransaction {
         token
     }
 
+    /// Stage a family Transform without manufacturing semantic padding members.
+    pub fn create_family_transform_animation(
+        &mut self,
+        source: impl Into<SemanticTransactionNodeRef>,
+        target_state: impl Into<SemanticTransactionNodeRef>,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::FamilyTransformTo {
+                    source: source.into(),
+                    target_state: target_state.into(),
+                },
+                options,
+            ),
+        });
+        token
+    }
+
     /// Stage a centered 2D angular-path rotation declaration.
     pub fn create_rotate_animation(
         &mut self,
