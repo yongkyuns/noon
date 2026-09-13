@@ -28,7 +28,7 @@ jobs:
           path = Path("crates/noon-web/src/canonical_authoring_scene.rs")
           text = path.read_text()
           old = "        let invalid_target = context.scene.family(&[(&left_target).into()]).unwrap();\n"
-          new = """        let nested_invalid_member = context\n            .scene\n            .family(&[(&left_target).into()])\n            .unwrap();\n        let invalid_target = context\n            .scene\n            .family(&[(&nested_invalid_member).into()])\n            .unwrap();\n"""
+          new = """        let nested_invalid_member = context.scene.family(&[(&left_target).into()]).unwrap();\n        let invalid_target = context\n            .scene\n            .family(&[(&nested_invalid_member).into()])\n            .unwrap();\n"""
           count = text.count(old)
           if count != 1:
               raise SystemExit(f"expected exactly one stale fixture, found {count}")
