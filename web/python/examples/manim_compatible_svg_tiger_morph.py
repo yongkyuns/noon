@@ -1,4 +1,4 @@
-from pathlib import Path
+from pathlib import Path as FilePath
 from tempfile import gettempdir
 
 from noon import *
@@ -33,7 +33,7 @@ def _fetch_tiger_svg():
     return open_url(VELLO_TIGER_URL).read()
 
 
-_DEMO_DIR = Path(gettempdir())
+_DEMO_DIR = FilePath(gettempdir())
 _TIGER_PATH = _DEMO_DIR / "noon-vello-ghostscript-tiger.svg"
 _TARGET_PATH = _DEMO_DIR / "noon-svg-morph-target.svg"
 _TIGER_PATH.write_text(_fetch_tiger_svg(), encoding="utf-8")
