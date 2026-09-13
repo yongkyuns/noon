@@ -161,11 +161,7 @@ fn source_with_svg_default(
         if prefix == "xml" {
             continue;
         }
-        push_attribute(
-            &mut wrapped,
-            &format!("xmlns:{prefix}"),
-            namespace.uri(),
-        );
+        push_attribute(&mut wrapped, &format!("xmlns:{prefix}"), namespace.uri());
     }
     wrapped.push_str(" stroke-width=\"");
     wrapped.push_str(&SVG_INITIAL_STROKE_WIDTH.to_string());
@@ -238,7 +234,7 @@ fn push_config_attributes(output: &mut String, svg_default: SvgDefaultStyle) {
 
 fn color_hex(color: Color) -> String {
     fn channel(value: f32) -> u8 {
-        (value.clamp(0.0, 1.0) * 255.0).round() as u8
+        (value.clamp(0.0, 1.0) * 255.0) as u8
     }
     format!(
         "#{:02X}{:02X}{:02X}",
@@ -286,6 +282,11 @@ mod tests {
             .iter()
             .map(|member| store.semantic_object_state_checked(*member).unwrap().style)
             .collect()
+    }
+
+    #[test]
+    fn svg_default_color_serialization_matches_manim_hex_truncation() {
+        assert_eq!(color_hex(Color::rgb(0.5, 0.1, 1.0)), "#7F19FF");
     }
 
     #[test]
