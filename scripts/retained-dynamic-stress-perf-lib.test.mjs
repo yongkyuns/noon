@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fixedStressSampleTimes, classifyStressPhase, validateStressReport } from "./retained-dynamic-stress-perf-lib.mjs";
+import {
+  STRESS_PERFORMANCE_CASES,
+  fixedStressSampleTimes,
+  classifyStressPhase,
+  summarizeStressCases,
+  validateStressReport,
+} from "./retained-dynamic-stress-perf-lib.mjs";
 const options = { transportMode: "shared", rendererBackend: "WebGPU", sampleHz: 60 };
 function complete() {
   return { schemaVersion: 2, setup: { warmupFrames: 0 }, scene: { objects: 626 },
@@ -18,6 +24,47 @@ test("complete fixed samples preserve all ten authored phases and measured timin
   assert.equal(classifyStressPhase(0.35), "create-grid");
   assert.equal(classifyStressPhase(5), "final-wave");
   assert.equal(classifyStressPhase(5.01), null);
+});
+test("performance cases separate cold morph activation from steady playback", () => {
+  const report = complete();
+  const cases = summarizeStressCases(report.samples);
+  assert.deepEqual(cases.map(performanceCase => performanceCase.id),
+    STRESS_PERFORMANCE_CASES.map(performanceCase => performanceCase.id));
+  const byId = Object.fromEntries(cases.map(performanceCase => [performanceCase.id, performanceCase]));
+
+  assert.equal(byId["morph-a-activation"].samples, 2);
+  assert.equal(byId["morph-a-steady"].samples, 31);
+  assert.equal(byId["morph-b-activation"].samples, 2);
+  assert.equal(byId["morph-b-steady"].samples, 31);
+  assert.equal(byId.turbulence.samples, 27);
+  assert.equal(byId["lifecycle-churn"].samples, 63);
+
+  assert.equal(byId["morph-a-activation"].firstSceneTime, 0.9);
+  assert.equal(byId["morph-a-activation"].lastSceneTime, 55 / 60);
+  assert.equal(byId["morph-a-steady"].firstSceneTime, 56 / 60);
+  assert.equal(byId["morph-b-activation"].firstSceneTime, 131 / 60);
+  assert.equal(byId["morph-b-steady"].firstSceneTime, 133 / 60);
+  assert.ok(cases.every(performanceCase => performanceCase.advanceRoundTripMs.p95 === 3));
+});
+test("activation outlier cannot be hidden by a fast steady morph case", () => {
+  const report = complete();
+  const firstMorphA = report.samples.find(sample => classifyStressPhase(sample.sceneTime) === "morph-a");
+  firstMorphA.advanceRoundTripMs = 80;
+  const cases = Object.fromEntries(
+    summarizeStressCases(report.samples).map(performanceCase => [performanceCase.id, performanceCase]),
+  );
+  assert.equal(cases["morph-a-activation"].advanceRoundTripMs.p95, 80);
+  assert.equal(cases["morph-a-steady"].advanceRoundTripMs.p95, 3);
+});
+test("steady morph regression cannot be hidden by a fast activation case", () => {
+  const report = complete();
+  const morphA = report.samples.filter(sample => classifyStressPhase(sample.sceneTime) === "morph-a");
+  for (const sample of morphA.slice(2)) sample.advanceRoundTripMs = 40;
+  const cases = Object.fromEntries(
+    summarizeStressCases(report.samples).map(performanceCase => [performanceCase.id, performanceCase]),
+  );
+  assert.equal(cases["morph-a-activation"].advanceRoundTripMs.p95, 3);
+  assert.equal(cases["morph-a-steady"].advanceRoundTripMs.p95, 40);
 });
 test("optional physical cadence floor rejects an FPS regression", () => {
   validateStressReport(complete(), { ...options, minimumEffectiveFps: 55 });
