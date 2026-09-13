@@ -2,7 +2,7 @@ use noon_core::{
     ObjectContentRef, ObjectId, Property, Rect, Style, TrackDefinition, TrackId, Transform2D,
 };
 
-use crate::{CompiledFamilyAnimation, CompiledObject};
+use crate::{CompiledFamilyAnimation, CompiledObject, CompiledScene};
 
 /// Renderer-independent mutations over the compiler-owned execution plan.
 ///
@@ -76,5 +76,24 @@ impl ExecutionMutationTransaction {
 
     pub fn is_empty(&self) -> bool {
         self.mutations.is_empty()
+    }
+}
+
+impl CompiledScene {
+    /// Commit one transform value whose object slot and numeric payload were already
+    /// validated by the caller's prepared publication proof.
+    ///
+    /// This is deliberately narrower than `apply_execution_patch`: it performs no
+    /// lookup or validation and cannot publish structural/timeline/resource edits.
+    #[doc(hidden)]
+    pub fn commit_prepared_transform_value(&mut self, object_index: u32, transform: Transform2D) {
+        self.objects[object_index as usize].base_transform = transform;
+    }
+
+    /// Commit one style value whose object slot and payload were already validated
+    /// by the caller's prepared publication proof.
+    #[doc(hidden)]
+    pub fn commit_prepared_style_value(&mut self, object_index: u32, style: Style) {
+        self.objects[object_index as usize].base_style = style;
     }
 }

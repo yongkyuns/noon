@@ -18,6 +18,9 @@ use noon_runtime::{
 
 use super::ExecutionSession;
 
+mod prepared_value;
+use prepared_value::PreparedPublication;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SemanticPublicationPurpose {
     AuthoredMutation,
@@ -329,6 +332,15 @@ impl ExecutionSession {
         scalar: Option<PreparedScalarPublicationContract>,
         order_root: Option<SemanticNodeId>,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+        if purpose == SemanticPublicationPurpose::AuthoredMutation
+            && execution_prefix.is_empty()
+            && effective.is_none()
+            && scalar.is_none()
+            && PreparedPublication::supports(&prepared)
+        {
+            return Ok(PreparedPublication::prepare(self, prepared, order_root)?.publish());
+        }
+
         self.require_publication_ready(purpose)?;
         self.require_published_store(prepared.store())?;
         if order_root.is_none() {
