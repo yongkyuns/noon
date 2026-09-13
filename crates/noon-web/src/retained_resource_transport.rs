@@ -210,7 +210,10 @@ impl RetainedResourceBundle {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.texts.is_empty() && self.geometries.is_empty() && self.fonts.is_empty()
+        self.texts.is_empty()
+            && self.geometries.is_empty()
+            && self.fonts.is_empty()
+            && self.render_geometry_resources.is_none()
     }
 
     pub(crate) fn capture_additions(
@@ -316,7 +319,6 @@ impl RetainedResourceBundle {
         self.texts.len()
     }
 
-    #[cfg(test)]
     pub(crate) fn set_render_geometries(
         &mut self,
         session: u32,
