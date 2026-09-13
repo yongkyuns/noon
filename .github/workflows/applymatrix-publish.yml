@@ -36,8 +36,8 @@ jobs:
           from pathlib import Path
           import re
 
-          path = Path("crates/noon/src/matrix_authoring.rs")
-          text = path.read_text()
+          matrix_path = Path("crates/noon/src/matrix_authoring.rs")
+          text = matrix_path.read_text()
 
           old = "        prepared.publish(&mut store.borrow_mut(), |store, transaction| {"
           new = (
@@ -57,7 +57,74 @@ jobs:
           )
           assert count == 1, "ApplyMatrix VectorPath test helper changed unexpectedly"
 
-          path.write_text(text)
+          old = (
+              "    columns: usize,\n"
+              "    about_x: f64,\n"
+              "    about_y: f64,\n"
+              ") -> Result<Option<PreparedPathEdits>, AuthoringError> {\n"
+              "    let matrix = PlanarMatrix::parse(values, rows, columns)?;\n"
+              "    let about = authoring_xy_f64(about_x, about_y)?;"
+          )
+          new = (
+              "    columns: usize,\n"
+              "    about: (f64, f64),\n"
+              ") -> Result<Option<PreparedPathEdits>, AuthoringError> {\n"
+              "    let matrix = PlanarMatrix::parse(values, rows, columns)?;\n"
+              "    let about = authoring_xy_f64(about.0, about.1)?;"
+          )
+          assert text.count(old) == 1, "ApplyMatrix helper signature changed unexpectedly"
+          text = text.replace(old, new, 1)
+
+          old = (
+              "                rows,\n"
+              "                columns,\n"
+              "                about_x,\n"
+              "                about_y,\n"
+          )
+          new = (
+              "                rows,\n"
+              "                columns,\n"
+              "                (about_x, about_y),\n"
+          )
+          assert text.count(old) == 1, "cold ApplyMatrix helper call changed unexpectedly"
+          text = text.replace(old, new, 1)
+
+          old = (
+              "        let mut completion_session = scene.execution_session().unwrap();\n"
+              "        let mut live = scene.live(&mut completion_session);\n"
+              "        let segment = live.play_animation(&animation).unwrap();\n"
+              "        live.advance_segment_to(segment, segment.end_time()).unwrap();\n"
+              "        live.complete_segment(segment).unwrap();\n"
+              "        drop(live);\n"
+          )
+          new = (
+              "        let mut completion_session = scene.execution_session().unwrap();\n"
+              "        {\n"
+              "            let mut live = scene.live(&mut completion_session);\n"
+              "            let segment = live.play_animation(&animation).unwrap();\n"
+              "            live.advance_segment_to(segment, segment.end_time()).unwrap();\n"
+              "            live.complete_segment(segment).unwrap();\n"
+              "        }\n"
+          )
+          assert text.count(old) == 1, "ApplyMatrix completion test scope changed unexpectedly"
+          text = text.replace(old, new, 1)
+          matrix_path.write_text(text)
+
+          live_path = Path("crates/noon/src/live_session/path_editing.rs")
+          live_text = live_path.read_text()
+          old = (
+              "                rows,\n"
+              "                columns,\n"
+              "                about_x,\n"
+              "                about_y,\n"
+          )
+          new = (
+              "                rows,\n"
+              "                columns,\n"
+              "                (about_x, about_y),\n"
+          )
+          assert live_text.count(old) == 1, "live ApplyMatrix helper call changed unexpectedly"
+          live_path.write_text(live_text.replace(old, new, 1))
           PY
 
           cargo fmt --all
