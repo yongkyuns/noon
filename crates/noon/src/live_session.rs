@@ -580,17 +580,20 @@ impl<'a> LiveSession<'a> {
         }
     }
 
-    /// Apply one supported semantic transaction and publish it into the same
-    /// runtime. Unsupported content and structural work fails before
+    /// Apply one supported semantic transaction through the Scene-owned running
+    /// publication route. Unsupported content and structural work fails before
     /// either layer commits.
     pub fn apply(
         &mut self,
         transaction: SemanticMutationTransaction,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let mut store = self.store.borrow_mut();
-        self.session
-            .apply_semantic_transaction_at_root(&mut store, self.root, transaction)
-            .map_err(Into::into)
+        crate::Scene::publish_running_transaction(
+            self.store,
+            self.root,
+            self.session,
+            transaction,
+        )
+        .map_err(Into::into)
     }
 
     /// Add an existing detached object to this live scene root.
