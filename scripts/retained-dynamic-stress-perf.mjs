@@ -7,8 +7,14 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs, isIdentifiedGpuAdapter, isSoftwareGpuAdapter } from "./manim-raster-support.mjs";
-import { STRESS_DURATION_SECONDS, STRESS_SAMPLE_HZ, STRESS_SOURCE_SHA256,
-  validateStressReport } from "./retained-dynamic-stress-perf-lib.mjs";
+import {
+  STRESS_DURATION_SECONDS,
+  STRESS_PERFORMANCE_CASES,
+  STRESS_SAMPLE_HZ,
+  STRESS_SOURCE_SHA256,
+  summarizeStressCases,
+  validateStressReport,
+} from "./retained-dynamic-stress-perf-lib.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sourcePath = "web/python/examples/manim_parity_stress_grid.py";
@@ -34,7 +40,11 @@ const report = {
   loopsPerTransport: loops,
   minimumEffectiveFps,
   measurement: "Fresh source per loop; sample round trip includes source continuation, worker, runtime and rendering",
-  performanceBudgets: { status: "unavailable", reason: "Isolated CPU/GPU, morph activation and warm replay metrics are not measured by shared source execution" },
+  performanceCases: STRESS_PERFORMANCE_CASES,
+  performanceBudgets: {
+    status: "not-enforced",
+    reason: "Cases are measured first; isolated CPU/GPU attribution and physical per-case budgets are added separately",
+  },
   runs: [],
 };
 const server = await serveRepository(root, integer("PORT", 4192), { crossOriginIsolated: true });
@@ -76,10 +86,11 @@ try {
           sampleHz,
           minimumEffectiveFps,
         });
-        report.runs.push({ transportMode, loop, adapterInfo, phases, profile: result.profile });
+        const cases = summarizeStressCases(result.profile.samples);
+        report.runs.push({ transportMode, loop, adapterInfo, phases, cases, profile: result.profile });
         const effectiveFps = result.profile.cadence.effective?.effectiveFps;
         const adapter = adapterInfo ? `, adapter ${adapterSummary(adapterInfo)}` : "";
-        console.log(`PASS ${backend}/${gpuMode} ${transportMode} fresh source ${loop + 1}/${loops}: ${format(effectiveFps)} FPS, ${phases.length} phases${adapter}`);
+        console.log(`PASS ${backend}/${gpuMode} ${transportMode} fresh source ${loop + 1}/${loops}: ${format(effectiveFps)} FPS, ${phases.length} phases, ${cases.length} performance cases${adapter}`);
       } finally { await page.close(); }
     }
   }
