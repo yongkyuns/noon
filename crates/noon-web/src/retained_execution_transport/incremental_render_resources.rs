@@ -17,10 +17,15 @@ impl RetainedExecutionFrameMirror {
         session: u32,
         geometries: Arc<[Arc<GeometryRef>]>,
     ) -> Result<RetainedRenderGeometryRollback, RetainedExecutionTransportError> {
-        if self.resource_session.is_some_and(|installed| installed != session) {
-            return Err(RetainedExecutionTransportError::InvalidRenderGeometryResource(
-                geometries.len().saturating_sub(1) as u32,
-            ));
+        if self
+            .resource_session
+            .is_some_and(|installed| installed != session)
+        {
+            return Err(
+                RetainedExecutionTransportError::InvalidRenderGeometryResource(
+                    geometries.len().saturating_sub(1) as u32,
+                ),
+            );
         }
         if geometries.len() < self.render_geometries.len()
             || !self
@@ -29,9 +34,11 @@ impl RetainedExecutionFrameMirror {
                 .zip(geometries.iter())
                 .all(|(installed, next)| Arc::ptr_eq(installed, next))
         {
-            return Err(RetainedExecutionTransportError::InvalidRenderGeometryResource(
-                geometries.len().saturating_sub(1) as u32,
-            ));
+            return Err(
+                RetainedExecutionTransportError::InvalidRenderGeometryResource(
+                    geometries.len().saturating_sub(1) as u32,
+                ),
+            );
         }
         let rollback = RetainedRenderGeometryRollback {
             previous_session: self.resource_session,
