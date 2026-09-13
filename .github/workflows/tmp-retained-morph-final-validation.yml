@@ -1,0 +1,78 @@
+name: Temporary retained morph final validation
+
+on:
+  push:
+    branches:
+      - codex/restore-continuation-morph-resources
+    paths:
+      - .github/workflows/tmp-retained-morph-final-validation.yml
+
+permissions:
+  contents: read
+
+jobs:
+  full-gate:
+    if: github.event.head_commit.message == 'Run retained morph locality validation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.after }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Install pinned browser tooling
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Full repository gate
+        run: bash scripts/check.sh full
+
+  physical-dynamic-stress:
+    if: github.event.head_commit.message == 'Run retained morph locality validation'
+    runs-on: self-hosted
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.after }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Install pinned browser tooling
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Build optimized production WASM
+        run: bash scripts/build-web-demo.sh
+      - name: Qualify Dynamic Load on physical WebGPU
+        env:
+          NOON_RETAINED_STRESS_BACKEND: webgpu
+          NOON_RETAINED_STRESS_SAMPLE_HZ: '60'
+          NOON_RETAINED_STRESS_WORKER_LOOPS: '2'
+          NOON_RETAINED_STRESS_TRANSPORTS: transferable,shared
+          NOON_RETAINED_STRESS_MIN_EFFECTIVE_FPS: '55'
+          NOON_RETAINED_STRESS_ARTIFACT: perf-artifacts/dynamic-stress-final.json
+        run: node scripts/retained-dynamic-stress-perf.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: retained-morph-physical-${{ github.run_id }}
+          path: perf-artifacts/dynamic-stress-final.json
+          if-no-files-found: warn
+          retention-days: 7
