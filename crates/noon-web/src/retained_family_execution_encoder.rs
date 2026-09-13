@@ -1,13 +1,13 @@
 use noon_core::{
-    Camera2DState, FontResourceLookup, GeometryResourceLookup, RetainedFamilyAnimationPlan,
-    TextResourceHandle, TextResourceLookup,
+    Camera2DState, FontResourceLookup, GeometryRef, GeometryResourceLookup,
+    RetainedFamilyAnimationPlan, TextResourceHandle, TextResourceLookup,
 };
 use noon_runtime::{FrameChanges, RetainedFamilyFrame, RetainedPlannedFamilyFrame};
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
-    RetainedExecutionDeltaEncoder, RetainedExecutionTransportError,
+    RenderGeometryPreparation, RetainedExecutionDeltaEncoder, RetainedExecutionTransportError,
     RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionTransportError,
     RetainedResourceBundle, RetainedResourceInventory, RetainedResourceTransportError,
 };
@@ -25,6 +25,8 @@ pub struct RetainedFamilyExecutionDeltaEncoder {
     published_plan_count: usize,
     observed_plan_count: usize,
     resources: RetainedResourceInventory,
+    render_geometry_resources: HashMap<crate::TransportSlotId, u32>,
+    next_render_geometry_resource: u32,
 }
 
 #[derive(Debug)]
@@ -35,7 +37,6 @@ struct StagedPlanMappings {
 }
 
 impl RetainedFamilyExecutionDeltaEncoder {
-    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) const fn session(&self) -> u32 {
         self.retained.session()
     }
@@ -47,16 +48,22 @@ impl RetainedFamilyExecutionDeltaEncoder {
             published_plan_count: 0,
             observed_plan_count: 0,
             resources: RetainedResourceInventory::default(),
+            render_geometry_resources: HashMap::new(),
+            next_render_geometry_resource: 0,
         }
     }
 
     pub(crate) fn new_with_resources(session: u32, resources: &RetainedResourceBundle) -> Self {
+        let next_render_geometry_resource = u32::try_from(resources.render_geometry_count())
+            .expect("retained render geometry resources exceed u32 transport index space");
         Self {
             retained: RetainedExecutionDeltaEncoder::new(session),
             plan_index_remap: HashMap::new(),
             published_plan_count: 0,
             observed_plan_count: 0,
             resources: resources.inventory(),
+            render_geometry_resources: HashMap::new(),
+            next_render_geometry_resource,
         }
     }
 
@@ -76,9 +83,62 @@ impl RetainedFamilyExecutionDeltaEncoder {
                 )
             })
             .collect::<std::collections::BTreeSet<_>>();
-        if new_texts.is_empty() {
+
+        // The base retained encoder already knows when an immutable transient
+        // geometry has changed: its first publication is inline, later frames may
+        // omit it by stable slot. Convert that publication into a session-scoped
+        // append-only resource and preserve the slot -> resource identity until the
+        // render override is cleared or the row is removed.
+        let mut staged_slot_resources = self.render_geometry_resources.clone();
+        let mut next_render_geometry_resource = self.next_render_geometry_resource;
+        let mut new_render_geometries = Vec::<Arc<GeometryRef>>::new();
+        let mut preparations = Vec::<RenderGeometryPreparation>::new();
+        for object in &mut envelope.retained.objects {
+            if object.render_transform.is_none() {
+                staged_slot_resources.remove(&object.slot);
+                continue;
+            }
+
+            if let Some(geometry) = object.render_geometry.take() {
+                let local_resource = u32::try_from(new_render_geometries.len()).map_err(|_| {
+                    RetainedResourceTransportError::Encode(
+                        "too many incremental render geometry resources".into(),
+                    )
+                })?;
+                let resource = next_render_geometry_resource;
+                next_render_geometry_resource = next_render_geometry_resource
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        RetainedResourceTransportError::Encode(
+                            "retained render geometry resource index exhausted".into(),
+                        )
+                    })?;
+                preparations.push(RenderGeometryPreparation {
+                    resource: local_resource,
+                    style: object.style,
+                    transform: object
+                        .render_transform
+                        .expect("render geometry publication has a render transform"),
+                });
+                new_render_geometries.push(Arc::new(geometry));
+                staged_slot_resources.insert(object.slot, resource);
+                object.render_geometry_resource = Some(resource);
+            } else if object.render_geometry_resource.is_none() {
+                if let Some(&resource) = staged_slot_resources.get(&object.slot) {
+                    object.render_geometry_resource = Some(resource);
+                }
+            }
+        }
+        for slot in &envelope.retained.removed_slots {
+            staged_slot_resources.remove(slot);
+        }
+
+        if new_texts.is_empty() && new_render_geometries.is_empty() {
+            self.render_geometry_resources = staged_slot_resources;
+            self.next_render_geometry_resource = next_render_geometry_resource;
             return Ok(());
         }
+
         let mut additions = RetainedResourceBundle::capture_additions(
             new_texts,
             texts,
@@ -87,8 +147,17 @@ impl RetainedFamilyExecutionDeltaEncoder {
             &self.resources,
         )?;
         additions.retain_additions(&mut self.resources);
+        if !new_render_geometries.is_empty() {
+            additions.set_render_geometries(
+                self.session(),
+                new_render_geometries.into(),
+                preparations,
+            );
+        }
         debug_assert!(!additions.is_empty());
         envelope.resource_additions = Some(additions);
+        self.render_geometry_resources = staged_slot_resources;
+        self.next_render_geometry_resource = next_render_geometry_resource;
         Ok(())
     }
 
@@ -408,9 +477,9 @@ impl From<RetainedFamilyExecutionTransportError> for RetainedFamilyExecutionEnco
 #[cfg(test)]
 mod tests {
     use noon_core::{
-        FamilyAnimationMode, FamilyAnimationState, GeometryRef, ObjectContentRef, ObjectId,
-        RateFunction, RetainedFamilyAnimationPlanBuilder, SemanticStore, Style, TextResourceArena,
-        Transform2D,
+        FamilyAnimationMode, FamilyAnimationState, FontResourceArena, GeometryRef,
+        GeometryResourceArena, ObjectContentRef, ObjectId, RateFunction,
+        RetainedFamilyAnimationPlanBuilder, SemanticStore, Style, TextResourceArena, Transform2D,
     };
     use noon_runtime::{FrameObjectState, FrameState};
 
@@ -497,6 +566,27 @@ mod tests {
             render_transforms: vec![None, None],
         };
         (plan, frame, vec![Some(state(0.5)), Some(state(0.5))])
+    }
+
+    #[test]
+    fn resource_backed_encoder_starts_after_installed_render_geometry_prefix() {
+        let texts = TextResourceArena::new();
+        let geometries = GeometryResourceArena::new();
+        let fonts = FontResourceArena::new();
+        let mut resources =
+            RetainedResourceBundle::capture([], &texts, &geometries, &fonts).unwrap();
+        resources.set_render_geometries(
+            29,
+            vec![Arc::new(GeometryRef::circle(1.0))].into(),
+            vec![RenderGeometryPreparation {
+                resource: 0,
+                style: Style::default(),
+                transform: Transform2D::IDENTITY,
+            }],
+        );
+
+        let encoder = RetainedFamilyExecutionDeltaEncoder::new_with_resources(29, &resources);
+        assert_eq!(encoder.next_render_geometry_resource, 1);
     }
 
     #[test]
