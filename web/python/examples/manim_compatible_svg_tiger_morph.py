@@ -34,8 +34,8 @@ _TIGER_PATH.write_text(_fetch_tiger_svg(), encoding="utf-8")
 class GhostscriptTigerMorph(Scene):
     def construct(self):
         tiger = SVGMobject(str(_TIGER_PATH), height=5.2)
-        kaleidoscope = SVGMobject(str(_TIGER_PATH), height=5.2)
-        tiger_return = SVGMobject(str(_TIGER_PATH), height=5.2)
+        kaleidoscope = tiger.copy()
+        tiger_return = tiger.copy()
 
         count = max(1, len(kaleidoscope))
         for index, leaf in enumerate(kaleidoscope):
