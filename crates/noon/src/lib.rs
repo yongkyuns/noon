@@ -100,6 +100,7 @@ mod sector_authoring;
 mod semantic_mobject;
 mod state_replacement;
 mod svg_authoring;
+mod svg_default_style;
 mod tangent_line_authoring;
 #[cfg(any(feature = "native-text", feature = "typst"))]
 mod text_authoring;
@@ -182,6 +183,7 @@ pub use scene_membership::SceneMembershipRequest;
 pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
 pub use state_replacement::ManimBecomeOptions;
 pub use svg_authoring::{SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature};
+pub use svg_default_style::SvgDefaultStyle;
 #[cfg(any(feature = "native-text", feature = "typst"))]
 pub use text_authoring::TextAuthoringError;
 #[cfg(feature = "typst")]
@@ -204,9 +206,9 @@ pub mod prelude {
         LiveProgram, LiveSession, LiveSessionError, ManimArrow, ManimArrowOptions,
         ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget, NativeBoolSignal,
         NativeVectorSignal, RateFunction, Scene, SemanticObjectState, SemanticStyle,
-        StoredGeometry, StyleUpdate, SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature,
-        TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange, VectorFieldPoint,
-        VectorFieldRanges2D, VectorPath,
+        StoredGeometry, StyleUpdate, SvgAuthoringError, SvgDefaultStyle, SvgImportOptions,
+        SvgUnsupportedFeature, TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange,
+        VectorFieldPoint, VectorFieldRanges2D, VectorPath,
     };
 }
 
