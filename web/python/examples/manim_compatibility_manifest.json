@@ -172,21 +172,21 @@
       "order": 1110
     },
     {
-    "id": "compatible-group-slicing",
-    "title": "GroupSlicing",
-    "summary": "Slice a VGroup and mutate the selected shared members without replacing the original family.",
-    "status": "ready",
-    "path": "python/examples/manim_compatible_group_slicing.py",
-    "category": "manim-compatible/grouping",
-    "features": ["VGroup", "slice", "shared identity", "shift", "Manim-compatible"],
-    "reuse": "manim-compatible-parity-v0.21",
-    "parity_status": "parity-qualified",
-    "parity_fixture": "group-slicing",
-    "thumbnail": "thumbnails/manim/compatible-group-slicing.svg",
-    "thumbnail_alt": "Square below a circle and rectangle shifted upward through a VGroup slice",
-    "thumbnail_time": 1.0,
-    "order": 1120
-  },
+      "id": "compatible-group-slicing",
+      "title": "GroupSlicing",
+      "summary": "Slice a VGroup and mutate the selected shared members without replacing the original family.",
+      "status": "ready",
+      "path": "python/examples/manim_compatible_group_slicing.py",
+      "category": "manim-compatible/grouping",
+      "features": ["VGroup", "slice", "shared identity", "shift", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "parity-qualified",
+      "parity_fixture": "group-slicing",
+      "thumbnail": "thumbnails/manim/compatible-group-slicing.svg",
+      "thumbnail_alt": "Square below a circle and rectangle shifted upward through a VGroup slice",
+      "thumbnail_time": 1.0,
+      "order": 1120
+    },
     {
       "id": "compatible-arrow-vector-field-static",
       "title": "ArrowVectorFieldStatic",
@@ -202,6 +202,22 @@
       "thumbnail_alt": "Five by three rotational vector field with a zero vector at the center",
       "thumbnail_time": 0.2,
       "order": 1130
+    },
+    {
+      "id": "compatible-svg-tiger-morph",
+      "title": "GhostscriptTigerMorph",
+      "summary": "Load Vello's Ghostscript Tiger as SVG, morph its retained vector family into a second SVG mark, then morph back.",
+      "status": "ready",
+      "path": "python/examples/manim_compatible_svg_tiger_morph.py",
+      "category": "manim-compatible/svg",
+      "features": ["SVGMobject", "Transform", "SVG morph", "Vello Ghostscript Tiger", "unequal family", "Manim-compatible"],
+      "upstream": "https://github.com/linebender/vello/blob/1e63b4a40ccb484f82e1d85b83df97ab95bcfbe7/assets/Ghostscript_Tiger.svg",
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "thumbnail": "https://cdn.jsdelivr.net/gh/linebender/vello@1e63b4a40ccb484f82e1d85b83df97ab95bcfbe7/assets/Ghostscript_Tiger.svg",
+      "thumbnail_alt": "Ghostscript Tiger used by Vello, before morphing into the Noon SVG mark",
+      "thumbnail_time": 0.5,
+      "order": 1140
     }
   ]
 }
