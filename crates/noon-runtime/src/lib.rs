@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+mod derived_display_evaluation;
 mod execution_slots;
 mod frame;
 mod prepared_frame;
@@ -9,6 +10,7 @@ mod reactive;
 mod renderer_publication;
 mod spatial_index;
 
+pub use derived_display_evaluation::*;
 pub use execution_slots::*;
 use frame::{frame_row_mut, EffectiveBoundsBasis, FrameRowMut, FrameRowState};
 pub use frame::{EffectiveObjectProperties, FrameChanges, FrameObjectState, FrameState};
@@ -1604,22 +1606,36 @@ fn apply_prepared_morph_track(
     track: &CompiledTrack,
     progress: f32,
 ) -> bool {
-    let TrackValues::PreparedMorph { from, to, .. } = &track.values else {
-        unreachable!("prepared Morph track must contain scalar endpoints");
+    let plan = track
+        .transform_geometry_plan
+        .as_ref()
+        .expect("prepared Morph track must carry compiled endpoint geometry");
+    apply_prepared_morph_values(row, &track.values, plan, progress)
+        .expect("prepared Morph track must contain matching scalar endpoints and path plan")
+}
+
+fn apply_prepared_morph_values(
+    row: &mut FrameRowMut<'_>,
+    values: &TrackValues,
+    plan: &TransformGeometryPlan,
+    progress: f32,
+) -> Option<bool> {
+    let TrackValues::PreparedMorph { from, to, .. } = values else {
+        return None;
     };
-    let Some(TransformGeometryPlan::PathPair {
+    let TransformGeometryPlan::PathPair {
         geometry,
         render_transform,
-    }) = track.transform_geometry_plan.as_ref()
+    } = plan
     else {
-        unreachable!("prepared Morph track must carry compiled endpoint geometry");
+        return None;
     };
     let morph = lerp(*from, *to, progress).clamp(0.0, 1.0);
     let mut changed = *row.morph != morph || *row.render_transform != *render_transform;
     *row.morph = morph;
     *row.render_transform = *render_transform;
     changed |= set_optional_geometry_if_changed(row.render_geometry, Some(geometry), true);
-    changed
+    Some(changed)
 }
 
 fn apply_transform_track(row: &mut FrameRowMut<'_>, track: &CompiledTrack, progress: f32) -> bool {
@@ -2031,24 +2047,26 @@ fn mapped_track_progress(track: &CompiledTrack, time: f64) -> Option<f32> {
 }
 
 fn interpolate(track: &CompiledTrack, progress: f32) -> EvaluatedValue {
-    match &track.values {
-        TrackValues::Scalar { from, to } => EvaluatedValue::Scalar(lerp(*from, *to, progress)),
-        TrackValues::Vec2 { from, to } => EvaluatedValue::Vec2(Vec2::new(
+    interpolate_track_values(&track.values, progress)
+        .expect("compiled continuous track carries an interpolable value kind")
+}
+
+fn interpolate_track_values(values: &TrackValues, progress: f32) -> Option<EvaluatedValue> {
+    match values {
+        TrackValues::Scalar { from, to } => {
+            Some(EvaluatedValue::Scalar(lerp(*from, *to, progress)))
+        }
+        TrackValues::Vec2 { from, to } => Some(EvaluatedValue::Vec2(Vec2::new(
             lerp(from.x, to.x, progress),
             lerp(from.y, to.y, progress),
-        )),
-        TrackValues::Color { from, to } => {
-            EvaluatedValue::Color(interpolate_optional_color(*from, *to, progress))
-        }
-        TrackValues::Bool { .. } | TrackValues::ZIndex { .. } => {
-            unreachable!("instant tracks are evaluated as discrete events")
-        }
-        TrackValues::Object { .. } => {
-            unreachable!("Transform tracks are evaluated atomically")
-        }
-        TrackValues::PreparedMorph { .. } => {
-            unreachable!("prepared Morph tracks install compiled geometry with scalar progress")
-        }
+        ))),
+        TrackValues::Color { from, to } => Some(EvaluatedValue::Color(interpolate_optional_color(
+            *from, *to, progress,
+        ))),
+        TrackValues::Bool { .. }
+        | TrackValues::ZIndex { .. }
+        | TrackValues::Object { .. }
+        | TrackValues::PreparedMorph { .. } => None,
     }
 }
 
