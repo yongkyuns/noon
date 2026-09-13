@@ -159,9 +159,9 @@ assert.equal(tigerGalleryEntry.thumbnail, tigerEntry.thumbnail, "absolute HTTPS 
 const tigerSource = await readFile(new URL(`./${tigerEntry.path}`, import.meta.url), "utf8");
 assert.match(tigerSource, /from pathlib import Path as FilePath/, "tiger demo must not let Noon's Path export shadow pathlib.Path");
 assert.match(tigerSource, /_DEMO_DIR = FilePath\(gettempdir\(\)\)/, "tiger demo filesystem paths must use the pathlib alias");
-assert.match(tigerSource, /SVGMobject\(/, "tiger demo must construct SVG families");
-assert.equal((tigerSource.match(/SVGMobject\(/g) ?? []).length, 3, "tiger demo must prepare source, target, and return SVG families");
-assert.equal((tigerSource.match(/Transform\(/g) ?? []).length, 2, "tiger demo must morph to the SVG mark and back");
+assert.equal((tigerSource.match(/SVGMobject\(/g) ?? []).length, 1, "tiger demo must parse the upstream SVG exactly once");
+assert.equal((tigerSource.match(/tiger\.copy\(\)/g) ?? []).length, 2, "tiger demo must reuse retained geometry resources for both transform targets");
+assert.equal((tigerSource.match(/Transform\(/g) ?? []).length, 2, "tiger demo must morph to the kaleidoscope and back");
 assert.match(tigerSource, /1e63b4a40ccb484f82e1d85b83df97ab95bcfbe7\/assets\/Ghostscript_Tiger\.svg/);
 assert.doesNotMatch(tigerSource, /SVGMobject\.from_string/, "demo should exercise ordinary file-backed SVGMobject authoring");
 
