@@ -243,7 +243,6 @@ pub struct RetainedExecutionDeltaEncoder {
 }
 
 impl RetainedExecutionDeltaEncoder {
-    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) const fn session(&self) -> u32 {
         self.session
     }
