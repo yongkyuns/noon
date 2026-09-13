@@ -912,6 +912,18 @@ impl Default for RetainedFramePreparer {
 }
 
 impl RetainedFramePreparer {
+    pub fn prepare_transient_presentations_visible(
+        &mut self,
+        publication: &RendererPublication<'_>,
+        visible_object_indices: &[usize],
+    ) -> Result<crate::PreparedDerivedDisplay, crate::DerivedDisplayRenderError> {
+        crate::prepare_derived_display_visible_cached(
+            publication,
+            visible_object_indices,
+            &mut self.geometry,
+        )
+    }
+
     /// Install a transport-decoded painter permutation for a genuine worker
     /// boundary. Direct runtime publications use [`RendererPublication`] instead.
     pub fn set_painter_order(&mut self, order: &[u32]) {
