@@ -904,7 +904,39 @@ impl std::error::Error for DerivedDisplayRenderError {}
 pub fn prepare_derived_display(
     publication: &noon_runtime::RendererPublication<'_>,
 ) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
-    prepare_derived_display_inner(publication, None, None)
+    prepare_derived_display_inner(
+        publication.frame(),
+        publication.painter_order(),
+        publication.transient_presentations(),
+        None,
+        None,
+    )
+}
+
+/// Pack identity-free transient rows already recovered at a genuine transport
+/// boundary. Stable painter order and the real source-anchor indices remain
+/// authoritative; no stable renderer identity is allocated for the occurrences.
+pub fn prepare_transient_presentation_rows(
+    frame: &FrameState,
+    painter_order: &[u32],
+    presentations: &[noon_runtime::TransientPresentationOccurrence],
+) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
+    prepare_derived_display_inner(frame, painter_order, presentations, None, None)
+}
+
+pub(crate) fn prepare_transient_presentation_rows_cached(
+    frame: &FrameState,
+    painter_order: &[u32],
+    presentations: &[noon_runtime::TransientPresentationOccurrence],
+    path_preparer: &mut crate::FramePreparer,
+) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
+    prepare_derived_display_inner(
+        frame,
+        painter_order,
+        presentations,
+        None,
+        Some(path_preparer),
+    )
 }
 
 /// Prepare only derived occurrences whose real source anchor participates in this
@@ -918,7 +950,13 @@ pub fn prepare_derived_display_visible(
         .iter()
         .copied()
         .collect::<std::collections::HashSet<_>>();
-    prepare_derived_display_inner(publication, Some(&visible), None)
+    prepare_derived_display_inner(
+        publication.frame(),
+        publication.painter_order(),
+        publication.transient_presentations(),
+        Some(&visible),
+        None,
+    )
 }
 
 pub(crate) fn prepare_derived_display_visible_cached(
@@ -930,17 +968,25 @@ pub(crate) fn prepare_derived_display_visible_cached(
         .iter()
         .copied()
         .collect::<std::collections::HashSet<_>>();
-    prepare_derived_display_inner(publication, Some(&visible), Some(path_preparer))
+    prepare_derived_display_inner(
+        publication.frame(),
+        publication.painter_order(),
+        publication.transient_presentations(),
+        Some(&visible),
+        Some(path_preparer),
+    )
 }
 
 fn prepare_derived_display_inner(
-    publication: &noon_runtime::RendererPublication<'_>,
+    frame: &FrameState,
+    painter_order: &[u32],
+    transient_presentations: &[noon_runtime::TransientPresentationOccurrence],
     visible: Option<&std::collections::HashSet<usize>>,
     mut path_preparer: Option<&mut crate::FramePreparer>,
 ) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
     let mut by_anchor =
         std::collections::BTreeMap::<u32, Vec<&noon_runtime::DerivedDisplayObject>>::new();
-    for object in publication.derived_display_objects() {
+    for object in transient_presentations {
         if visible
             .is_some_and(|visible| !visible.contains(&(object.anchor_object_index() as usize)))
         {
@@ -948,7 +994,7 @@ fn prepare_derived_display_inner(
         }
         let anchor = object.anchor_object_index();
         let state = object.state();
-        if state.z_index != publication.frame().objects[anchor as usize].z_index {
+        if state.z_index != frame.objects[anchor as usize].z_index {
             return Err(DerivedDisplayRenderError::ZIndexDiffersFromAnchor(
                 object.occurrence_index(),
             ));
@@ -961,7 +1007,7 @@ fn prepare_derived_display_inner(
 
     let mut prepared = PreparedDerivedDisplay::default();
     let mut seen_anchors = HashSet::with_capacity(by_anchor.len());
-    for &object_index in publication.painter_order() {
+    for &object_index in painter_order {
         if visible.is_some_and(|visible| !visible.contains(&(object_index as usize))) {
             continue;
         }
