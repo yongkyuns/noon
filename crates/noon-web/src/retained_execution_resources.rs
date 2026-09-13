@@ -24,6 +24,7 @@ pub struct InstalledRetainedExecutionMirror {
     resources: InstalledRetainedResources,
     resolved: Option<FrameState>,
     family: InstalledRetainedFamilyExecutionState,
+    transient_presentations: Vec<noon_runtime::TransientPresentationOccurrence>,
 }
 
 impl InstalledRetainedExecutionMirror {
@@ -38,6 +39,7 @@ impl InstalledRetainedExecutionMirror {
             resources,
             resolved: None,
             family: InstalledRetainedFamilyExecutionState::default(),
+            transient_presentations: Vec::new(),
         })
     }
 
@@ -89,6 +91,10 @@ impl InstalledRetainedExecutionMirror {
 
     pub fn active_family_animation_indices(&self) -> &std::collections::BTreeSet<usize> {
         self.family.active_indices()
+    }
+
+    pub fn transient_presentations(&self) -> &[noon_runtime::TransientPresentationOccurrence] {
+        &self.transient_presentations
     }
 
     pub fn family_plan(
@@ -145,6 +151,7 @@ impl InstalledRetainedExecutionMirror {
         }
         if snapshot {
             self.family = InstalledRetainedFamilyExecutionState::default();
+            self.transient_presentations.clear();
         }
         Ok((outcome, changes))
     }
@@ -172,12 +179,14 @@ impl InstalledRetainedExecutionMirror {
             self.validate_snapshot_resources(&delta.retained)?;
         }
         let prepared_family = self.prepare_family_update(&delta, self.resources.texts())?;
+        let prepared_transient = self.prepare_transient_presentations(&delta)?;
 
         let (outcome, changes) = self.apply(delta.retained)?;
         if outcome == RetainedTransportApplyOutcome::DroppedStale {
             return Ok((outcome, changes));
         }
         self.family.commit_prepared(prepared_family);
+        self.transient_presentations = prepared_transient;
         Ok((outcome, changes))
     }
 
@@ -191,6 +200,13 @@ impl InstalledRetainedExecutionMirror {
         self.wire.extend_installed_text_handles(&text_handles);
         let text_lookup = additions.text_lookup(&self.resources);
         let prepared_family = match self.prepare_family_update(&delta, &text_lookup) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.wire.remove_installed_text_handles(text_handles.keys());
+                return Err(error);
+            }
+        };
+        let prepared_transient = match self.prepare_transient_presentations(&delta) {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.wire.remove_installed_text_handles(text_handles.keys());
@@ -212,7 +228,68 @@ impl InstalledRetainedExecutionMirror {
 
         self.resources.commit_additions(additions);
         self.family.commit_prepared(prepared_family);
+        self.transient_presentations = prepared_transient;
         Ok((outcome, changes))
+    }
+
+    fn prepare_transient_presentations(
+        &self,
+        delta: &RetainedFamilyExecutionDeltaEnvelope,
+    ) -> Result<Vec<noon_runtime::TransientPresentationOccurrence>, InstalledExecutionError> {
+        let snapshot = delta.retained.snapshot;
+        let mut next_indices = HashMap::with_capacity(delta.retained.objects.len());
+        let mut next_row = if snapshot {
+            0
+        } else {
+            self.resolved
+                .as_ref()
+                .ok_or(InstalledExecutionError::MissingResolvedFrame)?
+                .objects
+                .len()
+        };
+        for object in &delta.retained.objects {
+            let index = if snapshot {
+                let index = object.order as usize;
+                next_row = next_row.max(index + 1);
+                index
+            } else if let Some(index) = self.wire.frame_index_for_slot(object.slot) {
+                index
+            } else {
+                let index = next_row;
+                next_row += 1;
+                index
+            };
+            next_indices.insert(object.object, index);
+        }
+        delta
+            .transient_presentations
+            .iter()
+            .map(|object| {
+                let index = next_indices
+                    .get(&object.anchor)
+                    .copied()
+                    .or_else(|| {
+                        (!snapshot)
+                            .then(|| self.wire.frame_index_for_object(object.anchor))
+                            .flatten()
+                    })
+                    .ok_or({
+                        InstalledExecutionError::Family(
+                            crate::RetainedFamilyExecutionTransportError::UnknownTransientAnchor(
+                                object.anchor,
+                            ),
+                        )
+                    })?;
+                let anchor = u32::try_from(index).map_err(|_| {
+                    InstalledExecutionError::Family(
+                        crate::RetainedFamilyExecutionTransportError::InvalidTransientAnchorIndex(
+                            index,
+                        ),
+                    )
+                })?;
+                Ok(object.install(anchor))
+            })
+            .collect()
     }
 
     fn prepare_family_update(
@@ -502,6 +579,7 @@ mod tests {
             )
             .unwrap()],
             resource_additions: None,
+            transient_presentations: Vec::new(),
         }
     }
 
@@ -660,6 +738,7 @@ mod tests {
             )
             .unwrap()],
             resource_additions: None,
+            transient_presentations: Vec::new(),
         };
         assert!(mirror.apply_family(invalid).is_err());
         assert_ne!(mirror.frame().unwrap().time, 2.0);
@@ -699,6 +778,7 @@ mod tests {
             .unwrap()],
             family_plans: Vec::new(),
             resource_additions: None,
+            transient_presentations: Vec::new(),
         };
 
         assert!(mirror.apply_family(invalid).is_err());
