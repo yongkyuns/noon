@@ -2,8 +2,7 @@ use std::collections::HashMap;
 
 use noon_compile::{
     lower_prepared_family_transform_channels, lower_prepared_semantic_animation_schedule,
-    prepare_family_transform_activations, EffectiveAnimationProperties,
-    PreparedFamilyTransformChannelError, SemanticExecutionIndex,
+    prepare_family_transform_activations, EffectiveAnimationProperties, SemanticExecutionIndex,
 };
 use noon_core::{
     AnimationOptions, ObjectId, Property, RateFunction, SemanticMutationTransaction,
@@ -35,6 +34,10 @@ fn index(store: &SemanticStore) -> SemanticExecutionIndex {
 }
 
 fn effective(x: f32) -> EffectiveAnimationProperties {
+    effective_with_appearance(x, 1.0)
+}
+
+fn effective_with_appearance(x: f32, appearance: f32) -> EffectiveAnimationProperties {
     EffectiveAnimationProperties {
         z_index: 0.0,
         transform: Transform2D {
@@ -42,7 +45,7 @@ fn effective(x: f32) -> EffectiveAnimationProperties {
             ..Transform2D::IDENTITY
         },
         style: Style::default(),
-        appearance: 1.0,
+        appearance,
         reveal: 1.0,
     }
 }
@@ -134,14 +137,18 @@ fn expansion_uses_stable_tracks_for_real_sources_and_identity_free_copy_tracks()
     let stable_sources = projection
         .stable_tracks()
         .iter()
-        .filter(|track| track.property == Property::Position)
-        .map(|track| track.execution_object_id)
+        .filter(|stable| stable.track.property == Property::Position)
+        .map(|stable| stable.track.execution_object_id)
         .collect::<Vec<_>>();
     assert_eq!(stable_sources, vec![s0_id, s1_id]);
     assert!(projection
         .stable_tracks()
         .iter()
-        .all(|track| track.property != Property::Appearance));
+        .all(|stable| !stable.retain_effective));
+    assert!(projection
+        .stable_tracks()
+        .iter()
+        .all(|stable| stable.track.property != Property::Appearance));
 }
 
 #[test]
@@ -175,15 +182,19 @@ fn equal_family_uses_only_existing_stable_track_vocabulary() {
         projection
             .stable_tracks()
             .iter()
-            .filter(|track| track.property == Property::Position)
-            .map(|track| track.execution_object_id)
+            .filter(|stable| stable.track.property == Property::Position)
+            .map(|stable| stable.track.execution_object_id)
             .collect::<Vec<_>>(),
         vec![s0_id, s1_id]
     );
+    assert!(projection
+        .stable_tracks()
+        .iter()
+        .all(|stable| !stable.retain_effective));
 }
 
 #[test]
-fn contraction_fails_at_explicit_effective_hold_boundary() {
+fn contraction_retains_only_the_padded_target_appearance_endpoint() {
     let mut store = SemanticStore::new();
     let s0 = object(&mut store, 0.0);
     let s1 = object(&mut store, 2.0);
@@ -209,14 +220,71 @@ fn contraction_fails_at_explicit_effective_hold_boundary() {
         Some(effective(x))
     })
     .unwrap();
+    let projection = lower_prepared_family_transform_channels(&prepared, &activation).unwrap();
 
+    assert!(projection.derived_occurrences().is_empty());
+    let appearance = projection
+        .stable_tracks()
+        .iter()
+        .find(|stable| {
+            stable.track.execution_object_id == ids[1]
+                && stable.track.property == Property::Appearance
+        })
+        .expect("padded target owns an execution-only appearance track");
+    assert!(appearance.retain_effective);
     assert!(matches!(
-        lower_prepared_family_transform_channels(&prepared, &activation),
-        Err(PreparedFamilyTransformChannelError::TargetPaddingRequiresEffectiveHold {
-            source: padded_source,
-            target_state: padded_target,
-            occurrence_index: 1,
-            ..
-        }) if padded_source == s1 && padded_target == t0
+        &appearance.track.values,
+        TrackValues::Scalar { from, to } if *from == 1.0 && *to == 0.0
+    ));
+
+    let padded_position = projection
+        .stable_tracks()
+        .iter()
+        .find(|stable| {
+            stable.track.execution_object_id == ids[1]
+                && stable.track.property == Property::Position
+        })
+        .expect("real source still transforms toward the padded target copy");
+    assert!(!padded_position.retain_effective);
+    assert!(matches!(
+        &padded_position.track.values,
+        TrackValues::Vec2 { from, to }
+            if *from == Vec2::new(2.0, 0.0) && *to == Vec2::new(1.0, 0.0)
+    ));
+    assert!(projection
+        .stable_tracks()
+        .iter()
+        .filter(|stable| stable.track.property != Property::Appearance)
+        .all(|stable| !stable.retain_effective));
+}
+
+#[test]
+fn previously_hidden_real_source_restores_appearance_for_real_target() {
+    let mut store = SemanticStore::new();
+    let source_leaf = object(&mut store, 0.0);
+    let target_leaf = object(&mut store, 2.0);
+    let source = family(&mut store, &[source_leaf]);
+    let target = family(&mut store, &[target_leaf]);
+    store.attach_to_scene(source).unwrap();
+    let index = index(&store);
+    let source_id = index.execution_object_id(source_leaf).unwrap();
+    let (prepared, schedule) = prepared_family_transform(&mut store, &index, source, target);
+
+    let activation = prepare_family_transform_activations(&prepared, &index, &schedule, |id| {
+        assert_eq!(id, source_id);
+        Some(effective_with_appearance(0.0, 0.0))
+    })
+    .unwrap();
+    let projection = lower_prepared_family_transform_channels(&prepared, &activation).unwrap();
+
+    let appearance = projection
+        .stable_tracks()
+        .iter()
+        .find(|stable| stable.track.property == Property::Appearance)
+        .expect("a previously hidden real source must fade back in for a real target");
+    assert!(!appearance.retain_effective);
+    assert!(matches!(
+        &appearance.track.values,
+        TrackValues::Scalar { from, to } if *from == 0.0 && *to == 1.0
     ));
 }
