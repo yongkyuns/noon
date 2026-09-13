@@ -1,8 +1,6 @@
 #![cfg(test)]
 
-use crate::{
-    InstalledRetainedExecutionMirror, RetainedExecutionDeltaEnvelope, SemanticExecutionPlayer,
-};
+use crate::{InstalledRetainedExecutionMirror, SemanticExecutionPlayer};
 use noon_core::{
     AnimationOptions, CompositionTimeMap, GeometryRef, ObjectContentRef, RateFunction,
     SemanticAnimationCompositionKind, SemanticAnimationIntent, SemanticMutationTransaction,
@@ -76,9 +74,7 @@ fn morph_endpoint_publishes_geometry_after_clearing_render_override() {
                 .unwrap()
                 .expect("seek changes morph state")
         };
-        mirror
-            .apply(serde_json::from_str::<RetainedExecutionDeltaEnvelope>(&encoded).unwrap())
-            .unwrap();
+        mirror.apply_json(&encoded).unwrap();
         let actual = mirror.frame().unwrap();
         let text = actual.objects[1].content.text().unwrap();
         assert_eq!(*local_text.get_or_insert(text), text);
