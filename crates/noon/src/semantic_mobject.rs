@@ -3,7 +3,7 @@
 //! Handles retain only their originating store and generational identity. All
 //! durable edits use the canonical transaction vocabulary. Captured state is
 //! transient input to shared preparation and coherent publication.
-use crate::{state_replacement::prepare_become_state, AuthoringError, ManimBecomeOptions};
+use crate::{state_replacement::prepare_become, AuthoringError, ManimBecomeOptions};
 use noon_core::{
     Bounds2D64, Color, GeometryRef, GeometryResource, PathCommand, SemanticMutationImpact,
     SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticObjectContent,
@@ -621,8 +621,13 @@ impl Mobject {
         self.require_same_store(other)?;
         let source = self.state()?;
         let target = other.state()?;
-        let state = prepare_become_state(&self.store.borrow(), &source, target, options)?;
-        self.commit_state(state)
+        let prepared = prepare_become(&self.store.borrow(), self.id, &source, target, options)?;
+        prepared.publish(&mut self.store.borrow_mut(), |store, transaction| {
+            transaction
+                .apply(store)
+                .map(|_| ())
+                .map_err(AuthoringError::from)
+        })
     }
 
     /// Derive the effective transform that maps this analytic Line's immutable

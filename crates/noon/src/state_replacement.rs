@@ -12,12 +12,12 @@ use noon_core::{Bounds2D64, SemanticMutationTransaction, SemanticObjectState, Se
 
 /// Pair through the same topology/alias contract as ordinary family Transform.
 /// All captures and fitting succeed before a caller can publish any edit.
-pub(crate) fn family_become_transaction<E: From<AuthoringError>>(
+pub(crate) fn prepare_family_become<E: From<AuthoringError>>(
     source: &MobjectFamily,
     target: &MobjectFamily,
     options: ManimBecomeOptions,
     mut capture: impl FnMut(&Mobject) -> Result<SemanticObjectState, E>,
-) -> Result<SemanticMutationTransaction, E> {
+) -> Result<crate::path_editing::PreparedPathEdits, E> {
     if !Rc::ptr_eq(source.integration_store(), target.integration_store()) {
         return Err(AuthoringError::ForeignStore.into());
     }
@@ -30,7 +30,11 @@ pub(crate) fn family_become_transaction<E: From<AuthoringError>>(
     {
         Ok(pairs) => pairs,
         Err(noon_core::SemanticFamilyPairingError::Empty) => {
-            return Ok(SemanticMutationTransaction::new())
+            return crate::path_editing::PreparedPathEdits::prepare(
+                &source.integration_store().borrow(),
+                Vec::new(),
+            )
+            .map_err(E::from)
         }
         Err(error) => return Err(AuthoringError::from(error).into()),
     };
@@ -49,8 +53,9 @@ pub(crate) fn family_become_transaction<E: From<AuthoringError>>(
     let store = source.integration_store().borrow();
     let targets = prepare_become_states(&store, &sources, targets, options)?;
     let mut transaction = SemanticMutationTransaction::new();
+    let mut replacements = Vec::new();
     let mut staged = HashMap::<noon_core::SemanticNodeId, SemanticObjectState>::new();
-    for ((source, target_id), mut target) in pairs.into_iter().zip(targets) {
+    for ((source, target_id), (mut target, path)) in pairs.into_iter().zip(targets) {
         // Plain Manim become reads a shared target after preceding leaf writes.
         // Matching options copy the target first, so those reads stay captured.
         if options == ManimBecomeOptions::default() {
@@ -62,9 +67,16 @@ pub(crate) fn family_become_transaction<E: From<AuthoringError>>(
         let previous = store
             .semantic_object_state_checked(source)
             .map_err(AuthoringError::from)?;
-        stage_state_changes(&mut transaction, source, previous, &target);
+        if let Some(path) = path {
+            replacements.push((source, target, path));
+        } else {
+            stage_state_changes(&mut transaction, source, previous, &target);
+        }
     }
-    Ok(transaction)
+    Ok(
+        crate::path_editing::PreparedPathEdits::prepare(&store, replacements)?
+            .with_transaction(transaction),
+    )
 }
 
 impl MobjectFamily {
@@ -76,10 +88,15 @@ impl MobjectFamily {
         target: &Self,
         options: ManimBecomeOptions,
     ) -> Result<(), AuthoringError> {
-        family_become_transaction(self, target, options, Mobject::state)?
-            .apply(&mut self.integration_store().borrow_mut())
-            .map(|_| ())
-            .map_err(AuthoringError::from)
+        prepare_family_become(self, target, options, Mobject::state)?.publish(
+            &mut self.integration_store().borrow_mut(),
+            |store, transaction| {
+                transaction
+                    .apply(store)
+                    .map(|_| ())
+                    .map_err(AuthoringError::from)
+            },
+        )
     }
 }
 
@@ -93,16 +110,32 @@ pub struct ManimBecomeOptions {
     pub stretch: bool,
 }
 
-pub(crate) fn prepare_become_state(
+pub(crate) fn prepare_become(
     store: &SemanticStore,
+    node: noon_core::SemanticNodeId,
     source: &SemanticObjectState,
     target: SemanticObjectState,
     options: ManimBecomeOptions,
-) -> Result<SemanticObjectState, AuthoringError> {
-    Ok(
+) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
+    let (target, path) =
         prepare_become_states(store, std::slice::from_ref(source), vec![target], options)?
             .pop()
-            .expect("one target state"),
+            .expect("one target state");
+    let mut transaction = SemanticMutationTransaction::new();
+    let replacements = if let Some(path) = path {
+        vec![(node, target, path)]
+    } else {
+        stage_state_changes(
+            &mut transaction,
+            node,
+            store.semantic_object_state_checked(node)?,
+            &target,
+        );
+        Vec::new()
+    };
+    Ok(
+        crate::path_editing::PreparedPathEdits::prepare(store, replacements)?
+            .with_transaction(transaction),
     )
 }
 
@@ -111,9 +144,9 @@ pub(crate) fn prepare_become_state(
 pub(crate) fn prepare_become_states(
     store: &SemanticStore,
     source: &[SemanticObjectState],
-    mut targets: Vec<SemanticObjectState>,
+    targets: Vec<SemanticObjectState>,
     options: ManimBecomeOptions,
-) -> Result<Vec<SemanticObjectState>, AuthoringError> {
+) -> Result<Vec<(SemanticObjectState, Option<noon_core::VectorPath>)>, AuthoringError> {
     fn bounds(
         store: &SemanticStore,
         states: &[SemanticObjectState],
@@ -195,15 +228,29 @@ pub(crate) fn prepare_become_states(
     } else {
         target_center
     };
-    for target in &mut targets {
-        let (local_x, local_y) =
-            crate::dimension_fit::world_scale_factors(target.transform.rotation_z, x, y)?;
-        let old_center = state_center(store, target)?;
+    let mut result = Vec::with_capacity(targets.len());
+    for mut target in targets {
+        let Ok((local_x, local_y)) =
+            crate::dimension_fit::world_scale_factors(target.transform.rotation_z, x, y)
+        else {
+            let path = crate::family_affine::world_scaled_path(
+                store,
+                &target,
+                x,
+                y,
+                target_center,
+                destination,
+            )?;
+            result.push((target, Some(path)));
+            continue;
+        };
+        let old_center = state_center(store, &target)?;
         let next_center = (
             destination.0 + (old_center.0 - target_center.0) * x,
             destination.1 + (old_center.1 - target_center.1) * y,
         );
-        scale_state_about_center(store, target, local_x, local_y, next_center)?;
+        scale_state_about_center(store, &mut target, local_x, local_y, next_center)?;
+        result.push((target, None));
     }
-    Ok(targets)
+    Ok(result)
 }

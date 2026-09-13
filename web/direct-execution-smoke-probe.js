@@ -647,7 +647,7 @@ async function directOrdinaryAffinePlayProof(expectedBackend) {
     throw new Error(`direct ordinary affine authored time is ${metrics.authoredTime}; expected 4`);
   }
   if (metrics.objectCount !== 1 || metrics.drawCalls <= 0) {
-    throw new Error(`direct ordinary affine produced invalid metrics ${JSON.stringify(metrics)}`);
+    throw new Error(`direct ordinary affine produced invalid renderer metrics ${JSON.stringify(metrics)}`);
   }
   if (endpointLuma < 250 || firstEndpointLuma > 60 || shiftedLuma > 60) {
     throw new Error(`direct ordinary affine did not render its x=5 endpoint ${JSON.stringify(metrics)}`);
@@ -1313,11 +1313,21 @@ async function directFamilyStateProof(expectedBackend) {
   try {
     renderer.resize(canvas.width, canvas.height);
     await presentDirectFrame(renderer);
-    for (const [time, leftX, rightX, y] of [[0, -1, 1, 0], [200, -0.5, 1.5, 0.5], [400, -2, 0, 0], [601, -2, 0, 0]]) {
+    // Aggregate bounds of two 0.6 squares, separated by 2, scaled 1.5 and
+    // rotated 0.3 before becoming the original 2.6-by-0.6 family.
+    const c = Math.cos(0.3), s = Math.sin(0.3);
+    const x = 1.5 * c * 2.6 / (3.9 * c + 0.9 * s);
+    const y = 1.5 * s * 0.6 / (3.9 * s + 0.9 * c);
+    for (const [time, leftX, rightX, leftY, rightY] of [
+      [0, -x, x, -y, y],
+      [200, 0.5 - x, 0.5 + x, 0.5 - y, 0.5 + y],
+      [400, -2, 0, 0, 0],
+      [601, -2, 0, 0, 0],
+    ]) {
       renderer.advanceDirectRealtime(time);
       await settleDirectPublication(renderer, time);
-      const left = await sampleRenderedColor(canvas, leftX, y);
-      const right = await sampleRenderedColor(canvas, rightX, y);
+      const left = await sampleRenderedColor(canvas, leftX, leftY);
+      const right = await sampleRenderedColor(canvas, rightX, rightY);
       if (!(left.red > 180 && left.blue < 50 && right.blue > 180 && right.red < 50)) {
         throw new Error(`direct family state at ${time}ms missed expected members: ${JSON.stringify({left, right})}`);
       }
