@@ -1,5 +1,5 @@
 use super::*;
-use crate::path_editing::{path_is_unchanged, path_replacement_state, path_transaction, PathEdit};
+use crate::path_editing::{prepare_object_edit, PathEdit};
 
 impl LiveSession<'_> {
     pub(super) fn publish_path_edits(
@@ -144,22 +144,13 @@ impl LiveSession<'_> {
         self.session
             .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
         let captured = self.capture_mobject_state(object)?;
-        let before = object.state()?;
-        let after = path_replacement_state(captured.clone())?;
         let mut store = self.store.borrow_mut();
-        let Some(path) = edit.prepare(&store, &captured)? else {
+        let Some(prepared) = prepare_object_edit(&store, object.node_id(), captured, edit)? else {
             return Ok(());
         };
-        if path_is_unchanged(&store, &before, &after, &path) {
-            return Ok(());
-        }
-        store.with_geometry_path(path, |store, handle| {
+        prepared.publish(&mut store, |store, transaction| {
             self.session
-                .apply_semantic_transaction_at_root(
-                    store,
-                    self.root,
-                    path_transaction(object.node_id(), &before, after, handle),
-                )
+                .apply_semantic_transaction_at_root(store, self.root, transaction)
                 .map(|_| ())
                 .map_err(LiveSessionError::from)
         })
