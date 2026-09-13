@@ -1,8 +1,8 @@
 use std::{cell::RefCell, rc::Rc};
 
 use noon_core::{
-    plan_semantic_scene_membership, SemanticMutationTransaction, SemanticMutationTransactionResult,
-    SemanticNodeId, SemanticSceneMembershipRequest, SemanticStore,
+    plan_semantic_scene_membership, SemanticMutationTransaction, SemanticNodeId,
+    SemanticSceneMembershipRequest, SemanticStore,
 };
 
 use crate::{AuthoringError, MobjectTarget};
@@ -76,29 +76,20 @@ pub(crate) fn prepare_scene_membership(
     .map_err(Into::into)
 }
 
-pub(crate) fn apply_scene_membership(
-    store: &Rc<RefCell<SemanticStore>>,
-    transaction: SemanticMutationTransaction,
-) -> Result<SemanticMutationTransactionResult, AuthoringError> {
-    transaction
-        .apply(&mut store.borrow_mut())
-        .map_err(Into::into)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::error::Error;
 
     #[test]
-    fn transaction_application_keeps_preflight_error_and_commits_nothing() {
-        let scene = crate::Scene::new();
+    fn scene_router_keeps_preflight_error_and_commits_nothing() {
+        let mut scene = crate::Scene::new();
         let object = scene.circle(1.0).unwrap();
         let revision = scene.integration_store().borrow().scene_revision();
         let mut transaction = SemanticMutationTransaction::new();
         transaction.add_member(scene.root(), object.node_id());
         transaction.add_member(object.node_id(), scene.root());
-        let error = apply_scene_membership(scene.integration_store(), transaction).unwrap_err();
+        let error = scene.apply_semantic_transaction(transaction).unwrap_err();
         let AuthoringError::Transaction(cause) = &error else {
             panic!("transaction errors must retain their category")
         };

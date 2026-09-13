@@ -5,8 +5,8 @@ use crate::{
 };
 use noon_core::{
     AnimationOptions, GeometryRef, RateFunction, SemanticMutationImpact,
-    SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticStore,
-    SemanticStyle, VectorPath,
+    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
+    SemanticNodeId, SemanticStore, SemanticStyle, VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -53,9 +53,9 @@ impl Scene {
     /// Raw shared arena access for explicit integration, not live mutation.
     ///
     /// External edits can invalidate generational handles and leave an existing
-    /// execution session on a stale scene revision. Use `Scene::live` and its
-    /// coherent publication operations for edits after lowering. No revision
-    /// validation is bypassed by this accessor; see [`crate::integration`].
+    /// execution session on a stale scene revision. Use Scene-owned persistent
+    /// operations after lowering. No revision validation is bypassed by this
+    /// accessor; see [`crate::integration`].
     pub fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
         &self.store
     }
@@ -127,35 +127,53 @@ impl Scene {
 
     /// Prepare and apply one atomic authored membership edit.
     ///
-    /// Errors preserve semantic identities and causes in [`AuthoringError`].
-    /// After execution bootstrap, use [`LiveSession::edit_membership`] instead:
-    /// direct authored edits invalidate that session's publication revision.
+    /// Before execution bootstrap this commits only to the Semantic Scene. Once
+    /// this Scene owns execution, the same transaction is published atomically
+    /// through that execution component. No external Scene/session pairing is
+    /// required for persistent membership edits.
     pub fn edit_membership(
         &mut self,
         request: SceneMembershipRequest<'_>,
-    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         let transaction =
             crate::scene_membership::prepare_scene_membership(&self.store, self.root, request)?;
-        crate::scene_membership::apply_scene_membership(&self.store, transaction)
+        self.apply_semantic_transaction(transaction)
+    }
+
+    /// Route one canonical persistent semantic transaction through the Scene's
+    /// current control state. This is the ownership seam for ordinary mutation:
+    /// cold Scenes commit authored state directly; running Scenes use the existing
+    /// prepared execution publication protocol without relowering or mirroring.
+    pub(crate) fn apply_semantic_transaction(
+        &mut self,
+        transaction: SemanticMutationTransaction,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        if let Some(execution) = self.execution.as_mut() {
+            let mut store = self.store.borrow_mut();
+            return execution
+                .apply_semantic_transaction_at_root(&mut store, self.root, transaction)
+                .map_err(AuthoringError::from);
+        }
+        transaction
+            .apply(&mut self.store.borrow_mut())
+            .map_err(AuthoringError::from)
     }
 
     pub fn add_many(
         &mut self,
         members: &[MobjectTarget<'_>],
-    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Add(members))
     }
 
     pub fn remove_many(
         &mut self,
         members: &[MobjectTarget<'_>],
-    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Remove(members))
     }
 
-    pub fn clear(
-        &mut self,
-    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
+    pub fn clear(&mut self) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Clear)
     }
 
@@ -163,7 +181,7 @@ impl Scene {
         &mut self,
         old: MobjectTarget<'_>,
         new: MobjectTarget<'_>,
-    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Replace { old, new })
     }
 
@@ -298,8 +316,9 @@ impl Scene {
         LiveSession::new(store, root, execution)
     }
 
-    /// Borrow the already-published execution session for supported live membership,
-    /// property edits, and effective-value queries. This facade retains no scene/runtime state.
+    /// Borrow an explicitly supplied execution session for compatibility during
+    /// the control-surface migration. Scene-owned persistent operations do not
+    /// require this pairing once execution is installed in the Scene itself.
     pub fn live<'a>(&'a self, session: &'a mut ExecutionSession) -> LiveSession<'a> {
         LiveSession::new(&self.store, self.root, session)
     }
