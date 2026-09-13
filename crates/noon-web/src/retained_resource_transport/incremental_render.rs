@@ -175,3 +175,105 @@ fn validate_render_geometry_resources(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use noon_core::{
+        FontResourceArena, GeometryResourceArena, Style, TextResourceArena, Transform2D, Vec2,
+        VectorPath,
+    };
+
+    use super::*;
+
+    fn empty_bundle() -> RetainedResourceBundle {
+        RetainedResourceBundle::capture(
+            [],
+            &TextResourceArena::new(),
+            &GeometryResourceArena::new(),
+            &FontResourceArena::new(),
+        )
+        .unwrap()
+    }
+
+    fn path(x: f32) -> Arc<GeometryRef> {
+        Arc::new(GeometryRef::path(
+            VectorPath::new()
+                .move_to(Vec2::new(x, 0.0))
+                .line_to(Vec2::new(x + 1.0, 1.0)),
+        ))
+    }
+
+    #[test]
+    fn incremental_render_append_reuses_prefix_and_rebases_preparations_once() {
+        let first = path(0.0);
+        let second = path(2.0);
+        let mut base = empty_bundle();
+        base.set_render_geometries(
+            7,
+            vec![first].into(),
+            vec![RenderGeometryPreparation {
+                resource: 0,
+                style: Style::default(),
+                transform: Transform2D::IDENTITY,
+            }],
+        );
+        let mut installed = base.install().unwrap();
+        let installed_prefix = installed.render_geometries();
+
+        let mut addition = empty_bundle();
+        addition.set_render_geometries(
+            7,
+            vec![second].into(),
+            vec![RenderGeometryPreparation {
+                resource: 0,
+                style: Style::default(),
+                transform: Transform2D::IDENTITY,
+            }],
+        );
+        let prepared = installed.prepare_additions_with_render(addition).unwrap();
+        assert_eq!(prepared.render_geometry_suffix().len(), 1);
+        let combined = prepared.render_geometries().unwrap();
+        assert_eq!(combined.len(), 2);
+        assert!(Arc::ptr_eq(&installed_prefix[0], &combined[0]));
+        assert_eq!(installed.render_geometries().len(), 1);
+
+        installed.commit_additions_with_render(prepared);
+        let committed = installed.render_geometries();
+        assert_eq!(committed.len(), 2);
+        assert!(Arc::ptr_eq(&installed_prefix[0], &committed[0]));
+        assert_eq!(installed.render_geometry_preparations().len(), 2);
+        assert_eq!(installed.render_geometry_preparations()[0].resource, 0);
+        assert_eq!(installed.render_geometry_preparations()[1].resource, 1);
+    }
+
+    #[test]
+    fn mismatched_render_session_is_rejected_without_mutating_installed_table() {
+        let mut base = empty_bundle();
+        base.set_render_geometries(
+            7,
+            vec![path(0.0)].into(),
+            vec![RenderGeometryPreparation {
+                resource: 0,
+                style: Style::default(),
+                transform: Transform2D::IDENTITY,
+            }],
+        );
+        let installed = base.install().unwrap();
+        let before = installed.render_geometries();
+
+        let mut addition = empty_bundle();
+        addition.set_render_geometries(
+            8,
+            vec![path(2.0)].into(),
+            vec![RenderGeometryPreparation {
+                resource: 0,
+                style: Style::default(),
+                transform: Transform2D::IDENTITY,
+            }],
+        );
+        assert!(installed.prepare_additions_with_render(addition).is_err());
+        let after = installed.render_geometries();
+        assert_eq!(after.len(), 1);
+        assert!(Arc::ptr_eq(&before[0], &after[0]));
+    }
+}
