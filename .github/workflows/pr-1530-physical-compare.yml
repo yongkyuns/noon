@@ -13,8 +13,8 @@ jobs:
     runs-on: [self-hosted, macOS, noon-physical]
     timeout-minutes: 90
     env:
-      BASELINE_SHA: 8e085af12356263576b817263ad4e001544c4db5
-      CANDIDATE_SHA: ef62305c2762b5279b93522592f88d2f5d3755b8
+      BASELINE_SHA: 8bbc81ce544a319ca768bc3c7281023ddfcad1e5
+      CANDIDATE_SHA: c51fe309bb26d160c75e6d4e1e5ca91aa6933523
     steps:
       - uses: actions/checkout@v7
         with:
@@ -24,9 +24,9 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin master
-          git fetch origin refs/pull/1530/merge:refs/remotes/origin/pr1530-merge
-          test "$(git rev-parse refs/remotes/origin/pr1530-merge)" = "$CANDIDATE_SHA"
-          git cat-file -e "$BASELINE_SHA^{commit}"
+          git fetch origin codex/restore-morph-preload-residency:refs/remotes/origin/pr1530-head
+          test "$(git rev-parse origin/master)" = "$BASELINE_SHA"
+          test "$(git rev-parse refs/remotes/origin/pr1530-head)" = "$CANDIDATE_SHA"
           echo "baseline=$BASELINE_SHA"
           echo "candidate=$CANDIDATE_SHA"
       - name: Verify physical macOS runner
