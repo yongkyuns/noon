@@ -480,3 +480,135 @@ fn effective_family_layout_preserves_detached_member_authored_bounds() {
     assert_eq!(layout.center, (1.0, 0.0));
     assert_eq!((layout.width, layout.height), (8.0, 2.0));
 }
+
+#[test]
+fn scene_path_alignment_captures_effective_operands_and_publishes_resources() {
+    let mut scene = Scene::new();
+    let left = scene.line((0.0, 0.0), (3.0, 0.0)).unwrap();
+    let right = scene.square(2.0).unwrap();
+    scene.add(&left).unwrap();
+    scene.add(&right).unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    scene.owned_live().shift(&left, 1.0, 2.0).unwrap();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+
+    scene.align_points(&left, &right).unwrap();
+
+    assert_eq!(scene.effective_path_query(&left).unwrap().curve_count(), 4);
+    assert_eq!(scene.effective_path_query(&right).unwrap().curve_count(), 4);
+    assert_eq!(
+        scene.effective_path_query(&left).unwrap().start().unwrap(),
+        (1.0, 2.0)
+    );
+    assert!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len()
+            > resources
+    );
+}
+
+#[test]
+fn scene_path_alignment_alias_is_noop_before_unsupported_capture() {
+    let mut scene = Scene::new();
+    let object = scene.circle(1.0).unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    scene
+        .owned_live()
+        .declare_and_activate_create(&object, AnimationOptions::new())
+        .unwrap();
+    scene.owned_execution_mut().take_frame_changes();
+    let revision = scene.revision();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+
+    scene.align_points(&object, &object).unwrap();
+
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
+    assert!(scene.owned_execution_mut().take_frame_changes().is_empty());
+}
+
+#[test]
+fn scene_path_alignment_foreign_target_fails_atomically() {
+    let mut scene = Scene::new();
+    let object = scene.line((0.0, 0.0), (3.0, 0.0)).unwrap();
+    scene.add(&object).unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    scene.owned_execution_mut().take_frame_changes();
+    let foreign = Scene::new().square(2.0).unwrap();
+    let before = object.state().unwrap();
+    let revision = scene.revision();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+
+    assert!(scene.align_points(&object, &foreign).is_err());
+
+    assert_eq!(object.state().unwrap(), before);
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
+    assert!(scene.owned_execution_mut().take_frame_changes().is_empty());
+}
+
+#[test]
+fn scene_path_alignment_rejects_render_override_before_resource_publication() {
+    let mut scene = Scene::new();
+    let left = scene.line((0.0, 0.0), (3.0, 0.0)).unwrap();
+    let right = scene.circle(1.0).unwrap();
+    scene.add(&left).unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    scene
+        .owned_live()
+        .declare_and_activate_create(&right, AnimationOptions::new())
+        .unwrap();
+    let before = left.state().unwrap();
+    let revision = scene.revision();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len();
+
+    assert!(scene.align_points(&left, &right).is_err());
+
+    assert_eq!(left.state().unwrap(), before);
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len(),
+        resources
+    );
+}

@@ -1,9 +1,10 @@
 //! Pair alignment uses the same atomic retained-resource transaction as family edits.
 use crate::{
     path_editing::{world_path, PreparedPathEdits},
-    AuthoringError, Mobject,
+    AuthoringError, ExecutionSession, Mobject,
 };
 use noon_core::{SemanticNodeId, SemanticObjectState, SemanticStore};
+use std::{cell::RefCell, rc::Rc};
 
 pub(crate) fn prepare_alignment(
     store: &SemanticStore,
@@ -23,6 +24,47 @@ pub(crate) fn prepare_alignment(
     }
     PreparedPathEdits::prepare(store, replacements)
 }
+
+/// Align two vector paths from one coherent running publication.
+///
+/// This is a low-level host bridge for integrations that already own the
+/// semantic store/root and execution component. Ordinary application code
+/// should use [`crate::Scene::align_points`].
+pub fn publish_align_points(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    left: &Mobject,
+    right: &Mobject,
+) -> Result<(), AuthoringError> {
+    if !Rc::ptr_eq(store, left.integration_store()) || !Rc::ptr_eq(store, right.integration_store())
+    {
+        return Err(AuthoringError::ForeignStore);
+    }
+    left.validate()?;
+    right.validate()?;
+    if left.node_id() == right.node_id() {
+        return Ok(());
+    }
+    execution
+        .require_resource_creation_at_root(&store.borrow(), root)
+        .map_err(AuthoringError::from)?;
+    let left_state = crate::effective_capture::capture_mobject_state(store, execution, left)?;
+    let right_state = crate::effective_capture::capture_mobject_state(store, execution, right)?;
+    let mut store = store.borrow_mut();
+    prepare_alignment(
+        &store,
+        (left.node_id(), left_state),
+        (right.node_id(), right_state),
+    )?
+    .publish(&mut store, |store, transaction| {
+        execution
+            .apply_semantic_transaction_at_root(store, root, transaction)
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    })
+}
+
 impl Mobject {
     /// Match corresponding path contour/curve counts using exact subdivision.
     /// Both operands retain identity, paint and visible shape. Publication is

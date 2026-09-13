@@ -255,6 +255,39 @@ impl Scene {
         self.apply_semantic_transaction(transaction).map(|_| ())
     }
 
+    /// Align two vector paths while preserving identity, paint, and visible shape.
+    /// Cold Scenes use authored state; running Scenes capture both operands from
+    /// one coherent Runtime publication and publish resources + semantic edits
+    /// atomically through the Scene-owned execution component.
+    pub fn align_points(&mut self, left: &Mobject, right: &Mobject) -> Result<(), AuthoringError> {
+        let root = self.root;
+        let store = &self.store;
+        if let Some(execution) = self.execution.as_mut() {
+            return crate::path_alignment::publish_align_points(
+                store, root, execution, left, right,
+            );
+        }
+        self.require_object(left)?;
+        self.require_object(right)?;
+        if left.node_id() == right.node_id() {
+            return Ok(());
+        }
+        let left_state = left.state()?;
+        let right_state = right.state()?;
+        let mut store = self.store.borrow_mut();
+        crate::path_alignment::prepare_alignment(
+            &store,
+            (left.node_id(), left_state),
+            (right.node_id(), right_state),
+        )?
+        .publish(&mut store, |store, transaction| {
+            transaction
+                .apply(store)
+                .map(|_| ())
+                .map_err(AuthoringError::from)
+        })
+    }
+
     /// Observe one family's effective Runtime layout without creating a borrowed
     /// LiveSession control facade. Cold Scenes fail explicitly rather than returning
     /// authored bounds as if they were an effective publication.

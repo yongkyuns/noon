@@ -38,6 +38,7 @@ pub use crate::host_callbacks::{
     effective_style_with_fill_opacity, effective_style_with_paint_opacity,
     effective_style_with_stroke_color, rotate_effective_transform_about_point,
 };
+pub use crate::path_alignment::publish_align_points;
 pub use crate::path_queries::effective_path_query;
 pub use crate::point_matching::publish_match_points;
 pub use crate::semantic_mobject::{authoring_render_f64, authoring_xy_f64, line_match_transform};
