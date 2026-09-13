@@ -65,12 +65,9 @@ pub(crate) fn compile_transform_geometry_values(
                     noon_geometry::MorphOptions::DEFAULT,
                 )
                 .map_err(|_| TransformCompileFailure::UnsupportedGeometry)?;
-                noon_geometry::plan_filled_morph_preserving_order(
-                    source,
-                    target,
-                    noon_geometry::MorphOptions::DEFAULT,
-                )
-                .map_err(|_| TransformCompileFailure::UnsafeFilledPath)?;
+                // Filled-path safety is style-dependent and was validated before
+                // PreparedMorph construction. This second pass has no style context, so
+                // it deliberately revalidates only renderer-independent correspondence.
                 Ok(Some(TransformGeometryPlan::PathPair {
                     geometry: Arc::new(geometry.clone()),
                     render_transform: *render_transform,
@@ -219,6 +216,11 @@ pub(crate) fn compile_content_morph(
     Ok((geometry.as_ref().clone(), render_transform))
 }
 
+pub(crate) fn morph_requires_filled_topology(from: Style, to: Style) -> bool {
+    from.fill.is_some_and(|color| color.alpha != 0.0)
+        || to.fill.is_some_and(|color| color.alpha != 0.0)
+}
+
 fn path_style_requires_retessellation(from: Style, to: Style) -> bool {
     from.stroke_width.to_bits() != to.stroke_width.to_bits()
         || from.stroke_join != to.stroke_join
@@ -237,7 +239,8 @@ fn compile_path_pair(
     if path_style_requires_retessellation(from_style, to_style) {
         return Err(TransformCompileFailure::RequiresRetessellation);
     }
-    if from_style.fill.is_some()
+    let fill_topology_required = morph_requires_filled_topology(from_style, to_style);
+    if fill_topology_required
         && noon_geometry::plan_filled_morph_preserving_order(
             &source,
             &target,
@@ -271,7 +274,7 @@ fn compile_path_pair(
                 from_transform,
                 to_transform,
             )
-            && (from_style.fill.is_none()
+            && (!fill_topology_required
                 || noon_geometry::plan_filled_morph_preserving_order(
                     &world_source,
                     &world_target,
@@ -465,6 +468,64 @@ mod tests {
                 Transform2D::IDENTITY,
             ),
             Err(TransformCompileFailure::RequiresRetessellation)
+        );
+    }
+
+    #[test]
+    fn transparent_fill_open_path_morph_uses_stroke_correspondence() {
+        let source = VectorPath::new().move_to(Vec2::new(-1.0, 0.0)).cubic_to(
+            Vec2::new(-0.5, 1.0),
+            Vec2::new(0.5, 1.0),
+            Vec2::new(1.0, 0.0),
+        );
+        let target = VectorPath::new().move_to(Vec2::new(-1.25, 0.25)).cubic_to(
+            Vec2::new(-0.25, 1.25),
+            Vec2::new(0.75, 0.75),
+            Vec2::new(1.25, -0.25),
+        );
+        let transparent_fill = Color {
+            alpha: 0.0,
+            ..Color::WHITE
+        };
+        let style = Style {
+            fill: Some(transparent_fill),
+            stroke: Some(Color::WHITE),
+            stroke_width: 0.08,
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            ..Style::default()
+        };
+
+        let plan = compile_path_pair(
+            style,
+            style,
+            Transform2D::IDENTITY,
+            Transform2D::IDENTITY,
+            source.clone(),
+            target.clone(),
+        )
+        .expect("transparent fill must not request filled topology for an open path");
+        assert!(matches!(
+            plan,
+            TransformGeometryPlan::PathPair {
+                render_transform: Some(Transform2D::IDENTITY),
+                ..
+            }
+        ));
+
+        let visible_fill = Style {
+            fill: Some(Color::WHITE),
+            ..style
+        };
+        assert_eq!(
+            compile_path_pair(
+                visible_fill,
+                visible_fill,
+                Transform2D::IDENTITY,
+                Transform2D::IDENTITY,
+                source,
+                target,
+            ),
+            Err(TransformCompileFailure::UnsafeFilledPath)
         );
     }
 }

@@ -1729,7 +1729,7 @@ impl FramePreparer {
                     && cache.stroke_width_bits == object.style.stroke_width.to_bits()
                     && cache.stroke_join == object.style.stroke_join
                     && cache.stroke_cap == object.style.stroke_cap
-                    && cache.fill_enabled == object.style.fill.is_some()
+                    && path_fill_cache_matches(cache.fill_enabled, &cache.path, object.style)
             }
             PreparedSlot::Unsupported(index) => {
                 matches!(render_geometry, GeometryRef::External(_))
@@ -1783,7 +1783,33 @@ impl FramePreparer {
     ) -> Result<(usize, bool), noon_geometry::GeometryError> {
         let stroke_transform = path_stroke_transform_key(style, transform);
         let stroke_width_bits = style.stroke_width.to_bits();
-        let fill_enabled = style.fill.is_some();
+        for fill_enabled in path_fill_cache_candidates(path, style)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(index) = self.find_cached_path_mesh_index(
+                path,
+                stroke_transform,
+                stroke_width_bits,
+                style.stroke_join,
+                style.stroke_cap,
+                fill_enabled,
+            ) {
+                self.mark_path_mesh_used(index);
+                return Ok((index, false));
+            }
+        }
+
+        let requested_fill = style.fill.is_some();
+        let (mesh, fill_enabled) =
+            match tessellate_path_mesh_with_fill(path, style, transform, requested_fill) {
+                Ok(mesh) => (mesh, requested_fill),
+                Err(_) if transparent_morph_fill_fallback_allowed(path, style) => (
+                    tessellate_path_mesh_with_fill(path, style, transform, false)?,
+                    false,
+                ),
+                Err(error) => return Err(error),
+            };
         let key = path_mesh_key(
             path,
             stroke_transform,
@@ -1792,23 +1818,6 @@ impl FramePreparer {
             style.stroke_cap,
             fill_enabled,
         );
-        let existing = self.path_mesh_lookup.get(&key).and_then(|candidates| {
-            candidates.iter().copied().find(|&index| {
-                let entry = &self.path_mesh_cache[index];
-                entry.path == *path
-                    && entry.stroke_transform == stroke_transform
-                    && entry.stroke_width_bits == stroke_width_bits
-                    && entry.stroke_join == style.stroke_join
-                    && entry.stroke_cap == style.stroke_cap
-                    && entry.fill_enabled == fill_enabled
-            })
-        });
-        if let Some(index) = existing {
-            self.mark_path_mesh_used(index);
-            return Ok((index, false));
-        }
-
-        let mesh = tessellate_path_mesh(path, style, transform)?;
         let index = self.path_mesh_cache.len();
         let last_used = self.next_path_mesh_use();
         self.path_mesh_cache.push(CachedPathMesh {
@@ -1824,6 +1833,36 @@ impl FramePreparer {
         });
         self.path_mesh_lookup.entry(key).or_default().push(index);
         Ok((index, true))
+    }
+
+    fn find_cached_path_mesh_index(
+        &self,
+        path: &VectorPath,
+        stroke_transform: PathStrokeTransformKey,
+        stroke_width_bits: u32,
+        stroke_join: StrokeJoin,
+        stroke_cap: StrokeCap,
+        fill_enabled: bool,
+    ) -> Option<usize> {
+        let key = path_mesh_key(
+            path,
+            stroke_transform,
+            stroke_width_bits,
+            stroke_join,
+            stroke_cap,
+            fill_enabled,
+        );
+        self.path_mesh_lookup.get(&key).and_then(|candidates| {
+            candidates.iter().copied().find(|&index| {
+                let entry = &self.path_mesh_cache[index];
+                entry.path == *path
+                    && entry.stroke_transform == stroke_transform
+                    && entry.stroke_width_bits == stroke_width_bits
+                    && entry.stroke_join == stroke_join
+                    && entry.stroke_cap == stroke_cap
+                    && entry.fill_enabled == fill_enabled
+            })
+        })
     }
 
     pub(crate) fn cached_path_mesh(
@@ -1887,27 +1926,21 @@ impl FramePreparer {
             let stroke_transform =
                 path_stroke_transform_key(object.style, frame.render_transform(object_index));
             let stroke_width_bits = object.style.stroke_width.to_bits();
-            let fill_enabled = object.style.fill.is_some();
-            let key = path_mesh_key(
-                path,
-                stroke_transform,
-                stroke_width_bits,
-                object.style.stroke_join,
-                object.style.stroke_cap,
-                fill_enabled,
-            );
-            if let Some(candidates) = self.path_mesh_lookup.get(&key) {
-                if let Some(index) = candidates.iter().copied().find(|&index| {
-                    let entry = &self.path_mesh_cache[index];
-                    entry.path == *path
-                        && entry.stroke_transform == stroke_transform
-                        && entry.stroke_width_bits == stroke_width_bits
-                        && entry.stroke_join == object.style.stroke_join
-                        && entry.stroke_cap == object.style.stroke_cap
-                        && entry.fill_enabled == fill_enabled
-                }) {
-                    keep[index] = true;
-                }
+            if let Some(index) = path_fill_cache_candidates(path, object.style)
+                .into_iter()
+                .flatten()
+                .find_map(|fill_enabled| {
+                    self.find_cached_path_mesh_index(
+                        path,
+                        stroke_transform,
+                        stroke_width_bits,
+                        object.style.stroke_join,
+                        object.style.stroke_cap,
+                        fill_enabled,
+                    )
+                })
+            {
+                keep[index] = true;
             }
         }
 
@@ -2053,6 +2086,15 @@ pub(crate) fn tessellate_path_mesh(
     style: Style,
     transform: Transform2D,
 ) -> Result<TessellatedPath, noon_geometry::GeometryError> {
+    tessellate_path_mesh_with_fill(path, style, transform, style.fill.is_some())
+}
+
+fn tessellate_path_mesh_with_fill(
+    path: &VectorPath,
+    style: Style,
+    transform: Transform2D,
+    fill_enabled: bool,
+) -> Result<TessellatedPath, noon_geometry::GeometryError> {
     let transformed_path;
     let tessellation_path = if style.stroke_width_mode == StrokeWidthMode::ScreenSpace {
         transformed_path = transform_path_without_translation(path, transform);
@@ -2068,7 +2110,7 @@ pub(crate) fn tessellate_path_mesh(
             style.stroke_width,
             style.stroke_join,
             style.stroke_cap,
-            style.fill.is_some(),
+            fill_enabled,
         )
     } else {
         noon_geometry::tessellate_styled_with_fill(
@@ -2076,9 +2118,28 @@ pub(crate) fn tessellate_path_mesh(
             style.stroke_width,
             style.stroke_join,
             style.stroke_cap,
-            style.fill.is_some(),
+            fill_enabled,
         )
     }
+}
+
+fn transparent_morph_fill_fallback_allowed(path: &VectorPath, style: Style) -> bool {
+    path.morph_target().is_some() && style.fill.is_some_and(|color| color.alpha == 0.0)
+}
+
+fn path_fill_cache_candidates(path: &VectorPath, style: Style) -> [Option<bool>; 2] {
+    let requested = style.fill.is_some();
+    [
+        Some(requested),
+        (requested && transparent_morph_fill_fallback_allowed(path, style)).then_some(false),
+    ]
+}
+
+fn path_fill_cache_matches(fill_enabled: bool, path: &VectorPath, style: Style) -> bool {
+    path_fill_cache_candidates(path, style)
+        .into_iter()
+        .flatten()
+        .any(|candidate| candidate == fill_enabled)
 }
 
 fn path_stroke_transform_key(style: Style, transform: Transform2D) -> PathStrokeTransformKey {
@@ -2461,6 +2522,56 @@ mod tests {
             .path_vertices
             .iter()
             .any(|vertex| vertex.surface & 1 == 0));
+    }
+
+    #[test]
+    fn transparent_open_morph_falls_back_to_stroke_only_mesh() {
+        let source = VectorPath::new().move_to(Vec2::new(-1.0, 0.0)).cubic_to(
+            Vec2::new(-0.5, 1.0),
+            Vec2::new(0.5, 1.0),
+            Vec2::new(1.0, 0.0),
+        );
+        let target = VectorPath::new().move_to(Vec2::new(-1.25, 0.25)).cubic_to(
+            Vec2::new(-0.25, 1.25),
+            Vec2::new(0.75, 0.75),
+            Vec2::new(1.25, -0.25),
+        );
+        let geometry = GeometryRef::path(source.with_morph_target(target));
+        let mut path = object(91, geometry);
+        path.style.fill = Some(Color {
+            alpha: 0.0,
+            ..Color::WHITE
+        });
+        path.style.stroke = Some(Color::WHITE);
+        path.style.stroke_width = 0.08;
+        let initial = frame(vec![path]);
+        let mut preparer = FramePreparer::new();
+
+        let vertices = {
+            let cold = preparer.prepare(&initial);
+            assert_eq!(cold.stats.unsupported_count, 0);
+            assert_eq!(cold.stats.geometry_cache_misses, 1);
+            assert!(!cold.path_vertices.is_empty());
+            assert!(cold
+                .path_vertices
+                .iter()
+                .all(|vertex| vertex.surface & 1 == 1));
+            cold.path_vertices.to_vec()
+        };
+
+        let mut advanced = initial.clone();
+        advanced.morphs[0] = 0.5;
+        let steady = preparer.prepare_incremental(&advanced, &FrameChanges::objects(vec![0]));
+        assert_eq!(steady.stats.unsupported_count, 0);
+        assert_eq!(steady.stats.geometry_cache_misses, 0);
+        assert!(!steady.path_geometry_dirty);
+        assert_eq!(steady.path_vertices, vertices);
+
+        let mut visible = initial;
+        visible.objects[0].style.fill = Some(Color::WHITE);
+        let mut visible_preparer = FramePreparer::new();
+        let rejected = visible_preparer.prepare(&visible);
+        assert_eq!(rejected.stats.unsupported_count, 1);
     }
 
     #[test]

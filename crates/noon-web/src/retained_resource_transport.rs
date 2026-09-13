@@ -215,9 +215,9 @@ impl RetainedResourceBundle {
 
     pub(crate) fn capture_additions(
         text_handles: impl IntoIterator<Item = TextResourceHandle>,
-        texts: &impl TextResourceLookup,
-        geometries: &impl GeometryResourceLookup,
-        fonts: &impl FontResourceLookup,
+        texts: &(impl TextResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
         installed: &RetainedResourceInventory,
     ) -> Result<Self, RetainedResourceTransportError> {
         Self::capture_filtered(text_handles, texts, geometries, fonts, Some(installed))
@@ -225,18 +225,18 @@ impl RetainedResourceBundle {
 
     pub fn capture(
         text_handles: impl IntoIterator<Item = TextResourceHandle>,
-        texts: &impl TextResourceLookup,
-        geometries: &impl GeometryResourceLookup,
-        fonts: &impl FontResourceLookup,
+        texts: &(impl TextResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
     ) -> Result<Self, RetainedResourceTransportError> {
         Self::capture_filtered(text_handles, texts, geometries, fonts, None)
     }
 
     fn capture_filtered(
         text_handles: impl IntoIterator<Item = TextResourceHandle>,
-        texts: &impl TextResourceLookup,
-        geometries: &impl GeometryResourceLookup,
-        fonts: &impl FontResourceLookup,
+        texts: &(impl TextResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
         installed: Option<&RetainedResourceInventory>,
     ) -> Result<Self, RetainedResourceTransportError> {
         let text_handles = text_handles

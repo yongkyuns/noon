@@ -64,9 +64,9 @@ impl RetainedFamilyExecutionDeltaEncoder {
         &mut self,
         envelope: &mut RetainedFamilyExecutionDeltaEnvelope,
         text_handles: impl IntoIterator<Item = TextResourceHandle>,
-        texts: &impl TextResourceLookup,
-        geometries: &impl GeometryResourceLookup,
-        fonts: &impl FontResourceLookup,
+        texts: &(impl TextResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
     ) -> Result<(), RetainedResourceTransportError> {
         let new_texts = text_handles
             .into_iter()
