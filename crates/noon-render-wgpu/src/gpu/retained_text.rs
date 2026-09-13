@@ -2560,11 +2560,14 @@ pub enum RetainedDerivedDisplayError {
     MixedTextUnsupported,
 }
 
+/// Feature-neutral spelling for the retained transient-presentation boundary.
+pub type RetainedTransientPresentationError = RetainedDerivedDisplayError;
+
 impl std::fmt::Display for RetainedDerivedDisplayError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MixedTextUnsupported => formatter.write_str(
-                "derived family Transform display rows are not yet interleaved with retained glyph painter items",
+                "transient presentation rows are not yet interleaved with retained glyph painter items",
             ),
         }
     }
@@ -2717,9 +2720,30 @@ impl GpuRenderer {
         RetainedUploadStats { geometry, text }
     }
 
-    /// Encode a retained geometry-only frame with identity-free derived analytic
+    /// Encode a retained geometry-only frame with identity-free transient analytic
     /// occurrences. Mixed glyph frames fail closed until the retained text stream can
     /// represent plan-local occurrence ordinals without manufacturing object IDs.
+    pub fn encode_retained_with_transient_presentations(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        prepared: &PreparedRetainedGpuFrame<'_>,
+        transient: &crate::PreparedDerivedDisplay,
+        clear_color: wgpu::Color,
+        query_set: Option<&wgpu::QuerySet>,
+    ) -> Result<RetainedDrawStats, RetainedTransientPresentationError> {
+        self.encode_retained_with_derived(
+            encoder,
+            view,
+            prepared,
+            transient,
+            clear_color,
+            query_set,
+        )
+    }
+
+    /// Migration entry point for the current B3 stack. New hosts should use
+    /// `encode_retained_with_transient_presentations`.
     pub fn encode_retained_with_derived(
         &self,
         encoder: &mut wgpu::CommandEncoder,

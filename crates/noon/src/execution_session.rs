@@ -1123,12 +1123,12 @@ impl ExecutionSession {
         }
         let publication = if expiring {
             self.runtime
-                .take_renderer_publication_with_followup_invalidation()
+                .take_renderer_publication_with_followup_presentation_redraw()
         } else {
             self.runtime.take_renderer_publication()
         };
         publication
-            .with_derived_display_objects(&self.derived_display_objects)
+            .with_transient_presentations(&self.derived_display_objects)
             .expect("compiler-owned family Transform rows retain valid painter anchors")
     }
 

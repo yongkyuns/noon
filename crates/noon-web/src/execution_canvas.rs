@@ -1256,7 +1256,7 @@ mod wasm {
                         .map_err(js_error)
                 } else {
                     self.renderer
-                        .encode_retained_with_derived(
+                        .encode_retained_with_transient_presentations(
                             &mut encoder,
                             &view,
                             &prepared,

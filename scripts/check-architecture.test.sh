@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory(prefix='noon architecture gate ') as directory:
              'layer_dependencies.py', 'architecture-ratchet.sh',
              'architecture_retired_models.py',
              'noon-core-module-ownership-ratchet.sh', 'renderer-host-boundary-ratchet.sh',
-             'active-perf-frontend-ratchet.sh']
+             'transient-presentation-ratchet.sh', 'active-perf-frontend-ratchet.sh']
     for name in names:
         shutil.copyfile(source / 'scripts' / name, root / 'scripts' / name)
     (root / '.gitignore').write_text('ignored/\n__pycache__/\n')
@@ -49,6 +49,54 @@ with tempfile.TemporaryDirectory(prefix='noon architecture gate ') as directory:
         (core / f'{owner}.rs').write_text('')
     (root / 'crates/noon-core/src/semantic_store.rs').write_text('struct SemanticNodeId;\nimpl SemanticNodeId {}\nstruct SemanticStore;\n')
     (root / 'crates/noon-web/src/clock.rs').write_text('struct PlaybackClock;\n')
+
+    # The common gate fixture must satisfy the transient-presentation architecture
+    # contract now enforced by check-architecture.sh. These are structural source
+    # probes only; architecture mode does not compile the fixture crates.
+    (root / 'crates/noon-runtime/src/frame.rs').write_text('''
+struct FrameChanges;
+impl FrameChanges {
+    pub fn presentation_redraw() -> Self { Self }
+    pub const fn has_stable_changes(&self) -> bool { false }
+}
+''')
+    (root / 'crates/noon-runtime/src/lib.rs').write_text('''
+pub fn take_renderer_publication_with_followup_presentation_redraw() {
+    let _changes = FrameChanges::presentation_redraw();
+}
+/// Consume derived spatial invalidation.
+pub fn spatial() {}
+''')
+    (root / 'crates/noon/src/execution_session.rs').write_text('''
+fn publish(self) { let _ = self.with_transient_presentations(&self.derived_display_objects); }
+''')
+    (root / 'crates/noon-runtime/src/renderer_publication.rs').write_text('''
+pub struct DerivedDisplayObject {
+    anchor_object_index: u32,
+    occurrence_index: u32,
+}
+impl DerivedDisplayObject {}
+pub const fn transient_presentations(&self) {}
+pub fn with_transient_presentations(&self) {}
+''')
+    gpu = root / 'crates/noon-render-wgpu/src/gpu'
+    gpu.mkdir()
+    (gpu / 'retained_text.rs').write_text('''
+fn prepare(changes: Changes) {
+    let _stable = (changes.requires_presentation_redraw() && !changes.has_stable_changes())
+        .then(FrameChanges::default);
+}
+pub fn encode_retained_with_transient_presentations(&self) {}
+''')
+    (gpu / 'derived_display.rs').write_text('pub fn upload_transient() {}\n')
+    (root / 'crates/noon-render-wgpu/src/render_order.rs').write_text('pub fn prepare_transient() {}\n')
+    (root / 'crates/noon-native/src/lib.rs').write_text('''
+fn draw(renderer: Renderer) { renderer.encode_retained_with_transient_presentations(); }
+''')
+    (root / 'crates/noon-web/src/execution_canvas.rs').write_text('''
+fn draw(renderer: Renderer) { renderer.encode_retained_with_transient_presentations(); }
+''')
+
     (root / 'web').mkdir()
     for name in ['perf-profile.js', 'scene-perf.js']:
         (root / 'web' / name).write_text('// clean\n')
@@ -88,6 +136,7 @@ with tempfile.TemporaryDirectory(prefix='noon architecture gate ') as directory:
         ('layer alias', 'crates/noon-core/Cargo.toml', '\n[dependencies]\nengine = { package = "noon-runtime", path = "../noon-runtime", optional = true }\n', 'must not depend on noon-runtime'),
         ('core ownership', 'crates/noon-core/src/lib.rs', '\ninclude!("other.rs");\n', 'noon-core module ownership ratchet:'),
         ('renderer host', 'crates/noon-render-wgpu/src/new host.rs', 'use winit::event_loop;\n', 'renderer host-boundary ratchet failed'),
+        ('transient host coupling', 'crates/noon-native/src/lib.rs', '\nfn legacy(renderer: Renderer) { renderer.encode_retained_with_derived(); }\n', 'regained derived-display host coupling'),
         ('performance frontend', 'web/perf-profile.js', '\nconst bad = demoSceneJson();\n', 'active perf frontend ratchet:'),
         ('crate-private export', 'crates/noon-web/src/lib.rs', 'pub use legacy::*;\n', 'ScenePlayer must remain crate-private'),
         ('migration growth', 'crates/noon-runtime/src/new.rs', 'struct SceneDocument;\n', 'architecture ratchet:'),
