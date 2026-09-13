@@ -8,13 +8,14 @@ use noon_core::{
 
 use crate::{FrameChanges, FrameState, RetainedPlannedFamilyFrame};
 
-/// One identity-free effective visual row derived for renderer-only animation work.
+/// One identity-free effective visual row for transient renderer presentation.
 ///
 /// Unlike [`crate::FrameObjectState`], this type deliberately has no `ObjectId` and
-/// therefore cannot enter the stable execution-slot domain. It is suitable for
-/// temporary family-Transform padding copies whose lifetime is bounded by one
-/// animation plan/publication. Content still uses the same immutable retained
-/// resources as ordinary frame rows; there is no second geometry/text world.
+/// therefore cannot enter the stable execution-slot domain. It can represent any
+/// plan-local visual occurrence whose lifetime is bounded by execution/publication,
+/// including the current unequal-family Transform padding copies. Content still
+/// uses the same immutable retained resources as ordinary frame rows; there is no
+/// second geometry/text world.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DerivedDisplayObjectState {
     pub z_index: f64,
@@ -56,7 +57,7 @@ impl DerivedDisplayObjectState {
 /// `anchor_object_index` identifies an existing stable execution slot only for
 /// painter placement and source-local invalidation. It is not the identity of this
 /// occurrence. `occurrence_index` preserves deterministic order when multiple
-/// derived copies share one source anchor.
+/// transient occurrences share one source anchor.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DerivedDisplayObject {
     anchor_object_index: u32,
@@ -114,31 +115,31 @@ impl std::fmt::Display for DerivedDisplayPublicationError {
                 object_count,
             } => write!(
                 formatter,
-                "derived display anchor {anchor_object_index} is outside stable frame object count {object_count}"
+                "transient presentation anchor {anchor_object_index} is outside stable frame object count {object_count}"
             ),
             Self::AnchorNotPresent(index) => {
-                write!(formatter, "derived display anchor {index} is not present in this frame")
+                write!(formatter, "transient presentation anchor {index} is not present in this frame")
             }
             Self::DuplicateOccurrence(index) => {
-                write!(formatter, "derived display occurrence index {index} is duplicated")
+                write!(formatter, "transient presentation occurrence index {index} is duplicated")
             }
             Self::InvalidZIndex(index) => {
-                write!(formatter, "derived display occurrence {index} has invalid z-index")
+                write!(formatter, "transient presentation occurrence {index} has invalid z-index")
             }
             Self::InvalidTransform(index) => {
-                write!(formatter, "derived display occurrence {index} has invalid transform")
+                write!(formatter, "transient presentation occurrence {index} has invalid transform")
             }
             Self::InvalidStyle(index) => {
-                write!(formatter, "derived display occurrence {index} has invalid style")
+                write!(formatter, "transient presentation occurrence {index} has invalid style")
             }
             Self::InvalidAppearance(index) => {
-                write!(formatter, "derived display occurrence {index} has invalid appearance")
+                write!(formatter, "transient presentation occurrence {index} has invalid appearance")
             }
             Self::InvalidReveal(index) => {
-                write!(formatter, "derived display occurrence {index} has invalid reveal")
+                write!(formatter, "transient presentation occurrence {index} has invalid reveal")
             }
             Self::InvalidMorph(index) => {
-                write!(formatter, "derived display occurrence {index} has invalid morph")
+                write!(formatter, "transient presentation occurrence {index} has invalid morph")
             }
         }
     }
@@ -146,13 +147,23 @@ impl std::fmt::Display for DerivedDisplayPublicationError {
 
 impl std::error::Error for DerivedDisplayPublicationError {}
 
+/// Feature-neutral vocabulary for identity-free renderer presentation.
+///
+/// The `DerivedDisplay*` names remain temporarily because the active unequal-family
+/// Transform stack already uses them. New renderer/runtime consumers should use the
+/// `TransientPresentation*` vocabulary so this lane does not encode its first
+/// authoring feature into the architecture.
+pub type TransientPresentationState = DerivedDisplayObjectState;
+pub type TransientPresentationOccurrence = DerivedDisplayObject;
+pub type TransientPresentationPublicationError = DerivedDisplayPublicationError;
+
 /// One coherent borrowed runtime publication for renderer preparation.
 ///
 /// The runtime creates this only while consuming accumulated changes. It keeps an
 /// effective frame, its immutable projected resources, and their typed publication
-/// context together without copying a second render world. Optional derived display
-/// rows are borrowed animation output layered on that publication; they never enter
-/// `FrameState` or stable execution storage.
+/// context together without copying a second render world. Optional transient
+/// presentation rows are borrowed execution output layered on that publication;
+/// they never enter `FrameState` or stable execution storage.
 pub struct RendererPublication<'a> {
     context: PublicationContext,
     frame: &'a FrameState,
@@ -211,6 +222,13 @@ impl RendererPublication<'_> {
         self.painter_order
     }
 
+    /// Identity-free transient occurrences attached to this exact publication.
+    pub const fn transient_presentations(&self) -> &[TransientPresentationOccurrence] {
+        self.derived_display_objects
+    }
+
+    /// Migration accessor for the currently stacked unequal-family Transform work.
+    /// New generic renderer/runtime code should use [`Self::transient_presentations`].
     pub const fn derived_display_objects(&self) -> &[DerivedDisplayObject] {
         self.derived_display_objects
     }
@@ -223,19 +241,28 @@ impl RendererPublication<'_> {
 }
 
 impl<'a> RendererPublication<'a> {
-    /// Attach animation-derived display rows to the exact publication that owns the
-    /// effective stable frame they were derived from.
+    /// Attach identity-free transient presentation rows to the exact publication
+    /// that owns the effective stable frame they were derived from.
     ///
     /// Every anchor and value is checked before the borrowed slice is installed, so
-    /// failure leaves the publication unchanged. Existing runtime callers keep the
-    /// empty default until a transform-family owner supplies transient rows.
-    pub fn with_derived_display_objects(
+    /// failure leaves the publication unchanged. Stable execution identity and
+    /// retained resource ownership are never synthesized for these occurrences.
+    pub fn with_transient_presentations(
         mut self,
+        presentations: &'a [TransientPresentationOccurrence],
+    ) -> Result<Self, TransientPresentationPublicationError> {
+        validate_derived_display_objects(self.frame, presentations)?;
+        self.derived_display_objects = presentations;
+        Ok(self)
+    }
+
+    /// Migration entry point for the currently stacked unequal-family Transform
+    /// implementation. It delegates to the feature-neutral publication contract.
+    pub fn with_derived_display_objects(
+        self,
         derived_display_objects: &'a [DerivedDisplayObject],
     ) -> Result<Self, DerivedDisplayPublicationError> {
-        validate_derived_display_objects(self.frame, derived_display_objects)?;
-        self.derived_display_objects = derived_display_objects;
-        Ok(self)
+        self.with_transient_presentations(derived_display_objects)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -419,6 +446,19 @@ mod derived_display_tests {
         assert_eq!(occurrence.anchor_object_index(), 7);
         assert_eq!(occurrence.occurrence_index(), 2);
         assert_eq!(occurrence.state().appearance, 0.5);
+    }
+
+    #[test]
+    fn transient_presentation_vocabulary_reuses_identity_free_occurrence_contract() {
+        let occurrence: TransientPresentationOccurrence =
+            TransientPresentationOccurrence::new(4, 9, derived_state());
+        let state: &TransientPresentationState = occurrence.state();
+        let no_error: Option<TransientPresentationPublicationError> = None;
+
+        assert_eq!(occurrence.anchor_object_index(), 4);
+        assert_eq!(occurrence.occurrence_index(), 9);
+        assert_eq!(state.appearance, 0.5);
+        assert!(no_error.is_none());
     }
 
     #[test]
