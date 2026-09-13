@@ -1827,21 +1827,10 @@ impl ExecutionSession {
                     )
                 }
                 Err(error) => {
-                    let is_flat_family = |family: SemanticNodeId| {
-                        store
-                            .semantic_family_members_checked(family)
-                            .is_ok_and(|members| {
-                                members.iter().all(|member| {
-                                    store.node(*member).is_some_and(|node| {
-                                        matches!(
-                                            node.kind(),
-                                            noon_core::SemanticNodeKind::AuthoringObject
-                                        )
-                                    })
-                                })
-                            })
+                    let is_family = |family: SemanticNodeId| {
+                        store.semantic_family_members_checked(family).is_ok()
                     };
-                    if !is_flat_family(*source) || !is_flat_family(*target_state) {
+                    if !is_family(*source) || !is_family(*target_state) {
                         return Err(ExecutionSessionAnimationError::InvalidComposition(
                             error.to_string(),
                         ));
