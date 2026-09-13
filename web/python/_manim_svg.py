@@ -93,7 +93,8 @@ def _rgb24(name: str, value: object) -> int | None:
         ("blue", color.blue),
     ):
         channel = _base._ir._unit_interval(f"{name}.{component_name}", component)
-        channels.append(int(channel * 255.0 + 0.5))
+        # ManimColor.to_hex() truncates each float channel after scaling by 255.
+        channels.append(int(channel * 255.0))
     return (channels[0] << 16) | (channels[1] << 8) | channels[2]
 
 
