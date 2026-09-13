@@ -9,6 +9,7 @@ use super::{
 
 /// Borrowed, validated incremental renderer resources before they are installed.
 /// Preparation indices are local to `geometries`, exactly as encoded on the wire.
+#[cfg(any(target_arch = "wasm32", test))]
 pub(crate) struct RenderGeometryAdditionView<'a> {
     pub(crate) session: u32,
     pub(crate) geometries: &'a [GeometryRef],
@@ -26,6 +27,13 @@ pub(crate) struct PreparedRetainedResourceAdditionsWithRender {
 }
 
 impl RetainedResourceBundle {
+    pub(crate) fn render_geometry_count(&self) -> usize {
+        self.render_geometry_resources
+            .as_ref()
+            .map_or(0, |resources| resources.geometries.len())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn render_geometry_addition(
         &self,
     ) -> Result<Option<RenderGeometryAdditionView<'_>>, RetainedResourceTransportError> {
