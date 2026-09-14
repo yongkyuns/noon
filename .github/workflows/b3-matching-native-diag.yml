@@ -20,6 +20,27 @@ jobs:
           set -euxo pipefail
           base64 -d < .github/tmp/b3-matching-mode.payload | gzip -dc > /tmp/b3-matching-mode.py
           python3 /tmp/b3-matching-mode.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          fixes = [
+              (
+                  'crates/noon-core/src/semantic_store/semantic_animations.rs',
+                  '''            Self::FamilyTransformTo {\n                source,\n                target_state,\n            } => Some((*source, *target_state)),\n''',
+                  '''            Self::FamilyTransformTo {\n                source,\n                target_state,\n                ..\n            } => Some((*source, *target_state)),\n''',
+              ),
+              (
+                  'crates/noon-core/src/semantic_store/semantic_references.rs',
+                  '''            SemanticAnimationIntent::FamilyTransformTo {\n                source,\n                target_state,\n            } => {\n''',
+                  '''            SemanticAnimationIntent::FamilyTransformTo {\n                source,\n                target_state,\n                ..\n            } => {\n''',
+              ),
+          ]
+          for filename, old, new in fixes:
+              path = Path(filename)
+              text = path.read_text()
+              assert text.count(old) == 1, (filename, text.count(old))
+              path.write_text(text.replace(old, new, 1))
+          PY
           cargo fmt --all
           git diff --check
           cargo check -p noon-core -p noon-compile
@@ -35,6 +56,7 @@ jobs:
           git rm .github/tmp/b3-matching-mode.*
           git add \
             crates/noon-core/src/semantic_store/semantic_animations.rs \
+            crates/noon-core/src/semantic_store/semantic_references.rs \
             crates/noon-core/src/semantic_store/semantic_transaction.rs \
             crates/noon-core/src/semantic_store/semantic_transaction/animation_addition.rs \
             crates/noon-compile/src/semantic_lowering/animation_schedule.rs \
