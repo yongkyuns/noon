@@ -130,6 +130,7 @@ fn decimal_timeline_round_trip_restores_appearance_at_5_55_boundary() {
         .map(|object| object.into())
         .collect::<Vec<_>>();
     let source = scene.family(&source_members).unwrap();
+    let restored_copy = source.copy_family().unwrap();
 
     let contracted_objects = (0..2)
         .map(|_| scene.square(1.0).unwrap())
@@ -139,15 +140,6 @@ fn decimal_timeline_round_trip_restores_appearance_at_5_55_boundary() {
         .map(|object| object.into())
         .collect::<Vec<_>>();
     let contracted = scene.family(&contracted_members).unwrap();
-
-    let restored_objects = (0..3)
-        .map(|_| scene.square(1.0).unwrap())
-        .collect::<Vec<_>>();
-    let restored_members = restored_objects
-        .iter()
-        .map(|object| object.into())
-        .collect::<Vec<_>>();
-    let restored = scene.family(&restored_members).unwrap();
 
     scene.add_many(&[(&source).into()]).unwrap();
     let mut execution = scene.execution_session().unwrap();
@@ -161,7 +153,7 @@ fn decimal_timeline_round_trip_restores_appearance_at_5_55_boundary() {
                 &contracted,
                 AnimationOptions::new()
                     .run_time(1.8)
-                    .rate_func(RateFunction::Linear),
+                    .rate_func(RateFunction::Smooth),
             )
             .unwrap();
         assert_eq!(contraction.end_time(), 2.65);
@@ -178,10 +170,10 @@ fn decimal_timeline_round_trip_restores_appearance_at_5_55_boundary() {
     let restoration = live
         .declare_and_activate_family_transform_to(
             &source,
-            &restored,
+            restored_copy.root(),
             AnimationOptions::new()
                 .run_time(1.8)
-                .rate_func(RateFunction::Linear),
+                .rate_func(RateFunction::Smooth),
         )
         .unwrap();
     assert_eq!(restoration.end_time(), 5.55);
