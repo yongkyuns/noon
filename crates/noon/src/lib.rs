@@ -79,6 +79,8 @@ mod family_copy;
 mod family_gradient;
 mod family_grid;
 mod family_layout;
+#[cfg(test)]
+mod family_layout_migration_tests;
 mod family_style;
 mod focus_on_authoring;
 mod geometry_authoring;
@@ -142,7 +144,7 @@ pub use family_callback_paint::{FamilyCallbackPaintError, FamilyPaint};
 pub use family_callback_translation::{CallbackFamilyTranslation, FamilyCallbackTranslationError};
 pub use family_copy::FamilyCopy;
 pub use family_grid::{FamilyGridOptions, GridFlow};
-pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor};
+pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor, LiveLayoutTarget};
 pub use family_style::StyleUpdate;
 pub use focus_on_authoring::FocusOnOptions;
 pub use host_callbacks::{RustHostCallbackContext, RustHostCallbackError, RustHostCallbackTable};
@@ -152,8 +154,8 @@ pub use live_program::{
 pub use live_session::{
     AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
     DrawBorderThenFillOptions, EffectiveMobjectLayout, EffectiveMobjectState, FadeEndpoint,
-    FadeTranslation, IndicateOptions, LiveLayoutTarget, LiveSession, LiveSessionError,
-    SubsetDisplayMode, TransformToRequest,
+    FadeTranslation, IndicateOptions, LiveSession, LiveSessionError, SubsetDisplayMode,
+    TransformToRequest,
 };
 pub use native_signal_authoring::{NativeBoolSignal, NativeVectorSignal};
 pub use noon_core::{

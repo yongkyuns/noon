@@ -1,19 +1,7 @@
-//! Family observations and placement through the existing live publication lane.
+//! Family affine edits and compatibility placement forwarding during control migration.
 use super::*;
-use crate::{
-    family_authoring::FamilyTranslation,
-    family_layout::{bounds_critical_point, RelativePlacement},
-    semantic_mobject::{authoring_xy_f64, ManimNextToArgs},
-};
-
-/// A live placement destination, observed at the current coherent publication.
-#[derive(Clone, Copy)]
-pub enum LiveLayoutTarget<'a> {
-    Point(f64, f64),
-    Mobject(&'a Mobject),
-    Family(&'a MobjectFamily),
-    Anchor(&'a crate::LayoutAnchor),
-}
+pub use crate::family_layout::LiveLayoutTarget;
+use crate::semantic_mobject::ManimNextToArgs;
 
 impl LiveSession<'_> {
     /// Stretch a selected live object/family through the shared world-axis operation.
@@ -317,21 +305,6 @@ impl LiveSession<'_> {
             .map_err(LiveSessionError::from)
     }
 
-    fn family_layout_measure(
-        &self,
-        family: &MobjectFamily,
-        boundary: bool,
-    ) -> Result<(Vec<noon_core::SemanticNodeId>, Option<Bounds2D64>), LiveSessionError> {
-        self.require_family(family)?;
-        crate::family_layout::effective_family_layout_measure(
-            self.store,
-            self.session,
-            family,
-            boundary,
-        )
-        .map_err(LiveSessionError::from)
-    }
-
     pub(super) fn family_member_bounds(
         &self,
         mobject: &Mobject,
@@ -354,77 +327,6 @@ impl LiveSession<'_> {
         .map_err(LiveSessionError::from)
     }
 
-    /// Move one live object or detached target using shared edge/mask semantics.
-    /// Reads only the source and destination bounds and publishes one translation.
-    pub fn move_to(
-        &mut self,
-        mobject: &Mobject,
-        target: LiveLayoutTarget<'_>,
-        edge: (f64, f64),
-        mask: (f64, f64),
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let transform = self.placement_authored_transform(mobject)?;
-        let bounds = mobject
-            .boundary_bounds_at(transform)
-            .map_err(LiveSessionError::from)?
-            .unwrap_or_else(|| {
-                Bounds2D64::point(
-                    f64::from(transform.translation.x),
-                    f64::from(transform.translation.y),
-                )
-            });
-        self.place_layout_members(
-            vec![mobject.node_id()],
-            Some(bounds),
-            target,
-            RelativePlacement::Move { edge, mask },
-        )
-    }
-
-    pub fn move_family_to(
-        &mut self,
-        family: &MobjectFamily,
-        target: LiveLayoutTarget<'_>,
-        edge: (f64, f64),
-        mask: (f64, f64),
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.place_family(family, target, RelativePlacement::Move { edge, mask })
-    }
-
-    pub fn next_family_to(
-        &mut self,
-        family: &MobjectFamily,
-        target: LiveLayoutTarget<'_>,
-        args: ManimNextToArgs,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.place_family(family, target, RelativePlacement::Next(args))
-    }
-
-    /// Align effective family bounds and publish only the selected leaves.
-    pub fn align_family_on_frame(
-        &mut self,
-        family: &MobjectFamily,
-        direction: (f64, f64),
-        buff: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let target = crate::family_layout::frame_alignment_target(direction, buff)
-            .map_err(LiveSessionError::from)?;
-        self.align_family_to(
-            family,
-            LiveLayoutTarget::Point(target.0, target.1),
-            direction,
-        )
-    }
-
-    pub fn align_family_to(
-        &mut self,
-        family: &MobjectFamily,
-        target: LiveLayoutTarget<'_>,
-        axis: (f64, f64),
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.place_family(family, target, RelativePlacement::Align(axis))
-    }
-
     fn anchor_layout_members(
         &self,
         anchor: &crate::LayoutAnchor,
@@ -437,35 +339,104 @@ impl LiveSession<'_> {
         anchor: &crate::LayoutAnchor,
         boundary: bool,
     ) -> Result<(Vec<SemanticNodeId>, Option<Bounds2D64>), LiveSessionError> {
-        if !Rc::ptr_eq(self.store, anchor.integration_store()) {
-            return Err(crate::AuthoringError::ForeignStore.into());
-        }
-        self.session.require_published_store(&self.store.borrow())?;
-        let node = anchor.resolve().map_err(LiveSessionError::from)?;
-        if matches!(
-            self.store.borrow().node(node).map(|n| n.kind()),
-            Some(noon_core::SemanticNodeKind::Family(_))
-        ) {
-            let family = MobjectFamily::from_node(Rc::clone(self.store), node)
-                .map_err(LiveSessionError::from)?;
-            self.family_layout_measure(&family, boundary)
-        } else {
-            let object =
-                Mobject::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::from)?;
-            let bounds = self.family_member_measure(&object, boundary)?;
-            let bounds = match bounds {
-                Some(bounds) => Some(bounds),
-                None => {
-                    let (x, y) = if self.session.semantic_object_is_reachable(node) {
-                        self.effective_layout(&object)?.center
-                    } else {
-                        object.center().map_err(LiveSessionError::from)?
-                    };
-                    Some(Bounds2D64::point(x, y))
-                }
-            };
-            Ok((vec![node], bounds))
-        }
+        crate::family_layout::effective_anchor_layout_measure(
+            self.store,
+            self.session,
+            anchor,
+            boundary,
+        )
+        .map_err(LiveSessionError::from)
+    }
+
+    /// Compatibility forwarding while callers migrate to Scene-owned placement.
+    pub fn move_to(
+        &mut self,
+        mobject: &Mobject,
+        target: LiveLayoutTarget<'_>,
+        edge: (f64, f64),
+        mask: (f64, f64),
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        crate::family_layout::publish_move_to(
+            self.store,
+            self.root,
+            self.session,
+            mobject,
+            target,
+            edge,
+            mask,
+        )
+        .map_err(LiveSessionError::from)
+    }
+
+    pub fn move_family_to(
+        &mut self,
+        family: &MobjectFamily,
+        target: LiveLayoutTarget<'_>,
+        edge: (f64, f64),
+        mask: (f64, f64),
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        crate::family_layout::publish_move_family_to(
+            self.store,
+            self.root,
+            self.session,
+            family,
+            target,
+            edge,
+            mask,
+        )
+        .map_err(LiveSessionError::from)
+    }
+
+    pub fn next_family_to(
+        &mut self,
+        family: &MobjectFamily,
+        target: LiveLayoutTarget<'_>,
+        args: ManimNextToArgs,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        crate::family_layout::publish_next_family_to(
+            self.store,
+            self.root,
+            self.session,
+            family,
+            target,
+            args,
+        )
+        .map_err(LiveSessionError::from)
+    }
+
+    /// Align effective family bounds and publish only the selected leaves.
+    pub fn align_family_on_frame(
+        &mut self,
+        family: &MobjectFamily,
+        direction: (f64, f64),
+        buff: f64,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        crate::family_layout::publish_align_family_on_frame(
+            self.store,
+            self.root,
+            self.session,
+            family,
+            direction,
+            buff,
+        )
+        .map_err(LiveSessionError::from)
+    }
+
+    pub fn align_family_to(
+        &mut self,
+        family: &MobjectFamily,
+        target: LiveLayoutTarget<'_>,
+        axis: (f64, f64),
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        crate::family_layout::publish_align_family_to(
+            self.store,
+            self.root,
+            self.session,
+            family,
+            target,
+            axis,
+        )
+        .map_err(LiveSessionError::from)
     }
 
     /// Place an entire object/family from selected effective bounds. All anchor
@@ -477,57 +448,15 @@ impl LiveSession<'_> {
         aligner: &crate::LayoutAnchor,
         args: ManimNextToArgs,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let (leaves, _) = self.anchor_layout_members(source)?;
-        let (_, bounds) = self.anchor_layout_measure(aligner, true)?;
-        self.place_layout_members(leaves, bounds, target, RelativePlacement::Next(args))
-    }
-
-    fn place_family(
-        &mut self,
-        family: &MobjectFamily,
-        target: LiveLayoutTarget<'_>,
-        placement: RelativePlacement,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let (leaves, bounds) = self.family_layout_measure(family, true)?;
-        self.place_layout_members(leaves, bounds, target, placement)
-    }
-
-    fn place_layout_members(
-        &mut self,
-        leaves: Vec<SemanticNodeId>,
-        bounds: Option<Bounds2D64>,
-        target: LiveLayoutTarget<'_>,
-        placement: RelativePlacement,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let delta = placement.delta(bounds, |x, y| match target {
-            LiveLayoutTarget::Point(px, py) => {
-                let point = authoring_xy_f64(px, py)?;
-                Ok((point.x, point.y))
-            }
-            LiveLayoutTarget::Mobject(object) => match self.family_member_measure(object, true)? {
-                Some(bounds) => Ok(bounds_critical_point(Some(bounds), x, y)),
-                None if self.session.semantic_object_is_reachable(object.node_id()) => {
-                    self.effective_layout(object).map(|layout| layout.center)
-                }
-                None => object.center().map_err(LiveSessionError::from),
-            },
-            LiveLayoutTarget::Anchor(anchor) => self
-                .anchor_layout_measure(anchor, true)
-                .map(|(_, bounds)| bounds_critical_point(bounds, x, y)),
-            LiveLayoutTarget::Family(family) => self
-                .family_layout_measure(family, true)
-                .map(|(_, bounds)| bounds_critical_point(bounds, x, y)),
-        })?;
-        // Relative placement cannot override a still-active affine/content driver.
-        // Complete its logical segment first, as for live Mobject.move_to_point.
-        for &leaf in &leaves {
-            let mobject =
-                Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
-            self.placement_authored_transform(&mobject)?;
-        }
-        let transaction = FamilyTranslation::from_members(leaves, delta.0, delta.1)
-            .and_then(|translation| translation.transaction(&self.store.borrow()))
-            .map_err(LiveSessionError::from)?;
-        self.apply(transaction)
+        crate::family_layout::publish_next_layout_to_aligned(
+            self.store,
+            self.root,
+            self.session,
+            source,
+            target,
+            aligner,
+            args,
+        )
+        .map_err(LiveSessionError::from)
     }
 }
