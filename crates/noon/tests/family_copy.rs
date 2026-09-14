@@ -1,5 +1,5 @@
-use noon::{AnimationOptions, RateFunction, Scene};
-use noon_core::{SemanticObjectProperty, SemanticVec3};
+use noon::{AnimationOptions, MobjectTarget, RateFunction, Scene};
+use noon_core::{SemanticFadeDirection, SemanticObjectProperty, SemanticVec3};
 
 #[test]
 fn authored_copy_preserves_dag_aliases_order_resources_and_source_state_in_one_commit() {
@@ -105,6 +105,45 @@ fn live_copy_obeys_completion_and_captures_completed_state_without_changing_sour
     live.shift(&copy_leaf, 1.0, 0.0).unwrap();
     assert_eq!(copy_leaf.center().unwrap(), (5.0, 0.0));
     assert_eq!(leaf.center().unwrap(), (4.0, 0.0));
+}
+
+#[test]
+fn live_copy_folds_effective_appearance_into_detached_object_opacity() {
+    let mut scene = Scene::new();
+    let leaf = scene.square(0.5).unwrap();
+    let family = scene.family(&[(&leaf).into()]).unwrap();
+    scene
+        .add_many(&[MobjectTarget::Family(&family)])
+        .unwrap();
+    let mut execution = scene.execution_session().unwrap();
+    let mut live = scene.live(&mut execution);
+    let segment = live
+        .declare_and_activate_family_fade(
+            &family,
+            SemanticFadeDirection::Out,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear)
+                .remover(true),
+        )
+        .unwrap();
+    live.advance_segment_to(segment, 1.0).unwrap();
+
+    let before = live.effective(&leaf).unwrap();
+    assert_eq!(before.style.opacity, 1.0);
+    assert_eq!(before.appearance, 0.5);
+    assert_eq!(leaf.state().unwrap().style.object_opacity, 1.0);
+
+    let copied = live.copy_family(&family).unwrap();
+    let copy_leaf = copied.mobject(&leaf).unwrap();
+    let copied_state = copy_leaf.state().unwrap();
+    assert_eq!(copied_state.style.object_opacity, 0.5);
+    assert_eq!(leaf.state().unwrap().style.object_opacity, 1.0);
+
+    let after = live.effective(&leaf).unwrap();
+    assert_eq!(after.transform, before.transform);
+    assert_eq!(after.style, before.style);
+    assert_eq!(after.appearance, before.appearance);
 }
 
 #[test]

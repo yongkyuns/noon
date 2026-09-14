@@ -25,11 +25,6 @@ pub(crate) fn capture_mobject_state(
                 UnsupportedAuthoringOperation::CaptureRenderOverride,
             ));
         }
-        if observed.object.appearance != 1.0 {
-            return Err(AuthoringError::Unsupported(
-                UnsupportedAuthoringOperation::CaptureNonUnitAppearance,
-            ));
-        }
         preserve_or_capture_f32(
             &mut state.transform.translation.x,
             observed.object.transform.translation.x,
@@ -51,7 +46,13 @@ pub(crate) fn capture_mobject_state(
             observed.object.transform.rotation,
         );
         state.set_z_index(observed.object.z_index);
-        state.style = target_style_from_effective(&state.style, observed.object.style)?;
+        // Runtime lifecycle appearance is deliberately independent of semantic style opacity,
+        // while a detached authored snapshot has no separate appearance channel. The renderer
+        // composes them multiplicatively, so fold that same normalized multiplier into the
+        // captured object opacity without copying lifecycle ownership or membership semantics.
+        let mut effective_style = observed.object.style;
+        effective_style.opacity *= observed.object.appearance.clamp(0.0, 1.0);
+        state.style = target_style_from_effective(&state.style, effective_style)?;
     }
     Ok(state)
 }
