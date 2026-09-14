@@ -53,6 +53,8 @@ pub enum UnsupportedAuthoringOperation {
     ApplyMatrixDimensions,
     /// ApplyMatrix cannot produce Z geometry in the current 2D path domain.
     ApplyMatrixNonPlanar,
+    /// CyclicReplace currently requires one non-empty flat family of object members.
+    CyclicReplaceFamilyTopology,
 }
 
 impl std::fmt::Display for UnsupportedAuthoringOperation {
@@ -80,6 +82,7 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::ApplyMatrixContent => "ApplyMatrix requires retained geometry",
             Self::ApplyMatrixDimensions => "ApplyMatrix requires a 2x2 or 3x3 matrix",
             Self::ApplyMatrixNonPlanar => "ApplyMatrix requires a 3x3 matrix that does not map XY coordinates into Z",
+            Self::CyclicReplaceFamilyTopology => "CyclicReplace requires one non-empty flat family of object members",
         })
     }
 }

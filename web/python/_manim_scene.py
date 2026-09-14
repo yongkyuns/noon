@@ -873,7 +873,12 @@ def _canonical_affine_options(
     return resolved
 
 
-def _canonical_transform_options(animation: object, kwargs: dict[str, object]) -> object | None:
+def _canonical_transform_options(
+    animation: object,
+    kwargs: dict[str, object],
+    *,
+    allow_family_lag: bool = False,
+) -> object | None:
     """Resolve Transform path/timing options through the Transform-only Rust policy."""
     duration = kwargs.get("duration")
     run_time = kwargs.get("run_time")
@@ -903,7 +908,10 @@ def _canonical_transform_options(animation: object, kwargs: dict[str, object]) -
         )
     except NotImplementedError:
         return None
-    if resolved.lag_ratio != 0.0 or resolved.reverse_rate_function:
+    if (
+        (resolved.lag_ratio != 0.0 and not allow_family_lag)
+        or resolved.reverse_rate_function
+    ):
         return None
     return resolved
 
@@ -1136,6 +1144,33 @@ def _canonical_composition_child_options(animation: object, kwargs: dict[str, ob
     if resolved is None:
         raise NotImplementedError("unsupported shared animation options")
     return resolved
+
+
+def _canonical_cyclic_replace_transform(
+    scene: _base.Scene, animation: object, child_kwargs: dict[str, object]
+) -> _animate.Transform | None:
+    """Build CyclicReplace's target through shared Rust family semantics."""
+    if not isinstance(animation, _animate.CyclicReplace):
+        return None
+    source = animation.group
+    if not isinstance(source, _compat.Group):
+        raise TypeError("CyclicReplace requires Mobjects or one Group/VGroup")
+    leaves = _compat._leaf_mobjects(source)
+    if not leaves or any(member._scene is not scene for member in leaves):
+        raise ValueError("CyclicReplace source members must belong to this Scene")
+    if getattr(source, "_semantic_family_handle", None) is None:
+        raise NotImplementedError("canonical CyclicReplace requires a shared family handle")
+
+    # Fail option preflight before the shared target-copy transaction allocates
+    # detached semantic identity. Rust owns direct-member validation, ordering,
+    # coherent copy capture, and cyclic placement.
+    if _canonical_transform_options(
+        animation, child_kwargs, allow_family_lag=True
+    ) is None:
+        raise NotImplementedError("unsupported canonical CyclicReplace options")
+
+    target = _semantic_handles._group_cyclic_replace_target(source)
+    return _animate.Transform(source, target, **animation.anim_args)
 
 
 def _canonical_family_transform_animation(
@@ -1549,6 +1584,10 @@ def _build_canonical_composition_candidate(
             nested = build(nested_kind, tuple(animation.animations), animation, {})
             builder.appendComposition(nested)
             return
+        cyclic_replace = _canonical_cyclic_replace_transform(self, animation, child_kwargs)
+        if cyclic_replace is not None:
+            append_leaf(builder, cyclic_replace, child_kwargs)
+            return
         if type(animation) is _animate.ApplyMatrix:
             # Validate generic animation options before target preparation. Nonzero
             # path_arc remains outside this first pointwise-matrix slice.
@@ -1904,8 +1943,10 @@ def _build_canonical_composition_candidate(
         family_transform = _canonical_family_transform_animation(self, animation)
         if family_transform is not None:
             source, target, leaf = family_transform
-            child = _canonical_affine_options(leaf, child_kwargs, allow_family_lag=True)
-            if child is None or child.path_arc != 0.0 or child.reverse_rate_function:
+            child = _canonical_transform_options(
+                leaf, child_kwargs, allow_family_lag=True
+            )
+            if child is None:
                 raise NotImplementedError("unsupported canonical family Transform options")
             if child.rate_func not in ("linear", "smooth"):
                 raise NotImplementedError(
@@ -1917,6 +1958,7 @@ def _build_canonical_composition_candidate(
                 float(child.run_time),
                 str(child.rate_func),
                 float(child.lag_ratio),
+                float(child.path_arc),
             )
             return
         if isinstance(animation, _composition.Add):

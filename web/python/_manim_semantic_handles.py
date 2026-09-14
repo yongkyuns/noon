@@ -1838,7 +1838,7 @@ def _group_target_context(value: object) -> object | None:
     return context
 
 
-def _group_copy(self: _compat.Group) -> _compat.Group:
+def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _compat.Group:
     context = _group_target_context(self)
 
     def excluded_fields(value):
@@ -1853,8 +1853,18 @@ def _group_copy(self: _compat.Group) -> _compat.Group:
 
     clone, pairs, family_members = _compat.prepare_family_wrapper_copy(self, excluded_fields)
     references = _family_membership_batch(context, "add", tuple(source for source, _ in pairs))
-    copied = (engine_call(context.liveCopyFamily, self._semantic_family_handle, references)
-              if context is not None else engine_call(self._semantic_family_handle.copyFamily, references))
+    if cyclic_replace:
+        copied = (
+            engine_call(context.liveCyclicReplaceTarget, self._semantic_family_handle, references)
+            if context is not None
+            else engine_call(self._semantic_family_handle.cyclicReplaceTarget, references)
+        )
+    else:
+        copied = (
+            engine_call(context.liveCopyFamily, self._semantic_family_handle, references)
+            if context is not None
+            else engine_call(self._semantic_family_handle.copyFamily, references)
+        )
     for source, target in pairs:
         if isinstance(source, _compat.Group):
             target._semantic_family_handle = engine_call(copied.familyFor, source._semantic_family_handle)
@@ -1867,3 +1877,11 @@ def _group_copy(self: _compat.Group) -> _compat.Group:
     for target, members in family_members:
         target._semantic_member_wrappers = {_family_wrapper_key(member): member for member in members}
     return clone
+
+
+def _group_copy(self: _compat.Group) -> _compat.Group:
+    return _group_copy_operation(self, cyclic_replace=False)
+
+
+def _group_cyclic_replace_target(self: _compat.Group) -> _compat.Group:
+    return _group_copy_operation(self, cyclic_replace=True)

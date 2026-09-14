@@ -1035,6 +1035,19 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = cyclicReplaceTarget)]
+        pub fn cyclic_replace_target(
+            &self,
+            references: crate::WasmSceneMembershipBatch,
+        ) -> Result<WasmFamilyCopy, JsValue> {
+            self.semantic_family()?
+                .cyclic_replace_target_with_references(
+                    &references.copy_references().map_err(js_error)?,
+                )
+                .map(WasmFamilyCopy::from_copy)
+                .map_err(js_error)
+        }
+
         /// Atomically apply Manim subset-display constructor semantics to every
         /// ordinary direct member before execution starts.
         #[wasm_bindgen(js_name = prepareSubsetDisplay)]

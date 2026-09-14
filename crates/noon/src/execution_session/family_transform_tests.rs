@@ -325,3 +325,121 @@ fn unequal_family_contraction_retains_only_effective_padding_fade() {
         1.0
     );
 }
+
+#[test]
+fn matching_flat_family_transform_carries_path_arc_to_each_leaf() {
+    let mut store = SemanticStore::new();
+    let s0 = object(&mut store, -2.0);
+    let s1 = object(&mut store, 2.0);
+    let source = family(&mut store, &[s0, s1]);
+    let t0 = object(&mut store, 2.0);
+    let t1 = object(&mut store, -2.0);
+    let target = family(&mut store, &[t0, t1]);
+
+    let mut session = ExecutionSession::from_semantic_root(&store, source).unwrap();
+    let request = SemanticCompositionRequest::FamilyTransformTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear)
+            .path_arc(std::f64::consts::PI),
+    };
+    let segment = session
+        .declare_and_activate_composition(&mut store, source, &request, AnimationOptions::new())
+        .unwrap();
+
+    session.advance_segment_to(segment, 0.5).unwrap();
+    let index_for = |session: &ExecutionSession, node| {
+        session
+            .execution_index
+            .execution_object_id(node)
+            .and_then(|object| session.runtime.frame_index_for_object(object))
+            .unwrap()
+    };
+    let left = session.frame().objects[index_for(&session, s0)]
+        .transform
+        .translation;
+    let right = session.frame().objects[index_for(&session, s1)]
+        .transform
+        .translation;
+    assert!(left.x.abs() < 1e-6 && (left.y + 2.0).abs() < 1e-6);
+    assert!(right.x.abs() < 1e-6 && (right.y - 2.0).abs() < 1e-6);
+
+    session.advance_segment_to(segment, 1.0).unwrap();
+    session.complete_segment(&mut store, segment).unwrap();
+    assert_eq!(
+        store
+            .semantic_object_state_checked(s0)
+            .unwrap()
+            .transform
+            .translation,
+        SemanticVec3::new(2.0, 0.0, 0.0)
+    );
+    assert_eq!(
+        store
+            .semantic_object_state_checked(s1)
+            .unwrap()
+            .transform
+            .translation,
+        SemanticVec3::new(-2.0, 0.0, 0.0)
+    );
+}
+
+#[test]
+fn curved_unequal_family_transform_fails_before_publication() {
+    let mut store = SemanticStore::new();
+    let s0 = object(&mut store, 0.0);
+    let s1 = object(&mut store, 2.0);
+    let source = family(&mut store, &[s0, s1]);
+    let t0 = object(&mut store, 10.0);
+    let t1 = object(&mut store, 12.0);
+    let t2 = object(&mut store, 14.0);
+    let target = family(&mut store, &[t0, t1, t2]);
+    let revision = store.scene_revision();
+
+    let mut session = ExecutionSession::from_semantic_root(&store, source).unwrap();
+    let request = SemanticCompositionRequest::FamilyTransformTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear)
+            .path_arc(std::f64::consts::PI / 2.0),
+    };
+    let error = session
+        .declare_and_activate_composition(&mut store, source, &request, AnimationOptions::new())
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("curved family Transform requires matching flat family topology"));
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(session.frame().time, 0.0);
+}
+
+#[test]
+fn sub_threshold_unequal_family_path_arc_keeps_straight_fallback() {
+    let mut store = SemanticStore::new();
+    let s0 = object(&mut store, 0.0);
+    let s1 = object(&mut store, 2.0);
+    let source = family(&mut store, &[s0, s1]);
+    let t0 = object(&mut store, 10.0);
+    let t1 = object(&mut store, 12.0);
+    let t2 = object(&mut store, 14.0);
+    let target = family(&mut store, &[t0, t1, t2]);
+
+    let mut session = ExecutionSession::from_semantic_root(&store, source).unwrap();
+    let request = SemanticCompositionRequest::FamilyTransformTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear)
+            .path_arc(0.009),
+    };
+    let segment = session
+        .declare_and_activate_composition(&mut store, source, &request, AnimationOptions::new())
+        .unwrap();
+    session.advance_segment_to(segment, 0.5).unwrap();
+    assert_eq!(session.frame().time, 0.5);
+}

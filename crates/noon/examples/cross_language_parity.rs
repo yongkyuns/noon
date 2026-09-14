@@ -104,6 +104,11 @@ fn main() -> Result<(), String> {
         example_scenes::family_arrangement::program()?,
         &[0.0, 0.25, 0.5, 0.75, 1.0],
     )?;
+    emit(
+        "manim_parity_cyclic_replace",
+        example_scenes::cyclic_replace::program()?,
+        &[0.0, 0.25, 0.5, 0.75, 1.0, 1.25],
+    )?;
     for (name, mut session) in [
         (
             "specialized_geometry",

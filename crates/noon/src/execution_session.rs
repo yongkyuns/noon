@@ -1797,62 +1797,96 @@ impl ExecutionSession {
                 source,
                 target_state,
                 options,
-            } => match store.ordered_family_leaf_pairs(*source, *target_state) {
-                Ok(pairs) => {
-                    let expanded = SemanticCompositionRequest::Composition {
-                        kind: SemanticAnimationCompositionKind::Parallel,
-                        children: pairs
-                            .into_iter()
-                            .map(
-                                |(source, target_state)| SemanticCompositionRequest::TransformTo {
-                                    source,
-                                    target_state,
-                                    interpolation:
-                                        noon_core::SemanticTransformInterpolation::Affine,
-                                    complete_priority: false,
-                                    options: AnimationOptions::new()
-                                        .rate_func(RateFunction::Linear),
-                                },
-                            )
-                            .collect(),
-                        options: *options,
-                    };
-                    self.stage_composition_request(
-                        store,
-                        root,
-                        &expanded,
-                        declaration,
-                        admitted,
-                        removals,
-                    )
-                }
-                Err(error) => {
-                    let is_flat_family = |family: SemanticNodeId| {
-                        store
-                            .semantic_family_members_checked(family)
-                            .is_ok_and(|members| {
-                                members.iter().all(|member| {
-                                    store.node(*member).is_some_and(|node| {
-                                        matches!(
-                                            node.kind(),
-                                            noon_core::SemanticNodeKind::AuthoringObject
-                                        )
-                                    })
+            } => {
+                let is_flat_family = |family: SemanticNodeId| {
+                    store
+                        .semantic_family_members_checked(family)
+                        .is_ok_and(|members| {
+                            members.iter().all(|member| {
+                                store.node(*member).is_some_and(|node| {
+                                    matches!(
+                                        node.kind(),
+                                        noon_core::SemanticNodeKind::AuthoringObject
+                                    )
                                 })
                             })
-                    };
-                    if !is_flat_family(*source) || !is_flat_family(*target_state) {
-                        return Err(ExecutionSessionAnimationError::InvalidComposition(
-                            error.to_string(),
-                        ));
-                    }
-                    Ok(declaration.create_family_transform_animation(
-                        *source,
-                        *target_state,
-                        *options,
-                    ))
+                        })
+                };
+                let path_arc = options.path_arc.unwrap_or(0.0);
+                let curved = path_arc.abs() >= noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD;
+                if curved && (!is_flat_family(*source) || !is_flat_family(*target_state)) {
+                    return Err(ExecutionSessionAnimationError::InvalidComposition(
+                        "curved family Transform requires matching flat family topology".into(),
+                    ));
                 }
-            },
+
+                match store.ordered_family_leaf_pairs(*source, *target_state) {
+                    Ok(pairs) => {
+                        let mut leaf_options =
+                            AnimationOptions::new().rate_func(RateFunction::Linear);
+                        if let Some(path_arc) = options.path_arc {
+                            leaf_options = leaf_options.path_arc(path_arc);
+                        }
+                        let mut composition_options = *options;
+                        // `path_arc` is Transform payload meaning, not composition
+                        // timing. Each aligned leaf owns the same deterministic arc.
+                        composition_options.path_arc = None;
+                        let expanded = SemanticCompositionRequest::Composition {
+                            kind: SemanticAnimationCompositionKind::Parallel,
+                            children: pairs
+                                .into_iter()
+                                .map(|(source, target_state)| {
+                                    SemanticCompositionRequest::TransformTo {
+                                        source,
+                                        target_state,
+                                        interpolation:
+                                            noon_core::SemanticTransformInterpolation::Affine,
+                                        complete_priority: false,
+                                        options: leaf_options,
+                                    }
+                                })
+                                .collect(),
+                            options: composition_options,
+                        };
+                        self.stage_composition_request(
+                            store,
+                            root,
+                            &expanded,
+                            declaration,
+                            admitted,
+                            removals,
+                        )
+                    }
+                    Err(error) => {
+                        if curved {
+                            return Err(ExecutionSessionAnimationError::InvalidComposition(
+                                format!(
+                                    "curved family Transform requires matching flat family topology: {error}"
+                                ),
+                            ));
+                        }
+                        if !is_flat_family(*source) || !is_flat_family(*target_state) {
+                            return Err(ExecutionSessionAnimationError::InvalidComposition(
+                                error.to_string(),
+                            ));
+                        }
+                        let mut options = *options;
+                        // Manim treats sub-threshold arcs as straight. The unequal
+                        // family compiler stays on its existing straight path rather
+                        // than assigning arcs to synthetic padding occurrences.
+                        if options.path_arc.is_some_and(|arc| {
+                            arc.abs() < noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD
+                        }) {
+                            options.path_arc = None;
+                        }
+                        Ok(declaration.create_family_transform_animation(
+                            *source,
+                            *target_state,
+                            options,
+                        ))
+                    }
+                }
+            }
             SemanticCompositionRequest::Indicate {
                 target,
                 indication,

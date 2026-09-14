@@ -1093,6 +1093,17 @@ impl SemanticExecutionPlayer {
         self.with_live_session(|live| live.copy_family_with_references(source, references))
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_cyclic_replace_target(
+        &mut self,
+        source: &noon::MobjectFamily,
+        references: &[noon::MobjectTarget<'_>],
+    ) -> Result<noon::FamilyCopy, AuthoringFailure> {
+        self.with_live_session(|live| {
+            live.cyclic_replace_target_with_references(source, references)
+        })
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_family_layout(
         &mut self,
