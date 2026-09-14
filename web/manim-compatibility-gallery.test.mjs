@@ -160,9 +160,13 @@ assert.equal(tigerGalleryEntry.thumbnail, tigerEntry.thumbnail, "absolute HTTPS 
 const tigerSource = await readFile(new URL(`./${tigerEntry.path}`, import.meta.url), "utf8");
 assert.match(tigerSource, /from pathlib import Path as FilePath/, "tiger demo must not let Noon's Path export shadow pathlib.Path");
 assert.match(tigerSource, /_DEMO_DIR = FilePath\(gettempdir\(\)\)/, "tiger demo filesystem paths must use the pathlib alias");
-assert.equal((tigerSource.match(/SVGMobject\(/g) ?? []).length, 1, "tiger demo must parse the upstream SVG exactly once");
-assert.equal((tigerSource.match(/tiger\.copy\(\)/g) ?? []).length, 2, "tiger demo must reuse retained geometry resources for both transform targets");
-assert.equal((tigerSource.match(/Transform\(/g) ?? []).length, 2, "tiger demo must morph to the kaleidoscope and back");
+assert.equal((tigerSource.match(/SVGMobject\(/g) ?? []).length, 2, "tiger demo must parse the Tiger and unrelated target as distinct SVG families");
+assert.equal((tigerSource.match(/tiger\.copy\(\)/g) ?? []).length, 1, "tiger demo must retain one original Tiger family for the return transform");
+assert.equal((tigerSource.match(/Transform\(/g) ?? []).length, 2, "tiger demo must morph to the unrelated SVG family and back");
+assert.equal((tigerSource.match(/<path\b/g) ?? []).length, 6, "unrelated target must be an independently authored six-path SVG family");
+assert.match(tigerSource, /rocket = SVGMobject\(str\(_TARGET_PATH\), height=5\.2\)/, "tiger demo must construct an independent target family");
+assert.doesNotMatch(tigerSource, /for index, leaf in enumerate/, "tiger demo must not fake deformation by rearranging copied Tiger leaves");
+assert.doesNotMatch(tigerSource, /<(?:rect|circle|ellipse|polygon|polyline)\b/, "unrelated target must stay within qualified plain SVG path topology");
 assert.match(tigerSource, /1e63b4a40ccb484f82e1d85b83df97ab95bcfbe7\/assets\/Ghostscript_Tiger\.svg/);
 assert.doesNotMatch(tigerSource, /SVGMobject\.from_string/, "demo should exercise ordinary file-backed SVGMobject authoring");
 
