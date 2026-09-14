@@ -20,6 +20,7 @@ import _manim_animation_options as _options
 import _manim_animate as _animate
 import _manim_compat as _compat
 import _manim_composition as _composition
+import _manim_cyclic_replace as _cyclic
 import _manim_draw_border_then_fill as _draw_border_then_fill
 import _manim_family_creation as _family_creation
 import _manim_indication as _indication
@@ -908,6 +909,42 @@ def _canonical_transform_options(animation: object, kwargs: dict[str, object]) -
     return resolved
 
 
+def _canonical_family_transform_options(
+    animation: object, kwargs: dict[str, object]
+) -> object | None:
+    duration = kwargs.get("duration")
+    run_time = kwargs.get("run_time")
+    easing = kwargs.get("easing")
+    rate_func = kwargs.get("rate_func")
+    lag_ratio = kwargs.get("lag_ratio")
+    path_arc = kwargs.get("path_arc")
+    if duration is not None and run_time is not None:
+        raise ValueError("use either duration or run_time, not both")
+    if easing is not None and rate_func is not None:
+        raise ValueError("use either rate_func or the low-level easing alias, not both")
+    if kwargs.keys() - {
+        "duration", "run_time", "start_time", "easing", "rate_func", "lag_ratio", "path_arc"
+    }:
+        return None
+    if kwargs.get("start_time") is not None:
+        return None
+    try:
+        resolved = _options.resolve_transform(
+            builder_args=_options.builder_args(animation),
+            default_lag_ratio=0.0,
+            play_run_time=(run_time if run_time is not None else duration),
+            play_easing=easing,
+            play_rate_func=rate_func,
+            play_lag_ratio=lag_ratio,
+            play_path_arc=path_arc,
+        )
+    except NotImplementedError:
+        return None
+    if resolved.reverse_rate_function:
+        return None
+    return resolved
+
+
 def _canonical_affine_lifecycle_animation(
     scene: _base.Scene, animation: object
 ) -> tuple[_base.Mobject, object] | None:
@@ -1544,6 +1581,32 @@ def _build_canonical_composition_candidate(
 
     def append_leaf(builder: object, animation: object, child_kwargs: dict[str, object]) -> None:
         nonlocal next_object_id
+        if isinstance(animation, _cyclic.CyclicReplace):
+            child = _canonical_family_transform_options(animation, child_kwargs)
+            if child is None or child.lag_ratio != 0.0:
+                raise NotImplementedError("unsupported canonical CyclicReplace options")
+            members = animation.mobjects
+            if len(members) < 2 or any(
+                isinstance(member, _compat.Group)
+                or not isinstance(member, _base.Mobject)
+                or member._scene is not self
+                or getattr(member, "_semantic_handle", None) is None
+                for member in members
+            ):
+                raise NotImplementedError(
+                    "CyclicReplace requires distinct scene-bound flat typed Mobjects"
+                )
+            if len({id(member) for member in members}) != len(members):
+                raise ValueError("CyclicReplace members must be distinct")
+            builder.appendCyclicReplace(
+                members[0]._semantic_handle,
+                float(child.run_time),
+                str(child.rate_func),
+                float(child.path_arc),
+            )
+            for member in members[1:]:
+                builder.appendCyclicReplaceMember(member._semantic_handle)
+            return
         if isinstance(animation, _composition.AnimationGroup):
             nested_kind = "sequence" if isinstance(animation, _composition.Succession) else "parallel"
             nested = build(nested_kind, tuple(animation.animations), animation, {})
@@ -1904,8 +1967,8 @@ def _build_canonical_composition_candidate(
         family_transform = _canonical_family_transform_animation(self, animation)
         if family_transform is not None:
             source, target, leaf = family_transform
-            child = _canonical_affine_options(leaf, child_kwargs, allow_family_lag=True)
-            if child is None or child.path_arc != 0.0 or child.reverse_rate_function:
+            child = _canonical_family_transform_options(leaf, child_kwargs)
+            if child is None:
                 raise NotImplementedError("unsupported canonical family Transform options")
             if child.rate_func not in ("linear", "smooth"):
                 raise NotImplementedError(
@@ -1917,6 +1980,7 @@ def _build_canonical_composition_candidate(
                 float(child.run_time),
                 str(child.rate_func),
                 float(child.lag_ratio),
+                float(child.path_arc),
             )
             return
         if isinstance(animation, _composition.Add):

@@ -113,6 +113,10 @@ pub enum PreparedSemanticAnimationLoweringError {
         target: SemanticTransactionNodeRef,
         execution_object_id: ObjectId,
     },
+    MissingCenterTranslationPeer {
+        animation: SemanticTransactionNodeRef,
+        target_state: SemanticTransactionNodeRef,
+    },
     InvalidEffectiveTransform {
         animation: SemanticTransactionNodeRef,
         target: SemanticTransactionNodeRef,
@@ -369,10 +373,9 @@ where
                         .existing()
                         .and_then(|node| index.execution_object_id(node))
                         .ok_or(
-                            PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
+                            PreparedSemanticAnimationLoweringError::MissingCenterTranslationPeer {
                                 animation: leaf.animation,
-                                target: target_state,
-                                execution_object_id: ObjectId::new(u64::MAX),
+                                target_state,
                             },
                         )?;
                     let mut peer_leaf = leaf.clone();

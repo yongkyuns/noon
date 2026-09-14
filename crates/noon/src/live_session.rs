@@ -207,7 +207,7 @@ pub enum AnimationCompositionRequest<'a> {
         options: AnimationOptions,
     },
     CyclicReplace {
-        family: &'a MobjectFamily,
+        members: Vec<&'a Mobject>,
         options: AnimationOptions,
     },
     Indicate {
@@ -1528,10 +1528,16 @@ impl<'a> LiveSession<'a> {
                     options: *options,
                 }
             }
-            AnimationCompositionRequest::CyclicReplace { family, options } => {
-                self.require_family(family)?;
+            AnimationCompositionRequest::CyclicReplace { members, options } => {
+                let members = members
+                    .iter()
+                    .map(|member| {
+                        self.require_mobject(member)?;
+                        Ok(member.node_id())
+                    })
+                    .collect::<Result<Vec<_>, LiveSessionError>>()?;
                 Request::CyclicReplace {
-                    family: family.node_id(),
+                    members,
                     options: *options,
                 }
             }

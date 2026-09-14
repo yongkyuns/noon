@@ -1,0 +1,1246 @@
+    Updating crates.io index
+     Locking 507 packages to latest compatible versions
+      Adding tinyvec v1.12.0 (available: v1.13.3)
+ Downloading crates ...
+  Downloaded data-url v0.3.2
+  Downloaded deranged v0.5.8
+  Downloaded adler2 v2.0.1
+  Downloaded equivalent v1.0.2
+  Downloaded csv-core v0.1.13
+  Downloaded unicode-bidi-mirroring v0.4.0
+  Downloaded find-msvc-tools v0.1.12
+  Downloaded unic-langid-macros-impl v0.9.6
+  Downloaded unicode-ident v1.0.24
+  Downloaded unicode-ccc v0.4.0
+  Downloaded option-ext v0.2.0
+  Downloaded enum-ordinalize-derive v4.4.2
+  Downloaded unicode-bidi v0.3.18
+  Downloaded fnv v1.0.7
+  Downloaded hayro-postscript v0.1.0
+  Downloaded ciborium-ll v0.2.2
+  Downloaded heck v0.5.0
+  Downloaded displaydoc v0.2.7
+  Downloaded font-types v0.11.3
+  Downloaded color_quant v1.1.0
+  Downloaded hayro v0.7.1
+  Downloaded unscanny v0.1.0
+  Downloaded bit-set v0.8.0
+  Downloaded linebender_resource_handle v0.1.1
+  Downloaded dirs v6.0.0
+  Downloaded gif v0.14.2
+  Downloaded i_shape v4.0.0
+  Downloaded iana-time-zone v0.1.65
+  Downloaded float-cmp v0.9.0
+  Downloaded float_next_after v1.0.0
+  Downloaded zeno v0.3.3
+  Downloaded mutate_once v0.1.2
+  Downloaded ecow v0.2.6
+  Downloaded either v1.18.0
+  Downloaded i_key_sort v0.11.0
+  Downloaded cfg-if v1.0.4
+  Downloaded num-conv v0.2.2
+  Downloaded imagesize v0.14.0
+  Downloaded percent-encoding v2.3.2
+  Downloaded arrayref v0.3.9
+  Downloaded dirs-sys v0.5.0
+  Downloaded icu_locale_fallback_data v2.3.0
+  Downloaded fastrand v2.5.0
+  Downloaded glifo v0.1.1
+  Downloaded enum-ordinalize v4.4.2
+  Downloaded euclid v0.22.14
+  Downloaded linked-hash-map v0.5.6
+  Downloaded icu_locale_fallback v2.3.0
+  Downloaded lock_api v0.4.14
+  Downloaded foldhash v0.2.0
+  Downloaded hayro-svg v0.7.0
+  Downloaded icu_locale v2.3.1
+  Downloaded font-types v0.12.5
+  Downloaded glidesort v0.1.2
+  Downloaded icu_provider_blob v2.3.0
+  Downloaded xmlwriter v0.1.0
+  Downloaded az v1.3.0
+  Downloaded palette_derive v0.7.7
+  Downloaded lyon_path v1.0.19
+  Downloaded form_urlencoded v1.2.2
+  Downloaded write16 v1.0.0
+  Downloaded hayro-ccitt v0.3.0
+  Downloaded itoa v1.0.18
+  Downloaded potential_utf v0.1.6
+  Downloaded yoke v0.8.3
+  Downloaded i_tree v0.19.0
+  Downloaded num-traits v0.2.19
+  Downloaded half v2.7.1
+  Downloaded litemap v0.8.3
+  Downloaded guillotiere v0.7.0
+  Downloaded i_float v4.1.0
+  Downloaded idna_adapter v1.2.2
+  Downloaded fdeflate v0.3.7
+  Downloaded num-integer v0.1.47
+  Downloaded imagesize v0.15.0
+  Downloaded icu_locale_core v2.3.0
+  Downloaded lipsum v0.9.1
+  Downloaded unicode-math-class v0.1.0
+  Downloaded phf_shared v0.13.1
+  Downloaded unicode-segmentation v1.13.3
+  Downloaded once_cell v1.21.4
+  Downloaded typst-realize v0.15.1
+  Downloaded cobs v0.3.0
+  Downloaded log v0.4.34
+  Downloaded typst-utils v0.15.1
+  Downloaded core_maths v0.1.1
+  Downloaded typst-timing v0.15.1
+  Downloaded hayro-jpeg2000 v0.3.5
+  Downloaded ciborium-io v0.2.2
+  Downloaded utf8_iter v1.0.4
+  Downloaded version_check v0.9.5
+  Downloaded utf16_iter v1.0.5
+  Downloaded flate2 v1.1.10
+  Downloaded icu_provider v2.3.1
+  Downloaded kamadak-exif v0.6.1
+  Downloaded lyon_geom v1.0.19
+  Downloaded stacker v0.1.25
+  Downloaded unicode-properties v0.1.4
+  Downloaded unsafe-libyaml v0.2.11
+  Downloaded yazi v0.2.1
+  Downloaded yoke-derive v0.8.2
+  Downloaded approx v0.5.1
+  Downloaded bytemuck_derive v1.12.1
+  Downloaded crossbeam-deque v0.8.8
+  Downloaded hayro-jbig2 v0.3.0
+  Downloaded icu_collections v2.3.0
+  Downloaded icu_normalizer_data v2.3.0
+  Downloaded image-webp v0.2.4
+  Downloaded memchr v2.8.3
+  Downloaded miniz_oxide v0.8.9
+  Downloaded miniz_oxide v0.9.1
+  Downloaded num-bigint v0.4.8
+  Downloaded quick-error v2.0.1
+  Downloaded same-file v1.0.6
+  Downloaded simplecss v0.2.2
+  Downloaded tinyvec_macros v0.1.1
+  Downloaded by_address v1.2.1
+  Downloaded fancy-regex v0.16.2
+  Downloaded fontdb v0.23.0
+  Downloaded hayro-syntax v0.7.2
+  Downloaded icu_properties v2.3.0
+  Downloaded idna v1.1.0
+  Downloaded indexmap v2.14.2
+  Downloaded libm v0.2.16
+  Downloaded ppv-lite86 v0.2.21
+  Downloaded serde_yaml v0.9.34+deprecated
+  Downloaded toml_datetime v0.6.11
+  Downloaded pico-args v0.5.0
+  Downloaded unicode-vo v0.1.0
+  Downloaded phf_macros v0.13.1
+  Downloaded comemo v0.5.1
+  Downloaded zerofrom-derive v0.1.7
+  Downloaded serde_spanned v0.6.9
+  Downloaded wasmi_ir v1.1.0
+  Downloaded zerofrom v0.1.8
+  Downloaded chinese-number v0.7.8
+  Downloaded thiserror-impl v2.0.20
+  Downloaded typst-html v0.15.1
+  Downloaded icu_properties_data v2.3.0
+  Downloaded rand v0.8.8
+  Downloaded slab v0.4.12
+  Downloaded smallvec v1.16.1
+  Downloaded svgtypes v0.16.1
+  Downloaded png v0.18.1
+  Downloaded kurbo v0.13.1
+  Downloaded typst-macros v0.15.1
+  Downloaded fearless_simd v0.4.1
+  Downloaded hashbrown v0.17.1
+  Downloaded plist v1.10.1
+  Downloaded semver v1.0.28
+  Downloaded polycool v0.4.0
+  Downloaded lyon_tessellation v1.0.22
+  Downloaded moxcms v0.8.1
+  Downloaded rustc-hash v2.1.3
+  Downloaded zune-core v0.5.3
+  Downloaded autocfg v1.5.1
+  Downloaded bit-vec v0.8.0
+  Downloaded palette_math v0.7.7
+  Downloaded peniko v0.6.1
+  Downloaded wasmi_collections v1.1.0
+  Downloaded unic-langid v0.9.6
+  Downloaded unicode-script v0.5.8
+  Downloaded yaml-rust v0.4.5
+  Downloaded parking_lot_core v0.9.12
+  Downloaded phf_generator v0.13.1
+  Downloaded chinese-variant v1.1.6
+  Downloaded time-core v0.1.9
+  Downloaded byteorder-lite v0.1.0
+  Downloaded comemo-macros v0.5.1
+  Downloaded rand_chacha v0.3.1
+  Downloaded bytemuck v1.25.2
+  Downloaded codex v0.3.0
+  Downloaded bincode v1.3.3
+  Downloaded writeable v0.6.4
+  Downloaded siphasher v1.0.3
+  Downloaded strict-num v0.1.1
+  Downloaded zmij v1.0.23
+  Downloaded bitflags v2.13.2
+  Downloaded crossbeam-utils v0.8.23
+  Downloaded slotmap v1.1.1
+  Downloaded wasmi_core v1.1.0
+  Downloaded weezl v0.1.12
+  Downloaded base64 v0.22.1
+  Downloaded paste v1.0.15
+  Downloaded phf v0.13.1
+  Downloaded powerfmt v0.2.0
+  Downloaded scopeguard v1.2.0
+  Downloaded strum v0.27.2
+  Downloaded unicode-normalization v0.1.25
+  Downloaded crc32fast v1.5.2
+  Downloaded roman-numerals-rs v3.1.0
+  Downloaded proc-macro-hack v0.5.20+deprecated
+  Downloaded tiny-skia-path v0.12.0
+  Downloaded toml v0.8.23
+  Downloaded unic-langid-macros v0.9.6
+  Downloaded arrayvec v0.7.8
+  Downloaded ciborium v0.2.2
+  Downloaded parking_lot v0.12.5
+  Downloaded proc-macro2 v1.0.107
+  Downloaded zerovec-derive v0.11.6
+  Downloaded strum_macros v0.27.2
+  Downloaded walkdir v2.5.0
+  Downloaded rand_core v0.6.4
+  Downloaded color v0.3.3
+  Downloaded psm v0.1.32
+  Downloaded quick-xml v0.38.4
+  Downloaded rayon-core v1.13.0
+  Downloaded thiserror v2.0.20
+  Downloaded typst-svg v0.15.1
+  Downloaded rust_decimal v1.43.0
+  Downloaded spin v0.9.9
+  Downloaded i_overlay v8.1.1
+  Downloaded tinyvec v1.12.0
+  Downloaded typst-syntax v0.15.1
+  Downloaded ryu v1.0.23
+  Downloaded typst v0.15.1
+  Downloaded roxmltree v0.21.1
+  Downloaded csv v1.4.0
+  Downloaded vello_cpu v0.0.8
+  Downloaded zerotrie v0.2.5
+  Downloaded crossbeam-epoch v0.9.21
+  Downloaded tinystr v0.8.4
+  Downloaded zune-jpeg v0.5.15
+  Downloaded ar_archive_writer v0.5.3
+  Downloaded cc v1.4.6
+  Downloaded citationberg v0.7.0
+  Downloaded quote v1.0.47
+  Downloaded serde v1.0.229
+  Downloaded serde_derive v1.0.229
+  Downloaded serde_path_to_error v0.1.20
+  Downloaded swash v0.2.10
+  Downloaded typed-arena v2.0.2
+  Downloaded unic-langid-impl v0.9.6
+  Downloaded vello_common v0.0.8
+  Downloaded aho-corasick v1.1.5
+  Downloaded base64 v0.23.1
+  Downloaded bumpalo v3.20.3
+  Downloaded hayro-cmap v0.1.0
+  Downloaded stable_deref_trait v1.2.1
+  Downloaded thin-vec v0.2.19
+  Downloaded time-macros v0.2.32
+  Downloaded toml_write v0.1.2
+  Downloaded url v2.5.8
+  Downloaded usvg v0.47.0
+  Downloaded winnow v0.7.15
+  Downloaded zerocopy-derive v0.8.57
+  Downloaded biblatex v0.12.0
+  Downloaded postcard v1.1.3
+  Downloaded simd-adler32 v0.3.10
+  Downloaded typst-as-lib v0.16.0
+  Downloaded typst-eval v0.15.1
+  Downloaded usvg v0.48.1
+  Downloaded vello_common v0.0.9
+  Downloaded zerovec v0.11.8
+  Downloaded image v0.25.10
+  Downloaded serde_core v1.0.229
+  Downloaded serde_json v1.0.151
+  Downloaded object v0.39.1
+  Downloaded rustybuzz v0.20.1
+  Downloaded regex v1.13.1
+  Downloaded chrono v0.4.45
+  Downloaded pic-scale v0.7.12
+  Downloaded rayon v1.12.0
+  Downloaded synstructure v0.13.2
+  Downloaded hayro-interpret v0.7.0
+  Downloaded toml_edit v0.22.27
+  Downloaded wasmi v1.1.0
+  Downloaded zlib-rs v0.6.7
+  Downloaded portable-atomic v1.15.0
+  Downloaded quick-xml v0.42.0
+  Downloaded wasmparser v0.239.0
+  Downloaded zerocopy v0.8.57
+  Downloaded palette v0.7.7
+  Downloaded shlex v2.0.1
+  Downloaded time v0.3.55
+  Downloaded ttf-parser v0.25.1
+  Downloaded skrifa v0.44.0
+  Downloaded syn v3.0.5
+  Downloaded hayagriva v0.10.1
+  Downloaded icu_collator_data v2.3.0
+  Downloaded regex-syntax v0.8.11
+  Downloaded syn v2.0.119
+  Downloaded icu_normalizer v2.3.0
+  Downloaded skrifa v0.42.1
+  Downloaded read-fonts v0.41.0
+  Downloaded read-fonts v0.39.2
+  Downloaded typst-layout v0.15.1
+  Downloaded typst-library v0.15.1
+  Downloaded libc v0.2.189
+  Downloaded hypher v0.1.7
+  Downloaded regex-automata v0.4.18
+  Downloaded syntect v5.3.0
+  Downloaded pxfm v0.1.30
+  Downloaded icu_collator v2.3.1
+  Downloaded icu_locale_data v2.3.0
+  Downloaded icu_segmenter_data v2.3.0
+  Downloaded two-face v0.4.5
+  Downloaded icu_segmenter v2.3.0
+  Downloaded typst-assets v0.15.1
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling serde_core v1.0.229
+   Compiling serde v1.0.229
+   Compiling libm v0.2.16
+   Compiling autocfg v1.5.1
+   Compiling num-traits v0.2.19
+   Compiling syn v3.0.5
+   Compiling syn v2.0.119
+    Checking stable_deref_trait v1.2.1
+    Checking smallvec v1.16.1
+    Checking memchr v2.8.3
+    Checking cfg-if v1.0.4
+   Compiling thiserror v2.0.20
+    Checking arrayvec v0.7.8
+   Compiling crossbeam-utils v0.8.23
+    Checking simd-adler32 v0.3.10
+   Compiling crossbeam-epoch v0.9.21
+    Checking writeable v0.6.4
+    Checking litemap v0.8.3
+   Compiling crc32fast v1.5.2
+   Compiling crossbeam-deque v0.8.8
+    Checking adler2 v2.0.1
+    Checking foldhash v0.2.0
+   Compiling rayon-core v1.13.0
+    Checking hashbrown v0.17.1
+    Checking miniz_oxide v0.9.1
+    Checking bitflags v2.13.2
+   Compiling serde_derive v1.0.229
+   Compiling displaydoc v0.2.7
+   Compiling zerovec-derive v0.11.6
+   Compiling synstructure v0.13.2
+   Compiling bytemuck_derive v1.12.1
+   Compiling thiserror-impl v2.0.20
+    Checking bytemuck v1.25.2
+   Compiling zerofrom-derive v0.1.7
+   Compiling yoke-derive v0.8.2
+    Checking cobs v0.3.0
+    Checking zlib-rs v0.6.7
+    Checking postcard v1.1.3
+    Checking zerofrom v0.1.8
+    Checking yoke v0.8.3
+    Checking flate2 v1.1.10
+    Checking either v1.18.0
+    Checking siphasher v1.0.3
+    Checking zerovec v0.11.8
+    Checking rayon v1.12.0
+    Checking polycool v0.4.0
+   Compiling libc v0.2.189
+    Checking itoa v1.0.18
+    Checking utf8_iter v1.0.4
+    Checking kurbo v0.13.1
+   Compiling zerocopy v0.8.57
+    Checking equivalent v1.0.2
+   Compiling zerocopy-derive v0.8.57
+    Checking tinystr v0.8.4
+    Checking icu_locale_core v2.3.0
+    Checking zerotrie v0.2.5
+    Checking potential_utf v0.1.6
+    Checking icu_collections v2.3.0
+    Checking indexmap v2.14.2
+    Checking icu_provider v2.3.1
+   Compiling icu_properties_data v2.3.0
+   Compiling icu_normalizer_data v2.3.0
+    Checking log v0.4.34
+    Checking once_cell v1.21.4
+    Checking fearless_simd v0.4.1
+    Checking euclid v0.22.14
+   Compiling proc-macro-hack v0.5.20+deprecated
+    Checking rustc-hash v2.1.3
+   Compiling zmij v1.0.23
+   Compiling icu_locale_fallback_data v2.3.0
+   Compiling phf_shared v0.13.1
+    Checking miniz_oxide v0.8.9
+    Checking fdeflate v0.3.7
+    Checking zune-core v0.5.3
+   Compiling fastrand v2.5.0
+    Checking pxfm v0.1.30
+    Checking write16 v1.0.0
+   Compiling parking_lot_core v0.9.12
+    Checking utf16_iter v1.0.5
+   Compiling serde_json v1.0.151
+    Checking tinyvec_macros v0.1.1
+    Checking tinyvec v1.12.0
+    Checking icu_normalizer v2.3.0
+   Compiling phf_generator v0.13.1
+    Checking zune-jpeg v0.5.15
+    Checking png v0.18.1
+   Compiling unic-langid-impl v0.9.6
+    Checking icu_properties v2.3.0
+    Checking aho-corasick v1.1.5
+    Checking core_maths v0.1.1
+    Checking regex-syntax v0.8.11
+    Checking hayro-ccitt v0.3.0
+   Compiling version_check v0.9.5
+   Compiling heck v0.5.0
+    Checking scopeguard v1.2.0
+   Compiling num-conv v0.2.2
+   Compiling time-core v0.1.9
+    Checking lock_api v0.4.14
+   Compiling slotmap v1.1.1
+   Compiling time-macros v0.2.32
+    Checking hayro-jbig2 v0.3.0
+   Compiling unic-langid-macros-impl v0.9.6
+    Checking regex-automata v0.4.18
+    Checking icu_locale_fallback v2.3.0
+    Checking moxcms v0.8.1
+    Checking hayro-jpeg2000 v0.3.5
+   Compiling phf_macros v0.13.1
+   Compiling paste v1.0.15
+    Checking powerfmt v0.2.0
+    Checking byteorder-lite v0.1.0
+   Compiling icu_locale_data v2.3.0
+    Checking color_quant v1.1.0
+    Checking deranged v0.5.8
+    Checking float-cmp v0.9.0
+    Checking bit-vec v0.8.0
+   Compiling portable-atomic v1.15.0
+   Compiling icu_collator_data v2.3.0
+    Checking weezl v0.1.12
+    Checking quick-error v2.0.1
+    Checking image-webp v0.2.4
+    Checking gif v0.14.2
+    Checking time v0.3.55
+    Checking bit-set v0.8.0
+    Checking strict-num v0.1.1
+    Checking phf v0.13.1
+    Checking unic-langid-macros v0.9.6
+    Checking parking_lot v0.12.5
+    Checking hayro-syntax v0.7.2
+    Checking idna_adapter v1.2.2
+   Compiling strum_macros v0.27.2
+    Checking ttf-parser v0.25.1
+    Checking half v2.7.1
+    Checking serde_spanned v0.6.9
+    Checking toml_datetime v0.6.11
+   Compiling enum-ordinalize-derive v4.4.2
+    Checking quick-xml v0.42.0
+    Checking num-integer v0.1.47
+    Checking percent-encoding v2.3.2
+   Compiling typst-utils v0.15.1
+    Checking unscanny v0.1.0
+    Checking ryu v1.0.23
+    Checking winnow v0.7.15
+    Checking linked-hash-map v0.5.6
+    Checking base64 v0.23.1
+    Checking unicode-script v0.5.8
+   Compiling wasmparser v0.239.0
+    Checking ciborium-io v0.2.2
+    Checking rand_core v0.6.4
+    Checking same-file v1.0.6
+    Checking arrayref v0.3.9
+    Checking toml_write v0.1.2
+    Checking walkdir v2.5.0
+    Checking tiny-skia-path v0.12.0
+    Checking ciborium-ll v0.2.2
+    Checking plist v1.10.1
+    Checking yaml-rust v0.4.5
+    Checking strum v0.27.2
+    Checking form_urlencoded v1.2.2
+    Checking num-bigint v0.4.8
+    Checking enum-ordinalize v4.4.2
+    Checking idna v1.1.0
+    Checking image v0.25.10
+    Checking unic-langid v0.9.6
+    Checking toml_edit v0.22.27
+    Checking fancy-regex v0.16.2
+    Checking ppv-lite86 v0.2.21
+    Checking unicode-normalization v0.1.25
+    Checking simplecss v0.2.2
+    Checking svgtypes v0.16.1
+    Checking serde_path_to_error v0.1.20
+    Checking bincode v1.3.3
+    Checking quick-xml v0.38.4
+    Checking font-types v0.11.3
+    Checking roxmltree v0.21.1
+    Checking wasmi_core v1.1.0
+    Checking unicode-properties v0.1.4
+    Checking chinese-variant v1.1.6
+   Compiling rust_decimal v1.43.0
+   Compiling object v0.39.1
+    Checking base64 v0.22.1
+    Checking pico-args v0.5.0
+    Checking roman-numerals-rs v3.1.0
+    Checking unicode-math-class v0.1.0
+   Compiling codex v0.3.0
+    Checking fnv v1.0.7
+    Checking unsafe-libyaml v0.2.11
+    Checking unicode-ccc v0.4.0
+    Checking data-url v0.3.2
+    Checking thin-vec v0.2.19
+    Checking xmlwriter v0.1.0
+    Checking unicode-segmentation v1.13.3
+   Compiling find-msvc-tools v0.1.12
+   Compiling shlex v2.0.1
+   Compiling by_address v1.2.1
+    Checking unicode-bidi-mirroring v0.4.0
+    Checking semver v1.0.28
+   Compiling palette_derive v0.7.7
+    Checking rustybuzz v0.20.1
+    Checking serde_yaml v0.9.34+deprecated
+   Compiling cc v1.4.6
+    Checking citationberg v0.7.0
+    Checking syntect v5.3.0
+    Checking wasmi_ir v1.1.0
+    Checking biblatex v0.12.0
+    Checking chinese-number v0.7.8
+    Checking read-fonts v0.39.2
+    Checking toml v0.8.23
+    Checking rand_chacha v0.3.1
+    Checking icu_collator v2.3.1
+    Checking icu_locale v2.3.1
+    Checking fontdb v0.23.0
+    Checking url v2.5.8
+    Checking ciborium v0.2.2
+    Checking rand v0.8.8
+    Checking typst-timing v0.15.1
+    Checking ecow v0.2.6
+    Checking color v0.3.3
+   Compiling comemo-macros v0.5.1
+    Checking csv-core v0.1.13
+    Checking approx v0.5.1
+    Checking palette_math v0.7.7
+    Checking unicode-bidi v0.3.18
+    Checking wasmi_collections v1.1.0
+   Compiling icu_segmenter_data v2.3.0
+    Checking mutate_once v0.1.2
+    Checking imagesize v0.14.0
+    Checking linebender_resource_handle v0.1.1
+    Checking slab v0.4.12
+    Checking spin v0.9.9
+    Checking unicode-vo v0.1.0
+    Checking hayro-postscript v0.1.0
+    Checking usvg v0.47.0
+    Checking hayro-cmap v0.1.0
+    Checking typst-syntax v0.15.1
+    Checking wasmi v1.1.0
+    Checking comemo v0.5.1
+    Checking skrifa v0.42.1
+    Checking peniko v0.6.1
+    Checking kamadak-exif v0.6.1
+    Checking palette v0.7.7
+    Checking csv v1.4.0
+    Checking lipsum v0.9.1
+    Checking hayagriva v0.10.1
+    Checking two-face v0.4.5
+    Checking regex v1.13.1
+   Compiling typst-macros v0.15.1
+    Checking guillotiere v0.7.0
+    Checking typst-assets v0.15.1
+    Checking glidesort v0.1.2
+    Checking typed-arena v2.0.2
+    Checking bumpalo v3.20.3
+    Checking az v1.3.0
+    Checking vello_common v0.0.8
+   Compiling ar_archive_writer v0.5.3
+    Checking hayro-interpret v0.7.0
+    Checking icu_segmenter v2.3.0
+   Compiling psm v0.1.32
+    Checking typst-library v0.15.1
+    Checking vello_cpu v0.0.8
+    Checking pic-scale v0.7.12
+    Checking icu_provider_blob v2.3.0
+    Checking hypher v0.1.7
+    Checking hayro-svg v0.7.0
+   Compiling stacker v0.1.25
+    Checking lyon_geom v1.0.19
+    Checking noon-core v0.1.0 (/home/runner/work/noon/noon/crates/noon-core)
+    Checking hayro v0.7.1
+    Checking i_float v4.1.0
+    Checking i_shape v4.0.0
+    Checking lyon_path v1.0.19
+    Checking font-types v0.12.5
+    Checking i_key_sort v0.11.0
+    Checking i_tree v0.19.0
+    Checking float_next_after v1.0.0
+    Checking option-ext v0.2.0
+    Checking dirs-sys v0.5.0
+    Checking lyon_tessellation v1.0.22
+    Checking i_overlay v8.1.1
+    Checking read-fonts v0.41.0
+    Checking iana-time-zone v0.1.65
+    Checking chrono v0.4.45
+    Checking noon-geometry v0.1.0 (/home/runner/work/noon/noon/crates/noon-geometry)
+    Checking dirs v6.0.0
+    Checking yazi v0.2.1
+    Checking zeno v0.3.3
+    Checking noon-compile v0.1.0 (/home/runner/work/noon/noon/crates/noon-compile)
+    Checking imagesize v0.15.0
+    Checking usvg v0.48.1
+    Checking skrifa v0.44.0
+    Checking noon-runtime v0.1.0 (/home/runner/work/noon/noon/crates/noon-runtime)
+    Checking swash v0.2.10
+    Checking noon-text v0.1.0 (/home/runner/work/noon/noon/crates/noon-text)
+    Checking typst-layout v0.15.1
+    Checking typst-svg v0.15.1
+    Checking typst-html v0.15.1
+    Checking typst-eval v0.15.1
+    Checking typst-realize v0.15.1
+    Checking typst v0.15.1
+    Checking typst-as-lib v0.16.0
+    Checking noon-typst v0.1.0 (/home/runner/work/noon/noon/crates/noon-typst)
+    Checking noon v0.1.0 (/home/runner/work/noon/noon/crates/noon)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 45.73s
+   Compiling unicode-ident v1.0.24
+   Compiling serde_core v1.0.229
+   Compiling libm v0.2.16
+   Compiling stable_deref_trait v1.2.1
+   Compiling smallvec v1.16.1
+   Compiling proc-macro2 v1.0.107
+   Compiling cfg-if v1.0.4
+   Compiling memchr v2.8.3
+   Compiling quote v1.0.47
+   Compiling syn v3.0.5
+   Compiling syn v2.0.119
+   Compiling num-traits v0.2.19
+   Compiling arrayvec v0.7.8
+   Compiling simd-adler32 v0.3.10
+   Compiling writeable v0.6.4
+   Compiling crossbeam-utils v0.8.23
+   Compiling litemap v0.8.3
+   Compiling siphasher v1.0.3
+   Compiling adler2 v2.0.1
+   Compiling crossbeam-epoch v0.9.21
+   Compiling foldhash v0.2.0
+   Compiling hashbrown v0.17.1
+   Compiling crossbeam-deque v0.8.8
+   Compiling crc32fast v1.5.2
+   Compiling miniz_oxide v0.9.1
+   Compiling bitflags v2.13.2
+   Compiling serde_derive v1.0.229
+   Compiling displaydoc v0.2.7
+   Compiling zerovec-derive v0.11.6
+   Compiling synstructure v0.13.2
+   Compiling bytemuck_derive v1.12.1
+   Compiling thiserror-impl v2.0.20
+   Compiling bytemuck v1.25.2
+   Compiling zerofrom-derive v0.1.7
+   Compiling yoke-derive v0.8.2
+   Compiling thiserror v2.0.20
+   Compiling cobs v0.3.0
+   Compiling zlib-rs v0.6.7
+   Compiling serde v1.0.229
+   Compiling rayon-core v1.13.0
+   Compiling zerofrom v0.1.8
+   Compiling yoke v0.8.3
+   Compiling postcard v1.1.3
+   Compiling zerovec v0.11.8
+   Compiling either v1.18.0
+   Compiling rayon v1.12.0
+   Compiling polycool v0.4.0
+   Compiling utf8_iter v1.0.4
+   Compiling itoa v1.0.18
+   Compiling kurbo v0.13.1
+   Compiling tinystr v0.8.4
+   Compiling icu_locale_core v2.3.0
+   Compiling zerotrie v0.2.5
+   Compiling potential_utf v0.1.6
+   Compiling flate2 v1.1.10
+   Compiling icu_provider v2.3.1
+   Compiling icu_collections v2.3.0
+   Compiling equivalent v1.0.2
+   Compiling indexmap v2.14.2
+   Compiling libc v0.2.189
+   Compiling zerocopy-derive v0.8.57
+   Compiling log v0.4.34
+   Compiling fearless_simd v0.4.1
+   Compiling once_cell v1.21.4
+   Compiling euclid v0.22.14
+   Compiling rustc-hash v2.1.3
+   Compiling icu_normalizer_data v2.3.0
+   Compiling icu_properties_data v2.3.0
+   Compiling phf_shared v0.13.1
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+   Compiling zerocopy v0.8.57
+   Compiling zune-core v0.5.3
+   Compiling write16 v1.0.0
+   Compiling pxfm v0.1.30
+   Compiling tinyvec_macros v0.1.1
+   Compiling utf16_iter v1.0.5
+   Compiling phf_generator v0.13.1
+   Compiling icu_normalizer v2.3.0
+   Compiling tinyvec v1.12.0
+   Compiling zune-jpeg v0.5.15
+   Compiling png v0.18.1
+   Compiling unic-langid-impl v0.9.6
+   Compiling icu_properties v2.3.0
+   Compiling zmij v1.0.23
+   Compiling icu_locale_fallback_data v2.3.0
+   Compiling core_maths v0.1.1
+   Compiling aho-corasick v1.1.5
+   Compiling regex-syntax v0.8.11
+   Compiling time-core v0.1.9
+   Compiling num-conv v0.2.2
+   Compiling hayro-ccitt v0.3.0
+   Compiling scopeguard v1.2.0
+   Compiling lock_api v0.4.14
+   Compiling hayro-jbig2 v0.3.0
+   Compiling time-macros v0.2.32
+   Compiling regex-automata v0.4.18
+   Compiling serde_json v1.0.151
+   Compiling icu_locale_fallback v2.3.0
+   Compiling unic-langid-macros-impl v0.9.6
+   Compiling moxcms v0.8.1
+   Compiling hayro-jpeg2000 v0.3.5
+   Compiling parking_lot_core v0.9.12
+   Compiling phf_macros v0.13.1
+   Compiling weezl v0.1.12
+   Compiling quick-error v2.0.1
+   Compiling bit-vec v0.8.0
+   Compiling powerfmt v0.2.0
+   Compiling deranged v0.5.8
+   Compiling byteorder-lite v0.1.0
+   Compiling float-cmp v0.9.0
+   Compiling color_quant v1.1.0
+   Compiling gif v0.14.2
+   Compiling time v0.3.55
+   Compiling strict-num v0.1.1
+   Compiling image-webp v0.2.4
+   Compiling bit-set v0.8.0
+   Compiling phf v0.13.1
+   Compiling unic-langid-macros v0.9.6
+   Compiling hayro-syntax v0.7.2
+   Compiling parking_lot v0.12.5
+   Compiling strum_macros v0.27.2
+   Compiling idna_adapter v1.2.2
+   Compiling ttf-parser v0.25.1
+   Compiling half v2.7.1
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling enum-ordinalize-derive v4.4.2
+   Compiling num-integer v0.1.47
+   Compiling quick-xml v0.42.0
+   Compiling arrayref v0.3.9
+   Compiling toml_write v0.1.2
+   Compiling unscanny v0.1.0
+   Compiling ciborium-io v0.2.2
+   Compiling rand_core v0.6.4
+   Compiling base64 v0.23.1
+   Compiling linked-hash-map v0.5.6
+   Compiling unicode-script v0.5.8
+   Compiling ryu v1.0.23
+   Compiling same-file v1.0.6
+   Compiling winnow v0.7.15
+   Compiling percent-encoding v2.3.2
+   Compiling walkdir v2.5.0
+   Compiling form_urlencoded v1.2.2
+   Compiling plist v1.10.1
+   Compiling yaml-rust v0.4.5
+   Compiling ciborium-ll v0.2.2
+   Compiling tiny-skia-path v0.12.0
+   Compiling num-bigint v0.4.8
+   Compiling enum-ordinalize v4.4.2
+   Compiling strum v0.27.2
+   Compiling idna v1.1.0
+   Compiling slotmap v1.1.1
+   Compiling toml_edit v0.22.27
+   Compiling unic-langid v0.9.6
+   Compiling portable-atomic v1.15.0
+   Compiling icu_collator_data v2.3.0
+   Compiling image v0.25.10
+   Compiling fancy-regex v0.16.2
+   Compiling icu_locale_data v2.3.0
+   Compiling ppv-lite86 v0.2.21
+   Compiling unicode-normalization v0.1.25
+   Compiling simplecss v0.2.2
+   Compiling svgtypes v0.16.1
+   Compiling serde_path_to_error v0.1.20
+   Compiling bincode v1.3.3
+   Compiling quick-xml v0.38.4
+   Compiling font-types v0.11.3
+   Compiling wasmi_core v1.1.0
+   Compiling roxmltree v0.21.1
+   Compiling unicode-segmentation v1.13.3
+   Compiling semver v1.0.28
+   Compiling pico-args v0.5.0
+   Compiling chinese-variant v1.1.6
+   Compiling unsafe-libyaml v0.2.11
+   Compiling unicode-bidi-mirroring v0.4.0
+   Compiling fnv v1.0.7
+   Compiling unicode-ccc v0.4.0
+   Compiling unicode-math-class v0.1.0
+   Compiling base64 v0.22.1
+   Compiling unicode-properties v0.1.4
+   Compiling data-url v0.3.2
+   Compiling roman-numerals-rs v3.1.0
+   Compiling thin-vec v0.2.19
+   Compiling xmlwriter v0.1.0
+   Compiling typst-utils v0.15.1
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling biblatex v0.12.0
+   Compiling rustybuzz v0.20.1
+   Compiling syntect v5.3.0
+   Compiling chinese-number v0.7.8
+   Compiling palette_derive v0.7.7
+   Compiling wasmi_ir v1.1.0
+   Compiling citationberg v0.7.0
+   Compiling read-fonts v0.39.2
+   Compiling toml v0.8.23
+   Compiling rand_chacha v0.3.1
+   Compiling icu_locale v2.3.1
+   Compiling icu_collator v2.3.1
+   Compiling fontdb v0.23.0
+   Compiling url v2.5.8
+   Compiling wasmparser v0.239.0
+   Compiling ciborium v0.2.2
+   Compiling rand v0.8.8
+   Compiling typst-timing v0.15.1
+   Compiling ecow v0.2.6
+   Compiling color v0.3.3
+   Compiling comemo-macros v0.5.1
+   Compiling approx v0.5.1
+   Compiling palette_math v0.7.7
+   Compiling csv-core v0.1.13
+   Compiling wasmi_collections v1.1.0
+   Compiling imagesize v0.14.0
+   Compiling hayro-postscript v0.1.0
+   Compiling spin v0.9.9
+   Compiling unicode-vo v0.1.0
+   Compiling linebender_resource_handle v0.1.1
+   Compiling slab v0.4.12
+   Compiling mutate_once v0.1.2
+   Compiling unicode-bidi v0.3.18
+   Compiling usvg v0.47.0
+   Compiling kamadak-exif v0.6.1
+   Compiling comemo v0.5.1
+   Compiling peniko v0.6.1
+   Compiling wasmi v1.1.0
+   Compiling hayro-cmap v0.1.0
+   Compiling csv v1.4.0
+   Compiling palette v0.7.7
+   Compiling typst-syntax v0.15.1
+   Compiling lipsum v0.9.1
+   Compiling skrifa v0.42.1
+   Compiling hayagriva v0.10.1
+   Compiling two-face v0.4.5
+   Compiling codex v0.3.0
+   Compiling rust_decimal v1.43.0
+   Compiling regex v1.13.1
+   Compiling typst-macros v0.15.1
+   Compiling guillotiere v0.7.0
+   Compiling typst-assets v0.15.1
+   Compiling glidesort v0.1.2
+   Compiling typed-arena v2.0.2
+   Compiling az v1.3.0
+   Compiling bumpalo v3.20.3
+   Compiling vello_common v0.0.8
+   Compiling typst-library v0.15.1
+   Compiling hayro-interpret v0.7.0
+   Compiling icu_segmenter_data v2.3.0
+   Compiling icu_segmenter v2.3.0
+   Compiling vello_cpu v0.0.8
+   Compiling pic-scale v0.7.12
+   Compiling icu_provider_blob v2.3.0
+   Compiling hypher v0.1.7
+   Compiling hayro v0.7.1
+   Compiling hayro-svg v0.7.0
+   Compiling psm v0.1.32
+   Compiling lyon_geom v1.0.19
+   Compiling noon-core v0.1.0 (/home/runner/work/noon/noon/crates/noon-core)
+   Compiling i_float v4.1.0
+   Compiling i_shape v4.0.0
+   Compiling lyon_path v1.0.19
+   Compiling stacker v0.1.25
+   Compiling font-types v0.12.5
+   Compiling i_tree v0.19.0
+   Compiling option-ext v0.2.0
+   Compiling i_key_sort v0.11.0
+   Compiling float_next_after v1.0.0
+   Compiling lyon_tessellation v1.0.22
+   Compiling i_overlay v8.1.1
+   Compiling dirs-sys v0.5.0
+   Compiling read-fonts v0.41.0
+   Compiling iana-time-zone v0.1.65
+   Compiling chrono v0.4.45
+   Compiling dirs v6.0.0
+   Compiling yazi v0.2.1
+   Compiling noon-geometry v0.1.0 (/home/runner/work/noon/noon/crates/noon-geometry)
+   Compiling skrifa v0.44.0
+   Compiling zeno v0.3.3
+   Compiling noon-compile v0.1.0 (/home/runner/work/noon/noon/crates/noon-compile)
+   Compiling typst-layout v0.15.1
+   Compiling typst-eval v0.15.1
+   Compiling typst-svg v0.15.1
+   Compiling swash v0.2.10
+   Compiling typst-html v0.15.1
+   Compiling typst-realize v0.15.1
+   Compiling imagesize v0.15.0
+   Compiling typst v0.15.1
+   Compiling usvg v0.48.1
+   Compiling typst-as-lib v0.16.0
+   Compiling noon-text v0.1.0 (/home/runner/work/noon/noon/crates/noon-text)
+   Compiling noon-typst v0.1.0 (/home/runner/work/noon/noon/crates/noon-typst)
+   Compiling noon-runtime v0.1.0 (/home/runner/work/noon/noon/crates/noon-runtime)
+   Compiling noon v0.1.0 (/home/runner/work/noon/noon/crates/noon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 26s
+     Running unittests src/lib.rs (target/debug/deps/noon-aab70455c1805d08)
+
+running 7 tests
+test execution_session::family_transform_tests::cyclic_replace_uses_same_succession_activation_centers ... ok
+test execution_session::family_transform_tests::unequal_family_contraction_retains_only_effective_padding_fade ... ok
+test execution_session::family_transform_tests::cyclic_replace_direct_seek_matches_forward_playback ... ok
+test execution_session::family_transform_tests::unequal_family_transform_direct_seek_matches_forward_playback ... ok
+test execution_session::family_transform_tests::unequal_family_transform_publishes_one_identity_free_expansion_copy ... ok
+test execution_session::family_transform_tests::unequal_family_transform_scene_root_member_publishes_expansion_copy ... ok
+test execution_session::family_transform_tests::unequal_family_path_transform_is_seek_equivalent_and_retires_locally ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 348 filtered out; finished in 0.79s
+
+     Running tests/animated_priority.rs (target/debug/deps/animated_priority-6a0fbba7865a6c43)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/animated_stroke_width.rs (target/debug/deps/animated_stroke_width-cb07fd4ebe9dd168)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/boolean_geometry.rs (target/debug/deps/boolean_geometry-41f300d80584443e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/canonical_curve_layout.rs (target/debug/deps/canonical_curve_layout-fb4d60a750d0b8e9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/composition_admission.rs (target/debug/deps/composition_admission-65a6a99c972df200)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/constructor_priority.rs (target/debug/deps/constructor_priority-de90514d67b84a55)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/cross_geometry_transform.rs (target/debug/deps/cross_geometry_transform-d8fb4624ec267295)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/dimension_fitting.rs (target/debug/deps/dimension_fitting-93029cfd5d0f5cda)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running tests/family_affine.rs (target/debug/deps/family_affine-a3f3013671a1f23b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/family_alignment.rs (target/debug/deps/family_alignment-4f8680d20cd51fcf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/family_arrangement.rs (target/debug/deps/family_arrangement-197030dd88befbf8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/family_callback_paint.rs (target/debug/deps/family_callback_paint-e1735df6e793f3ea)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/family_callback_translation.rs (target/debug/deps/family_callback_translation-b279b48898f328ff)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/family_construction.rs (target/debug/deps/family_construction-51f2863e86456c11)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/family_copy.rs (target/debug/deps/family_copy-b74dc7fcf1007a22)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/family_grid.rs (target/debug/deps/family_grid-e452f43297dff618)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/family_layout.rs (target/debug/deps/family_layout-5cec99a2f23b8e27)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/family_membership_order.rs (target/debug/deps/family_membership_order-16b40e541fe52149)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/family_replacement.rs (target/debug/deps/family_replacement-b90589d6e5c99f51)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/family_state.rs (target/debug/deps/family_state-8a61a9c05654d1ce)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/family_style.rs (target/debug/deps/family_style-caa7b6f84587bcad)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/family_translation.rs (target/debug/deps/family_translation-8742cb46f7a4bfa2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/geometry_matchers.rs (target/debug/deps/geometry_matchers-dca32d2214dd08aa)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/live_creation_resource_atomicity.rs (target/debug/deps/live_creation_resource_atomicity-54a6c9c7847660c8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/live_family_layout.rs (target/debug/deps/live_family_layout-279dc019a203cbe7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/manim_arc_geometry.rs (target/debug/deps/manim_arc_geometry-f693648f65de32cc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/manim_arrow_geometry.rs (target/debug/deps/manim_arrow_geometry-13d20965d78fd2f0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/manim_gallery_moving_around.rs (target/debug/deps/manim_gallery_moving_around-319d88197b2ea0c3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/manim_scale.rs (target/debug/deps/manim_scale-082f4ab56866675e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/manim_scale_pivots.rs (target/debug/deps/manim_scale_pivots-ef0574e4f4eae458)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/manim_style_defaults.rs (target/debug/deps/manim_style_defaults-91c31fb196d6d01e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/manim_tangent_line.rs (target/debug/deps/manim_tangent_line-c0f3474f7579089e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/paint_queries_gradients.rs (target/debug/deps/paint_queries_gradients-13cef3db45891da6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/path_alignment.rs (target/debug/deps/path_alignment-086292e3aaa489e1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/path_construction.rs (target/debug/deps/path_construction-7eac5990fb9e9197)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/path_editing.rs (target/debug/deps/path_editing-f4ae711a0b7f1a4b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/path_family_arrangement.rs (target/debug/deps/path_family_arrangement-16072377abec91ec)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/path_queries.rs (target/debug/deps/path_queries-d3588c8149abc4c5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/path_refinement.rs (target/debug/deps/path_refinement-b1094ffcc793a280)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/path_selection.rs (target/debug/deps/path_selection-856c91110660c7c7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/path_smoothing.rs (target/debug/deps/path_smoothing-3e4c94cab7ecef9f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/path_subcurves.rs (target/debug/deps/path_subcurves-6518a62ae2119343)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/planar_affine.rs (target/debug/deps/planar_affine-9c13efeee203df1e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/point_matching.rs (target/debug/deps/point_matching-fb1b81ab4ae9e134)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/root_order_acceptance.rs (target/debug/deps/root_order_acceptance-a85f109ce6cb2f2a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/root_order_alias_regressions.rs (target/debug/deps/root_order_alias_regressions-63f6e4a60e04d308)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/root_order_transaction_regressions.rs (target/debug/deps/root_order_transaction_regressions-7e67b99debfa94ce)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running tests/rotated_become.rs (target/debug/deps/rotated_become-9d659b8ce8ffdaaa)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/set_fill_semantics.rs (target/debug/deps/set_fill_semantics-22917e9f2e57139e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/specialized_geometry_inputs.rs (target/debug/deps/specialized_geometry_inputs-dd9cf27d43150e4d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/world_stretch.rs (target/debug/deps/world_stretch-252062831a210706)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/z_index.rs (target/debug/deps/z_index-fc988a25f75624e6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+F
+======================================================================
+FAIL: test_requests_are_inert_and_normalize_call_shapes (__main__.ManimCyclicReplaceTests.test_requests_are_inert_and_normalize_call_shapes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/noon/noon/web/python/test_manim_cyclic_replace.py", line 80, in test_requests_are_inert_and_normalize_call_shapes
+    self.assertEqual(
+AssertionError: 1 != 0 : CyclicReplace request subprocess failed:
+stdout:
+
+stderr:
+Traceback (most recent call last):
+  File "<string>", line 27, in <module>
+AttributeError: property 'submobjects' of 'Group' object has no setter
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.249s
+
+FAILED (failures=1)

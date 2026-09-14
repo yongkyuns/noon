@@ -112,7 +112,7 @@ pub(crate) enum SemanticCompositionRequest {
         options: AnimationOptions,
     },
     CyclicReplace {
-        family: SemanticNodeId,
+        members: Vec<SemanticNodeId>,
         options: AnimationOptions,
     },
     Indicate {
@@ -1803,22 +1803,20 @@ impl ExecutionSession {
                 );
                 Ok(animation)
             }
-            SemanticCompositionRequest::CyclicReplace { family, options } => {
-                let members = store
-                    .semantic_family_members_checked(*family)
-                    .map_err(|error| {
-                        ExecutionSessionAnimationError::InvalidComposition(error.to_string())
-                    })?;
+            SemanticCompositionRequest::CyclicReplace { members, options } => {
+                let mut seen = HashSet::new();
                 if members.len() < 2
                     || members.iter().any(|member| {
-                        !self.reachability.is_object_reachable(*member)
+                        !seen.insert(*member)
+                            || !self.reachability.is_object_reachable(*member)
                             || store.node(*member).is_none_or(|node| {
                                 !matches!(node.kind(), noon_core::SemanticNodeKind::AuthoringObject)
                             })
+                            || store.semantic_object_state_checked(*member).is_err()
                     })
                 {
                     return Err(ExecutionSessionAnimationError::InvalidComposition(
-                        "CyclicReplace requires at least two scene-bound flat object members"
+                        "CyclicReplace requires at least two distinct scene-bound flat object members"
                             .into(),
                     ));
                 }

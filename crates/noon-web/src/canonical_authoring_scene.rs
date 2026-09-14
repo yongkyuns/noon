@@ -110,6 +110,10 @@ enum OrdinaryCompositionChild {
         target_state: noon::MobjectFamily,
         options: noon_core::AnimationOptions,
     },
+    CyclicReplace {
+        members: Vec<noon::Mobject>,
+        options: noon_core::AnimationOptions,
+    },
     Indicate {
         target: noon::Mobject,
         indication: noon::IndicateOptions,
@@ -1144,6 +1148,9 @@ impl CanonicalAuthoringScene {
                         noon_core::SemanticTransformInterpolation::PointCorrespondence => {
                             noon::TransformToRequest::point_correspondence(source, target, *options)
                         }
+                        noon_core::SemanticTransformInterpolation::CenterTranslation => {
+                            unreachable!("CenterTranslation is emitted only by CyclicReplace")
+                        }
                     };
                     noon::AnimationCompositionRequest::TransformTo(if *complete_priority {
                         request.method_target()
@@ -1160,6 +1167,12 @@ impl CanonicalAuthoringScene {
                     target_state,
                     options: *options,
                 },
+                OrdinaryCompositionChild::CyclicReplace { members, options } => {
+                    noon::AnimationCompositionRequest::CyclicReplace {
+                        members: members.iter().collect(),
+                        options: *options,
+                    }
+                }
                 OrdinaryCompositionChild::Indicate {
                     target,
                     indication,
@@ -1471,6 +1484,7 @@ impl CanonicalAuthoringScene {
                 | OrdinaryCompositionChild::Wait { .. } => {}
                 OrdinaryCompositionChild::ValueTracker { .. } => {}
                 OrdinaryCompositionChild::FamilyTransformTo { .. }
+                | OrdinaryCompositionChild::CyclicReplace { .. }
                 | OrdinaryCompositionChild::Indicate { .. }
                 | OrdinaryCompositionChild::FamilyIndicate { .. } => {}
                 OrdinaryCompositionChild::Composition { children, .. } => {
@@ -1763,6 +1777,48 @@ impl CanonicalAuthoringScene {
                     }
                     continue;
                 }
+                OrdinaryCompositionChild::CyclicReplace { members, options } => {
+                    if members.len() < 2 {
+                        return Err("CyclicReplace requires at least two direct members".into());
+                    }
+                    let mut seen = BTreeSet::new();
+                    for member in members {
+                        if !std::rc::Rc::ptr_eq(
+                            self.scene.integration_store(),
+                            member.integration_store(),
+                        ) {
+                            return Err(
+                                "CyclicReplace member belongs to another authoring store".into()
+                            );
+                        }
+                        member.validate().map_err(|error| error.to_string())?;
+                        if !self.identities.contains_key(&member.node_id()) {
+                            return Err(
+                                "CyclicReplace members must already be bound to this Scene".into(),
+                            );
+                        }
+                        if !seen.insert(member.node_id()) {
+                            return Err("CyclicReplace members must be distinct".into());
+                        }
+                    }
+                    let resolved = noon_core::resolve_transform_animation_options(
+                        noon_core::AnimationDefaults::MANIM,
+                        *options,
+                        noon_core::AnimationOptions::new(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    if resolved.lag_ratio != 0.0
+                        || resolved.reverse_rate_function
+                        || resolved.remover
+                        || resolved.introducer
+                    {
+                        return Err(
+                            "CyclicReplace does not support lag, lifecycle, or reverse options"
+                                .into(),
+                        );
+                    }
+                    continue;
+                }
                 OrdinaryCompositionChild::FamilyTransformTo {
                     source,
                     target_state,
@@ -1781,7 +1837,7 @@ impl CanonicalAuthoringScene {
                     }
                     source.validate().map_err(|error| error.to_string())?;
                     target_state.validate().map_err(|error| error.to_string())?;
-                    noon_core::resolve_animation_options(
+                    noon_core::resolve_transform_animation_options(
                         noon_core::AnimationDefaults::MANIM,
                         *options,
                         noon_core::AnimationOptions::new(),
@@ -3466,6 +3522,46 @@ mod wasm {
                     target_state: target_state.semantic_family()?,
                     options,
                 });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendCyclicReplace)]
+        pub fn append_cyclic_replace(
+            &mut self,
+            first: &crate::WasmAuthoringMobjectHandle,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            path_arc: f64,
+        ) -> Result<(), JsValue> {
+            let options = Self::optional_options(child_run_time, rate_function)?.path_arc(path_arc);
+            self.children.push(OrdinaryCompositionChild::CyclicReplace {
+                members: vec![first.semantic_mobject().clone()],
+                options,
+            });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendCyclicReplaceMember)]
+        pub fn append_cyclic_replace_member(
+            &mut self,
+            member: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            let Some(OrdinaryCompositionChild::CyclicReplace { members, .. }) =
+                self.children.last_mut()
+            else {
+                return Err(js_error(
+                    "CyclicReplace member must follow appendCyclicReplace",
+                ));
+            };
+            if !std::rc::Rc::ptr_eq(
+                members[0].integration_store(),
+                member.semantic_mobject().integration_store(),
+            ) {
+                return Err(js_error(
+                    "CyclicReplace member belongs to another authoring store",
+                ));
+            }
+            members.push(member.semantic_mobject().clone());
             Ok(())
         }
 

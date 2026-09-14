@@ -325,3 +325,90 @@ fn unequal_family_contraction_retains_only_effective_padding_fade() {
         1.0
     );
 }
+
+fn cyclic_sequence_session() -> (
+    SemanticStore,
+    ExecutionSession,
+    ExecutionSegment,
+    [SemanticNodeId; 3],
+) {
+    let mut store = SemanticStore::new();
+    let a = object(&mut store, -2.0);
+    let b = object(&mut store, 0.0);
+    let c = object(&mut store, 2.0);
+    let root = family(&mut store, &[a, b, c]);
+    let a_after_first = object(&mut store, 4.0);
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    let first = SemanticCompositionRequest::TransformTo {
+        source: a,
+        target_state: a_after_first,
+        interpolation: noon_core::SemanticTransformInterpolation::Affine,
+        complete_priority: false,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear),
+    };
+    let cyclic = SemanticCompositionRequest::CyclicReplace {
+        members: vec![a, b, c],
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear)
+            .path_arc(std::f64::consts::FRAC_PI_2),
+    };
+    let request = SemanticCompositionRequest::Composition {
+        kind: SemanticAnimationCompositionKind::Sequence,
+        children: vec![first, cyclic],
+        options: AnimationOptions::new()
+            .run_time(2.0)
+            .rate_func(RateFunction::Linear),
+    };
+    let segment = session
+        .declare_and_activate_composition(&mut store, root, &request, AnimationOptions::new())
+        .unwrap();
+    (store, session, segment, [a, b, c])
+}
+
+fn translation_for(session: &ExecutionSession, node: SemanticNodeId) -> Vec2 {
+    let object = session.execution_index.execution_object_id(node).unwrap();
+    let index = session.runtime.frame_index_for_object(object).unwrap();
+    session.frame().objects[index].transform.translation
+}
+
+#[test]
+fn cyclic_replace_uses_same_succession_activation_centers() {
+    let (_store, mut session, segment, [a, b, c]) = cyclic_sequence_session();
+    session.advance_segment_to(segment, 1.5).unwrap();
+    let middle_c = translation_for(&session, c);
+    assert!(middle_c.x > 2.0 && middle_c.x < 4.0);
+    assert!(
+        middle_c.y.abs() > 0.1,
+        "CyclicReplace midpoint must use the curved path"
+    );
+
+    session.advance_segment_to(segment, 2.0).unwrap();
+    let endpoints = [
+        translation_for(&session, a),
+        translation_for(&session, b),
+        translation_for(&session, c),
+    ];
+    for (actual, expected) in endpoints.into_iter().zip([
+        Vec2::new(0.0, 0.0),
+        Vec2::new(2.0, 0.0),
+        Vec2::new(4.0, 0.0),
+    ]) {
+        assert!((actual.x - expected.x).abs() < 1e-5);
+        assert!((actual.y - expected.y).abs() < 1e-5);
+    }
+}
+
+#[test]
+fn cyclic_replace_direct_seek_matches_forward_playback() {
+    let (_forward_store, mut forward, forward_segment, _) = cyclic_sequence_session();
+    forward.advance_segment_to(forward_segment, 1.25).unwrap();
+    forward.advance_segment_to(forward_segment, 1.5).unwrap();
+    let forward_frame = forward.frame().clone();
+
+    let (_direct_store, mut direct, _direct_segment, _) = cyclic_sequence_session();
+    direct.seek(1.5).unwrap();
+    assert_eq!(direct.frame(), &forward_frame);
+}
