@@ -18,7 +18,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cat .github/tmp/b3-matching-mode.* | base64 -d > /tmp/b3-matching-mode.py
+          base64 -d < .github/tmp/b3-matching-mode.payload | gzip -dc > /tmp/b3-matching-mode.py
           python3 /tmp/b3-matching-mode.py
           cargo fmt --all -- --check
           cargo check -p noon-core -p noon-compile
@@ -41,5 +41,3 @@ jobs:
             crates/noon-compile/src/semantic_lowering/animation_payload/matching_family_transform_activation.rs
           git commit -m 'Select matching-shape family transforms semantically'
           git push origin HEAD:${GITHUB_REF_NAME}
-
-# Trigger after the push workflow became active in the parent commit.
