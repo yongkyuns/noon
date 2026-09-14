@@ -23,7 +23,7 @@ jobs:
           fetch-depth: 0
       - name: Apply, validate, and publish clean implementation
         env:
-          EXPECTED_MASTER: 89db7e829e31ef49d5ed2b6bc6d08ed3aaef9234
+          EXPECTED_MASTER: d3adc1285c2fe4938f1422d524df54d6400c92ff
           EXPECTED_TARGET: 4b8601e2c13a42366546423de0b46a38303e2faf
         run: |
           set -euo pipefail
