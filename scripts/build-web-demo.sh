@@ -101,6 +101,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
     web/python/_manim_shared_geometry.py \
     web/python/_manim_animation_options.py \
     web/python/_manim_animate.py \
+    web/python/_manim_cyclic_replace.py \
     web/python/_manim_rotate.py \
     web/python/_manim_composition.py \
     web/python/_manim_frame_sampling.py \

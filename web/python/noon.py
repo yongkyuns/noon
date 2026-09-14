@@ -722,6 +722,8 @@ Object = Mobject
 # Public wrappers resolve from their defining modules without startup mutation.
 _PUBLIC_EXPORTS = {
     "Transform": "_manim_animate",
+    "CyclicReplace": "_manim_cyclic_replace",
+    "Swap": "_manim_cyclic_replace",
     "ReplacementTransform": "_manim_animate",
     "TransformFromCopy": "_manim_animate",
     "TransformMatchingShapes": "_manim_animate",
