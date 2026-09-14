@@ -172,6 +172,20 @@ impl Scene {
             .map_err(AuthoringError::from)
     }
 
+    fn with_running_execution<T>(
+        &mut self,
+        operation: impl FnOnce(
+            &Rc<RefCell<SemanticStore>>,
+            SemanticNodeId,
+            &mut ExecutionSession,
+        ) -> Result<T, AuthoringError>,
+    ) -> Result<T, AuthoringError> {
+        let execution = self.execution.as_mut().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        operation(&self.store, self.root, execution)
+    }
+
     pub fn add_many(
         &mut self,
         members: &[MobjectTarget<'_>],
@@ -280,6 +294,130 @@ impl Scene {
             crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
         ))?;
         crate::family_layout::effective_family_layout(&self.store, execution, family)
+    }
+
+    /// Shift a family through the Scene-owned running publication authority.
+    /// Use `MobjectFamily::shift` for cold authored placement.
+    pub fn shift_family(
+        &mut self,
+        family: &MobjectFamily,
+        x: f64,
+        y: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            crate::family_layout::publish_shift_family(store, root, execution, family, x, y)
+        })
+    }
+
+    /// Arrange a family from current effective bounds and publish once.
+    pub fn arrange_family_with_options(
+        &mut self,
+        family: &MobjectFamily,
+        options: &crate::FamilyArrangeOptions,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            crate::family_layout::publish_arrange_family(store, root, execution, family, options)
+        })
+    }
+
+    /// Arrange a family grid from current effective bounds and publish once.
+    pub fn arrange_family_in_grid_with_options(
+        &mut self,
+        family: &MobjectFamily,
+        options: &crate::FamilyGridOptions,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            crate::family_layout::publish_arrange_family_in_grid(
+                store, root, execution, family, options,
+            )
+        })
+    }
+
+    /// Move one object relative to an effective target through one transaction.
+    pub fn move_to(
+        &mut self,
+        object: &Mobject,
+        target: crate::LiveLayoutTarget<'_>,
+        edge: (f64, f64),
+        mask: (f64, f64),
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            crate::family_layout::publish_move_to(
+                store, root, execution, object, target, edge, mask,
+            )
+        })
+    }
+
+    /// Move a family relative to an effective target through one transaction.
+    pub fn move_family_to(
+        &mut self,
+        family: &MobjectFamily,
+        target: crate::LiveLayoutTarget<'_>,
+        edge: (f64, f64),
+        mask: (f64, f64),
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            crate::family_layout::publish_move_family_to(
+                store, root, execution, family, target, edge, mask,
+            )
+        })
+    }
+
+    /// Place a family next to one effective target through one transaction.
+    pub fn next_family_to(
+        &mut self,
+        family: &MobjectFamily,
+        target: crate::LiveLayoutTarget<'_>,
+        args: crate::ManimNextToArgs,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            crate::family_layout::publish_next_family_to(
+                store, root, execution, family, target, args,
+            )
+        })
+    }
+
+    /// Align a family to the default frame using current effective bounds.
+    pub fn align_family_on_frame(
+        &mut self,
+        family: &MobjectFamily,
+        direction: (f64, f64),
+        buff: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            crate::family_layout::publish_align_family_on_frame(
+                store, root, execution, family, direction, buff,
+            )
+        })
+    }
+
+    /// Align a family to one effective target using current effective bounds.
+    pub fn align_family_to(
+        &mut self,
+        family: &MobjectFamily,
+        target: crate::LiveLayoutTarget<'_>,
+        axis: (f64, f64),
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            crate::family_layout::publish_align_family_to(
+                store, root, execution, family, target, axis,
+            )
+        })
+    }
+
+    /// Place one selected layout using a distinct selected aligner.
+    pub fn next_layout_to_aligned(
+        &mut self,
+        source: &crate::LayoutAnchor,
+        target: crate::LiveLayoutTarget<'_>,
+        aligner: &crate::LayoutAnchor,
+        args: crate::ManimNextToArgs,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            crate::family_layout::publish_next_layout_to_aligned(
+                store, root, execution, source, target, aligner, args,
+            )
+        })
     }
 
     /// Observe effective Runtime priority without creating a borrowed LiveSession facade.
