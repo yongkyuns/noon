@@ -10,6 +10,23 @@ fn order(session: &ExecutionSession) -> Vec<noon_core::ObjectId> {
         .collect()
 }
 
+fn publish_z_index(
+    scene: &Scene,
+    session: &mut ExecutionSession,
+    source: &LayoutAnchor,
+    value: f64,
+    family: bool,
+) -> Result<(), noon::AuthoringError> {
+    noon::integration::publish_z_index(
+        scene.integration_store(),
+        scene.root(),
+        session,
+        source,
+        value,
+        family,
+    )
+}
+
 #[test]
 fn authored_live_and_family_reorders_match_a_stable_reference() {
     let mut scene = Scene::new();
@@ -35,14 +52,14 @@ fn authored_live_and_family_reorders_match_a_stable_reference() {
             family_order.retain(|&index| index != changed);
             family_order.push(changed);
         } else {
-            scene
-                .live(&mut session)
-                .set_z_index(
-                    &LayoutAnchor::from(&objects[changed]),
-                    ((step % 7) as f64 - 3.) * 0.25,
-                    true,
-                )
-                .unwrap();
+            publish_z_index(
+                &scene,
+                &mut session,
+                &LayoutAnchor::from(&objects[changed]),
+                ((step % 7) as f64 - 3.) * 0.25,
+                true,
+            )
+            .unwrap();
         }
         let mut expected = family_order.clone();
         expected.sort_by(|&a, &b| {
@@ -95,24 +112,15 @@ fn family_priority_and_copies_preserve_roots_aliases_and_atomicity() {
     let mut session = scene.execution_session().unwrap();
     let before = order(&session);
     let revision = scene.revision();
-    assert!(scene
-        .live(&mut session)
-        .set_z_index(&(&family).into(), f64::NAN, true)
-        .is_err());
+    assert!(publish_z_index(&scene, &mut session, &(&family).into(), f64::NAN, true,).is_err());
     assert_eq!(order(&session), before);
     assert_eq!(scene.revision(), revision);
     session.take_frame_changes();
-    scene
-        .live(&mut session)
-        .set_z_index(&(&family).into(), 9., false)
-        .unwrap();
+    publish_z_index(&scene, &mut session, &(&family).into(), 9., false).unwrap();
     assert!(session.take_frame_changes().is_empty());
     assert_eq!(a.z_index().unwrap(), 2.5);
     let foreign = Scene::new().square(1.).unwrap();
-    assert!(scene
-        .live(&mut session)
-        .set_z_index(&(&foreign).into(), 5., true)
-        .is_err());
+    assert!(publish_z_index(&scene, &mut session, &(&foreign).into(), 5., true).is_err());
 }
 
 #[test]
@@ -126,24 +134,15 @@ fn local_priority_changes_dirty_only_the_crossed_order_range() {
         .unwrap();
     let mut session = scene.execution_session().unwrap();
     session.take_frame_changes();
-    scene
-        .live(&mut session)
-        .set_z_index(&(&b).into(), 0.5, true)
-        .unwrap();
+    publish_z_index(&scene, &mut session, &(&b).into(), 0.5, true).unwrap();
     let changes = session.take_frame_changes();
     assert_eq!(changes.painter_order_range(), Some(1..3));
     assert!(changes.object_indices().is_empty());
     assert!(!changes.is_structural());
     assert_eq!(session.painter_order(), &[0, 2, 1]);
-    scene
-        .live(&mut session)
-        .set_z_index(&(&b).into(), 1.5, true)
-        .unwrap();
+    publish_z_index(&scene, &mut session, &(&b).into(), 1.5, true).unwrap();
     assert!(session.take_frame_changes().is_empty());
-    scene
-        .live(&mut session)
-        .set_z_index(&(&b).into(), 0., true)
-        .unwrap();
+    publish_z_index(&scene, &mut session, &(&b).into(), 0., true).unwrap();
     assert_eq!(session.painter_order(), &[0, 1, 2]);
 }
 
@@ -181,10 +180,7 @@ fn later_admission_and_readmission_apply_current_priority_without_replacing_slot
         .map(|row| row.id)
         .collect::<Vec<_>>();
     scene.live(&mut session).remove(&c).unwrap();
-    scene
-        .live(&mut session)
-        .set_z_index(&(&c).into(), 3., true)
-        .unwrap();
+    publish_z_index(&scene, &mut session, &(&c).into(), 3., true).unwrap();
     scene.live(&mut session).add(&c).unwrap();
     assert_eq!(
         order(&session),
