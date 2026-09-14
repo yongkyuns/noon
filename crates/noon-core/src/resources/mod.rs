@@ -16,6 +16,12 @@ pub use image::*;
 mod lookup;
 pub use lookup::*;
 
+mod matching_shape;
+pub use matching_shape::*;
+
+mod matching_shape_correspondence;
+pub use matching_shape_correspondence::*;
+
 mod mutation;
 pub use mutation::*;
 
