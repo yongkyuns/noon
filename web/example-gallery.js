@@ -13,6 +13,11 @@ if (typeof document !== "undefined") {
   installGalleryThumbnailFallback(document);
 }
 
+function normalizeGalleryResourcePath(path) {
+  const resource = path.trim();
+  return resource.startsWith("https://") ? resource : `./${resource}`;
+}
+
 export function normalizeGalleryManifest(manifest) {
   if (!manifest || !Array.isArray(manifest.entries)) {
     throw new TypeError("Manim example manifest must contain an entries array");
@@ -75,7 +80,7 @@ export function normalizeGalleryManifest(manifest) {
       reuse: entry.reuse,
       parityStatus: entry.parity_status,
       parityFixture: entry.parity_fixture ?? null,
-      thumbnail: `./${entry.thumbnail}`,
+      thumbnail: normalizeGalleryResourcePath(entry.thumbnail),
       thumbnailAlt: entry.thumbnail_alt ?? `${entry.title} poster frame`,
       thumbnailTime,
       order,

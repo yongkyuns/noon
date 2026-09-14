@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 13);
+assert.equal(gallery.examples.length, 14);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -30,6 +30,7 @@ assert.deepEqual(
     "compatible-text-family-reveal",
     "compatible-group-slicing",
     "compatible-arrow-vector-field-static",
+    "compatible-svg-tiger-morph",
   ],
 );
 
@@ -57,7 +58,9 @@ for (const entry of readyEntries) {
   );
 
   await access(new URL(`./${entry.path}`, import.meta.url));
-  await access(new URL(`./${entry.thumbnail}`, import.meta.url));
+  if (!entry.thumbnail.startsWith("https://")) {
+    await access(new URL(`./${entry.thumbnail}`, import.meta.url));
+  }
 
   const source = await readFile(new URL(`./${entry.path}`, import.meta.url), "utf8");
   assert.match(source, /from noon import\b/, `${entry.id}: public source must import Noon`);
@@ -106,7 +109,6 @@ for (const entry of readyEntries) {
   }
 }
 
-
 const slicingEntry = readyEntries.find((entry) => entry.id === "compatible-group-slicing");
 assert.ok(slicingEntry, "group slicing must be a ready compatibility example");
 assert.equal(slicingEntry.parity_fixture, "group-slicing");
@@ -147,5 +149,20 @@ assert.equal(
   vectorFieldCanonical,
   "ArrowVectorField gallery source must stay import-only equivalent to its qualified canonical fixture",
 );
+
+const tigerEntry = readyEntries.find((entry) => entry.id === "compatible-svg-tiger-morph");
+assert.ok(tigerEntry, "Ghostscript Tiger SVG morph must be a ready compatibility example");
+assert.equal(tigerEntry.category, "manim-compatible/svg");
+assert.match(tigerEntry.upstream, /linebender\/vello\/blob\/1e63b4a40ccb484f82e1d85b83df97ab95bcfbe7\/assets\/Ghostscript_Tiger\.svg$/);
+const tigerGalleryEntry = gallery.examples.find((entry) => entry.id === tigerEntry.id);
+assert.equal(tigerGalleryEntry.thumbnail, tigerEntry.thumbnail, "absolute HTTPS tiger thumbnail must remain absolute");
+const tigerSource = await readFile(new URL(`./${tigerEntry.path}`, import.meta.url), "utf8");
+assert.match(tigerSource, /from pathlib import Path as FilePath/, "tiger demo must not let Noon's Path export shadow pathlib.Path");
+assert.match(tigerSource, /_DEMO_DIR = FilePath\(gettempdir\(\)\)/, "tiger demo filesystem paths must use the pathlib alias");
+assert.equal((tigerSource.match(/SVGMobject\(/g) ?? []).length, 1, "tiger demo must parse the upstream SVG exactly once");
+assert.equal((tigerSource.match(/tiger\.copy\(\)/g) ?? []).length, 2, "tiger demo must reuse retained geometry resources for both transform targets");
+assert.equal((tigerSource.match(/Transform\(/g) ?? []).length, 2, "tiger demo must morph to the kaleidoscope and back");
+assert.match(tigerSource, /1e63b4a40ccb484f82e1d85b83df97ab95bcfbe7\/assets\/Ghostscript_Tiger\.svg/);
+assert.doesNotMatch(tigerSource, /SVGMobject\.from_string/, "demo should exercise ordinary file-backed SVGMobject authoring");
 
 console.log("✓ Noon-authored Manim-compatible gallery examples");
