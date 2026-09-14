@@ -41,6 +41,7 @@ class ManimCyclicReplaceTests(unittest.TestCase):
             assert cyclic.anim_args == {"run_time": 2.0, "path_arc": -0.75}
 
             group = object.__new__(compat.Group)
+            group._semantic_family_handle = types.SimpleNamespace(memberCount=3)
             semantic_handles._group_members = lambda value: [a, b, c] if value is group else []
             grouped = CyclicReplace(group)
             assert grouped.mobjects == (a, b, c)
