@@ -1,4 +1,7 @@
-use crate::{AnimationOptions, ExecutionSegment, ExecutionSession, LiveSession, RateFunction, Scene};
+use crate::{
+    AnimationCompositionRequest, AnimationOptions, ExecutionSegment, ExecutionSession, LiveSession,
+    MobjectFamily, RateFunction, Scene, SemanticAnimationCompositionKind,
+};
 
 fn smooth(run_time: f64) -> AnimationOptions {
     AnimationOptions::new()
@@ -13,6 +16,25 @@ fn drain(session: &mut ExecutionSession) {
 fn finish(live: &mut LiveSession<'_>, segment: ExecutionSegment) {
     live.advance_segment_to(segment, segment.end_time()).unwrap();
     live.complete_segment(segment).unwrap();
+}
+
+fn family_transform(
+    live: &mut LiveSession<'_>,
+    source: &MobjectFamily,
+    target: &MobjectFamily,
+    run_time: f64,
+) -> ExecutionSegment {
+    let request = AnimationCompositionRequest::Composition {
+        kind: SemanticAnimationCompositionKind::Parallel,
+        children: vec![AnimationCompositionRequest::FamilyTransformTo {
+            source,
+            target_state: target,
+            options: smooth(run_time),
+        }],
+        options: AnimationOptions::new().rate_func(RateFunction::Linear),
+    };
+    live.declare_and_activate_composition(&request, AnimationOptions::new())
+        .unwrap()
 }
 
 #[test]
@@ -56,9 +78,7 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
     };
     {
         let mut live = scene.live(&mut execution);
-        let segment = live
-            .declare_and_activate_family_transform_to(&source, outline.root(), smooth(0.35))
-            .unwrap();
+        let segment = family_transform(&mut live, &source, outline.root(), 0.35);
         assert_eq!(segment.end_time(), 0.85);
         finish(&mut live, segment);
     }
@@ -66,9 +86,7 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
 
     {
         let mut live = scene.live(&mut execution);
-        let contraction = live
-            .declare_and_activate_family_transform_to(&source, &contracted, smooth(1.8))
-            .unwrap();
+        let contraction = family_transform(&mut live, &source, &contracted, 1.8);
         assert_eq!(contraction.end_time(), 2.65);
         finish(&mut live, contraction);
     }
@@ -102,9 +120,7 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
 
     let restoration = {
         let mut live = scene.live(&mut execution);
-        let segment = live
-            .declare_and_activate_family_transform_to(&source, returned.root(), smooth(1.8))
-            .unwrap();
+        let segment = family_transform(&mut live, &source, returned.root(), 1.8);
         assert_eq!(segment.end_time(), 5.55);
         live.advance_segment_to(segment, segment.end_time()).unwrap();
         for (index, object) in source_objects.iter().enumerate() {
