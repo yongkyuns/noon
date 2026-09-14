@@ -25,6 +25,7 @@ class ManimCyclicReplaceTests(unittest.TestCase):
 
             import noon
             import _manim_compat as compat
+            import _manim_semantic_handles as semantic_handles
             from _manim_cyclic_replace import CyclicReplace, Swap
 
             a = object.__new__(noon.Mobject)
@@ -40,7 +41,7 @@ class ManimCyclicReplaceTests(unittest.TestCase):
             assert cyclic.anim_args == {"run_time": 2.0, "path_arc": -0.75}
 
             group = object.__new__(compat.Group)
-            group.submobjects = [a, b, c]
+            semantic_handles._group_members = lambda value: [a, b, c] if value is group else []
             grouped = CyclicReplace(group)
             assert grouped.mobjects == (a, b, c)
             assert grouped.group is group
@@ -60,7 +61,6 @@ class ManimCyclicReplaceTests(unittest.TestCase):
                 raise AssertionError("non-finite arc must fail")
 
             nested = object.__new__(compat.Group)
-            nested.submobjects = [a, b]
             try:
                 CyclicReplace(a, nested)
             except NotImplementedError:
