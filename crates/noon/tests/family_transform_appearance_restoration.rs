@@ -131,6 +131,8 @@ fn decimal_timeline_round_trip_restores_appearance_at_5_55_boundary() {
         .collect::<Vec<_>>();
     let source = scene.family(&source_members).unwrap();
     let restored_copy = source.copy_family().unwrap();
+    restored_copy.root().set_fill(None, Some(0.0)).unwrap();
+    source.set_fill(None, Some(0.0)).unwrap();
 
     let contracted_objects = (0..2)
         .map(|_| scene.square(1.0).unwrap())
@@ -140,6 +142,7 @@ fn decimal_timeline_round_trip_restores_appearance_at_5_55_boundary() {
         .map(|object| object.into())
         .collect::<Vec<_>>();
     let contracted = scene.family(&contracted_members).unwrap();
+    contracted.set_fill(None, Some(0.0)).unwrap();
 
     scene.add_many(&[(&source).into()]).unwrap();
     let mut execution = scene.execution_session().unwrap();
@@ -163,9 +166,22 @@ fn decimal_timeline_round_trip_restores_appearance_at_5_55_boundary() {
         assert!(source_objects
             .iter()
             .any(|object| live.effective(object).unwrap().appearance == 0.0));
+        live.set_family_fill(&source, None, Some(1.0)).unwrap();
+        assert!(source_objects
+            .iter()
+            .any(|object| live.effective(object).unwrap().appearance == 0.0));
     }
 
+    execution.advance_to(3.4).unwrap();
+    {
+        let mut live = scene.live(&mut execution);
+        live.set_family_fill(&source, None, Some(0.0)).unwrap();
+        assert!(source_objects
+            .iter()
+            .any(|object| live.effective(object).unwrap().appearance == 0.0));
+    }
     execution.advance_to(3.75).unwrap();
+
     let mut live = scene.live(&mut execution);
     let restoration = live
         .declare_and_activate_family_transform_to(
