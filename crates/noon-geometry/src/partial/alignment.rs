@@ -2,9 +2,10 @@
 use super::*;
 
 /// Match contour and curve counts without changing either path's visible shape.
-/// Missing contours become null curves at the last endpoint. Unfinished anchors
-/// become null curves; an entirely empty path uses the origin. Explicit retained
-/// contour breaks and each operand's closed joins remain intact.
+/// Missing contours become null curves at the last endpoint and preserve the
+/// corresponding contour's open/closed topology. Unfinished anchors become null
+/// curves; an entirely empty path uses the origin. Explicit retained contour
+/// breaks and each operand's closed joins remain intact.
 ///
 /// The result is temporary preparation data. Persistent callers publish both
 /// replacements in one transaction; transform preparation can consume it directly.
@@ -37,8 +38,10 @@ pub fn align_paths(
         return Ok((left.clone(), right.clone()));
     }
     let count = left_contours.len().max(right_contours.len());
-    pad_contours(&mut left_contours, count);
-    pad_contours(&mut right_contours, count);
+    let left_closures = contour_closures(&left_contours);
+    let right_closures = contour_closures(&right_contours);
+    pad_contours(&mut left_contours, count, &right_closures);
+    pad_contours(&mut right_contours, count, &left_closures);
     let mut results = [VectorPath::new(), VectorPath::new()];
     for (a, b) in left_contours.iter_mut().zip(&mut right_contours) {
         trim_null_tail(a);
@@ -68,12 +71,15 @@ pub fn align_paths(
 }
 
 fn null_curve(point: Vec2, subpath: usize) -> Curve {
+    null_curve_with_closure(point, subpath, false)
+}
+fn null_curve_with_closure(point: Vec2, subpath: usize, closes_contour: bool) -> Curve {
     Curve {
         from: point,
         to: point,
         kind: CurveKind::Line,
         subpath,
-        closes_contour: false,
+        closes_contour,
     }
 }
 fn contours(path: &VectorPath) -> Vec<Vec<Curve>> {
@@ -99,10 +105,22 @@ fn contours(path: &VectorPath) -> Vec<Vec<Curve>> {
     }
     contours
 }
-fn pad_contours(contours: &mut Vec<Vec<Curve>>, count: usize) {
+fn contour_closures(contours: &[Vec<Curve>]) -> Vec<bool> {
+    contours
+        .iter()
+        .map(|curves| curves.last().is_some_and(|curve| curve.closes_contour))
+        .collect()
+}
+fn pad_contours(contours: &mut Vec<Vec<Curve>>, count: usize, counterpart_closures: &[bool]) {
     let endpoint = contours.last().unwrap().last().unwrap().to;
     while contours.len() < count {
-        contours.push(vec![null_curve(endpoint, contours.len())]);
+        let index = contours.len();
+        let closes_contour = counterpart_closures.get(index).copied().unwrap_or(false);
+        contours.push(vec![null_curve_with_closure(
+            endpoint,
+            index,
+            closes_contour,
+        )]);
     }
 }
 fn trim_null_tail(curves: &mut Vec<Curve>) {
@@ -169,6 +187,34 @@ mod tests {
         assert!(collect_curves(&empty)
             .iter()
             .all(|c| c.from == Vec2::ZERO && c.to == Vec2::ZERO));
+    }
+    #[test]
+    fn missing_closed_contours_keep_counterpart_closure() {
+        let single = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(1., 0.))
+            .close();
+        let multi = single
+            .clone()
+            .move_to(Vec2::new(2., 0.))
+            .line_to(Vec2::new(3., 0.))
+            .line_to(Vec2::new(2.5, 1.))
+            .close();
+
+        let (aligned, other) = align_paths(&single, &multi).unwrap();
+        let aligned_contours = contours(&aligned);
+        let other_contours = contours(&other);
+        assert_eq!(aligned_contours.len(), 2);
+        assert_eq!(other_contours.len(), 2);
+        assert!(aligned_contours[0].last().unwrap().closes_contour);
+        assert!(aligned_contours[1].last().unwrap().closes_contour);
+        assert!(other_contours[1].last().unwrap().closes_contour);
+        assert!(crate::plan_morph_preserving_order(
+            &single,
+            &multi,
+            crate::MorphOptions::DEFAULT,
+        )
+        .is_ok());
     }
     #[test]
     fn closures_and_explicit_coincident_breaks_survive() {
