@@ -1,6 +1,7 @@
 //! Family affine edits and compatibility placement forwarding during control migration.
 use super::*;
-use crate::{family_layout::LiveLayoutTarget, semantic_mobject::ManimNextToArgs};
+pub use crate::family_layout::LiveLayoutTarget;
+use crate::semantic_mobject::ManimNextToArgs;
 
 impl LiveSession<'_> {
     /// Stretch a selected live object/family through the shared world-axis operation.
