@@ -73,7 +73,8 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
     let outline = {
         let mut live = scene.live(&mut execution);
         let copied = live.copy_family(&source).unwrap();
-        live.set_family_fill(copied.root(), None, Some(0.0)).unwrap();
+        live.set_family_fill(copied.root(), None, Some(0.0))
+            .unwrap();
         copied
     };
     {
@@ -117,6 +118,16 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
         finish(&mut scene.live(&mut execution), wait);
     }
     drain(&mut execution);
+
+    assert_eq!(
+        scene
+            .live(&mut execution)
+            .effective(&source_objects[1])
+            .unwrap()
+            .appearance,
+        0.0,
+        "contracted source leaf lost its retained hidden appearance before return activation"
+    );
 
     let restoration = {
         let mut live = scene.live(&mut execution);
