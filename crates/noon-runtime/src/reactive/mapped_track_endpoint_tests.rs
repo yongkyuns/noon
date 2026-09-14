@@ -1,7 +1,10 @@
-use noon_compile::{CompiledObject, CompiledScene, ExecutionPatch};
+use noon_compile::{
+    lower_semantic_execution, ExecutionPatch, SemanticExecutionIndex,
+};
 use noon_core::{
-    CompositionTimeMap, CompositionTimeMapStep, GeometryRef, ObjectId, Property, RateFunction,
-    Style, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
+    CompositionTimeMap, CompositionTimeMapStep, ObjectId, Property, RateFunction,
+    SemanticObjectState, SemanticStore, StoredGeometry, TrackDefinition, TrackId, TrackTiming,
+    TrackValues,
 };
 
 use crate::SceneInstance;
@@ -29,17 +32,20 @@ fn mapped_appearance_track(
 }
 
 fn retained_hide_runtime() -> (SceneInstance, ObjectId) {
-    let object = ObjectId::new(1);
-    let compiled = CompiledScene::compile_objects(
-        vec![CompiledObject::new(
-            object,
-            GeometryRef::circle(1.0),
-            Transform2D::IDENTITY,
-            Style::default(),
-        )],
-        &[mapped_appearance_track(1, object, 0.85, 1.8, 1.0, 0.0)],
-    )
-    .unwrap();
+    let mut store = SemanticStore::new();
+    let node = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+        radius: 1.0,
+    }));
+    store.attach_to_scene(node).unwrap();
+    let mut index = SemanticExecutionIndex::new();
+    let output = lower_semantic_execution(&store, &mut index).unwrap();
+    let object = index.execution_object_id(node).unwrap();
+    let (mut compiled, _reactive) = output.into_parts();
+    compiled
+        .apply_execution_patch(&ExecutionPatch::AddTrack(mapped_appearance_track(
+            1, object, 0.85, 1.8, 1.0, 0.0,
+        )))
+        .unwrap();
     (SceneInstance::new(compiled), object)
 }
 
