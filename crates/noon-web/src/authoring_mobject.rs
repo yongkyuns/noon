@@ -1441,6 +1441,21 @@ mod wasm {
             self.clone_handle()
         }
 
+        /// Apply one deterministic pointwise matrix to this detached geometry target.
+        #[wasm_bindgen(js_name = applyMatrix)]
+        pub fn apply_matrix(
+            &mut self,
+            values: Vec<f64>,
+            rows: u32,
+            columns: u32,
+            about_x: f64,
+            about_y: f64,
+        ) -> Result<(), JsValue> {
+            self.handle
+                .apply_matrix(&values, rows as usize, columns as usize, about_x, about_y)
+                .map_err(js_error)
+        }
+
         /// Replace world-space corners through the shared semantic transaction.
         #[wasm_bindgen(js_name = setPointsAsCorners)]
         pub fn set_points_as_corners(&mut self, values: Vec<f64>) -> Result<(), JsValue> {

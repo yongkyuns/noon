@@ -47,6 +47,12 @@ pub enum UnsupportedAuthoringOperation {
     LineMatchSourceContent,
     /// This operation cannot retain the requested world-axis deformation.
     RotatedDimensionStretch,
+    /// ApplyMatrix requires retained geometric content.
+    ApplyMatrixContent,
+    /// ApplyMatrix accepts only 2x2 or 3x3 matrices.
+    ApplyMatrixDimensions,
+    /// ApplyMatrix cannot produce Z geometry in the current 2D path domain.
+    ApplyMatrixNonPlanar,
 }
 
 impl std::fmt::Display for UnsupportedAuthoringOperation {
@@ -71,6 +77,9 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::PointMatchContent => "match_points requires vector geometry on both operands",
             Self::LineMatchSourceContent => "Line.match_points requires an analytic Line source",
             Self::RotatedDimensionStretch => "this operation cannot represent the requested world-axis deformation",
+            Self::ApplyMatrixContent => "ApplyMatrix requires retained geometry",
+            Self::ApplyMatrixDimensions => "ApplyMatrix requires a 2x2 or 3x3 matrix",
+            Self::ApplyMatrixNonPlanar => "ApplyMatrix requires a 3x3 matrix that does not map XY coordinates into Z",
         })
     }
 }

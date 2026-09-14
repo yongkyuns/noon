@@ -85,6 +85,7 @@ mod host_callbacks;
 pub mod integration;
 mod live_program;
 mod live_session;
+mod matrix_authoring;
 mod native_signal_authoring;
 mod path_alignment;
 mod path_editing;
