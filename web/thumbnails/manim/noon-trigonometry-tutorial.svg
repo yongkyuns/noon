@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title desc">
+  <title id="title">Trigonometry tutorial</title>
+  <desc id="desc">A right triangle with opposite, adjacent, and hypotenuse labels beside SOH CAH TOA.</desc>
+  <rect width="640" height="360" rx="24" fill="#101827"/>
+  <text x="38" y="52" fill="#8ab4ff" font-family="sans-serif" font-size="25" font-weight="700">TRIGONOMETRY, MADE HUMAN</text>
+  <text x="38" y="84" fill="#d7e2f2" font-family="sans-serif" font-size="15">Draw it • name it • choose the ratio</text>
+  <path d="M72 286H290V126Z" fill="none" stroke="#8ab4ff" stroke-width="6" stroke-linejoin="round"/>
+  <circle cx="72" cy="286" r="8" fill="#ff6b78"/>
+  <text x="94" y="275" fill="#ff6b78" font-family="sans-serif" font-size="18">θ</text>
+  <text x="139" y="317" fill="#8ab4ff" font-family="sans-serif" font-size="17">adjacent</text>
+  <text x="302" y="212" fill="#70d6a5" font-family="sans-serif" font-size="17">opposite</text>
+  <text x="143" y="184" fill="#f5c96a" font-family="sans-serif" font-size="17" transform="rotate(-36 143 184)">hypotenuse</text>
+  <text x="390" y="144" fill="#70d6a5" font-family="sans-serif" font-size="24" font-weight="700">SOH — CAH — TOA</text>
+  <text x="390" y="183" fill="#d7e2f2" font-family="sans-serif" font-size="18">sin θ = opposite / hypotenuse</text>
+  <text x="390" y="216" fill="#d7e2f2" font-family="sans-serif" font-size="18">cos θ = adjacent / hypotenuse</text>
+  <text x="390" y="249" fill="#d7e2f2" font-family="sans-serif" font-size="18">tan θ = opposite / adjacent</text>
+  <text x="390" y="305" fill="#f5c96a" font-family="sans-serif" font-size="19">A visual, step-by-step lesson</text>
+</svg>

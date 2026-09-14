@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 14);
+assert.equal(gallery.examples.length, 15);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -31,6 +31,7 @@ assert.deepEqual(
     "compatible-group-slicing",
     "compatible-arrow-vector-field-static",
     "compatible-svg-tiger-morph",
+    "noon-trigonometry-tutorial",
   ],
 );
 
