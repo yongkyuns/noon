@@ -560,6 +560,108 @@ pub fn plan_filled_morph_preserving_order(
     plan_filled_morph_impl(source, target, options, false)
 }
 
+/// Prove the bounded filled-path case where exact ordered point correspondence
+/// is one orientation-reversing affine image of the source.
+///
+/// Unlike the general filled planner, this deliberately preserves source/target
+/// point pairing and permits the complete fan to become singular and reverse
+/// winding together. Every interpolated boundary is `(1-t) I + t A` applied to
+/// the source, so a singular instant is a coherent affine collapse rather than
+/// an independently inverting triangle. Arbitrary winding-changing morphs remain
+/// rejected by this proof path.
+pub fn plan_filled_affine_winding_flip_preserving_order(
+    source: &VectorPath,
+    target: &VectorPath,
+    options: MorphOptions,
+) -> Result<FilledMorphPlan, FilledMorphError> {
+    let plan = plan_morph_impl(source, target, options, false)?;
+    if plan.contours.len() != 1 || !plan.contours[0].closed {
+        return Err(FilledMorphError::RequiresSingleClosedContour);
+    }
+    let contour = plan
+        .contours
+        .into_iter()
+        .next()
+        .expect("one contour validated");
+
+    let source_area = signed_polygon_area(&contour.source_points);
+    let target_area = signed_polygon_area(&contour.target_points);
+    if !source_area.is_finite() || source_area.abs() <= FILL_AREA_EPSILON {
+        return Err(FilledMorphError::DegenerateArea {
+            side: MorphSide::Source,
+        });
+    }
+    if !target_area.is_finite() || target_area.abs() <= FILL_AREA_EPSILON {
+        return Err(FilledMorphError::DegenerateArea {
+            side: MorphSide::Target,
+        });
+    }
+    if source_area.is_sign_positive() == target_area.is_sign_positive() {
+        return Err(FilledMorphError::NoStableFanTriangulation);
+    }
+    if !polygon_is_simple(&contour.source_points) {
+        return Err(FilledMorphError::SelfIntersecting {
+            side: MorphSide::Source,
+        });
+    }
+    if !polygon_is_simple(&contour.target_points) {
+        return Err(FilledMorphError::SelfIntersecting {
+            side: MorphSide::Target,
+        });
+    }
+
+    let source_center =
+        polygon_centroid(&contour.source_points).ok_or(FilledMorphError::DegenerateArea {
+            side: MorphSide::Source,
+        })?;
+    let target_center =
+        polygon_centroid(&contour.target_points).ok_or(FilledMorphError::DegenerateArea {
+            side: MorphSide::Target,
+        })?;
+    if !ordered_contours_form_affine_reflection(&contour.source_points, &contour.target_points) {
+        return Err(FilledMorphError::NoStableFanTriangulation);
+    }
+
+    // The source fan must itself be valid. The proven affine map then carries
+    // every triangle through the same determinant, including any shared zero.
+    let count = contour.source_points.len();
+    if count < 3 {
+        return Err(FilledMorphError::NoStableFanTriangulation);
+    }
+    for index in 0..count {
+        let next = (index + 1) % count;
+        let area = orientation(
+            source_center,
+            contour.source_points[index],
+            contour.source_points[next],
+        );
+        if !area.is_finite()
+            || area.abs() <= FILL_AREA_EPSILON
+            || area.is_sign_positive() != source_area.is_sign_positive()
+        {
+            return Err(FilledMorphError::NoStableFanTriangulation);
+        }
+    }
+
+    let center = u32::try_from(count).map_err(|_| FilledMorphError::NoStableFanTriangulation)?;
+    let mut indices = Vec::with_capacity(count * 3);
+    for index in 0..count {
+        let next = (index + 1) % count;
+        indices.extend([
+            center,
+            u32::try_from(index).map_err(|_| FilledMorphError::NoStableFanTriangulation)?,
+            u32::try_from(next).map_err(|_| FilledMorphError::NoStableFanTriangulation)?,
+        ]);
+    }
+
+    Ok(FilledMorphPlan {
+        contour,
+        source_center,
+        target_center,
+        indices,
+    })
+}
+
 fn plan_filled_morph_impl(
     source: &VectorPath,
     target: &VectorPath,
@@ -650,6 +752,69 @@ fn canonicalize_ccw(points: &mut [Vec2], side: MorphSide) -> Result<(), FilledMo
         points.reverse();
     }
     Ok(())
+}
+
+fn ordered_contours_form_affine_reflection(source: &[Vec2], target: &[Vec2]) -> bool {
+    if source.len() != target.len() || source.len() < 3 {
+        return false;
+    }
+    let max_coordinate = source
+        .iter()
+        .chain(target)
+        .flat_map(|point| [f64::from(point.x).abs(), f64::from(point.y).abs()])
+        .fold(0.0_f64, f64::max);
+    let basis_tolerance = f64::from(FILL_AREA_EPSILON)
+        .max(f64::from(f32::EPSILON) * 128.0 * max_coordinate.max(1.0) * max_coordinate.max(1.0));
+    let origin = source[0];
+    let mut basis = None;
+    'basis: for first in 1..source.len() {
+        for second in first + 1..source.len() {
+            let ux = f64::from(source[first].x - origin.x);
+            let uy = f64::from(source[first].y - origin.y);
+            let vx = f64::from(source[second].x - origin.x);
+            let vy = f64::from(source[second].y - origin.y);
+            let determinant = ux * vy - uy * vx;
+            if determinant.abs() > basis_tolerance {
+                basis = Some((first, second, ux, uy, vx, vy, determinant));
+                break 'basis;
+            }
+        }
+    }
+    let Some((first, second, ux, uy, vx, vy, determinant)) = basis else {
+        return false;
+    };
+
+    let target_origin = target[0];
+    let dux = f64::from(target[first].x - target_origin.x);
+    let duy = f64::from(target[first].y - target_origin.y);
+    let dvx = f64::from(target[second].x - target_origin.x);
+    let dvy = f64::from(target[second].y - target_origin.y);
+    let m00 = (dux * vy - dvx * uy) / determinant;
+    let m01 = (-dux * vx + dvx * ux) / determinant;
+    let m10 = (duy * vy - dvy * uy) / determinant;
+    let m11 = (-duy * vx + dvy * ux) / determinant;
+    let affine_determinant = m00 * m11 - m01 * m10;
+    let matrix_scale = [m00, m01, m10, m11]
+        .into_iter()
+        .map(f64::abs)
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
+    let determinant_tolerance = f64::EPSILON * 256.0 * matrix_scale * matrix_scale;
+    if !affine_determinant.is_finite() || affine_determinant >= -determinant_tolerance {
+        return false;
+    }
+    let tx = f64::from(target_origin.x) - m00 * f64::from(origin.x) - m01 * f64::from(origin.y);
+    let ty = f64::from(target_origin.y) - m10 * f64::from(origin.x) - m11 * f64::from(origin.y);
+    let fit_tolerance = f64::from(f32::EPSILON) * 256.0 * max_coordinate.max(1.0);
+
+    source.iter().zip(target).all(|(source, target)| {
+        let x = m00 * f64::from(source.x) + m01 * f64::from(source.y) + tx;
+        let y = m10 * f64::from(source.x) + m11 * f64::from(source.y) + ty;
+        x.is_finite()
+            && y.is_finite()
+            && (x - f64::from(target.x)).abs() <= fit_tolerance
+            && (y - f64::from(target.y)).abs() <= fit_tolerance
+    })
 }
 
 fn signed_polygon_area(points: &[Vec2]) -> f32 {
@@ -924,6 +1089,68 @@ mod tests {
         assert!(plan.vertex_count() >= 5);
         assert!(midpoint.iter().all(|point| point.x.abs() < 1.0e-6));
         assert!(midpoint.iter().all(|point| point.y.abs() < 1.0e-6));
+    }
+
+    #[test]
+    fn affine_winding_reflection_preserves_ordered_pairing_and_fixed_tessellation() {
+        let source = square_from(0, false);
+        let target = source.transformed(noon_core::Transform2D {
+            scale: Vec2::new(-1.0, 1.0),
+            ..noon_core::Transform2D::IDENTITY
+        });
+        let plan = plan_filled_affine_winding_flip_preserving_order(
+            &source,
+            &target,
+            MorphOptions::DEFAULT,
+        )
+        .expect("exact affine reflection has one coherent winding flip");
+        let path = source.clone().with_morph_target(target);
+        let mesh = crate::tessellate_styled_with_fill_preserving_morph_order(
+            &path,
+            0.08,
+            noon_core::StrokeJoin::Round,
+            noon_core::StrokeCap::Round,
+            true,
+        )
+        .expect("proven reflected fill must tessellate once");
+        let fill_vertices: Vec<_> = mesh
+            .vertices
+            .iter()
+            .filter(|vertex| vertex.surface == crate::PathSurface::Fill)
+            .collect();
+        assert_eq!(fill_vertices.len(), plan.vertex_count());
+        for (index, (source, target)) in plan
+            .contour
+            .source_points
+            .iter()
+            .zip(&plan.contour.target_points)
+            .enumerate()
+        {
+            assert_eq!(fill_vertices[index].position, *source);
+            assert_eq!(fill_vertices[index].target_position, *target);
+            assert!(((source.x + target.x) * 0.5).abs() < 1.0e-5);
+        }
+        let center = fill_vertices.last().expect("fan center");
+        assert_eq!(center.position, plan.source_center);
+        assert_eq!(center.target_position, plan.target_center);
+        assert!(((center.position.x + center.target_position.x) * 0.5).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn affine_winding_proof_rejects_non_affine_opposite_winding() {
+        let source = square_from(0, false);
+        let target = VectorPath::new()
+            .move_to(Vec2::new(1.0, -1.0))
+            .line_to(Vec2::new(-1.0, -1.0))
+            .line_to(Vec2::new(-1.0, 1.2))
+            .line_to(Vec2::new(1.0, 1.0))
+            .close();
+        assert!(plan_filled_affine_winding_flip_preserving_order(
+            &source,
+            &target,
+            MorphOptions::DEFAULT,
+        )
+        .is_err());
     }
 
     #[test]

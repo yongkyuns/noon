@@ -644,7 +644,20 @@ fn tessellate_morph_path(
 
     if fill_enabled {
         let fill = if preserve_morph_order {
-            crate::plan_filled_morph_preserving_order(source, target, crate::MorphOptions::DEFAULT)
+            // Exact affine reflection must retain ordered point pairing. If it is
+            // not that bounded case, preserve the established general planner.
+            crate::plan_filled_affine_winding_flip_preserving_order(
+                source,
+                target,
+                crate::MorphOptions::DEFAULT,
+            )
+            .or_else(|_| {
+                crate::plan_filled_morph_preserving_order(
+                    source,
+                    target,
+                    crate::MorphOptions::DEFAULT,
+                )
+            })
         } else {
             crate::plan_filled_morph(source, target, crate::MorphOptions::DEFAULT)
         }
