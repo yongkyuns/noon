@@ -49,3 +49,4 @@ jobs:
             git commit -m 'B3: finalize activation-time CyclicReplace [stage]'
             git push origin HEAD:b3-cyclic-replace-adapter
           fi
+# trigger after workflow registration
