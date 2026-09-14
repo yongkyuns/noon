@@ -21,17 +21,4 @@ impl LiveSession<'_> {
         }
         source.z_index().map_err(Into::into)
     }
-
-    /// Publish priority through the same atomic scene/runtime mutation as authored edits.
-    pub fn set_z_index(
-        &mut self,
-        source: &LayoutAnchor,
-        value: f64,
-        family: bool,
-    ) -> Result<(), LiveSessionError> {
-        let transaction =
-            source.z_index_transaction(self.store.borrow().identity(), value, family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        self.apply(transaction).map(|_| ())
-    }
 }
