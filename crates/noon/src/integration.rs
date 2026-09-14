@@ -64,3 +64,116 @@ pub use noon_runtime::{
     EffectiveObjectProperties, FrameChanges, FrameObjectState, FrameState, RendererPublication,
     RuntimeIdentity, RuntimeWakeState, TimelineWakeState,
 };
+
+/// Publish a family translation through the existing coherent execution authority.
+pub fn publish_family_shift(
+    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+    root: crate::SemanticNodeId,
+    execution: &mut crate::ExecutionSession,
+    family: &crate::MobjectFamily,
+    x: f64,
+    y: f64,
+) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
+    crate::family_layout::publish_shift_family(store, root, execution, family, x, y)
+}
+
+/// Publish linear family arrangement without constructing a `LiveSession` facade.
+pub fn publish_family_arrangement(
+    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+    root: crate::SemanticNodeId,
+    execution: &mut crate::ExecutionSession,
+    family: &crate::MobjectFamily,
+    options: &crate::FamilyArrangeOptions,
+) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
+    crate::family_layout::publish_arrange_family(store, root, execution, family, options)
+}
+
+/// Publish grid family arrangement without constructing a `LiveSession` facade.
+pub fn publish_family_grid_arrangement(
+    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+    root: crate::SemanticNodeId,
+    execution: &mut crate::ExecutionSession,
+    family: &crate::MobjectFamily,
+    options: &crate::FamilyGridOptions,
+) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
+    crate::family_layout::publish_arrange_family_in_grid(store, root, execution, family, options)
+}
+
+/// Publish object placement from one coherent effective layout observation.
+pub fn publish_mobject_move_to(
+    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+    root: crate::SemanticNodeId,
+    execution: &mut crate::ExecutionSession,
+    object: &crate::Mobject,
+    target: crate::LiveLayoutTarget<'_>,
+    edge: (f64, f64),
+    mask: (f64, f64),
+) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
+    crate::family_layout::publish_move_to(store, root, execution, object, target, edge, mask)
+}
+
+/// Publish family placement from one coherent effective layout observation.
+pub fn publish_family_move_to(
+    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+    root: crate::SemanticNodeId,
+    execution: &mut crate::ExecutionSession,
+    family: &crate::MobjectFamily,
+    target: crate::LiveLayoutTarget<'_>,
+    edge: (f64, f64),
+    mask: (f64, f64),
+) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
+    crate::family_layout::publish_move_family_to(store, root, execution, family, target, edge, mask)
+}
+
+/// Publish family next-to placement from one coherent effective layout observation.
+pub fn publish_family_next_to(
+    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+    root: crate::SemanticNodeId,
+    execution: &mut crate::ExecutionSession,
+    family: &crate::MobjectFamily,
+    target: crate::LiveLayoutTarget<'_>,
+    args: crate::ManimNextToArgs,
+) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
+    crate::family_layout::publish_next_family_to(store, root, execution, family, target, args)
+}
+
+/// Publish selected-layout next-to placement with a distinct effective aligner.
+pub fn publish_layout_next_to_aligned(
+    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+    root: crate::SemanticNodeId,
+    execution: &mut crate::ExecutionSession,
+    source: &crate::LayoutAnchor,
+    target: crate::LiveLayoutTarget<'_>,
+    aligner: &crate::LayoutAnchor,
+    args: crate::ManimNextToArgs,
+) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
+    crate::family_layout::publish_next_layout_to_aligned(
+        store, root, execution, source, target, aligner, args,
+    )
+}
+
+/// Publish family alignment to the default frame.
+pub fn publish_family_align_on_frame(
+    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+    root: crate::SemanticNodeId,
+    execution: &mut crate::ExecutionSession,
+    family: &crate::MobjectFamily,
+    direction: (f64, f64),
+    buff: f64,
+) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
+    crate::family_layout::publish_align_family_on_frame(
+        store, root, execution, family, direction, buff,
+    )
+}
+
+/// Publish family alignment against another effective target.
+pub fn publish_family_align_to(
+    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+    root: crate::SemanticNodeId,
+    execution: &mut crate::ExecutionSession,
+    family: &crate::MobjectFamily,
+    target: crate::LiveLayoutTarget<'_>,
+    axis: (f64, f64),
+) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
+    crate::family_layout::publish_align_family_to(store, root, execution, family, target, axis)
+}
