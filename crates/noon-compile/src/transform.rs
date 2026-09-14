@@ -210,10 +210,19 @@ pub(crate) fn compile_content_morph(
     else {
         unreachable!("point transform compiles to a path pair")
     };
-    if from_style.stroke_width_mode == StrokeWidthMode::ScreenSpace && render_transform.is_none() {
+    if screen_space_stroke_requires_fixed_frame(from_style, to_style) && render_transform.is_none()
+    {
         return Err(TransformCompileFailure::RequiresRetessellation);
     }
     Ok((geometry.as_ref().clone(), render_transform))
+}
+
+fn screen_space_stroke_requires_fixed_frame(from: Style, to: Style) -> bool {
+    let screen_space = from.stroke_width_mode == StrokeWidthMode::ScreenSpace
+        || to.stroke_width_mode == StrokeWidthMode::ScreenSpace;
+    let stroked = (from.stroke.is_some() && from.stroke_width > 0.0)
+        || (to.stroke.is_some() && to.stroke_width > 0.0);
+    screen_space && stroked
 }
 
 pub(crate) fn morph_requires_filled_topology(from: Style, to: Style) -> bool {
@@ -514,6 +523,36 @@ mod tests {
             ),
             Err(TransformCompileFailure::RequiresRetessellation)
         );
+    }
+
+    #[test]
+    fn fill_only_screen_space_morph_allows_local_plan_when_fixed_frame_is_singular() {
+        let style = Style {
+            fill: Some(Color::WHITE),
+            stroke: None,
+            stroke_width: 0.0,
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            ..Style::default()
+        };
+        let singular = Transform2D {
+            scale: Vec2::new(0.0, 1.0),
+            ..Transform2D::IDENTITY
+        };
+
+        let (geometry, render_transform) = compile_content_morph(
+            &GeometryRef::rectangle(2.0, 2.0),
+            &GeometryRef::circle(1.0),
+            style,
+            style,
+            singular,
+            Transform2D::IDENTITY,
+        )
+        .expect("fill-only morphs do not need a fixed frame for absent screen-space strokes");
+        let GeometryRef::VectorPath(path) = geometry else {
+            panic!("content morph must compile to a path pair")
+        };
+        assert!(path.morph_target().is_some());
+        assert_eq!(render_transform, None);
     }
 
     #[test]
