@@ -48,7 +48,7 @@ pub use crate::text_authoring::NATIVE_POINT_TO_SCENE_SCALE;
 pub use crate::text_authoring::SCALE_FACTOR_PER_FONT_POINT;
 #[cfg(any(feature = "native-text", feature = "typst"))]
 pub use crate::text_authoring::{RetainedMobject, RetainedScene};
-pub use crate::z_index::publish_z_index;
+pub use crate::z_index::{effective_z_index, publish_z_index};
 pub use noon_core::{
     GeometryResource, GeometryResourceArena, GeometryResourceError, GeometryResourceHandle,
     GeometryResourceLookup, HostCallbackId, SemanticFamilyPairingError, SemanticLoweringError,

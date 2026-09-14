@@ -9,7 +9,6 @@
 mod boolean_geometry;
 mod family_layout;
 mod path_editing;
-mod z_index;
 pub use family_layout::LiveLayoutTarget;
 
 #[cfg(test)]
