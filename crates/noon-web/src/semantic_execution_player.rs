@@ -1360,7 +1360,17 @@ impl SemanticExecutionPlayer {
         operation: noon::BooleanOperation,
         operands: &[noon::Mobject],
     ) -> Result<noon::ManimGeometryOptions, AuthoringFailure> {
-        self.with_live_session(|live| live.boolean_geometry_options(operation, operands))
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_boolean_geometry_options(
+            &semantics,
+            &self.session,
+            operation,
+            operands,
+        )
+        .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
