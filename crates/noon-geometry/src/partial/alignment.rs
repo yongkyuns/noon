@@ -209,12 +209,10 @@ mod tests {
         assert!(aligned_contours[0].last().unwrap().closes_contour);
         assert!(aligned_contours[1].last().unwrap().closes_contour);
         assert!(other_contours[1].last().unwrap().closes_contour);
-        assert!(crate::plan_morph_preserving_order(
-            &single,
-            &multi,
-            crate::MorphOptions::DEFAULT,
-        )
-        .is_ok());
+        assert!(
+            crate::plan_morph_preserving_order(&single, &multi, crate::MorphOptions::DEFAULT,)
+                .is_ok()
+        );
     }
     #[test]
     fn closures_and_explicit_coincident_breaks_survive() {
