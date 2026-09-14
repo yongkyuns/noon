@@ -2,6 +2,8 @@ mod animation_payload;
 mod animation_schedule;
 mod compiled_scene;
 mod entrypoint;
+#[cfg(test)]
+mod family_transform_schedule_tests;
 mod host_callbacks;
 mod initial_animation;
 mod membership;
