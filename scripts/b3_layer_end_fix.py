@@ -63,5 +63,19 @@ helper = anchor + '''
 if text.count(anchor) != 1:
     raise RuntimeError(f"expected derived-display state helper once, found {text.count(anchor)}")
 text = text.replace(anchor, helper, 1)
+text = text.replace(
+    '''frame(vec![
+            object(0, GeometryRef::circle(1.0)),
+            object(1, GeometryRef::rectangle(1.0, 1.0)),
+        ])''',
+    '''frame(vec![
+            GeometryRef::circle(1.0),
+            GeometryRef::rectangle(1.0, 1.0),
+        ])''',
+)
+text = text.replace(
+    "frame(vec![object(0, GeometryRef::circle(1.0))])",
+    "frame(vec![GeometryRef::circle(1.0)])",
+)
 path.write_text(text)
 print("LayerEnd renderer test support applied")
