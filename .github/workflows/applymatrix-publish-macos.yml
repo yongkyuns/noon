@@ -23,8 +23,8 @@ jobs:
           fetch-depth: 0
       - name: Apply, validate, and publish clean implementation
         env:
-          EXPECTED_MASTER: c2861ff6ac1e54b09421bbf214534f610a050d9e
-          EXPECTED_TARGET: 125ac8d44e315a43da3fb2ce5af3fe00f8c191ba
+          EXPECTED_MASTER: 3cf96a557cbecc30db128b9370fa8a141090a9be
+          EXPECTED_TARGET: c41f70e8dc50de3dc6480cbfa2222739691ee3b2
         run: |
           set -euo pipefail
           python3 - <<'PY'
