@@ -111,6 +111,10 @@ pub(crate) enum SemanticCompositionRequest {
         target_state: SemanticNodeId,
         options: AnimationOptions,
     },
+    CyclicReplace {
+        family: SemanticNodeId,
+        options: AnimationOptions,
+    },
     Indicate {
         target: SemanticNodeId,
         indication: IndicateOptions,
@@ -1782,8 +1786,13 @@ impl ExecutionSession {
                 options,
             } => {
                 admit(*source, declaration, admitted)?;
-                let target_state =
-                    self.stage_animation_target_state(store, declaration, *target_state)?;
+                let target_state = if *interpolation
+                    == noon_core::SemanticTransformInterpolation::CenterTranslation
+                {
+                    *target_state
+                } else {
+                    self.stage_animation_target_state(store, declaration, *target_state)?
+                };
                 let animation = declaration.create_transform_animation_with_interpolation(
                     *source,
                     target_state,
@@ -1792,6 +1801,57 @@ impl ExecutionSession {
                     *options,
                 );
                 Ok(animation)
+            }
+            SemanticCompositionRequest::CyclicReplace { family, options } => {
+                let members = store
+                    .semantic_family_members_checked(*family)
+                    .map_err(|error| {
+                        ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                    })?;
+                if members.len() < 2
+                    || members.iter().any(|member| {
+                        !self.reachability.is_object_reachable(*member)
+                            || store.node(*member).is_none_or(|node| {
+                                !matches!(node.kind(), noon_core::SemanticNodeKind::AuthoringObject)
+                            })
+                    })
+                {
+                    return Err(ExecutionSessionAnimationError::InvalidComposition(
+                        "CyclicReplace requires at least two scene-bound flat object members"
+                            .into(),
+                    ));
+                }
+                let path_arc = options.path_arc.unwrap_or(std::f64::consts::FRAC_PI_2);
+                let mut child_options = AnimationOptions::new()
+                    .rate_func(RateFunction::Linear)
+                    .path_arc(path_arc);
+                child_options.run_time = None;
+                let children = members
+                    .iter()
+                    .enumerate()
+                    .map(|(index, source)| SemanticCompositionRequest::TransformTo {
+                        source: *source,
+                        target_state: members[(index + 1) % members.len()],
+                        interpolation: noon_core::SemanticTransformInterpolation::CenterTranslation,
+                        complete_priority: false,
+                        options: child_options,
+                    })
+                    .collect();
+                let mut composition_options = *options;
+                composition_options.path_arc = None;
+                let expanded = SemanticCompositionRequest::Composition {
+                    kind: SemanticAnimationCompositionKind::Parallel,
+                    children,
+                    options: composition_options,
+                };
+                self.stage_composition_request(
+                    store,
+                    root,
+                    &expanded,
+                    declaration,
+                    admitted,
+                    removals,
+                )
             }
             SemanticCompositionRequest::FamilyTransformTo {
                 source,

@@ -206,6 +206,10 @@ pub enum AnimationCompositionRequest<'a> {
         target_state: &'a MobjectFamily,
         options: AnimationOptions,
     },
+    CyclicReplace {
+        family: &'a MobjectFamily,
+        options: AnimationOptions,
+    },
     Indicate {
         target: &'a Mobject,
         indication: IndicateOptions,

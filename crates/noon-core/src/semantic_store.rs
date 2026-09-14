@@ -56,6 +56,8 @@ pub use semantic_family::*;
 
 mod semantic_model;
 pub use semantic_model::*;
+mod effective_layout;
+pub use effective_layout::*;
 
 mod object_content;
 pub use object_content::*;

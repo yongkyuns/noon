@@ -247,6 +247,8 @@ pub enum SemanticTransformInterpolation {
     Affine,
     /// Interpolate corresponding analytic path points while retaining semantic affine channels.
     PointCorrespondence,
+    /// Preserve the source presentation while translating its activation-time layout center to the target-state center.
+    CenterTranslation,
 }
 
 /// One authored animation operation before execution scheduling/lowering.

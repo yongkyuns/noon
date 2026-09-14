@@ -355,8 +355,6 @@ where
                         error,
                     }
                 })?;
-                validate_affine_payload(source, target, leaf.options)
-                    .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
                 let from = capture_effective(
                     leaf,
                     source,
@@ -364,15 +362,110 @@ where
                     &mut captures,
                     &mut effective_properties,
                 )?;
-                let channels = lower_transform_channels(
-                    prepared.store(),
-                    source,
-                    target,
-                    from,
-                    interpolation,
-                    leaf.options.path_arc,
-                )
-                .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
+                let channels = if interpolation
+                    == noon_core::SemanticTransformInterpolation::CenterTranslation
+                {
+                    let peer = target_state
+                        .existing()
+                        .and_then(|node| index.execution_object_id(node))
+                        .ok_or(
+                            PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
+                                animation: leaf.animation,
+                                target: target_state,
+                                execution_object_id: ObjectId::new(u64::MAX),
+                            },
+                        )?;
+                    let mut peer_leaf = leaf.clone();
+                    peer_leaf.target = target_state;
+                    peer_leaf.execution_object_id = peer;
+                    captures.begin_leaf(&peer_leaf, &mut driven, &tracks, &intervals, true);
+                    let peer_from = capture_effective(
+                        &peer_leaf,
+                        target,
+                        false,
+                        &mut captures,
+                        &mut effective_properties,
+                    )?;
+                    let source_center = noon_core::effective_layout_center(
+                        prepared.store(),
+                        source,
+                        from.transform,
+                    )
+                    .map_err(|_| {
+                        PreparedSemanticAnimationLoweringError::UnsupportedContentChange {
+                            animation: leaf.animation,
+                            target: leaf.target,
+                            target_state,
+                        }
+                    })?;
+                    let target_center = noon_core::effective_layout_center(
+                        prepared.store(),
+                        target,
+                        peer_from.transform,
+                    )
+                    .map_err(|_| {
+                        PreparedSemanticAnimationLoweringError::UnsupportedContentChange {
+                            animation: leaf.animation,
+                            target: leaf.target,
+                            target_state,
+                        }
+                    })?;
+                    let delta = target_center - source_center;
+                    let to = from.transform.translation + delta;
+                    if source
+                        .signal_bindings()
+                        .iter()
+                        .any(|binding| binding.property() == SemanticObjectProperty::Translation)
+                    {
+                        return Err(
+                            PreparedSemanticAnimationLoweringError::ReactiveDriverConflict {
+                                animation: leaf.animation,
+                                target: leaf.target,
+                                property: SemanticObjectProperty::Translation,
+                            },
+                        );
+                    }
+                    let values = if leaf.options.path_arc.abs()
+                        >= noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD
+                    {
+                        TrackValues::ArcVec2 {
+                            from: from.transform.translation,
+                            to,
+                            arc_angle: leaf.options.path_arc,
+                        }
+                    } else {
+                        TrackValues::Vec2 {
+                            from: from.transform.translation,
+                            to,
+                        }
+                    };
+                    vec![super::affine::LoweredAffineChannel {
+                        property: Property::Position,
+                        conflict_property: SemanticObjectProperty::Translation,
+                        completion: SemanticAnimationCompletion::Property {
+                            property: SemanticObjectProperty::Translation,
+                            value: noon_core::SemanticVec3::new(
+                                f64::from(to.x),
+                                f64::from(to.y),
+                                source.transform.translation.z,
+                            )
+                            .into(),
+                        },
+                        values,
+                    }]
+                } else {
+                    validate_affine_payload(source, target, leaf.options)
+                        .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?;
+                    lower_transform_channels(
+                        prepared.store(),
+                        source,
+                        target,
+                        from,
+                        interpolation,
+                        leaf.options.path_arc,
+                    )
+                    .map_err(|issue| prepared_payload_error(leaf, target_state, issue))?
+                };
                 for channel in channels {
                     push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
                 }
