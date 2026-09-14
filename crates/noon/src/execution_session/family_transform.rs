@@ -1,7 +1,7 @@
 use noon_compile::PreparedFamilyTransformChannelProjection;
 use noon_runtime::{
     DerivedDisplayAnimationOccurrence, DerivedDisplayAnimationPlan, DerivedDisplayAnimationTrack,
-    DerivedDisplayObjectState, SceneInstance,
+    DerivedDisplayObjectState, SceneInstance, TransientPresentationPainterPlacement,
 };
 
 /// Convert compiler-owned family-Transform padding channels into one runtime-only
@@ -93,12 +93,14 @@ pub(super) fn build_derived_family_transform_plan(
             })
             .collect();
         occurrences.push(DerivedDisplayAnimationOccurrence {
-            anchor_object_index: u32::try_from(anchor_object_index).map_err(|_| {
-                format!(
-                    "derived family Transform occurrence {} source row exceeds u32 painter indexing",
-                    occurrence.occurrence_index
-                )
-            })?,
+            painter_placement: TransientPresentationPainterPlacement::AfterStable {
+                anchor_object_index: u32::try_from(anchor_object_index).map_err(|_| {
+                    format!(
+                        "derived family Transform occurrence {} source row exceeds u32 painter indexing",
+                        occurrence.occurrence_index
+                    )
+                })?,
+            },
             occurrence_index: occurrence.occurrence_index,
             base,
             tracks,
