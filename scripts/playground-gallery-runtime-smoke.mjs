@@ -118,7 +118,9 @@ try {
       await page.goto(`${base}?example=${encodeURIComponent(entry.id)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForFunction(() => window.__noonExampleGallery !== undefined, null, { timeout: 45000 });
       let completed = false;
-      const deadline = Date.now() + 75000;
+      // Longer authored examples can run materially slower than real time in Firefox CI.
+      // Keep wall-clock headroom for a progressing autoplay while still detecting a hang.
+      const deadline = Date.now() + 105000;
       while (Date.now() < deadline) {
         const state = await page.evaluate(() => {
           const gallery = window.__noonExampleGallery;
