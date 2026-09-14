@@ -41,3 +41,5 @@ jobs:
             crates/noon-compile/src/semantic_lowering/animation_payload/matching_family_transform_activation.rs
           git commit -m 'Select matching-shape family transforms semantically'
           git push origin HEAD:${GITHUB_REF_NAME}
+
+# Trigger after the push workflow became active in the parent commit.
