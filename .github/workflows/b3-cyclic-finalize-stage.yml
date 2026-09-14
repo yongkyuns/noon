@@ -1,0 +1,51 @@
+name: B3 CyclicReplace finalize stage
+
+on:
+  push:
+    branches:
+      - b3-cyclic-replace-adapter
+
+permissions:
+  contents: write
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: b3-cyclic-replace-adapter
+          fetch-depth: 0
+      - name: Apply integration patch
+        run: python3 scripts/_b3_cyclic_finalize.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Native checks
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo check -p noon-core -p noon-compile -p noon 2>&1 | tee .b3-cyclic-final-status.txt
+          cargo test -p noon family_transform_tests 2>&1 | tee -a .b3-cyclic-final-status.txt
+      - name: Python contract
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 web/python/test_manim_cyclic_replace.py 2>&1 | tee -a .b3-cyclic-final-status.txt
+          python3 -m py_compile web/python/_manim_cyclic_replace.py web/python/_manim_scene.py
+      - name: WASM check
+        shell: bash
+        run: |
+          set -o pipefail
+          rustup target add wasm32-unknown-unknown
+          cargo check -p noon-web --target wasm32-unknown-unknown 2>&1 | tee -a .b3-cyclic-final-status.txt
+      - name: Commit generated patch and diagnostics
+        if: always()
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates web compat scripts/build-web-demo.sh web/python-compat-modules.js .b3-cyclic-final-status.txt 2>/dev/null || true
+          if ! git diff --cached --quiet; then
+            git commit -m 'B3: finalize activation-time CyclicReplace [stage]'
+            git push origin HEAD:b3-cyclic-replace-adapter
+          fi
