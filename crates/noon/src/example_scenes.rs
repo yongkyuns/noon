@@ -3252,6 +3252,8 @@ pub mod ordinary_focus_on;
 
 pub mod ordinary_rotating;
 
+pub mod apply_matrix;
+
 pub mod scale_in_place;
 
 pub mod family_membership_order;

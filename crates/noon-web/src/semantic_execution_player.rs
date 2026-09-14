@@ -1170,6 +1170,30 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_apply_matrix(
+        &mut self,
+        mobject: &noon::Mobject,
+        values: &[f64],
+        rows: usize,
+        columns: usize,
+        about_x: f64,
+        about_y: f64,
+    ) -> Result<(), AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .apply_matrix(mobject, values, rows, columns, about_x, about_y)
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_scale(
         &mut self,
         mobject: &noon::Mobject,

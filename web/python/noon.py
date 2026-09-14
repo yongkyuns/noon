@@ -725,6 +725,7 @@ _PUBLIC_EXPORTS = {
     "ReplacementTransform": "_manim_animate",
     "TransformFromCopy": "_manim_animate",
     "TransformMatchingShapes": "_manim_animate",
+    "ApplyMatrix": "_manim_animate",
     "Create": "_manim_animate",
     "Uncreate": "_manim_animate",
     "FadeIn": "_manim_animate",

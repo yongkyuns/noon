@@ -94,6 +94,30 @@ class Transform:
         _store_animation_args(self, kwargs)
 
 
+class ApplyMatrix:
+    """Inert ManimCE ``ApplyMatrix`` request for shared Rust pointwise target preparation."""
+
+    def __init__(
+        self,
+        matrix: object,
+        mobject: object,
+        about_point: object = _base.ORIGIN,
+        run_time: float = 3.0,
+        **kwargs: Any,
+    ) -> None:
+        if isinstance(mobject, _compat.Group):
+            raise NotImplementedError("ApplyMatrix currently supports one leaf Mobject")
+        if not isinstance(mobject, _base.Mobject):
+            raise TypeError("ApplyMatrix target must be a Mobject")
+        self.matrix = matrix
+        self.mobject = mobject
+        self.source = mobject
+        self.about_point = about_point
+        animation_kwargs = dict(kwargs)
+        animation_kwargs["run_time"] = float(run_time)
+        _store_animation_args(self, animation_kwargs)
+
+
 class Indicate:
     """Inert ManimCE ``Indicate`` request for shared Rust semantic playback."""
 
