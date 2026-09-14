@@ -21,19 +21,14 @@ jobs:
         run: |
           @'
           from pathlib import Path
+          import re
+
           path = Path("crates/noon-web/src/semantic_execution_player.rs")
           text = path.read_text()
-          old = '''    pub(crate) fn live_set_z_index(
-              &mut self,
-              anchor: &noon::LayoutAnchor,
-              value: f64,
-              family: bool,
-          ) -> Result<(), AuthoringFailure> {
-              self.with_live_session(|live| live.set_z_index(anchor, value, family))
-                  .map(|_| ())
-          }
-          '''
-          new = '''    pub(crate) fn live_set_z_index(
+          pattern = re.compile(
+              r'''(?ms)^    pub\(crate\) fn live_set_z_index\(\n.*?^    \}\n(?=\n    #\[cfg\(target_arch = "wasm32"\)\]\n    pub\(crate\) fn live_flip_layout)'''
+          )
+          replacement = '''    pub(crate) fn live_set_z_index(
               &mut self,
               anchor: &noon::LayoutAnchor,
               value: f64,
@@ -55,9 +50,12 @@ jobs:
               .map_err(AuthoringFailure::from)
           }
           '''
-          if text.count(old) != 1:
-              raise SystemExit(f"expected one live_set_z_index caller block, found {text.count(old)}")
-          path.write_text(text.replace(old, new, 1))
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f"expected one live_set_z_index function, replaced {count}")
+          if "live.set_z_index(anchor, value, family)" in text:
+              raise SystemExit("LiveSession z-index setter caller remains")
+          path.write_text(text)
           '@ | Set-Content -Encoding utf8 patch1555.py
           python patch1555.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
