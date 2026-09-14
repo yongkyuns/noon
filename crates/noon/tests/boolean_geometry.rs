@@ -87,10 +87,13 @@ fn live_boolean_constructor_observes_current_affine_without_copying_paint() {
         .unwrap();
     let authored_options =
         ManimGeometryOptions::boolean_geometry(Op::Union, &[a.clone(), b.clone()]).unwrap();
-    let live_options = scene
-        .live(&mut session)
-        .boolean_geometry_options(Op::Union, &[a.clone(), b.clone()])
-        .unwrap();
+    let live_options = noon::integration::effective_boolean_geometry_options(
+        scene.integration_store(),
+        &session,
+        Op::Union,
+        &[a.clone(), b.clone()],
+    )
+    .unwrap();
     // Options are snapshots; later execution cannot move either captured region.
     scene
         .live(&mut session)
@@ -119,7 +122,7 @@ fn live_boolean_constructor_observes_current_affine_without_copying_paint() {
 
 #[test]
 fn live_boolean_constructor_rejects_active_content_override_atomically() {
-    use noon::{AnimationOptions, AuthoringError, LiveSessionError, UnsupportedAuthoringOperation};
+    use noon::{AnimationOptions, AuthoringError, UnsupportedAuthoringOperation};
 
     let scene = Scene::new();
     let a = scene.circle(1.).unwrap();
@@ -136,15 +139,16 @@ fn live_boolean_constructor_rejects_active_content_override_atomically() {
         .geometry_resources()
         .len();
 
-    let error = scene
-        .live(&mut session)
-        .boolean_geometry_options(Op::Union, &[a, b])
-        .unwrap_err();
+    let error = noon::integration::effective_boolean_geometry_options(
+        scene.integration_store(),
+        &session,
+        Op::Union,
+        &[a, b],
+    )
+    .unwrap_err();
     assert!(matches!(
         error,
-        LiveSessionError::Authoring(AuthoringError::Unsupported(
-            UnsupportedAuthoringOperation::EffectivePathRenderOverride
-        ))
+        AuthoringError::Unsupported(UnsupportedAuthoringOperation::EffectivePathRenderOverride)
     ));
     assert_eq!(scene.revision(), revision);
     assert_eq!(
@@ -162,13 +166,16 @@ fn live_boolean_constructor_preserves_foreign_store_error() {
     let scene = Scene::new();
     let a = scene.square(2.).unwrap();
     let foreign = Scene::new().square(2.).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let session = scene.execution_session().unwrap();
 
     assert!(matches!(
-        scene
-            .live(&mut session)
-            .boolean_geometry_options(Op::Union, &[a, foreign]),
-        Err(noon::LiveSessionError::ForeignMobjectStore)
+        noon::integration::effective_boolean_geometry_options(
+            scene.integration_store(),
+            &session,
+            Op::Union,
+            &[a, foreign],
+        ),
+        Err(noon::AuthoringError::ForeignStore)
     ));
 }
 
