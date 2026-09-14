@@ -1,11 +1,14 @@
 //! Shared shape-preserving subdivision for corresponding path contours.
 use super::*;
 
-/// Match contour and curve counts without changing either path's visible shape.
+/// Match contour and curve counts without changing either path's visible trace.
 /// Missing contours become null curves at the last endpoint and preserve the
-/// corresponding contour's open/closed topology. Unfinished anchors become null
-/// curves; an entirely empty path uses the origin. Explicit retained contour
-/// breaks and each operand's closed joins remain intact.
+/// corresponding contour's open/closed topology. When two existing corresponding
+/// contours disagree on closure, the closed contour's seam is retained as ordinary
+/// curve geometry while both prepared contours become open, matching Manim's
+/// point-array correspondence without changing authored endpoint topology.
+/// Unfinished anchors become null curves; an entirely empty path uses the origin.
+/// Explicit retained contour breaks remain intact.
 ///
 /// The result is temporary preparation data. Persistent callers publish both
 /// replacements in one transaction; transform preparation can consume it directly.
@@ -33,7 +36,7 @@ pub fn align_paths(
         && left_contours
             .iter()
             .zip(&right_contours)
-            .all(|(a, b)| a.len() == b.len())
+            .all(|(a, b)| a.len() == b.len() && contour_closed(a) == contour_closed(b))
     {
         return Ok((left.clone(), right.clone()));
     }
@@ -44,6 +47,7 @@ pub fn align_paths(
     pad_contours(&mut right_contours, count, &left_closures);
     let mut results = [VectorPath::new(), VectorPath::new()];
     for (a, b) in left_contours.iter_mut().zip(&mut right_contours) {
+        reconcile_existing_closure(a, b);
         trim_null_tail(a);
         trim_null_tail(b);
         let count = a.len().max(b.len());
@@ -105,10 +109,13 @@ fn contours(path: &VectorPath) -> Vec<Vec<Curve>> {
     }
     contours
 }
+fn contour_closed(curves: &[Curve]) -> bool {
+    curves.last().is_some_and(|curve| curve.closes_contour)
+}
 fn contour_closures(contours: &[Vec<Curve>]) -> Vec<bool> {
     contours
         .iter()
-        .map(|curves| curves.last().is_some_and(|curve| curve.closes_contour))
+        .map(|curves| contour_closed(curves))
         .collect()
 }
 fn pad_contours(contours: &mut Vec<Vec<Curve>>, count: usize, counterpart_closures: &[bool]) {
@@ -122,6 +129,18 @@ fn pad_contours(contours: &mut Vec<Vec<Curve>>, count: usize, counterpart_closur
             closes_contour,
         )]);
     }
+}
+fn reconcile_existing_closure(left: &mut [Curve], right: &mut [Curve]) {
+    if contour_closed(left) == contour_closed(right) {
+        return;
+    }
+    // Manim VMobject alignment interpolates corresponding cubic point arrays and
+    // carries no independent animated closure bit. Keep an explicit closing edge
+    // as an ordinary curve, but do not require the other endpoint to gain closure.
+    // Authored source/target paths remain untouched; only this preparation copy is
+    // normalized for point correspondence.
+    left.last_mut().unwrap().closes_contour = false;
+    right.last_mut().unwrap().closes_contour = false;
 }
 fn trim_null_tail(curves: &mut Vec<Curve>) {
     while curves.len() > 1 {
@@ -211,6 +230,36 @@ mod tests {
         assert!(other_contours[1].last().unwrap().closes_contour);
         assert!(
             crate::plan_morph_preserving_order(&single, &multi, crate::MorphOptions::DEFAULT,)
+                .is_ok()
+        );
+    }
+    #[test]
+    fn existing_closure_mismatch_keeps_seam_as_open_curve_geometry() {
+        let open = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(1., 0.))
+            .line_to(Vec2::new(2., 0.))
+            .line_to(Vec2::new(3., 0.));
+        let closed = VectorPath::new()
+            .move_to(Vec2::new(0., 1.))
+            .line_to(Vec2::new(1., 1.))
+            .line_to(Vec2::new(0.5, 2.))
+            .close();
+
+        // Both inputs have three drawable curves, so this also protects the
+        // equal-point-count fast path from bypassing closure normalization.
+        assert_eq!(collect_curves(&open).len(), collect_curves(&closed).len());
+        assert!(!contour_closed(&contours(&open)[0]));
+        assert!(contour_closed(&contours(&closed)[0]));
+
+        let (aligned_open, aligned_closed) = align_paths(&open, &closed).unwrap();
+        let open_contour = &contours(&aligned_open)[0];
+        let closed_contour = &contours(&aligned_closed)[0];
+        assert!(!contour_closed(open_contour));
+        assert!(!contour_closed(closed_contour));
+        assert_eq!(closed_contour.last().unwrap().to, closed_contour[0].from);
+        assert!(
+            crate::plan_morph_preserving_order(&open, &closed, crate::MorphOptions::DEFAULT,)
                 .is_ok()
         );
     }
