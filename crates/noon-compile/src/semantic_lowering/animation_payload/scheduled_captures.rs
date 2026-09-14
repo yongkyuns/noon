@@ -2,12 +2,24 @@
 use std::collections::HashMap;
 
 use noon_core::{
-    continuous_time_map_interval, ObjectId, Property, SemanticTransactionNodeRef, TrackValues,
+    continuous_time_map_interval, ObjectId, Property, SemanticObjectContent,
+    SemanticTransactionNodeRef, TrackValues,
 };
 
 use super::super::PreparedSemanticScheduledAnimationLeaf;
-use super::affine::{driver_key, EffectiveAnimationProperties};
+use super::affine::{driver_key, EffectiveAnimationProperties, SemanticAnimationCompletion};
 use super::prepared_composition::PreparedSemanticAnimationTrack;
+
+/// Candidate-local authored content visible when one scheduled leaf activates.
+///
+/// `Authored` means no prior completed content morph changed the source geometry.
+/// `Completed` carries the exact semantic endpoint of the prior morph. This value
+/// owns no runtime identity and does not mutate authored or live-session state.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum ScheduledContentEndpoint {
+    Authored,
+    Completed(SemanticObjectContent),
+}
 
 #[derive(Default)]
 pub(super) struct ScheduledCaptures {
@@ -64,6 +76,12 @@ impl ScheduledCaptures {
         self.base.insert(object, value);
     }
 
+    /// Advance candidate-local endpoint bookkeeping before one scheduled leaf begins.
+    ///
+    /// The returned content is an exact authored endpoint produced by a prior
+    /// completed content morph on the same object. Ordinary prepared lowering still
+    /// keeps content-changing sequences fail-closed below; matching-shape activation
+    /// can consume this endpoint without mutating SemanticStore or live session state.
     pub fn begin_leaf(
         &mut self,
         leaf: &PreparedSemanticScheduledAnimationLeaf,
@@ -71,22 +89,30 @@ impl ScheduledCaptures {
         tracks: &[PreparedSemanticAnimationTrack],
         intervals: &HashMap<SemanticTransactionNodeRef, (f64, f64)>,
         allow_sequential_capture: bool,
-    ) {
+    ) -> ScheduledContentEndpoint {
         for (index, track) in tracks.iter().enumerate().skip(self.recorded_tracks) {
             self.latest_tracks
                 .insert(driver_key(track.execution_object_id, track.property), index);
         }
         self.recorded_tracks = tracks.len();
         if !allow_sequential_capture {
-            return;
+            return ScheduledContentEndpoint::Authored;
         }
         let Some((start, _)) = intervals.get(&leaf.animation) else {
-            return;
+            return ScheduledContentEndpoint::Authored;
         };
         let object = leaf.execution_object_id;
+        let completed_content = completed_content_before(
+            object,
+            *start,
+            driven,
+            &self.latest_tracks,
+            tracks,
+            intervals,
+        );
         // A content morph changes the source geometry used by later lowering.
-        // Keep that dependency reserved until shared content activation supports
-        // the sequence; affine/style channels can capture their exact endpoints.
+        // Keep ordinary prepared lowering fail-closed until its source state can
+        // consume `completed_content`; affine/style channels can capture endpoints.
         if self
             .latest_tracks
             .contains_key(&driver_key(object, Property::Morph))
@@ -94,7 +120,7 @@ impl ScheduledCaptures {
                 .latest_tracks
                 .contains_key(&driver_key(object, Property::Transform))
         {
-            return;
+            return completed_content;
         }
         for slot in 0..=driver_key(object, Property::Presence).1 {
             let key = (object.get(), slot);
@@ -131,6 +157,40 @@ impl ScheduledCaptures {
             }
             driven.remove(&key);
         }
+        completed_content
+    }
+}
+
+fn completed_content_before(
+    object: ObjectId,
+    start: f64,
+    driven: &HashMap<(u64, u8), SemanticTransactionNodeRef>,
+    latest_tracks: &HashMap<(u64, u8), usize>,
+    tracks: &[PreparedSemanticAnimationTrack],
+    intervals: &HashMap<SemanticTransactionNodeRef, (f64, f64)>,
+) -> ScheduledContentEndpoint {
+    let key = driver_key(object, Property::Morph);
+    let Some(owner) = driven.get(&key).copied() else {
+        return ScheduledContentEndpoint::Authored;
+    };
+    let Some((_, end)) = intervals.get(&owner) else {
+        return ScheduledContentEndpoint::Authored;
+    };
+    let rounding = 4.0 * f64::EPSILON * end.abs().max(start.abs()).max(f64::MIN_POSITIVE);
+    if *end - start > rounding {
+        return ScheduledContentEndpoint::Authored;
+    }
+    let Some(track) = latest_tracks.get(&key).and_then(|index| tracks.get(*index)) else {
+        return ScheduledContentEndpoint::Authored;
+    };
+    if track.animation != owner || track.timing.easing.evaluate(1.0) != 1.0 {
+        return ScheduledContentEndpoint::Authored;
+    }
+    match &track.completion {
+        SemanticAnimationCompletion::ContentMorph { content } => {
+            ScheduledContentEndpoint::Completed(*content)
+        }
+        _ => ScheduledContentEndpoint::Authored,
     }
 }
 
