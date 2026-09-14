@@ -1268,14 +1268,26 @@ impl SemanticExecutionPlayer {
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_z_index(
-        &mut self,
-        anchor: &noon::LayoutAnchor,
-        value: f64,
-        family: bool,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_z_index(anchor, value, family))
-            .map(|_| ())
-    }
+    &mut self,
+    anchor: &noon::LayoutAnchor,
+    value: f64,
+    family: bool,
+) -> Result<(), AuthoringFailure> {
+    let semantics = self
+        .semantics
+        .clone()
+        .ok_or("execution player has no live semantic store")?;
+    noon::integration::publish_z_index(
+        &semantics,
+        self.semantic_root
+            .expect("live semantic store has one scene root"),
+        &mut self.session,
+        anchor,
+        value,
+        family,
+    )
+    .map_err(AuthoringFailure::from)
+}
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_flip_layout(
