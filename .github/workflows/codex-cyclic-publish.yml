@@ -1,0 +1,82 @@
+name: Publish CyclicReplace implementation on macOS
+
+on:
+  push:
+    branches:
+      - codex/b3-cyclic-replace-publish
+    paths:
+      - .github/workflows/codex-cyclic-publish.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cyclic-replace-publish
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Apply, validate, and publish clean implementation
+        env:
+          EXPECTED_MASTER: 1f48ec4e04b7798e7405fcd5e1ee798fd3c50db4
+          EXPECTED_TARGET: 9fc501fd9f2d9608db804409b117df6464ce3ff0
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, gzip
+          encoded = Path('.github/cyclic-replace.patch.gz.b64').read_bytes()
+          Path('/tmp/cyclic-replace.patch').write_bytes(gzip.decompress(base64.b64decode(encoded)))
+          PY
+          git fetch origin master codex/b3-cyclic-replace
+          test "$(git rev-parse origin/master)" = "$EXPECTED_MASTER"
+          test "$(git rev-parse origin/codex/b3-cyclic-replace)" = "$EXPECTED_TARGET"
+          git switch --detach "$EXPECTED_MASTER"
+          git apply --3way /tmp/cyclic-replace.patch
+
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo test -p noon-compile family_transform
+          cargo test -p noon family_transform
+          cargo check -p noon-web --target wasm32-unknown-unknown
+          python3 -m unittest \
+            web/python/test_manim_cyclic_replace.py \
+            web/python/test_manim_transform_path_arc_options.py
+          git diff --check
+
+          git add -A
+          expected="$(cat <<'EOF'
+          crates/noon-compile/src/semantic_lowering/animation_payload/family_transform.rs
+          crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_activation.rs
+          crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_channels.rs
+          crates/noon-compile/src/semantic_lowering/animation_schedule.rs
+          crates/noon-web/src/canonical_authoring_scene.rs
+          crates/noon/src/execution_session.rs
+          crates/noon/src/execution_session/family_transform_tests.rs
+          web/python/_manim_animate.py
+          web/python/_manim_scene.py
+          web/python/noon.py
+          web/python/test_manim_cyclic_replace.py
+          EOF
+          )"
+          actual="$(git diff --cached --name-only | LC_ALL=C sort)"
+          expected="$(printf '%s\n' "$expected" | sed 's/^[[:space:]]*//' | LC_ALL=C sort)"
+          test "$actual" = "$expected" || {
+            echo 'Unexpected changed-file surface'
+            echo 'Expected:'
+            printf '%s\n' "$expected"
+            echo 'Actual:'
+            printf '%s\n' "$actual"
+            exit 1
+          }
+
+          git config user.name 'Yongkyun Shin'
+          git config user.email '4311628+yongkyuns@users.noreply.github.com'
+          git commit -m 'Add deterministic CyclicReplace family transforms'
+          git push --force-with-lease=refs/heads/codex/b3-cyclic-replace:$EXPECTED_TARGET \
+            origin HEAD:refs/heads/codex/b3-cyclic-replace
