@@ -20,7 +20,8 @@ jobs:
           set -euxo pipefail
           base64 -d < .github/tmp/b3-matching-mode.payload | gzip -dc > /tmp/b3-matching-mode.py
           python3 /tmp/b3-matching-mode.py
-          cargo fmt --all -- --check
+          cargo fmt --all
+          git diff --check
           cargo check -p noon-core -p noon-compile
           cargo test -p noon-core family_transform_correspondence_mode_is_authored_state --lib
           cargo test -p noon-compile matching_family_transform --lib
