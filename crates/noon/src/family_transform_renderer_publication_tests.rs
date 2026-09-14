@@ -122,6 +122,13 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
         let mut live = scene.live(&mut execution);
         let segment = family_transform(&mut live, &source, returned.root(), 1.8);
         assert_eq!(segment.end_time(), 5.55);
+        let midpoint = segment.start_time() + segment.duration() * 0.5;
+        live.advance_segment_to(segment, midpoint).unwrap();
+        let midpoint_appearance = live.effective(&source_objects[1]).unwrap().appearance;
+        assert!(
+            midpoint_appearance > 0.0 && midpoint_appearance < 1.0,
+            "source leaf 1 did not animate appearance at midpoint: {midpoint_appearance}"
+        );
         live.advance_segment_to(segment, segment.end_time()).unwrap();
         for (index, object) in source_objects.iter().enumerate() {
             assert_eq!(
