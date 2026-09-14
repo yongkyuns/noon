@@ -1,0 +1,40 @@
+name: B3 LayerEnd transient publication
+
+on:
+  push:
+    branches: [b3-runtime-transient-layer-end-publication]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply exact-anchor patch
+        run: |
+          python scripts/b3_layer_end_patch.py
+          python scripts/b3_layer_end_fix.py
+      - name: Format
+        run: cargo fmt --all -- --check || (cargo fmt --all && cargo fmt --all -- --check)
+      - name: Check runtime and renderer
+        run: cargo check -p noon-runtime -p noon-render-wgpu
+      - name: Run focused runtime regressions
+        run: cargo test -p noon-runtime layer_end
+      - name: Run focused renderer regressions
+        run: cargo test -p noon-render-wgpu layer_end
+      - name: Run transient renderer regressions
+        run: cargo test -p noon-render-wgpu transient
+      - name: Commit product patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm scripts/b3_layer_end_patch.py scripts/b3_layer_end_fix.py .github/workflows/b3_layer_end_apply.yml
+          git add -A
+          git config user.name "ChatGPT Codex Connector"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "B3: publish LayerEnd transient presentations"
+          git push origin HEAD:b3-runtime-transient-layer-end-publication
