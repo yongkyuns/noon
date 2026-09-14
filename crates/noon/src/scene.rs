@@ -282,6 +282,15 @@ impl Scene {
         crate::family_layout::effective_family_layout(&self.store, execution, family)
     }
 
+    /// Observe effective Runtime priority without creating a borrowed LiveSession facade.
+    /// Cold Scenes fail explicitly rather than returning authored state as effective state.
+    pub fn effective_z_index(&self, source: &crate::LayoutAnchor) -> Result<f64, AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::z_index::effective_z_index(&self.store, execution, source)
+    }
+
     pub(crate) fn require_object(&self, object: &Mobject) -> Result<(), crate::AuthoringError> {
         if !Rc::ptr_eq(&self.store, object.integration_store()) {
             return Err(crate::AuthoringError::ForeignStore);

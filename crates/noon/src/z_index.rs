@@ -54,6 +54,33 @@ impl LayoutAnchor {
     }
 }
 
+/// Observe one anchor's effective priority from an existing coherent execution.
+///
+/// Reachable semantic leaves use Runtime's current priority. Detached objects and
+/// non-rendered family roots retain their authored priority.
+pub fn effective_z_index(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    source: &LayoutAnchor,
+) -> Result<f64, AuthoringError> {
+    if !Rc::ptr_eq(store, source.integration_store()) {
+        return Err(AuthoringError::ForeignStore);
+    }
+    let node = source.resolve()?;
+    let store_ref = store.borrow();
+    execution
+        .require_published_store(&store_ref)
+        .map_err(AuthoringError::from)?;
+    if execution.semantic_object_is_reachable(node) {
+        return execution
+            .effective_semantic_object(&store_ref, node)
+            .map(|observed| observed.object.z_index)
+            .map_err(AuthoringError::from);
+    }
+    drop(store_ref);
+    source.z_index()
+}
+
 /// Publish one z-index edit through an already-lowered execution component.
 ///
 /// This is migration plumbing for legacy standalone-session callers. Durable
@@ -117,24 +144,38 @@ mod tests {
         let mut scene = Scene::new();
         let object = scene.square(1.0).unwrap();
         scene.add(&object).unwrap();
+        let detached = scene.square(1.0).unwrap();
+        detached.set_z_index(3.0).unwrap();
+        let anchor = LayoutAnchor::from(&object);
+        assert!(matches!(
+            scene.effective_z_index(&anchor),
+            Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable
+            ))
+        ));
+
         let execution = scene.execution_session().unwrap();
         scene.install_execution(execution);
-        let anchor = LayoutAnchor::from(&object);
         let before = scene.revision();
-
         scene.set_z_index(&anchor, 7.0, true).unwrap();
-
         assert_eq!(scene.revision().get(), before.get() + 1);
         assert_eq!(object.z_index().unwrap(), 7.0);
-        {
-            let live = scene.owned_live();
-            assert_eq!(live.z_index(&anchor).unwrap(), 7.0);
-        }
+        assert_eq!(scene.effective_z_index(&anchor).unwrap(), 7.0);
+        assert_eq!(
+            scene
+                .effective_z_index(&LayoutAnchor::from(&detached))
+                .unwrap(),
+            3.0
+        );
 
         let foreign_scene = Scene::new();
         let foreign = foreign_scene.square(1.0).unwrap();
         assert!(matches!(
             scene.set_z_index(&LayoutAnchor::from(&foreign), 1.0, false),
+            Err(AuthoringError::ForeignStore)
+        ));
+        assert!(matches!(
+            scene.effective_z_index(&LayoutAnchor::from(&foreign)),
             Err(AuthoringError::ForeignStore)
         ));
     }

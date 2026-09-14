@@ -1263,7 +1263,12 @@ impl SemanticExecutionPlayer {
         &mut self,
         anchor: &noon::LayoutAnchor,
     ) -> Result<f64, AuthoringFailure> {
-        self.with_live_session(|live| live.z_index(anchor))
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::integration::effective_z_index(&semantics, &self.session, anchor)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]
