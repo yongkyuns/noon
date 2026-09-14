@@ -7,7 +7,8 @@ use noon_core::{
 use super::super::{PreparedSemanticAnimationScheduleProjection, SemanticExecutionIndex};
 use super::affine::EffectiveAnimationProperties;
 use super::family_transform::{
-    derive_family_transform_correspondence, FamilyTransformCorrespondenceError,
+    derive_family_transform_correspondence, validate_family_transform_path_arc_contract,
+    FamilyTransformCorrespondenceError,
 };
 
 /// One activation-time family Transform occurrence before execution publication.
@@ -145,6 +146,18 @@ where
     for family in schedule.family_transforms() {
         let source_family = existing_endpoint(family.animation, family.source)?;
         let target_family = existing_endpoint(family.animation, family.target_state)?;
+        validate_family_transform_path_arc_contract(
+            prepared.store(),
+            source_family,
+            target_family,
+            family.options.path_arc,
+        )
+        .map_err(
+            |error| PreparedFamilyTransformActivationError::Correspondence {
+                animation: family.animation,
+                error,
+            },
+        )?;
         let correspondence =
             derive_family_transform_correspondence(prepared.store(), source_family, target_family)
                 .map_err(

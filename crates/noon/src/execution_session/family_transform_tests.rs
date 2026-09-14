@@ -325,3 +325,148 @@ fn unequal_family_contraction_retains_only_effective_padding_fade() {
         1.0
     );
 }
+
+fn matching_arc_session(
+    path_arc: f64,
+) -> (
+    SemanticStore,
+    ExecutionSession,
+    ExecutionSegment,
+    SemanticNodeId,
+    SemanticNodeId,
+) {
+    let mut store = SemanticStore::new();
+    let s0 = object(&mut store, 0.0);
+    let s1 = object(&mut store, 2.0);
+    let source = family(&mut store, &[s0, s1]);
+    let t0 = object(&mut store, 2.0);
+    let t1 = object(&mut store, 0.0);
+    let target = family(&mut store, &[t0, t1]);
+    let mut session = ExecutionSession::from_semantic_root(&store, source).unwrap();
+    let request = SemanticCompositionRequest::FamilyTransformTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear)
+            .path_arc(path_arc),
+    };
+    let segment = session
+        .declare_and_activate_composition(&mut store, source, &request, AnimationOptions::new())
+        .unwrap();
+    (store, session, segment, s0, s1)
+}
+
+fn node_translation(session: &ExecutionSession, node: SemanticNodeId) -> Vec2 {
+    let index = session
+        .execution_index
+        .execution_object_id(node)
+        .and_then(|object| session.runtime.frame_index_for_object(object))
+        .unwrap();
+    session.frame().objects[index].transform.translation
+}
+
+#[test]
+fn matching_family_path_arc_uses_curved_leaf_tracks_and_seek_is_equivalent() {
+    let (mut store, mut forward, segment, s0, s1) =
+        matching_arc_session(std::f64::consts::FRAC_PI_2);
+    forward.advance_segment_to(segment, 0.5).unwrap();
+    let forward_left = node_translation(&forward, s0);
+    let forward_right = node_translation(&forward, s1);
+    assert!((forward_left.x - 1.0).abs() < 1e-5);
+    assert!((forward_right.x - 1.0).abs() < 1e-5);
+    assert!(forward_left.y < -0.1);
+    assert!(forward_right.y > 0.1);
+
+    let (_direct_store, mut direct, _direct_segment, direct_s0, direct_s1) =
+        matching_arc_session(std::f64::consts::FRAC_PI_2);
+    direct.seek(0.5).unwrap();
+    assert_eq!(node_translation(&direct, direct_s0), forward_left);
+    assert_eq!(node_translation(&direct, direct_s1), forward_right);
+
+    forward.advance_segment_to(segment, 1.0).unwrap();
+    forward.complete_segment(&mut store, segment).unwrap();
+    assert_eq!(node_translation(&forward, s0), Vec2::new(2.0, 0.0));
+    assert_eq!(node_translation(&forward, s1), Vec2::new(0.0, 0.0));
+}
+
+#[test]
+fn matching_family_negative_path_arc_reverses_curvature() {
+    let (_positive_store, mut positive, positive_segment, positive_s0, positive_s1) =
+        matching_arc_session(std::f64::consts::FRAC_PI_2);
+    positive.advance_segment_to(positive_segment, 0.5).unwrap();
+    let positive_left = node_translation(&positive, positive_s0);
+    let positive_right = node_translation(&positive, positive_s1);
+
+    let (_negative_store, mut negative, negative_segment, negative_s0, negative_s1) =
+        matching_arc_session(-std::f64::consts::FRAC_PI_2);
+    negative.advance_segment_to(negative_segment, 0.5).unwrap();
+    let negative_left = node_translation(&negative, negative_s0);
+    let negative_right = node_translation(&negative, negative_s1);
+
+    assert!(positive_left.y < 0.0 && negative_left.y > 0.0);
+    assert!(positive_right.y > 0.0 && negative_right.y < 0.0);
+}
+
+#[test]
+fn significant_family_path_arc_rejects_unequal_topology_before_publication() {
+    let mut store = SemanticStore::new();
+    let s0 = object(&mut store, 0.0);
+    let s1 = object(&mut store, 2.0);
+    let source = family(&mut store, &[s0, s1]);
+    let t0 = object(&mut store, 10.0);
+    let t1 = object(&mut store, 12.0);
+    let t2 = object(&mut store, 14.0);
+    let target = family(&mut store, &[t0, t1, t2]);
+    let source_members = store
+        .semantic_family_members_checked(source)
+        .unwrap()
+        .to_vec();
+    let before = store.scene_revision();
+    let mut session = ExecutionSession::from_semantic_root(&store, source).unwrap();
+    let request = SemanticCompositionRequest::FamilyTransformTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear)
+            .path_arc(std::f64::consts::FRAC_PI_2),
+    };
+    let error = session
+        .declare_and_activate_composition(&mut store, source, &request, AnimationOptions::new())
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("path_arc requires matching flat leaf topology"));
+    assert_eq!(store.scene_revision(), before);
+    assert_eq!(
+        store.semantic_family_members_checked(source).unwrap(),
+        source_members
+    );
+    assert_eq!(node_translation(&session, s0), Vec2::new(0.0, 0.0));
+    assert_eq!(node_translation(&session, s1), Vec2::new(2.0, 0.0));
+}
+
+#[test]
+fn subthreshold_family_path_arc_keeps_existing_unequal_alignment() {
+    let mut store = SemanticStore::new();
+    let s0 = object(&mut store, 0.0);
+    let s1 = object(&mut store, 2.0);
+    let source = family(&mut store, &[s0, s1]);
+    let t0 = object(&mut store, 10.0);
+    let t1 = object(&mut store, 12.0);
+    let t2 = object(&mut store, 14.0);
+    let target = family(&mut store, &[t0, t1, t2]);
+    let mut session = ExecutionSession::from_semantic_root(&store, source).unwrap();
+    let request = SemanticCompositionRequest::FamilyTransformTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear)
+            .path_arc(noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD * 0.5),
+    };
+    session
+        .declare_and_activate_composition(&mut store, source, &request, AnimationOptions::new())
+        .unwrap();
+}

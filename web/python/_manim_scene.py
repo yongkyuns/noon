@@ -873,6 +873,43 @@ def _canonical_affine_options(
     return resolved
 
 
+def _canonical_family_transform_options(
+    animation: object, kwargs: dict[str, object]
+) -> object | None:
+    """Resolve family Transform timing/path options through the shared Transform policy."""
+    duration = kwargs.get("duration")
+    run_time = kwargs.get("run_time")
+    easing = kwargs.get("easing")
+    rate_func = kwargs.get("rate_func")
+    lag_ratio = kwargs.get("lag_ratio")
+    path_arc = kwargs.get("path_arc")
+    if duration is not None and run_time is not None:
+        raise ValueError("use either duration or run_time, not both")
+    if easing is not None and rate_func is not None:
+        raise ValueError("use either rate_func or the low-level easing alias, not both")
+    if kwargs.keys() - {
+        "duration", "run_time", "start_time", "easing", "rate_func", "lag_ratio", "path_arc"
+    }:
+        return None
+    if kwargs.get("start_time") is not None:
+        return None
+    try:
+        resolved = _options.resolve_transform(
+            builder_args=_options.builder_args(animation),
+            default_lag_ratio=0.0,
+            play_run_time=(run_time if run_time is not None else duration),
+            play_easing=easing,
+            play_rate_func=rate_func,
+            play_lag_ratio=lag_ratio,
+            play_path_arc=path_arc,
+        )
+    except NotImplementedError:
+        return None
+    if resolved.reverse_rate_function:
+        return None
+    return resolved
+
+
 def _canonical_transform_options(animation: object, kwargs: dict[str, object]) -> object | None:
     """Resolve Transform path/timing options through the Transform-only Rust policy."""
     duration = kwargs.get("duration")
@@ -1549,6 +1586,35 @@ def _build_canonical_composition_candidate(
             nested = build(nested_kind, tuple(animation.animations), animation, {})
             builder.appendComposition(nested)
             return
+        if isinstance(animation, _animate.CyclicReplace):
+            # Resolve options before target construction. Shared Rust-backed layout/copy/move
+            # operations observe the current play-begin state; Python owns no interpolation.
+            if _canonical_family_transform_options(animation, child_kwargs) is None:
+                raise NotImplementedError("unsupported canonical CyclicReplace options")
+            if len(animation.mobjects) == 1 and isinstance(animation.mobjects[0], _compat.Group):
+                source = animation.mobjects[0]
+            else:
+                source = _compat.Group(*animation.mobjects)
+            members = list(source.submobjects)
+            if len(members) < 2 or any(
+                isinstance(member, _compat.Group) or not isinstance(member, _base.Mobject)
+                for member in members
+            ):
+                raise NotImplementedError(
+                    "CyclicReplace currently requires a flat family with at least two leaves"
+                )
+            if any(member._scene is not self for member in members):
+                raise NotImplementedError("CyclicReplace source leaves must belong to this Scene")
+            centers = [member.get_center() for member in members]
+            target = source._copy_for_animate_target()
+            target_members = list(target.submobjects)
+            if len(target_members) != len(members):
+                raise RuntimeError("CyclicReplace family copy changed topology")
+            for index, member in enumerate(target_members):
+                member.move_to(centers[(index - 1) % len(centers)])
+            transform = _base.Transform(source, target, **animation.anim_args)
+            append_leaf(builder, transform, child_kwargs)
+            return
         if type(animation) is _animate.ApplyMatrix:
             # Validate generic animation options before target preparation. Nonzero
             # path_arc remains outside this first pointwise-matrix slice.
@@ -1904,8 +1970,8 @@ def _build_canonical_composition_candidate(
         family_transform = _canonical_family_transform_animation(self, animation)
         if family_transform is not None:
             source, target, leaf = family_transform
-            child = _canonical_affine_options(leaf, child_kwargs, allow_family_lag=True)
-            if child is None or child.path_arc != 0.0 or child.reverse_rate_function:
+            child = _canonical_family_transform_options(leaf, child_kwargs)
+            if child is None:
                 raise NotImplementedError("unsupported canonical family Transform options")
             if child.rate_func not in ("linear", "smooth"):
                 raise NotImplementedError(
@@ -1917,6 +1983,7 @@ def _build_canonical_composition_candidate(
                 float(child.run_time),
                 str(child.rate_func),
                 float(child.lag_ratio),
+                float(child.path_arc),
             )
             return
         if isinstance(animation, _composition.Add):

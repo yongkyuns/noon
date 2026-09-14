@@ -3454,12 +3454,17 @@ mod wasm {
             child_run_time: Option<f64>,
             rate_function: Option<String>,
             lag_ratio: Option<f64>,
+            path_arc: Option<f64>,
         ) -> Result<(), JsValue> {
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?;
+            if let Some(path_arc) = path_arc {
+                options = options.path_arc(path_arc);
+            }
             self.children
                 .push(OrdinaryCompositionChild::FamilyTransformTo {
                     source: source.semantic_family()?,
                     target_state: target_state.semantic_family()?,
-                    options: Self::family_options(child_run_time, rate_function, lag_ratio)?,
+                    options,
                 });
             Ok(())
         }

@@ -94,6 +94,40 @@ class Transform:
         _store_animation_args(self, kwargs)
 
 
+class CyclicReplace:
+    """Inert ManimCE ``CyclicReplace`` request over shared family Transform."""
+
+    def __init__(
+        self,
+        *mobjects: object,
+        path_arc: float = _base.PI / 2.0,
+        **kwargs: Any,
+    ) -> None:
+        if len(mobjects) == 1 and isinstance(mobjects[0], _compat.Group):
+            pass
+        elif len(mobjects) < 2:
+            raise ValueError("CyclicReplace requires at least two Mobjects or one Group")
+        elif any(not isinstance(value, _base.Mobject) or isinstance(value, _compat.Group) for value in mobjects):
+            raise TypeError("CyclicReplace members must be flat Mobjects")
+        self.mobjects = tuple(mobjects)
+        animation_kwargs = dict(kwargs)
+        animation_kwargs["path_arc"] = float(path_arc)
+        _store_animation_args(self, animation_kwargs)
+
+
+class Swap(CyclicReplace):
+    """Two-member ManimCE ``Swap`` alias with CyclicReplace semantics."""
+
+    def __init__(
+        self,
+        mobject1: object,
+        mobject2: object,
+        path_arc: float = _base.PI / 2.0,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(mobject1, mobject2, path_arc=path_arc, **kwargs)
+
+
 class ApplyMatrix:
     """Inert ManimCE ``ApplyMatrix`` request for shared Rust pointwise target preparation."""
 
