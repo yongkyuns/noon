@@ -664,6 +664,40 @@ impl<'a> LiveSession<'a> {
         pending.resolve(&result).map_err(LiveSessionError::from)
     }
 
+    /// Capture one flat family at the current publication and cyclically move
+    /// each copied member to the next source member's effective position.
+    pub fn cyclic_replace_target(
+        &mut self,
+        source: &MobjectFamily,
+    ) -> Result<crate::FamilyCopy, LiveSessionError> {
+        self.cyclic_replace_target_with_references(source, &[])
+    }
+
+    /// Preserve detached wrapper metadata references while constructing the same
+    /// activation-effective cyclic target used by the no-reference helper.
+    pub fn cyclic_replace_target_with_references(
+        &mut self,
+        source: &MobjectFamily,
+        references: &[crate::MobjectTarget<'_>],
+    ) -> Result<crate::FamilyCopy, LiveSessionError> {
+        self.require_family(source)?;
+        self.require_target_capture()?;
+        let members = crate::cyclic_replace::direct_object_members(source)?;
+        let mut centers = Vec::with_capacity(members.len());
+        for member in &members {
+            let mobject = Mobject::from_node(Rc::clone(self.store), *member)?;
+            centers.push(self.effective_layout(&mobject)?.center);
+        }
+        let copied = self.copy_family_with_references(source, references)?;
+        let target_members = crate::cyclic_replace::direct_object_members(copied.root())?;
+        let transaction = {
+            let store = self.store.borrow();
+            crate::cyclic_replace::cyclic_target_transaction(&store, &target_members, &centers)?
+        };
+        self.apply(transaction)?;
+        Ok(copied)
+    }
+
     /// Replace one object's presentation with another object's effective state while
     /// retaining the target identity and scene membership.
     pub fn become_mobject(

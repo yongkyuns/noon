@@ -67,8 +67,9 @@ class ManimAnimationConstructorOptionsTests(unittest.TestCase):
             from _typed_geometry_test_support import identity_only_wrapper as identity
             import noon
             names = ("Transform", "ReplacementTransform", "TransformFromCopy",
-                     "TransformMatchingShapes", "ApplyMatrix", "Create", "Uncreate", "FadeIn",
-                     "FadeOut", "Indicate", "ScaleInPlace", "ShrinkToCenter")
+                     "TransformMatchingShapes", "ApplyMatrix", "CyclicReplace", "Swap",
+                     "Create", "Uncreate", "FadeIn", "FadeOut", "Indicate",
+                     "ScaleInPlace", "ShrinkToCenter")
             exports = {name: getattr(noon, name) for name in names}
             # Public requests accept options before Scene/bootstrap imports. Later
             # imports must preserve class identity and existing instances.
@@ -89,12 +90,24 @@ class ManimAnimationConstructorOptionsTests(unittest.TestCase):
             assert not hasattr(_manim_animate, "_expanded_schedule")
             assert not hasattr(_manim_lifecycle, "_compile_with_plan")
 
-            from noon import Circle, Create, FadeIn, Scene, Square, Transform, linear, smooth
+            from noon import (
+                Circle, Create, CyclicReplace, FadeIn, Scene, Square, Swap, Transform,
+                VGroup, linear, smooth,
+            )
 
             # Constructor options are part of the public animation object, not a
             # Noon-only Scene.play workaround.
             transform = Transform(identity(Square), identity(Circle), run_time=1.25, path_arc=0.3)
             assert transform.anim_args == {"run_time": 1.25, "path_arc": 0.3}
+
+            group = identity(VGroup)
+            cyclic = CyclicReplace(group, run_time=1.5)
+            assert isinstance(cyclic, Transform)
+            assert cyclic.group is group and cyclic.source is group
+            assert cyclic.anim_args == {"run_time": 1.5, "path_arc": math.pi / 2.0}
+            swap = Swap(group, path_arc=-0.75)
+            assert isinstance(swap, CyclicReplace)
+            assert swap.anim_args == {"path_arc": -0.75}
 
             square, circle = identity(Square), identity(Circle)
             create = Create(square, run_time=2.0, rate_func=linear)

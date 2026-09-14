@@ -118,6 +118,31 @@ class ApplyMatrix:
         _store_animation_args(self, animation_kwargs)
 
 
+class CyclicReplace(Transform):
+    """Inert ManimCE ``CyclicReplace`` request over shared family Transform."""
+
+    def __init__(
+        self,
+        *mobjects: object,
+        path_arc: float = math.pi / 2.0,
+        **kwargs: Any,
+    ) -> None:
+        if len(mobjects) == 1 and isinstance(mobjects[0], _compat.Group):
+            group = mobjects[0]
+        else:
+            group = _compat.Group(*mobjects)
+        self.group = group
+        animation_kwargs = dict(kwargs)
+        animation_kwargs["path_arc"] = float(path_arc)
+        # Preserve Transform subclass/call-shape compatibility. The canonical
+        # Scene adapter constructs the detached cyclic target at play begin.
+        super().__init__(group, group, **animation_kwargs)
+
+
+class Swap(CyclicReplace):
+    """ManimCE alias for a two-entry ``CyclicReplace``."""
+
+
 class Indicate:
     """Inert ManimCE ``Indicate`` request for shared Rust semantic playback."""
 

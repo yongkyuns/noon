@@ -60,6 +60,7 @@ mod authoring_error;
 mod boolean_authoring;
 mod camera_authoring;
 mod compact_value_authoring;
+mod cyclic_replace;
 mod dashed_line_authoring;
 #[cfg(feature = "diagnostics")]
 pub mod diagnostics;
