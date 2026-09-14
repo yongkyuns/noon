@@ -1,27 +1,13 @@
-name: B3 matching native diagnostic
+name: B3 matching mode staging
 
 on:
-  push:
-    branches: [b3-matching-native-request]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  inspect:
+  idle:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Inspect anchors
-        shell: bash
-        run: |
-          set -euxo pipefail
-          grep -n -A90 -B20 "FamilyTransformTo" crates/noon-core/src/semantic_store/semantic_transaction/animation_addition.rs | head -n 500 || true
-          grep -n -A80 -B20 "create_family_transform_animation" crates/noon-core/src/semantic_store/semantic_transaction.rs || true
-          grep -n -A100 -B20 "FamilyTransformTo" crates/noon-compile/src/semantic_lowering/animation_schedule.rs | head -n 650 || true
-          grep -n -A90 -B20 "enum AnimationCompositionRequest" crates/noon/src/live_session.rs || true
-          grep -n -A110 -B20 "FamilyTransformTo" crates/noon/src/live_session.rs | head -n 520 || true
-          grep -n -A110 -B20 "enum SemanticCompositionRequest" crates/noon/src/execution_session.rs || true
-          grep -n -A130 -B20 "FamilyTransformTo" crates/noon/src/execution_session.rs | head -n 600 || true
-          grep -n -A60 -B20 "PendingSegmentCompletionKind" crates/noon/src/execution_segment.rs crates/noon/src/execution_session/completion.rs || true
-          grep -n -A120 -B20 "build_derived_family_transform_plan" crates/noon/src/execution_session/family_transform.rs || true
+      - run: echo staged
