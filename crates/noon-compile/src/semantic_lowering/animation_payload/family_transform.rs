@@ -70,6 +70,10 @@ pub enum FamilyTransformCorrespondenceError {
     },
     AliasedSourceLeaf(SemanticNodeId),
     AliasedTargetLeaf(SemanticNodeId),
+    UnsupportedPathArcTopology {
+        source: SemanticNodeId,
+        target: SemanticNodeId,
+    },
 }
 
 impl std::fmt::Display for FamilyTransformCorrespondenceError {
@@ -125,11 +129,64 @@ impl std::fmt::Display for FamilyTransformCorrespondenceError {
                 node.slot(),
                 node.generation()
             ),
+            Self::UnsupportedPathArcTopology { source, target } => write!(
+                formatter,
+                "family Transform path_arc requires matching flat leaf topology ({}:{} -> {}:{})",
+                source.slot(),
+                source.generation(),
+                target.slot(),
+                target.generation()
+            ),
         }
     }
 }
 
 impl std::error::Error for FamilyTransformCorrespondenceError {}
+
+/// Validate the bounded curved-path family Transform contract.
+///
+/// A meaningful path arc is supported only when both families are non-empty, flat,
+/// and contain the same number of direct authored object leaves. This prevents
+/// recursive alignment/padding from manufacturing curved occurrences that do not
+/// correspond to stable source identities. Sub-threshold arcs retain the existing
+/// straight family Transform behavior.
+pub fn validate_family_transform_path_arc_contract(
+    store: &SemanticStore,
+    source: SemanticNodeId,
+    target: SemanticNodeId,
+    path_arc: f64,
+) -> Result<(), FamilyTransformCorrespondenceError> {
+    if path_arc.abs() < noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD {
+        return Ok(());
+    }
+    require_family_root(store, source)?;
+    require_family_root(store, target)?;
+    let source_members = store
+        .semantic_family_members_checked(source)
+        .map_err(|_| FamilyTransformCorrespondenceError::InvalidFamily(source))?;
+    let target_members = store
+        .semantic_family_members_checked(target)
+        .map_err(|_| FamilyTransformCorrespondenceError::InvalidFamily(target))?;
+    if source_members.is_empty() || source_members.len() != target_members.len() {
+        return Err(
+            FamilyTransformCorrespondenceError::UnsupportedPathArcTopology { source, target },
+        );
+    }
+    for &member in source_members.iter().chain(target_members.iter()) {
+        let kind = store
+            .node(member)
+            .map(|node| node.kind())
+            .ok_or(FamilyTransformCorrespondenceError::MissingNode(member))?;
+        if !matches!(kind, SemanticNodeKind::AuthoringObject)
+            || store.semantic_object_state_checked(member).is_err()
+        {
+            return Err(
+                FamilyTransformCorrespondenceError::UnsupportedPathArcTopology { source, target },
+            );
+        }
+    }
+    Ok(())
+}
 
 /// Derive Manim-compatible recursive submobject correspondence without changing
 /// either authored family.
@@ -546,6 +603,64 @@ mod tests {
         assert!(matches!(
             derive_family_transform_correspondence(&store, source, target),
             Err(FamilyTransformCorrespondenceError::AliasedSourceLeaf(id)) if id == shared
+        ));
+    }
+    #[test]
+    fn significant_path_arc_requires_matching_flat_topology() {
+        let mut store = SemanticStore::new();
+        let s0 = object(&mut store);
+        let s1 = object(&mut store);
+        let t0 = object(&mut store);
+        let t1 = object(&mut store);
+        let t2 = object(&mut store);
+        let source = family(&mut store, &[s0, s1]);
+        let target = family(&mut store, &[t0, t1]);
+        validate_family_transform_path_arc_contract(
+            &store,
+            source,
+            target,
+            std::f64::consts::FRAC_PI_2,
+        )
+        .unwrap();
+
+        let unequal = family(&mut store, &[t0, t1, t2]);
+        assert!(matches!(
+            validate_family_transform_path_arc_contract(
+                &store,
+                source,
+                unequal,
+                std::f64::consts::FRAC_PI_2,
+            ),
+            Err(FamilyTransformCorrespondenceError::UnsupportedPathArcTopology { .. })
+        ));
+        validate_family_transform_path_arc_contract(
+            &store,
+            source,
+            unequal,
+            noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD * 0.5,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn significant_path_arc_rejects_nested_family_topology() {
+        let mut store = SemanticStore::new();
+        let s0 = object(&mut store);
+        let s1 = object(&mut store);
+        let t0 = object(&mut store);
+        let t1 = object(&mut store);
+        let nested_source = family(&mut store, &[s0]);
+        let nested_target = family(&mut store, &[t0]);
+        let source = family(&mut store, &[nested_source, s1]);
+        let target = family(&mut store, &[nested_target, t1]);
+        assert!(matches!(
+            validate_family_transform_path_arc_contract(
+                &store,
+                source,
+                target,
+                -std::f64::consts::FRAC_PI_2,
+            ),
+            Err(FamilyTransformCorrespondenceError::UnsupportedPathArcTopology { .. })
         ));
     }
 }

@@ -1844,9 +1844,12 @@ where
             source,
             target_state,
         } => {
-            let options =
-                resolve_animation_options(AnimationDefaults::MANIM, state.options, play_options)
-                    .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            let options = resolve_transform_animation_options(
+                AnimationDefaults::MANIM,
+                state.options,
+                play_options,
+            )
+            .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
             Ok(PlannedAnimation {
                 animation,
                 run_time: options.run_time,
