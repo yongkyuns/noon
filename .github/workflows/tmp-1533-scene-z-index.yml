@@ -1,0 +1,337 @@
+name: Temporary Scene-owned z-index migration
+
+on:
+  push:
+    branches:
+      - codex/1533-scene-z-index
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/1533-scene-z-index
+          fetch-depth: 0
+      - name: Migrate z-index ownership to Scene
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          scene = Path("crates/noon/src/scene.rs")
+          text = scene.read_text()
+          marker = '''        crate::family_layout::effective_family_layout(&self.store, execution, family)
+              .map_err(AuthoringError::from)
+          }
+
+              pub(crate) fn require_object'''
+          if marker not in text:
+              marker = '''        crate::family_layout::effective_family_layout(&self.store, execution, family)
+          }
+
+              pub(crate) fn require_object'''
+          if marker not in text:
+              raise SystemExit("scene insertion marker not found")
+          replacement = marker.replace(
+              "\n\n    pub(crate) fn require_object",
+              '''
+
+              /// Read one priority from the latest coherent Runtime publication.
+              /// Cold Scenes fail explicitly; detached and non-rendered roots preserve authored priority.
+              pub fn effective_z_index(
+                  &self,
+                  source: &crate::LayoutAnchor,
+              ) -> Result<f64, AuthoringError> {
+                  let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+                      crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+                  ))?;
+                  if !Rc::ptr_eq(&self.store, source.integration_store()) {
+                      return Err(AuthoringError::ForeignStore);
+                  }
+                  let node = source.resolve()?;
+                  let store = self.store.borrow();
+                  execution
+                      .require_published_store(&store)
+                      .map_err(AuthoringError::from)?;
+                  if execution.semantic_object_is_reachable(node) {
+                      return execution
+                          .effective_semantic_object(&store, node)
+                          .map(|observed| observed.object.z_index)
+                          .map_err(AuthoringError::from);
+                  }
+                  drop(store);
+                  source.z_index()
+              }
+
+              /// Persist painter priority through this Scene's canonical cold/running transaction lane.
+              pub fn set_z_index(
+                  &mut self,
+                  source: &crate::LayoutAnchor,
+                  value: f64,
+                  family: bool,
+              ) -> Result<(), AuthoringError> {
+                  let identity = self.store.borrow().identity();
+                  let transaction = source.z_index_transaction(identity, value, family)?;
+                  self.apply_semantic_transaction(transaction).map(|_| ())
+              }
+
+              pub(crate) fn require_object'''
+          )
+          text = text.replace(marker, replacement, 1)
+          scene.write_text(text)
+
+          live = Path("crates/noon/src/live_session.rs")
+          text = live.read_text()
+          if text.count("mod z_index;\n") != 1:
+              raise SystemExit("expected one LiveSession z-index module declaration")
+          live.write_text(text.replace("mod z_index;\n", "", 1))
+
+          live_z = Path("crates/noon/src/live_session/z_index.rs")
+          if not live_z.exists():
+              raise SystemExit("LiveSession z-index module already absent")
+          live_z.unlink()
+
+          integration = Path("crates/noon/tests/z_index.rs")
+          integration.write_text(r'''use noon::{ExecutionSession, LayoutAnchor, Scene};
+          use noon_compile::semantic_execution_object_id;
+          use noon_core::SemanticMutationTransaction;
+
+          fn order(session: &ExecutionSession) -> Vec<noon_core::ObjectId> {
+              session
+                  .painter_order()
+                  .iter()
+                  .map(|&row| session.frame().objects[row as usize].id)
+                  .collect()
+          }
+
+          #[test]
+          fn authored_scene_and_family_reorders_match_a_stable_reference() {
+              let mut scene = Scene::new();
+              let objects = (0..24)
+                  .map(|i| {
+                      let object = scene.square(1.).unwrap();
+                      object.set_z_index((i % 5) as f64 * 0.5).unwrap();
+                      object
+                  })
+                  .collect::<Vec<_>>();
+              let members = objects.iter().map(Into::into).collect::<Vec<_>>();
+              let family = scene.family(&members).unwrap();
+              scene.add_many(&[(&family).into()]).unwrap();
+              let mut family_order = (0..objects.len()).collect::<Vec<_>>();
+              for step in 0..72 {
+                  let changed = (step * 7) % objects.len();
+                  if step % 3 == 0 {
+                      let mut transaction = SemanticMutationTransaction::new();
+                      transaction.reorder_member(family.node_id(), objects[changed].node_id(), None);
+                      transaction
+                          .apply(&mut scene.integration_store().borrow_mut())
+                          .unwrap();
+                      family_order.retain(|&index| index != changed);
+                      family_order.push(changed);
+                  } else {
+                      scene
+                          .set_z_index(
+                              &LayoutAnchor::from(&objects[changed]),
+                              ((step % 7) as f64 - 3.) * 0.25,
+                              true,
+                          )
+                          .unwrap();
+                  }
+                  let mut expected = family_order.clone();
+                  expected.sort_by(|&a, &b| {
+                      objects[a]
+                          .z_index()
+                          .unwrap()
+                          .partial_cmp(&objects[b].z_index().unwrap())
+                          .unwrap()
+                  });
+                  let expected = expected
+                      .iter()
+                      .map(|&i| semantic_execution_object_id(objects[i].node_id()))
+                      .collect::<Vec<_>>();
+                  let session = scene.execution_session().unwrap();
+                  assert_eq!(order(&session), expected, "step {step}");
+              }
+          }
+
+          #[test]
+          fn scene_priority_and_copies_preserve_roots_aliases_and_atomicity() {
+              let mut scene = Scene::new();
+              let a = scene.square(1.).unwrap();
+              let b = scene.circle(1.).unwrap();
+              let nested = scene.family(&[(&a).into(), (&b).into()]).unwrap();
+              let family = scene.family(&[(&nested).into(), (&a).into()]).unwrap();
+              family.set_z_index(2.5, true).unwrap();
+              family.set_z_index(-1.25, false).unwrap();
+              assert_eq!(family.z_index().unwrap(), -1.25);
+              assert_eq!(nested.z_index().unwrap(), 2.5);
+              assert_eq!(a.z_index().unwrap(), 2.5);
+              let copy = family.copy_family().unwrap();
+              assert_eq!(copy.root().z_index().unwrap(), -1.25);
+              assert_eq!(copy.family(&nested).unwrap().z_index().unwrap(), 2.5);
+              assert_eq!(copy.mobject(&a).unwrap().z_index().unwrap(), 2.5);
+
+              let revision = scene.revision();
+              assert!(scene
+                  .set_z_index(&LayoutAnchor::from(&family), f64::NAN, true)
+                  .is_err());
+              assert_eq!(scene.revision(), revision);
+
+              scene
+                  .set_z_index(&LayoutAnchor::from(&family), 9., false)
+                  .unwrap();
+              assert_eq!(family.z_index().unwrap(), 9.0);
+              assert_eq!(a.z_index().unwrap(), 2.5);
+
+              let foreign = Scene::new().square(1.).unwrap();
+              assert!(matches!(
+                  scene.set_z_index(&LayoutAnchor::from(&foreign), 5., true),
+                  Err(noon::AuthoringError::ForeignStore)
+              ));
+          }
+
+          #[test]
+          fn paired_priority_example_uses_the_retained_execution_session() {
+              assert_eq!(
+                  noon::example_scenes::z_index::session()
+                      .unwrap()
+                      .frame()
+                      .objects
+                      .len(),
+                  3
+              );
+          }
+          ''')
+
+          scene_tests = Path("crates/noon/src/scene/tests.rs")
+          text = scene_tests.read_text()
+          sentinel = "fn scene_owned_z_index_requires_running_effective_observation_and_preserves_detached_priority()"
+          if sentinel in text:
+              raise SystemExit("Scene z-index tests already present")
+          text += r'''
+
+          #[test]
+          fn scene_owned_z_index_requires_running_effective_observation_and_preserves_detached_priority() {
+              let mut scene = Scene::new();
+              let live = scene.square(1.0).unwrap();
+              let detached = scene.square(1.0).unwrap();
+              live.set_z_index(1.0).unwrap();
+              detached.set_z_index(4.0).unwrap();
+              scene.add(&live).unwrap();
+
+              let live_anchor = crate::LayoutAnchor::from(&live);
+              assert!(matches!(
+                  scene.effective_z_index(&live_anchor),
+                  Err(crate::AuthoringError::Unsupported(
+                      crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable
+                  ))
+              ));
+
+              let execution = scene.execution_session().unwrap();
+              scene.install_execution(execution);
+              assert_eq!(scene.effective_z_index(&live_anchor).unwrap(), 1.0);
+              assert_eq!(
+                  scene
+                      .effective_z_index(&crate::LayoutAnchor::from(&detached))
+                      .unwrap(),
+                  4.0
+              );
+
+              let foreign_scene = Scene::new();
+              let foreign = foreign_scene.square(1.0).unwrap();
+              assert!(matches!(
+                  scene.effective_z_index(&crate::LayoutAnchor::from(&foreign)),
+                  Err(crate::AuthoringError::ForeignStore)
+              ));
+          }
+
+          #[test]
+          fn scene_owned_z_index_publishes_local_order_changes_and_rejects_stale_state() {
+              let mut scene = Scene::new();
+              let a = scene.square(1.0).unwrap();
+              let b = scene.square(1.0).unwrap();
+              let c = scene.square(1.0).unwrap();
+              scene
+                  .add_many(&[(&a).into(), (&b).into(), (&c).into()])
+                  .unwrap();
+              let execution = scene.execution_session().unwrap();
+              scene.install_execution(execution);
+              scene.owned_execution_mut().take_frame_changes();
+
+              let b_anchor = crate::LayoutAnchor::from(&b);
+              scene.set_z_index(&b_anchor, 0.5, true).unwrap();
+              let changes = scene.owned_execution_mut().take_frame_changes();
+              assert_eq!(changes.painter_order_range(), Some(1..3));
+              assert!(changes.object_indices().is_empty());
+              assert!(!changes.is_structural());
+              assert_eq!(scene.owned_execution().painter_order(), &[0, 2, 1]);
+              assert_eq!(scene.effective_z_index(&b_anchor).unwrap(), 0.5);
+
+              scene.set_z_index(&b_anchor, 1.5, true).unwrap();
+              assert!(scene.owned_execution_mut().take_frame_changes().is_empty());
+              scene.set_z_index(&b_anchor, 0.0, true).unwrap();
+              assert_eq!(scene.owned_execution().painter_order(), &[0, 1, 2]);
+              scene.owned_execution_mut().take_frame_changes();
+
+              let before_b = b.z_index().unwrap();
+              a.set_z_index(7.0).unwrap();
+              let stale_revision = scene.revision();
+              let publication = scene.owned_execution().publication_context();
+              let error = scene.set_z_index(&b_anchor, 2.0, true).unwrap_err();
+              assert!(matches!(
+                  error,
+                  crate::AuthoringError::ExecutionPublication(
+                      crate::ExecutionSessionPublicationError::StaleSceneRevision { .. }
+                  )
+              ));
+              assert_eq!(b.z_index().unwrap(), before_b);
+              assert_eq!(scene.revision(), stale_revision);
+              assert_eq!(scene.owned_execution().publication_context(), publication);
+          }
+
+          #[test]
+          fn scene_owned_z_index_updates_nonrendered_family_root_without_frame_delta() {
+              let mut scene = Scene::new();
+              let a = scene.square(1.0).unwrap();
+              let b = scene.circle(1.0).unwrap();
+              let family = scene.family(&[(&a).into(), (&b).into()]).unwrap();
+              scene.add_many(&[(&family).into()]).unwrap();
+              let execution = scene.execution_session().unwrap();
+              scene.install_execution(execution);
+              scene.owned_execution_mut().take_frame_changes();
+
+              let family_anchor = crate::LayoutAnchor::from(&family);
+              scene.set_z_index(&family_anchor, 9.0, false).unwrap();
+              assert!(scene.owned_execution_mut().take_frame_changes().is_empty());
+              assert_eq!(family.z_index().unwrap(), 9.0);
+              assert_eq!(a.z_index().unwrap(), 0.0);
+              assert_eq!(scene.effective_z_index(&family_anchor).unwrap(), 9.0);
+          }
+          '''
+          scene_tests.write_text(text)
+          '@ | Set-Content -Encoding utf8 patch1533.py
+          python patch1533.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item patch1533.py
+          Remove-Item .github/workflows/tmp-1533-scene-z-index.yml
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $names = git diff --name-only | Sort-Object
+          $expected = @(
+            'crates/noon/src/live_session.rs',
+            'crates/noon/src/live_session/z_index.rs',
+            'crates/noon/src/scene.rs',
+            'crates/noon/src/scene/tests.rs',
+            'crates/noon/tests/z_index.rs',
+            '.github/workflows/tmp-1533-scene-z-index.yml'
+          ) | Sort-Object
+          if (Compare-Object $names $expected) { throw "unexpected changed-file surface: $names" }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Move z-index control onto Scene"
+          git push origin HEAD:codex/1533-scene-z-index
