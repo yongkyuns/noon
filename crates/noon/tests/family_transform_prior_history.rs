@@ -53,7 +53,8 @@ fn prior_equal_family_style_transform_does_not_break_padding_restoration_capture
             .declare_and_activate_family_transform_to(&source, outline.root(), smooth(0.35))
             .unwrap();
         assert_eq!(segment.end_time(), 0.85);
-        live.advance_segment_to(segment, segment.end_time()).unwrap();
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
         live.complete_segment(segment).unwrap();
     }
 
@@ -63,7 +64,8 @@ fn prior_equal_family_style_transform_does_not_break_padding_restoration_capture
             .declare_and_activate_family_transform_to(&source, &contracted, smooth(1.8))
             .unwrap();
         assert_eq!(segment.end_time(), 2.65);
-        live.advance_segment_to(segment, segment.end_time()).unwrap();
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
         live.complete_segment(segment).unwrap();
         assert!(source_objects
             .iter()
