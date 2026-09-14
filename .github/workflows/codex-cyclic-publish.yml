@@ -55,14 +55,15 @@ jobs:
           crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_activation.rs
           crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_channels.rs
           crates/noon-compile/src/semantic_lowering/animation_schedule.rs
+          crates/noon-native/examples/ordinary_cyclic_replace.rs
           crates/noon-web/src/canonical_authoring_scene.rs
           crates/noon/src/example_scenes.rs
           crates/noon/src/example_scenes/cyclic_replace.rs
           crates/noon/src/execution_session.rs
           crates/noon/src/execution_session/family_transform_tests.rs
-          examples/python/cyclic_replace.py
           web/python/_manim_animate.py
           web/python/_manim_scene.py
+          web/python/examples/manim_compatible_cyclic_replace.py
           web/python/noon.py
           web/python/test_manim_cyclic_replace.py
           EOF
