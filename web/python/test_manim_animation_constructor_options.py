@@ -67,7 +67,7 @@ class ManimAnimationConstructorOptionsTests(unittest.TestCase):
             from _typed_geometry_test_support import identity_only_wrapper as identity
             import noon
             names = ("Transform", "ReplacementTransform", "TransformFromCopy",
-                     "TransformMatchingShapes", "Create", "Uncreate", "FadeIn",
+                     "TransformMatchingShapes", "ApplyMatrix", "Create", "Uncreate", "FadeIn",
                      "FadeOut", "Indicate", "ScaleInPlace", "ShrinkToCenter")
             exports = {name: getattr(noon, name) for name in names}
             # Public requests accept options before Scene/bootstrap imports. Later

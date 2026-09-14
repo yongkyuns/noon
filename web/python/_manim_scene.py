@@ -1453,6 +1453,49 @@ def _canonical_subset_display_animation(scene: _base.Scene, animation: object):
     return family, leaves, animation.mode
 
 
+def _apply_matrix_target(target: _base.Mobject, animation: object) -> None:
+    """Transport ApplyMatrix call shape; Rust owns matrix/path semantics."""
+    try:
+        raw_rows = list(animation.matrix)
+    except TypeError:
+        raw_rows = [animation.matrix]
+    rows: list[list[object]] = []
+    for raw_row in raw_rows:
+        try:
+            row = list(raw_row)
+        except TypeError:
+            row = [raw_row]
+        rows.append(row)
+    columns = len(rows[0]) if rows else 0
+    values = [float(value) for row in rows for value in row]
+    about = _base._as_vec2(animation.about_point)
+    handle = getattr(target, "_semantic_handle", None)
+    if handle is None:
+        raise NotImplementedError("ApplyMatrix requires a typed semantic Mobject")
+    context = getattr(target, "_canonical_live_target_context", None)
+    if context is None:
+        engine_call(
+            handle.applyMatrix,
+            values,
+            len(rows),
+            columns,
+            float(about.x),
+            float(about.y),
+            operation="ApplyMatrix",
+        )
+    else:
+        engine_call(
+            context.liveApplyMatrix,
+            handle,
+            values,
+            len(rows),
+            columns,
+            float(about.x),
+            float(about.y),
+            operation="ApplyMatrix",
+        )
+
+
 def _build_canonical_composition_candidate(
     self: _base.Scene,
     kind: str,
@@ -1505,6 +1548,18 @@ def _build_canonical_composition_candidate(
             nested_kind = "sequence" if isinstance(animation, _composition.Succession) else "parallel"
             nested = build(nested_kind, tuple(animation.animations), animation, {})
             builder.appendComposition(nested)
+            return
+        if type(animation) is _animate.ApplyMatrix:
+            # Validate generic animation options before target preparation. Nonzero
+            # path_arc remains outside this first pointwise-matrix slice.
+            _canonical_composition_child_options(animation, child_kwargs)
+            source = animation.source
+            if source._scene not in (None, self):
+                raise ValueError("ApplyMatrix target belongs to another Scene")
+            target = source._copy_for_animate_target()
+            _apply_matrix_target(target, animation)
+            transform = _base.Transform(source, target, **animation.anim_args)
+            append_leaf(builder, transform, child_kwargs)
             return
         if type(animation) is _animate.ScaleInPlace:
             # Resolve options before creating a target. Copy/scale and effective

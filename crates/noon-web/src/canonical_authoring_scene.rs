@@ -6902,6 +6902,34 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveApplyMatrix)]
+        pub fn live_apply_matrix(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            values: Vec<f64>,
+            rows: u32,
+            columns: u32,
+            about_x: f64,
+            about_y: f64,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(
+                self.inner.scene.integration_store(),
+                "live execution context",
+            )?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_apply_matrix(
+                    handle.semantic_mobject(),
+                    &values,
+                    rows as usize,
+                    columns as usize,
+                    about_x,
+                    about_y,
+                )
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveScale)]
         pub fn live_scale(
             &mut self,
