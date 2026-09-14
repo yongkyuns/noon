@@ -1528,6 +1528,13 @@ impl<'a> LiveSession<'a> {
                     options: *options,
                 }
             }
+            AnimationCompositionRequest::CyclicReplace { family, options } => {
+                self.require_family(family)?;
+                Request::CyclicReplace {
+                    family: family.node_id(),
+                    options: *options,
+                }
+            }
             AnimationCompositionRequest::Indicate {
                 target,
                 indication,

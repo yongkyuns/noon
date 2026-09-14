@@ -1786,12 +1786,13 @@ impl ExecutionSession {
                 options,
             } => {
                 admit(*source, declaration, admitted)?;
-                let target_state = if *interpolation
+                let target_state: SemanticTransactionNodeRef = if *interpolation
                     == noon_core::SemanticTransformInterpolation::CenterTranslation
                 {
-                    *target_state
+                    (*target_state).into()
                 } else {
                     self.stage_animation_target_state(store, declaration, *target_state)?
+                        .into()
                 };
                 let animation = declaration.create_transform_animation_with_interpolation(
                     *source,
