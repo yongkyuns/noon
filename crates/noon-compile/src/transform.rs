@@ -1,6 +1,6 @@
 use noon_core::{
-    GeometryRef, Property, StrokeWidthMode, Style, TrackDefinition, TrackValues, Transform2D,
-    VectorPath,
+    GeometryRef, PathCommand, Property, StrokeWidthMode, Style, TrackDefinition, TrackValues,
+    Transform2D, VectorPath,
 };
 use std::sync::Arc;
 
@@ -196,6 +196,11 @@ pub(crate) fn compile_content_morph(
         .expect("supported source geometry must convert to a path");
     let target = noon_geometry::canonical_outline_path(to_geometry)
         .expect("supported target geometry must convert to a path");
+    let (source, target) = if morph_requires_filled_topology(from_style, to_style) {
+        (source, target)
+    } else {
+        prepare_stroke_correspondence(source, target)?
+    };
     let TransformGeometryPlan::PathPair {
         geometry,
         render_transform,
@@ -228,6 +233,83 @@ fn screen_space_stroke_requires_fixed_frame(from: Style, to: Style) -> bool {
 pub(crate) fn morph_requires_filled_topology(from: Style, to: Style) -> bool {
     from.fill.is_some_and(|color| color.alpha != 0.0)
         || to.fill.is_some_and(|color| color.alpha != 0.0)
+}
+
+fn prepare_stroke_correspondence(
+    source: VectorPath,
+    target: VectorPath,
+) -> Result<(VectorPath, VectorPath), TransformCompileFailure> {
+    let aligned = noon_geometry::align_paths(&source, &target)
+        .map_err(|_| TransformCompileFailure::UnsupportedGeometry)?;
+    if noon_geometry::plan_morph_preserving_order(
+        &aligned.0,
+        &aligned.1,
+        noon_geometry::MorphOptions::DEFAULT,
+    )
+    .is_ok()
+    {
+        return Ok(aligned);
+    }
+
+    let source = stroke_correspondence_path(&source);
+    let target = stroke_correspondence_path(&target);
+    let aligned = noon_geometry::align_paths(&source, &target)
+        .map_err(|_| TransformCompileFailure::UnsupportedGeometry)?;
+    noon_geometry::plan_morph_preserving_order(
+        &aligned.0,
+        &aligned.1,
+        noon_geometry::MorphOptions::DEFAULT,
+    )
+    .map_err(|_| TransformCompileFailure::UnsupportedGeometry)?;
+    Ok(aligned)
+}
+
+/// Convert closure markers into equivalent explicit closing edges for a stroke-only fallback
+/// payload. This preserves the centerline path trace while removing a closure bit that has no
+/// filled-topology meaning and would otherwise make open-to-closed family correspondence fail a
+/// later renderer-independent preflight pass. Already-supported correspondence retains closure.
+fn stroke_correspondence_path(path: &VectorPath) -> VectorPath {
+    let mut result = VectorPath::new();
+    let mut subpath_start = None;
+    let mut current = None;
+    for command in path.commands() {
+        result = match *command {
+            PathCommand::MoveTo { to } => {
+                subpath_start = Some(to);
+                current = Some(to);
+                result.move_to(to)
+            }
+            PathCommand::LineTo { to } => {
+                current = Some(to);
+                result.line_to(to)
+            }
+            PathCommand::QuadraticTo { control, to } => {
+                current = Some(to);
+                result.quadratic_to(control, to)
+            }
+            PathCommand::CubicTo {
+                control1,
+                control2,
+                to,
+            } => {
+                current = Some(to);
+                result.cubic_to(control1, control2, to)
+            }
+            PathCommand::Close => {
+                if let (Some(start), Some(end)) = (subpath_start, current) {
+                    current = Some(start);
+                    if end != start {
+                        result.line_to(start)
+                    } else {
+                        result
+                    }
+                } else {
+                    result
+                }
+            }
+        };
+    }
+    result
 }
 
 fn path_style_requires_retessellation(from: Style, to: Style) -> bool {
@@ -553,6 +635,136 @@ mod tests {
         };
         assert!(path.morph_target().is_some());
         assert_eq!(render_transform, None);
+    }
+
+    #[test]
+    fn stroke_content_morph_preserves_supported_closed_correspondence() {
+        let source = VectorPath::new()
+            .move_to(Vec2::new(-1.0, -1.0))
+            .line_to(Vec2::new(1.0, -1.0))
+            .line_to(Vec2::new(0.0, 1.0))
+            .close();
+        let target = VectorPath::new()
+            .move_to(Vec2::new(-1.0, -1.0))
+            .line_to(Vec2::new(1.0, -1.0))
+            .line_to(Vec2::new(1.0, 1.0))
+            .line_to(Vec2::new(-1.0, 1.0))
+            .close();
+        let transparent_fill = Color {
+            alpha: 0.0,
+            ..Color::WHITE
+        };
+        let style = Style {
+            fill: Some(transparent_fill),
+            stroke: Some(Color::WHITE),
+            stroke_width: 0.08,
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            ..Style::default()
+        };
+
+        let (geometry, _) = compile_content_morph(
+            &GeometryRef::path(source),
+            &GeometryRef::path(target),
+            style,
+            style,
+            Transform2D::IDENTITY,
+            Transform2D::IDENTITY,
+        )
+        .expect("supported closed correspondence must remain closed");
+        let GeometryRef::VectorPath(prepared) = geometry else {
+            panic!("content morph must compile to a path pair")
+        };
+        let prepared_target = prepared.morph_target().expect("prepared morph target");
+        assert!(prepared
+            .commands()
+            .iter()
+            .any(|command| matches!(command, PathCommand::Close)));
+        assert!(prepared_target
+            .commands()
+            .iter()
+            .any(|command| matches!(command, PathCommand::Close)));
+    }
+
+    #[test]
+    fn stroke_content_morph_prepares_open_closed_resource_pair_for_preflight() {
+        let source = VectorPath::new()
+            .move_to(Vec2::new(-1.0, 0.0))
+            .line_to(Vec2::new(1.0, 0.0));
+        let target = VectorPath::new()
+            .move_to(Vec2::new(-1.0, -1.0))
+            .line_to(Vec2::new(1.0, -1.0))
+            .line_to(Vec2::new(0.0, 1.0))
+            .close()
+            .move_to(Vec2::new(2.0, -0.5))
+            .line_to(Vec2::new(3.0, -0.5))
+            .line_to(Vec2::new(2.5, 0.5))
+            .close();
+        let transparent_fill = Color {
+            alpha: 0.0,
+            ..Color::WHITE
+        };
+        let style = Style {
+            fill: Some(transparent_fill),
+            stroke: Some(Color::WHITE),
+            stroke_width: 0.08,
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            ..Style::default()
+        };
+
+        let (geometry, render_transform) = compile_content_morph(
+            &GeometryRef::path(source.clone()),
+            &GeometryRef::path(target.clone()),
+            style,
+            style,
+            Transform2D::IDENTITY,
+            Transform2D::IDENTITY,
+        )
+        .expect("stroke-only content morph must prepare open-to-closed correspondence");
+        let GeometryRef::VectorPath(prepared) = &geometry else {
+            panic!("content morph must compile to a path pair")
+        };
+        let prepared_target = prepared.morph_target().expect("prepared morph target");
+        assert!(prepared
+            .commands()
+            .iter()
+            .all(|command| !matches!(command, PathCommand::Close)));
+        assert!(prepared_target
+            .commands()
+            .iter()
+            .all(|command| !matches!(command, PathCommand::Close)));
+        noon_geometry::plan_morph_preserving_order(
+            prepared,
+            prepared_target,
+            noon_geometry::MorphOptions::DEFAULT,
+        )
+        .expect("prepared execution pair must already satisfy generic correspondence");
+
+        let values = TrackValues::PreparedMorph {
+            from: 0.0,
+            to: 1.0,
+            geometry,
+            render_transform,
+        };
+        assert!(matches!(
+            compile_transform_geometry_values(Property::Morph, &values),
+            Ok(Some(TransformGeometryPlan::PathPair { .. }))
+        ));
+
+        let visible_fill = Style {
+            fill: Some(Color::WHITE),
+            ..style
+        };
+        assert_eq!(
+            compile_content_morph(
+                &GeometryRef::path(source),
+                &GeometryRef::path(target),
+                visible_fill,
+                visible_fill,
+                Transform2D::IDENTITY,
+                Transform2D::IDENTITY,
+            ),
+            Err(TransformCompileFailure::UnsafeFilledPath)
+        );
     }
 
     #[test]
