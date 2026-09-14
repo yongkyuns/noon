@@ -1,5 +1,5 @@
 use noon_compile::{
-    lower_semantic_execution, ExecutionPatch, SemanticExecutionIndex,
+    lower_semantic_execution, ExecutionMutationTransaction, ExecutionPatch, SemanticExecutionIndex,
 };
 use noon_core::{
     CompositionTimeMap, CompositionTimeMapStep, ObjectId, Property, RateFunction,
@@ -50,11 +50,10 @@ fn retained_hide_runtime() -> (SceneInstance, ObjectId) {
 }
 
 fn install_restoration(runtime: &mut SceneInstance, object: ObjectId) {
-    runtime
-        .apply_execution_patch(&ExecutionPatch::AddTrack(mapped_appearance_track(
-            2, object, 3.75, 1.8, 0.0, 1.0,
-        )))
-        .unwrap();
+    let transaction = ExecutionMutationTransaction::from_mutations([
+        ExecutionPatch::AddTrack(mapped_appearance_track(2, object, 3.75, 1.8, 0.0, 1.0)),
+    ]);
+    runtime.apply_execution_transaction(&transaction).unwrap();
 }
 
 #[test]
