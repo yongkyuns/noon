@@ -14,7 +14,6 @@ pub use family_layout::LiveLayoutTarget;
 use crate::effective_capture::target_style_from_effective;
 use crate::execution_session::EffectiveSemanticObject;
 use crate::{
-    family_arrangement::FamilyArrangePlan,
     semantic_mobject::authoring_render_f64,
     semantic_mobject::{
         edit_color, edit_disable_fill, edit_disable_stroke, edit_fill, edit_fill_color,
@@ -1966,25 +1965,15 @@ impl<'a> LiveSession<'a> {
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        let leaves = self
-            .store
-            .borrow()
-            .ordered_family_leaf_pairs(family.node_id(), family.node_id())
-            .map_err(crate::AuthoringError::from)?
-            .into_iter()
-            .map(|(leaf, _)| leaf)
-            .collect::<Vec<_>>();
-        let mut transaction = SemanticMutationTransaction::new();
-        for leaf in leaves {
-            let mobject =
-                Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
-            let mut translation = self.authored(&mobject)?.transform.translation;
-            translation.x += x;
-            translation.y += y;
-            transaction.set_property(leaf, SemanticObjectProperty::Translation, translation);
-        }
-        self.apply(transaction)
+        crate::family_layout::publish_shift_family(
+            self.store,
+            self.root,
+            self.session,
+            family,
+            x,
+            y,
+        )
+        .map_err(LiveSessionError::from)
     }
 
     /// Arrange direct family members from effective runtime layout and publish
@@ -2009,10 +1998,14 @@ impl<'a> LiveSession<'a> {
         family: &MobjectFamily,
         options: &crate::FamilyArrangeOptions,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        let plan = FamilyArrangePlan::begin(family, options).map_err(LiveSessionError::from)?;
-        self.publish_family_arrangement(plan)
+        crate::family_layout::publish_arrange_family(
+            self.store,
+            self.root,
+            self.session,
+            family,
+            options,
+        )
+        .map_err(LiveSessionError::from)
     }
 
     /// Arrange a family using coherent live bounds and one shared translation transaction.
@@ -2041,29 +2034,14 @@ impl<'a> LiveSession<'a> {
         family: &MobjectFamily,
         options: &crate::FamilyGridOptions,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        let plan = FamilyArrangePlan::grid(family, options).map_err(LiveSessionError::from)?;
-        self.publish_family_arrangement(plan)
-    }
-
-    fn publish_family_arrangement(
-        &mut self,
-        mut plan: FamilyArrangePlan,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        plan.observe_leaf_bounds(|leaf| {
-            let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
-            Ok::<_, LiveSessionError>(crate::family_arrangement::ArrangementBounds {
-                dimensions: self.family_member_bounds(&mobject)?,
-                anchors: self.family_member_measure(&mobject, true)?,
-            })
-        })?;
-        let transaction = plan.transaction(|leaf| {
-            let mobject = Mobject::from_node(Rc::clone(self.store), leaf)?;
-            self.placement_authored_transform(&mobject)?;
-            self.authored(&mobject).map(|s| s.transform.translation)
-        })?;
-        self.apply(transaction)
+        crate::family_layout::publish_arrange_family_in_grid(
+            self.store,
+            self.root,
+            self.session,
+            family,
+            options,
+        )
+        .map_err(LiveSessionError::from)
     }
 
     /// Move an object's effective layout center to one point through a single
@@ -2087,44 +2065,8 @@ impl<'a> LiveSession<'a> {
         &self,
         mobject: &Mobject,
     ) -> Result<Transform2D, LiveSessionError> {
-        let authored = self.authored(mobject)?;
-        let authored_transform = Transform2D {
-            translation: authored
-                .transform
-                .translation
-                .lower_xy_f32()
-                .map_err(crate::AuthoringError::from)?,
-            rotation: authoring_render_f64(
-                "move_to authored rotation",
-                authored.transform.rotation_z,
-            )
-            .map_err(LiveSessionError::from)? as f32,
-            scale: authored
-                .transform
-                .scale
-                .lower_xy_f32()
-                .map_err(crate::AuthoringError::from)?,
-        };
-        let store = self.store.borrow();
-        match self
-            .session
-            .effective_semantic_object(&store, mobject.node_id())
-        {
-            Ok(observed) if !observed.authored_content_layout_applicable() => {
-                return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
-                    crate::UnsupportedAuthoringOperation::PlacementRenderOverride,
-                )));
-            }
-            Ok(observed) if observed.object.transform != authored_transform => {
-                return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
-                    crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver,
-                )));
-            }
-            Ok(_) | Err(ExecutionSessionPublicationError::UnknownObject(_)) => {}
-            Err(error) => return Err(error.into()),
-        }
-        drop(store);
-        Ok(authored_transform)
+        crate::family_layout::placement_authored_transform(self.store, self.session, mobject)
+            .map_err(LiveSessionError::from)
     }
 
     /// Multiply an object's authored affine scale through the shared live
