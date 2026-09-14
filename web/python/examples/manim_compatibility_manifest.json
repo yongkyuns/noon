@@ -218,6 +218,21 @@
       "thumbnail_alt": "Ghostscript Tiger used by Vello before its retained paths fan into a kaleidoscope",
       "thumbnail_time": 0.5,
       "order": 1140
+    },
+    {
+      "id": "noon-trigonometry-tutorial",
+      "title": "Trigonometry Tutorial",
+      "summary": "A beginner-friendly visual lesson on right-triangle sides, the Pythagorean theorem, SOH–CAH–TOA, and a worked 3–4–5 example.",
+      "status": "ready",
+      "path": "python/examples/noon_trigonometry_tutorial.py",
+      "category": "manim-compatible/tutorial",
+      "features": ["Text", "Write", "Line", "Dot", "Create", "FadeOut", "right-triangle", "SOH-CAH-TOA", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "thumbnail": "thumbnails/manim/noon-trigonometry-tutorial.svg",
+      "thumbnail_alt": "Right triangle with theta, side names, and SOH CAH TOA formulas",
+      "thumbnail_time": 38.0,
+      "order": 1150
     }
   ]
 }
