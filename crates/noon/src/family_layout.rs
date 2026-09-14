@@ -3,9 +3,11 @@ use crate::AuthoringError;
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{
+    family_arrangement::FamilyArrangePlan,
     family_authoring::FamilyTranslation,
     semantic_mobject::{authoring_render_f64, authoring_xy_f64, ManimNextToArgs},
-    Bounds2D64, ExecutionSession, Mobject, MobjectFamily, SemanticNodeId,
+    Bounds2D64, ExecutionSession, ExecutionSessionPublicationError, Mobject, MobjectFamily,
+    SemanticMutationTransactionResult, SemanticNodeId, Transform2D,
 };
 use noon_core::SemanticStore;
 
@@ -28,6 +30,18 @@ pub enum FamilyLayoutTarget<'a> {
     Point(f64, f64),
     Mobject(&'a Mobject),
     Family(&'a FamilyLayout),
+    Anchor(&'a LayoutAnchor),
+}
+
+/// A placement destination observed from one coherent execution publication.
+///
+/// The value owns no Runtime state. Running placement helpers resolve it against
+/// the caller-supplied [`ExecutionSession`] immediately before one publication.
+#[derive(Clone, Copy)]
+pub enum LiveLayoutTarget<'a> {
+    Point(f64, f64),
+    Mobject(&'a Mobject),
+    Family(&'a MobjectFamily),
     Anchor(&'a LayoutAnchor),
 }
 
@@ -484,4 +498,366 @@ pub(crate) fn effective_family_member_measure(
     } else {
         object.layout_bounds_at(transform)
     }
+}
+
+pub(crate) fn effective_anchor_layout_measure(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    anchor: &LayoutAnchor,
+    boundary: bool,
+) -> Result<(Vec<SemanticNodeId>, Option<Bounds2D64>), AuthoringError> {
+    if !Rc::ptr_eq(store, anchor.integration_store()) {
+        return Err(AuthoringError::ForeignStore);
+    }
+    execution
+        .require_published_store(&store.borrow())
+        .map_err(AuthoringError::from)?;
+    let node = anchor.resolve()?;
+    if matches!(
+        store.borrow().node(node).map(|n| n.kind()),
+        Some(noon_core::SemanticNodeKind::Family(_))
+    ) {
+        let family = MobjectFamily::from_node(Rc::clone(store), node)?;
+        effective_family_layout_measure(store, execution, &family, boundary)
+    } else {
+        let object = Mobject::from_node(Rc::clone(store), node)?;
+        let bounds = effective_family_member_measure(store, execution, &object, boundary)?;
+        let bounds = match bounds {
+            Some(bounds) => Some(bounds),
+            None => {
+                let (x, y) = effective_member_center(store, execution, &object)?;
+                Some(Bounds2D64::point(x, y))
+            }
+        };
+        Ok((vec![node], bounds))
+    }
+}
+
+pub(crate) fn placement_authored_transform(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    object: &Mobject,
+) -> Result<Transform2D, AuthoringError> {
+    if !Rc::ptr_eq(store, object.integration_store()) {
+        return Err(AuthoringError::ForeignStore);
+    }
+    let authored = object.state()?;
+    let authored_transform = Transform2D {
+        translation: authored.transform.translation.lower_xy_f32()?,
+        rotation: authoring_render_f64(
+            "move_to authored rotation",
+            authored.transform.rotation_z,
+        )? as f32,
+        scale: authored.transform.scale.lower_xy_f32()?,
+    };
+    let store_ref = store.borrow();
+    match execution.effective_semantic_object(&store_ref, object.node_id()) {
+        Ok(observed) if !observed.authored_content_layout_applicable() => {
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::PlacementRenderOverride,
+            ));
+        }
+        Ok(observed) if observed.object.transform != authored_transform => {
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver,
+            ));
+        }
+        Ok(_) | Err(ExecutionSessionPublicationError::UnknownObject(_)) => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(authored_transform)
+}
+
+fn effective_member_center(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    object: &Mobject,
+) -> Result<(f64, f64), AuthoringError> {
+    if !execution.semantic_object_is_reachable(object.node_id()) {
+        return object.center();
+    }
+    let store_ref = store.borrow();
+    let observed = execution
+        .effective_semantic_object(&store_ref, object.node_id())
+        .map_err(AuthoringError::from)?;
+    if !observed.authored_content_layout_applicable() {
+        return Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveFamilyLayoutRenderOverride,
+        ));
+    }
+    Ok((
+        f64::from(observed.object.transform.translation.x),
+        f64::from(observed.object.transform.translation.y),
+    ))
+}
+
+fn live_target_point(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    target: LiveLayoutTarget<'_>,
+    x: f64,
+    y: f64,
+) -> Result<(f64, f64), AuthoringError> {
+    match target {
+        LiveLayoutTarget::Point(px, py) => {
+            let point = authoring_xy_f64(px, py)?;
+            Ok((point.x, point.y))
+        }
+        LiveLayoutTarget::Mobject(object) => {
+            match effective_family_member_measure(store, execution, object, true)? {
+                Some(bounds) => Ok(bounds_critical_point(Some(bounds), x, y)),
+                None => effective_member_center(store, execution, object),
+            }
+        }
+        LiveLayoutTarget::Anchor(anchor) => effective_anchor_layout_measure(
+            store,
+            execution,
+            anchor,
+            true,
+        )
+        .map(|(_, bounds)| bounds_critical_point(bounds, x, y)),
+        LiveLayoutTarget::Family(family) => effective_family_layout_measure(
+            store,
+            execution,
+            family,
+            true,
+        )
+        .map(|(_, bounds)| bounds_critical_point(bounds, x, y)),
+    }
+}
+
+fn publish_layout_translation(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    leaves: Vec<SemanticNodeId>,
+    bounds: Option<Bounds2D64>,
+    target: LiveLayoutTarget<'_>,
+    placement: RelativePlacement,
+) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+    execution
+        .require_published_store(&store.borrow())
+        .map_err(AuthoringError::from)?;
+    let delta = placement.delta(bounds, |x, y| {
+        live_target_point(store, execution, target, x, y)
+    })?;
+    for &leaf in &leaves {
+        let object = Mobject::from_node(Rc::clone(store), leaf)?;
+        placement_authored_transform(store, execution, &object)?;
+    }
+    let transaction = FamilyTranslation::from_members(leaves, delta.0, delta.1)?
+        .transaction(&store.borrow())?;
+    crate::Scene::publish_running_transaction(store, root, execution, transaction)
+        .map_err(AuthoringError::from)
+}
+
+pub(crate) fn publish_shift_family(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    family: &MobjectFamily,
+    x: f64,
+    y: f64,
+) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+    if !Rc::ptr_eq(store, family.integration_store()) {
+        return Err(AuthoringError::ForeignStore);
+    }
+    family.validate()?;
+    execution
+        .require_published_store(&store.borrow())
+        .map_err(AuthoringError::from)?;
+    let transaction = FamilyTranslation::begin(&store.borrow(), family.node_id(), x, y)?
+        .transaction(&store.borrow())?;
+    crate::Scene::publish_running_transaction(store, root, execution, transaction)
+        .map_err(AuthoringError::from)
+}
+
+pub(crate) fn publish_arrange_family(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    family: &MobjectFamily,
+    options: &crate::FamilyArrangeOptions,
+) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+    if !Rc::ptr_eq(store, family.integration_store()) {
+        return Err(AuthoringError::ForeignStore);
+    }
+    family.validate()?;
+    execution
+        .require_published_store(&store.borrow())
+        .map_err(AuthoringError::from)?;
+    let plan = FamilyArrangePlan::begin(family, options)?;
+    publish_family_arrangement(store, root, execution, plan)
+}
+
+pub(crate) fn publish_arrange_family_in_grid(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    family: &MobjectFamily,
+    options: &crate::FamilyGridOptions,
+) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+    if !Rc::ptr_eq(store, family.integration_store()) {
+        return Err(AuthoringError::ForeignStore);
+    }
+    family.validate()?;
+    execution
+        .require_published_store(&store.borrow())
+        .map_err(AuthoringError::from)?;
+    let plan = FamilyArrangePlan::grid(family, options)?;
+    publish_family_arrangement(store, root, execution, plan)
+}
+
+fn publish_family_arrangement(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    mut plan: FamilyArrangePlan,
+) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+    plan.observe_leaf_bounds(|leaf| {
+        let object = Mobject::from_node(Rc::clone(store), leaf)?;
+        Ok::<_, AuthoringError>(crate::family_arrangement::ArrangementBounds {
+            dimensions: effective_family_member_measure(store, execution, &object, false)?,
+            anchors: effective_family_member_measure(store, execution, &object, true)?,
+        })
+    })?;
+    let transaction = plan.transaction(|leaf| {
+        let object = Mobject::from_node(Rc::clone(store), leaf)?;
+        placement_authored_transform(store, execution, &object)?;
+        object.state().map(|state| state.transform.translation)
+    })?;
+    crate::Scene::publish_running_transaction(store, root, execution, transaction)
+        .map_err(AuthoringError::from)
+}
+
+pub(crate) fn publish_move_to(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    object: &Mobject,
+    target: LiveLayoutTarget<'_>,
+    edge: (f64, f64),
+    mask: (f64, f64),
+) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+    execution
+        .require_published_store(&store.borrow())
+        .map_err(AuthoringError::from)?;
+    let transform = placement_authored_transform(store, execution, object)?;
+    let bounds = object.boundary_bounds_at(transform)?.unwrap_or_else(|| {
+        Bounds2D64::point(
+            f64::from(transform.translation.x),
+            f64::from(transform.translation.y),
+        )
+    });
+    publish_layout_translation(
+        store,
+        root,
+        execution,
+        vec![object.node_id()],
+        Some(bounds),
+        target,
+        RelativePlacement::Move { edge, mask },
+    )
+}
+
+pub(crate) fn publish_move_family_to(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    family: &MobjectFamily,
+    target: LiveLayoutTarget<'_>,
+    edge: (f64, f64),
+    mask: (f64, f64),
+) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+    let (leaves, bounds) = effective_family_layout_measure(store, execution, family, true)?;
+    publish_layout_translation(
+        store,
+        root,
+        execution,
+        leaves,
+        bounds,
+        target,
+        RelativePlacement::Move { edge, mask },
+    )
+}
+
+pub(crate) fn publish_next_family_to(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    family: &MobjectFamily,
+    target: LiveLayoutTarget<'_>,
+    args: ManimNextToArgs,
+) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+    let (leaves, bounds) = effective_family_layout_measure(store, execution, family, true)?;
+    publish_layout_translation(
+        store,
+        root,
+        execution,
+        leaves,
+        bounds,
+        target,
+        RelativePlacement::Next(args),
+    )
+}
+
+pub(crate) fn publish_align_family_on_frame(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    family: &MobjectFamily,
+    direction: (f64, f64),
+    buff: f64,
+) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+    let target = frame_alignment_target(direction, buff)?;
+    publish_align_family_to(
+        store,
+        root,
+        execution,
+        family,
+        LiveLayoutTarget::Point(target.0, target.1),
+        direction,
+    )
+}
+
+pub(crate) fn publish_align_family_to(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    family: &MobjectFamily,
+    target: LiveLayoutTarget<'_>,
+    axis: (f64, f64),
+) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+    let (leaves, bounds) = effective_family_layout_measure(store, execution, family, true)?;
+    publish_layout_translation(
+        store,
+        root,
+        execution,
+        leaves,
+        bounds,
+        target,
+        RelativePlacement::Align(axis),
+    )
+}
+
+pub(crate) fn publish_next_layout_to_aligned(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    source: &LayoutAnchor,
+    target: LiveLayoutTarget<'_>,
+    aligner: &LayoutAnchor,
+    args: ManimNextToArgs,
+) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+    let (leaves, _) = effective_anchor_layout_measure(store, execution, source, false)?;
+    let (_, bounds) = effective_anchor_layout_measure(store, execution, aligner, true)?;
+    publish_layout_translation(
+        store,
+        root,
+        execution,
+        leaves,
+        bounds,
+        target,
+        RelativePlacement::Next(args),
+    )
 }
