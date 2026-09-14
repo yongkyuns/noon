@@ -291,6 +291,24 @@ impl Scene {
         crate::z_index::effective_z_index(&self.store, execution, source)
     }
 
+    /// Prepare boolean geometry from the current coherent Runtime publication.
+    /// Cold Scenes fail explicitly rather than substituting authored geometry.
+    pub fn effective_boolean_geometry_options(
+        &self,
+        operation: crate::BooleanOperation,
+        operands: &[Mobject],
+    ) -> Result<crate::ManimGeometryOptions, AuthoringError> {
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::boolean_authoring::effective_boolean_geometry_options(
+            &self.store,
+            execution,
+            operation,
+            operands,
+        )
+    }
+
     pub(crate) fn require_object(&self, object: &Mobject) -> Result<(), crate::AuthoringError> {
         if !Rc::ptr_eq(&self.store, object.integration_store()) {
             return Err(crate::AuthoringError::ForeignStore);

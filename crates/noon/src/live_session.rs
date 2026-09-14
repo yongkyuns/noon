@@ -6,7 +6,6 @@
 //! Existing affine declarations use session-local segments, whose endpoint
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
-mod boolean_geometry;
 mod family_layout;
 mod path_editing;
 pub use family_layout::LiveLayoutTarget;

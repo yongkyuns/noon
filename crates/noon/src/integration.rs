@@ -23,6 +23,7 @@
 //! The retained text adapter below is still needed by explicit transport callers
 //! and is deletion-owned by #959. It is not the ordinary Scene authoring API.
 
+pub use crate::boolean_authoring::effective_boolean_geometry_options;
 pub use crate::compact_value_authoring::semantic_object_state_from_compact;
 pub use crate::execution_segment::{ExecutionSegmentSequence, ExecutionSegmentToken};
 pub use crate::execution_session::{
