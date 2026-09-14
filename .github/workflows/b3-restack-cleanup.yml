@@ -1,0 +1,35 @@
+name: B3 restack cleanup
+
+on:
+  push:
+    branches:
+      - b3-cyclic-replace-adapter
+
+permissions:
+  contents: write
+
+jobs:
+  restack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: b3-cyclic-replace-adapter
+          fetch-depth: 0
+      - name: Restack on current master and remove temporary tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin master
+          git rebase origin/master
+          rm -f .b3-center-status.txt .b3-center-status2.txt
+          rm -f .github/workflows/b3-center-fix.yml .github/workflows/b3-center-translation-patch.yml
+          rm -f scripts/_b3_center_fix.py scripts/_b3_center_translation_patch.py
+          git rm -f .github/workflows/b3-restack-cleanup.yml
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m 'chore: remove B3 staging tooling'
+          fi
+          git push --force-with-lease origin HEAD:b3-cyclic-replace-adapter
