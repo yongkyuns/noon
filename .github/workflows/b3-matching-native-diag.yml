@@ -1,13 +1,43 @@
-name: B3 matching mode staging
+name: B3 matching mode apply
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [b3-matching-native-request]
 
 permissions:
   contents: write
 
 jobs:
-  idle:
+  apply:
     runs-on: ubuntu-latest
     steps:
-      - run: echo staged
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply and validate selector
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cat .github/tmp/b3-matching-mode.* | base64 -d > /tmp/b3-matching-mode.py
+          python3 /tmp/b3-matching-mode.py
+          cargo fmt --all -- --check
+          cargo check -p noon-core -p noon-compile
+          cargo test -p noon-core family_transform_correspondence_mode_is_authored_state --lib
+          cargo test -p noon-compile matching_family_transform --lib
+      - name: Commit source-only selector
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/b3-matching-native-diag.yml
+          git rm .github/tmp/b3-matching-mode.*
+          git add \
+            crates/noon-core/src/semantic_store/semantic_animations.rs \
+            crates/noon-core/src/semantic_store/semantic_transaction.rs \
+            crates/noon-core/src/semantic_store/semantic_transaction/animation_addition.rs \
+            crates/noon-compile/src/semantic_lowering/animation_schedule.rs \
+            crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_activation.rs \
+            crates/noon-compile/src/semantic_lowering/animation_payload/matching_family_transform_activation.rs
+          git commit -m 'Select matching-shape family transforms semantically'
+          git push origin HEAD:${GITHUB_REF_NAME}
