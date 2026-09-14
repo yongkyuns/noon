@@ -1,4 +1,4 @@
-use noon_compile::{CompiledObject, CompiledScene};
+use noon_compile::{CompiledObject, CompiledScene, ExecutionPatch};
 use noon_core::{
     CompositionTimeMap, CompositionTimeMapStep, GeometryRef, ObjectId, Property, RateFunction,
     Style, TrackDefinition, TrackId, TrackTiming, TrackValues, Transform2D,
@@ -28,7 +28,7 @@ fn mapped_appearance_track(
     }
 }
 
-fn mapped_round_trip_runtime() -> SceneInstance {
+fn retained_hide_runtime() -> (SceneInstance, ObjectId) {
     let object = ObjectId::new(1);
     let compiled = CompiledScene::compile_objects(
         vec![CompiledObject::new(
@@ -37,20 +37,27 @@ fn mapped_round_trip_runtime() -> SceneInstance {
             Transform2D::IDENTITY,
             Style::default(),
         )],
-        &[
-            mapped_appearance_track(1, object, 0.85, 1.8, 1.0, 0.0),
-            mapped_appearance_track(2, object, 3.75, 1.8, 0.0, 1.0),
-        ],
+        &[mapped_appearance_track(1, object, 0.85, 1.8, 1.0, 0.0)],
     )
     .unwrap();
-    SceneInstance::new(compiled)
+    (SceneInstance::new(compiled), object)
+}
+
+fn install_restoration(runtime: &mut SceneInstance, object: ObjectId) {
+    runtime
+        .apply_execution_patch(&ExecutionPatch::AddTrack(mapped_appearance_track(
+            2, object, 3.75, 1.8, 0.0, 1.0,
+        )))
+        .unwrap();
 }
 
 #[test]
-fn later_mapped_appearance_track_owns_its_exact_endpoint() {
-    let mut forward = mapped_round_trip_runtime();
+fn live_added_mapped_appearance_track_owns_its_exact_endpoint() {
+    let (mut forward, object) = retained_hide_runtime();
     forward.advance_to(2.65).unwrap();
     assert_eq!(forward.frame().objects[0].appearance, 0.0);
+    forward.advance_to(3.75).unwrap();
+    install_restoration(&mut forward, object);
 
     forward.advance_to(4.65).unwrap();
     let midpoint = forward.frame().objects[0].appearance;
@@ -59,7 +66,9 @@ fn later_mapped_appearance_track_owns_its_exact_endpoint() {
     forward.advance_to(5.55).unwrap();
     assert_eq!(forward.frame().objects[0].appearance, 1.0);
 
-    let mut direct = mapped_round_trip_runtime();
+    let (mut direct, object) = retained_hide_runtime();
+    direct.advance_to(3.75).unwrap();
+    install_restoration(&mut direct, object);
     direct.seek(5.55).unwrap();
     assert_eq!(direct.frame().objects[0].appearance, 1.0);
 }
