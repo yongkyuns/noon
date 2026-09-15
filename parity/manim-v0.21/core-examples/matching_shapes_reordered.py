@@ -32,13 +32,20 @@ class MatchingShapesReordered(Scene):
         source_members = tuple(source.submobjects)
         target_members = tuple(target.submobjects)
 
-        def assert_completed_state():
+        def assert_completed_state(*, completed_waits=0):
             # Observe the public API: rendering alone cannot prove that Python
             # wrappers follow the original target into the completed Rust scene.
             roots = self.mobjects
-            assert len(roots) == 3 and all(
-                actual is expected for actual, expected in zip(roots, (before, after, target))
+            assert 3 <= len(roots) <= 3 + completed_waits and all(
+                actual is expected for actual, expected in zip(roots[:3], (before, after, target))
             ), "matching cleanup must append the original target after surviving roots"
+            # Manim 0.21 admits one empty Mobject for each Wait and leaves it
+            # in the root list. Permit only those inert trailing placeholders;
+            # authored root identity/order and source removal remain exact.
+            assert all(
+                type(root) is Mobject and root.get_num_points() == 0 and not root.submobjects
+                for root in roots[3:]
+            ), "only inert Wait placeholders may follow the completed authored roots"
             for family, members in ((source, source_members), (target, target_members)):
                 actual = family.submobjects
                 assert len(actual) == len(members) and all(
@@ -56,6 +63,6 @@ class MatchingShapesReordered(Scene):
         assert_completed_state()
         # Cairo emits only one PNG per static wait, regardless of its duration.
         self.wait(0.1)
-        assert_completed_state()
+        assert_completed_state(completed_waits=1)
         self.wait(0.1)
-        assert_completed_state()
+        assert_completed_state(completed_waits=2)
