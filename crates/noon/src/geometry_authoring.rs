@@ -262,9 +262,11 @@ fn rotate_transform_about_origin(
 }
 
 fn brace_angle(direction: (f64, f64)) -> Result<f64, AuthoringError> {
-    let direction = finite_point("direction", direction)?;
-    let rotation = f64::atan2(-direction.0, direction.1);
-    authoring_render_f64("brace rotation", rotation)
+    let direction = finite_point("brace direction", direction)?;
+    authoring_render_f64(
+        "brace angle",
+        -direction.0.atan2(direction.1) + std::f64::consts::PI,
+    )
 }
 
 fn finite_point(name: &str, point: (f64, f64)) -> Result<(f64, f64), AuthoringError> {
@@ -331,7 +333,7 @@ impl RawBracePath {
         path.cubic_rel(0.0537, 0.02695, 0.07418, 0.05816, 0.08648, 0.07769);
         path.cubic_rel(0.001562, 0.002538, 0.004539, 0.002563, 0.01098, 0.002563);
         path.cubic_rel(0.006444, -2e-8, 0.009421, -2.47e-5, 0.01098, -0.002563);
-        path.cubic_rel(0.0123, -0.01953, 0.03278, 0.05074, 0.08648, -0.07769);
+        path.cubic_rel(0.0123, -0.01953, 0.03278, -0.05074, 0.08648, -0.07769);
         path.cubic_rel(0.04491, -0.02187, 0.09409, -0.02597, 0.1246, -0.02636);
         path.line_rel(linear_section_length, 0.0);
         path.cubic_rel(0.05077, 0.0, 0.1629, -0.02346, 0.2307, -0.1455);
@@ -341,7 +343,7 @@ impl RawBracePath {
             -0.006444, -3.919e-8, -0.009348, 2.448e-5, -0.01091, 0.002563,
         );
         path.cubic_rel(-0.0123, 0.01953, -0.03278, 0.05074, -0.08648, 0.07769);
-        path.cubic_rel(-0.04491, 0.02187, -0.09416, 0.02597, -0.1246, -0.02636);
+        path.cubic_rel(-0.04491, 0.02187, -0.09416, 0.02597, -0.1246, 0.02636);
         path.line_rel(-linear_section_length, 0.0);
         path.cubic_rel(-0.04786, 0.0, -0.1502, 0.02094, -0.2185, 0.1256);
         path.cubic_rel(-0.06833, -0.1046, -0.1706, -0.1256, -0.2185, -0.1256);
