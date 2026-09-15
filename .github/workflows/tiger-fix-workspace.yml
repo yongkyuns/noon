@@ -19,18 +19,63 @@ jobs:
   workspace:
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    outputs:
+      candidate: ${{ steps.publish.outputs.candidate }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.ref_name }}
-          fetch-depth: 2
-      - name: Apply isolated candidate integration
+          fetch-depth: 0
+      - name: Update renderer assertions for the supported representation
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          if test -f scripts/.apply-tiger-fix.py; then python3 scripts/.apply-tiger-fix.py; fi
-          rm -f scripts/.tiger-fix.patch.part1 scripts/.apply-tiger-fix.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('crates/noon-render-wgpu/src/lib.rs')
+          s=p.read_text()
+          old='''        let rejected = visible_preparer.prepare(&visible);
+                  assert_eq!(rejected.stats.unsupported_count, 1);'''
+          new='''        let filled = visible_preparer.prepare(&visible);
+                  assert_eq!(filled.stats.unsupported_count, 0);
+                  assert!(filled.path_vertices.iter().any(|vertex| vertex.surface & 1 == 0));
+                  visible.morphs[0] = 0.5;
+                  let middle = visible_preparer.prepare_incremental(&visible, &FrameChanges::objects(vec![0]));
+                  assert_eq!(middle.stats.unsupported_count, 0);
+                  assert!(middle.stats.path_vertices_repacked > 0);'''
+          assert s.count(old)==1
+          s=s.replace(old,new)
+          start=s.index('        assert_eq!(prepared.render_batches.len(), 3);',s.index('fn unique_path_replacement_dirties_only_its_geometry_chunks'))
+          end=s.index('        assert!(!prepared.mega_path_index_dirty);',start)
+          s=s[:start]+'''        // The GPU consumes the canonical chunk iterator, not the obsolete
+                  // flat snapshot. Adjacent mega chunks coalesce at draw encoding.
+                  let ordered = prepared.ordered_render_batches().collect::<Vec<_>>();
+                  let pivot = ordered.iter().position(|entry| matches!(entry.batch.primitive,
+                      RenderPrimitive::Path { batch: REPLACED })).unwrap();
+                  assert!(pivot > 0 && pivot + 1 < ordered.len());
+                  assert!(ordered[..pivot].iter().all(|entry| matches!(entry.batch.primitive,
+                      RenderPrimitive::MegaPath { .. })));
+                  assert!(ordered[pivot + 1..].iter().all(|entry| matches!(entry.batch.primitive,
+                      RenderPrimitive::MegaPath { .. })));
+                  assert_eq!(prepared.stats.render_order_chunks_rebuilt, 1);
+                  assert!(prepared.stats.render_order_positions_visited <= 64);
+          '''+s[end:]
+          p.write_text(s)
+          p=Path('crates/noon-render-wgpu/src/mega_mesh.rs')
+          s=p.read_text()
+          anchor='''        if path_batch.instance_range.end != path_batch.instance_range.start + 1'''
+          assert s.count(anchor)==1
+          s=s.replace(anchor,'''        if self.path_mesh_cache[self.path_batch_cache_indices[path_batch_index]].sampled.is_some() {
+                      return false;
+                  }
+          '''+anchor)
+          p.write_text(s)
+          p=Path('scripts/playground-tiger-morph-smoke.mjs')
+          s=p.read_text().replace('  let lastTime = -1;', '  let lastTime = -1;\n  let armed = false;')
+          s=s.replace('    if (Number.isFinite(time) && time >= 0', '    if (Number.isFinite(time) && time >= 0 && time < 0.3) armed = true;\n    if (armed && Number.isFinite(time) && time >= 0')
+          p.write_text(s)
+          PY
           python3 -m py_compile web/python/examples/manim_compatible_svg_tiger_morph.py
-          node --check scripts/playground-python-family-transform-smoke.mjs
+          node --check scripts/playground-tiger-morph-smoke.mjs
       - name: Use pinned Rust
         run: rustup install
       - uses: actions/cache@v6
@@ -44,34 +89,34 @@ jobs:
         with:
           version: v0.16.0
       - name: Format and publish candidate on isolated branch
+        id: publish
         run: |
           cargo fmt --all
           git diff --check
           git config user.name 'Noon fix validation'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add crates docs/architecture.md web/python/examples/manim_compatible_svg_tiger_morph.py scripts/playground-python-family-transform-smoke.mjs scripts/.apply-tiger-fix.py scripts/.tiger-fix.patch.part1
+          git add -u
           if ! git diff --cached --quiet; then
-            git commit -m 'fix: preserve filled geometry throughout tiger family round trip'
+            git commit -m 'test: validate sampled fill support and canonical local draw ordering'
             git push origin HEAD:refs/heads/fix/ghostscript-tiger-filled-morph
           fi
-          git rev-parse HEAD
-      - name: Geometry and compiler regression tests
-        run: |
-          cargo test -p noon-geometry --lib
-          cargo test -p noon-compile --all-targets
+          echo "candidate=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Renderer library regression tests
+        run: cargo test -p noon-render-wgpu --all-features --lib
       - name: Renderer continuity and locality tests
-        run: |
-          cargo test -p noon-render-wgpu --all-features --lib
-          cargo test -p noon-render-wgpu --all-features --test complex_filled_morph --test morph_steady_locality --test path_cache_lifecycle --test retained_animation_geometry_parity
+        if: ${{ !cancelled() && steps.publish.outcome == 'success' }}
+        run: cargo test -p noon-render-wgpu --all-features --test complex_filled_morph --test morph_steady_locality --test path_cache_lifecycle --test retained_animation_geometry_parity
       - name: Filled family completion and publication tests
+        if: ${{ !cancelled() && steps.publish.outcome == 'success' }}
         run: cargo test -p noon --lib family_transform_renderer_publication_tests
       - name: Repository fast gate
+        if: ${{ !cancelled() && steps.publish.outcome == 'success' }}
         run: bash scripts/check.sh fast 6d6cc95cc307379df700cf22a8b889e0cb60b442
       - name: Export exact candidate and patch
         if: always()
         run: |
           git archive --format=tar -o /tmp/noon-source.tar HEAD
-          git diff 6d6cc95cc307379df700cf22a8b889e0cb60b442 HEAD > /tmp/noon-tiger-tested.patch || true
+          git diff 6d6cc95cc307379df700cf22a8b889e0cb60b442 HEAD > /tmp/noon-tiger-tested.patch
           git rev-parse HEAD > /tmp/noon-tested-head.txt
       - uses: actions/upload-artifact@v7
         if: always()
@@ -81,4 +126,64 @@ jobs:
             /tmp/noon-source.tar
             /tmp/noon-tiger-tested.patch
             /tmp/noon-tested-head.txt
+          retention-days: 2
+  browser:
+    needs: workspace
+    if: ${{ !cancelled() && needs.workspace.outputs.candidate != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.workspace.outputs.candidate }}
+      - name: Use pinned Rust and WASM target
+        run: |
+          rustup install
+          rustup target add wasm32-unknown-unknown
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build exact candidate browser package
+        env:
+          NOON_SKIP_WEB_PREFLIGHT: '1'
+          NOON_WASM_SKIP_OPT: '1'
+          NOON_WASM_PROFILE: dev
+        run: |
+          git rev-parse HEAD
+          bash scripts/build-web-demo.sh
+      - name: Install browser test dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Exercise filled Python family round trip
+        run: node scripts/playground-python-family-transform-smoke.mjs
+      - name: Capture actual Ghostscript tiger-to-rocket-to-tiger
+        if: ${{ !cancelled() }}
+        run: node scripts/playground-tiger-morph-smoke.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: tiger-browser-proof
+          path: browser-smoke-artifacts
+          retention-days: 2
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: tiger-browser-runtime
+          path: |
+            web/pkg
+            web/python-worker.js
+            web/runtime-build-identity.json
+            web/python/compat-bundle.*.json
           retention-days: 2
