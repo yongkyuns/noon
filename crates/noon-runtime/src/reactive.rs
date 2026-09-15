@@ -12,9 +12,6 @@ pub use host_policy::*;
 mod timeline_scheduler;
 pub use timeline_scheduler::*;
 
-#[cfg(test)]
-mod mapped_track_endpoint_tests;
-
 mod wake;
 pub use wake::*;
 
