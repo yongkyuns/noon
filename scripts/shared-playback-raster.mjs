@@ -10,7 +10,8 @@ import { browserArgs, rasterFixtureSource, compareEffectiveFrames, MAX_EFFECTIVE
 const { chromium } = playwright;
 const { PNG } = pngjs;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const manifest = JSON.parse(await readFile(path.join(repoRoot, "parity/manim-v0.21/manifest.json"), "utf8"));
+const manifestPath = path.resolve(repoRoot, process.env.NOON_MANIM_RASTER_MANIFEST ?? "parity/manim-v0.21/manifest.json");
+const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const artifactRoot = path.resolve(repoRoot, process.env.NOON_MANIM_RASTER_ARTIFACTS ?? "manim-raster-artifacts");
 const baseline = JSON.parse(await readFile(path.join(artifactRoot, "report.json"), "utf8"));
 const reference = JSON.parse(await readFile(path.join(artifactRoot, "semantic/manim-all-frames.json"), "utf8"));
@@ -28,8 +29,8 @@ assert.equal(reference.frame_rate, manifest.reference.frame_rate);
 // The existing raster pass is dense playback. This pass changes only the host
 // sample cadence and reuses its actual pixels/current-runtime diagnostics.
 const port = Number(process.env.NOON_SHARED_PLAYBACK_PORT ?? "4194");
-const baseUrl = `http://127.0.0.1:${port}`;
-const server = await serveRepository(repoRoot, port);
+const server = await serveRepository(repoRoot, port, { crossOriginIsolated: true });
+const { baseUrl } = server;
 
 function effectiveFrame(frame) {
   assert.equal(frame?.engine, "noon", "missing shared-runtime capture");
@@ -56,6 +57,8 @@ async function qualifyFixture(page, fixture, backend) {
   const source = await readFile(path.join(repoRoot, fixture.source ?? manifest.reference.source), "utf8");
   const selected = rasterFixtureSource(source, fixture.scene);
   await page.goto(`${baseUrl}/web/manim-raster-host.html`, { waitUntil: "load" });
+  assert.equal(await page.evaluate(() => globalThis.crossOriginIsolated), true,
+    "sparse raster capture requires the isolated shared test server");
   await page.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });
   await page.evaluate(() => window.noonHostRaster.ready());
   const loaded = await page.evaluate(({ source, duration }) => window.noonHostRaster.load(source, duration),
