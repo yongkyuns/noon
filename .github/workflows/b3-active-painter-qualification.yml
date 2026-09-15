@@ -1,0 +1,26 @@
+name: B3 active matching painter qualification
+on:
+  push:
+    branches: [tooling/qualify-1571-active-painter-order]
+    paths:
+      - .github/workflows/b3-active-painter-qualification.yml
+      - .github/b3_active_painter_patch.py
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: e4240f66752ba6023d5397077d3017b9c9231f0c
+      - name: Archive exact product source
+        run: |
+          git rev-parse HEAD
+          git archive --format=tar.gz --output="$RUNNER_TEMP/noon-source-e4240f6.tar.gz" HEAD
+      - uses: actions/upload-artifact@v7
+        with:
+          name: noon-source-e4240f6
+          path: ${{ runner.temp }}/noon-source-e4240f6.tar.gz
+          retention-days: 3
