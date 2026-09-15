@@ -1,0 +1,223 @@
+name: B3 Raster Isolation Qualification
+on:
+  push:
+    branches: [b3-raster-isolation-qualification]
+permissions:
+  contents: write
+concurrency:
+  group: b3-raster-isolation-qualification
+  cancel-in-progress: false
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      NOON_WASM_SKIP_OPT: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply shared-server repair and focused regression
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          expected = {
+              'scripts/browser-test-server.mjs': 'b646a73713e2027663eb3067a80da7e688c8438c',
+              'scripts/manim-raster-differential.mjs': 'f8f736fc9b8133e295b073dcc43966387ab0f0c9',
+              'scripts/shared-playback-raster.mjs': '70d68f200e5786e47054ea6de88134696a1ebf06',
+              '.github/workflows/manim-raster-differential.yml': '70b793a8256c2f6a4d92a22ca16af878e557df10',
+          }
+          for path, sha in expected.items():
+              actual = subprocess.check_output(['git', 'hash-object', path], text=True).strip()
+              assert actual == sha, (path, actual, sha)
+          def replace(text, old, new):
+              assert text.count(old) == 1, (old, text.count(old))
+              return text.replace(old, new, 1)
+          p = Path('scripts/browser-test-server.mjs')
+          p.write_text(replace(p.read_text(), 'return { baseUrl, async close()',
+              'return { baseUrl: `http://127.0.0.1:${server.address().port}`, async close()'))
+          p = Path('scripts/manim-raster-differential.mjs')
+          text = p.read_text()
+          text = replace(text, 'import { spawn, spawnSync } from "node:child_process";',
+              'import { spawnSync } from "node:child_process";\nimport { serveRepository } from "./browser-test-server.mjs";')
+          text = replace(text, 'const manifestPath = path.join(repoRoot, "parity", "manim-v0.21", "manifest.json");',
+              'const manifestPath = path.resolve(repoRoot, process.env.NOON_MANIM_RASTER_MANIFEST ?? "parity/manim-v0.21/manifest.json");')
+          text = replace(text, 'const baseUrl = `http://127.0.0.1:${port}`;\n', '')
+          start = text.index('let serverOutput = "";\n')
+          end = text.index('\ntry {\n  const references = await renderManimReferences();', start)
+          text = text[:start] + '''// Ordinary synchronous construct uses the existing shared continuation host.
+          // Serve the real document and workers with COOP/COEP, not a second server.
+          const server = await serveRepository(repoRoot, port, { crossOriginIsolated: true });
+          const { baseUrl } = server;
+          ''' + text[end:]
+          text = replace(text, '  await waitForServer();\n', '')
+          text = replace(text, '  server.kill("SIGTERM");', '  await server.close();')
+          text = replace(text, '  await page.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });',
+              '''  assert.equal(await page.evaluate(() => globalThis.crossOriginIsolated), true,
+              "raster capture requires the isolated shared test server");
+            await page.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });''')
+          p.write_text(text)
+          p = Path('scripts/shared-playback-raster.mjs')
+          text = replace(p.read_text(), 'const baseUrl = `http://127.0.0.1:${port}`;\n', '')
+          text = replace(text, 'const server = await serveRepository(repoRoot, port);',
+              'const server = await serveRepository(repoRoot, port, { crossOriginIsolated: true });\nconst { baseUrl } = server;')
+          text = replace(text, '  await page.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });',
+              '''  assert.equal(await page.evaluate(() => globalThis.crossOriginIsolated), true,
+              "sparse raster capture requires the isolated shared test server");
+            await page.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });''')
+          p.write_text(text)
+          p = Path('.github/workflows/manim-raster-differential.yml')
+          text = replace(p.read_text(), '      - "scripts/manim-raster-*.mjs"',
+              '      - "scripts/manim-raster-*.mjs"\n      - "scripts/browser-test-server.mjs"\n      - "scripts/shared-playback-raster.mjs"')
+          text = replace(text, 'node --test scripts/manim-raster-samples.test.mjs',
+              'node --test scripts/manim-raster-samples.test.mjs scripts/manim-raster-server.test.mjs')
+          p.write_text(text)
+          Path('scripts/manim-raster-server.test.mjs').write_text('''import assert from "node:assert/strict";
+          import { mkdtemp, rm, writeFile } from "node:fs/promises";
+          import { tmpdir } from "node:os";
+          import path from "node:path";
+          import test from "node:test";
+          import { serveRepository } from "./browser-test-server.mjs";
+
+          async function host(t, options) {
+            const root = await mkdtemp(path.join(tmpdir(), "noon-raster-server-"));
+            await writeFile(path.join(root, "scene.html"), "<!doctype html><title>scene</title>");
+            await writeFile(path.join(root, "worker.js"), "self.ready = true;");
+            await writeFile(path.join(root, "engine.wasm"), new Uint8Array([0, 97, 115, 109]));
+            const server = await serveRepository(root, 0, options);
+            t.after(async () => {
+              await server.close();
+              await rm(root, { recursive: true, force: true });
+            });
+            return { ...server, root };
+          }
+
+          test("isolated raster document, worker and WASM share COOP/COEP and MIME types", async (t) => {
+            const server = await host(t, { crossOriginIsolated: true });
+            assert.notEqual(new URL(server.baseUrl).port, "0");
+            for (const [file, mime] of [["scene.html", "text/html"],
+              ["worker.js", "text/javascript"], ["engine.wasm", "application/wasm"]]) {
+              const response = await fetch(`${server.baseUrl}/${file}`);
+              assert.equal(response.status, 200);
+              assert.equal(response.headers.get("cross-origin-opener-policy"), "same-origin");
+              assert.equal(response.headers.get("cross-origin-embedder-policy"), "require-corp");
+              assert.equal(response.headers.get("cross-origin-resource-policy"), "same-origin");
+              assert.equal(response.headers.get("content-type"), mime);
+              assert.ok((await response.arrayBuffer()).byteLength > 0);
+            }
+          });
+
+          test("isolation remains opt-in for existing non-isolated hosts", async (t) => {
+            const server = await host(t);
+            const response = await fetch(`${server.baseUrl}/scene.html`);
+            assert.equal(response.status, 200);
+            assert.equal(response.headers.get("cross-origin-opener-policy"), null);
+            assert.equal(response.headers.get("cross-origin-embedder-policy"), null);
+            await response.arrayBuffer();
+            const missing = await fetch(`${server.baseUrl}/missing.html`);
+            assert.equal(missing.status, 404);
+            await missing.arrayBuffer();
+          });
+
+          test("a bind collision rejects instead of capturing another task's server", async (t) => {
+            const server = await host(t, { crossOriginIsolated: true });
+            await assert.rejects(
+              serveRepository(server.root, Number(new URL(server.baseUrl).port), { crossOriginIsolated: true }),
+              { code: "EADDRINUSE" },
+            );
+          });
+          ''')
+          PY
+      - name: Server, sampler and existing policy regressions
+        run: |
+          node --test scripts/manim-raster-server.test.mjs scripts/manim-raster-samples.test.mjs scripts/manim-raster-policy.test.mjs
+          node --check scripts/manim-raster-differential.mjs
+          node --check scripts/shared-playback-raster.mjs
+          git diff --check
+      - name: Publish clean candidate without qualification files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Yongkyun Shin'
+          git config user.email '4311628+yongkyuns@users.noreply.github.com'
+          git rm .github/workflows/b3-raster-isolation-qualification.yml
+          git add scripts/browser-test-server.mjs scripts/manim-raster-differential.mjs scripts/shared-playback-raster.mjs scripts/manim-raster-server.test.mjs .github/workflows/manim-raster-differential.yml
+          tree=$(git write-tree)
+          candidate=$(printf '%s\n' 'fix: serve paired raster captures through the isolated shared host' | git commit-tree "$tree" -p 9890ad9d88f87e10f6c65287e6b857a256600f9a)
+          git push origin "$candidate":refs/heads/b3-raster-isolation-candidate
+          git checkout --detach "$candidate"
+          echo "Candidate SHA: $candidate"
+          echo "Candidate tree: $tree"
+      - name: Pinned Rust, WASM and browser build prerequisites
+        run: |
+          rustup install
+          rustup target add wasm32-unknown-unknown
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Fast gate with explicitly fetched comparison history
+        shell: bash
+        run: |
+          status=0
+          bash scripts/check.sh fast 9890ad9d88f87e10f6c65287e6b857a256600f9a > "$RUNNER_TEMP/b3-fast.log" 2>&1 || status=$?
+          tail -n 70 "$RUNNER_TEMP/b3-fast.log"
+          exit "$status"
+      - name: Build exact clean browser inputs
+        shell: bash
+        run: |
+          status=0
+          bash scripts/build-web-demo.sh > "$RUNNER_TEMP/b3-build.log" 2>&1 || status=$?
+          tail -n 70 "$RUNNER_TEMP/b3-build.log"
+          exit "$status"
+      - name: Install pinned raster prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config
+          python -m pip install --disable-pip-version-check "manim[typst]==0.21.0" "typst==0.15.0"
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Qualify paired WebGPU and WebGL without changing thresholds or build inputs
+        shell: bash
+        env:
+          NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
+          NOON_MANIM_RASTER_ARTIFACTS: artifacts/b3-isolated-raster
+          NOON_MANIM_RASTER_PORT: "0"
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          manifest = json.loads(Path('parity/manim-v0.21/manifest.json').read_text())
+          manifest['fixtures'] = [f for f in manifest['fixtures'] if f['scene'] == 'MatchingShapesReordered']
+          assert len(manifest['fixtures']) == 1
+          target = Path(os.environ['RUNNER_TEMP']) / 'b3-raster-manifest.json'
+          target.write_text(json.dumps(manifest))
+          PY
+          export NOON_MANIM_RASTER_MANIFEST="$RUNNER_TEMP/b3-raster-manifest.json"
+          status=0
+          node scripts/manim-raster-differential.mjs > "$RUNNER_TEMP/b3-raster.log" 2>&1 || status=$?
+          tail -n 90 "$RUNNER_TEMP/b3-raster.log"
+          exit "$status"
+      - name: Preserve command logs and actual raster evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: b3-isolated-raster-qualification
+          path: |
+            artifacts/b3-isolated-raster
+            ${{ runner.temp }}/b3-fast.log
+            ${{ runner.temp }}/b3-build.log
+            ${{ runner.temp }}/b3-raster.log
+          if-no-files-found: warn
+          retention-days: 7
