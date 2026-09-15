@@ -4,6 +4,9 @@ on:
     branches: [tooling/qualify-1614-timing-scopes]
 permissions:
   contents: write
+defaults:
+  run:
+    shell: bash
 concurrency:
   group: b3-matching-timing-scopes
   cancel-in-progress: true
