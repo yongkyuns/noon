@@ -18,7 +18,8 @@ browser = json.loads((noon_dir / 'browser.json').read_text())
 report = {'manim_version': reference['manim_version'], 'noon_runtime': browser['runtimeReference'],
           'samples': [], 'failures': [], 'tolerances': {
               'paint_channel_absolute': 1e-6, 'endpoint_bbox_pixels': 2,
-              'foreground_iou': 0.95, 'blurred_foreground_mean_rgb_error_255': 8.0}}
+              'foreground_threshold_rgb': 32, 'foreground_iou': 0.95,
+              'blurred_foreground_mean_rgb_error_255': 8.0}}
 
 def check(ok, message):
     if not ok:
@@ -64,8 +65,11 @@ for sample in reference['samples']:
     check(a_image.size == b_image.size, f'{label}: canvas dimensions differ')
     a = np.array(a_image, dtype=float)
     b = np.array(b_image, dtype=float)
-    a_mask = a.max(axis=2) > 25
-    b_mask = b.max(axis=2) > 25
+    # Keep the binary support check away from Cairo/WebGL's very dark edge
+    # quantization band. Semantic paint channels are checked exactly above; this
+    # mask only verifies raster support/placement rather than antialias values.
+    a_mask = a.max(axis=2) > 32
+    b_mask = b.max(axis=2) > 32
     union = a_mask | b_mask
     iou = float((a_mask & b_mask).sum() / max(1, union.sum()))
     blurred_a = np.array(a_image.filter(ImageFilter.GaussianBlur(0.5)), dtype=float)
