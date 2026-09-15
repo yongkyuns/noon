@@ -29,8 +29,33 @@ class MatchingShapesReordered(Scene):
         after = Circle(radius=1, color=WHITE, fill_opacity=0.6).shift(4 * RIGHT)
         source = VGroup(triangle(-2, BLUE), kite(2, RED))
         target = VGroup(kite(-4, YELLOW), triangle(4, GREEN))
+        source_members = tuple(source.submobjects)
+        target_members = tuple(target.submobjects)
+
+        def assert_completed_state():
+            # Observe the public API: rendering alone cannot prove that Python
+            # wrappers follow the original target into the completed Rust scene.
+            roots = self.mobjects
+            assert len(roots) == 3 and all(
+                actual is expected for actual, expected in zip(roots, (before, after, target))
+            ), "matching cleanup must append the original target after surviving roots"
+            for family, members in ((source, source_members), (target, target_members)):
+                actual = family.submobjects
+                assert len(actual) == len(members) and all(
+                    member is expected for member, expected in zip(actual, members)
+                ), "matching cleanup must preserve source and target member identities"
+            # get_center observes geometry bounds, not transform translation:
+            # the asymmetric kite has a local x-center of 0.5.
+            assert abs(target_members[0].get_center()[0] + 3.5) < 1e-6
+            assert abs(target_members[1].get_center()[0] - 4.0) < 1e-6
+            assert abs(source_members[0].get_center()[0] + 2.0) < 1e-6
+            assert abs(source_members[1].get_center()[0] - 2.5) < 1e-6
+
         self.add(before, source, after)
         self.play(TransformMatchingShapes(source, target), run_time=2, rate_func=linear)
+        assert_completed_state()
         # Cairo emits only one PNG per static wait, regardless of its duration.
         self.wait(0.1)
+        assert_completed_state()
         self.wait(0.1)
+        assert_completed_state()
