@@ -28,4 +28,9 @@ new = '''                        let receiver_state = prototype
                             .unwrap_or_else(|| SemanticObjectState::new(state.content))
                             .with_visual_state_from(state);'''
 assert text.count(old) == 1
+text = text.replace(old, new, 1)
+
+old = 'aligned_source_prototype(current, target_members.len(), index),'
+new = 'aligned_source_prototype(&current, target_members.len(), index),'
+assert text.count(old) == 1
 state.write_text(text.replace(old, new, 1))
