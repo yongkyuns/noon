@@ -150,7 +150,8 @@ mod wasm {
         }
 
         fn query_viewport(&mut self, bounds: Rect) -> noon::integration::ExecutionViewportQuery {
-            self.program.query_viewport(bounds)
+            let query = self.program.query_viewport(bounds);
+            self.program.session().renderer_viewport_query(query)
         }
 
         fn drive_to(&mut self, requested_time: f64) -> Result<DirectDriveOutcome, JsValue> {
@@ -264,7 +265,10 @@ mod wasm {
 
         fn query_viewport(&mut self, bounds: Rect) -> noon::integration::ExecutionViewportQuery {
             match &mut self.authority {
-                DirectSourceAuthority::Session { session, .. } => session.query_viewport(bounds),
+                DirectSourceAuthority::Session { session, .. } => {
+                    let query = session.query_viewport(bounds);
+                    session.renderer_viewport_query(query)
+                }
                 DirectSourceAuthority::Program(program) => program.query_viewport(bounds),
             }
         }
