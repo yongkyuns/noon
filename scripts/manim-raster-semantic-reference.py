@@ -245,7 +245,9 @@ def main() -> int:
 
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     reference = manifest["reference"]
-    repo_root = args.manifest.parent.parent.parent
+    # Sources remain repository-relative when a focused manifest lives elsewhere.
+    # Match the JS capture driver; neither the manifest location nor cwd is a root.
+    repo_root = Path(__file__).resolve().parent.parent
     settings = {
         "renderer": "cairo",
         "frame_rate": float(reference["frame_rate"]),

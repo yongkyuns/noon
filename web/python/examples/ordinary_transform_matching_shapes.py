@@ -32,12 +32,30 @@ class OrdinaryTransformMatchingShapes(Scene):
         )
         target = VGroup(target_kite, target_triangle)
 
+        def assert_state(readded=False):
+            expected_roots = (target, source) if readded else (target,)
+            roots = self.mobjects
+            assert len(roots) == len(expected_roots)
+            assert all(actual is expected for actual, expected in zip(roots, expected_roots))
+            for family, members in (
+                (source, (source_triangle, source_kite)),
+                (target, (target_kite, target_triangle)),
+            ):
+                actual = family.submobjects
+                assert len(actual) == len(members)
+                assert all(member is expected for member, expected in zip(actual, members))
+            assert abs(target_kite.get_center().x + 3.5) < 1e-6
+            assert abs(target_triangle.get_center().x - 4) < 1e-6
+            assert abs(source_triangle.get_center().x + 2) < 1e-6
+            assert abs(source_kite.get_center().x - 2.5) < 1e-6
+
         self.play(
             TransformMatchingShapes(source, target, run_time=1.0, rate_func=linear)
         )
-        assert abs(target_kite.get_center().x + 3.5) < 1e-6
-        assert abs(target_triangle.get_center().x - 4) < 1e-6
-
+        assert_state()
         self.play(Indicate(target, run_time=1.0))
-        assert abs(target_kite.get_center().x + 3.5) < 1e-6
-        assert abs(target_triangle.get_center().x - 4) < 1e-6
+        assert_state()
+        self.add(source)
+        assert_state(readded=True)
+        self.wait(0.1)
+        assert_state(readded=True)
