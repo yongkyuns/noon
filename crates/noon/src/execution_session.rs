@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use crate::execution_segment::{
     ExecutionSegment, ExecutionSegmentError, ExecutionSegmentSequence, ExecutionSegmentToken,
     PendingSegmentCompletion, PendingSegmentCompletionKind, ScalarSegmentCompletionEntry,
-    SegmentCompletionEntry,
+    SegmentCompletionEntry, UnequalFamilyTransformCompletion,
 };
 use crate::live_session::{DrawBorderThenFillOptions, IndicateOptions, SubsetDisplayMode};
 use noon_compile::{
@@ -1286,6 +1286,7 @@ impl ExecutionSession {
             kind: PendingSegmentCompletionKind {
                 lifecycle_root: None,
                 lifecycle_removals: Vec::new(),
+                family_transform: None,
                 object_entries: completions,
                 scalar_entries: Vec::new(),
             },
@@ -1551,6 +1552,7 @@ impl ExecutionSession {
             kind: PendingSegmentCompletionKind {
                 lifecycle_root: None,
                 lifecycle_removals: Vec::new(),
+                family_transform: None,
                 object_entries: Vec::new(),
                 scalar_entries: vec![ScalarSegmentCompletionEntry {
                     signal,
@@ -1826,6 +1828,23 @@ impl ExecutionSession {
                 // after an earlier unequal-family contraction. Curved equal-family transforms
                 // keep the per-leaf path below because each leaf owns the authored path arc.
                 if !curved && is_flat_family(*source) && is_flat_family(*target_state) {
+                    let source_count = store
+                        .semantic_family_members_checked(*source)
+                        .map_err(|error| {
+                            ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                        })?
+                        .len();
+                    let target_count = store
+                        .semantic_family_members_checked(*target_state)
+                        .map_err(|error| {
+                            ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                        })?
+                        .len();
+                    if source_count != target_count && !self.reachability.is_reachable(*source) {
+                        return Err(ExecutionSessionAnimationError::InvalidComposition(
+                            "unequal family Transform requires the source family to be reachable in the execution domain".into(),
+                        ));
+                    }
                     let mut options = *options;
                     if options
                         .path_arc
@@ -3405,6 +3424,23 @@ impl ExecutionSession {
         self.signal_timeline.commit_append(scalar_timeline);
         debug_assert!(result.resolve(root).is_some());
         let activation_scene_revision = self.publication_context().scene_revision();
+        let family_transform_completion =
+            schedule.family_transforms().first().and_then(|transform| {
+                let source = resolve_committed_node(transform.source, &result);
+                let target_state = resolve_committed_node(transform.target_state, &result);
+                let source_count = store
+                    .semantic_family_members_checked(source)
+                    .expect("prepared flat family Transform source remains a family")
+                    .len();
+                let target_count = store
+                    .semantic_family_members_checked(target_state)
+                    .expect("prepared flat family Transform target remains a family")
+                    .len();
+                (source_count != target_count).then_some(UnequalFamilyTransformCompletion {
+                    source,
+                    target_state,
+                })
+            });
 
         self.next_activation_track_id = next_track_id;
         self.derived_display_plan = derived_display_plan;
@@ -3453,6 +3489,7 @@ impl ExecutionSession {
                             .into_iter()
                             .collect(),
                     },
+                    family_transform: family_transform_completion,
                     object_entries: entries,
                     scalar_entries: scalar_completions.into_values().collect(),
                 },
