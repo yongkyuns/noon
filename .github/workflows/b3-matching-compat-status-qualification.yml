@@ -45,16 +45,20 @@ jobs:
           grep -q 'MatchingShapesReordered' parity/manim-v0.21/core-examples/matching_shapes_reordered.py
           git diff --check
           test "$(git diff --numstat -- compat/manim-v0.21.0.json | awk '{print $1":"$2}')" = "1:1"
+          cp compat/manim-v0.21.0.json "$RUNNER_TEMP/manim-v0.21.0.json"
       - name: Publish product-only candidate
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'Yongkyun Shin'
           git config user.email '4311628+yongkyuns@users.noreply.github.com'
-          git rm .github/workflows/b3-matching-compat-status-qualification.yml
+          git fetch --depth=1 origin 57b109cea22047b9260e5056ec4e26def79cd86c
+          git checkout --detach 57b109cea22047b9260e5056ec4e26def79cd86c
+          cp "$RUNNER_TEMP/manim-v0.21.0.json" compat/manim-v0.21.0.json
           git add compat/manim-v0.21.0.json
-          tree=$(git write-tree)
-          candidate=$(printf '%s\n' 'docs: classify TransformMatchingShapes supported subset accurately' | git commit-tree "$tree" -p 57b109cea22047b9260e5056ec4e26def79cd86c)
-          git push origin "$candidate":refs/heads/b3-matching-compat-status-candidate-v2
-          echo "Candidate SHA: $candidate"
-          echo "Candidate tree: $tree"
+          git diff --cached --check
+          test "$(git diff --cached --numstat -- compat/manim-v0.21.0.json | awk '{print $1":"$2}')" = "1:1"
+          git commit -m 'docs: classify TransformMatchingShapes supported subset accurately'
+          git push --force origin HEAD:refs/heads/b3-matching-compat-status-candidate-v2
+          echo "Candidate SHA: $(git rev-parse HEAD)"
+          echo "Candidate tree: $(git rev-parse HEAD^{tree})"
