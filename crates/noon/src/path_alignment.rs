@@ -1,6 +1,9 @@
 //! Pair alignment uses the same atomic retained-resource transaction as family edits.
 use crate::{
-    path_editing::{world_path, PreparedPathEdits},
+    path_editing::{
+        publish_running_path_edits, require_running_path_resource_admission, world_path,
+        PreparedPathEdits,
+    },
     AuthoringError, ExecutionSession, Mobject,
 };
 use noon_core::{SemanticNodeId, SemanticObjectState, SemanticStore};
@@ -40,9 +43,7 @@ pub fn publish_alignment(
     if left.node_id() == right.node_id() {
         return Ok(());
     }
-    execution
-        .require_resource_creation_at_root(&store.borrow(), root)
-        .map_err(AuthoringError::from)?;
+    require_running_path_resource_admission(store, root, execution)?;
     let left = (
         left.node_id(),
         crate::effective_capture::capture_mobject_state(store, execution, left)?,
@@ -51,13 +52,11 @@ pub fn publish_alignment(
         right.node_id(),
         crate::effective_capture::capture_mobject_state(store, execution, right)?,
     );
-    let mut store = store.borrow_mut();
-    prepare_alignment(&store, left, right)?.publish(&mut store, |store, transaction| {
-        execution
-            .apply_semantic_transaction_at_root(store, root, transaction)
-            .map(|_| ())
-            .map_err(AuthoringError::from)
-    })?;
+    let prepared = {
+        let store = store.borrow();
+        prepare_alignment(&store, left, right)?
+    };
+    publish_running_path_edits(store, root, execution, prepared)?;
     Ok(())
 }
 
