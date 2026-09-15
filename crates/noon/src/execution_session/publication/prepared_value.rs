@@ -212,12 +212,12 @@ mod viewport_tests {
     use super::*;
     use crate::{RateFunction, Rect, Scene, Vec2};
     use noon_core::{
-        CompositionTimeMap, CompositionTimeMapStep, GeometryRef, Property, TrackTiming, TrackValues,
-        Transform2D,
+        CompositionTimeMap, CompositionTimeMapStep, GeometryRef, Property, TrackTiming,
+        TrackValues, Transform2D,
     };
     use noon_runtime::{
-        DerivedDisplayAnimationOccurrence, DerivedDisplayAnimationPlan, DerivedDisplayAnimationTrack,
-        DerivedDisplayEvaluationError, DerivedDisplayObjectState,
+        DerivedDisplayAnimationOccurrence, DerivedDisplayAnimationPlan,
+        DerivedDisplayAnimationTrack, DerivedDisplayEvaluationError, DerivedDisplayObjectState,
     };
 
     #[test]
