@@ -1,6 +1,6 @@
 use noon_core::{
-    AnimationOptions, SemanticAnimationIntent, SemanticMutationImpact, SemanticMutationTransaction,
-    SemanticObjectState, SemanticStore, StoredGeometry,
+    AnimationOptions, SemanticAnimationIntent, SemanticFamilyTransformMode, SemanticMutationImpact,
+    SemanticMutationTransaction, SemanticObjectState, SemanticStore, StoredGeometry,
 };
 
 fn object(store: &mut SemanticStore) -> noon_core::SemanticNodeId {
@@ -53,11 +53,16 @@ fn family_transform_is_one_authored_intent_without_padding_or_topology_change() 
     assert_eq!(state.intent().target(), Some(source));
     assert_eq!(state.intent().target_state(), Some(target));
     assert_eq!(state.intent().family_transform(), Some((source, target)));
+    assert_eq!(
+        state.intent().family_transform_mode(),
+        Some(SemanticFamilyTransformMode::Structural)
+    );
     assert!(matches!(
         state.intent(),
         SemanticAnimationIntent::FamilyTransformTo {
             source: actual_source,
             target_state: actual_target,
+            mode: SemanticFamilyTransformMode::Structural,
         } if *actual_source == source && *actual_target == target
     ));
     assert_eq!(
