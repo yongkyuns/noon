@@ -21,8 +21,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: e3fd12f4574e5c84f4a78308df5ac48cc62c8926
-          fetch-depth: 2
+          ref: 0cffed7dfdb313e60db5c9ebb4f9cf6564039594
+          fetch-depth: 3
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -32,8 +32,7 @@ jobs:
           python-version: "3.12"
       - name: Verify exact clean candidate and comparison base
         run: |
-          test "$(git rev-parse HEAD)" = e3fd12f4574e5c84f4a78308df5ac48cc62c8926
-          test "$(git rev-parse HEAD^{tree})" = bdccd899acca9456f739da6b2843a7186414f7d6
+          test "$(git rev-parse HEAD)" = 0cffed7dfdb313e60db5c9ebb4f9cf6564039594
           git cat-file -e 21a994d27e918715ca9dc5e3af2eb46681aaac6a^{commit}
           test ! -e .github/workflows/b3-raster-isolation-qualification.yml
           git diff --check 21a994d27e918715ca9dc5e3af2eb46681aaac6a
@@ -46,7 +45,7 @@ jobs:
           node --check scripts/manim-raster-differential.mjs
           node --check scripts/shared-playback-raster.mjs
           node --check scripts/manim-raster-enforce.mjs
-          python -m py_compile scripts/manim-raster-semantic-reference.py scripts/test_manim_raster_manifest.py web/python/examples/ordinary_transform_matching_shapes.py
+          python -m py_compile scripts/manim-raster-semantic-reference.py scripts/test_manim_raster_manifest.py web/python/examples/ordinary_transform_matching_shapes.py parity/manim-v0.21/core-examples/matching_shapes_reordered.py
       - name: Install pinned reference before expensive builds
         run: |
           { sudo apt-get update -qq &&
