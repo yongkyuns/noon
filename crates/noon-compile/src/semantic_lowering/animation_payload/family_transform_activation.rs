@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use noon_core::{
-    ObjectId, PreparedSemanticMutationTransaction, SemanticNodeId, SemanticTransactionNodeRef,
+    resolve_uniform_composition_schedule, CompositionError, CompositionTimeMapStep, ObjectId,
+    PreparedSemanticMutationTransaction, RateFunction, SemanticNodeId, SemanticTransactionNodeRef,
 };
 
 use super::super::{PreparedSemanticAnimationScheduleProjection, SemanticExecutionIndex};
@@ -65,6 +66,10 @@ pub enum PreparedFamilyTransformActivationError {
         animation: SemanticTransactionNodeRef,
         error: FamilyTransformCorrespondenceError,
     },
+    MemberTiming {
+        animation: SemanticTransactionNodeRef,
+        error: CompositionError,
+    },
     MissingExecutionSource {
         animation: SemanticTransactionNodeRef,
         source: SemanticNodeId,
@@ -87,6 +92,10 @@ impl std::fmt::Display for PreparedFamilyTransformActivationError {
             Self::Correspondence { animation, error } => write!(
                 formatter,
                 "prepared family Transform {animation:?} correspondence failed: {error}"
+            ),
+            Self::MemberTiming { animation, error } => write!(
+                formatter,
+                "prepared family Transform {animation:?} member timing failed: {error}"
             ),
             Self::MissingExecutionSource { animation, source } => write!(
                 formatter,
@@ -117,6 +126,7 @@ impl std::error::Error for PreparedFamilyTransformActivationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Correspondence { error, .. } => Some(error),
+            Self::MemberTiming { error, .. } => Some(error),
             _ => None,
         }
     }
@@ -153,8 +163,24 @@ where
                         error,
                     },
                 )?;
+        let member_schedule = (family.options.lag_ratio != 0.0)
+            .then(|| {
+                resolve_uniform_composition_schedule(
+                    correspondence.len(),
+                    family.options.lag_ratio,
+                    1.0,
+                )
+                .map_err(|error| {
+                    PreparedFamilyTransformActivationError::MemberTiming {
+                        animation: family.animation,
+                        error,
+                    }
+                })
+            })
+            .transpose()?;
 
-        for correspondence_member in correspondence.occurrences() {
+        for (member_index, correspondence_member) in correspondence.occurrences().iter().enumerate()
+        {
             let source = correspondence_member.source();
             let execution_object_id = index.execution_object_id(source).ok_or(
                 PreparedFamilyTransformActivationError::MissingExecutionSource {
@@ -178,6 +204,15 @@ where
             let occurrence_index = u32::try_from(occurrences.len()).map_err(|_| {
                 PreparedFamilyTransformActivationError::TooManyOccurrences(occurrences.len())
             })?;
+            let mut time_map = family.time_map.clone();
+            if let Some(member_schedule) = member_schedule.as_ref() {
+                let interval = member_schedule.intervals[member_index];
+                time_map.push(CompositionTimeMapStep::new(
+                    interval.start_time,
+                    interval.duration,
+                    RateFunction::Linear,
+                ));
+            }
             occurrences.push(PreparedFamilyTransformOccurrence {
                 animation: family.animation,
                 source,
@@ -187,7 +222,7 @@ where
                 target_padding: correspondence_member.target_is_padding(),
                 occurrence_index,
                 timing: family.timing,
-                time_map: family.time_map.clone(),
+                time_map,
                 finish_time_map: family.finish_time_map.clone(),
                 options: family.options,
                 effective_source,

@@ -106,5 +106,5 @@ class GhostscriptTigerMorph(Scene):
         self.wait(0.35)
 
         self.play(Transform(tiger, tiger_return), run_time=1.8)
-        tiger.set_fill(opacity=1)
-        self.wait(0.85)
+        self.play(tiger.animate.set_fill(opacity=1), run_time=0.35)
+        self.wait(0.5)

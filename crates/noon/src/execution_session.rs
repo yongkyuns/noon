@@ -1820,6 +1820,25 @@ impl ExecutionSession {
                     ));
                 }
 
+                // Straight flat family transforms must share one correspondence/lifecycle
+                // authority regardless of whether the endpoint cardinalities happen to match.
+                // The canonical family channel owns padding appearance, including restoration
+                // after an earlier unequal-family contraction. Curved equal-family transforms
+                // keep the per-leaf path below because each leaf owns the authored path arc.
+                if !curved && is_flat_family(*source) && is_flat_family(*target_state) {
+                    let mut options = *options;
+                    if options
+                        .path_arc
+                        .is_some_and(|arc| arc.abs() < noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD)
+                    {
+                        options.path_arc = None;
+                    }
+                    return Ok(declaration.create_family_transform_animation(
+                        *source,
+                        *target_state,
+                        options,
+                    ));
+                }
                 match store.ordered_family_leaf_pairs(*source, *target_state) {
                     Ok(pairs) => {
                         let mut leaf_options =
