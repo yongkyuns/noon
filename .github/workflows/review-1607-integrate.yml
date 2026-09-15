@@ -14,7 +14,7 @@ env:
   CARGO_PROFILE_TEST_DEBUG: '0'
 jobs:
   integrate:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
