@@ -25,6 +25,16 @@ fn family(store: &mut SemanticStore, count: usize) -> noon_core::SemanticNodeId 
     family
 }
 
+fn effective() -> EffectiveAnimationProperties {
+    EffectiveAnimationProperties {
+        z_index: 0.0,
+        transform: Transform2D::default(),
+        style: Style::default(),
+        appearance: 1.0,
+        reveal: 1.0,
+    }
+}
+
 #[test]
 fn one_child_parallel_family_transform_keeps_full_root_time_map() {
     let mut store = SemanticStore::new();
@@ -82,6 +92,65 @@ fn one_child_parallel_family_transform_keeps_full_root_time_map() {
 }
 
 #[test]
+fn canonical_family_transform_applies_member_lag_before_easing() {
+    let mut store = SemanticStore::new();
+    let source = family(&mut store, 2);
+    let target = family(&mut store, 2);
+    store.attach_to_scene(source).unwrap();
+
+    let mut index = SemanticExecutionIndex::new();
+    index.lower_scene(&store).unwrap();
+
+    let mut transaction = SemanticMutationTransaction::new();
+    let transform = transaction.create_family_transform_animation(
+        source,
+        target,
+        AnimationOptions::new()
+            .run_time(2.0)
+            .rate_func(RateFunction::Smooth)
+            .lag_ratio(0.5),
+    );
+    let prepared = transaction.prepare(&mut store).unwrap();
+    let schedule = lower_prepared_semantic_animation_schedule(
+        &prepared,
+        &index,
+        transform,
+        0.0,
+        AnimationOptions::new(),
+    )
+    .unwrap();
+    let activation =
+        prepare_family_transform_activations(&prepared, &index, &schedule, |_| Some(effective()))
+            .unwrap();
+
+    assert_eq!(activation.occurrences().len(), 2);
+    let first = &activation.occurrences()[0];
+    let second = &activation.occurrences()[1];
+    assert_eq!(
+        first.timing,
+        TrackTiming::new(0.0, 2.0, RateFunction::Smooth)
+    );
+    assert_eq!(second.timing, first.timing);
+    assert_eq!(first.time_map.steps.len(), 1);
+    assert_eq!(second.time_map.steps.len(), 1);
+    assert!((first.time_map.steps[0].start - 0.0).abs() < 1e-12);
+    assert!((first.time_map.steps[0].duration - 2.0 / 3.0).abs() < 1e-12);
+    assert!((second.time_map.steps[0].start - 1.0 / 3.0).abs() < 1e-12);
+    assert!((second.time_map.steps[0].duration - 2.0 / 3.0).abs() < 1e-12);
+    assert_eq!(first.time_map.steps[0].rate_func, RateFunction::Linear);
+    assert_eq!(second.time_map.steps[0].rate_func, RateFunction::Linear);
+
+    let first_progress =
+        noon_core::mapped_continuous_progress(first.timing, &first.time_map, 0.5).unwrap();
+    let expected = RateFunction::Smooth.evaluate(0.375);
+    assert!((first_progress - expected).abs() < 1e-6);
+    assert_eq!(
+        noon_core::mapped_continuous_progress(second.timing, &second.time_map, 0.5),
+        None
+    );
+}
+
+#[test]
 fn hidden_real_source_in_one_child_parallel_emits_restoring_appearance_track() {
     let mut store = SemanticStore::new();
     let source_members = (0..3).map(|_| object(&mut store)).collect::<Vec<_>>();
@@ -124,11 +193,8 @@ fn hidden_real_source_in_one_child_parallel_emits_restoring_appearance_track() {
         &schedule,
         |object| {
             Some(EffectiveAnimationProperties {
-                z_index: 0.0,
-                transform: Transform2D::default(),
-                style: Style::default(),
                 appearance: if object == hidden { 0.0 } else { 1.0 },
-                reveal: 1.0,
+                ..effective()
             })
         },
     )
