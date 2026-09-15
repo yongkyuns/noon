@@ -204,6 +204,12 @@ pub enum AnimationCompositionRequest<'a> {
         target_state: &'a MobjectFamily,
         options: AnimationOptions,
     },
+    /// Match ordered family members by activation-time normalized point geometry.
+    MatchingFamilyTransformTo {
+        source: &'a MobjectFamily,
+        target_state: &'a MobjectFamily,
+        options: AnimationOptions,
+    },
     Indicate {
         target: &'a Mobject,
         indication: IndicateOptions,
@@ -1088,6 +1094,22 @@ impl<'a> LiveSession<'a> {
         self.declare_and_activate_composition(&request, AnimationOptions::new())
     }
 
+    /// Match family members by activation-time shape and replace the source family
+    /// with the original authored target at the exact completion barrier.
+    pub fn declare_and_activate_matching_family_transform_to(
+        &mut self,
+        source: &MobjectFamily,
+        target_state: &MobjectFamily,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        let request = AnimationCompositionRequest::MatchingFamilyTransformTo {
+            source,
+            target_state,
+            options,
+        };
+        self.declare_and_activate_composition(&request, AnimationOptions::new())
+    }
+
     /// Indicate one object and restore its activation-effective source state.
     pub fn declare_and_activate_indicate(
         &mut self,
@@ -1551,6 +1573,19 @@ impl<'a> LiveSession<'a> {
                 self.require_family(source)?;
                 self.require_family(target_state)?;
                 Request::FamilyTransformTo {
+                    source: source.node_id(),
+                    target_state: target_state.node_id(),
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::MatchingFamilyTransformTo {
+                source,
+                target_state,
+                options,
+            } => {
+                self.require_family(source)?;
+                self.require_family(target_state)?;
+                Request::MatchingFamilyTransformTo {
                     source: source.node_id(),
                     target_state: target_state.node_id(),
                     options: *options,
