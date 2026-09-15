@@ -1,0 +1,118 @@
+name: B3 Public Matching Lifecycle Qualification
+on:
+  push:
+    branches: [b3-matching-public-lifecycle-qualification]
+permissions:
+  contents: read
+concurrency:
+  group: b3-matching-public-lifecycle-qualification
+  cancel-in-progress: true
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      NOON_WASM_SKIP_OPT: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 57b109cea22047b9260e5056ec4e26def79cd86c
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify exact flattened source
+        run: |
+          test "$(git rev-parse HEAD)" = 57b109cea22047b9260e5056ec4e26def79cd86c
+          test ! -e .github/workflows/b3-matching-public-lifecycle-qualification.yml
+          python3 -m py_compile web/python/examples/ordinary_transform_matching_shapes.py
+      - name: Install pinned Rust and WASM build tool
+        run: |
+          rustup install
+          rustup target add wasm32-unknown-unknown
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build exact browser package
+        run: bash scripts/build-web-demo.sh
+      - name: Install browser harness
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1
+          npx playwright install --with-deps chromium
+      - name: Execute real public Python matching lifecycle on both renderers
+        shell: bash
+        run: |
+          mkdir -p artifacts/public-matching-lifecycle
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { mkdir, readFile, writeFile } from 'node:fs/promises';
+          import path from 'node:path';
+          import playwright from 'playwright';
+          import { serveRepository } from './scripts/browser-test-server.mjs';
+          import { browserArgs, rasterFixtureSource } from './scripts/manim-raster-support.mjs';
+
+          const sceneName = 'OrdinaryTransformMatchingShapes';
+          const raw = await readFile('web/python/examples/ordinary_transform_matching_shapes.py', 'utf8');
+          const source = rasterFixtureSource(raw, sceneName);
+          const server = await serveRepository(process.cwd(), 0, { crossOriginIsolated: true });
+          const results = [];
+          try {
+            for (const backend of ['webgpu', 'webgl']) {
+              const browser = await playwright.chromium.launch({
+                channel: 'chromium', headless: true, args: browserArgs(backend),
+              });
+              try {
+                const page = await browser.newPage({ viewport: { width: 1000, height: 580 } });
+                const pageErrors = [];
+                page.on('pageerror', error => pageErrors.push(String(error)));
+                await page.goto(`${server.baseUrl}/web/manim-raster-host.html`, { waitUntil: 'load' });
+                assert.equal(await page.evaluate(() => globalThis.crossOriginIsolated), true);
+                await page.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });
+                await page.evaluate(() => window.noonHostRaster.ready());
+                const loaded = await page.evaluate(
+                  ({ source }) => window.noonHostRaster.load(source, 3.0), { source },
+                );
+                assert.equal(loaded.kind, 'semantic_execution');
+                assert.equal(loaded.rendererBackend, backend === 'webgpu' ? 'WebGPU' : 'WebGL2');
+
+                // Drive through matching (1s), second Indicate (1s), source re-add,
+                // and the authored 0.1s hold. Assertions in the public Python source
+                // execute at each boundary and therefore fail this step directly.
+                const times = Array.from({ length: 64 }, (_, index) => index / 30);
+                const completed = await page.evaluate(
+                  times => window.noonHostRaster.renderThrough(times.length - 1, times), times,
+                );
+                assert.equal(completed.error, null);
+                assert.equal(completed.presented, true);
+                assert.ok(Math.abs(completed.authoredDuration - 2.1) < 1e-9, completed.authoredDuration);
+                assert.deepEqual(pageErrors, []);
+
+                const frame = await page.evaluate(() => window.noonHostRaster.debugFrame());
+                const present = frame.objects.filter(object => object.present);
+                assert.equal(present.length, 4, 'target plus re-added source must publish four leaves');
+                const dir = path.join('artifacts/public-matching-lifecycle', backend);
+                await mkdir(dir, { recursive: true });
+                await page.locator('#scene').screenshot({ path: path.join(dir, 'completed.png') });
+                await writeFile(path.join(dir, 'completed.json'), JSON.stringify({ loaded, completed, frame, pageErrors }, null, 2));
+                results.push({ backend, authoredDuration: completed.authoredDuration, presentLeaves: present.length, passed: true });
+                console.log(`[PASS] ${sceneName}/${backend}: original target, second Indicate, source re-add, hold`);
+              } finally {
+                await browser.close();
+              }
+            }
+          } finally {
+            await server.close();
+            await writeFile('artifacts/public-matching-lifecycle/results.json', JSON.stringify({ sourceSha: '57b109cea22047b9260e5056ec4e26def79cd86c', results }, null, 2));
+          }
+          JS
+      - name: Upload public lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: b3-public-matching-lifecycle
+          path: artifacts/public-matching-lifecycle
+          if-no-files-found: error
+          retention-days: 7
