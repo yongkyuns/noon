@@ -62,7 +62,7 @@ fn canonical_circle_layout_bounds(
 }
 // Manim dimensions bound cubic control points; centers and edges bound anchors.
 // These are layout bounds; runtime visibility continues using geometric bounds.
-fn transformed_path_layout_bounds(
+pub(crate) fn transformed_path_layout_bounds(
     path: &VectorPath,
     transform: SemanticTransform2_5D,
     include_handles: bool,

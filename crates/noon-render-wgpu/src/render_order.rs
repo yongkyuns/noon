@@ -80,12 +80,19 @@ impl FramePreparer {
             .all(|&object_index| (object_index as usize) < frame.objects.len()));
         self.painter_order_indices.clear();
         self.painter_order_indices.extend_from_slice(order);
+        self.painter_order_positions.clear();
+        self.painter_order_positions
+            .resize(frame.objects.len(), None);
+        for (position, &index) in order.iter().enumerate() {
+            self.painter_order_positions[index as usize] = Some(position);
+        }
         self.painter_order_installed = true;
     }
 
     /// Return to storage order when a parent switches to compact scratch rows.
     pub(crate) fn clear_painter_order(&mut self) {
         self.painter_order_indices.clear();
+        self.painter_order_positions.clear();
         self.painter_order_installed = false;
     }
 
@@ -103,6 +110,16 @@ impl FramePreparer {
             .all(|&object_index| (object_index as usize) < frame.objects.len()));
         let old_end = range.end.min(self.painter_order_indices.len());
         let new_end = range.end.min(order.len());
+        self.painter_order_positions
+            .resize(frame.objects.len(), None);
+        for &index in &self.painter_order_indices[range.start.min(old_end)..old_end] {
+            if let Some(position) = self.painter_order_positions.get_mut(index as usize) {
+                *position = None;
+            }
+        }
+        for (offset, &index) in order[range.start..new_end].iter().enumerate() {
+            self.painter_order_positions[index as usize] = Some(range.start + offset);
+        }
         self.painter_order_indices.splice(
             range.start.min(old_end)..old_end,
             order[range.start..new_end].iter().copied(),
@@ -1108,9 +1125,19 @@ fn pack_derived_display_object(
             (DerivedDisplayPrimitive::Line, index)
         }
         noon_core::GeometryRef::VectorPath(path) => {
+            let owner = crate::sampled_morph::SampledMeshOwner::Derived {
+                anchor: object.anchor_object_index(),
+                occurrence,
+            };
             if let Some(path_preparer) = path_preparer {
                 let (cache_index, _) = path_preparer
-                    .cache_path_mesh(path, state.style, render_transform)
+                    .cache_path_mesh_at_progress(
+                        path,
+                        state.style,
+                        render_transform,
+                        owner,
+                        state.morph,
+                    )
                     .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;
                 let resident_indices = path_preparer.path_mesh_cache[cache_index]
                     .resident
@@ -1127,17 +1154,19 @@ fn pack_derived_display_object(
                         DerivedPathGeometrySource::Retained,
                     )
                 } else {
-                    // The nonresident lane is already cold work. Reusing the existing
-                    // helper keeps cache lookup semantics centralized without adding
-                    // any steady-frame cost to resident transient paths.
                     let (mesh, _) = path_preparer
-                        .cached_path_mesh(path, state.style, render_transform)
+                        .cached_path_mesh(path, state.style, render_transform, owner, state.morph)
                         .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;
                     pack_derived_path_mesh(prepared, mesh, state, render_transform, style)
                 }
             } else {
-                let mesh = crate::tessellate_path_mesh(path, state.style, render_transform)
-                    .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;
+                let mesh = crate::sampled_morph::tessellate_path_at_progress(
+                    path,
+                    state.style,
+                    render_transform,
+                    state.morph,
+                )
+                .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;
                 pack_derived_path_mesh(prepared, &mesh, state, render_transform, style)
             }
         }

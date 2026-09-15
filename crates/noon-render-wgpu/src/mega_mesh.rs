@@ -26,8 +26,12 @@ impl FramePreparer {
         let eligible = self
             .path_batches
             .iter()
-            .map(|batch| {
-                batch.instance_range.end == batch.instance_range.start + 1
+            .enumerate()
+            .map(|(index, batch)| {
+                self.path_mesh_cache[self.path_batch_cache_indices[index]]
+                    .sampled
+                    .is_none()
+                    && batch.instance_range.end == batch.instance_range.start + 1
                     && !batch.index_range.is_empty()
             })
             .collect::<Vec<_>>();
@@ -101,6 +105,12 @@ impl FramePreparer {
         let Some(path_batch) = self.path_batches.get(path_batch_index).cloned() else {
             return false;
         };
+        if self.path_mesh_cache[self.path_batch_cache_indices[path_batch_index]]
+            .sampled
+            .is_some()
+        {
+            return false;
+        }
         if path_batch.instance_range.end != path_batch.instance_range.start + 1
             || path_batch.index_range.is_empty()
         {
@@ -250,7 +260,13 @@ impl FramePreparer {
         path_batch_index: usize,
         packed: PathInstance,
     ) {
+        // A non-detached path need not own a mega segment: sampled fills
+        // live only in the mutable path arena, whose vertex ranges can grow.
         if self.individual_path_draws
+            || !self
+                .mega_path_segments
+                .get(path_batch_index)
+                .is_some_and(Option::is_some)
             || self.mega_path_indices.is_empty()
             || self
                 .mega_path_detached

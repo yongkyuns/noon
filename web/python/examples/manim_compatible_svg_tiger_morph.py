@@ -78,33 +78,14 @@ class GhostscriptTigerMorph(Scene):
         _normalize_morph_style(tiger)
         _normalize_morph_style(rocket)
 
-        # Complex filled paths intentionally stay within Noon's bounded safe-fill
-        # morph contract. Perform the unrelated geometry deformation as an outline,
-        # where shared path alignment can pad differing contour counts without
-        # inventing per-frame topology, then restore each family's authored fills.
+        # Preserve the authored paint throughout both real path transforms.
+        # Complex fills are sampled/tessellated by the shared Rust renderer, not
+        # replaced with outlines or hidden until an instantaneous endpoint repaint.
         tiger_return = tiger.copy()
-        tiger_return.set_fill(opacity=0)
-        rocket.set_fill(opacity=0)
-        rocket.set_stroke(BLACK, width=MORPH_STROKE_WIDTH, opacity=1)
 
         self.add(tiger)
         self.wait(0.5)
-        self.play(
-            tiger.animate.set_fill(opacity=0).set_stroke(
-                BLACK, width=MORPH_STROKE_WIDTH, opacity=1
-            ),
-            run_time=0.35,
-        )
         self.play(Transform(tiger, rocket), run_time=1.8)
-
-        # Unequal-family Transform can leave source-padding occurrences hidden.
-        # After that boundary, use direct family paint rather than animation-target
-        # copies, which intentionally cannot snapshot execution-only appearance.
-        tiger.set_fill(opacity=1)
         self.wait(0.75)
-        tiger.set_fill(opacity=0)
-        self.wait(0.35)
-
         self.play(Transform(tiger, tiger_return), run_time=1.8)
-        self.play(tiger.animate.set_fill(opacity=1), run_time=0.35)
-        self.wait(0.5)
+        self.wait(0.85)
