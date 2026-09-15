@@ -1,0 +1,171 @@
+name: B3 Matching Duplicate Parity Qualification
+on:
+  push:
+    branches: [b3-matching-duplicate-parity-qualification]
+permissions:
+  contents: read
+concurrency:
+  group: b3-matching-duplicate-parity-qualification
+  cancel-in-progress: true
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CARGO_INCREMENTAL: "0"
+      NOON_WASM_SKIP_OPT: "1"
+      NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
+      NOON_MANIM_RASTER_ARTIFACTS: artifacts/b3-matching-duplicates
+      NOON_MANIM_RASTER_PORT: "0"
+      NOON_SHARED_PLAYBACK_PORT: "0"
+      NOON_SHARED_PLAYBACK_FIXTURES: matching-shapes-duplicate-growth,matching-shapes-duplicate-shrink
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify focused source and build strict external manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile parity/manim-v0.21/core-examples/matching_shapes_duplicates.py
+          mkdir -p artifacts/qualification
+          git rev-parse HEAD > artifacts/qualification/source-sha.txt
+          git rev-parse HEAD^{tree} > artifacts/qualification/source-tree.txt
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          source = 'parity/manim-v0.21/core-examples/matching_shapes_duplicates.py'
+          base = json.loads(Path('parity/manim-v0.21/manifest.json').read_text())
+          tolerance = {
+              'max_differing_ratio': 0.003,
+              'max_mean_absolute_channel_error': 0.1,
+              'max_centroid_delta_px': 2.0,
+              'max_extent_delta_px': 2.0,
+              'max_duration_delta_seconds': 0.034,
+          }
+          times = [0.0, 0.5, 1.0, 1.5, 2.0, 2.1]
+          base['fixtures'] = [
+              {
+                  'id': 'matching-shapes-duplicate-growth',
+                  'scene': 'MatchingShapesDuplicateGrowth',
+                  'source': source,
+                  'expected_duration': 2.2,
+                  'sample_times': times,
+                  'raster_tolerance': tolerance,
+              },
+              {
+                  'id': 'matching-shapes-duplicate-shrink',
+                  'scene': 'MatchingShapesDuplicateShrink',
+                  'source': source,
+                  'expected_duration': 2.2,
+                  'sample_times': times,
+                  'raster_tolerance': tolerance,
+              },
+          ]
+          target = Path(os.environ['RUNNER_TEMP']) / 'b3-matching-duplicates-manifest.json'
+          target.write_text(json.dumps(base, indent=2) + '\n')
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'NOON_MANIM_RASTER_MANIFEST={target}\n')
+          PY
+          git diff --check
+      - name: Install pinned ManimCE reference
+        shell: bash
+        run: |
+          { sudo apt-get update -qq &&
+            sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config &&
+            python -m pip install --disable-pip-version-check "manim[typst]==0.21.0" "typst==0.15.0";
+          } > artifacts/qualification/reference-install.log 2>&1 || { tail -n 80 artifacts/qualification/reference-install.log; exit 1; }
+      - name: Prove pinned Manim materializes every duplicate/mismatch checkpoint
+        shell: bash
+        run: |
+          python scripts/manim-raster-semantic-reference.py \
+            --manifest "$NOON_MANIM_RASTER_MANIFEST" \
+            --output artifacts/qualification/manim-reference.json
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path('artifacts/qualification/manim-reference.json').read_text())
+          assert data['manim_version'] == '0.21.0'
+          assert {f['id'] for f in data['fixtures']} == {
+              'matching-shapes-duplicate-growth', 'matching-shapes-duplicate-shrink'
+          }
+          for fixture in data['fixtures']:
+              assert abs(fixture['logical_duration'] - 2.2) < 1e-9
+              frame_times = [float(frame['time']) for frame in fixture['frames']]
+              for expected in (0.0, 0.5, 1.0, 1.5, 2.0, 2.1):
+                  assert any(abs(actual - expected) < 1e-9 for actual in frame_times), (fixture['id'], expected)
+          PY
+      - name: Native matching multiplicity, leftover fade and seek coverage
+        run: cargo test -p noon --lib matching_family -- --nocapture
+      - name: Install pinned Rust/WASM browser build tool
+        run: |
+          rustup install
+          rustup target add wasm32-unknown-unknown
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build exact browser package
+        run: bash scripts/build-web-demo.sh
+      - name: Install pinned raster browser dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Capture both unequal-cardinality scenes on WebGPU and WebGL
+        shell: bash
+        run: |
+          status=0
+          node scripts/manim-raster-differential.mjs > artifacts/qualification/raster.log 2>&1 || status=$?
+          tail -n 120 artifacts/qualification/raster.log
+          exit "$status"
+      - name: Enforce unchanged strict matching thresholds
+        run: node scripts/manim-raster-enforce.mjs
+      - name: Prove sparse/direct host stepping equals dense forward playback
+        run: node scripts/shared-playback-raster.mjs
+      - name: Summarize checkpoint metrics and lifecycle publication
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('artifacts/b3-matching-duplicates/report.json').read_text())
+          assert {f['id'] for f in report['fixtures']} == {
+              'matching-shapes-duplicate-growth', 'matching-shapes-duplicate-shrink'
+          }
+          summary = {'source_sha': Path('artifacts/qualification/source-sha.txt').read_text().strip(), 'fixtures': []}
+          for fixture in report['fixtures']:
+              entry = {'id': fixture['id'], 'backends': {}}
+              for backend, backend_report in fixture['backends'].items():
+                  assert not backend_report.get('error'), (fixture['id'], backend, backend_report.get('error'))
+                  samples = []
+                  for sample in backend_report['samples']:
+                      samples.append({
+                          'time': sample['time'],
+                          'differing_ratio': sample['diff']['differingRatio'],
+                          'mean_absolute_channel_error': sample['diff']['meanAbsoluteChannelError'],
+                          'present_ids': [obj['id'] for obj in sample['debugFrame']['objects'] if obj['present']],
+                          'transient_count': len(sample['debugFrame'].get('transientPresentations', [])),
+                      })
+                  entry['backends'][backend] = samples
+              summary['fixtures'].append(entry)
+          Path('artifacts/qualification/summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+          PY
+      - name: Verify qualification does not mutate source
+        if: always()
+        run: git diff --exit-code
+      - name: Upload actual duplicate/mismatch parity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: b3-matching-duplicate-parity
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 7
