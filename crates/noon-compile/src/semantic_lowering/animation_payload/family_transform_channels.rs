@@ -218,7 +218,7 @@ pub fn lower_prepared_family_transform_channels(
 
         validate_affine_payload(source, target, occurrence.options)
             .map_err(|issue| payload_error(occurrence, issue))?;
-        let channels = lower_transform_channels(
+        let mut channels = lower_transform_channels(
             prepared.store(),
             source,
             target,
@@ -227,6 +227,7 @@ pub fn lower_prepared_family_transform_channels(
             0.0,
         )
         .map_err(|issue| payload_error(occurrence, issue))?;
+        preserve_single_padding_fade(occurrence, &mut channels);
 
         let target_appearance = if occurrence.target_padding { 0.0 } else { 1.0 };
         if occurrence.source_padding {
@@ -302,6 +303,56 @@ pub fn lower_prepared_family_transform_channels(
         stable_tracks,
         derived_occurrences,
     })
+}
+
+/// Manim interpolates the already-padded RGBA endpoints once. Interpolating
+/// authored paint alpha AND Appearance would instead multiply two fades, producing
+/// t*(1-t) ghost fill even when both visible endpoints have zero alpha.
+///
+/// With one zero-appearance endpoint the equivalent factorization is exact:
+/// retain the other endpoint's paint alpha and let Appearance own the single fade.
+/// RGB still follows ordered color interpolation. Completion metadata is deliberately
+/// unchanged: hidden rows reconcile to their real target paint atomically, while
+/// Appearance retains the padding mask. This also handles a completed hidden row
+/// becoming real again. Fractional non-padding appearance is not rewritten here.
+fn preserve_single_padding_fade(
+    occurrence: &PreparedFamilyTransformOccurrence,
+    channels: &mut [LoweredAffineChannel],
+) {
+    let preserve_source = occurrence.target_padding;
+    let preserve_target = !preserve_source
+        && (occurrence.source_padding || occurrence.effective_source.appearance == 0.0);
+    if !preserve_source && !preserve_target {
+        return;
+    }
+    for channel in channels {
+        match (channel.property, &mut channel.values) {
+            (Property::Fill | Property::Stroke, TrackValues::Color { from, to }) => {
+                let visible = if preserve_source { *from } else { *to };
+                let hidden = if preserve_source { to } else { from };
+                *hidden = match (visible, *hidden) {
+                    (Some(visible), Some(mut hidden)) => {
+                        hidden.alpha = visible.alpha;
+                        Some(hidden)
+                    }
+                    (Some(visible), None) => Some(visible),
+                    (None, Some(mut hidden)) => {
+                        hidden.alpha = 0.0;
+                        Some(hidden)
+                    }
+                    (None, None) => None,
+                };
+            }
+            (Property::Opacity, TrackValues::Scalar { from, to }) => {
+                if preserve_source {
+                    *to = *from;
+                } else {
+                    *from = *to;
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn push_stable_channel(
