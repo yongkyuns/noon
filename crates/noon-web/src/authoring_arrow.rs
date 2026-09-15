@@ -433,7 +433,7 @@ pub struct WasmAuthoringArrowHandle {
 }
 
 impl WasmAuthoringArrowHandle {
-    fn arrow(&self) -> Result<&noon::ManimArrow, JsValue> {
+    pub(crate) fn arrow(&self) -> Result<&noon::ManimArrow, JsValue> {
         match &self.published {
             PublishedArrowRequest::Arrow(arrow) => Ok(arrow),
             PublishedArrowRequest::VectorField(_) => Err(invalid_input(

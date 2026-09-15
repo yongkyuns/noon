@@ -313,17 +313,29 @@ class Arrow(_compat.Group):
             raise NotImplementedError(
                 f"Arrow.scale pivot option(s) are not yet shared Rust semantics: {unknown}"
             )
-        if _shared._group_live_layout_context(self) is not None:
-            raise NotImplementedError(
-                "live Arrow.scale requires shared dependent publication support"
-            )
+        live_context = _shared._group_live_layout_context(self)
         handle = getattr(self, "_semantic_arrow_handle", None)
-        operation = getattr(handle, "scale", None) if handle is not None else None
+        if handle is None:
+            raise RuntimeError("Arrow.scale requires the shared Rust authoring host")
+        factor = _ir._finite_number("factor", factor)
+        if live_context is not None:
+            operation = getattr(live_context, "liveScaleArrow", None)
+            if operation is None:
+                raise RuntimeError("live Arrow.scale requires the shared Rust live host")
+            engine_call(
+                operation,
+                handle,
+                factor,
+                bool(scale_tips),
+                operation="Arrow.scale",
+            )
+            return self
+        operation = getattr(handle, "scale", None)
         if operation is None:
             raise RuntimeError("Arrow.scale requires the shared Rust authoring host")
         engine_call(
             operation,
-            _ir._finite_number("factor", factor),
+            factor,
             bool(scale_tips),
             operation="Arrow.scale",
         )

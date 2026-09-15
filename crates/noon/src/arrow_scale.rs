@@ -84,6 +84,26 @@ impl ManimArrow {
     /// by the authoritative semantic shaft role. All changed leaves publish in one
     /// semantic transaction and unrelated scene state is untouched.
     pub fn scale(&self, factor: f64, scale_tips: bool) -> Result<(), ArrowScaleError> {
+        let Some(transaction) = self.prepare_scale_transaction(factor, scale_tips)? else {
+            return Ok(());
+        };
+        let store = self.family().integration_store();
+        transaction
+            .apply(&mut store.borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)?;
+        Ok(())
+    }
+
+    /// Prepare the complete dependent Arrow edit without publishing it.
+    ///
+    /// Detached authoring and live execution share this exact transaction;
+    /// only the owning publication path differs.
+    fn prepare_scale_transaction(
+        &self,
+        factor: f64,
+        scale_tips: bool,
+    ) -> Result<Option<SemanticMutationTransaction>, ArrowScaleError> {
         let factor = crate::integration::authoring_render_f64("arrow scale factor", factor)?;
         let policy = self.validate_scale_components()?;
         let endpoints = self.manim_endpoints()?;
@@ -93,7 +113,7 @@ impl ManimArrow {
 
         // Pinned ManimCE returns immediately for a zero-length Arrow.
         if old_length == 0.0 {
-            return Ok(());
+            return Ok(None);
         }
 
         let previous_shaft = self.shaft().state()?;
@@ -145,11 +165,7 @@ impl ManimArrow {
                 next,
             );
         }
-        transaction
-            .apply(&mut store.borrow_mut())
-            .map(|_| ())
-            .map_err(AuthoringError::from)?;
-        Ok(())
+        Ok(Some(transaction))
     }
 
     fn validate_scale_components(&self) -> Result<SemanticArrowShaftRole, ArrowScaleError> {
@@ -342,6 +358,43 @@ impl ManimArrow {
             .min(snapshot.policy.max_stroke_width_to_length_ratio() * new_length);
 
         Ok((next_shaft, next_end_tip, next_start_tip))
+    }
+}
+
+impl crate::LiveSession<'_> {
+    /// Scale one retained Arrow dependency closure through the owning live session.
+    ///
+    /// Component identity and immutable tip resources are retained. The authored
+    /// store is never changed separately from the active execution publication.
+    pub fn scale_arrow(
+        &mut self,
+        arrow: &ManimArrow,
+        factor: f64,
+        scale_tips: bool,
+    ) -> Result<(), crate::LiveSessionError> {
+        // Validate ownership before deriving any dependent edit. The aggregate Arrow
+        // is constructed from one store, so checking its retained leaves also checks
+        // the family capability without inventing frontend ownership state.
+        self.authored(arrow.shaft())?;
+        self.authored(arrow.end_tip())?;
+        if let Some(start_tip) = arrow.start_tip() {
+            self.authored(start_tip)?;
+        }
+
+        let Some(transaction) = arrow
+            .prepare_scale_transaction(factor, scale_tips)
+            .map_err(live_arrow_scale_error)?
+        else {
+            return Ok(());
+        };
+        self.apply(transaction).map(|_| ())
+    }
+}
+
+fn live_arrow_scale_error(error: ArrowScaleError) -> crate::LiveSessionError {
+    match error {
+        ArrowScaleError::Authoring(error) => crate::LiveSessionError::Authoring(error),
+        other => crate::LiveSessionError::Mobject(other.to_string()),
     }
 }
 
@@ -589,6 +642,67 @@ mod tests {
             start_resource
         );
         assert!((arrow.manim_length().unwrap() - 2.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn live_scale_publishes_the_arrow_dependency_closure_once() {
+        let mut scene = Scene::new();
+        let mut options = ManimArrowOptions::arrow(-1.0, 0.0, 1.0, 0.0).unwrap();
+        options.set_buff(0.0).unwrap();
+        let arrow = ManimArrow::create(Rc::clone(scene.integration_store()), options).unwrap();
+        scene.add_many(&[arrow.family().into()]).unwrap();
+        let tip_resource = resource_handle(&arrow.end_tip().state().unwrap());
+        let before_revision = scene.integration_store().borrow().scene_revision();
+        let mut session = scene.execution_session().unwrap();
+
+        scene
+            .live(&mut session)
+            .scale_arrow(&arrow, 0.5, false)
+            .unwrap();
+
+        assert!((arrow.manim_length().unwrap() - 1.0).abs() < 1e-5);
+        assert_eq!(
+            resource_handle(&arrow.end_tip().state().unwrap()),
+            tip_resource
+        );
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            before_revision.checked_next().unwrap()
+        );
+    }
+
+    #[test]
+    fn live_scale_rejects_a_stale_session_without_partial_arrow_mutation() {
+        let mut scene = Scene::new();
+        let mut options = ManimArrowOptions::arrow(-1.0, 0.0, 1.0, 0.0).unwrap();
+        options.set_buff(0.0).unwrap();
+        let arrow = ManimArrow::create(Rc::clone(scene.integration_store()), options).unwrap();
+        scene.add_many(&[arrow.family().into()]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+
+        // A direct authored mutation after lowering deliberately stales this runtime.
+        arrow.scale(0.8, false).unwrap();
+        let stale_revision = scene.integration_store().borrow().scene_revision();
+        let before_shaft = arrow.shaft().state().unwrap();
+        let before_tip = arrow.end_tip().state().unwrap();
+
+        let error = scene
+            .live(&mut session)
+            .scale_arrow(&arrow, 0.5, false)
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            crate::LiveSessionError::Publication(
+                crate::ExecutionSessionPublicationError::StaleSceneRevision { .. }
+            )
+        ));
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            stale_revision
+        );
+        assert_eq!(arrow.shaft().state().unwrap(), before_shaft);
+        assert_eq!(arrow.end_tip().state().unwrap(), before_tip);
     }
 
     #[test]
