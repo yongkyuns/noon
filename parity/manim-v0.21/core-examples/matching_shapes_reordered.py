@@ -4,7 +4,7 @@ from manim import *
 class MatchingShapesReordered(Scene):
     """Distinct shapes cross by shape key, then the original target is appended.
 
-    The two-second linear animation puts every quarter on a 30 fps frame.
+    The two-second play puts every quarter on a 30 fps frame.
     Separate holds materialize both cleanup and post-cleanup reference frames.
     """
 
@@ -32,13 +32,21 @@ class MatchingShapesReordered(Scene):
         source_members = tuple(source.submobjects)
         target_members = tuple(target.submobjects)
 
-        def assert_completed_state():
+        def assert_completed_state(completed_waits=0):
             # Observe the public API: rendering alone cannot prove that Python
             # wrappers follow the original target into the completed Rust scene.
             roots = self.mobjects
-            assert len(roots) == 3 and all(
+            assert 3 <= len(roots) <= 3 + completed_waits and all(
                 actual is expected for actual, expected in zip(roots, (before, after, target))
             ), "matching cleanup must append the original target after surviving roots"
+            # ManimCE 0.21.0 appends a plain empty Mobject for each Wait. These
+            # are not authored roots; Noon need not reproduce internal dummies.
+            # Do not filter real geometry, families, duplicates, or ordering errors.
+            assert all(
+                type(extra) is Mobject and not extra.submobjects
+                and extra.width == 0 and extra.height == 0
+                for extra in roots[3:]
+            ), "only empty Wait placeholders may follow the original target"
             for family, members in ((source, source_members), (target, target_members)):
                 actual = family.submobjects
                 assert len(actual) == len(members) and all(
@@ -56,6 +64,6 @@ class MatchingShapesReordered(Scene):
         assert_completed_state()
         # Cairo emits only one PNG per static wait, regardless of its duration.
         self.wait(0.1)
-        assert_completed_state()
+        assert_completed_state(completed_waits=1)
         self.wait(0.1)
-        assert_completed_state()
+        assert_completed_state(completed_waits=2)
