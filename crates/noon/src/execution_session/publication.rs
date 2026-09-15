@@ -343,6 +343,20 @@ impl ExecutionSession {
 
         self.require_publication_ready(purpose)?;
         self.require_published_store(prepared.store())?;
+        // Segment-completion continuations may stage a root-relative reorder as part
+        // of one structural publication, but unlike authored LiveSession edits they
+        // do not carry a separate root argument. A reorder that directly names this
+        // session's execution root is already unambiguous in the prepared transaction;
+        // use that existing authority rather than inventing a completion-only path.
+        let order_root = order_root.or_else(|| {
+            (purpose == SemanticPublicationPurpose::SegmentCompletion).then_some(())?;
+            prepared.candidate_mutations().find_map(|mutation| match mutation {
+                SemanticMutation::ReorderMember { family, .. } => family
+                    .existing()
+                    .filter(|family| self.reachability.is_execution_root(*family)),
+                _ => None,
+            })
+        });
         if order_root.is_none() {
             if let Some(SemanticMutation::ReorderMember { family, .. }) = prepared
                 .candidate_mutations()
@@ -564,3 +578,5 @@ impl ExecutionSession {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod segment_completion_order_tests;
