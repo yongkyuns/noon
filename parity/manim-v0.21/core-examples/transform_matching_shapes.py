@@ -16,6 +16,14 @@ def matching_kite(x, y=0.0, color=GREEN):
     ).shift([x, y, 0.0])
 
 
+def roots_after_wait(scene):
+    # ManimCE 0.21 inserts a point-free base Mobject for Wait. Ignore only
+    # that inert placeholder, not unexpected drawable roots or family copies.
+    return [mob for mob in scene.mobjects if not (
+        type(mob) is Mobject and mob.get_num_points() == 0 and not mob.submobjects
+    )]
+
+
 class MatchingShapesReordered(Scene):
     def construct(self):
         # Nesting and reversed target order distinguish shape matching from zip.
@@ -29,7 +37,7 @@ class MatchingShapesReordered(Scene):
         # The original target is appended; it is not a copy or the old source.
         assert self.mobjects == [before, after, target]
         self.wait(0.1)
-        assert self.mobjects == [before, after, target]
+        assert roots_after_wait(self) == [before, after, target]
         self.wait(0.1)
 
 
@@ -44,5 +52,5 @@ class MatchingShapesDefaultMismatches(Scene):
         self.play(TransformMatchingShapes(source, target), run_time=2.0, rate_func=linear)
         assert self.mobjects == [target]
         self.wait(0.1)
-        assert self.mobjects == [target]
+        assert roots_after_wait(self) == [target]
         self.wait(0.1)

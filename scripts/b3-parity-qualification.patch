@@ -1,0 +1,160 @@
+diff --git a/parity/manim-v0.21/manifest.json b/parity/manim-v0.21/manifest.json
+index b83a03d..1fb4e1f 100644
+--- a/parity/manim-v0.21/manifest.json
++++ b/parity/manim-v0.21/manifest.json
+@@ -675,6 +675,34 @@
+       "scene": "UnequalFamilyPathTransformExpansion",
+       "source": "parity/manim-v0.21/core-examples/unequal_family_path_transform.py",
+       "expected_duration": 1.0
++    },
++    {
++      "id": "matching-shapes-reordered",
++      "scene": "MatchingShapesReordered",
++      "source": "parity/manim-v0.21/core-examples/transform_matching_shapes.py",
++      "expected_duration": 2.2,
++      "sample_times": [
++        0,
++        0.5,
++        1,
++        1.5,
++        2,
++        2.1
++      ]
++    },
++    {
++      "id": "matching-shapes-default-mismatches",
++      "scene": "MatchingShapesDefaultMismatches",
++      "source": "parity/manim-v0.21/core-examples/transform_matching_shapes.py",
++      "expected_duration": 2.2,
++      "sample_times": [
++        0,
++        0.5,
++        1,
++        1.5,
++        2,
++        2.1
++      ]
+     }
+   ],
+   "sample_fractions": [
+diff --git a/scripts/manim-raster-differential.mjs b/scripts/manim-raster-differential.mjs
+index b8d2ccd..e69a56e 100644
+--- a/scripts/manim-raster-differential.mjs
++++ b/scripts/manim-raster-differential.mjs
+@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
+ 
+ import playwright from "playwright";
+ import pngjs from "pngjs";
+-import { browserArgs, rasterFixtureSource } from "./manim-raster-support.mjs";
++import { browserArgs, rasterFixtureSource, rasterSampleIndices } from "./manim-raster-support.mjs";
+ 
+ const { chromium } = playwright;
+ const { PNG } = pngjs;
+@@ -110,23 +110,13 @@ async function findPngFrames(root, scene) {
+   return frames;
+ }
+ 
+-function sampleFrames(frameTimes) {
+-  const frameCount = frameTimes.length;
+-  assert.ok(Number.isSafeInteger(frameCount) && frameCount > 0, "invalid reference frame count");
+-  const previous = frameTimes.reduce((last, time, index) => {
+-    assert.ok(Number.isFinite(time) && time >= 0, `invalid logical time for reference frame ${index}`);
+-    assert.ok(time + 1e-12 >= last, `reference frame ${index} moves backwards in logical time`);
+-    return time;
+-  }, -Infinity);
+-  void previous;
+-  const indices = manifest.sample_fractions.map((fraction) =>
+-    Math.round((frameCount - 1) * Number(fraction)),
+-  );
+-  return [...new Set(indices)].map((frameIndex) => ({
+-    frameIndex,
+-    time: frameTimes[frameIndex],
+-    label: `frame-${String(frameIndex).padStart(4, "0")}`,
+-  }));
++function sampleFrames(frameTimes, fixture) {
++  return rasterSampleIndices(frameTimes, manifest.sample_fractions, fixture.sample_times ?? null)
++    .map((frameIndex) => ({
++      frameIndex,
++      time: frameTimes[frameIndex],
++      label: `frame-${String(frameIndex).padStart(4, "0")}`,
++    }));
+ }
+ 
+ async function renderManimReferences() {
+@@ -193,7 +183,7 @@ async function renderManimReferences() {
+     assert.equal(frames.width, reference.pixel_width, `${fixture.id}: Manim reference width`);
+     assert.equal(frames.height, reference.pixel_height, `${fixture.id}: Manim reference height`);
+ 
+-    const samples = sampleFrames(frameTimes);
++    const samples = sampleFrames(frameTimes, fixture);
+     for (const sample of samples) {
+       const outputPath = path.join(frameDir, `${sample.label}.png`);
+       await writeFile(outputPath, await readFile(frameFiles[sample.frameIndex]));
+diff --git a/scripts/manim-raster-support.mjs b/scripts/manim-raster-support.mjs
+index d20d8cd..bd940ab 100644
+--- a/scripts/manim-raster-support.mjs
++++ b/scripts/manim-raster-support.mjs
+@@ -105,3 +105,29 @@ export function compareEffectiveFrames(actual, expected) {
+   compare(actual, expected, "frame");
+   return maximumAbsoluteError;
+ }
++
++// Explicit semantic checkpoints must name real reference frames, never nearby
++// frames silently rounded from a fraction of the encoded movie duration.
++export function rasterSampleIndices(frameTimes, fractions, sampleTimes = null) {
++  if (!Array.isArray(frameTimes) || frameTimes.length === 0
++      || frameTimes.some((time, i) => !Number.isFinite(time) || time < 0
++        || (i > 0 && time < frameTimes[i - 1]))) {
++    throw new Error("reference frame times must be nonempty, finite and monotone");
++  }
++  const indices = sampleTimes === null
++    ? fractions.map((fraction) => {
++      if (!Number.isFinite(fraction) || fraction < 0 || fraction > 1) {
++        throw new Error("sample fraction must be in [0, 1]");
++      }
++      return Math.round((frameTimes.length - 1) * fraction);
++    })
++    : sampleTimes.map((time) => {
++      const index = frameTimes.findIndex((frameTime) => Math.abs(frameTime - time) < 1e-9);
++      if (!Number.isFinite(time) || index < 0) {
++        throw new Error(`no materialized reference frame at requested time ${time}`);
++      }
++      return index;
++    });
++  if (indices.length === 0) throw new Error("at least one raster sample is required");
++  return [...new Set(indices)].sort((a, b) => a - b);
++}
+diff --git a/scripts/manim-raster-support.test.mjs b/scripts/manim-raster-support.test.mjs
+index 94424bd..8690957 100644
+--- a/scripts/manim-raster-support.test.mjs
++++ b/scripts/manim-raster-support.test.mjs
+@@ -1,6 +1,6 @@
+ import assert from "node:assert/strict";
+ import test from "node:test";
+-import { compareEffectiveFrames } from "./manim-raster-support.mjs";
++import { compareEffectiveFrames, rasterSampleIndices } from "./manim-raster-support.mjs";
+ 
+ const frame = { objects: [{ id: 7, present: true, transform: { y: 3.9542133808135986 }, opacity: 0.5 }] };
+ 
+@@ -32,3 +32,21 @@ test("effective comparison preserves identity, presence and object structure", () => {
+     assert.throws(() => compareEffectiveFrames(actual, frame));
+   }
+ });
++
++test("exact semantic checkpoints select real frames including cleanup and its next publication", () => {
++  const times = [...Array.from({ length: 60 }, (_, i) => i / 30), 2, 2.1];
++  assert.deepEqual(rasterSampleIndices(times, [], [0, 0.5, 1, 1.5, 2, 2.1]), [0, 15, 30, 45, 60, 61]);
++  assert.deepEqual(rasterSampleIndices(times, [0, 0.5, 1]), [0, 31, 61]);
++  assert.deepEqual(rasterSampleIndices(times, [], [2, 0, 2]), [0, 60]);
++});
++
++test("sample selection fails closed rather than substituting another reference time", () => {
++  for (const time of [0.01, NaN, Infinity, -1, 9]) {
++    assert.throws(() => rasterSampleIndices([0, 0.5, 1], [], [time]), /no materialized reference/);
++  }
++  for (const times of [[], [NaN], [Infinity], [-1], [1, 0]]) {
++    assert.throws(() => rasterSampleIndices(times, [0]), /reference frame times/);
++  }
++  assert.throws(() => rasterSampleIndices([0, 1], []), /at least one/);
++  assert.throws(() => rasterSampleIndices([0, 1], [1.1]), /sample fraction/);
++});
