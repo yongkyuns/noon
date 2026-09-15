@@ -1,0 +1,53 @@
+name: Tiger padding paint regression
+on:
+  push:
+    branches: [fix/ghostscript-tiger-filled-morph]
+    paths:
+      - crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_channels.rs
+      - crates/noon-compile/tests/family_transform_padding_paint.rs
+      - .github/workflows/tiger-padding-paint.yml
+permissions:
+  contents: read
+concurrency:
+  group: tiger-padding-paint
+  cancel-in-progress: true
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Use pinned Rust
+        run: rustup install
+      - name: Prove the new regression detects the old double fade
+        shell: bash
+        run: |
+          mkdir -p browser-smoke-artifacts/tiger-padding-paint
+          file=crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_channels.rs
+          cp "$file" /tmp/family-transform-fixed.rs
+          trap 'cp /tmp/family-transform-fixed.rs "$file"' EXIT
+          git show 8644c467631bc4431317c4f1287d05b970446008:"$file" > "$file"
+          set +e
+          cargo test -p noon-compile --test family_transform_padding_paint 2>&1 | tee browser-smoke-artifacts/tiger-padding-paint/before.log
+          result=${PIPESTATUS[0]}
+          set -e
+          test "$result" -ne 0
+          grep -q 'transparent_source_to_padding_never_acquires_ghost_fill_or_stroke.*FAILED' browser-smoke-artifacts/tiger-padding-paint/before.log
+          grep -q 'source_padding_grows_with_one_fade_not_a_squared_fade.*FAILED' browser-smoke-artifacts/tiger-padding-paint/before.log
+          grep -q 'hidden_real_source_returning_to_transparent_paint_stays_transparent.*FAILED' browser-smoke-artifacts/tiger-padding-paint/before.log
+      - name: Validate the actual committed fix and family scheduling
+        run: |
+          cargo test -p noon-compile --test family_transform_padding_paint --test family_transform_channels --test family_transform_activation --test family_transform_schedule 2>&1 | tee browser-smoke-artifacts/tiger-padding-paint/after.log
+          git diff --exit-code
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: tiger-padding-paint-regression
+          path: browser-smoke-artifacts/tiger-padding-paint
+          retention-days: 7
