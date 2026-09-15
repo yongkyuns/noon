@@ -367,12 +367,7 @@ impl GpuRenderer {
     ) -> (DrawStats, usize) {
         let Some(insertions) = anchors.get(&resolved.batch.primitive) else {
             return (
-                self.draw_resolved_ordered_batch(
-                    pass,
-                    stable,
-                    resolved,
-                    single_sample_analytics,
-                ),
+                self.draw_resolved_ordered_batch(pass, stable, resolved, single_sample_analytics),
                 0,
             );
         };
@@ -401,12 +396,7 @@ impl GpuRenderer {
                 stats.instances_drawn += drawn.instances_drawn;
             }
             for &slot in slots {
-                let drawn = self.draw_transient_slot(
-                    pass,
-                    derived,
-                    slot,
-                    single_sample_analytics,
-                );
+                let drawn = self.draw_transient_slot(pass, derived, slot, single_sample_analytics);
                 stats.draw_calls += drawn.draw_calls;
                 stats.instances_drawn += drawn.instances_drawn;
                 inserted += 1;
@@ -417,12 +407,8 @@ impl GpuRenderer {
         if cursor < resolved.batch.instance_range.end {
             let mut segment = resolved.clone();
             segment.batch.instance_range = cursor..resolved.batch.instance_range.end;
-            let drawn = self.draw_resolved_ordered_batch(
-                pass,
-                stable,
-                &segment,
-                single_sample_analytics,
-            );
+            let drawn =
+                self.draw_resolved_ordered_batch(pass, stable, &segment, single_sample_analytics);
             stats.draw_calls += drawn.draw_calls;
             stats.instances_drawn += drawn.instances_drawn;
         }
@@ -494,8 +480,12 @@ impl GpuRenderer {
                 let start = u32::try_from(slot.instance_index)
                     .expect("transient path instance count exceeds wgpu limits");
                 pass.draw_indexed(path.index_range.clone(), 0, start..start + 1);
+                DrawStats {
+                    draw_calls: 1,
+                    instances_drawn: 1,
+                }
             }
-        }
+        };
         DrawStats {
             draw_calls: 1,
             instances_drawn: 1,
