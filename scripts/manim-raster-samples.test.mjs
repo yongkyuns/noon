@@ -11,11 +11,19 @@ test("fraction sampling retains the existing rounded-frame contract", () => {
   assert.equal(samples.at(-1).label, "frame-0065");
 });
 
-test("matching phases and the post-cleanup hold use exact reference frames", () => {
+test("matching phases and separate frozen holds use exact reference frames", () => {
   const times = [0, 0.5, 1, 1.5, 2, 2.1];
-  const samples = sampleRasterFrames(referenceTimes, fractions, times);
-  assert.deepEqual(samples.map(({ frameIndex }) => frameIndex), [0, 15, 30, 45, 60, 63]);
+  // Cairo materializes sixty animation PNGs followed by one PNG per static wait.
+  const materialized = [...Array.from({ length: 60 }, (_, i) => i / 30), 2, 2.1];
+  const samples = sampleRasterFrames(materialized, fractions, times);
+  assert.deepEqual(samples.map(({ frameIndex }) => frameIndex), [0, 15, 30, 45, 60, 61]);
   assert.deepEqual(samples.map(({ time }) => time), times);
+});
+
+test("one frozen hold cannot supply a fabricated post-cleanup frame", () => {
+  const materialized = [...Array.from({ length: 60 }, (_, i) => i / 30), 2];
+  assert.throws(() => sampleRasterFrames(materialized, fractions, [2, 2.1]),
+    /no reference frame at requested logical time 2.1/);
 });
 
 test("a missing contract boundary fails instead of selecting a nearby frame", () => {
