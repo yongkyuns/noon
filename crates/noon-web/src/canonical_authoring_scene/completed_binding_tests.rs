@@ -179,3 +179,55 @@ fn completed_binding_validates_entire_batch_before_committing_either_registry() 
         .is_err());
     assert_eq!(context.bindings.len(), 2);
 }
+
+#[test]
+fn matching_constructor_and_outer_group_rates_remain_independent() {
+    use noon_core::{AnimationOptions, RateFunction, SemanticAnimationCompositionKind};
+
+    for inner_rate in [None, Some(RateFunction::Linear), Some(RateFunction::Smooth)] {
+        for outer_rate in [RateFunction::Linear, RateFunction::Smooth] {
+            let (mut context, source_leaf, source, _, target) = fixture();
+            let mut child_options = AnimationOptions::new().run_time(3.0);
+            if let Some(rate) = inner_rate {
+                child_options = child_options.rate_func(rate);
+            }
+            // Constructor duration/rate stay on the matching child; Scene.play
+            // rescales and eases the enclosing group without replacing that rate.
+            let request = OrdinaryCompositionChild::Composition {
+                kind: SemanticAnimationCompositionKind::Parallel,
+                children: vec![OrdinaryCompositionChild::MatchingFamilyTransformTo {
+                    source,
+                    target_state: target,
+                    options: child_options,
+                }],
+                options: AnimationOptions::new().run_time(2.0).rate_func(outer_rate),
+            };
+            let end = context
+                .begin_ordinary_mixed_composition(
+                    SemanticAnimationCompositionKind::Parallel,
+                    &[request],
+                    AnimationOptions::new().rate_func(RateFunction::Linear),
+                    AnimationOptions::new(),
+                )
+                .unwrap();
+            assert_eq!(end, 2.0);
+            for alpha in [0.0, 0.25, 0.5, 0.75] {
+                context
+                    .active_live_player()
+                    .unwrap()
+                    .live_advance_segment_to(end * f64::from(alpha))
+                    .unwrap();
+                let progress = inner_rate
+                    .unwrap_or(RateFunction::Smooth)
+                    .evaluate(outer_rate.evaluate(alpha));
+                let expected = -2.0 + 6.0 * f64::from(progress);
+                let actual = context.mobject_layout(&source_leaf).unwrap().0;
+                assert!(
+                    (actual - expected).abs() < 1e-5,
+                    "inner={inner_rate:?}, outer={outer_rate:?}, alpha={alpha}: {actual} != {expected}"
+                );
+            }
+            complete(&mut context, end);
+        }
+    }
+}

@@ -528,7 +528,7 @@ fn matching_family_quarter_phases_agree_with_direct_seek_and_keep_cleanup_stable
             assert_position(sample[1], 2.0 - 6.0 * alpha);
             assert_eq!(
                 store.semantic_family_members_checked(root).unwrap(),
-                &[before, source, after]
+                &[before, after, source]
             );
             session.take_renderer_publication();
             session.advance_segment_to(segment, sample_time).unwrap();
@@ -776,6 +776,23 @@ fn matching_family_completion_appends_target_in_same_z_painter_order() {
         .declare_and_activate_composition(&mut store, root, &request, AnimationOptions::new())
         .unwrap();
 
+    // Setup moves the existing source family behind surviving same-z roots,
+    // without allocating replacement source IDs or changing any z index.
+    assert_eq!(
+        store.semantic_family_members_checked(root).unwrap(),
+        &[before, after, source]
+    );
+    let active_ids = session
+        .painter_order()
+        .iter()
+        .map(|&index| session.frame().objects[index as usize].id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        active_ids,
+        vec![before_execution, after_execution, source_execution]
+    );
+    assert!(session.frame().objects.iter().all(|row| row.z_index == 0.0));
+
     session
         .advance_segment_to(segment, segment.end_time())
         .unwrap();
@@ -889,4 +906,81 @@ fn matching_family_cleanup_restores_matched_padded_and_unmatched_sources() {
         assert_eq!(restored.style, expected.style);
         assert_eq!(restored.appearance, expected.appearance);
     }
+}
+
+#[test]
+fn matching_family_rejected_activation_preserves_original_root_order() {
+    let mut store = SemanticStore::new();
+    let before = object(&mut store, -4.0);
+    let leaf = matching_path_object(&mut store, matching_triangle(), 0.0);
+    let source = family(&mut store, &[leaf]);
+    let after = object(&mut store, 4.0);
+    let target_leaf = matching_path_object(&mut store, matching_triangle(), 1.0);
+    let target = family(&mut store, &[target_leaf]);
+    let root = family(&mut store, &[before, source, after]);
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    let revision = store.scene_revision();
+    let painter_order = session.painter_order().to_vec();
+    let request = SemanticCompositionRequest::MatchingFamilyTransformTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new().run_time(f64::NAN),
+    };
+    assert!(session
+        .declare_and_activate_composition(&mut store, root, &request, AnimationOptions::new())
+        .is_err());
+    assert_eq!(store.scene_revision(), revision);
+    assert_eq!(
+        store.semantic_family_members_checked(root).unwrap(),
+        &[before, source, after]
+    );
+    assert_eq!(session.painter_order(), painter_order);
+    assert!(session.pending_segment_completion.is_none());
+}
+
+#[test]
+fn matching_family_target_leftover_anchors_after_reordered_source() {
+    let mut store = SemanticStore::new();
+    let before = object(&mut store, -4.0);
+    let leaf = matching_path_object(&mut store, matching_triangle(), 0.0);
+    let source = family(&mut store, &[leaf]);
+    let after = object(&mut store, 4.0);
+    let target_leaf = matching_path_object(&mut store, matching_triangle(), 1.0);
+    let leftover = matching_path_object(&mut store, matching_kite(), 2.0);
+    let target = family(&mut store, &[target_leaf, leftover]);
+    let root = family(&mut store, &[before, source, after]);
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    let source_id = session.execution_index.execution_object_id(leaf).unwrap();
+    let source_index = session.runtime.frame_index_for_object(source_id).unwrap();
+    let request = SemanticCompositionRequest::MatchingFamilyTransformTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear),
+    };
+    let segment = session
+        .declare_and_activate_composition(&mut store, root, &request, AnimationOptions::new())
+        .unwrap();
+    let plan = session.derived_display_plan.as_ref().unwrap();
+    assert_eq!(plan.occurrences().len(), 1);
+    assert_eq!(
+        plan.occurrences()[0].painter_placement,
+        noon_runtime::TransientPresentationPainterPlacement::AfterStable {
+            anchor_object_index: u32::try_from(source_index).unwrap(),
+        }
+    );
+    session.advance_segment_to(segment, 0.5).unwrap();
+    assert_eq!(
+        session.painter_order().last().copied(),
+        Some(source_index as u32)
+    );
+    session
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    session.complete_segment(&mut store, segment).unwrap();
+    assert_eq!(
+        store.semantic_family_members_checked(root).unwrap(),
+        &[before, after, target]
+    );
 }

@@ -1991,8 +1991,9 @@ def _build_canonical_composition_candidate(
         family_transform = _canonical_family_transform_animation(self, animation)
         if family_transform is not None:
             source, target, leaf = family_transform
+            matching = type(leaf) is _animate.TransformMatchingShapes
             child = _canonical_transform_options(
-                leaf, child_kwargs, allow_family_lag=True
+                leaf, {} if matching else child_kwargs, allow_family_lag=True
             )
             if child is None:
                 raise NotImplementedError("unsupported canonical family Transform options")
@@ -2000,9 +2001,21 @@ def _build_canonical_composition_candidate(
                 raise NotImplementedError(
                     "canonical family Transform requires linear or smooth easing"
                 )
+            matching_group = None
+            if matching:
+                # Manim constructor kwargs belong to the Transform/Fade children;
+                # Scene.play kwargs belong to their enclosing, normally linear group.
+                # Encode those scopes as an ordinary Rust composition, not a second
+                # Python timing/interpolation implementation.
+                matching_group = context.beginOrdinaryCompositionBuilder(
+                    "parallel", _canonical_play_options(dict(child_kwargs)), 0.0, None
+                )
+                matching_group.setCompositionRateFunction(
+                    _canonical_composition_rate_id(child_kwargs) or "linear"
+                )
             append_family_transform = (
-                builder.appendMatchingFamilyTransformTo
-                if type(leaf) is _animate.TransformMatchingShapes
+                matching_group.appendMatchingFamilyTransformTo
+                if matching_group is not None
                 else builder.appendFamilyTransformTo
             )
             append_family_transform(
@@ -2013,7 +2026,8 @@ def _build_canonical_composition_candidate(
                 float(child.lag_ratio),
                 float(child.path_arc),
             )
-            if type(leaf) is _animate.TransformMatchingShapes:
+            if matching_group is not None:
+                builder.appendComposition(matching_group)
                 completed_families.extend((source, target))
             return
         if isinstance(animation, _composition.Add):
