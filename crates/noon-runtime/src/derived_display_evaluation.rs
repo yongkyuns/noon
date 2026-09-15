@@ -7,6 +7,17 @@ use noon_core::{
 use crate::frame::FrameRowState;
 use crate::{DerivedDisplayObject, DerivedDisplayObjectState};
 
+/// Painter placement for one identity-free transient animation occurrence.
+///
+/// `AfterStable` preserves the existing source-copy semantics. `LayerEnd` carries no
+/// synthetic source anchor and is reserved for detached authored transient bases; it
+/// remains fail-closed in this evaluator until renderer publication supports it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransientPresentationPainterPlacement {
+    AfterStable { anchor_object_index: u32 },
+    LayerEnd,
+}
+
 /// One identity-free runtime channel for a transient derived display occurrence.
 ///
 /// This execution data intentionally carries no `TrackId`, `ObjectId`, semantic node,
@@ -21,10 +32,10 @@ pub struct DerivedDisplayAnimationTrack {
     pub transform_geometry_plan: Option<TransformGeometryPlan>,
 }
 
-/// One plan-local visual occurrence anchored only for painter placement.
+/// One plan-local visual occurrence with explicit painter placement.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DerivedDisplayAnimationOccurrence {
-    pub anchor_object_index: u32,
+    pub painter_placement: TransientPresentationPainterPlacement,
     pub occurrence_index: u32,
     pub base: DerivedDisplayObjectState,
     pub tracks: Vec<DerivedDisplayAnimationTrack>,
@@ -108,11 +119,22 @@ impl DerivedDisplayAnimationPlan {
                     occurrence.occurrence_index,
                 )?;
             }
-            objects.push(DerivedDisplayObject::new(
-                occurrence.anchor_object_index,
-                occurrence.occurrence_index,
-                derived_from_row(occurrence.base.text_bounds, base_content, row),
-            ));
+            let state = derived_from_row(occurrence.base.text_bounds, base_content, row);
+            let object = match occurrence.painter_placement {
+                TransientPresentationPainterPlacement::AfterStable {
+                    anchor_object_index,
+                } => DerivedDisplayObject::new(
+                    anchor_object_index,
+                    occurrence.occurrence_index,
+                    state,
+                ),
+                TransientPresentationPainterPlacement::LayerEnd => {
+                    return Err(DerivedDisplayEvaluationError::UnsupportedPainterPlacement(
+                        occurrence.occurrence_index,
+                    ));
+                }
+            };
+            objects.push(object);
         }
         Ok(objects)
     }
@@ -123,6 +145,7 @@ pub enum DerivedDisplayEvaluationError {
     InvalidTime(f64),
     DuplicateOccurrence(u32),
     EmptyOccurrence(u32),
+    UnsupportedPainterPlacement(u32),
     InvalidTimeMap {
         occurrence_index: u32,
         property: Property,
@@ -151,6 +174,10 @@ impl std::fmt::Display for DerivedDisplayEvaluationError {
             Self::EmptyOccurrence(index) => {
                 write!(formatter, "derived display occurrence {index} has no channels")
             }
+            Self::UnsupportedPainterPlacement(index) => write!(
+                formatter,
+                "derived display occurrence {index} requests painter placement not yet supported by renderer publication"
+            ),
             Self::InvalidTimeMap {
                 occurrence_index,
                 property,
@@ -313,13 +340,29 @@ mod tests {
         }
     }
 
+    fn after_stable(
+        anchor_object_index: u32,
+        occurrence_index: u32,
+        base: DerivedDisplayObjectState,
+        tracks: Vec<DerivedDisplayAnimationTrack>,
+    ) -> DerivedDisplayAnimationOccurrence {
+        DerivedDisplayAnimationOccurrence {
+            painter_placement: TransientPresentationPainterPlacement::AfterStable {
+                anchor_object_index,
+            },
+            occurrence_index,
+            base,
+            tracks,
+        }
+    }
+
     #[test]
     fn derived_copy_is_absent_before_start_and_matches_endpoints() {
-        let occurrence = DerivedDisplayAnimationOccurrence {
-            anchor_object_index: 3,
-            occurrence_index: 7,
-            base: base(GeometryRef::circle(1.0)),
-            tracks: vec![
+        let occurrence = after_stable(
+            3,
+            7,
+            base(GeometryRef::circle(1.0)),
+            vec![
                 track(
                     Property::Position,
                     TrackValues::Vec2 {
@@ -332,7 +375,7 @@ mod tests {
                     TrackValues::Scalar { from: 0.0, to: 1.0 },
                 ),
             ],
-        };
+        );
         let plan = DerivedDisplayAnimationPlan::new(vec![occurrence]).unwrap();
         assert!(plan.evaluate(0.5).unwrap().is_empty());
 
@@ -354,6 +397,26 @@ mod tests {
     }
 
     #[test]
+    fn layer_end_occurrence_fails_closed_until_publication_supports_it() {
+        let occurrence = DerivedDisplayAnimationOccurrence {
+            painter_placement: TransientPresentationPainterPlacement::LayerEnd,
+            occurrence_index: 11,
+            base: base(GeometryRef::circle(1.0)),
+            tracks: vec![track(
+                Property::Appearance,
+                TrackValues::Scalar { from: 0.0, to: 1.0 },
+            )],
+        };
+        let plan = DerivedDisplayAnimationPlan::new(vec![occurrence]).unwrap();
+        assert_eq!(
+            plan.evaluate(1.0),
+            Err(DerivedDisplayEvaluationError::UnsupportedPainterPlacement(
+                11
+            ))
+        );
+    }
+
+    #[test]
     fn nested_time_map_controls_occurrence_lifetime_and_progress() {
         let mut mapped = track(
             Property::Position,
@@ -369,12 +432,7 @@ mod tests {
                 0.5,
                 RateFunction::Linear,
             )]);
-        let occurrence = DerivedDisplayAnimationOccurrence {
-            anchor_object_index: 0,
-            occurrence_index: 1,
-            base: base(GeometryRef::circle(1.0)),
-            tracks: vec![mapped],
-        };
+        let occurrence = after_stable(0, 1, base(GeometryRef::circle(1.0)), vec![mapped]);
         let plan = DerivedDisplayAnimationPlan::new(vec![occurrence]).unwrap();
         assert!(plan.evaluate(1.0).unwrap().is_empty());
         assert_eq!(
@@ -397,10 +455,10 @@ mod tests {
             .line_to(Vec2::new(0.0, 1.0));
         let geometry = GeometryRef::path(source.with_morph_target(target));
         let prepared = Arc::new(geometry.clone());
-        let occurrence = DerivedDisplayAnimationOccurrence {
-            anchor_object_index: 0,
-            occurrence_index: 2,
-            base: {
+        let occurrence = after_stable(
+            0,
+            2,
+            {
                 let mut state = base(geometry.clone());
                 state.style = Style {
                     stroke: Some(Color::WHITE),
@@ -409,7 +467,7 @@ mod tests {
                 };
                 state
             },
-            tracks: vec![DerivedDisplayAnimationTrack {
+            vec![DerivedDisplayAnimationTrack {
                 property: Property::Morph,
                 values: TrackValues::PreparedMorph {
                     from: 0.0,
@@ -424,7 +482,7 @@ mod tests {
                     render_transform: None,
                 }),
             }],
-        };
+        );
         let plan = DerivedDisplayAnimationPlan::new(vec![occurrence]).unwrap();
         let middle = plan.evaluate(1.0).unwrap();
         assert_eq!(middle[0].state().morph, 0.5);
