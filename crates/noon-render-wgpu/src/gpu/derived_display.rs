@@ -1,13 +1,15 @@
+use std::collections::{hash_map::Entry, BTreeMap, HashMap};
+
 use bytemuck::Pod;
 
 use crate::{
-    DerivedDisplayPrimitive, DisplayPainterItem, PreparedDerivedDisplay, PreparedFrame,
-    PreparedGeometryObjectOutcome, RenderPrimitive,
+    DerivedDisplayPrimitive, DerivedPathGeometrySource, DisplayPainterItem, PreparedDerivedDisplay,
+    PreparedDerivedDisplaySlot, PreparedFrame, PreparedGeometryObjectOutcome, RenderPrimitive,
 };
 
 use super::{
     empty_buffer, empty_instance_buffer, ensure_capacity, ensure_capacity_with_usage, DrawStats,
-    GpuRenderer, UploadStats,
+    GpuRenderer, ResolvedOrderedBatch, UploadStats,
 };
 
 #[derive(Debug)]
@@ -134,47 +136,67 @@ fn upload_all<T: Pod>(queue: &wgpu::Queue, buffer: &wgpu::Buffer, values: &[T]) 
     bytes.len()
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MixedDrawItem {
-    Stable {
-        primitive: RenderPrimitive,
-        instance_index: usize,
-    },
-    Derived {
-        primitive: DerivedDisplayPrimitive,
-        instance_index: usize,
-    },
+type ResolvedTransientAnchors =
+    HashMap<RenderPrimitive, BTreeMap<usize, Vec<PreparedDerivedDisplaySlot>>>;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct TransientResolutionStats {
+    slot_index_entries: usize,
+    slot_lookups: usize,
+    anchor_lookups: usize,
+    occurrences_resolved: usize,
 }
 
-fn resolve_mixed_draw_items(
+/// Resolve each publication-local occurrence exactly once. Stable painter order is
+/// deliberately not copied here: the retained ordered-batch stream remains the sole
+/// authority and transient rows are spliced after their stable anchors during draw.
+fn resolve_transient_anchors(
     stable: &PreparedFrame<'_>,
     derived: &PreparedDerivedDisplay,
-) -> Vec<MixedDrawItem> {
-    let mut resolved = Vec::with_capacity(derived.painter_items.len());
-    for item in &derived.painter_items {
-        match *item {
-            DisplayPainterItem::Stable { object_index } => {
-                match stable.observe_object(object_index as usize) {
-                    Ok(object) => resolved.push(MixedDrawItem::Stable {
-                        primitive: object.primitive,
-                        instance_index: object.instance_index,
-                    }),
-                    Err(PreparedGeometryObjectOutcome::Absent)
-                    | Err(PreparedGeometryObjectOutcome::Unsupported(_)) => {}
-                }
-            }
-            DisplayPainterItem::Derived { occurrence_index } => {
-                let slot = derived
-                    .slot_for_occurrence(occurrence_index)
-                    .expect("prepared derived painter item must retain its occurrence slot");
-                resolved.push(MixedDrawItem::Derived {
-                    primitive: slot.primitive,
-                    instance_index: slot.instance_index,
-                });
-            }
-        }
+) -> (ResolvedTransientAnchors, TransientResolutionStats) {
+    let mut stats = TransientResolutionStats::default();
+    let mut slots_by_occurrence = HashMap::with_capacity(derived.slots.len());
+    for &slot in &derived.slots {
+        slots_by_occurrence.insert(slot.occurrence_index, slot);
     }
-    resolved
+    stats.slot_index_entries = slots_by_occurrence.len();
+
+    let mut anchor_cache = HashMap::<u32, Option<(RenderPrimitive, usize)>>::new();
+    let mut resolved = ResolvedTransientAnchors::new();
+    for item in &derived.painter_items {
+        let DisplayPainterItem::Derived { occurrence_index } = *item else {
+            // Stable entries were emitted by the pre-locality implementation. The
+            // retained prepared frame now draws those rows directly.
+            continue;
+        };
+        stats.slot_lookups += 1;
+        let slot = *slots_by_occurrence
+            .get(&occurrence_index)
+            .expect("prepared transient painter item must retain its occurrence slot");
+        let anchor = match anchor_cache.entry(slot.anchor_object_index) {
+            Entry::Occupied(entry) => *entry.get(),
+            Entry::Vacant(entry) => {
+                stats.anchor_lookups += 1;
+                let observation = match stable.observe_object(slot.anchor_object_index as usize) {
+                    Ok(object) => Some((object.primitive, object.instance_index)),
+                    Err(PreparedGeometryObjectOutcome::Absent)
+                    | Err(PreparedGeometryObjectOutcome::Unsupported(_)) => None,
+                };
+                *entry.insert(observation)
+            }
+        };
+        let Some((primitive, instance_index)) = anchor else {
+            continue;
+        };
+        resolved
+            .entry(primitive)
+            .or_default()
+            .entry(instance_index)
+            .or_default()
+            .push(slot);
+        stats.occurrences_resolved += 1;
+    }
+    (resolved, stats)
 }
 
 impl GpuRenderer {
@@ -283,6 +305,137 @@ impl GpuRenderer {
         let mut stats = DrawStats::default();
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
+        let (anchors, resolution) = resolve_transient_anchors(stable, derived);
+        assert_eq!(
+            resolution.occurrences_resolved, resolution.slot_lookups,
+            "transient presentation anchor is absent from the prepared stable submission"
+        );
+
+        let mut inserted = 0usize;
+        let mut pending = None::<ResolvedOrderedBatch>;
+        for resolved in stable.ordered_render_batches() {
+            let next = ResolvedOrderedBatch {
+                batch: resolved.batch.clone(),
+                mega: resolved.mega_path_batch.cloned(),
+            };
+            if pending.as_mut().is_some_and(|current| current.merge(&next)) {
+                continue;
+            }
+            if let Some(current) = pending.replace(next) {
+                let (drawn, inserted_now) = self.draw_stable_batch_with_transients(
+                    pass,
+                    stable,
+                    derived,
+                    &anchors,
+                    &current,
+                    single_sample_analytics,
+                );
+                stats.draw_calls += drawn.draw_calls;
+                stats.instances_drawn += drawn.instances_drawn;
+                inserted += inserted_now;
+            }
+        }
+        if let Some(current) = pending {
+            let (drawn, inserted_now) = self.draw_stable_batch_with_transients(
+                pass,
+                stable,
+                derived,
+                &anchors,
+                &current,
+                single_sample_analytics,
+            );
+            stats.draw_calls += drawn.draw_calls;
+            stats.instances_drawn += drawn.instances_drawn;
+            inserted += inserted_now;
+        }
+
+        assert_eq!(
+            inserted, resolution.occurrences_resolved,
+            "transient presentation anchor could not be located in retained painter batches"
+        );
+        stats
+    }
+
+    fn draw_stable_batch_with_transients<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        stable: &PreparedFrame<'_>,
+        derived: &PreparedDerivedDisplay,
+        anchors: &ResolvedTransientAnchors,
+        resolved: &ResolvedOrderedBatch,
+        single_sample_analytics: bool,
+    ) -> (DrawStats, usize) {
+        let Some(insertions) = anchors.get(&resolved.batch.primitive) else {
+            return (
+                self.draw_resolved_ordered_batch(
+                    pass,
+                    stable,
+                    resolved,
+                    single_sample_analytics,
+                ),
+                0,
+            );
+        };
+        let range_start = resolved.batch.instance_range.start as usize;
+        let range_end = resolved.batch.instance_range.end as usize;
+        let mut cursor = resolved.batch.instance_range.start;
+        let mut stats = DrawStats::default();
+        let mut inserted = 0usize;
+
+        for (&anchor_instance, slots) in insertions.range(range_start..range_end) {
+            let anchor = u32::try_from(anchor_instance)
+                .expect("stable anchor instance count exceeds wgpu limits");
+            let after_anchor = anchor
+                .checked_add(1)
+                .expect("stable anchor instance count exceeds wgpu limits");
+            if cursor < after_anchor {
+                let mut segment = resolved.clone();
+                segment.batch.instance_range = cursor..after_anchor;
+                let drawn = self.draw_resolved_ordered_batch(
+                    pass,
+                    stable,
+                    &segment,
+                    single_sample_analytics,
+                );
+                stats.draw_calls += drawn.draw_calls;
+                stats.instances_drawn += drawn.instances_drawn;
+            }
+            for &slot in slots {
+                let drawn = self.draw_transient_slot(
+                    pass,
+                    derived,
+                    slot,
+                    single_sample_analytics,
+                );
+                stats.draw_calls += drawn.draw_calls;
+                stats.instances_drawn += drawn.instances_drawn;
+                inserted += 1;
+            }
+            cursor = after_anchor;
+        }
+
+        if cursor < resolved.batch.instance_range.end {
+            let mut segment = resolved.clone();
+            segment.batch.instance_range = cursor..resolved.batch.instance_range.end;
+            let drawn = self.draw_resolved_ordered_batch(
+                pass,
+                stable,
+                &segment,
+                single_sample_analytics,
+            );
+            stats.draw_calls += drawn.draw_calls;
+            stats.instances_drawn += drawn.instances_drawn;
+        }
+        (stats, inserted)
+    }
+
+    fn draw_transient_slot<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        derived: &PreparedDerivedDisplay,
+        slot: PreparedDerivedDisplaySlot,
+        single_sample_analytics: bool,
+    ) -> DrawStats {
         let circle_pipeline = if single_sample_analytics {
             &self.circle_pipeline_single_sample
         } else {
@@ -298,116 +451,55 @@ impl GpuRenderer {
         } else {
             &self.line_pipeline
         };
-
-        for item in resolve_mixed_draw_items(stable, derived) {
-            match item {
-                MixedDrawItem::Stable {
-                    primitive: RenderPrimitive::Circle,
-                    instance_index,
-                } => draw_analytic(
-                    pass,
-                    circle_pipeline,
-                    &self.quad_buffer,
-                    &self.circle_buffer,
-                    instance_index,
-                ),
-                MixedDrawItem::Stable {
-                    primitive: RenderPrimitive::Rectangle,
-                    instance_index,
-                } => draw_analytic(
-                    pass,
-                    rectangle_pipeline,
-                    &self.quad_buffer,
-                    &self.rectangle_buffer,
-                    instance_index,
-                ),
-                MixedDrawItem::Stable {
-                    primitive: RenderPrimitive::Line,
-                    instance_index,
-                } => draw_analytic(
-                    pass,
-                    line_pipeline,
-                    &self.quad_buffer,
-                    &self.line_buffer,
-                    instance_index,
-                ),
-                MixedDrawItem::Stable {
-                    primitive: RenderPrimitive::Path { batch },
-                    instance_index,
-                } => {
-                    let path = &stable.path_batches[batch];
-                    if path.index_range.is_empty() {
-                        continue;
-                    }
-                    pass.set_pipeline(&self.path_pipeline);
-                    pass.set_vertex_buffer(0, self.path_vertex_buffer.slice(..));
-                    pass.set_vertex_buffer(1, self.path_instance_buffer.slice(..));
-                    pass.set_index_buffer(
-                        self.path_index_buffer.slice(..),
-                        wgpu::IndexFormat::Uint32,
-                    );
-                    let start = u32::try_from(instance_index)
-                        .expect("stable path instance count exceeds wgpu limits");
-                    pass.draw_indexed(path.index_range.clone(), 0, start..start + 1);
+        match slot.primitive {
+            DerivedDisplayPrimitive::Circle => draw_analytic(
+                pass,
+                circle_pipeline,
+                &self.quad_buffer,
+                &self.derived_display.circle_buffer,
+                slot.instance_index,
+            ),
+            DerivedDisplayPrimitive::Rectangle => draw_analytic(
+                pass,
+                rectangle_pipeline,
+                &self.quad_buffer,
+                &self.derived_display.rectangle_buffer,
+                slot.instance_index,
+            ),
+            DerivedDisplayPrimitive::Line => draw_analytic(
+                pass,
+                line_pipeline,
+                &self.quad_buffer,
+                &self.derived_display.line_buffer,
+                slot.instance_index,
+            ),
+            DerivedDisplayPrimitive::Path { batch, source } => {
+                let path = &derived.path_batches[batch];
+                if path.index_range.is_empty() {
+                    return DrawStats::default();
                 }
-                MixedDrawItem::Stable {
-                    primitive: RenderPrimitive::MegaPath { .. },
-                    ..
-                } => unreachable!("stable object observation resolves retained Path slots"),
-                MixedDrawItem::Derived {
-                    primitive: DerivedDisplayPrimitive::Circle,
-                    instance_index,
-                } => draw_analytic(
-                    pass,
-                    circle_pipeline,
-                    &self.quad_buffer,
-                    &self.derived_display.circle_buffer,
-                    instance_index,
-                ),
-                MixedDrawItem::Derived {
-                    primitive: DerivedDisplayPrimitive::Rectangle,
-                    instance_index,
-                } => draw_analytic(
-                    pass,
-                    rectangle_pipeline,
-                    &self.quad_buffer,
-                    &self.derived_display.rectangle_buffer,
-                    instance_index,
-                ),
-                MixedDrawItem::Derived {
-                    primitive: DerivedDisplayPrimitive::Line,
-                    instance_index,
-                } => draw_analytic(
-                    pass,
-                    line_pipeline,
-                    &self.quad_buffer,
-                    &self.derived_display.line_buffer,
-                    instance_index,
-                ),
-                MixedDrawItem::Derived {
-                    primitive: DerivedDisplayPrimitive::Path { batch },
-                    instance_index,
-                } => {
-                    let path = &derived.path_batches[batch];
-                    if path.index_range.is_empty() {
-                        continue;
+                let (vertex_buffer, index_buffer) = match source {
+                    DerivedPathGeometrySource::Transient => (
+                        &self.derived_display.path_vertex_buffer,
+                        &self.derived_display.path_index_buffer,
+                    ),
+                    DerivedPathGeometrySource::Retained => {
+                        (&self.path_vertex_buffer, &self.path_index_buffer)
                     }
-                    pass.set_pipeline(&self.path_pipeline);
-                    pass.set_vertex_buffer(0, self.derived_display.path_vertex_buffer.slice(..));
-                    pass.set_vertex_buffer(1, self.derived_display.path_instance_buffer.slice(..));
-                    pass.set_index_buffer(
-                        self.derived_display.path_index_buffer.slice(..),
-                        wgpu::IndexFormat::Uint32,
-                    );
-                    let start = u32::try_from(instance_index)
-                        .expect("transient path instance count exceeds wgpu limits");
-                    pass.draw_indexed(path.index_range.clone(), 0, start..start + 1);
-                }
+                };
+                pass.set_pipeline(&self.path_pipeline);
+                pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                pass.set_vertex_buffer(1, self.derived_display.path_instance_buffer.slice(..));
+                pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                let start = u32::try_from(slot.instance_index)
+                    .expect("transient path instance count exceeds wgpu limits");
+                pass.draw_indexed(path.index_range.clone(), 0, start..start + 1);
             }
-            stats.draw_calls += 1;
-            stats.instances_drawn += 1;
         }
-        stats
+        DrawStats {
+            draw_calls: 1,
+            instances_drawn: 1,
+        }
     }
 }
 
@@ -417,12 +509,16 @@ fn draw_analytic<'a>(
     quad_buffer: &'a wgpu::Buffer,
     instance_buffer: &'a wgpu::Buffer,
     instance_index: usize,
-) {
+) -> DrawStats {
     let start = u32::try_from(instance_index).expect("analytic instance count exceeds wgpu limits");
     pass.set_pipeline(pipeline);
     pass.set_vertex_buffer(0, quad_buffer.slice(..));
     pass.set_vertex_buffer(1, instance_buffer.slice(..));
     pass.draw(0..6, start..start + 1);
+    DrawStats {
+        draw_calls: 1,
+        instances_drawn: 1,
+    }
 }
 
 #[cfg(test)]
@@ -434,7 +530,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::{prepare_derived_display, FramePreparer};
+    use crate::{
+        prepare_derived_display, prepare_derived_display_visible_cached, FramePreparer,
+        PathMeshPreload,
+    };
 
     fn state(geometry: GeometryRef) -> TransientPresentationState {
         TransientPresentationState {
@@ -520,7 +619,133 @@ mod tests {
     }
 
     #[test]
-    fn mixed_draw_resolution_preserves_anchor_copy_order_without_new_stable_slots() {
+    fn resident_transient_path_uploads_instance_only() {
+        const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let path = noon_core::VectorPath::new()
+            .move_to(noon_core::Vec2::new(-0.5, -0.5))
+            .line_to(noon_core::Vec2::new(0.5, -0.5))
+            .line_to(noon_core::Vec2::new(0.0, 0.5))
+            .close();
+        let geometry = GeometryRef::path(path);
+        let style = Style::default();
+        let objects = vec![CompiledObject::new(
+            ObjectId::new(1),
+            geometry.clone(),
+            Transform2D::IDENTITY,
+            style,
+        )];
+        let compiled = CompiledScene::compile_objects(objects, &[]).unwrap();
+        let mut runtime = SceneInstance::new(compiled);
+        let presentations = [TransientPresentationOccurrence::new(
+            0,
+            7,
+            state(geometry.clone()),
+        )];
+        let publication = runtime
+            .take_renderer_publication()
+            .with_transient_presentations(&presentations)
+            .unwrap();
+        let mut preparer = FramePreparer::for_individual_path_draws();
+        preparer
+            .preload_paths(&[PathMeshPreload {
+                geometry: &geometry,
+                style,
+                transform: Transform2D::IDENTITY,
+            }])
+            .unwrap();
+        preparer.set_painter_order(publication.frame(), publication.painter_order());
+        let derived =
+            prepare_derived_display_visible_cached(&publication, &[0], &mut preparer).unwrap();
+        assert!(derived.path_vertices.is_empty());
+        assert!(derived.path_indices.is_empty());
+        assert_eq!(derived.stats.resident_path_reuses, 1);
+        let stable = preparer.prepare(publication.frame());
+
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut renderer = GpuRenderer::new(&device, FORMAT);
+        renderer.set_viewport(&device, &queue, 32, 32);
+        renderer.upload(&device, &queue, &stable);
+        let uploaded = renderer.upload_transient_presentations(&device, &queue, &derived);
+        assert_eq!(
+            uploaded.bytes_uploaded,
+            std::mem::size_of::<crate::PathInstance>()
+        );
+        assert_eq!(uploaded.buffer_reallocations, 1);
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Noon resident transient path test target"),
+            size: wgpu::Extent3d {
+                width: 32,
+                height: 32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let draw = renderer.encode_with_transient_presentations(
+            &mut encoder,
+            &view,
+            &stable,
+            &derived,
+            wgpu::Color::BLACK,
+        );
+        queue.submit(Some(encoder.finish()));
+        assert_eq!(draw.draw_calls, 2);
+        assert_eq!(draw.instances_drawn, 2);
+    }
+
+    #[test]
+    fn transient_resolution_is_linear_in_occurrences_and_unique_anchors() {
+        const COUNT: u32 = 4_096;
+        let objects = vec![CompiledObject::new(
+            ObjectId::new(1),
+            GeometryRef::circle(1.0),
+            Transform2D::IDENTITY,
+            Style::default(),
+        )];
+        let compiled = CompiledScene::compile_objects(objects, &[]).unwrap();
+        let mut runtime = SceneInstance::new(compiled);
+        let presentations = (0..COUNT)
+            .map(|occurrence| {
+                TransientPresentationOccurrence::new(
+                    0,
+                    occurrence,
+                    state(GeometryRef::circle(0.25)),
+                )
+            })
+            .collect::<Vec<_>>();
+        let publication = runtime
+            .take_renderer_publication()
+            .with_transient_presentations(&presentations)
+            .unwrap();
+        let derived = prepare_derived_display(&publication).unwrap();
+        let mut preparer = FramePreparer::new();
+        preparer.set_painter_order(publication.frame(), publication.painter_order());
+        let stable = preparer.prepare(publication.frame());
+
+        let (resolved, stats) = resolve_transient_anchors(&stable, &derived);
+        assert_eq!(stats.slot_index_entries, COUNT as usize);
+        assert_eq!(stats.slot_lookups, COUNT as usize);
+        assert_eq!(stats.anchor_lookups, 1);
+        assert_eq!(stats.occurrences_resolved, COUNT as usize);
+        assert_eq!(
+            resolved
+                .get(&RenderPrimitive::Circle)
+                .and_then(|by_instance| by_instance.get(&0))
+                .map(Vec::len),
+            Some(COUNT as usize)
+        );
+    }
+
+    #[test]
+    fn sparse_resolution_preserves_anchor_copy_order_without_new_stable_slots() {
         let objects = vec![
             CompiledObject::new(
                 ObjectId::new(1),
@@ -558,26 +783,22 @@ mod tests {
         let stable = preparer.prepare(publication.frame());
 
         assert_eq!(stable.slots.len(), 2);
+        let (resolved, stats) = resolve_transient_anchors(&stable, &derived);
+        assert_eq!(stats.slot_lookups, 2);
+        assert_eq!(stats.anchor_lookups, 2);
         assert_eq!(
-            resolve_mixed_draw_items(&stable, &derived),
-            vec![
-                MixedDrawItem::Stable {
-                    primitive: RenderPrimitive::Circle,
-                    instance_index: 0,
-                },
-                MixedDrawItem::Derived {
-                    primitive: DerivedDisplayPrimitive::Circle,
-                    instance_index: 0,
-                },
-                MixedDrawItem::Stable {
-                    primitive: RenderPrimitive::Rectangle,
-                    instance_index: 0,
-                },
-                MixedDrawItem::Derived {
-                    primitive: DerivedDisplayPrimitive::Line,
-                    instance_index: 0,
-                },
-            ]
+            resolved
+                .get(&RenderPrimitive::Circle)
+                .and_then(|by_instance| by_instance.get(&0))
+                .map(|slots| slots[0].occurrence_index),
+            Some(7)
+        );
+        assert_eq!(
+            resolved
+                .get(&RenderPrimitive::Rectangle)
+                .and_then(|by_instance| by_instance.get(&0))
+                .map(|slots| slots[0].occurrence_index),
+            Some(8)
         );
     }
 }
