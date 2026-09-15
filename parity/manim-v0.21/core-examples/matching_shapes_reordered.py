@@ -9,17 +9,21 @@ class MatchingShapesReordered(Scene):
     """
 
     def construct(self):
+        # Use the common public path API, not the unexposed Polygon constructor.
+        # Repeating the first vertex preserves the same closed contour in both engines.
         def triangle(x, color):
-            return Polygon(
-                (-1, -1, 0), (1, -0.5, 0), (-0.25, 1, 0),
+            return VMobject(
                 color=color, fill_opacity=0.8, stroke_width=0,
-            ).shift(x * RIGHT)
+            ).set_points_as_corners([
+                (-1, -1, 0), (1, -0.5, 0), (-0.25, 1, 0), (-1, -1, 0),
+            ]).shift(x * RIGHT)
 
         def kite(x, color):
-            return Polygon(
-                (0, -1, 0), (1.5, 0, 0), (0, 1, 0), (-0.5, 0, 0),
+            return VMobject(
                 color=color, fill_opacity=0.8, stroke_width=0,
-            ).shift(x * RIGHT)
+            ).set_points_as_corners([
+                (0, -1, 0), (1.5, 0, 0), (0, 1, 0), (-0.5, 0, 0), (0, -1, 0),
+            ]).shift(x * RIGHT)
 
         before = Circle(radius=1, color=WHITE, fill_opacity=0.6).shift(4 * LEFT)
         after = Circle(radius=1, color=WHITE, fill_opacity=0.6).shift(4 * RIGHT)
