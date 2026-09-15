@@ -506,7 +506,11 @@ mod tests {
                 .scene_revision(),
             scene.revision()
         );
-        let expected = path.path_query().unwrap().point_from_proportion(0.0).unwrap();
+        let expected = path
+            .path_query()
+            .unwrap()
+            .point_from_proportion(0.0)
+            .unwrap();
 
         scene.add(&path).unwrap();
         assert_eq!(scene.owned_execution().frame().objects.len(), 2);
