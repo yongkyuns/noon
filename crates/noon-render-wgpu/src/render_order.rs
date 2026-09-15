@@ -1004,7 +1004,7 @@ pub(crate) fn prepare_derived_display_visible_cached(
 
 fn prepare_derived_display_inner(
     frame: &FrameState,
-    painter_order: &[u32],
+    _painter_order: &[u32],
     transient_presentations: &[noon_runtime::TransientPresentationOccurrence],
     visible: Option<&std::collections::HashSet<usize>>,
     mut path_preparer: Option<&mut crate::FramePreparer>,
@@ -1031,25 +1031,11 @@ fn prepare_derived_display_inner(
     }
 
     let mut prepared = PreparedDerivedDisplay::default();
-    // Stateless callers still receive the explicit missing-anchor validation. The
-    // retained/cached lane already owns the authoritative painter stream, so scanning
-    // it again here would turn one transient update into O(total-scene) work.
-    let painter_membership = if path_preparer.is_none() {
-        prepared.stats.painter_positions_visited = painter_order.len();
-        Some(painter_order.iter().copied().collect::<HashSet<_>>())
-    } else {
-        None
-    };
-
-    for (&anchor, objects) in &by_anchor {
-        if painter_membership
-            .as_ref()
-            .is_some_and(|membership| !membership.contains(&anchor))
-        {
-            return Err(DerivedDisplayRenderError::MissingAnchorInPainterOrder(
-                anchor,
-            ));
-        }
+    // RendererPublication validates source-anchor membership/presence before this
+    // layer is entered. Re-scanning the stable painter permutation here would turn a
+    // one-occurrence transient update into O(total scene) work, so preparation keeps
+    // only the sparse anchor indices carried by the transient rows themselves.
+    for objects in by_anchor.values() {
         for &object in objects {
             pack_derived_display_object(object, &mut prepared, path_preparer.as_deref_mut())?;
             prepared.painter_items.push(DisplayPainterItem::Derived {
@@ -1340,7 +1326,7 @@ mod derived_display_tests {
                 },
             ]
         );
-        assert_eq!(prepared.stats.painter_positions_visited, 2);
+        assert_eq!(prepared.stats.painter_positions_visited, 0);
         assert_eq!(prepared.stats.occurrences_packed, 3);
     }
 
@@ -1404,6 +1390,7 @@ mod derived_display_tests {
                 transform: Transform2D::IDENTITY,
             }])
             .unwrap();
+        assert_eq!(preparer.path_mesh_cache_len(), 1);
         preparer.set_painter_order(publication.frame(), publication.painter_order());
         {
             let stable = preparer.prepare(publication.frame());
@@ -1431,6 +1418,7 @@ mod derived_display_tests {
         assert!(second.path_vertices.is_empty());
         assert!(second.path_indices.is_empty());
         assert_eq!(second.stats.resident_path_reuses, 1);
+        assert_eq!(preparer.path_mesh_cache_len(), 1);
 
         let stable = preparer
             .prepare_incremental(publication.frame(), &noon_runtime::FrameChanges::default());
@@ -1440,7 +1428,7 @@ mod derived_display_tests {
     }
 
     #[test]
-    fn cached_single_transient_does_not_reconstruct_large_stable_painter_stream() {
+    fn single_transient_does_not_reconstruct_large_stable_painter_stream() {
         const STABLE_COUNT: usize = 20_000;
         let mut runtime = runtime(
             (0..STABLE_COUNT)
@@ -1457,17 +1445,22 @@ mod derived_display_tests {
             .take_renderer_publication()
             .with_derived_display_objects(&derived)
             .unwrap();
+
+        let stateless = prepare_derived_display(&publication).unwrap();
+        assert_eq!(stateless.stats.painter_positions_visited, 0);
+        assert_eq!(stateless.stats.occurrences_packed, 1);
+        assert_eq!(stateless.painter_items.len(), 1);
+
         let mut preparer = crate::FramePreparer::new();
         preparer.set_painter_order(publication.frame(), publication.painter_order());
         preparer.prepare(publication.frame());
-
-        let prepared =
+        let cached =
             prepare_derived_display_visible_cached(&publication, &[anchor as usize], &mut preparer)
                 .unwrap();
-        assert_eq!(prepared.stats.painter_positions_visited, 0);
-        assert_eq!(prepared.stats.occurrences_packed, 1);
-        assert_eq!(prepared.painter_items.len(), 1);
-        assert_eq!(prepared.slots.len(), 1);
+        assert_eq!(cached.stats.painter_positions_visited, 0);
+        assert_eq!(cached.stats.occurrences_packed, 1);
+        assert_eq!(cached.painter_items.len(), 1);
+        assert_eq!(cached.slots.len(), 1);
     }
 
     #[test]
