@@ -7,10 +7,6 @@ permissions:
 defaults:
   run:
     shell: bash
-env:
-  CARGO_INCREMENTAL: '0'
-  CARGO_PROFILE_DEV_DEBUG: '0'
-  CARGO_PROFILE_TEST_DEBUG: '0'
 jobs:
   resolve:
     runs-on: macos-latest
@@ -19,7 +15,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 1
-      - name: Resolve current master against the reviewed Tiger branch
+      - name: Resolve current master against Tiger branch
         run: |
           set -euo pipefail
           git fetch --no-tags --depth=64 origin master fix/ghostscript-tiger-filled-morph-clean
@@ -30,25 +26,68 @@ jobs:
           set -e
           test "$merge_status" -ne 0
           conflicts="$(git diff --name-only --diff-filter=U | sort)"
-          expected=$'crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_channels.rs\ncrates/noon-render-wgpu/src/render_order.rs'
-          test "$conflicts" = "$expected"
+          test "$conflicts" = 'crates/noon-render-wgpu/src/render_order.rs'
 
-          git checkout --theirs -- crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_channels.rs
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_channels.rs')
-          s = p.read_text()
-          old = "noon_core::SemanticTransformInterpolation::Affine,\n            0.0,"
-          new = "noon_core::SemanticTransformInterpolation::Affine,\n            occurrence.options.path_arc,"
-          assert s.count(old) == 1, s.count(old)
-          p.write_text(s.replace(old, new))
-          PY
-
+          # Preserve master's newer transient renderer organization, then layer
+          # #1607's inverse painter-position cache and sampled-fill realization on it.
           git checkout --ours -- crates/noon-render-wgpu/src/render_order.rs
           python3 - <<'PY'
           from pathlib import Path
           p = Path('crates/noon-render-wgpu/src/render_order.rs')
           s = p.read_text()
+
+          old = '''        self.painter_order_indices.clear();
+                  self.painter_order_indices.extend_from_slice(order);
+                  self.painter_order_installed = true;
+          '''
+          new = '''        self.painter_order_indices.clear();
+                  self.painter_order_indices.extend_from_slice(order);
+                  self.painter_order_positions.clear();
+                  self.painter_order_positions
+                      .resize(frame.objects.len(), None);
+                  for (position, &index) in order.iter().enumerate() {
+                      self.painter_order_positions[index as usize] = Some(position);
+                  }
+                  self.painter_order_installed = true;
+          '''
+          assert s.count(old) == 1, s.count(old)
+          s = s.replace(old, new)
+
+          old = '''    pub(crate) fn clear_painter_order(&mut self) {
+                  self.painter_order_indices.clear();
+                  self.painter_order_installed = false;
+              }
+          '''
+          new = '''    pub(crate) fn clear_painter_order(&mut self) {
+                  self.painter_order_indices.clear();
+                  self.painter_order_positions.clear();
+                  self.painter_order_installed = false;
+              }
+          '''
+          assert s.count(old) == 1, s.count(old)
+          s = s.replace(old, new)
+
+          old = '''        let old_end = range.end.min(self.painter_order_indices.len());
+                  let new_end = range.end.min(order.len());
+                  self.painter_order_indices.splice(
+          '''
+          new = '''        let old_end = range.end.min(self.painter_order_indices.len());
+                  let new_end = range.end.min(order.len());
+                  self.painter_order_positions
+                      .resize(frame.objects.len(), None);
+                  for &index in &self.painter_order_indices[range.start.min(old_end)..old_end] {
+                      if let Some(position) = self.painter_order_positions.get_mut(index as usize) {
+                          *position = None;
+                      }
+                  }
+                  for (offset, &index) in order[range.start..new_end].iter().enumerate() {
+                      self.painter_order_positions[index as usize] = Some(range.start + offset);
+                  }
+                  self.painter_order_indices.splice(
+          '''
+          assert s.count(old) == 1, s.count(old)
+          s = s.replace(old, new)
+
           start = s.index('        noon_core::GeometryRef::VectorPath(path) => {\n')
           end = s.index('        noon_core::GeometryRef::External(_) => {\n', start)
           lines = [
@@ -82,8 +121,6 @@ jobs:
               '                        DerivedPathGeometrySource::Retained,',
               '                    )',
               '                } else {',
-              '                    // The nonresident lane is already cold work. Sampled fills own',
-              '                    // one renderer-local mesh per identity-free occurrence.',
               '                    let (mesh, _) = path_preparer',
               '                        .cached_path_mesh(',
               '                            path,',
@@ -107,72 +144,20 @@ jobs:
               '            }',
               '        }',
           ]
-          p.write_text(s[:start] + '\n'.join(lines) + '\n' + s[end:])
-          PY
-
-          python3 - <<'PY'
-          from pathlib import Path
-          import subprocess
-          p = Path('crates/noon-render-wgpu/src/lib.rs')
-          s = p.read_text()
-          field = '    painter_order_positions: Vec<Option<usize>>,\n'
-          assert s.count(field) == 1
-          s = s.replace(field, '')
-          start = s.index('        let mut replacement_chunks = std::collections::BTreeSet::new();\n')
-          end = s.index('        let mut instances_repacked = 0;\n', start)
-          lines = [
-              '        let mut render_order_changed = false;',
-              '        for object_index in replacement_indices {',
-              '            let detaches_mega_segment = match self.slots[object_index] {',
-              '                PreparedSlot::Path { batch, .. } => {',
-              '                    self.mega_path_segments',
-              '                        .get(batch)',
-              '                        .is_some_and(Option::is_some)',
-              '                        && !self',
-              '                            .mega_path_detached',
-              '                            .get(batch)',
-              '                            .copied()',
-              '                            .unwrap_or(true)',
-              '                }',
-              '                _ => false,',
-              '            };',
-              '            let replacement = self',
-              '                .replace_unique_path_geometry(frame, object_index)',
-              '                .expect("preflighted unique path replacement must tessellate");',
-              '            geometry_cache_misses += usize::from(replacement.cache_miss);',
-              '            path_vertices_repacked += replacement.vertices_repacked;',
-              '            path_indices_repacked += replacement.indices_repacked;',
-              '            render_order_changed |= detaches_mega_segment;',
-              '        }',
-              '        if render_order_changed {',
-              '            self.rebuild_ordered_render_batches();',
-              '            self.rebuild_mega_render_batches();',
-              '            self.rebuild_render_order_chunks(None);',
-              '        }',
-              '',
-          ]
-          s = s[:start] + '\n'.join(lines) + s[end:]
-          master = subprocess.check_output(['git', 'show', 'origin/master:crates/noon-render-wgpu/src/lib.rs']).decode()
-          marker = '    #[test]\n    fn unique_path_replacement_dirties_only_its_geometry_chunks() {'
-          def block(text):
-              begin = text.index(marker)
-              finish = text.index('\n    #[test]\n', begin + len(marker))
-              return text[begin:finish]
-          s = s.replace(block(s), block(master))
+          s = s[:start] + '\n'.join(lines) + '\n' + s[end:]
           p.write_text(s)
           PY
 
-          git add crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_channels.rs \
-                  crates/noon-render-wgpu/src/render_order.rs \
-                  crates/noon-render-wgpu/src/lib.rs
+          git add crates/noon-render-wgpu/src/render_order.rs
           test -z "$(git diff --name-only --diff-filter=U)"
+          cargo fmt --all
+          cargo fmt --all -- --check
 
           mkdir -p review-artifacts/crates/noon-compile/src/semantic_lowering/animation_payload
           mkdir -p review-artifacts/crates/noon-render-wgpu/src
           cp crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_channels.rs \
              review-artifacts/crates/noon-compile/src/semantic_lowering/animation_payload/
           cp crates/noon-render-wgpu/src/render_order.rs review-artifacts/crates/noon-render-wgpu/src/
-          cp crates/noon-render-wgpu/src/lib.rs review-artifacts/crates/noon-render-wgpu/src/
           git rev-parse origin/master > review-artifacts/base-sha.txt
           git diff --binary origin/master > review-artifacts/resolved.diff
           git status --short > review-artifacts/status.txt
