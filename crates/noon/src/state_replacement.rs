@@ -94,10 +94,25 @@ pub(crate) fn prepare_family_become<E: From<AuthoringError>>(
 #[derive(Clone)]
 enum PersistentTargetNode {
     Object,
-    Family {
-        members: Vec<SemanticNodeId>,
-        z_index: f64,
-    },
+    Family { members: Vec<SemanticNodeId> },
+}
+
+/// Select receiver metadata for synthesized expansion nodes using the same repeat
+/// index rule as Manim's `add_n_more_submobjects`. This does not transfer target
+/// identity or painter metadata; it only chooses the receiver-side prototype.
+fn aligned_source_prototype(
+    source_members: &[SemanticNodeId],
+    target_len: usize,
+    target_index: usize,
+) -> Option<SemanticNodeId> {
+    if source_members.is_empty() {
+        return None;
+    }
+    if source_members.len() >= target_len {
+        return source_members.get(target_index).copied();
+    }
+    let source_index = target_index * source_members.len() / target_len;
+    source_members.get(source_index).copied()
 }
 
 /// Persistent `become()` reconciliation is intentionally separate from Transform
@@ -135,9 +150,8 @@ impl<'a> PersistentFamilyReconcile<'a> {
         })?;
         match node.kind() {
             SemanticNodeKind::AuthoringObject => Ok(PersistentTargetNode::Object),
-            SemanticNodeKind::Family(presentation) => Ok(PersistentTargetNode::Family {
+            SemanticNodeKind::Family(_) => Ok(PersistentTargetNode::Family {
                 members: node.members_iter().collect(),
-                z_index: presentation.z_index,
             }),
             _ => Err(AuthoringError::from(
                 noon_core::SemanticSceneOperationError::NotSemanticAuthoringNode(target),
@@ -171,6 +185,7 @@ impl<'a> PersistentFamilyReconcile<'a> {
     fn reconcile_node(
         &mut self,
         candidate: Option<SemanticNodeId>,
+        prototype: Option<SemanticNodeId>,
         target: SemanticNodeId,
     ) -> Result<SemanticTransactionNodeRef, AuthoringError> {
         if let Some(mapped) = self.target_to_receiver.get(&target) {
@@ -200,24 +215,51 @@ impl<'a> PersistentFamilyReconcile<'a> {
                             crate::UnsupportedAuthoringOperation::RotatedDimensionStretch,
                         ));
                     }
-                    SemanticTransactionNodeRef::Pending(
-                        self.transaction
-                            .create_node(SemanticNodeCreation::object(state.clone())),
-                    )
+                    {
+                        let receiver_state = prototype
+                            .and_then(|prototype| {
+                                self.store.semantic_object_state_checked(prototype).ok()
+                            })
+                            .cloned()
+                            .unwrap_or_else(|| SemanticObjectState::new(state.content))
+                            .with_visual_state_from(state);
+                        SemanticTransactionNodeRef::Pending(
+                            self.transaction
+                                .create_node(SemanticNodeCreation::object(receiver_state)),
+                        )
+                    }
                 };
                 self.target_to_receiver.insert(target, receiver);
                 Ok(receiver)
             }
-            PersistentTargetNode::Family { members, z_index } => {
-                let (receiver, reused) = if let Some(source) = reusable {
+            PersistentTargetNode::Family { members } => {
+                let (receiver, reused, prototype_members) = if let Some(source) = reusable {
                     self.source_to_target.insert(source, target);
-                    (SemanticTransactionNodeRef::Existing(source), Some(source))
+                    (
+                        SemanticTransactionNodeRef::Existing(source),
+                        Some(source),
+                        Vec::new(),
+                    )
                 } else {
                     let pending = self.transaction.create_node(SemanticNodeCreation::family());
-                    if z_index != 0.0 {
-                        self.transaction.set_z_index(pending, z_index);
+                    let (prototype_members, prototype_z_index) = prototype
+                        .and_then(|prototype| self.store.node(prototype))
+                        .and_then(|node| match node.kind() {
+                            SemanticNodeKind::Family(presentation) => Some((
+                                node.members_iter().collect::<Vec<_>>(),
+                                presentation.z_index,
+                            )),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| (Vec::new(), 0.0));
+                    if prototype_z_index != 0.0 {
+                        self.transaction.set_z_index(pending, prototype_z_index);
                     }
-                    (SemanticTransactionNodeRef::Pending(pending), None)
+                    (
+                        SemanticTransactionNodeRef::Pending(pending),
+                        None,
+                        prototype_members,
+                    )
                 };
                 // Publish the mapping before descending so aliases in the target
                 // DAG converge on exactly one receiver-owned identity.
@@ -225,8 +267,12 @@ impl<'a> PersistentFamilyReconcile<'a> {
                 if let Some(source) = reused {
                     self.reconcile_existing_family(source, &members)?;
                 } else {
-                    for target_member in members {
-                        let member = self.reconcile_node(None, target_member)?;
+                    for (index, target_member) in members.iter().copied().enumerate() {
+                        let member = self.reconcile_node(
+                            None,
+                            aligned_source_prototype(&prototype_members, members.len(), index),
+                            target_member,
+                        )?;
                         self.transaction.add_member(receiver, member);
                     }
                 }
@@ -246,7 +292,11 @@ impl<'a> PersistentFamilyReconcile<'a> {
             .map_err(AuthoringError::from)?;
         let mut desired = Vec::with_capacity(target_members.len());
         for (index, &target_member) in target_members.iter().enumerate() {
-            desired.push(self.reconcile_node(current.get(index).copied(), target_member)?);
+            desired.push(self.reconcile_node(
+                current.get(index).copied(),
+                aligned_source_prototype(&current, target_members.len(), index),
+                target_member,
+            )?);
         }
 
         let desired_existing: HashSet<_> = desired
@@ -332,7 +382,11 @@ fn prepare_persistent_family_reconcile<E: From<AuthoringError>>(
     let fitted_targets = prepare_become_states(&store, &source_states, captured_targets, options)?;
     let target_states: HashMap<_, _> = target_leaves.into_iter().zip(fitted_targets).collect();
     let mut reconcile = PersistentFamilyReconcile::new(&store, &target_states);
-    let root = reconcile.reconcile_node(Some(source.node_id()), target.node_id())?;
+    let root = reconcile.reconcile_node(
+        Some(source.node_id()),
+        Some(source.node_id()),
+        target.node_id(),
+    )?;
     debug_assert_eq!(root.existing(), Some(source.node_id()));
 
     let mut transaction = reconcile.transaction;
