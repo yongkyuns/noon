@@ -1,11 +1,49 @@
 //! Persistent vector edits publish new immutable content through one transaction.
 mod transaction;
-use crate::{AuthoringError, Mobject};
+use crate::{AuthoringError, ExecutionSession, Mobject};
 use noon_core::{
     SemanticMutationTransaction, SemanticNodeId, SemanticObjectContent, SemanticObjectState,
     SemanticStore, StoredGeometry, Vec2, VectorPath,
 };
+use std::{cell::RefCell, rc::Rc};
 pub(crate) use transaction::PreparedPathEdits;
+
+/// Validate that one running Scene root may admit immutable path resources.
+///
+/// Callers that must preserve fail-closed ordering can invoke this before
+/// effective capture; [`publish_running_path_edits`] repeats the check for any
+/// prepared edit that actually creates resources.
+pub(crate) fn require_running_path_resource_admission(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &ExecutionSession,
+) -> Result<(), AuthoringError> {
+    execution
+        .require_resource_creation_at_root(&store.borrow(), root)
+        .map_err(AuthoringError::from)
+}
+
+/// Publish one already-prepared path edit through the running Scene authority.
+///
+/// Resource admission and immutable-resource rollback remain inside the same
+/// `PreparedPathEdits::publish` scope as semantic publication, so a rejected
+/// running mutation cannot leak newly admitted geometry resources.
+pub(crate) fn publish_running_path_edits(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    prepared: PreparedPathEdits,
+) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
+    if prepared.creates_resources() {
+        require_running_path_resource_admission(store, root, execution)?;
+    }
+    let mut store = store.borrow_mut();
+    prepared.publish(&mut store, |store, transaction| {
+        execution
+            .apply_semantic_transaction_at_root(store, root, transaction)
+            .map_err(AuthoringError::from)
+    })
+}
 
 pub(crate) fn corners_path(points: &[Vec2]) -> Result<VectorPath, AuthoringError> {
     if points.iter().any(|p| !p.x.is_finite() || !p.y.is_finite()) {

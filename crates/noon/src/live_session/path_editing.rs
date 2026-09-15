@@ -1,5 +1,8 @@
 use super::*;
-use crate::path_editing::{prepare_object_edit, PathEdit};
+use crate::path_editing::{
+    prepare_object_edit, publish_running_path_edits, require_running_path_resource_admission,
+    PathEdit,
+};
 
 impl LiveSession<'_> {
     /// Apply a pointwise matrix through the same coherent path-edit publication
@@ -38,16 +41,8 @@ impl LiveSession<'_> {
         &mut self,
         prepared: crate::path_editing::PreparedPathEdits,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let mut store = self.store.borrow_mut();
-        if prepared.creates_resources() {
-            self.session
-                .require_resource_creation_at_root(&store, self.root)?;
-        }
-        prepared.publish(&mut store, |store, transaction| {
-            self.session
-                .apply_semantic_transaction_at_root(store, self.root, transaction)
-                .map_err(LiveSessionError::from)
-        })
+        publish_running_path_edits(self.store, self.root, self.session, prepared)
+            .map_err(LiveSessionError::from)
     }
 
     /// Copy a selected interval from one coherent effective publication.
@@ -173,19 +168,15 @@ impl LiveSession<'_> {
     }
     fn edit_path(&mut self, object: &Mobject, edit: PathEdit<'_>) -> Result<(), LiveSessionError> {
         self.require_mobject(object)?;
-        self.session
-            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        require_running_path_resource_admission(self.store, self.root, self.session)
+            .map_err(LiveSessionError::from)?;
         let captured = self.capture_mobject_state(object)?;
-        let mut store = self.store.borrow_mut();
+        let store = self.store.borrow_mut();
         let Some(prepared) = prepare_object_edit(&store, object.node_id(), captured, edit)? else {
             return Ok(());
         };
-        prepared.publish(&mut store, |store, transaction| {
-            self.session
-                .apply_semantic_transaction_at_root(store, self.root, transaction)
-                .map(|_| ())
-                .map_err(LiveSessionError::from)
-        })
+        drop(store);
+        self.publish_path_edits(prepared).map(|_| ())
     }
 }
 
@@ -214,8 +205,8 @@ impl crate::LiveSession<'_> {
         smooth: bool,
     ) -> Result<(), crate::LiveSessionError> {
         self.require_family(family)?;
-        self.session
-            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        require_running_path_resource_admission(self.store, self.root, self.session)
+            .map_err(crate::LiveSessionError::from)?;
         let nodes = self
             .store
             .borrow()
@@ -228,15 +219,10 @@ impl crate::LiveSession<'_> {
                 Ok((node, self.capture_mobject_state(&object)?))
             })
             .collect::<Result<Vec<_>, crate::LiveSessionError>>()?;
-        let mut store = self.store.borrow_mut();
-        crate::path_smoothing::prepare_anchor_edits(&store, states, smooth)?.publish(
-            &mut store,
-            |store, transaction| {
-                self.session
-                    .apply_semantic_transaction_at_root(store, self.root, transaction)
-                    .map(|_| ())
-                    .map_err(crate::LiveSessionError::from)
-            },
-        )
+        let prepared = {
+            let store = self.store.borrow();
+            crate::path_smoothing::prepare_anchor_edits(&store, states, smooth)?
+        };
+        self.publish_path_edits(prepared).map(|_| ())
     }
 }
