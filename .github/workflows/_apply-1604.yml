@@ -26,6 +26,11 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              assert count == 1, f"{label}: expected one match, got {count}"
+              return text.replace(old, new, 1)
+
           path = Path('crates/noon/src/state_replacement.rs')
           text = path.read_text()
 
@@ -44,14 +49,9 @@ jobs:
               Family { members: Vec<SemanticNodeId> },
           }
 
-          /// `become` copies visual object state, not receiver identity/painter provenance.
-          ///
-          /// Manim aligns a short source by copying a source-side submobject, then replaces
-          /// points/style from the target. Mirror that ownership split here: reused or
-          /// synthesized receiver nodes keep source-side presentation/role/bindings while
-          /// content, transform and style come from the fitted target. A receiver created
-          /// from an empty source starts with ordinary/default metadata. The semantic store
-          /// assigns its own insertion-order tie break when the node is admitted.
+          /// Build the state of a receiver-owned node created while persistent `become`
+          /// expands topology. Manim expands the source side first, then copies target
+          /// points/style, so target painter/identity metadata must not leak into the copy.
           fn receiver_owned_become_state(
               prototype: Option<&SemanticObjectState>,
               target: &SemanticObjectState,
@@ -65,6 +65,9 @@ jobs:
               state
           }
 
+          /// Source-side prototype selected by Manim's `add_n_more_submobjects`
+          /// repeat-index rule. This decides receiver metadata only; visual state still
+          /// comes from the corresponding target node.
           fn aligned_source_prototype(
               source_members: &[SemanticNodeId],
               target_len: usize,
@@ -80,8 +83,7 @@ jobs:
               source_members.get(source_index).copied()
           }
           '''
-          assert old in text
-          text = text.replace(old, new, 1)
+          text = replace_once(text, old, new, 'target enum + helpers')
 
           old = '''            SemanticNodeKind::Family(presentation) => Ok(PersistentTargetNode::Family {
                           members: node.members_iter().collect(),
@@ -92,8 +94,7 @@ jobs:
                           members: node.members_iter().collect(),
                       }),
           '''
-          assert old in text
-          text = text.replace(old, new, 1)
+          text = replace_once(text, old, new, 'target family snapshot')
 
           old = '''    fn reconcile_node(
                   &mut self,
@@ -108,8 +109,7 @@ jobs:
                   target: SemanticNodeId,
               ) -> Result<SemanticTransactionNodeRef, AuthoringError> {
           '''
-          assert old in text
-          text = text.replace(old, new, 1)
+          text = replace_once(text, old, new, 'reconcile signature')
 
           old = '''                    SemanticTransactionNodeRef::Pending(
                               self.transaction
@@ -117,9 +117,7 @@ jobs:
                           )
           '''
           new = '''                    let prototype_state = prototype.and_then(|prototype| {
-                              self.store
-                                  .node(prototype)
-                                  .and_then(|node| node.semantic_object_state())
+                              self.store.semantic_object_state_checked(prototype).ok()
                           });
                           let state = receiver_owned_become_state(prototype_state, state);
                           SemanticTransactionNodeRef::Pending(
@@ -127,11 +125,17 @@ jobs:
                                   .create_node(SemanticNodeCreation::object(state)),
                           )
           '''
-          assert old in text
-          text = text.replace(old, new, 1)
+          text = replace_once(text, old, new, 'pending object state')
 
-          old = '''            PersistentTargetNode::Family { members, z_index } => {
-                      let (receiver, reused) = if let Some(source) = reusable {
+          text = replace_once(
+              text,
+              '            PersistentTargetNode::Family { members, z_index } => {\n',
+              '            PersistentTargetNode::Family { members } => {\n',
+              'family arm header',
+          )
+          text = replace_once(
+              text,
+              '''                let (receiver, reused) = if let Some(source) = reusable {
                           self.source_to_target.insert(source, target);
                           (SemanticTransactionNodeRef::Existing(source), Some(source))
                       } else {
@@ -141,89 +145,87 @@ jobs:
                           }
                           (SemanticTransactionNodeRef::Pending(pending), None)
                       };
-                      // Publish the mapping before descending so aliases in the target
-                      // DAG converge on exactly one receiver-owned identity.
-                      self.target_to_receiver.insert(target, receiver);
-                      if let Some(source) = reused {
-                          self.reconcile_existing_family(source, &members)?;
+          ''',
+              '''                let (receiver, reused, prototype_members) = if let Some(source) = reusable {
+                          self.source_to_target.insert(source, target);
+                          (
+                              SemanticTransactionNodeRef::Existing(source),
+                              Some(source),
+                              Vec::new(),
+                          )
                       } else {
+                          let pending = self.transaction.create_node(SemanticNodeCreation::family());
+                          let (prototype_members, prototype_z_index) = prototype
+                              .and_then(|prototype| self.store.node(prototype))
+                              .and_then(|node| match node.kind() {
+                                  SemanticNodeKind::Family(presentation) => Some((
+                                      node.members_iter().collect::<Vec<_>>(),
+                                      presentation.z_index,
+                                  )),
+                                  _ => None,
+                              })
+                              .unwrap_or_else(|| (Vec::new(), 0.0));
+                          if prototype_z_index != 0.0 {
+                              self.transaction.set_z_index(pending, prototype_z_index);
+                          }
+                          (
+                              SemanticTransactionNodeRef::Pending(pending),
+                              None,
+                              prototype_members,
+                          )
+                      };
+          ''',
+              'family receiver ownership',
+          )
+          text = replace_once(
+              text,
+              '''                } else {
                           for target_member in members {
                               let member = self.reconcile_node(None, target_member)?;
                               self.transaction.add_member(receiver, member);
                           }
                       }
-                      Ok(receiver)
-                  }
-          '''
-          new = '''            PersistentTargetNode::Family { members } => {
-                      let (receiver, reused) = if let Some(source) = reusable {
-                          self.source_to_target.insert(source, target);
-                          (SemanticTransactionNodeRef::Existing(source), Some(source))
-                      } else {
-                          let pending = self.transaction.create_node(SemanticNodeCreation::family());
-                          let prototype_members = prototype
-                              .and_then(|prototype| self.store.node(prototype))
-                              .and_then(|node| match node.kind() {
-                                  SemanticNodeKind::Family(presentation) => {
-                                      if presentation.z_index != 0.0 {
-                                          self.transaction.set_z_index(pending, presentation.z_index);
-                                      }
-                                      Some(node.members_iter().collect::<Vec<_>>())
-                                  }
-                                  _ => None,
-                              })
-                              .unwrap_or_default();
-                          self.target_to_receiver.insert(
-                              target,
-                              SemanticTransactionNodeRef::Pending(pending),
-                          );
+          ''',
+              '''                } else {
                           for (index, target_member) in members.iter().copied().enumerate() {
                               let member = self.reconcile_node(
                                   None,
                                   aligned_source_prototype(&prototype_members, members.len(), index),
                                   target_member,
                               )?;
-                              self.transaction.add_member(pending, member);
+                              self.transaction.add_member(receiver, member);
                           }
-                          return Ok(SemanticTransactionNodeRef::Pending(pending));
-                      };
-                      // Publish the mapping before descending so aliases in the target
-                      // DAG converge on exactly one receiver-owned identity.
-                      self.target_to_receiver.insert(target, receiver);
-                      if let Some(source) = reused {
-                          self.reconcile_existing_family(source, &members)?;
                       }
-                      Ok(receiver)
-                  }
-          '''
-          assert old in text
-          text = text.replace(old, new, 1)
-
-          old = '''        for (index, &target_member) in target_members.iter().enumerate() {
+          ''',
+              'pending family descendants',
+          )
+          text = replace_once(
+              text,
+              '''        for (index, &target_member) in target_members.iter().enumerate() {
                       desired.push(self.reconcile_node(current.get(index).copied(), target_member)?);
                   }
-          '''
-          new = '''        for (index, &target_member) in target_members.iter().enumerate() {
+          ''',
+              '''        for (index, &target_member) in target_members.iter().enumerate() {
                       desired.push(self.reconcile_node(
                           current.get(index).copied(),
                           aligned_source_prototype(current, target_members.len(), index),
                           target_member,
                       )?);
                   }
-          '''
-          assert old in text
-          text = text.replace(old, new, 1)
-
-          old = '''    let root = reconcile.reconcile_node(Some(source.node_id()), target.node_id())?;
-          '''
-          new = '''    let root = reconcile.reconcile_node(
+          ''',
+              'existing family alignment',
+          )
+          text = replace_once(
+              text,
+              '    let root = reconcile.reconcile_node(Some(source.node_id()), target.node_id())?;\n',
+              '''    let root = reconcile.reconcile_node(
                   Some(source.node_id()),
                   Some(source.node_id()),
                   target.node_id(),
               )?;
-          '''
-          assert old in text
-          text = text.replace(old, new, 1)
+          ''',
+              'root reconciliation',
+          )
           path.write_text(text)
 
           path = Path('crates/noon/tests/family_state.rs')
@@ -255,8 +257,7 @@ jobs:
               assert_eq!(receiver.style, target.style);
           }
           '''
-          assert marker in text
-          text = text.replace(marker, replacement, 1)
+          text = replace_once(text, marker, replacement, 'test helpers')
 
           start = text.index('#[test]\nfn unequal_family_become_reuses_receiver_identity_and_never_imports_target_ids()')
           end = text.index('\n#[test]\nfn dimension_matching_uses_aggregate_bounds', start)
@@ -265,7 +266,7 @@ jobs:
               let scene = Scene::new();
               let source_leaf = scene.square(1.0).unwrap();
               source_leaf.set_z_index(7.0).unwrap();
-              let source_state = source_leaf.state().unwrap();
+              let source_state = object_state(&scene, source_leaf.node_id());
               let source = scene.family(&[(&source_leaf).into()]).unwrap();
               let source_root = source.node_id();
               let first_target = scene.circle(2.0).unwrap();
@@ -299,9 +300,6 @@ jobs:
                   .collect::<Vec<_>>();
               for (receiver, target) in receiver_states.iter().zip(&target_states) {
                   assert_become_visual_state(receiver, target);
-                  // `become` copies target visual state, not target painter metadata.
-                  // The synthesized expansion leaf is a receiver-owned copy of the
-                  // aligned source leaf, matching Manim's add_n_more_submobjects path.
                   assert_eq!(receiver.z_index(), source_state.z_index());
               }
               assert_eq!(
@@ -323,8 +321,6 @@ jobs:
                   target_states
               );
 
-              // Contracting topology only changes membership. Detached receiver-owned
-              // descendants retain valid identities for any other handles/aliases.
               let empty = scene.family(&[]).unwrap();
               let expanded_ids = receiver_ids.clone();
               let revision = scene.revision();
@@ -388,12 +384,14 @@ jobs:
                   .iter()
                   .map(|&row| session.frame().objects[row as usize].id)
                   .collect::<Vec<_>>();
-              let expected = [
-                  semantic_execution_object_id(receiver_ids[0]),
-                  semantic_execution_object_id(receiver_ids[1]),
-                  semantic_execution_object_id(peer.node_id()),
-              ];
-              assert_eq!(actual, expected);
+              assert_eq!(
+                  actual,
+                  [
+                      semantic_execution_object_id(receiver_ids[0]),
+                      semantic_execution_object_id(receiver_ids[1]),
+                      semantic_execution_object_id(peer.node_id()),
+                  ]
+              );
               assert!(target_ids
                   .iter()
                   .map(|&id| semantic_execution_object_id(id))
