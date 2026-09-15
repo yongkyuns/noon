@@ -9,13 +9,14 @@ use crate::semantic_store::SemanticRemoveNodeEffect;
 use crate::{
     AnimationOptions, HostCallbackId, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationState,
-    SemanticFadeDirection, SemanticFadeEndpoint, SemanticNodeId, SemanticNodeKind,
-    SemanticObjectContent, SemanticObjectProperty, SemanticObjectState,
-    SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticScalarSignalHold,
-    SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack, SemanticScalarSignalTrackError,
-    SemanticSceneOperationError, SemanticSignalBinding, SemanticSignalError, SemanticSignalSource,
-    SemanticSignalValue, SemanticSignalValueKind, SemanticStore, SemanticStoreError, SemanticStyle,
-    SemanticTransformInterpolation, SemanticUpdaterRegistration, StoredGeometry,
+    SemanticFadeDirection, SemanticFadeEndpoint, SemanticFamilyTransformCorrespondence,
+    SemanticNodeId, SemanticNodeKind, SemanticObjectContent, SemanticObjectProperty,
+    SemanticObjectState, SemanticObjectTrackProperty, SemanticObjectTrackValues,
+    SemanticScalarSignalHold, SemanticScalarSignalTimelineEntry, SemanticScalarSignalTrack,
+    SemanticScalarSignalTrackError, SemanticSceneOperationError, SemanticSignalBinding,
+    SemanticSignalError, SemanticSignalSource, SemanticSignalValue, SemanticSignalValueKind,
+    SemanticStore, SemanticStoreError, SemanticStyle, SemanticTransformInterpolation,
+    SemanticUpdaterRegistration, StoredGeometry,
 };
 use crate::{CompositionTimeMap, TrackTiming};
 
@@ -755,6 +756,37 @@ impl SemanticMutationTransaction {
         target_state: impl Into<SemanticTransactionNodeRef>,
         options: AnimationOptions,
     ) -> SemanticLocalNodeToken {
+        self.create_family_transform_animation_with_correspondence(
+            source,
+            target_state,
+            SemanticFamilyTransformCorrespondence::Structural,
+            options,
+        )
+    }
+
+    /// Stage a family Transform using deterministic matching-shape correspondence.
+    pub fn create_matching_family_transform_animation(
+        &mut self,
+        source: impl Into<SemanticTransactionNodeRef>,
+        target_state: impl Into<SemanticTransactionNodeRef>,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        self.create_family_transform_animation_with_correspondence(
+            source,
+            target_state,
+            SemanticFamilyTransformCorrespondence::MatchingShapes,
+            options,
+        )
+    }
+
+    /// Stage a family Transform with an explicit correspondence strategy.
+    pub fn create_family_transform_animation_with_correspondence(
+        &mut self,
+        source: impl Into<SemanticTransactionNodeRef>,
+        target_state: impl Into<SemanticTransactionNodeRef>,
+        correspondence: SemanticFamilyTransformCorrespondence,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
         let token = self.allocate_local_node_token();
         self.mutations.push(SemanticMutation::AddAnimation {
             token,
@@ -762,6 +794,7 @@ impl SemanticMutationTransaction {
                 SemanticTransactionAnimationIntent::FamilyTransformTo {
                     source: source.into(),
                     target_state: target_state.into(),
+                    correspondence,
                 },
                 options,
             ),

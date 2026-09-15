@@ -249,6 +249,17 @@ pub enum SemanticTransformInterpolation {
     PointCorrespondence,
 }
 
+/// Correspondence strategy used by one family Transform declaration.
+///
+/// This selects compiler correspondence only. Both modes share the same semantic
+/// animation identity, scheduler, runtime execution, and completion lifecycle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SemanticFamilyTransformCorrespondence {
+    #[default]
+    Structural,
+    MatchingShapes,
+}
+
 /// One authored animation operation before execution scheduling/lowering.
 ///
 /// Targets and composition children are semantic identities. Execution tracks,
@@ -285,6 +296,7 @@ pub enum SemanticAnimationIntent {
     FamilyTransformTo {
         source: SemanticNodeId,
         target_state: SemanticNodeId,
+        correspondence: SemanticFamilyTransformCorrespondence,
     },
     /// Temporarily scale and recolor one object around a shared activation center.
     /// The compiler captures the effective source and lowers a restoring track.
@@ -410,7 +422,17 @@ impl SemanticAnimationIntent {
             Self::FamilyTransformTo {
                 source,
                 target_state,
+                ..
             } => Some((*source, *target_state)),
+            _ => None,
+        }
+    }
+
+    pub const fn family_transform_correspondence(
+        &self,
+    ) -> Option<SemanticFamilyTransformCorrespondence> {
+        match self {
+            Self::FamilyTransformTo { correspondence, .. } => Some(*correspondence),
             _ => None,
         }
     }
@@ -817,6 +839,37 @@ impl SemanticStore {
         target_state: SemanticNodeId,
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_family_transform_animation_with_correspondence(
+            source,
+            target_state,
+            SemanticFamilyTransformCorrespondence::Structural,
+            options,
+        )
+    }
+
+    /// Insert one family Transform using deterministic matching-shape correspondence.
+    pub fn insert_semantic_matching_family_transform_animation(
+        &mut self,
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_family_transform_animation_with_correspondence(
+            source,
+            target_state,
+            SemanticFamilyTransformCorrespondence::MatchingShapes,
+            options,
+        )
+    }
+
+    /// Insert one family Transform declaration with an explicit correspondence strategy.
+    pub fn insert_semantic_family_transform_animation_with_correspondence(
+        &mut self,
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+        correspondence: SemanticFamilyTransformCorrespondence,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
         self.semantic_family_members_checked(source)?;
         self.semantic_family_members_checked(target_state)?;
@@ -829,6 +882,7 @@ impl SemanticStore {
                 SemanticAnimationIntent::FamilyTransformTo {
                     source,
                     target_state,
+                    correspondence,
                 },
                 options,
             )),

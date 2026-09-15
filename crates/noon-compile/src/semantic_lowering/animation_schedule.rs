@@ -7,10 +7,10 @@ use noon_core::{
     CompositionTimeMap, CompositionTimeMapStep, ObjectId, PreparedSemanticMutationTransaction,
     RateFunction, ResolvedAnimationOptions, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationError,
-    SemanticAnimationIntent, SemanticFadeDirection, SemanticNodeId, SemanticScalarSignalQueryError,
-    SemanticScalarSignalTrack, SemanticStore, SemanticTransactionAnimationIntent,
-    SemanticTransactionNodeRef, SemanticTransactionReadError, SemanticTransformInterpolation,
-    TrackTiming,
+    SemanticAnimationIntent, SemanticFadeDirection, SemanticFamilyTransformCorrespondence,
+    SemanticNodeId, SemanticScalarSignalQueryError, SemanticScalarSignalTrack, SemanticStore,
+    SemanticTransactionAnimationIntent, SemanticTransactionNodeRef, SemanticTransactionReadError,
+    SemanticTransformInterpolation, TrackTiming,
 };
 
 use super::SemanticExecutionIndex;
@@ -149,6 +149,7 @@ pub struct SemanticScheduledFamilyTransform {
     pub animation: SemanticNodeId,
     pub source: SemanticNodeId,
     pub target_state: SemanticNodeId,
+    pub correspondence: SemanticFamilyTransformCorrespondence,
     pub timing: TrackTiming,
     pub time_map: CompositionTimeMap,
     pub options: ResolvedAnimationOptions,
@@ -282,6 +283,7 @@ pub struct PreparedSemanticScheduledFamilyTransform {
     pub animation: SemanticTransactionNodeRef,
     pub source: SemanticTransactionNodeRef,
     pub target_state: SemanticTransactionNodeRef,
+    pub correspondence: SemanticFamilyTransformCorrespondence,
     pub timing: TrackTiming,
     pub time_map: CompositionTimeMap,
     pub options: ResolvedAnimationOptions,
@@ -621,6 +623,7 @@ pub fn lower_semantic_animation_schedule(
                 animation,
                 source,
                 target_state,
+                correspondence,
                 timing,
                 time_map,
                 options,
@@ -629,6 +632,7 @@ pub fn lower_semantic_animation_schedule(
                 animation,
                 source,
                 target_state,
+                correspondence,
                 timing,
                 time_map,
                 options,
@@ -708,6 +712,7 @@ pub fn lower_prepared_semantic_animation_schedule(
                 animation,
                 source,
                 target_state,
+                correspondence,
                 timing,
                 time_map,
                 options,
@@ -716,6 +721,7 @@ pub fn lower_prepared_semantic_animation_schedule(
                 animation,
                 source,
                 target_state,
+                correspondence,
                 timing,
                 time_map,
                 options,
@@ -883,6 +889,7 @@ enum AnimationDeclarationIntent<R> {
     FamilyTransformTo {
         source: R,
         target_state: R,
+        correspondence: SemanticFamilyTransformCorrespondence,
     },
     TransformTo {
         target: R,
@@ -1038,6 +1045,7 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
             SemanticAnimationIntent::FamilyTransformTo {
                 source,
                 target_state,
+                correspondence,
             } => {
                 self.store
                     .semantic_family_members_checked(*source)
@@ -1048,6 +1056,7 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                 AnimationDeclarationIntent::FamilyTransformTo {
                     source: *source,
                     target_state: *target_state,
+                    correspondence: *correspondence,
                 }
             }
             SemanticAnimationIntent::TransformTo {
@@ -1293,9 +1302,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     SemanticAnimationIntent::FamilyTransformTo {
                         source,
                         target_state,
+                        correspondence,
                     } => AnimationDeclarationIntent::FamilyTransformTo {
                         source: (*source).into(),
                         target_state: (*target_state).into(),
+                        correspondence: *correspondence,
                     },
                     SemanticAnimationIntent::TransformTo {
                         target,
@@ -1425,9 +1436,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     SemanticTransactionAnimationIntent::FamilyTransformTo {
                         source,
                         target_state,
+                        correspondence,
                     } => AnimationDeclarationIntent::FamilyTransformTo {
                         source: *source,
                         target_state: *target_state,
+                        correspondence: *correspondence,
                     },
                     SemanticTransactionAnimationIntent::TransformTo {
                         target,
@@ -1646,6 +1659,7 @@ enum ScheduledAnimationLeaf<R> {
         animation: R,
         source: R,
         target_state: R,
+        correspondence: SemanticFamilyTransformCorrespondence,
         timing: TrackTiming,
         time_map: CompositionTimeMap,
         options: ResolvedAnimationOptions,
@@ -1801,6 +1815,7 @@ enum PlannedAnimationKind<R> {
     FamilyTransform {
         source: R,
         target_state: R,
+        correspondence: SemanticFamilyTransformCorrespondence,
         options: ResolvedAnimationOptions,
     },
     Leaf {
@@ -1843,6 +1858,7 @@ where
         AnimationDeclarationIntent::FamilyTransformTo {
             source,
             target_state,
+            correspondence,
         } => {
             let options =
                 resolve_animation_options(AnimationDefaults::MANIM, state.options, play_options)
@@ -1853,6 +1869,7 @@ where
                 kind: PlannedAnimationKind::FamilyTransform {
                     source,
                     target_state,
+                    correspondence,
                     options,
                 },
             })
@@ -2473,12 +2490,14 @@ fn collect_leaves<R: Copy>(
         PlannedAnimationKind::FamilyTransform {
             source,
             target_state,
+            correspondence,
             options,
         } => leaves.push(ScheduledAnimationLeaf::FamilyTransform {
             finish_time_map: finish_time_map.clone(),
             animation: plan.animation,
             source: *source,
             target_state: *target_state,
+            correspondence: *correspondence,
             timing: TrackTiming::new(root_start_time, root_run_time, options.rate_func),
             time_map: CompositionTimeMap::from_steps(steps.clone()),
             options: *options,
@@ -3181,5 +3200,88 @@ mod recursive_wait_tests {
                 .unwrap();
         assert!((schedule.run_time() - 0.4).abs() < 1e-12);
         assert!(schedule.leaves().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod family_transform_correspondence_mode_tests {
+    use noon_core::{
+        AnimationOptions, SemanticFamilyTransformCorrespondence, SemanticMutationTransaction,
+        SemanticObjectState, SemanticStore, StoredGeometry,
+    };
+
+    use super::*;
+
+    fn family(store: &mut SemanticStore) -> SemanticNodeId {
+        let leaf = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+            radius: 1.0,
+        }));
+        let family = store.insert_family();
+        store.add_member(family, leaf).unwrap();
+        family
+    }
+
+    #[test]
+    fn published_and_prepared_family_schedules_preserve_correspondence_mode() {
+        let mut store = SemanticStore::new();
+        let source = family(&mut store);
+        let target = family(&mut store);
+        let index = SemanticExecutionIndex::new();
+
+        let structural = store
+            .insert_semantic_family_transform_animation(source, target, AnimationOptions::new())
+            .unwrap();
+        let matching = store
+            .insert_semantic_matching_family_transform_animation(
+                source,
+                target,
+                AnimationOptions::new(),
+            )
+            .unwrap();
+
+        let structural_schedule = lower_semantic_animation_schedule(
+            &store,
+            &index,
+            structural,
+            0.0,
+            AnimationOptions::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            structural_schedule.family_transforms()[0].correspondence,
+            SemanticFamilyTransformCorrespondence::Structural
+        );
+        let matching_schedule = lower_semantic_animation_schedule(
+            &store,
+            &index,
+            matching,
+            0.0,
+            AnimationOptions::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            matching_schedule.family_transforms()[0].correspondence,
+            SemanticFamilyTransformCorrespondence::MatchingShapes
+        );
+
+        let mut transaction = SemanticMutationTransaction::new();
+        let pending = transaction.create_matching_family_transform_animation(
+            source,
+            target,
+            AnimationOptions::new(),
+        );
+        let prepared = transaction.prepare(&mut store).unwrap();
+        let prepared_schedule = lower_prepared_semantic_animation_schedule(
+            &prepared,
+            &index,
+            pending,
+            0.0,
+            AnimationOptions::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            prepared_schedule.family_transforms()[0].correspondence,
+            SemanticFamilyTransformCorrespondence::MatchingShapes
+        );
     }
 }
