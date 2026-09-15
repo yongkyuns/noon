@@ -1,0 +1,47 @@
+name: B3 Matching Stack Qualification
+on:
+  push:
+    branches: [b3-matching-stack-qualification]
+permissions:
+  contents: write
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Merge exact product heads without qualification scaffolding
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Yongkyun Shin'
+          git config user.email '4311628+yongkyuns@users.noreply.github.com'
+          git checkout --detach 22301a6481baecfa5626294758cee6a4c2a8176d
+          git merge --no-ff 0619d5726f4eeee86d30f4ea115157bb711203f1 -m 'Merge completed matching identity and source-restoration fixes into parity stack'
+          cargo fmt --all -- --check
+          git diff --check
+          test ! -e .github/workflows/b3-matching-stack-qualification.yml
+          test ! -e .github/workflows/b3-binding-qualification.yml
+          test ! -e .github/b3-binding-qualification.py
+          git push origin HEAD:refs/heads/b3-matching-stack-candidate
+          echo "Integrated candidate: $(git rev-parse HEAD)"
+          echo "Integrated tree: $(git rev-parse HEAD^{tree})"
+      - name: Python matching completion and adapter tests
+        run: |
+          PYTHONPATH=web/python python3 -m unittest discover -s web/python -p 'test_manim_matching_completion_bindings.py' -v
+          PYTHONPATH=web/python python3 -m unittest discover -s web/python -p 'test_manim_transform_matching_shapes.py' -v
+      - name: Native completed-binding tests
+        run: cargo test -p noon-web --lib completed_binding -- --nocapture
+      - name: Native matching lifecycle and seek parity tests
+        run: cargo test -p noon --lib matching_family -- --nocapture
+      - name: Existing exact-time raster sampler tests
+        run: node --test scripts/manim-raster-samples.test.mjs scripts/manim-raster-policy.test.mjs
