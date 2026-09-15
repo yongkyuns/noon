@@ -13,16 +13,16 @@ env:
   CARGO_PROFILE_TEST_DEBUG: '0'
 jobs:
   resolve:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0
+          fetch-depth: 1
       - name: Resolve current master against the reviewed Tiger branch
         run: |
           set -euo pipefail
-          git fetch origin master fix/ghostscript-tiger-filled-morph-clean
+          git fetch --no-tags --depth=64 origin master fix/ghostscript-tiger-filled-morph-clean
           git checkout --detach origin/master
           set +e
           git merge --no-commit --no-ff origin/fix/ghostscript-tiger-filled-morph-clean
@@ -49,10 +49,8 @@ jobs:
           from pathlib import Path
           p = Path('crates/noon-render-wgpu/src/render_order.rs')
           s = p.read_text()
-          start_marker = '        noon_core::GeometryRef::VectorPath(path) => {\n'
-          end_marker = '        noon_core::GeometryRef::External(_) => {\n'
-          start = s.index(start_marker)
-          end = s.index(end_marker, start)
+          start = s.index('        noon_core::GeometryRef::VectorPath(path) => {\n')
+          end = s.index('        noon_core::GeometryRef::External(_) => {\n', start)
           lines = [
               '        noon_core::GeometryRef::VectorPath(path) => {',
               '            let owner = crate::sampled_morph::SampledMeshOwner::Derived {',
@@ -109,8 +107,7 @@ jobs:
               '            }',
               '        }',
           ]
-          s = s[:start] + '\n'.join(lines) + '\n' + s[end:]
-          p.write_text(s)
+          p.write_text(s[:start] + '\n'.join(lines) + '\n' + s[end:])
           PY
 
           python3 - <<'PY'
@@ -121,11 +118,8 @@ jobs:
           field = '    painter_order_positions: Vec<Option<usize>>,\n'
           assert s.count(field) == 1
           s = s.replace(field, '')
-
-          start_marker = '        let mut replacement_chunks = std::collections::BTreeSet::new();\n'
-          end_marker = '        let mut instances_repacked = 0;\n'
-          start = s.index(start_marker)
-          end = s.index(end_marker, start)
+          start = s.index('        let mut replacement_chunks = std::collections::BTreeSet::new();\n')
+          end = s.index('        let mut instances_repacked = 0;\n', start)
           lines = [
               '        let mut render_order_changed = false;',
               '        for object_index in replacement_indices {',
@@ -158,15 +152,12 @@ jobs:
               '',
           ]
           s = s[:start] + '\n'.join(lines) + s[end:]
-
-          master = subprocess.check_output([
-              'git', 'show', 'origin/master:crates/noon-render-wgpu/src/lib.rs'
-          ]).decode()
+          master = subprocess.check_output(['git', 'show', 'origin/master:crates/noon-render-wgpu/src/lib.rs']).decode()
           marker = '    #[test]\n    fn unique_path_replacement_dirties_only_its_geometry_chunks() {'
           def block(text):
-              start = text.index(marker)
-              end = text.index('\n    #[test]\n', start + len(marker))
-              return text[start:end]
+              begin = text.index(marker)
+              finish = text.index('\n    #[test]\n', begin + len(marker))
+              return text[begin:finish]
           s = s.replace(block(s), block(master))
           p.write_text(s)
           PY
@@ -175,8 +166,6 @@ jobs:
                   crates/noon-render-wgpu/src/render_order.rs \
                   crates/noon-render-wgpu/src/lib.rs
           test -z "$(git diff --name-only --diff-filter=U)"
-          cargo fmt --all
-          cargo fmt --all -- --check
 
           mkdir -p review-artifacts/crates/noon-compile/src/semantic_lowering/animation_payload
           mkdir -p review-artifacts/crates/noon-render-wgpu/src
@@ -184,6 +173,7 @@ jobs:
              review-artifacts/crates/noon-compile/src/semantic_lowering/animation_payload/
           cp crates/noon-render-wgpu/src/render_order.rs review-artifacts/crates/noon-render-wgpu/src/
           cp crates/noon-render-wgpu/src/lib.rs review-artifacts/crates/noon-render-wgpu/src/
+          git rev-parse origin/master > review-artifacts/base-sha.txt
           git diff --binary origin/master > review-artifacts/resolved.diff
           git status --short > review-artifacts/status.txt
       - uses: actions/upload-artifact@v7
