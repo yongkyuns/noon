@@ -75,6 +75,7 @@ try {
   }, source);
   const deadline = Date.now() + 120000;
   let lastTime = -1;
+  let armed = false;
   while (Date.now() < deadline) {
     const state = await page.evaluate(async () => ({
       done: window.__tigerDone,
@@ -87,7 +88,8 @@ try {
     assert.equal(state.error, null, state.error ?? undefined);
     assert.notEqual(state.patchState, 'error', state.patchText);
     const time = Number(state.report?.metrics?.time);
-    if (Number.isFinite(time) && time >= 0 && time <= 5.8 && time !== lastTime) {
+    if (Number.isFinite(time) && time >= 0 && time < 0.3) armed = true;
+    if (armed && Number.isFinite(time) && time >= 0 && time <= 5.8 && time !== lastTime) {
       const bytes = await page.locator('#scene').screenshot({ timeout: 10000 });
       const image = PNG.sync.read(bytes);
       const frame = { time, phase: phase(time), width: image.width, height: image.height,

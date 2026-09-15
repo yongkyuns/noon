@@ -2617,8 +2617,17 @@ mod tests {
         let mut visible = initial;
         visible.objects[0].style.fill = Some(Color::WHITE);
         let mut visible_preparer = FramePreparer::new();
-        let rejected = visible_preparer.prepare(&visible);
-        assert_eq!(rejected.stats.unsupported_count, 1);
+        let filled = visible_preparer.prepare(&visible);
+        assert_eq!(filled.stats.unsupported_count, 0);
+        assert!(filled
+            .path_vertices
+            .iter()
+            .any(|vertex| vertex.surface & 1 == 0));
+        visible.morphs[0] = 0.5;
+        let middle =
+            visible_preparer.prepare_incremental(&visible, &FrameChanges::objects(vec![0]));
+        assert_eq!(middle.stats.unsupported_count, 0);
+        assert!(middle.stats.path_vertices_repacked > 0);
     }
 
     #[test]
@@ -3651,19 +3660,27 @@ mod tests {
         assert_eq!(prepared.stats.mega_path_count, OBJECT_COUNT - 1);
         assert_eq!(prepared.stats.mega_path_batch_count, 2);
         assert_eq!(prepared.stats.mega_path_detached_count, 1);
-        assert_eq!(prepared.render_batches.len(), 3);
-        assert!(matches!(
-            prepared.render_batches[0].primitive,
-            RenderPrimitive::MegaPath { .. }
-        ));
-        assert!(matches!(
-            prepared.render_batches[1].primitive,
-            RenderPrimitive::Path { batch: REPLACED }
-        ));
-        assert!(matches!(
-            prepared.render_batches[2].primitive,
-            RenderPrimitive::MegaPath { .. }
-        ));
+        // The GPU consumes the canonical chunk iterator, not the obsolete
+        // flat snapshot. Adjacent mega chunks coalesce at draw encoding.
+        let ordered = prepared.ordered_render_batches().collect::<Vec<_>>();
+        let pivot = ordered
+            .iter()
+            .position(|entry| {
+                matches!(
+                    entry.batch.primitive,
+                    RenderPrimitive::Path { batch: REPLACED }
+                )
+            })
+            .unwrap();
+        assert!(pivot > 0 && pivot + 1 < ordered.len());
+        assert!(ordered[..pivot]
+            .iter()
+            .all(|entry| matches!(entry.batch.primitive, RenderPrimitive::MegaPath { .. })));
+        assert!(ordered[pivot + 1..]
+            .iter()
+            .all(|entry| matches!(entry.batch.primitive, RenderPrimitive::MegaPath { .. })));
+        assert_eq!(prepared.stats.render_order_chunks_rebuilt, 1);
+        assert!(prepared.stats.render_order_positions_visited <= 64);
         assert!(!prepared.mega_path_index_dirty);
         assert!(prepared.mega_path_instance_dirty_ranges.is_empty());
         assert!(prepared.stats.path_vertex_free_range_count > 0);
