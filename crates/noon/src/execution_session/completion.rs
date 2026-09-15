@@ -353,6 +353,17 @@ impl ExecutionSession {
                 .then_some((entry.semantic_object, index))
             })
             .collect::<HashMap<_, _>>();
+        let final_content_entries = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                matches!(
+                    entry.completion,
+                    SemanticAnimationCompletion::ContentMorph { .. }
+                )
+                .then_some((entry.semantic_object, index))
+            })
+            .collect::<HashMap<_, _>>();
         for (index, entry) in entries.iter().enumerate() {
             match &entry.completion {
                 SemanticAnimationCompletion::Priority { value } => {
@@ -371,7 +382,9 @@ impl ExecutionSession {
                     }
                 }
                 SemanticAnimationCompletion::ContentMorph { content } => {
-                    semantic.replace_content(entry.semantic_object, *content);
+                    if final_content_entries.get(&entry.semantic_object) == Some(&index) {
+                        semantic.replace_content(entry.semantic_object, *content);
+                    }
                 }
                 SemanticAnimationCompletion::Fill { .. }
                 | SemanticAnimationCompletion::Stroke { .. }
