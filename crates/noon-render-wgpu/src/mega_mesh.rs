@@ -260,7 +260,13 @@ impl FramePreparer {
         path_batch_index: usize,
         packed: PathInstance,
     ) {
+        // A non-detached path need not own a mega segment: sampled fills
+        // live only in the mutable path arena, whose vertex ranges can grow.
         if self.individual_path_draws
+            || !self
+                .mega_path_segments
+                .get(path_batch_index)
+                .is_some_and(Option::is_some)
             || self.mega_path_indices.is_empty()
             || self
                 .mega_path_detached
