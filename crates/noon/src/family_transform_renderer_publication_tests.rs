@@ -183,3 +183,98 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
     }
     live.copy_family(&source).unwrap();
 }
+
+#[test]
+fn complex_filled_family_round_trip_restores_padding_without_repainting() {
+    use noon_core::{Color, Vec2, VectorPath};
+    let mut scene = Scene::new();
+    let concave = VectorPath::new()
+        .move_to(Vec2::new(0.0, 0.0))
+        .line_to(Vec2::new(8.0, 0.0))
+        .line_to(Vec2::new(8.0, 8.0))
+        .line_to(Vec2::new(6.0, 8.0))
+        .line_to(Vec2::new(6.0, 2.0))
+        .line_to(Vec2::new(2.0, 2.0))
+        .line_to(Vec2::new(2.0, 8.0))
+        .line_to(Vec2::new(0.0, 8.0))
+        .close();
+    let rectangle = VectorPath::new()
+        .move_to(Vec2::new(0.0, 0.0))
+        .line_to(Vec2::new(8.0, 0.0))
+        .line_to(Vec2::new(8.0, 8.0))
+        .line_to(Vec2::new(0.0, 8.0))
+        .close();
+    let source_objects = (0..3)
+        .map(|_| scene.path(concave.clone(), Default::default()).unwrap())
+        .collect::<Vec<_>>();
+    let source_members = source_objects
+        .iter()
+        .map(|object| object.into())
+        .collect::<Vec<_>>();
+    let source = scene.family(&source_members).unwrap();
+    source.set_fill(Some(Color::WHITE), Some(1.0)).unwrap();
+    let returned = source.copy_family().unwrap();
+    let target_objects = (0..2)
+        .map(|_| scene.path(rectangle.clone(), Default::default()).unwrap())
+        .collect::<Vec<_>>();
+    let target_members = target_objects
+        .iter()
+        .map(|object| object.into())
+        .collect::<Vec<_>>();
+    let target = scene.family(&target_members).unwrap();
+    target.set_fill(Some(Color::WHITE), Some(1.0)).unwrap();
+    scene.add_many(&[(&source).into()]).unwrap();
+    let mut execution = scene.execution_session().unwrap();
+    {
+        let mut live = scene.live(&mut execution);
+        let segment = family_transform(&mut live, &source, &target, 1.8);
+        assert_eq!(
+            live.segment_state(segment).timeline(),
+            TimelineWakeState::Continuous
+        );
+        live.advance_segment_to(segment, 0.9).unwrap();
+        finish(&mut live, segment);
+    }
+    drain(&mut execution);
+    assert_eq!(
+        scene
+            .live(&mut execution)
+            .effective(&source_objects[1])
+            .unwrap()
+            .appearance,
+        0.0
+    );
+    {
+        let wait = scene.live(&mut execution).wait_segment(0.75).unwrap();
+        finish(&mut scene.live(&mut execution), wait);
+    }
+    drain(&mut execution);
+    {
+        let mut live = scene.live(&mut execution);
+        let segment = family_transform(&mut live, &source, returned.root(), 1.8);
+        assert_eq!(
+            live.segment_state(segment).timeline(),
+            TimelineWakeState::Continuous
+        );
+        live.advance_segment_to(segment, segment.start_time() + segment.duration() * 0.5)
+            .unwrap();
+        let appearance = live.effective(&source_objects[1]).unwrap().appearance;
+        assert!(
+            appearance > 0.0 && appearance < 1.0,
+            "padding must recover continuously: {appearance}"
+        );
+        finish(&mut live, segment);
+    }
+    drain(&mut execution);
+    {
+        let wait = scene.live(&mut execution).wait_segment(0.85).unwrap();
+        finish(&mut scene.live(&mut execution), wait);
+    }
+    drain(&mut execution);
+    let mut live = scene.live(&mut execution);
+    for object in &source_objects {
+        assert_eq!(live.effective(object).unwrap().appearance, 1.0);
+    }
+    live.copy_family(&source)
+        .expect("returned filled family remains capturable after hold/drain");
+}

@@ -27,19 +27,16 @@ class SyntheticFamilyRoundTrip(Scene):
         source = VGroup(Square(), Square(), Square())
         contracted = VGroup(Square(), Square())
         returned = source.copy()
-        returned.set_fill(opacity=0)
-        contracted.set_fill(opacity=0)
+        source.set_fill(WHITE, opacity=1)
+        returned.set_fill(WHITE, opacity=1)
+        contracted.set_fill(WHITE, opacity=1)
 
         self.add(source)
         self.wait(0.5)
-        self.play(source.animate.set_fill(opacity=0), run_time=0.35)
         self.play(Transform(source, contracted), run_time=1.8)
-        source.set_fill(opacity=1)
         self.wait(0.75)
-        source.set_fill(opacity=0)
-        self.wait(0.35)
         self.play(Transform(source, returned), run_time=1.8)
-        self.play(source.animate.set_fill(opacity=1), run_time=0.35)
+        self.wait(0.85)
 `;
 
 await mkdir(artifacts, { recursive: true });
@@ -102,13 +99,17 @@ try {
   await page.waitForFunction(() => window.__noonExampleGallery !== undefined, null, {
     timeout: 45000,
   });
+  // Do not join the gallery's initial run and mistake its completion for ours.
+  await page.waitForFunction(() => !window.__noonExampleGallery.runInFlight &&
+    document.querySelector('#patch-status')?.dataset.state === 'applied', null, { timeout: 90000 });
   await page.evaluate((pythonSource) => {
     const editor = document.querySelector('#python-scene-source');
     if (!(editor instanceof HTMLTextAreaElement)) {
       throw new Error('Python scene editor is unavailable');
     }
     editor.value = pythonSource;
-    editor.dispatchEvent(new Event('input', { bubbles: true }));
+    // This fixture explicitly invokes Run. Dispatching input also queues an
+    // automatic rerun, whose overlapping completion is not this test's subject.
     window.__pythonFamilyTransformDone = false;
     window.__pythonFamilyTransformError = null;
     Promise.resolve(window.__noonExampleGallery.run())

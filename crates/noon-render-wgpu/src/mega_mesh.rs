@@ -26,8 +26,12 @@ impl FramePreparer {
         let eligible = self
             .path_batches
             .iter()
-            .map(|batch| {
-                batch.instance_range.end == batch.instance_range.start + 1
+            .enumerate()
+            .map(|(index, batch)| {
+                self.path_mesh_cache[self.path_batch_cache_indices[index]]
+                    .sampled
+                    .is_none()
+                    && batch.instance_range.end == batch.instance_range.start + 1
                     && !batch.index_range.is_empty()
             })
             .collect::<Vec<_>>();

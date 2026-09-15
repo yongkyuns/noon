@@ -25,7 +25,9 @@ pub(super) fn prepare_sampled_path(
     path: &VectorPath,
     style: Style,
 ) -> Result<PreparedPathInterpolation, GeometryError> {
-    let target = path.morph_target().filter(|_| style.fill.is_some())
+    let target = path
+        .morph_target()
+        .filter(|_| style.fill.is_some())
         .ok_or_else(|| GeometryError::Tessellation("not a filled path morph".into()))?;
     PreparedPathInterpolation::new(path, target)
         .map_err(|error| GeometryError::Tessellation(error.to_string()))
@@ -43,7 +45,8 @@ pub(super) fn tessellate_path_at_progress(
             let Ok(interpolation) = prepare_sampled_path(path, style) else {
                 return Err(original);
             };
-            let sampled = interpolation.interpolate(progress)
+            let sampled = interpolation
+                .interpolate(progress)
                 .map_err(|error| GeometryError::Tessellation(error.to_string()))?;
             tessellate_path_mesh(&sampled, style, transform)
         }
@@ -61,7 +64,9 @@ impl FramePreparer {
     ) -> Result<(usize, bool), GeometryError> {
         // Validate before touching either cache or packed presentation state.
         if !progress.is_finite() || !(0.0..=1.0).contains(&progress) {
-            return Err(GeometryError::Tessellation("invalid path morph progress".into()));
+            return Err(GeometryError::Tessellation(
+                "invalid path morph progress".into(),
+            ));
         }
         let stroke_transform = path_stroke_transform_key(style, transform);
         let old_index = self.sampled_path_mesh_lookup.get(&owner).copied();
@@ -79,12 +84,17 @@ impl FramePreparer {
                     self.mark_path_mesh_used(index);
                     return Ok((index, false));
                 }
-                let current = sampled.interpolation.interpolate(progress)
+                let current = sampled
+                    .interpolation
+                    .interpolate(progress)
                     .map_err(|error| GeometryError::Tessellation(error.to_string()))?;
                 let mesh = tessellate_path_mesh(&current, style, transform)?;
                 self.path_mesh_cache[index].mesh = mesh;
-                self.path_mesh_cache[index].sampled.as_mut().unwrap().progress_bits =
-                    progress.to_bits();
+                self.path_mesh_cache[index]
+                    .sampled
+                    .as_mut()
+                    .unwrap()
+                    .progress_bits = progress.to_bits();
                 self.path_mesh_cache_generation = self.path_mesh_cache_generation.saturating_add(1);
                 self.mark_path_mesh_used(index);
                 return Ok((index, true));
@@ -99,7 +109,8 @@ impl FramePreparer {
         let Ok(interpolation) = prepare_sampled_path(path, style) else {
             return Err(original_error);
         };
-        let current = interpolation.interpolate(progress)
+        let current = interpolation
+            .interpolate(progress)
             .map_err(|error| GeometryError::Tessellation(error.to_string()))?;
         let mesh = tessellate_path_mesh(&current, style, transform)?;
         let last_used = self.next_path_mesh_use();
@@ -113,7 +124,11 @@ impl FramePreparer {
             mesh,
             resident: None,
             last_used,
-            sampled: Some(SampledPathMesh { owner, interpolation, progress_bits: progress.to_bits() }),
+            sampled: Some(SampledPathMesh {
+                owner,
+                interpolation,
+                progress_bits: progress.to_bits(),
+            }),
         };
         // Reuse the owner's one disposable mesh across progress AND later morphs.
         // Never insert it into the immutable, potentially shared mesh-key lookup.

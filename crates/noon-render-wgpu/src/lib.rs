@@ -11,6 +11,7 @@ mod mega_mesh;
 mod path_residency;
 mod render_order;
 mod reveal;
+mod sampled_morph;
 pub mod text;
 
 pub use gpu::*;
@@ -484,6 +485,7 @@ struct CachedPathMesh {
     mesh: TessellatedPath,
     resident: Option<path_residency::ResidentPathRanges>,
     last_used: u64,
+    sampled: Option<sampled_morph::SampledPathMesh>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -561,12 +563,14 @@ pub struct FramePreparer {
     visible_projection_stats: VisibleRenderProjectionStats,
     // Stable execution-row indices in the runtime's derived semantic painter order.
     painter_order_indices: Vec<u32>,
+    painter_order_positions: Vec<Option<usize>>,
     // Distinguishes the runtime's explicit empty scene order from the legacy dense
     // default used before any painter permutation has been installed.
     painter_order_installed: bool,
     path_batch_cache_indices: Vec<usize>,
     path_mesh_cache: Vec<CachedPathMesh>,
     path_mesh_lookup: HashMap<PathMeshKey, Vec<usize>>,
+    sampled_path_mesh_lookup: HashMap<sampled_morph::SampledMeshOwner, usize>,
     path_mesh_cache_limit: Option<usize>,
     path_mesh_clock: u64,
     path_mesh_cache_generation: u64,
@@ -670,6 +674,7 @@ impl FramePreparer {
         let mut geometry_cache_misses = 0;
         let mut path_vertices_repacked = 0;
         let mut path_indices_repacked = 0;
+        let mut replacement_chunks = std::collections::BTreeSet::new();
         for object_index in replacement_indices {
             let replacement = self
                 .replace_unique_path_geometry(frame, object_index)
@@ -677,11 +682,21 @@ impl FramePreparer {
             geometry_cache_misses += usize::from(replacement.cache_miss);
             path_vertices_repacked += replacement.vertices_repacked;
             path_indices_repacked += replacement.indices_repacked;
+            let position = if self.painter_order_installed {
+                self.painter_order_positions
+                    .get(object_index)
+                    .copied()
+                    .flatten()
+            } else {
+                Some(object_index)
+            };
+            if let Some(position) = position {
+                replacement_chunks.insert(position / Self::RENDER_ORDER_CHUNK_SIZE);
+            }
         }
-        if path_vertices_repacked > 0 || path_indices_repacked > 0 {
-            self.rebuild_ordered_render_batches();
-            self.rebuild_mega_render_batches();
-            self.rebuild_render_order_chunks(None);
+        for chunk in replacement_chunks {
+            let start = chunk * Self::RENDER_ORDER_CHUNK_SIZE;
+            self.rebuild_render_order_chunks(Some(start..start + Self::RENDER_ORDER_CHUNK_SIZE));
         }
 
         let mut instances_repacked = 0;
@@ -895,17 +910,22 @@ impl FramePreparer {
         let object = &frame.objects[object_index];
         let reveal = frame.reveal(object_index);
         let partial_reveal_bits = analytic_reveal.map(|_| reveal.clamp(0.0, 1.0).to_bits());
-        let (cache_index, cache_miss) =
-            match self.cache_path_mesh(path, object.style, frame.render_transform(object_index)) {
-                Ok(value) => value,
-                Err(_) => {
-                    let slot = PreparedSlot::Unsupported(self.unsupported.len());
-                    self.unsupported.push(object.id);
-                    self.slots.push(slot);
-                    self.append_ordered_render_slot(slot);
-                    return StructuralAppendStats::default();
-                }
-            };
+        let (cache_index, cache_miss) = match self.cache_path_mesh_at_progress(
+            path,
+            object.style,
+            frame.render_transform(object_index),
+            sampled_morph::SampledMeshOwner::Stable(object.id),
+            frame.morph(object_index),
+        ) {
+            Ok(value) => value,
+            Err(_) => {
+                let slot = PreparedSlot::Unsupported(self.unsupported.len());
+                self.unsupported.push(object.id);
+                self.slots.push(slot);
+                self.append_ordered_render_slot(slot);
+                return StructuralAppendStats::default();
+            }
+        };
 
         let packed = if partial_reveal_bits.is_some() {
             pack_path(object, frame.render_transform(object_index), 1.0, 0.0)
@@ -1139,8 +1159,13 @@ impl FramePreparer {
         let PreparedSlot::Path { batch, .. } = self.slots[object_index] else {
             unreachable!("unique path replacement preflight requires a path slot");
         };
-        let (cache_index, cache_miss) =
-            self.cache_path_mesh(path, object.style, frame.render_transform(object_index))?;
+        let (cache_index, cache_miss) = self.cache_path_mesh_at_progress(
+            path,
+            object.style,
+            frame.render_transform(object_index),
+            sampled_morph::SampledMeshOwner::Stable(object.id),
+            frame.morph(object_index),
+        )?;
         let resident = self.path_mesh_cache[cache_index].resident.clone();
         let (vertices_repacked, indices_repacked) = if let Some(ranges) = resident {
             let old_vertices = self.path_batch_vertex_ranges[batch].clone();
@@ -1294,10 +1319,12 @@ impl FramePreparer {
                     _ => None,
                 });
             if let Some(path) = path {
-                let cache_index = match self.cache_path_mesh(
+                let cache_index = match self.cache_path_mesh_at_progress(
                     path,
                     object.style,
                     frame.render_transform(object_index),
+                    sampled_morph::SampledMeshOwner::Stable(object.id),
+                    frame.morph(object_index),
                 ) {
                     Ok((index, cache_miss)) => {
                         geometry_cache_misses += usize::from(cache_miss);
@@ -1720,6 +1747,10 @@ impl FramePreparer {
                     || !should_create_path_reveal_head(object, frame.reveal(object_index));
                 self.path_ids.get(*index) == Some(&object.id)
                     && geometry_matches
+                    && cache.sampled.as_ref().is_none_or(|sampled| {
+                        sampled.owner == sampled_morph::SampledMeshOwner::Stable(object.id)
+                            && sampled.progress_bits == frame.morph(object_index).to_bits()
+                    })
                     && reveal_head_available
                     && cache.stroke_transform
                         == path_stroke_transform_key(
@@ -1830,6 +1861,7 @@ impl FramePreparer {
             mesh,
             resident: None,
             last_used,
+            sampled: None,
         });
         self.path_mesh_lookup.entry(key).or_default().push(index);
         Ok((index, true))
@@ -1870,8 +1902,11 @@ impl FramePreparer {
         path: &VectorPath,
         style: Style,
         transform: Transform2D,
+        owner: sampled_morph::SampledMeshOwner,
+        progress: f32,
     ) -> Result<(&TessellatedPath, bool), noon_geometry::GeometryError> {
-        let (index, cache_miss) = self.cache_path_mesh(path, style, transform)?;
+        let (index, cache_miss) =
+            self.cache_path_mesh_at_progress(path, style, transform, owner, progress)?;
         Ok((&self.path_mesh_cache[index].mesh, cache_miss))
     }
 
@@ -1923,6 +1958,12 @@ impl FramePreparer {
             let Some(GeometryRef::VectorPath(path)) = frame.render_geometry(object_index) else {
                 continue;
             };
+            if let Some(&index) = self
+                .sampled_path_mesh_lookup
+                .get(&sampled_morph::SampledMeshOwner::Stable(object.id))
+            {
+                keep[index] = true;
+            }
             let stroke_transform =
                 path_stroke_transform_key(object.style, frame.render_transform(object_index));
             let stroke_width_bits = object.style.stroke_width.to_bits();
@@ -1968,6 +2009,7 @@ impl FramePreparer {
         let old_cache = std::mem::take(&mut self.path_mesh_cache);
         let mut remapped_indices = vec![None; old_cache.len()];
         self.path_mesh_lookup.clear();
+        self.sampled_path_mesh_lookup.clear();
         for (old_index, entry) in old_cache.into_iter().enumerate() {
             if !keep[old_index] {
                 continue;
@@ -1982,11 +2024,16 @@ impl FramePreparer {
             );
             let new_index = self.path_mesh_cache.len();
             remapped_indices[old_index] = Some(new_index);
+            if let Some(sampled) = &entry.sampled {
+                self.sampled_path_mesh_lookup
+                    .insert(sampled.owner, new_index);
+            } else {
+                self.path_mesh_lookup
+                    .entry(key)
+                    .or_default()
+                    .push(new_index);
+            }
             self.path_mesh_cache.push(entry);
-            self.path_mesh_lookup
-                .entry(key)
-                .or_default()
-                .push(new_index);
         }
         // Evicting stale cache entries changes their indices, not the packed
         // geometry of surviving batches. Preserve that correspondence so the
