@@ -1991,8 +1991,11 @@ def _build_canonical_composition_candidate(
         family_transform = _canonical_family_transform_animation(self, animation)
         if family_transform is not None:
             source, target, leaf = family_transform
+            matching = type(leaf) is _animate.TransformMatchingShapes
+            # Manim constructor options belong to the Transform/Fade children;
+            # Scene.play options belong to their enclosing AnimationGroup.
             child = _canonical_transform_options(
-                leaf, child_kwargs, allow_family_lag=True
+                leaf, {} if matching else child_kwargs, allow_family_lag=True
             )
             if child is None:
                 raise NotImplementedError("unsupported canonical family Transform options")
@@ -2000,10 +2003,25 @@ def _build_canonical_composition_candidate(
                 raise NotImplementedError(
                     "canonical family Transform requires linear or smooth easing"
                 )
+            destination = builder
+            if matching:
+                if any(child_kwargs.get(name) not in (None, 0.0)
+                       for name in ("lag_ratio", "path_arc")):
+                    raise NotImplementedError(
+                        "TransformMatchingShapes does not yet support play-level lag or path options"
+                    )
+                outer_kwargs = dict(child_kwargs)
+                outer_kwargs.pop("path_arc", None)
+                outer_duration = _canonical_play_options(outer_kwargs)
+                destination = context.beginOrdinaryCompositionBuilder(
+                    "parallel", outer_duration, 0.0, None,
+                )
+                destination.setCompositionRateFunction(
+                    _canonical_composition_rate_id(child_kwargs) or "linear"
+                )
             append_family_transform = (
-                builder.appendMatchingFamilyTransformTo
-                if type(leaf) is _animate.TransformMatchingShapes
-                else builder.appendFamilyTransformTo
+                destination.appendMatchingFamilyTransformTo
+                if matching else destination.appendFamilyTransformTo
             )
             append_family_transform(
                 source._semantic_family_handle,
@@ -2013,7 +2031,8 @@ def _build_canonical_composition_candidate(
                 float(child.lag_ratio),
                 float(child.path_arc),
             )
-            if type(leaf) is _animate.TransformMatchingShapes:
+            if matching:
+                builder.appendComposition(destination)
                 completed_families.extend((source, target))
             return
         if isinstance(animation, _composition.Add):
