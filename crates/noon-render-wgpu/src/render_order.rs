@@ -804,13 +804,25 @@ mod tests {
     }
 }
 
+/// Geometry source selected for one identity-free transient vector path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DerivedPathGeometrySource {
+    /// Vertices and indices are publication-local and live in transient GPU buffers.
+    Transient,
+    /// Indices address the stable preparer's already-resident path geometry buffers.
+    Retained,
+}
+
 /// Packed primitive kind for one identity-free derived display occurrence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DerivedDisplayPrimitive {
     Circle,
     Rectangle,
     Line,
-    Path { batch: usize },
+    Path {
+        batch: usize,
+        source: DerivedPathGeometrySource,
+    },
 }
 
 /// One lookup row into the transient derived-instance buffers.
@@ -822,19 +834,34 @@ pub struct PreparedDerivedDisplaySlot {
     pub instance_index: usize,
 }
 
-/// Painter-level merge descriptor. Stable entries retain their execution slot;
-/// derived entries retain only their plan-local occurrence ordinal.
+/// Sparse painter descriptor for transient presentation.
+///
+/// New preparation emits only `Derived` rows. Stable ordering remains owned by the
+/// retained `PreparedFrame`; `Stable` remains as a compatibility spelling for older
+/// callers that may construct descriptors directly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DisplayPainterItem {
     Stable { object_index: u32 },
     Derived { occurrence_index: u32 },
 }
 
+/// Explicit transient-locality work counters. They deliberately exclude stable draw
+/// traversal: that work is already owned by the retained prepared frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TransientPresentationPrepareStats {
+    pub occurrences_packed: usize,
+    pub painter_positions_visited: usize,
+    pub path_vertices_repacked: usize,
+    pub path_indices_repacked: usize,
+    pub resident_path_reuses: usize,
+}
+
 /// Transient packed geometry for one renderer publication.
 ///
-/// These arrays deliberately contain no `ObjectId` side tables. They are rebuilt
-/// from the publication's identity-free derived rows and discarded independently of
-/// the stable `FramePreparer` storage.
+/// These arrays deliberately contain no `ObjectId` side tables. `painter_items` is
+/// sparse: it contains only transient insertions. The stable prepared frame keeps
+/// canonical painter ordering and is never recopied merely because a transient row
+/// changed.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PreparedDerivedDisplay {
     pub circles: Vec<crate::CircleInstance>,
@@ -846,14 +873,18 @@ pub struct PreparedDerivedDisplay {
     pub path_batches: Vec<crate::PathBatch>,
     pub slots: Vec<PreparedDerivedDisplaySlot>,
     pub painter_items: Vec<DisplayPainterItem>,
+    pub stats: TransientPresentationPrepareStats,
 }
 
 impl PreparedDerivedDisplay {
+    /// Lookup is logarithmic because preparation sorts the identity-free occurrence
+    /// index once. The hot draw path resolves all slots into one O(D) hash table and
+    /// does not call this method per painter item.
     pub fn slot_for_occurrence(&self, occurrence_index: u32) -> Option<PreparedDerivedDisplaySlot> {
         self.slots
-            .iter()
-            .copied()
-            .find(|slot| slot.occurrence_index == occurrence_index)
+            .binary_search_by_key(&occurrence_index, |slot| slot.occurrence_index)
+            .ok()
+            .map(|index| self.slots[index])
     }
 }
 
@@ -895,12 +926,7 @@ impl std::fmt::Display for DerivedDisplayRenderError {
 
 impl std::error::Error for DerivedDisplayRenderError {}
 
-/// Pack analytic derived display rows and merge their occurrence order immediately
-/// after each stable source anchor without modifying the stable frame preparer.
-///
-/// Vector paths reuse the renderer's shared tessellation semantics and ordinary path
-/// pipeline without receiving stable identity. External geometry and text still fail
-/// closed rather than fabricating a stable `ObjectId` merely to reuse retained slots.
+/// Pack transient presentation rows without duplicating stable painter descriptors.
 pub fn prepare_derived_display(
     publication: &noon_runtime::RendererPublication<'_>,
 ) -> Result<PreparedDerivedDisplay, DerivedDisplayRenderError> {
@@ -939,9 +965,8 @@ pub(crate) fn prepare_transient_presentation_rows_cached(
     )
 }
 
-/// Prepare only derived occurrences whose real source anchor participates in this
-/// viewport projection. Stable and derived painter ordering still comes from the
-/// authoritative publication order rather than candidate order.
+/// Prepare only transient occurrences whose real source anchor participates in this
+/// viewport projection. Stable ordering stays resident in the prepared frame.
 pub fn prepare_derived_display_visible(
     publication: &noon_runtime::RendererPublication<'_>,
     visible_object_indices: &[usize],
@@ -1006,33 +1031,34 @@ fn prepare_derived_display_inner(
     }
 
     let mut prepared = PreparedDerivedDisplay::default();
-    let mut seen_anchors = HashSet::with_capacity(by_anchor.len());
-    for &object_index in painter_order {
-        if visible.is_some_and(|visible| !visible.contains(&(object_index as usize))) {
-            continue;
+    // Stateless callers still receive the explicit missing-anchor validation. The
+    // retained/cached lane already owns the authoritative painter stream, so scanning
+    // it again here would turn one transient update into O(total-scene) work.
+    let painter_membership = if path_preparer.is_none() {
+        prepared.stats.painter_positions_visited = painter_order.len();
+        Some(painter_order.iter().copied().collect::<HashSet<_>>())
+    } else {
+        None
+    };
+
+    for (&anchor, objects) in &by_anchor {
+        if painter_membership
+            .as_ref()
+            .is_some_and(|membership| !membership.contains(&anchor))
+        {
+            return Err(DerivedDisplayRenderError::MissingAnchorInPainterOrder(anchor));
         }
-        prepared
-            .painter_items
-            .push(DisplayPainterItem::Stable { object_index });
-        let Some(objects) = by_anchor.get(&object_index) else {
-            continue;
-        };
-        seen_anchors.insert(object_index);
         for &object in objects {
             pack_derived_display_object(object, &mut prepared, path_preparer.as_deref_mut())?;
             prepared.painter_items.push(DisplayPainterItem::Derived {
                 occurrence_index: object.occurrence_index(),
             });
+            prepared.stats.occurrences_packed += 1;
         }
     }
-    if let Some(&anchor) = by_anchor
-        .keys()
-        .find(|anchor| !seen_anchors.contains(anchor))
-    {
-        return Err(DerivedDisplayRenderError::MissingAnchorInPainterOrder(
-            anchor,
-        ));
-    }
+    prepared
+        .slots
+        .sort_unstable_by_key(|slot| slot.occurrence_index);
     Ok(prepared)
 }
 
@@ -1095,10 +1121,23 @@ fn pack_derived_display_object(
         }
         noon_core::GeometryRef::VectorPath(path) => {
             if let Some(path_preparer) = path_preparer {
-                let (mesh, _) = path_preparer
-                    .cached_path_mesh(path, state.style, render_transform)
+                let (cache_index, _) = path_preparer
+                    .cache_path_mesh(path, state.style, render_transform)
                     .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;
-                pack_derived_path_mesh(prepared, mesh, state, render_transform, style)
+                let cached = &path_preparer.path_mesh_cache[cache_index];
+                if let Some(resident) = &cached.resident {
+                    prepared.stats.resident_path_reuses += 1;
+                    pack_derived_path_instance(
+                        prepared,
+                        resident.indices.clone(),
+                        state,
+                        render_transform,
+                        style,
+                        DerivedPathGeometrySource::Retained,
+                    )
+                } else {
+                    pack_derived_path_mesh(prepared, &cached.mesh, state, render_transform, style)
+                }
             } else {
                 let mesh = crate::tessellate_path_mesh(path, state.style, render_transform)
                     .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;
@@ -1134,17 +1173,35 @@ fn pack_derived_path_mesh(
             target_position: [vertex.target_position.x, vertex.target_position.y],
             surface: crate::pack_path_surface(vertex.surface, vertex.path_progress),
         }));
+    prepared.stats.path_vertices_repacked += mesh.vertices.len();
     let index_start = u32::try_from(prepared.path_indices.len())
         .expect("transient path index count exceeds renderer limits");
-    prepared
-        .path_indices
-        .extend(mesh.indices.iter().map(|index| {
-            index
-                .checked_add(vertex_start)
-                .expect("transient path index exceeds renderer limits")
-        }));
+    prepared.path_indices.extend(mesh.indices.iter().map(|index| {
+        index
+            .checked_add(vertex_start)
+            .expect("transient path index exceeds renderer limits")
+    }));
+    prepared.stats.path_indices_repacked += mesh.indices.len();
     let index_end = u32::try_from(prepared.path_indices.len())
         .expect("transient path index count exceeds renderer limits");
+    pack_derived_path_instance(
+        prepared,
+        index_start..index_end,
+        state,
+        render_transform,
+        style,
+        DerivedPathGeometrySource::Transient,
+    )
+}
+
+fn pack_derived_path_instance(
+    prepared: &mut PreparedDerivedDisplay,
+    index_range: Range<u32>,
+    state: &noon_runtime::DerivedDisplayObjectState,
+    render_transform: noon_core::Transform2D,
+    style: crate::PackedStyle,
+    source: DerivedPathGeometrySource,
+) -> (DerivedDisplayPrimitive, usize) {
     let index = prepared.paths.len();
     prepared.paths.push(crate::PathInstance {
         transform: crate::packed_path_transform(state.style, render_transform),
@@ -1155,10 +1212,10 @@ fn pack_derived_path_mesh(
         u32::try_from(index).expect("transient path instance count exceeds renderer limits");
     let batch = prepared.path_batches.len();
     prepared.path_batches.push(crate::PathBatch {
-        index_range: index_start..index_end,
+        index_range,
         instance_range: instance_start..instance_start + 1,
     });
-    (DerivedDisplayPrimitive::Path { batch }, index)
+    (DerivedDisplayPrimitive::Path { batch, source }, index)
 }
 
 fn pack_derived_display_style(
@@ -1227,6 +1284,7 @@ mod derived_display_tests {
         assert_eq!(prepared.circles[0].transform.translation, [2.0, -1.0]);
         assert_eq!(prepared.circles[0].style.opacity, 0.25);
         assert_eq!(prepared.circles[0].padding[0], 0.5);
+        assert_eq!(prepared.stats.occurrences_packed, 1);
         assert_eq!(
             prepared.slot_for_occurrence(7),
             Some(PreparedDerivedDisplaySlot {
@@ -1239,7 +1297,7 @@ mod derived_display_tests {
     }
 
     #[test]
-    fn painter_projection_inserts_copies_after_stable_anchor_in_occurrence_order() {
+    fn painter_projection_keeps_only_sparse_transient_descriptors() {
         let mut runtime = runtime(vec![
             GeometryRef::circle(1.0),
             GeometryRef::rectangle(1.0, 1.0),
@@ -1258,23 +1316,23 @@ mod derived_display_tests {
         assert_eq!(
             prepared.painter_items,
             vec![
-                DisplayPainterItem::Stable { object_index: 0 },
                 DisplayPainterItem::Derived {
                     occurrence_index: 2
                 },
                 DisplayPainterItem::Derived {
                     occurrence_index: 4
                 },
-                DisplayPainterItem::Stable { object_index: 1 },
                 DisplayPainterItem::Derived {
                     occurrence_index: 8
                 },
             ]
         );
+        assert_eq!(prepared.stats.painter_positions_visited, 2);
+        assert_eq!(prepared.stats.occurrences_packed, 3);
     }
 
     #[test]
-    fn transient_renderer_packs_path_without_synthetic_id() {
+    fn transient_renderer_packs_nonresident_path_without_synthetic_id() {
         let mut runtime = runtime(vec![GeometryRef::circle(1.0)]);
         let path = noon_core::VectorPath::new()
             .move_to(Vec2::new(-0.5, -0.5))
@@ -1302,55 +1360,127 @@ mod derived_display_tests {
             Some(PreparedDerivedDisplaySlot {
                 anchor_object_index: 0,
                 occurrence_index: 3,
-                primitive: DerivedDisplayPrimitive::Path { batch: 0 },
+                primitive: DerivedDisplayPrimitive::Path {
+                    batch: 0,
+                    source: DerivedPathGeometrySource::Transient,
+                },
                 instance_index: 0,
             })
         );
     }
 
     #[test]
-    fn cached_transient_path_reuses_frame_preparer_mesh_without_repacking_stable_path() {
-        let stable_path = noon_core::VectorPath::new()
+    fn cached_transient_path_reuses_resident_mesh_without_geometry_repack() {
+        let path = noon_core::VectorPath::new()
             .move_to(Vec2::new(-1.0, -0.5))
             .line_to(Vec2::new(0.0, 0.75))
             .line_to(Vec2::new(1.0, -0.5))
             .close();
-        let transient_path = noon_core::VectorPath::new()
-            .move_to(Vec2::new(-0.5, -0.25))
-            .line_to(Vec2::new(0.0, 0.5))
-            .line_to(Vec2::new(0.5, -0.25))
-            .close();
-        let mut runtime = runtime(vec![GeometryRef::path(stable_path)]);
-        let mut path_state = state(GeometryRef::path(transient_path));
-        path_state.style.fill = Some(noon_core::Color::WHITE);
-        path_state.style.stroke = None;
-        let derived = [DerivedDisplayObject::new(0, 7, path_state)];
+        let geometry = GeometryRef::path(path);
+        let mut runtime = runtime(vec![geometry.clone()]);
+        let derived = [DerivedDisplayObject::new(0, 7, state(geometry.clone()))];
         let publication = runtime
             .take_renderer_publication()
             .with_derived_display_objects(&derived)
             .unwrap();
-        let mut preparer = crate::FramePreparer::new();
+        let mut preparer = crate::FramePreparer::for_individual_path_draws();
+        preparer
+            .preload_paths(&[crate::PathMeshPreload {
+                geometry: &geometry,
+                style: Style::default(),
+                transform: Transform2D::IDENTITY,
+            }])
+            .unwrap();
         preparer.set_painter_order(publication.frame(), publication.painter_order());
         {
             let stable = preparer.prepare(publication.frame());
             assert_eq!(stable.stats.full_rebuilds, 1);
         }
-        assert_eq!(preparer.path_mesh_cache_len(), 1);
 
         let first =
             prepare_derived_display_visible_cached(&publication, &[0], &mut preparer).unwrap();
-        assert_eq!(preparer.path_mesh_cache_len(), 2);
+        assert!(first.path_vertices.is_empty());
+        assert!(first.path_indices.is_empty());
+        assert_eq!(first.stats.path_vertices_repacked, 0);
+        assert_eq!(first.stats.path_indices_repacked, 0);
+        assert_eq!(first.stats.resident_path_reuses, 1);
+        assert_eq!(first.stats.painter_positions_visited, 0);
+        assert_eq!(
+            first.slot_for_occurrence(7).unwrap().primitive,
+            DerivedDisplayPrimitive::Path {
+                batch: 0,
+                source: DerivedPathGeometrySource::Retained,
+            }
+        );
+
         let second =
             prepare_derived_display_visible_cached(&publication, &[0], &mut preparer).unwrap();
-        assert_eq!(preparer.path_mesh_cache_len(), 2);
-        assert_eq!(first.path_vertices, second.path_vertices);
-        assert_eq!(first.path_indices, second.path_indices);
+        assert!(second.path_vertices.is_empty());
+        assert!(second.path_indices.is_empty());
+        assert_eq!(second.stats.resident_path_reuses, 1);
 
         let stable = preparer
             .prepare_incremental(publication.frame(), &noon_runtime::FrameChanges::default());
         assert_eq!(stable.stats.full_rebuilds, 0);
         assert_eq!(stable.stats.instances_repacked, 0);
         assert_eq!(stable.stats.geometry_cache_misses, 0);
+    }
+
+    #[test]
+    fn cached_single_transient_does_not_reconstruct_large_stable_painter_stream() {
+        const STABLE_COUNT: usize = 20_000;
+        let mut runtime = runtime(
+            (0..STABLE_COUNT)
+                .map(|_| GeometryRef::circle(1.0))
+                .collect(),
+        );
+        let anchor = (STABLE_COUNT / 2) as u32;
+        let derived = [DerivedDisplayObject::new(
+            anchor,
+            1,
+            state(GeometryRef::circle(0.25)),
+        )];
+        let publication = runtime
+            .take_renderer_publication()
+            .with_derived_display_objects(&derived)
+            .unwrap();
+        let mut preparer = crate::FramePreparer::new();
+        preparer.set_painter_order(publication.frame(), publication.painter_order());
+        preparer.prepare(publication.frame());
+
+        let prepared =
+            prepare_derived_display_visible_cached(&publication, &[anchor as usize], &mut preparer)
+                .unwrap();
+        assert_eq!(prepared.stats.painter_positions_visited, 0);
+        assert_eq!(prepared.stats.occurrences_packed, 1);
+        assert_eq!(prepared.painter_items.len(), 1);
+        assert_eq!(prepared.slots.len(), 1);
+    }
+
+    #[test]
+    fn occurrence_lookup_is_indexed_after_one_preparation_sort() {
+        const COUNT: u32 = 4_096;
+        let mut runtime = runtime(vec![GeometryRef::circle(1.0)]);
+        let derived = (0..COUNT)
+            .rev()
+            .map(|occurrence| {
+                DerivedDisplayObject::new(0, occurrence, state(GeometryRef::circle(0.25)))
+            })
+            .collect::<Vec<_>>();
+        let publication = runtime
+            .take_renderer_publication()
+            .with_derived_display_objects(&derived)
+            .unwrap();
+        let prepared = prepare_derived_display(&publication).unwrap();
+
+        assert_eq!(prepared.slots.len(), COUNT as usize);
+        for occurrence in 0..COUNT {
+            assert_eq!(
+                prepared.slot_for_occurrence(occurrence)
+                    .map(|slot| slot.occurrence_index),
+                Some(occurrence)
+            );
+        }
     }
 
     #[test]
