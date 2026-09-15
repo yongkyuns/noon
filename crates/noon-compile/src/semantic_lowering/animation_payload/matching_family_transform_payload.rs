@@ -126,6 +126,15 @@ pub fn lower_prepared_matching_family_transform_payload(
     let target_occurrence_index_start =
         next_transient_occurrence_index(matched.derived_occurrences())?;
     let mut stable_tracks = matched.stable_tracks().to_vec();
+    // Matching cleanup restores its source; only the original detached target
+    // enters the scene. Do not commit ordinary Transform destinations or
+    // retain padding opacity on the removed source. Earlier Succession
+    // children still publish their own endpoints, preserving the source
+    // state captured when this matching child activated.
+    for stable in &mut stable_tracks {
+        stable.track.completion = SemanticAnimationCompletion::Release;
+        stable.retain_effective = false;
+    }
     for source in leftovers.source_fades() {
         stable_tracks.extend(source_leftover_tracks(activation.animation, source));
     }
