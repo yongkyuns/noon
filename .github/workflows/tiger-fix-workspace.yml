@@ -4,16 +4,81 @@ on:
     branches: [fix/ghostscript-tiger-filled-morph]
     paths: [.github/workflows/tiger-fix-workspace.yml]
 permissions:
-  contents: read
+  contents: write
+concurrency:
+  group: tiger-fix-workspace
+  cancel-in-progress: true
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_GHA_RW_MODE: READ_ONLY
 jobs:
   workspace:
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
-      - name: Export exact source for local inspection
-        run: git archive --format=tar -o /tmp/noon-source.tar HEAD
-      - uses: actions/upload-artifact@v4
+      - uses: actions/checkout@v7
         with:
-          name: tiger-fix-source
-          path: /tmp/noon-source.tar
-          retention-days: 1
+          ref: ${{ github.ref_name }}
+          fetch-depth: 2
+      - name: Apply isolated candidate integration
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          if test -f scripts/.apply-tiger-fix.py; then python3 scripts/.apply-tiger-fix.py; fi
+          rm -f scripts/.tiger-fix.patch.part1 scripts/.apply-tiger-fix.py
+          python3 -m py_compile web/python/examples/manim_compatible_svg_tiger_morph.py
+          node --check scripts/playground-python-family-transform-smoke.mjs
+      - name: Use pinned Rust
+        run: rustup install
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Format and publish candidate on isolated branch
+        run: |
+          cargo fmt --all
+          git diff --check
+          git config user.name 'Noon fix validation'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates docs/architecture.md web/python/examples/manim_compatible_svg_tiger_morph.py scripts/playground-python-family-transform-smoke.mjs scripts/.apply-tiger-fix.py scripts/.tiger-fix.patch.part1
+          if ! git diff --cached --quiet; then
+            git commit -m 'fix: preserve filled geometry throughout tiger family round trip'
+            git push origin HEAD:refs/heads/fix/ghostscript-tiger-filled-morph
+          fi
+          git rev-parse HEAD
+      - name: Geometry and compiler regression tests
+        run: |
+          cargo test -p noon-geometry --lib
+          cargo test -p noon-compile --all-targets
+      - name: Renderer continuity and locality tests
+        run: |
+          cargo test -p noon-render-wgpu --all-features --lib
+          cargo test -p noon-render-wgpu --all-features --test complex_filled_morph --test morph_steady_locality --test path_cache_lifecycle --test retained_animation_geometry_parity
+      - name: Filled family completion and publication tests
+        run: cargo test -p noon --lib family_transform_renderer_publication_tests
+      - name: Repository fast gate
+        run: bash scripts/check.sh fast 6d6cc95cc307379df700cf22a8b889e0cb60b442
+      - name: Export exact candidate and patch
+        if: always()
+        run: |
+          git archive --format=tar -o /tmp/noon-source.tar HEAD
+          git diff 6d6cc95cc307379df700cf22a8b889e0cb60b442 HEAD > /tmp/noon-tiger-tested.patch || true
+          git rev-parse HEAD > /tmp/noon-tested-head.txt
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: tiger-fix-tested-source
+          path: |
+            /tmp/noon-source.tar
+            /tmp/noon-tiger-tested.patch
+            /tmp/noon-tested-head.txt
+          retention-days: 2
