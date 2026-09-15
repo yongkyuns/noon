@@ -2,6 +2,7 @@ use crate::{
     AnimationCompositionRequest, AnimationOptions, ExecutionSegment, ExecutionSession, LiveSession,
     MobjectFamily, RateFunction, Scene, SemanticAnimationCompositionKind,
 };
+use noon_runtime::TimelineWakeState;
 
 fn smooth(run_time: f64) -> AnimationOptions {
     AnimationOptions::new()
@@ -133,6 +134,11 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
         let mut live = scene.live(&mut execution);
         let segment = family_transform(&mut live, &source, returned.root(), 1.8);
         assert_eq!(segment.end_time(), 5.55);
+        assert_eq!(
+            live.segment_state(segment).timeline(),
+            TimelineWakeState::Continuous,
+            "return Transform published no active execution driver"
+        );
         let midpoint = segment.start_time() + segment.duration() * 0.5;
         live.advance_segment_to(segment, midpoint).unwrap();
         let midpoint_appearance = live.effective(&source_objects[1]).unwrap().appearance;
