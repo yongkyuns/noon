@@ -1,6 +1,7 @@
 //! Explicit diagnostic/export boundary; the Rust engine itself uses typed state.
-use noon::{diagnostics::execution_frame_value, example_scenes, LiveProgramStatus,
-    RustHostCallbackTable};
+use noon::{
+    diagnostics::execution_frame_value, example_scenes, LiveProgramStatus, RustHostCallbackTable,
+};
 use serde_json::json;
 
 fn main() -> Result<(), String> {
@@ -24,21 +25,29 @@ fn main() -> Result<(), String> {
     for (label, time) in samples {
         loop {
             match program.status() {
-                LiveProgramStatus::ReadyToResume => { program.resume().map_err(|e| e.to_string())?; }
+                LiveProgramStatus::ReadyToResume => {
+                    program.resume().map_err(|e| e.to_string())?;
+                }
                 LiveProgramStatus::PublicationPending(expected) => {
                     let context = program.take_renderer_publication().context();
                     assert_eq!(context, expected);
-                    program.admit_publication(context).map_err(|e| e.to_string())?;
+                    program
+                        .admit_publication(context)
+                        .map_err(|e| e.to_string())?;
                 }
                 LiveProgramStatus::Awaiting(_) => {
-                    let status = program.drive_to(&mut callbacks, time).map_err(|e| e.to_string())?;
+                    let status = program
+                        .drive_to(&mut callbacks, time)
+                        .map_err(|e| e.to_string())?;
                     if matches!(status, LiveProgramStatus::Awaiting(_)) {
                         program.take_renderer_publication();
                         break;
                     }
                 }
                 LiveProgramStatus::Finished => break,
-                LiveProgramStatus::Terminal => return Err("SVG morph entered terminal state".into()),
+                LiveProgramStatus::Terminal => {
+                    return Err("SVG morph entered terminal state".into())
+                }
             }
         }
         let frame = execution_frame_value(program.session());
@@ -46,6 +55,9 @@ fn main() -> Result<(), String> {
         captures.push(json!({"label": label, "time": time, "debug": frame}));
     }
     assert_eq!(program.status(), LiveProgramStatus::Finished);
-    println!("{}", json!({"outcome": "pass", "engine": "native-rust", "captures": captures}));
+    println!(
+        "{}",
+        json!({"outcome": "pass", "engine": "native-rust", "captures": captures})
+    );
     Ok(())
 }

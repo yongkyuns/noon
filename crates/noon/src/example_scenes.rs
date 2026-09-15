@@ -28,6 +28,7 @@ pub mod painter_order_overlap;
 pub mod renderer_fixtures;
 pub mod renderer_recovery;
 pub mod specialized_geometry;
+pub mod svg_morph;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_family_fade;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]

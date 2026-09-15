@@ -75,6 +75,20 @@ report = {"manim_version": manim.__version__, "renderer": "cairo",
           "samples": [], "notes": "Ordinary Transform; no outline phase, repaint, or replacement."}
 with tempconfig({"renderer": "cairo", "pixel_width": 960, "pixel_height": 540,
                  "frame_width": 128/9, "frame_height": 8, "background_color": "#000000"}):
+    # Independent placement oracles: dimension bounds contain handles but center
+    # is anchored at the endpoints. The visible bulge need not be centered.
+    for name, commands, width in [
+        ('cubic', 'M0 0 C0 12 12 12 12 0 Z', 2.0),
+        ('quadratic', 'M0 0 Q6 12 12 0 Z', 3.0),
+    ]:
+        fixture = OUT / f'{name}-placement.svg'
+        fixture.write_text(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"><path d="{commands}"/></svg>')
+        shape = SVGMobject(str(fixture), height=2.0)
+        assert abs(float(shape.width)-width) < 1e-8
+        assert abs(float(shape.height)-2.0) < 1e-8
+        assert np.max(np.abs(shape.get_center())) < 1e-8
+        assert abs(float(shape.get_all_points()[:,1].max())) < 1e-8
+        assert abs(float(shape.get_all_points()[:,1].min())+2.0) < 1e-8
     tiger, rocket = make_objects()
     saved = tiger.copy()
     report["source_leaves"] = len(tiger)

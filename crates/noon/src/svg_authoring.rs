@@ -524,8 +524,11 @@ fn prepare_svg(source: &str, options: SvgImportOptions) -> Result<PreparedSvg, S
     let mut leaves = Vec::new();
     collect_group(tree.root(), &mut Vec::new(), &mut leaves)?;
     resolve_leaf_identity_locators(&mut leaves);
-    let bounds = aggregate_path_bounds(&leaves);
-    let transform = placement_transform(bounds, options);
+    // Dimensions include canonical cubic handles; the centering boundary
+    // contains anchors only. This is the same authority used by ordinary Mobjects.
+    let dimensions = aggregate_path_bounds(&leaves, true);
+    let boundary = aggregate_path_bounds(&leaves, false);
+    let transform = placement_transform(dimensions, boundary, options);
     Ok(PreparedSvg { leaves, transform })
 }
 
@@ -875,10 +878,17 @@ fn svg_point(mut point: usvg::tiny_skia_path::Point, transform: usvg::Transform)
     Vec2::new(point.x, -point.y)
 }
 
-fn aggregate_path_bounds(leaves: &[PreparedSvgLeaf]) -> Option<noon_core::Bounds2D64> {
+fn aggregate_path_bounds(
+    leaves: &[PreparedSvgLeaf],
+    include_handles: bool,
+) -> Option<noon_core::Bounds2D64> {
     let mut aggregate: Option<noon_core::Bounds2D64> = None;
     for leaf in leaves {
-        let Some(bounds) = noon_geometry::cubic_control_point_bounds(&leaf.path) else {
+        let Some(bounds) = crate::semantic_mobject::transformed_path_layout_bounds(
+            &leaf.path,
+            SemanticTransform2_5D::default(),
+            include_handles,
+        ) else {
             continue;
         };
         if let Some(aggregate) = &mut aggregate {
@@ -893,13 +903,15 @@ fn aggregate_path_bounds(leaves: &[PreparedSvgLeaf]) -> Option<noon_core::Bounds
 
 fn placement_transform(
     bounds: Option<noon_core::Bounds2D64>,
+    boundary: Option<noon_core::Bounds2D64>,
     options: SvgImportOptions,
 ) -> SemanticTransform2_5D {
     let Some(bounds) = bounds else {
         return SemanticTransform2_5D::default();
     };
-    let center_x = (bounds.min_x + bounds.max_x) * 0.5;
-    let center_y = (bounds.min_y + bounds.max_y) * 0.5;
+    let boundary = boundary.unwrap_or(bounds);
+    let center_x = (boundary.min_x + boundary.max_x) * 0.5;
+    let center_y = (boundary.min_y + boundary.max_y) * 0.5;
     let mut scale = 1.0;
     if let Some(height) = options.height {
         if bounds.height() > 0.0 {
@@ -940,9 +952,9 @@ mod tests {
         let family = scene.svg_from_str(svg).unwrap();
         let bounds = family.layout_bounds().unwrap().unwrap();
         assert!((bounds.width() - 2.0).abs() < 1e-6);
-        assert!((bounds.height() - 1.5).abs() < 1e-6);
-        assert!((bounds.min_y + 0.5).abs() < 1e-6);
-        assert!((bounds.max_y - 1.0).abs() < 1e-6);
+        assert!((bounds.height() - 2.0).abs() < 1e-6);
+        assert!((bounds.min_y + 2.0).abs() < 1e-6);
+        assert!(bounds.max_y.abs() < 1e-6);
     }
 
     #[test]
@@ -956,9 +968,9 @@ mod tests {
         let family = scene.svg_from_str(svg).unwrap();
         let bounds = family.layout_bounds().unwrap().unwrap();
         assert!((bounds.width() - 3.0).abs() < 1e-6);
-        assert!((bounds.height() - 1.5).abs() < 1e-6);
-        assert!((bounds.min_y + 0.5).abs() < 1e-6);
-        assert!((bounds.max_y - 1.0).abs() < 1e-6);
+        assert!((bounds.height() - 2.0).abs() < 1e-6);
+        assert!((bounds.min_y + 2.0).abs() < 1e-6);
+        assert!(bounds.max_y.abs() < 1e-6);
     }
 
     fn raw_options() -> SvgImportOptions {

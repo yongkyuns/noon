@@ -18,7 +18,7 @@ const result = { errors: [], frames: [] };
 let server, browser, context, page;
 const pictures = [];
 function phase(time) {
-  if (time < 0.5) return 'tiger';
+  if (time <= 0.5) return 'tiger';
   if (time < 2.3) return 'forward';
   if (time < 3.05) return 'rocket';
   if (time < 4.85) return 'return';
@@ -88,7 +88,10 @@ try {
     assert.equal(state.error, null, state.error ?? undefined);
     assert.notEqual(state.patchState, 'error', state.patchText);
     const time = Number(state.report?.metrics?.time);
-    if (Number.isFinite(time) && time >= 0 && time < 0.3) armed = true;
+    // The static opening wait need not present a new frame at time zero.
+    // Arm on the new scene's identity/count, not an unobservable time window.
+    // The previous Indicate scene has one object; this pinned tiger has 138.
+    if (state.report?.metrics?.objectCount === 138 && Number.isFinite(time)) armed = true;
     if (armed && Number.isFinite(time) && time >= 0 && time <= 5.8 && time !== lastTime) {
       const bytes = await page.locator('#scene').screenshot({ timeout: 10000 });
       const image = PNG.sync.read(bytes);
