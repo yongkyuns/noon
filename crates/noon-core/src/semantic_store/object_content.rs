@@ -224,6 +224,23 @@ impl SemanticObjectState {
         }
     }
 
+    /// Return receiver-owned state with target visual state.
+    ///
+    /// Persistent `become` keeps painter provenance, role, bindings and identity
+    /// on the receiver while copying the target's content, transform and style.
+    /// Keep this as an exhaustive struct literal: adding a new authored-state field
+    /// must fail to compile until its ownership is explicitly classified here.
+    pub fn with_visual_state_from(&self, target: &Self) -> Self {
+        Self {
+            content: target.content,
+            transform: target.transform,
+            style: target.style.clone(),
+            presentation: self.presentation,
+            role: self.role,
+            signal_bindings: self.signal_bindings.clone(),
+        }
+    }
+
     pub const fn presentation(&self) -> SemanticPresentation {
         self.presentation
     }
@@ -328,6 +345,31 @@ mod tests {
         assert_eq!(state.insertion_order(), 0);
         assert_eq!(state.role(), SemanticObjectRole::Ordinary);
         assert!(state.signal_bindings().is_empty());
+    }
+
+    #[test]
+    fn visual_state_copy_preserves_receiver_owned_metadata() {
+        let mut receiver = SemanticObjectState::new(StoredGeometry::Rectangle {
+            size: Vec2::new(1.0, 1.0),
+        });
+        receiver.set_z_index(7.0);
+        receiver.assign_insertion_order(11);
+        receiver.set_role(SemanticObjectRole::Camera2D);
+        let mut target = SemanticObjectState::new(StoredGeometry::Circle { radius: 2.0 });
+        target.transform.translation = SemanticVec3::new(3.0, -2.0, 0.0);
+        target.style.object_opacity = 0.25;
+        target.set_z_index(-4.0);
+        target.assign_insertion_order(99);
+        target.set_role(SemanticObjectRole::ArrowEndTip);
+
+        let copied = receiver.with_visual_state_from(&target);
+
+        assert_eq!(copied.content, target.content);
+        assert_eq!(copied.transform, target.transform);
+        assert_eq!(copied.style, target.style);
+        assert_eq!(copied.presentation(), receiver.presentation());
+        assert_eq!(copied.role(), receiver.role());
+        assert_eq!(copied.signal_bindings(), receiver.signal_bindings());
     }
 
     #[test]

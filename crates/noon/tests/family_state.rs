@@ -28,6 +28,24 @@ fn family(scene: &Scene) -> MobjectFamily {
     scene.family(&[(&a).into(), (&nested).into()]).unwrap()
 }
 
+fn object_state(scene: &Scene, id: noon::SemanticNodeId) -> noon::SemanticObjectState {
+    scene
+        .integration_store()
+        .borrow()
+        .semantic_object_state_checked(id)
+        .unwrap()
+        .clone()
+}
+
+fn assert_become_visual_state(
+    receiver: &noon::SemanticObjectState,
+    target: &noon::SemanticObjectState,
+) {
+    assert_eq!(receiver.content, target.content);
+    assert_eq!(receiver.transform, target.transform);
+    assert_eq!(receiver.style, target.style);
+}
+
 #[test]
 fn family_become_and_restore_preserve_alias_identity_and_share_content() {
     let scene = Scene::new();
@@ -69,26 +87,23 @@ fn family_become_and_restore_preserve_alias_identity_and_share_content() {
 fn unequal_family_become_reuses_receiver_identity_and_never_imports_target_ids() {
     let scene = Scene::new();
     let source_leaf = scene.square(1.0).unwrap();
+    source_leaf.set_z_index(7.0).unwrap();
+    let source_state = object_state(&scene, source_leaf.node_id());
     let source = scene.family(&[(&source_leaf).into()]).unwrap();
     let source_root = source.node_id();
     let first_target = scene.circle(2.0).unwrap();
+    first_target.set_z_index(-4.0).unwrap();
     let mut second_target = scene.rectangle(3.0, 1.0).unwrap();
     second_target.shift(4.0, 1.0).unwrap();
+    second_target.set_z_index(11.0).unwrap();
     let target = scene
         .family(&[(&first_target).into(), (&second_target).into()])
         .unwrap();
     let target_ids = leaves(&target);
-    let target_states: Vec<_> = target_ids
+    let target_states = target_ids
         .iter()
-        .map(|&id| {
-            scene
-                .integration_store()
-                .borrow()
-                .semantic_object_state_checked(id)
-                .unwrap()
-                .clone()
-        })
-        .collect();
+        .map(|&id| object_state(&scene, id))
+        .collect::<Vec<_>>();
     let revision = scene.revision();
 
     source.become_family(&target, Default::default()).unwrap();
@@ -101,22 +116,33 @@ fn unequal_family_become_reuses_receiver_identity_and_never_imports_target_ids()
     assert!(!target_ids.contains(&receiver_ids[0]));
     assert!(!target_ids.contains(&receiver_ids[1]));
     assert_ne!(receiver_ids[1], source_leaf.node_id());
-    let receiver_states: Vec<_> = receiver_ids
+    let receiver_states = receiver_ids
         .iter()
-        .map(|&id| {
-            scene
-                .integration_store()
-                .borrow()
-                .semantic_object_state_checked(id)
-                .unwrap()
-                .clone()
-        })
-        .collect();
-    assert_eq!(receiver_states, target_states);
-    assert_eq!(leaves(&target), target_ids);
+        .map(|&id| object_state(&scene, id))
+        .collect::<Vec<_>>();
+    for (receiver, target) in receiver_states.iter().zip(&target_states) {
+        assert_become_visual_state(receiver, target);
+        assert_eq!(receiver.z_index(), source_state.z_index());
+        assert_eq!(receiver.role(), source_state.role());
+        assert_eq!(receiver.signal_bindings(), source_state.signal_bindings());
+    }
+    assert_eq!(
+        receiver_states[0].insertion_order(),
+        source_state.insertion_order()
+    );
+    assert_ne!(
+        receiver_states[1].insertion_order(),
+        target_states[1].insertion_order()
+    );
+    assert!(receiver_states[1].insertion_order() > receiver_states[0].insertion_order());
+    assert_eq!(
+        target_ids
+            .iter()
+            .map(|&id| object_state(&scene, id))
+            .collect::<Vec<_>>(),
+        target_states
+    );
 
-    // Contracting topology only changes membership. Detached receiver-owned
-    // descendants retain valid identities for any other handles/aliases.
     let empty = scene.family(&[]).unwrap();
     let expanded_ids = receiver_ids.clone();
     let revision = scene.revision();
@@ -124,10 +150,72 @@ fn unequal_family_become_reuses_receiver_identity_and_never_imports_target_ids()
     assert_eq!(source.node_id(), source_root);
     assert!(leaves(&source).is_empty());
     assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    {
+        let store = scene.integration_store().borrow();
+        for &id in &expanded_ids {
+            assert!(store.node(id).is_some());
+        }
+    }
+
+    source.become_family(&target, Default::default()).unwrap();
+    let reexpanded_ids = leaves(&source);
+    assert_eq!(reexpanded_ids.len(), target_ids.len());
+    assert!(reexpanded_ids.iter().all(|id| !target_ids.contains(id)));
     let store = scene.integration_store().borrow();
     for id in expanded_ids {
         assert!(store.node(id).is_some());
     }
+}
+
+#[test]
+fn live_unequal_family_become_preserves_same_z_receiver_painter_order() {
+    use noon_compile::semantic_execution_object_id;
+
+    let mut scene = Scene::new();
+    let source_leaf = scene.square(2.0).unwrap();
+    source_leaf.set_z_index(5.0).unwrap();
+    let source = scene.family(&[(&source_leaf).into()]).unwrap();
+    let peer = scene.square(2.0).unwrap();
+    peer.set_z_index(5.0).unwrap();
+
+    let first_target = scene.circle(1.0).unwrap();
+    first_target.set_z_index(-10.0).unwrap();
+    let second_target = scene.circle(1.0).unwrap();
+    second_target.set_z_index(20.0).unwrap();
+    let target = scene
+        .family(&[(&first_target).into(), (&second_target).into()])
+        .unwrap();
+    let target_ids = leaves(&target);
+
+    scene.add_many(&[(&source).into(), (&peer).into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    scene
+        .live(&mut session)
+        .become_family(&source, &target, Default::default())
+        .unwrap();
+
+    let receiver_ids = leaves(&source);
+    assert_eq!(receiver_ids.len(), 2);
+    for &receiver in &receiver_ids {
+        assert_eq!(object_state(&scene, receiver).z_index(), 5.0);
+    }
+    let actual = session
+        .painter_order()
+        .iter()
+        .map(|&row| session.frame().objects[row as usize].id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        [
+            semantic_execution_object_id(receiver_ids[0]),
+            semantic_execution_object_id(receiver_ids[1]),
+            semantic_execution_object_id(peer.node_id()),
+        ]
+    );
+    assert!(target_ids
+        .iter()
+        .map(|&id| semantic_execution_object_id(id))
+        .all(|id| !actual.contains(&id)));
 }
 
 #[test]
