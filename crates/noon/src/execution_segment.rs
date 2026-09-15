@@ -129,6 +129,8 @@ impl ExecutionSegment {
         self
     }
 
+    // Staged for the next family-transform activation slice.
+    #[allow(dead_code)]
     pub(crate) const fn with_family_replacement(
         mut self,
         root: SemanticNodeId,
