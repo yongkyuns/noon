@@ -9,6 +9,9 @@ use noon_core::{
 
 use crate::NativeHostError;
 
+#[cfg(test)]
+mod viewport_tests;
+
 /// The narrow execution surface consumed by the native platform loop.
 ///
 /// Both implementations retain their canonical runtime owner. This trait only
@@ -73,7 +76,8 @@ impl NativeExecutionSource for StaticExecutionSource {
     }
 
     fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {
-        self.session.query_viewport(bounds)
+        let query = self.session.query_viewport(bounds);
+        self.session.renderer_viewport_query(query)
     }
 
     fn timeline(&self) -> TimelineWakeState {
@@ -170,7 +174,8 @@ where
     }
 
     fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {
-        self.program.query_viewport(bounds)
+        let query = self.program.query_viewport(bounds);
+        self.program.session().renderer_viewport_query(query)
     }
 
     fn timeline(&self) -> TimelineWakeState {
