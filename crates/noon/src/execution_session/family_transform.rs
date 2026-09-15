@@ -1,5 +1,6 @@
 use noon_compile::{
-    PreparedFamilyTransformChannelProjection, PreparedMatchingShapeTargetLeftoverFade,
+    PreparedDerivedFamilyTransformOccurrence, PreparedFamilyTransformChannelProjection,
+    PreparedMatchingFamilyTransformPayload, PreparedMatchingShapeTargetLeftoverFade,
     PreparedTransientPainterPlacement,
 };
 use noon_core::{SemanticMutationTransaction, SemanticNodeId, SemanticStore};
@@ -18,13 +19,18 @@ pub(super) fn build_derived_family_transform_plan(
     runtime: &SceneInstance,
     projection: &PreparedFamilyTransformChannelProjection,
 ) -> Result<Option<DerivedDisplayAnimationPlan>, String> {
-    if projection.derived_occurrences().is_empty() {
-        return Ok(None);
-    }
+    let occurrences =
+        materialize_derived_family_occurrences(runtime, projection.derived_occurrences())?;
+    build_transient_plan(occurrences)
+}
 
+fn materialize_derived_family_occurrences(
+    runtime: &SceneInstance,
+    prepared_occurrences: &[PreparedDerivedFamilyTransformOccurrence],
+) -> Result<Vec<DerivedDisplayAnimationOccurrence>, String> {
     let frame = runtime.frame();
-    let mut occurrences = Vec::with_capacity(projection.derived_occurrences().len());
-    for occurrence in projection.derived_occurrences() {
+    let mut occurrences = Vec::with_capacity(prepared_occurrences.len());
+    for occurrence in prepared_occurrences {
         let anchor_object_index = runtime
             .frame_index_for_object(occurrence.anchor_execution_object_id)
             .ok_or_else(|| {
@@ -110,10 +116,7 @@ pub(super) fn build_derived_family_transform_plan(
             tracks,
         });
     }
-
-    DerivedDisplayAnimationPlan::new(occurrences)
-        .map(Some)
-        .map_err(|error| error.to_string())
+    Ok(occurrences)
 }
 
 /// Materialize detached matching-shape target leftovers into the existing
@@ -130,10 +133,50 @@ pub(super) fn build_matching_shape_target_leftover_plan(
     target_fades: &[PreparedMatchingShapeTargetLeftoverFade],
     occurrence_index_start: u32,
 ) -> Result<Option<DerivedDisplayAnimationPlan>, String> {
-    if target_fades.is_empty() {
-        return Ok(None);
-    }
+    let occurrences =
+        materialize_matching_shape_target_leftovers(runtime, target_fades, occurrence_index_start)?;
+    build_transient_plan(occurrences)
+}
 
+/// Materialize every identity-free occurrence required by one complete matching-family
+/// payload into the session's single existing transient animation plan.
+///
+/// Matched duplicate padding copies keep their real source painter anchors. Detached
+/// target leftovers resolve `LayerEnd` independently. The compiler reserves the target
+/// occurrence range after all matched derived occurrences, so concatenation cannot
+/// invent or arbitrate another occurrence identity space.
+pub(super) fn build_matching_family_transform_plan(
+    runtime: &SceneInstance,
+    payload: &PreparedMatchingFamilyTransformPayload,
+) -> Result<Option<DerivedDisplayAnimationPlan>, String> {
+    build_matching_family_transform_plan_from_parts(
+        runtime,
+        payload.derived_occurrences(),
+        payload.target_leftovers(),
+        payload.target_occurrence_index_start(),
+    )
+}
+
+fn build_matching_family_transform_plan_from_parts(
+    runtime: &SceneInstance,
+    derived: &[PreparedDerivedFamilyTransformOccurrence],
+    target_fades: &[PreparedMatchingShapeTargetLeftoverFade],
+    target_occurrence_index_start: u32,
+) -> Result<Option<DerivedDisplayAnimationPlan>, String> {
+    let mut occurrences = materialize_derived_family_occurrences(runtime, derived)?;
+    occurrences.extend(materialize_matching_shape_target_leftovers(
+        runtime,
+        target_fades,
+        target_occurrence_index_start,
+    )?);
+    build_transient_plan(occurrences)
+}
+
+fn materialize_matching_shape_target_leftovers(
+    runtime: &SceneInstance,
+    target_fades: &[PreparedMatchingShapeTargetLeftoverFade],
+    occurrence_index_start: u32,
+) -> Result<Vec<DerivedDisplayAnimationOccurrence>, String> {
     let mut occurrences = Vec::with_capacity(target_fades.len());
     for (ordinal, fade) in target_fades.iter().enumerate() {
         if fade.base.painter_placement() != PreparedTransientPainterPlacement::LayerEnd {
@@ -193,13 +236,20 @@ pub(super) fn build_matching_shape_target_leftover_plan(
             tracks,
         });
     }
+    Ok(occurrences)
+}
 
+fn build_transient_plan(
+    occurrences: Vec<DerivedDisplayAnimationOccurrence>,
+) -> Result<Option<DerivedDisplayAnimationPlan>, String> {
+    if occurrences.is_empty() {
+        return Ok(None);
+    }
     DerivedDisplayAnimationPlan::new(occurrences)
         .map(Some)
         .map_err(|error| error.to_string())
 }
 
-#[allow(dead_code)]
 fn stable_layer_tail(runtime: &SceneInstance, z_index: f64) -> Option<u32> {
     let frame = runtime.frame();
     runtime
@@ -218,7 +268,6 @@ fn stable_layer_tail(runtime: &SceneInstance, z_index: f64) -> Option<u32> {
 }
 
 /// Unsupported topology for exact-end matching-family replacement.
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum MatchingFamilyCompletionSwapError {
     InvalidExecutionRoot(SemanticNodeId),
@@ -249,7 +298,6 @@ impl std::error::Error for MatchingFamilyCompletionSwapError {}
 /// target must be detached. Only outer membership changes, so both families retain
 /// their internal authored topology and no execution identity is manufactured. The
 /// target occupies the source family's exact sibling slot rather than being appended.
-#[allow(dead_code)]
 pub(super) fn stage_matching_family_completion_swap(
     store: &SemanticStore,
     execution_root: SemanticNodeId,
@@ -420,7 +468,8 @@ mod matching_completion_tests {
 #[cfg(test)]
 mod matching_target_tests {
     use noon_compile::{
-        CompiledObject, CompiledScene, PreparedMatchingShapeLeftoverFadeTrack,
+        CompiledObject, CompiledScene, EffectiveAnimationProperties,
+        PreparedDerivedFamilyTransformTrack, PreparedMatchingShapeLeftoverFadeTrack,
         PreparedMatchingShapeTargetTransientBase,
     };
     use noon_core::{
@@ -475,6 +524,31 @@ mod matching_target_tests {
         }
     }
 
+    fn derived_occurrence() -> PreparedDerivedFamilyTransformOccurrence {
+        PreparedDerivedFamilyTransformOccurrence {
+            occurrence_index: 0,
+            anchor_execution_object_id: ObjectId::new(1),
+            source: SemanticNodeId::new(1, 0),
+            target_state: SemanticNodeId::new(2, 0),
+            effective_source: EffectiveAnimationProperties {
+                z_index: 0.0,
+                transform: Transform2D::IDENTITY,
+                style: Style::default(),
+                appearance: 1.0,
+                reveal: 1.0,
+            },
+            tracks: vec![PreparedDerivedFamilyTransformTrack {
+                occurrence_index: 0,
+                anchor_execution_object_id: ObjectId::new(1),
+                property: Property::Appearance,
+                values: TrackValues::Scalar { from: 0.0, to: 1.0 },
+                transform_geometry_plan: None,
+                timing: TrackTiming::new(2.0, 1.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }],
+        }
+    }
+
     #[test]
     fn target_leftover_resolves_layer_end_to_last_real_stable_row() {
         let runtime = runtime();
@@ -492,6 +566,36 @@ mod matching_target_tests {
         );
         assert_eq!(plan.evaluate(2.0).unwrap()[0].state().appearance, 0.0);
         assert_eq!(plan.evaluate(3.0).unwrap()[0].state().appearance, 1.0);
+    }
+
+    #[test]
+    fn matching_plan_combines_derived_and_target_occurrences_without_index_collision() {
+        let runtime = runtime();
+        let plan = build_matching_family_transform_plan_from_parts(
+            &runtime,
+            &[derived_occurrence()],
+            &[target_fade(0.0)],
+            1,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(plan.occurrences().len(), 2);
+        assert_eq!(plan.occurrences()[0].occurrence_index, 0);
+        assert_eq!(plan.occurrences()[1].occurrence_index, 1);
+        assert_eq!(
+            plan.occurrences()[0].painter_placement,
+            TransientPresentationPainterPlacement::AfterStable {
+                anchor_object_index: 0,
+            }
+        );
+        assert_eq!(
+            plan.occurrences()[1].painter_placement,
+            TransientPresentationPainterPlacement::AfterStable {
+                anchor_object_index: 1,
+            }
+        );
+        assert_eq!(plan.evaluate(2.5).unwrap().len(), 2);
     }
 
     #[test]
