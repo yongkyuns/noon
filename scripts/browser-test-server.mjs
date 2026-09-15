@@ -31,7 +31,7 @@ export async function serveRepository(repoRoot, port, { crossOriginIsolated = fa
     server.once("error", reject);
     server.listen(port, "127.0.0.1", resolve);
   });
-  return { baseUrl, async close() {
+  return { baseUrl: `http://127.0.0.1:${server.address().port}`, async close() {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
   } };

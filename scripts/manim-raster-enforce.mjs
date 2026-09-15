@@ -16,7 +16,7 @@ const artifactRoot = path.resolve(
   process.env.NOON_MANIM_RASTER_ARTIFACTS ?? "manim-raster-artifacts",
 );
 const manifest = JSON.parse(
-  await readFile(path.join(repoRoot, "parity", "manim-v0.21", "manifest.json"), "utf8"),
+  await readFile(path.resolve(repoRoot, process.env.NOON_MANIM_RASTER_MANIFEST ?? "parity/manim-v0.21/manifest.json"), "utf8"),
 );
 const report = JSON.parse(await readFile(path.join(artifactRoot, "report.json"), "utf8"));
 
