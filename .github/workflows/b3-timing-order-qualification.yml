@@ -25,6 +25,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/b3-evidence"
           cp tooling/b3-timing-order.patch.gz.b64 "$RUNNER_TEMP/b3-patch.b64"
+          cp tooling/b3-alias-guard.patch "$RUNNER_TEMP/b3-alias-guard.patch"
           git config user.name 'Yongkyun Shin'
           git config user.email '4311628+yongkyuns@users.noreply.github.com'
           git checkout --detach 8250da301ae6b58dee104d08c8288b359e26c48a
@@ -37,9 +38,13 @@ jobs:
           data = gzip.decompress(base64.b64decode(Path(os.environ['RUNNER_TEMP'], 'b3-patch.b64').read_text()))
           assert hashlib.sha256(data).hexdigest() == '32b74902ed2712e9945fe3e080ac74b7e71731f9f0cfb45d91ab868a56cbe4a0'
           Path(os.environ['RUNNER_TEMP'], 'b3-patch.diff').write_bytes(data)
+          guard = Path(os.environ['RUNNER_TEMP'], 'b3-alias-guard.patch').read_bytes()
+          assert hashlib.sha256(guard).hexdigest() == '9b0855be599498b8bca6f749bc95d10d4e6f192674b38b89d915f4260e5c41b9'
           PY
           git apply --check --include='crates/noon/src/execution_session.rs' --include='crates/noon/src/execution_session/*' "$RUNNER_TEMP/b3-patch.diff"
           git apply --include='crates/noon/src/execution_session.rs' --include='crates/noon/src/execution_session/*' "$RUNNER_TEMP/b3-patch.diff"
+          git apply --check "$RUNNER_TEMP/b3-alias-guard.patch"
+          git apply "$RUNNER_TEMP/b3-alias-guard.patch"
           git diff --check
       - uses: actions/setup-python@v7
         with:
@@ -76,14 +81,14 @@ jobs:
           test "$(wc -l < "$RUNNER_TEMP/b3-evidence/changed-files.txt")" -eq 4
           git diff --exit-code -- parity scripts web/python .github crates/noon-web
           git add crates/noon/src/execution_session.rs crates/noon/src/execution_session/family_transform.rs crates/noon/src/execution_session/family_transform_tests.rs crates/noon/src/execution_session/publication.rs
-          git commit -m 'fix: publish matching active painter order atomically'
+          git commit -m 'fix: publish matching active painter order atomically and reject shared source topology'
           git rev-parse HEAD | tee "$RUNNER_TEMP/b3-evidence/source-sha.txt"
           git rev-parse 'HEAD^{tree}' | tee "$RUNNER_TEMP/b3-evidence/source-tree.txt"
           git push origin "HEAD:refs/heads/tooling/b3-integrated-order-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
       - name: Native family and binding regressions
         run: |
           set -o pipefail
-          cargo test -p noon --lib family_transform 2>&1 | tee "$RUNNER_TEMP/b3-evidence/family-tests.log"
+          cargo test -p noon --lib --all-features 2>&1 | tee "$RUNNER_TEMP/b3-evidence/family-tests.log"
           cargo test -p noon-web --lib completed_binding_tests -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b3-evidence/binding-tests.log"
           cargo clippy -p noon -p noon-web --all-targets --all-features -- -D warnings 2>&1 | tee "$RUNNER_TEMP/b3-evidence/clippy.log"
           bash scripts/check.sh architecture 8250da301ae6b58dee104d08c8288b359e26c48a 2>&1 | tee "$RUNNER_TEMP/b3-evidence/architecture.log"
