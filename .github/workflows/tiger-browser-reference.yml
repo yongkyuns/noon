@@ -1,0 +1,38 @@
+name: Tiger browser reference
+on:
+  push:
+    branches: [fix/ghostscript-tiger-filled-morph]
+    paths:
+      - scripts/tiger-manim-differential.mjs
+      - .github/workflows/tiger-browser-reference.yml
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: tiger-browser-reference
+  cancel-in-progress: true
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - name: Reuse the exact 116d400 engine build; only the test harness differs
+        uses: actions/download-artifact@v8
+        with:
+          name: tiger-browser-runtime
+          path: web
+          github-token: ${{ github.token }}
+          run-id: 34943252251
+      - name: Install browser dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Sample production-path tiger at exact timestamps
+        run: node scripts/tiger-manim-differential.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: tiger-browser-reference
+          path: browser-smoke-artifacts/tiger-differential
+          retention-days: 7
