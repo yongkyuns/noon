@@ -1,4 +1,6 @@
 use super::*;
+use noon_core::mapped_continuous_progress;
+use noon_runtime::TransientPresentationPainterPlacement;
 
 /// Final P1 proof for ordinary local transform/style publication.
 ///
@@ -132,6 +134,8 @@ impl ExecutionSession {
     /// are the one ordering authority: merging visits only the visible candidates
     /// plus unique active anchors and never scans the full painter permutation.
     ///
+    /// Reads only plan timing and painter metadata. Effective transient geometry is
+    /// evaluated once, when taking the renderer publication, not during this query.
     /// `spatial_stats()` continues to describe only the spatial-index query. The
     /// returned object indices may therefore contain additional mandatory anchors.
     #[doc(hidden)]
@@ -142,10 +146,18 @@ impl ExecutionSession {
         let Some(plan) = self.derived_display_plan.as_ref() else {
             return query;
         };
-        let transient = plan
-            .evaluate(self.runtime.frame().time)
-            .expect("validated derived display plan must evaluate at runtime time");
-        if transient.is_empty() {
+        let time = self.runtime.frame().time;
+        // Match DerivedDisplayAnimationPlan::evaluate's first-channel lifetime
+        // through the shared time-map function, without materializing any payload.
+        let mut transient = plan
+            .occurrences()
+            .iter()
+            .filter(|occurrence| {
+                let first = &occurrence.tracks[0];
+                mapped_continuous_progress(first.timing, &first.time_map, time).is_some()
+            })
+            .peekable();
+        if transient.peek().is_none() {
             return query;
         }
 
@@ -156,7 +168,14 @@ impl ExecutionSession {
             .collect::<std::collections::HashSet<_>>();
         let mut anchors = Vec::<(u32, usize)>::new();
         for occurrence in transient {
-            let anchor = occurrence.anchor_object_index() as usize;
+            let anchor = match occurrence.painter_placement {
+                TransientPresentationPainterPlacement::AfterStable {
+                    anchor_object_index,
+                } => anchor_object_index as usize,
+                TransientPresentationPainterPlacement::LayerEnd => {
+                    panic!("validated transient plan requires a stable painter anchor")
+                }
+            };
             if !seen.insert(anchor) {
                 continue;
             }
@@ -190,7 +209,16 @@ impl ExecutionSession {
 
 #[cfg(test)]
 mod viewport_tests {
-    use super::merge_ranked_viewport_rows;
+    use super::*;
+    use crate::{RateFunction, Rect, Scene, Vec2};
+    use noon_core::{
+        CompositionTimeMap, CompositionTimeMapStep, GeometryRef, Property, TrackTiming, TrackValues,
+        Transform2D,
+    };
+    use noon_runtime::{
+        DerivedDisplayAnimationOccurrence, DerivedDisplayAnimationPlan, DerivedDisplayAnimationTrack,
+        DerivedDisplayEvaluationError, DerivedDisplayObjectState,
+    };
 
     #[test]
     fn renderer_viewport_anchor_merge_preserves_runtime_painter_order() {
@@ -198,5 +226,79 @@ mod viewport_tests {
             merge_ranked_viewport_rows(&[(1, 20), (4, 50), (7, 80)], &[(0, 10), (3, 40), (9, 100)],),
             [10, 20, 40, 50, 80, 100]
         );
+    }
+
+    #[test]
+    fn renderer_viewport_reads_mapped_anchors_without_evaluating_geometry() {
+        let mut scene = Scene::new();
+        let object = scene.circle(0.5).unwrap();
+        scene.add_many(&[(&object).into()]).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let anchor = session.painter_order()[0];
+        let occurrence = DerivedDisplayAnimationOccurrence {
+            painter_placement: TransientPresentationPainterPlacement::AfterStable {
+                anchor_object_index: anchor,
+            },
+            occurrence_index: 0,
+            base: DerivedDisplayObjectState {
+                z_index: 0.0,
+                content: GeometryRef::circle(0.5).into(),
+                text_bounds: None,
+                transform: Transform2D::IDENTITY,
+                style: Default::default(),
+                appearance: 1.0,
+                presence: true,
+                reveal: 1.0,
+                morph: 0.0,
+                render_geometry: None,
+                render_transform: None,
+            },
+            tracks: vec![DerivedDisplayAnimationTrack {
+                // Deliberately non-evaluable sentinel: a metadata query must not
+                // touch the Morph payload. Normal publication still rejects it.
+                property: Property::Morph,
+                values: TrackValues::Scalar { from: 0.0, to: 1.0 },
+                transform_geometry_plan: None,
+                timing: TrackTiming::new(0.0, 4.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::from_steps(vec![CompositionTimeMapStep::new(
+                    0.5,
+                    0.5,
+                    RateFunction::Linear,
+                )]),
+            }],
+        };
+        let plan = DerivedDisplayAnimationPlan::new(vec![occurrence]).unwrap();
+        assert!(matches!(
+            plan.evaluate(3.0),
+            Err(DerivedDisplayEvaluationError::MissingGeometryPlan { .. })
+        ));
+        session.derived_display_plan = Some(plan);
+        let bounds = Rect::new(Vec2::new(10.0, 10.0), Vec2::new(12.0, 12.0));
+
+        // Include the mapped start, held endpoint, and backward seek. Before the
+        // mapped start no anchor is required, even though the root interval began.
+        for (time, active) in [
+            (0.0, false),
+            (1.0, false),
+            (2.0, true),
+            (3.0, true),
+            (4.0, true),
+            (9.0, true),
+            (1.0, false),
+        ] {
+            session.runtime.seek(time).unwrap();
+            let spatial = session.query_viewport(bounds);
+            assert!(spatial.object_indices().is_empty());
+            let context = session.publication_context();
+            let query = session.renderer_viewport_query(spatial.clone());
+            if active {
+                assert_eq!(query.object_indices(), &[anchor as usize]);
+            } else {
+                assert_eq!(query, spatial);
+            }
+            assert_eq!(query.spatial_stats(), spatial.spatial_stats());
+            assert_eq!(session.publication_context(), context);
+            assert!(session.derived_display_objects.is_empty());
+        }
     }
 }
