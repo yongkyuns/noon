@@ -93,6 +93,37 @@ impl<'session, 'store> PreparedPublication<'session, 'store> {
     }
 }
 
+fn merge_ranked_viewport_rows(
+    visible: &[(u32, usize)],
+    anchors: &[(u32, usize)],
+) -> Vec<usize> {
+    let mut merged = Vec::with_capacity(visible.len() + anchors.len());
+    let mut visible = visible.iter().copied().peekable();
+    let mut anchors = anchors.iter().copied().peekable();
+    loop {
+        match (visible.peek(), anchors.peek()) {
+            (Some(&(visible_rank, _)), Some(&(anchor_rank, _))) => {
+                if visible_rank < anchor_rank {
+                    merged.push(visible.next().expect("peeked visible row").1);
+                } else {
+                    debug_assert_ne!(visible_rank, anchor_rank);
+                    merged.push(anchors.next().expect("peeked transient anchor").1);
+                }
+            }
+            (Some(_), None) => {
+                merged.extend(visible.map(|(_, object_index)| object_index));
+                break;
+            }
+            (None, Some(_)) => {
+                merged.extend(anchors.map(|(_, object_index)| object_index));
+                break;
+            }
+            (None, None) => break,
+        }
+    }
+    merged
+}
+
 impl ExecutionSession {
     /// Add the stable painter anchors required by active identity-free transient
     /// presentation to an ordinary retained viewport query.
@@ -144,8 +175,7 @@ impl ExecutionSession {
         }
         anchors.sort_unstable_by_key(|&(rank, _)| rank);
 
-        let visible = std::mem::take(&mut query.object_indices);
-        let visible = visible
+        let visible = std::mem::take(&mut query.object_indices)
             .into_iter()
             .map(|object_index| {
                 let rank = self.runtime.painter_rank(object_index).unwrap_or_else(|| {
@@ -158,71 +188,22 @@ impl ExecutionSession {
             .collect::<Vec<_>>();
         debug_assert!(visible.windows(2).all(|pair| pair[0].0 < pair[1].0));
 
-        let mut merged = Vec::with_capacity(visible.len() + anchors.len());
-        let mut visible = visible.into_iter().peekable();
-        let mut anchors = anchors.into_iter().peekable();
-        loop {
-            match (visible.peek(), anchors.peek()) {
-                (Some(&(visible_rank, _)), Some(&(anchor_rank, _))) => {
-                    if visible_rank < anchor_rank {
-                        merged.push(visible.next().expect("peeked visible row").1);
-                    } else {
-                        debug_assert_ne!(visible_rank, anchor_rank);
-                        merged.push(anchors.next().expect("peeked transient anchor").1);
-                    }
-                }
-                (Some(_), None) => {
-                    merged.extend(visible.map(|(_, object_index)| object_index));
-                    break;
-                }
-                (None, Some(_)) => {
-                    merged.extend(anchors.map(|(_, object_index)| object_index));
-                    break;
-                }
-                (None, None) => break,
-            }
-        }
-        query.object_indices = merged;
+        query.object_indices = merge_ranked_viewport_rows(&visible, &anchors);
         query
     }
 }
 
 #[cfg(test)]
 mod viewport_tests {
-    fn merge_ranked(
-        visible: &[(u32, usize)],
-        anchors: &[(u32, usize)],
-    ) -> Vec<usize> {
-        let mut merged = Vec::with_capacity(visible.len() + anchors.len());
-        let mut visible = visible.iter().copied().peekable();
-        let mut anchors = anchors.iter().copied().peekable();
-        loop {
-            match (visible.peek(), anchors.peek()) {
-                (Some(&(visible_rank, _)), Some(&(anchor_rank, _))) => {
-                    if visible_rank < anchor_rank {
-                        merged.push(visible.next().unwrap().1);
-                    } else {
-                        merged.push(anchors.next().unwrap().1);
-                    }
-                }
-                (Some(_), None) => {
-                    merged.extend(visible.map(|(_, object)| object));
-                    break;
-                }
-                (None, Some(_)) => {
-                    merged.extend(anchors.map(|(_, object)| object));
-                    break;
-                }
-                (None, None) => break,
-            }
-        }
-        merged
-    }
+    use super::merge_ranked_viewport_rows;
 
     #[test]
     fn renderer_viewport_anchor_merge_preserves_runtime_painter_order() {
         assert_eq!(
-            merge_ranked(&[(1, 20), (4, 50), (7, 80)], &[(0, 10), (3, 40), (9, 100)]),
+            merge_ranked_viewport_rows(
+                &[(1, 20), (4, 50), (7, 80)],
+                &[(0, 10), (3, 40), (9, 100)],
+            ),
             [10, 20, 40, 50, 80, 100]
         );
     }
