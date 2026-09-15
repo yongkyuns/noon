@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
 import pngjs from "pngjs";
-import { browserArgs, rasterFixtureSource } from "./manim-raster-support.mjs";
+import { browserArgs, rasterFixtureSource, rasterSampleIndices } from "./manim-raster-support.mjs";
 
 const { chromium } = playwright;
 const { PNG } = pngjs;
@@ -110,23 +110,13 @@ async function findPngFrames(root, scene) {
   return frames;
 }
 
-function sampleFrames(frameTimes) {
-  const frameCount = frameTimes.length;
-  assert.ok(Number.isSafeInteger(frameCount) && frameCount > 0, "invalid reference frame count");
-  const previous = frameTimes.reduce((last, time, index) => {
-    assert.ok(Number.isFinite(time) && time >= 0, `invalid logical time for reference frame ${index}`);
-    assert.ok(time + 1e-12 >= last, `reference frame ${index} moves backwards in logical time`);
-    return time;
-  }, -Infinity);
-  void previous;
-  const indices = manifest.sample_fractions.map((fraction) =>
-    Math.round((frameCount - 1) * Number(fraction)),
-  );
-  return [...new Set(indices)].map((frameIndex) => ({
-    frameIndex,
-    time: frameTimes[frameIndex],
-    label: `frame-${String(frameIndex).padStart(4, "0")}`,
-  }));
+function sampleFrames(frameTimes, fixture) {
+  return rasterSampleIndices(frameTimes, manifest.sample_fractions, fixture.sample_times ?? null)
+    .map((frameIndex) => ({
+      frameIndex,
+      time: frameTimes[frameIndex],
+      label: `frame-${String(frameIndex).padStart(4, "0")}`,
+    }));
 }
 
 async function renderManimReferences() {
@@ -193,7 +183,7 @@ async function renderManimReferences() {
     assert.equal(frames.width, reference.pixel_width, `${fixture.id}: Manim reference width`);
     assert.equal(frames.height, reference.pixel_height, `${fixture.id}: Manim reference height`);
 
-    const samples = sampleFrames(frameTimes);
+    const samples = sampleFrames(frameTimes, fixture);
     for (const sample of samples) {
       const outputPath = path.join(frameDir, `${sample.label}.png`);
       await writeFile(outputPath, await readFile(frameFiles[sample.frameIndex]));

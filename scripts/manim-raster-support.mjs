@@ -105,3 +105,29 @@ export function compareEffectiveFrames(actual, expected) {
   compare(actual, expected, "frame");
   return maximumAbsoluteError;
 }
+
+// Explicit semantic checkpoints must name real reference frames, never nearby
+// frames silently rounded from a fraction of the encoded movie duration.
+export function rasterSampleIndices(frameTimes, fractions, sampleTimes = null) {
+  if (!Array.isArray(frameTimes) || frameTimes.length === 0
+      || frameTimes.some((time, i) => !Number.isFinite(time) || time < 0
+        || (i > 0 && time < frameTimes[i - 1]))) {
+    throw new Error("reference frame times must be nonempty, finite and monotone");
+  }
+  const indices = sampleTimes === null
+    ? fractions.map((fraction) => {
+      if (!Number.isFinite(fraction) || fraction < 0 || fraction > 1) {
+        throw new Error("sample fraction must be in [0, 1]");
+      }
+      return Math.round((frameTimes.length - 1) * fraction);
+    })
+    : sampleTimes.map((time) => {
+      const index = frameTimes.findIndex((frameTime) => Math.abs(frameTime - time) < 1e-9);
+      if (!Number.isFinite(time) || index < 0) {
+        throw new Error(`no materialized reference frame at requested time ${time}`);
+      }
+      return index;
+    });
+  if (indices.length === 0) throw new Error("at least one raster sample is required");
+  return [...new Set(indices)].sort((a, b) => a - b);
+}
