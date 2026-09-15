@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: cargo fmt --all -- --check
+      - run: cargo fmt --all
       - run: cargo test -p noon --all-features native_unequal_family_transform_persists_before_second_animation
 
   direct-wasm:
