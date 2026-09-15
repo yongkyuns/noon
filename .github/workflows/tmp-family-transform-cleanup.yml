@@ -1,0 +1,36 @@
+name: Temporary family Transform cleanup
+
+on:
+  push:
+    branches:
+      - codex/family-transform-appearance-restoration
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/family-transform-appearance-restoration
+          fetch-depth: 0
+      - name: Restore focused diff and format workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout fe1184b5d34d3fbf4ba3762db2f93a2ff1ab08a1 -- crates/noon-web/src/canonical_authoring_scene/ownership_tests.rs
+          rm -f \
+            crates/noon/tests/family_transform_appearance_restoration.rs \
+            crates/noon/tests/family_transform_prior_history.rs \
+            crates/noon/tests/family_transform_renderer_publication.rs
+          cargo fmt --all
+          if git diff --quiet && git diff --cached --quiet; then
+            exit 0
+          fi
+          git add -A
+          git commit -m "Trim family Transform diagnostics and format"
+          git push origin HEAD:codex/family-transform-appearance-restoration
