@@ -1,0 +1,22 @@
+name: Qualify 1614 completion bindings
+on:
+  push:
+    branches: [tooling/qualify-1614-completion-bindings]
+    paths: ['.github/workflows/qualify-1614-bindings.yml', 'scripts/qualify-1614-patch.py']
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Export exact source for isolated review
+        run: |
+          git rev-parse HEAD
+          git archive --format=tar HEAD | gzip > "$RUNNER_TEMP/noon-1614-source.tar.gz"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: noon-1614-source
+          path: ${{ runner.temp }}/noon-1614-source.tar.gz
+          retention-days: 1
