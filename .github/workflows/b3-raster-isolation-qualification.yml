@@ -6,12 +6,13 @@ permissions:
   contents: read
 concurrency:
   group: b3-raster-isolation-qualification
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   qualify:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
+      NOON_QUALIFICATION_SOURCE: e4240f66752ba6023d5397077d3017b9c9231f0c
       CARGO_BUILD_JOBS: 2
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
@@ -21,8 +22,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 0cffed7dfdb313e60db5c9ebb4f9cf6564039594
-          fetch-depth: 3
+          ref: ${{ env.NOON_QUALIFICATION_SOURCE }}
+          fetch-depth: 4
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -32,7 +33,8 @@ jobs:
           python-version: "3.12"
       - name: Verify exact clean candidate and comparison base
         run: |
-          test "$(git rev-parse HEAD)" = 0cffed7dfdb313e60db5c9ebb4f9cf6564039594
+          test "$(git rev-parse HEAD)" = "$NOON_QUALIFICATION_SOURCE"
+          test "$(git rev-parse HEAD^{tree})" = 45c0bcbf4751a9de410dfba3ae710d700edbc8a0
           git cat-file -e 21a994d27e918715ca9dc5e3af2eb46681aaac6a^{commit}
           test ! -e .github/workflows/b3-raster-isolation-qualification.yml
           git diff --check 21a994d27e918715ca9dc5e3af2eb46681aaac6a
