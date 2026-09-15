@@ -16,10 +16,12 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
       NOON_WASM_SKIP_OPT: "1"
+      NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
+      NOON_MANIM_RASTER_ARTIFACTS: artifacts/b3-isolated-raster
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 21a994d27e918715ca9dc5e3af2eb46681aaac6a
+          ref: e3fd12f4574e5c84f4a78308df5ac48cc62c8926
           fetch-depth: 2
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -30,16 +32,41 @@ jobs:
           python-version: "3.12"
       - name: Verify exact clean candidate and comparison base
         run: |
-          test "$(git rev-parse HEAD)" = 21a994d27e918715ca9dc5e3af2eb46681aaac6a
-          test "$(git rev-parse HEAD^{tree})" = b832bbc54ac1c16cded64efb6c17e1c2e804e5b5
-          git cat-file -e 9890ad9d88f87e10f6c65287e6b857a256600f9a^{commit}
+          test "$(git rev-parse HEAD)" = e3fd12f4574e5c84f4a78308df5ac48cc62c8926
+          test "$(git rev-parse HEAD^{tree})" = bdccd899acca9456f739da6b2843a7186414f7d6
+          git cat-file -e 21a994d27e918715ca9dc5e3af2eb46681aaac6a^{commit}
           test ! -e .github/workflows/b3-raster-isolation-qualification.yml
-          git diff --check HEAD^
+          git diff --check 21a994d27e918715ca9dc5e3af2eb46681aaac6a
+          mkdir -p artifacts/qualification
+          git rev-parse HEAD > artifacts/qualification/source-sha.txt
+          git rev-parse HEAD^{tree} > artifacts/qualification/source-tree.txt
       - name: Server, sampler and existing policy regressions
         run: |
           node --test scripts/manim-raster-server.test.mjs scripts/manim-raster-samples.test.mjs scripts/manim-raster-policy.test.mjs
           node --check scripts/manim-raster-differential.mjs
           node --check scripts/shared-playback-raster.mjs
+          node --check scripts/manim-raster-enforce.mjs
+          python -m py_compile scripts/manim-raster-semantic-reference.py scripts/test_manim_raster_manifest.py web/python/examples/ordinary_transform_matching_shapes.py
+      - name: Install pinned reference before expensive builds
+        run: |
+          { sudo apt-get update -qq &&
+            sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config &&
+            python -m pip install --disable-pip-version-check "manim[typst]==0.21.0" "typst==0.15.0";
+          } > artifacts/qualification/reference-install.log 2>&1 || { tail -n 70 artifacts/qualification/reference-install.log; exit 1; }
+      - name: Reproduce old path failure and verify the repaired real-Manim contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp scripts/manim-raster-semantic-reference.py "$RUNNER_TEMP/repaired-reference.py"
+          trap 'cp "$RUNNER_TEMP/repaired-reference.py" scripts/manim-raster-semantic-reference.py' EXIT
+          git show 21a994d27e918715ca9dc5e3af2eb46681aaac6a:scripts/manim-raster-semantic-reference.py > scripts/manim-raster-semantic-reference.py
+          status=0
+          python scripts/test_manim_raster_manifest.py > artifacts/qualification/manifest-before.log 2>&1 || status=$?
+          test "$status" -ne 0
+          grep -q FileNotFoundError artifacts/qualification/manifest-before.log
+          cp "$RUNNER_TEMP/repaired-reference.py" scripts/manim-raster-semantic-reference.py
+          python scripts/test_manim_raster_manifest.py 2>&1 | tee artifacts/qualification/manifest-after.log
+          git diff --exit-code
       - name: Pinned Rust and WASM target
         run: |
           rustup install
@@ -48,34 +75,78 @@ jobs:
         with:
           tool: wasm-pack@0.15.0
           fallback: none
-      - name: Fast gate with an explicit existing comparison base
+      - name: Fast gate on the exact integrated candidate
         shell: bash
         run: |
           status=0
-          bash scripts/check.sh fast 9890ad9d88f87e10f6c65287e6b857a256600f9a > "$RUNNER_TEMP/b3-fast.log" 2>&1 || status=$?
-          tail -n 70 "$RUNNER_TEMP/b3-fast.log"
+          bash scripts/check.sh fast 21a994d27e918715ca9dc5e3af2eb46681aaac6a > artifacts/qualification/fast.log 2>&1 || status=$?
+          tail -n 70 artifacts/qualification/fast.log
           exit "$status"
       - name: Build exact clean browser inputs
         shell: bash
         run: |
           status=0
-          bash scripts/build-web-demo.sh > "$RUNNER_TEMP/b3-build.log" 2>&1 || status=$?
-          tail -n 70 "$RUNNER_TEMP/b3-build.log"
+          bash scripts/build-web-demo.sh > artifacts/qualification/build.log 2>&1 || status=$?
+          tail -n 70 artifacts/qualification/build.log
           exit "$status"
-      - name: Install pinned raster prerequisites
+      - name: Install pinned browser prerequisites
+        run: |
+          { npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0 &&
+            npx playwright install --with-deps chromium;
+          } > artifacts/qualification/browser-install.log 2>&1 || { tail -n 70 artifacts/qualification/browser-install.log; exit 1; }
+      - name: Real public Python target getters, second animation and source re-add
+        id: lifecycle
+        timeout-minutes: 5
         shell: bash
         run: |
-          { sudo apt-get update -qq &&
-            sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config &&
-            python -m pip install --disable-pip-version-check "manim[typst]==0.21.0" "typst==0.15.0" &&
-            npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0 &&
-            npx playwright install --with-deps chromium;
-          } > "$RUNNER_TEMP/b3-prerequisites.log" 2>&1 || { tail -n 70 "$RUNNER_TEMP/b3-prerequisites.log"; exit 1; }
-      - name: Measure paired WebGPU and WebGL without changing thresholds or build inputs
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { mkdir, readFile, writeFile } from 'node:fs/promises';
+          import path from 'node:path';
+          import playwright from 'playwright';
+          import { serveRepository } from './scripts/browser-test-server.mjs';
+          import { browserArgs, rasterFixtureSource } from './scripts/manim-raster-support.mjs';
+          const root = process.cwd();
+          const source = rasterFixtureSource(await readFile('web/python/examples/ordinary_transform_matching_shapes.py', 'utf8'), 'OrdinaryTransformMatchingShapes');
+          const server = await serveRepository(root, 0, { crossOriginIsolated: true });
+          const evidence = [];
+          try {
+            for (const backend of ['webgpu', 'webgl']) {
+              const browser = await playwright.chromium.launch({ channel: 'chromium', headless: true, args: browserArgs(backend) });
+              try {
+                const page = await browser.newPage({ viewport: { width: 1000, height: 580 } });
+                await page.goto(`${server.baseUrl}/web/manim-raster-host.html`, { waitUntil: 'load' });
+                assert.equal(await page.evaluate(() => globalThis.crossOriginIsolated), true);
+                await page.waitForFunction(() => window.noonHostRaster, null, { timeout: 30000 });
+                await page.evaluate(() => window.noonHostRaster.ready());
+                const loaded = await page.evaluate(source => window.noonHostRaster.load(source, 3), source);
+                assert.equal(loaded.kind, 'semantic_execution');
+                assert.equal(loaded.rendererBackend, backend === 'webgpu' ? 'WebGPU' : 'WebGL2');
+                const times = Array.from({ length: 64 }, (_, index) => index / 30);
+                const completed = await page.evaluate(times => window.noonHostRaster.renderThrough(times.length - 1, times), times);
+                assert.equal(completed.error, null);
+                assert.equal(completed.presented, true);
+                assert.ok(Math.abs(completed.authoredDuration - 2.1) < 1e-9);
+                const frame = await page.evaluate(() => window.noonHostRaster.debugFrame());
+                assert.equal(frame.objects.filter(object => object.present).length, 4);
+                const dir = path.join('artifacts/qualification/lifecycle', backend);
+                await mkdir(dir, { recursive: true });
+                await page.locator('#scene').screenshot({ path: path.join(dir, 'source-readded.png') });
+                await writeFile(path.join(dir, 'completed.json'), JSON.stringify({ loaded, completed, frame }, null, 2));
+                evidence.push({ backend, passed: true, authoredDuration: completed.authoredDuration, presentLeaves: 4 });
+                console.log(`[PASS] public matching lifecycle / ${backend}`);
+              } finally { await browser.close(); }
+            }
+          } finally {
+            await writeFile('artifacts/qualification/lifecycle-results.json', JSON.stringify(evidence, null, 2));
+            await server.close();
+          }
+          JS
+      - name: Measure paired frames with the unchanged strict fixture
+        id: raster
+        if: ${{ !cancelled() && steps.lifecycle.outcome != 'skipped' }}
         shell: bash
         env:
-          NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
-          NOON_MANIM_RASTER_ARTIFACTS: artifacts/b3-isolated-raster
           NOON_MANIM_RASTER_PORT: "0"
         run: |
           python3 - <<'PY'
@@ -86,22 +157,32 @@ jobs:
           assert len(manifest['fixtures']) == 1
           target = Path(os.environ['RUNNER_TEMP']) / 'b3-raster-manifest.json'
           target.write_text(json.dumps(manifest))
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'NOON_MANIM_RASTER_MANIFEST={target}\n')
+              output.write(f"NOON_SHARED_PLAYBACK_FIXTURES={manifest['fixtures'][0]['id']}\n")
           PY
           export NOON_MANIM_RASTER_MANIFEST="$RUNNER_TEMP/b3-raster-manifest.json"
           status=0
-          node scripts/manim-raster-differential.mjs > "$RUNNER_TEMP/b3-raster.log" 2>&1 || status=$?
-          tail -n 90 "$RUNNER_TEMP/b3-raster.log"
+          node scripts/manim-raster-differential.mjs > artifacts/qualification/raster.log 2>&1 || status=$?
+          tail -n 90 artifacts/qualification/raster.log
           exit "$status"
+      - name: Capture paired semantic observations
+        if: ${{ !cancelled() && steps.raster.outcome == 'success' }}
+        run: node scripts/manim-raster-semantic-state.mjs
+      - name: Verify sparse versus dense playback independently of Manim acceptance
+        if: ${{ !cancelled() && steps.raster.outcome == 'success' }}
+        run: node scripts/shared-playback-raster.mjs
+      - name: Enforce original fixture tolerances without exception
+        if: ${{ !cancelled() && steps.raster.outcome == 'success' }}
+        run: node scripts/manim-raster-enforce.mjs
+      - name: Verify source inputs remain unchanged
+        if: always()
+        run: git diff --exit-code
       - name: Preserve command logs and actual raster evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: b3-isolated-raster-qualification
-          path: |
-            artifacts/b3-isolated-raster
-            ${{ runner.temp }}/b3-fast.log
-            ${{ runner.temp }}/b3-build.log
-            ${{ runner.temp }}/b3-raster.log
-            ${{ runner.temp }}/b3-prerequisites.log
-          if-no-files-found: warn
+          path: artifacts
+          if-no-files-found: error
           retention-days: 7
