@@ -179,3 +179,64 @@ fn completed_binding_validates_entire_batch_before_committing_either_registry() 
         .is_err());
     assert_eq!(context.bindings.len(), 2);
 }
+
+#[test]
+fn matching_nested_rate_scopes_preserve_child_defaults_and_outer_duration() {
+    use noon_core::{AnimationOptions, RateFunction, SemanticAnimationCompositionKind};
+    // Independent values from ManimCE v0.21 smooth at alpha=.25 and smooth(smooth(.25)).
+    for (inner, outer, progress) in [
+        (RateFunction::Linear, RateFunction::Linear, 0.25),
+        (
+            RateFunction::Smooth,
+            RateFunction::Linear,
+            0.07010371654510815,
+        ),
+        (
+            RateFunction::Linear,
+            RateFunction::Smooth,
+            0.07010371654510815,
+        ),
+        (
+            RateFunction::Smooth,
+            RateFunction::Smooth,
+            0.0067987788242606885,
+        ),
+    ] {
+        let (mut context, source_leaf, source, target_leaf, target) = fixture();
+        let end = context
+            .begin_ordinary_mixed_composition(
+                SemanticAnimationCompositionKind::Parallel,
+                &[OrdinaryCompositionChild::Composition {
+                    kind: SemanticAnimationCompositionKind::Parallel,
+                    children: vec![OrdinaryCompositionChild::MatchingFamilyTransformTo {
+                        source,
+                        target_state: target,
+                        options: AnimationOptions::new().run_time(3.0).rate_func(inner),
+                    }],
+                    options: AnimationOptions::new().run_time(2.0).rate_func(outer),
+                }],
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new(),
+            )
+            .unwrap();
+        assert!((end - 2.0).abs() < 1e-9);
+        context
+            .active_live_player()
+            .unwrap()
+            .live_advance_segment_to(0.5)
+            .unwrap();
+        // Public layout getters intentionally reject active path morphs.
+        // Observe the same canonical frame rows consumed by the renderer.
+        let session = context.active_live_player().unwrap().session_mut_for_test();
+        assert_eq!(session.painter_order().len(), 1);
+        let index = session.painter_order()[0] as usize;
+        let actual = f64::from(session.frame().objects[index].transform.translation.x);
+        assert!(
+            (actual - (-2.0 + 6.0 * progress)).abs() < 1e-5,
+            "{inner:?}/{outer:?}: {actual}"
+        );
+        complete(&mut context, end);
+        assert!(!context.contains_mobject(&source_leaf).unwrap());
+        assert!(context.contains_mobject(&target_leaf).unwrap());
+    }
+}
