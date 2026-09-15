@@ -1,0 +1,66 @@
+name: B3 Matching Compatibility Status Qualification
+on:
+  push:
+    branches: [b3-matching-compat-status-qualification]
+permissions:
+  contents: write
+concurrency:
+  group: b3-matching-compat-status-qualification
+  cancel-in-progress: true
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Correct and validate compatibility status
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path('compat/manim-v0.21.0.json')
+          data = json.loads(path.read_text())
+          entry = data['overrides']['TransformMatchingShapes']
+          assert entry['status'] == 'supported', entry
+          assert entry['category'] == 'animation', entry
+
+          entry.clear()
+          entry.update({
+              'status': 'partial',
+              'category': 'animation',
+              'dependency': '#1571',
+              'evidence': 'web/python/_manim_animate.py; web/python/_manim_scene.py; web/python/examples/ordinary_transform_matching_shapes.py; crates/noon/src/execution_session/family_transform_tests.rs; parity/manim-v0.21/core-examples/matching_shapes_reordered.py',
+              'reason': 'Default normalized point-geometry matching supports duplicate multiplicity, unmatched fades, activation-time capture, authored-target cleanup, constructor/play timing scopes, and same-z active/cleanup ordering through the shared Rust request; Python key_map, transform_mismatches, and fade_transform_mismatches remain explicitly unsupported.',
+          })
+          assert entry['status'] in data['statuses']
+          path.write_text(json.dumps(data, indent=2) + '\n')
+
+          reread = json.loads(path.read_text())['overrides']['TransformMatchingShapes']
+          assert reread['status'] == 'partial'
+          for option in ('key_map', 'transform_mismatches', 'fade_transform_mismatches'):
+              assert option in reread['reason']
+          PY
+          python3 -m json.tool compat/manim-v0.21.0.json >/dev/null
+          grep -q 'TransformMatchingShapes' web/python/_manim_animate.py
+          grep -q 'appendMatchingFamilyTransformTo' web/python/_manim_scene.py
+          grep -q 'TransformMatchingShapes' web/python/examples/ordinary_transform_matching_shapes.py
+          grep -q 'MatchingShapesReordered' parity/manim-v0.21/core-examples/matching_shapes_reordered.py
+          git diff --check
+      - name: Publish product-only candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Yongkyun Shin'
+          git config user.email '4311628+yongkyuns@users.noreply.github.com'
+          git rm .github/workflows/b3-matching-compat-status-qualification.yml
+          git add compat/manim-v0.21.0.json
+          tree=$(git write-tree)
+          candidate=$(printf '%s\n' 'docs: classify TransformMatchingShapes supported subset accurately' | git commit-tree "$tree" -p 57b109cea22047b9260e5056ec4e26def79cd86c)
+          git push origin "$candidate":refs/heads/b3-matching-compat-status-candidate
+          echo "Candidate SHA: $candidate"
+          echo "Candidate tree: $tree"
