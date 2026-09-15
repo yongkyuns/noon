@@ -1,4 +1,4 @@
-//! Ordered family transform followed by a restoring family Indicate.
+//! Unequal family transform followed by a restoring family Indicate.
 
 use std::rc::Rc;
 
@@ -36,6 +36,7 @@ impl LiveContinuation for FamilyTransformIndicate {
                 Ok(ContinuationStep::Await(segment))
             }
             1 => {
+                self.require_source_member_count(3)?;
                 self.require_positions(live, -1.0, 1.0)?;
                 let segment = live
                     .declare_and_activate_family_indicate(
@@ -51,6 +52,7 @@ impl LiveContinuation for FamilyTransformIndicate {
                 Ok(ContinuationStep::Await(segment))
             }
             2 => {
+                self.require_source_member_count(3)?;
                 self.require_positions(live, -1.0, 1.0)?;
                 self.stage = 3;
                 live.wait_segment(0.25)
@@ -87,6 +89,7 @@ impl LiveContinuation for FamilyTransformIndicate {
                     .map_err(|error| error.to_string())
             }
             4 => {
+                self.require_source_member_count(3)?;
                 self.require_positions(live, 0.0, 1.0)?;
                 self.stage = 5;
                 Ok(ContinuationStep::Finished)
@@ -97,6 +100,20 @@ impl LiveContinuation for FamilyTransformIndicate {
 }
 
 impl FamilyTransformIndicate {
+    fn require_source_member_count(&self, expected: usize) -> Result<(), String> {
+        let store = self.source.integration_store().borrow();
+        let actual = store
+            .semantic_family_members_checked(self.source.node_id())
+            .map_err(|error| error.to_string())?
+            .len();
+        if actual != expected {
+            return Err(format!(
+                "family Transform endpoint has {actual} persistent source members; expected {expected}"
+            ));
+        }
+        Ok(())
+    }
+
     fn require_positions(
         &self,
         live: &LiveSession<'_>,
@@ -147,12 +164,31 @@ pub fn program() -> Result<LiveProgram<FamilyTransformIndicate>, String> {
     let source = scene
         .family(&[(&left).into(), (&right).into()])
         .map_err(|error| error.to_string())?;
+
+    // Keep the saved state independent from the authored Transform target. The
+    // unequal target has three real authored leaves while the source has two;
+    // ordinary Transform must persist the receiver-owned repeated-left copy.
     let saved_left = left.target_editor().map_err(|error| error.to_string())?;
-    let copied = source
-        .copy_with_references(&[(&saved_left).into()])
+    let mut target_left = left.target_editor().map_err(|error| error.to_string())?;
+    let mut target_middle = left.target_editor().map_err(|error| error.to_string())?;
+    let mut target_right = right.target_editor().map_err(|error| error.to_string())?;
+    target_left
+        .shift(1.0, 0.0)
         .map_err(|error| error.to_string())?;
-    let target = copied.root().clone();
-    target.shift(1.0, 0.0).map_err(|error| error.to_string())?;
+    target_middle
+        .shift(2.0, 0.0)
+        .map_err(|error| error.to_string())?;
+    target_right
+        .shift(1.0, 0.0)
+        .map_err(|error| error.to_string())?;
+    let target = scene
+        .family(&[
+            (&target_left).into(),
+            (&target_middle).into(),
+            (&target_right).into(),
+        ])
+        .map_err(|error| error.to_string())?;
+
     scene
         .into_live_program(FamilyTransformIndicate {
             left,
@@ -184,8 +220,18 @@ mod tests {
         program.admit_publication(context).unwrap();
     }
 
+    fn sorted_frame_x(program: &LiveProgram<FamilyTransformIndicate>) -> Vec<f32> {
+        let frame = program.session().frame();
+        let mut x = (0..frame.objects.len())
+            .filter(|&index| frame.is_present(index))
+            .map(|index| frame.render_transform(index).translation.x)
+            .collect::<Vec<_>>();
+        x.sort_by(f32::total_cmp);
+        x
+    }
+
     #[test]
-    fn native_family_lag_and_indicate_restore_the_transformed_activation_state() {
+    fn native_unequal_family_transform_persists_before_second_animation() {
         let mut program = program().unwrap();
         let mut callbacks = RustHostCallbackTable::new();
         assert!(matches!(
@@ -197,6 +243,7 @@ mod tests {
                 program.drive_to(&mut callbacks, time).unwrap(),
                 LiveProgramStatus::Awaiting(_)
             ));
+            assert_eq!(program.session().frame().objects.len(), 2);
             assert!(
                 (program.session().frame().render_transform(0).translation.x - left_x).abs() < 1e-5
             );
@@ -205,36 +252,35 @@ mod tests {
                     < 1e-5
             );
         }
+
         admit_completion(&mut program, &mut callbacks, 2.0);
+        assert_eq!(program.session().frame().objects.len(), 3);
+        assert_eq!(sorted_frame_x(&program), vec![-1.0, 0.0, 1.0]);
+
+        // Resuming starts Indicate over the persisted three-member source. If the
+        // old transient-only endpoint returned, resume itself fails the semantic
+        // member-count check before this second animation can activate.
         assert!(matches!(
             program.resume().unwrap(),
             LiveProgramStatus::Awaiting(_)
         ));
-        for (time, highlighted, resting) in [(8.0 / 3.0, 0, 1), (10.0 / 3.0, 1, 0)] {
-            assert!(matches!(
-                program.drive_to(&mut callbacks, time).unwrap(),
-                LiveProgramStatus::Awaiting(_)
-            ));
-            let highlighted = program.session().frame().render_transform(highlighted);
-            let resting = program.session().frame().render_transform(resting);
-            assert!((highlighted.translation.x.abs() - 1.2).abs() < 1e-5);
-            assert!((highlighted.scale.x - 1.2).abs() < 1e-5);
-            assert!((resting.translation.x.abs() - 1.0).abs() < 1e-5);
-            assert!((resting.scale.x - 1.0).abs() < 1e-5);
-        }
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 3.0).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert_eq!(program.session().frame().objects.len(), 3);
+        assert!(
+            (0..3).any(|index| program.session().frame().render_transform(index).scale.x > 1.0)
+        );
+
         admit_completion(&mut program, &mut callbacks, 4.0);
+        assert_eq!(program.session().frame().objects.len(), 3);
+        assert_eq!(sorted_frame_x(&program), vec![-1.0, 0.0, 1.0]);
         assert!(matches!(
             program.resume().unwrap(),
             LiveProgramStatus::Awaiting(_)
         ));
-        assert_eq!(
-            program.session().frame().render_transform(0).translation.x,
-            -1.0
-        );
-        assert_eq!(
-            program.session().frame().render_transform(1).translation.x,
-            1.0
-        );
+
         for time in [4.25, 4.5] {
             match program.drive_to(&mut callbacks, time).unwrap() {
                 LiveProgramStatus::PublicationPending(expected) => {
@@ -248,6 +294,7 @@ mod tests {
             let status = program.resume().unwrap();
             assert_eq!(status == LiveProgramStatus::Finished, time == 4.5);
         }
+        assert_eq!(program.session().frame().objects.len(), 3);
         assert_eq!(
             program.session().frame().render_transform(0).translation.x,
             0.0
