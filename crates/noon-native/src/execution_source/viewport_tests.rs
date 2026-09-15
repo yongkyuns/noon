@@ -94,7 +94,11 @@ fn native_viewport_prepares_onscreen_copy_with_offscreen_anchor() {
     assert_eq!(publication.transient_presentations().len(), 1);
     let occurrence = &publication.transient_presentations()[0];
     let anchor = occurrence.anchor_object_index() as usize;
-    let copy_x = occurrence.state().effective_render_transform().translation.x;
+    let copy_x = occurrence
+        .state()
+        .effective_render_transform()
+        .translation
+        .x;
     assert!(copy_x.abs() < 1.0e-5);
     assert_eq!(
         publication.frame().objects[anchor].transform.translation.x,
@@ -202,7 +206,10 @@ fn native_viewport_seek_matches_forward_presentation() {
         .take_renderer_publication()
         .transient_presentations()
         .to_vec();
-    assert_eq!(forward_query.object_indices(), direct_query.object_indices());
+    assert_eq!(
+        forward_query.object_indices(),
+        direct_query.object_indices()
+    );
     assert_eq!(forward_occurrences, direct_occurrences);
 }
 
