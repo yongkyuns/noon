@@ -1046,7 +1046,9 @@ fn prepare_derived_display_inner(
             .as_ref()
             .is_some_and(|membership| !membership.contains(&anchor))
         {
-            return Err(DerivedDisplayRenderError::MissingAnchorInPainterOrder(anchor));
+            return Err(DerivedDisplayRenderError::MissingAnchorInPainterOrder(
+                anchor,
+            ));
         }
         for &object in objects {
             pack_derived_display_object(object, &mut prepared, path_preparer.as_deref_mut())?;
@@ -1176,11 +1178,13 @@ fn pack_derived_path_mesh(
     prepared.stats.path_vertices_repacked += mesh.vertices.len();
     let index_start = u32::try_from(prepared.path_indices.len())
         .expect("transient path index count exceeds renderer limits");
-    prepared.path_indices.extend(mesh.indices.iter().map(|index| {
-        index
-            .checked_add(vertex_start)
-            .expect("transient path index exceeds renderer limits")
-    }));
+    prepared
+        .path_indices
+        .extend(mesh.indices.iter().map(|index| {
+            index
+                .checked_add(vertex_start)
+                .expect("transient path index exceeds renderer limits")
+        }));
     prepared.stats.path_indices_repacked += mesh.indices.len();
     let index_end = u32::try_from(prepared.path_indices.len())
         .expect("transient path index count exceeds renderer limits");
@@ -1476,7 +1480,8 @@ mod derived_display_tests {
         assert_eq!(prepared.slots.len(), COUNT as usize);
         for occurrence in 0..COUNT {
             assert_eq!(
-                prepared.slot_for_occurrence(occurrence)
+                prepared
+                    .slot_for_occurrence(occurrence)
                     .map(|slot| slot.occurrence_index),
                 Some(occurrence)
             );
