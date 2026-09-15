@@ -52,6 +52,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0
 
+      - name: Check transient viewport integration
+        run: cargo test -p noon --all-features --test transient_viewport
+
+      - name: Check native transient viewport preparation
+        run: cargo test -p noon-native --all-features --lib execution_source::viewport_tests
+
       - name: Present typed Rust semantic scene through native host
         run: |
           xvfb-run -a -s "-screen 0 1280x720x24" \
