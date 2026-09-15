@@ -72,8 +72,6 @@ jobs:
                           for root in roots[3:]
                       ), "only inert Wait placeholders may follow the completed authored roots"
                       for family, members in ((source, source_members), (target, target_members)):'''
-          # The extra indentation above belongs to this YAML block, not Python source.
-          new = '\n'.join(line[10:] if index else line for index, line in enumerate(new.splitlines()))
           assert text.count(old) == 1
           text = text.replace(old, new)
           old_waits = '        self.wait(0.1)\n        assert_completed_state()\n        self.wait(0.1)\n        assert_completed_state()'
