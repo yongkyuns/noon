@@ -24,47 +24,35 @@ jobs:
 
           path = Path("crates/noon/src/execution_session.rs")
           text = path.read_text()
-          needle = '''                if curved && (!is_flat_family(*source) || !is_flat_family(*target_state)) {
-                      return Err(ExecutionSessionAnimationError::InvalidComposition(
-                          "curved family Transform requires matching flat family topology".into(),
-                      ));
-                  }
-
-                  match store.ordered_family_leaf_pairs(*source, *target_state) {
-          '''
-          replacement = '''                if curved && (!is_flat_family(*source) || !is_flat_family(*target_state)) {
-                      return Err(ExecutionSessionAnimationError::InvalidComposition(
-                          "curved family Transform requires matching flat family topology".into(),
-                      ));
-                  }
-
-                  // Straight flat family transforms must share one correspondence/lifecycle
-                  // authority regardless of whether the endpoint cardinalities happen to match.
-                  // The canonical family channel owns padding appearance, including restoration
-                  // after an earlier unequal-family contraction. Curved equal-family transforms
-                  // keep the per-leaf path below because each leaf owns the authored path arc.
-                  if !curved && is_flat_family(*source) && is_flat_family(*target_state) {
-                      let mut options = *options;
-                      if options.path_arc.is_some_and(|arc| {
-                          arc.abs() < noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD
-                      }) {
-                          options.path_arc = None;
-                      }
-                      return Ok(declaration.create_family_transform_animation(
-                          *source,
-                          *target_state,
-                          options,
-                      ));
-                  }
-
-                  match store.ordered_family_leaf_pairs(*source, *target_state) {
-          '''
-          count = text.count(needle)
-          if count == 0 and "Straight flat family transforms must share one correspondence/lifecycle" in text:
+          signature = "Straight flat family transforms must share one correspondence/lifecycle"
+          if signature in text:
               raise SystemExit(0)
-          if count != 1:
-              raise SystemExit(f"expected one router block, found {count}")
-          path.write_text(text.replace(needle, replacement, 1))
+          indent = " " * 16
+          marker = indent + "match store.ordered_family_leaf_pairs(*source, *target_state) {"
+          if text.count(marker) != 1:
+              raise SystemExit(f"expected one family router marker, found {text.count(marker)}")
+          block = "\n".join([
+              indent + "// " + signature,
+              indent + "// authority regardless of whether the endpoint cardinalities happen to match.",
+              indent + "// The canonical family channel owns padding appearance, including restoration",
+              indent + "// after an earlier unequal-family contraction. Curved equal-family transforms",
+              indent + "// keep the per-leaf path below because each leaf owns the authored path arc.",
+              indent + "if !curved && is_flat_family(*source) && is_flat_family(*target_state) {",
+              indent + "    let mut options = *options;",
+              indent + "    if options.path_arc.is_some_and(|arc| {",
+              indent + "        arc.abs() < noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD",
+              indent + "    }) {",
+              indent + "        options.path_arc = None;",
+              indent + "    }",
+              indent + "    return Ok(declaration.create_family_transform_animation(",
+              indent + "        *source,",
+              indent + "        *target_state,",
+              indent + "        options,",
+              indent + "    ));",
+              indent + "}",
+              "",
+          ])
+          path.write_text(text.replace(marker, block + marker, 1))
           PY
       - name: Commit router patch
         shell: bash
