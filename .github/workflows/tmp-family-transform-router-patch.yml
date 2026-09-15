@@ -1,0 +1,78 @@
+name: Temporary family Transform router patch
+
+on:
+  push:
+    branches:
+      - codex/family-transform-appearance-restoration
+
+permissions:
+  contents: write
+
+jobs:
+  patch-router:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/family-transform-appearance-restoration
+      - name: Route straight flat family transforms through family channels
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/noon/src/execution_session.rs")
+          text = path.read_text()
+          needle = '''                if curved && (!is_flat_family(*source) || !is_flat_family(*target_state)) {
+                      return Err(ExecutionSessionAnimationError::InvalidComposition(
+                          "curved family Transform requires matching flat family topology".into(),
+                      ));
+                  }
+
+                  match store.ordered_family_leaf_pairs(*source, *target_state) {
+          '''
+          replacement = '''                if curved && (!is_flat_family(*source) || !is_flat_family(*target_state)) {
+                      return Err(ExecutionSessionAnimationError::InvalidComposition(
+                          "curved family Transform requires matching flat family topology".into(),
+                      ));
+                  }
+
+                  // Straight flat family transforms must share one correspondence/lifecycle
+                  // authority regardless of whether the endpoint cardinalities happen to match.
+                  // The canonical family channel owns padding appearance, including restoration
+                  // after an earlier unequal-family contraction. Curved equal-family transforms
+                  // keep the per-leaf path below because each leaf owns the authored path arc.
+                  if !curved && is_flat_family(*source) && is_flat_family(*target_state) {
+                      let mut options = *options;
+                      if options.path_arc.is_some_and(|arc| {
+                          arc.abs() < noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD
+                      }) {
+                          options.path_arc = None;
+                      }
+                      return Ok(declaration.create_family_transform_animation(
+                          *source,
+                          *target_state,
+                          options,
+                      ));
+                  }
+
+                  match store.ordered_family_leaf_pairs(*source, *target_state) {
+          '''
+          count = text.count(needle)
+          if count == 0 and "Straight flat family transforms must share one correspondence/lifecycle" in text:
+              raise SystemExit(0)
+          if count != 1:
+              raise SystemExit(f"expected one router block, found {count}")
+          path.write_text(text.replace(needle, replacement, 1))
+          PY
+      - name: Commit router patch
+        shell: bash
+        run: |
+          if git diff --quiet -- crates/noon/src/execution_session.rs; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/noon/src/execution_session.rs
+          git commit -m "Route straight flat family transforms through family channels"
+          git push origin HEAD:codex/family-transform-appearance-restoration
