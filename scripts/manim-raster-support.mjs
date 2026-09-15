@@ -1,3 +1,55 @@
+// Select actual reference frames, never fabricated timestamps. Explicit times
+// are for contract boundaries; fraction-based sampling remains the default.
+export function sampleRasterFrames(frameTimes, sampleFractions, sampleTimes) {
+  if (!Array.isArray(frameTimes) || frameTimes.length === 0) {
+    throw new Error("expected a non-empty reference frame timeline");
+  }
+  let previous = -Infinity;
+  for (const [index, time] of frameTimes.entries()) {
+    if (!Number.isFinite(time) || time < 0 || time + 1e-12 < previous) {
+      throw new Error(`invalid logical time for reference frame ${index}`);
+    }
+    previous = time;
+  }
+
+  let indices;
+  if (sampleTimes !== undefined) {
+    if (!Array.isArray(sampleTimes) || sampleTimes.length === 0) {
+      throw new Error("sample_times must be a non-empty array");
+    }
+    let previousRequested = -Infinity;
+    indices = sampleTimes.map((time) => {
+      if (!Number.isFinite(time) || time < 0 || time <= previousRequested) {
+        throw new Error("sample_times must be finite, non-negative and strictly increasing");
+      }
+      previousRequested = time;
+      // This tolerance accounts only for binary clock arithmetic. It must not
+      // silently substitute a nearby video frame for a requested boundary.
+      const index = frameTimes.findIndex((frameTime) => Math.abs(frameTime - time) <= 1e-9);
+      if (index === -1) {
+        throw new Error(`no reference frame at requested logical time ${time}`);
+      }
+      return index;
+    });
+  } else {
+    if (!Array.isArray(sampleFractions) || sampleFractions.length === 0) {
+      throw new Error("expected non-empty sample fractions");
+    }
+    indices = sampleFractions.map((fraction) => {
+      const value = Number(fraction);
+      if (!Number.isFinite(value) || value < 0 || value > 1) {
+        throw new Error("sample fractions must be finite and in [0, 1]");
+      }
+      return Math.round((frameTimes.length - 1) * value);
+    });
+  }
+  return [...new Set(indices)].map((frameIndex) => ({
+    frameIndex,
+    time: frameTimes[frameIndex],
+    label: `frame-${String(frameIndex).padStart(4, "0")}`,
+  }));
+}
+
 export function rasterFixtureSource(source, scene) {
   const adapted = source.replace("from manim import *", "from noon import *");
   // Selection is host bootstrap. The normal source runner owns construct and
