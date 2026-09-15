@@ -64,13 +64,36 @@ impl Scene {
         self.store.borrow().scene_revision()
     }
 
-    /// Construct detached geometry through the shared authoring implementation.
-    /// Use `LiveSession::create_manim_geometry` after initial lowering instead.
+    /// Construct one detached Manim geometry object through the Scene-owned
+    /// semantic publication path.
+    ///
+    /// The same operation is valid before and after execution bootstrap. Running
+    /// Scenes preflight execution provenance before importing immutable resources,
+    /// then publish the semantic creation through the owned execution component so
+    /// its revision stays coherent. The new object remains detached until admitted
+    /// by an explicit membership/lifecycle operation.
     pub fn geometry(
-        &self,
+        &mut self,
         options: crate::ManimGeometryOptions,
     ) -> Result<Mobject, crate::AuthoringError> {
-        Mobject::from_manim_geometry(Rc::clone(&self.store), options)
+        if let Some(execution) = self.execution.as_ref() {
+            let store = self.store.borrow();
+            execution
+                .require_resource_creation_at_root(&store, self.root)
+                .map_err(AuthoringError::from)?;
+        }
+
+        let state = {
+            let mut store = self.store.borrow_mut();
+            options.into_state(&mut store)?
+        };
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_node(SemanticNodeCreation::object(state));
+        let result = self.apply_semantic_transaction(transaction)?;
+        let [SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one detached geometry creation has one exact semantic impact")
+        };
+        Mobject::from_node(Rc::clone(&self.store), *node)
     }
 
     /// Construct one detached Arrow-family object through the shared Rust

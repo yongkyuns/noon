@@ -71,7 +71,7 @@ impl ManimGeometryOptions {
 impl Scene {
     /// Construct a detached Brace in this scene's semantic store.
     pub fn brace(
-        &self,
+        &mut self,
         target: &LayoutAnchor,
         direction: (f64, f64),
         buff: f64,
@@ -87,7 +87,7 @@ impl Scene {
 
     /// Construct a detached BraceBetweenPoints in this scene's semantic store.
     pub fn brace_between_points(
-        &self,
+        &mut self,
         point_1: (f64, f64),
         point_2: (f64, f64),
         direction: (f64, f64),
@@ -425,8 +425,100 @@ mod tests {
     const EPSILON: f64 = 2.0e-5;
 
     #[test]
+    fn scene_geometry_uses_one_detached_creation_path_before_and_after_bootstrap() {
+        let mut scene = Scene::new();
+
+        let cold_revision = scene.revision();
+        let cold = scene
+            .geometry(ManimGeometryOptions::circle(0.5).unwrap())
+            .unwrap();
+        assert_eq!(scene.revision().get(), cold_revision.get() + 1);
+        assert!(scene
+            .integration_store()
+            .borrow()
+            .node(scene.root())
+            .unwrap()
+            .members()
+            .is_empty());
+
+        scene.add(&cold).unwrap();
+        let execution = scene.execution_session().unwrap();
+        scene.install_execution(execution);
+        let frame_len = scene.owned_execution().frame().objects.len();
+        let running_revision = scene.revision();
+
+        let running = scene
+            .geometry(ManimGeometryOptions::square(0.75).unwrap())
+            .unwrap();
+        assert_eq!(scene.revision().get(), running_revision.get() + 1);
+        assert_eq!(
+            scene
+                .owned_execution()
+                .publication_context()
+                .scene_revision(),
+            scene.revision()
+        );
+        assert_eq!(scene.owned_execution().frame().objects.len(), frame_len);
+        assert!(scene
+            .owned_execution()
+            .execution_object_id(running.node_id())
+            .is_none());
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .node(scene.root())
+                .unwrap()
+                .members(),
+            &[cold.node_id()]
+        );
+    }
+
+    #[test]
+    fn running_scene_geometry_rejects_stale_execution_before_object_creation() {
+        let mut scene = Scene::new();
+        let seed = scene.circle(1.0).unwrap();
+        scene.add(&seed).unwrap();
+        let execution = scene.execution_session().unwrap();
+        scene.install_execution(execution);
+
+        // Deliberately use a remaining cold-only constructor to make the installed
+        // execution revision stale. Scene::geometry must reject before creating a
+        // second semantic identity.
+        let _stale_marker = scene.circle(0.25).unwrap();
+        let revision = scene.revision();
+        let root_members = scene
+            .integration_store()
+            .borrow()
+            .node(scene.root())
+            .unwrap()
+            .members()
+            .to_vec();
+
+        let error = scene
+            .geometry(ManimGeometryOptions::square(0.5).unwrap())
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            AuthoringError::ExecutionPublication(
+                crate::ExecutionSessionPublicationError::StaleSceneRevision { .. }
+            )
+        ));
+        assert_eq!(scene.revision(), revision);
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .node(scene.root())
+                .unwrap()
+                .members(),
+            root_members.as_slice()
+        );
+    }
+
+    #[test]
     fn brace_matches_default_square_width_and_buffer_without_mutating_target() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(2.0).unwrap();
         let before = square.state().unwrap();
 
@@ -450,7 +542,7 @@ mod tests {
 
     #[test]
     fn brace_observes_family_bounds_once_without_changing_members() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut left = scene.square(1.0).unwrap();
         let mut right = scene.square(1.0).unwrap();
         left.shift(-1.0, 0.0).unwrap();
@@ -477,7 +569,7 @@ mod tests {
 
     #[test]
     fn brace_between_points_auto_direction_matches_line_normal() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let brace = scene
             .brace_between_points((-1.0, 0.0), (1.0, 0.0), (0.0, 0.0), 0.2, 2.0)
             .unwrap();
@@ -488,7 +580,7 @@ mod tests {
 
     #[test]
     fn right_facing_brace_uses_projected_target_extent() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let target = scene.rectangle(2.0, 3.0).unwrap();
         let brace = scene
             .brace(
@@ -503,7 +595,7 @@ mod tests {
 
     #[test]
     fn brace_rejects_non_finite_inputs_before_object_creation() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(2.0).unwrap();
         let revision = scene.revision();
         let error = scene
@@ -515,7 +607,7 @@ mod tests {
 
     #[test]
     fn brace_rejects_foreign_target_without_observing_it() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let other = Scene::new();
         let target = other.square(1.0).unwrap();
         assert_eq!(
