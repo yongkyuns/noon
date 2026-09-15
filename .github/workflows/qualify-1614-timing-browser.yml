@@ -1,0 +1,176 @@
+name: B3 public matching timing qualification
+on:
+  push:
+    branches: [tooling/qualify-1614-timing-browser]
+permissions:
+  contents: read
+  actions: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 443d49d303a3015c98678757349c384a85e5dfd2
+          fetch-depth: 2
+          show-progress: false
+      - name: Verify production Rust is unchanged from the reused runtime
+        run: |
+          test "$(git rev-parse HEAD)" = 443d49d303a3015c98678757349c384a85e5dfd2
+          test "$(git rev-parse HEAD^)" = 0619d5726f4eeee86d30f4ea115157bb711203f1
+          git diff --exit-code HEAD^ HEAD -- crates ':!crates/noon-web/src/canonical_authoring_scene/completed_binding_tests.rs' Cargo.toml Cargo.lock rust-toolchain.toml
+          mkdir -p timing-browser-artifacts
+          printf '%s\n' 443d49d303a3015c98678757349c384a85e5dfd2 > timing-browser-artifacts/python-source-sha.txt
+          printf '%s\n' '0619d5726f4eeee86d30f4ea115157bb711203f1 runtime from run 35027042175, artifact 10420445613' > timing-browser-artifacts/runtime-provenance.txt
+      - uses: actions/download-artifact@v8
+        with:
+          name: playground-cross-browser-web-runtime
+          run-id: 35027042175
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: web
+      - name: Rebuild Python bundle and identity from the candidate
+        run: |
+          node scripts/build-python-worker.mjs
+          node scripts/build-runtime-identity.mjs
+          node scripts/check-web-package.mjs
+      - name: Install browser dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Exercise public Python timing and completion on both backends
+        run: |
+          cat > scripts/qualify-public-matching-timing.mjs <<'JS'
+          import assert from 'node:assert/strict';
+          import { writeFile, mkdir } from 'node:fs/promises';
+          import path from 'node:path';
+          import playwright from 'playwright';
+          import { serveRepository } from './browser-test-server.mjs';
+          import { browserArgs } from './manim-raster-support.mjs';
+          const root = process.cwd();
+          const artifacts = path.join(root, 'timing-browser-artifacts');
+          await mkdir(artifacts, {recursive: true});
+          await writeFile(path.join(root, 'web/qualify-public-matching-timing.html'),
+            '<!doctype html><html><head><link rel="icon" href="data:,"></head><body></body></html>');
+          const server = await serveRepository(root, 4199, {crossOriginIsolated: true});
+          const results = [];
+          const cases = [
+            {name: 'default-children', ctor: 'run_time=2', play: '', p: 0.07010371654510815},
+            {name: 'constructor-linear', ctor: 'run_time=2, rate_func=linear', play: '', p: 0.25},
+            {name: 'play-linear-default-children', ctor: '', play: ', run_time=2, rate_func=linear', p: 0.07010371654510815},
+            {name: 'play-smooth-constructor-linear-duration-override', ctor: 'run_time=3, rate_func=linear', play: ', run_time=2, rate_func=smooth', p: 0.07010371654510815},
+            {name: 'play-smooth-default-children', ctor: '', play: ', run_time=2, rate_func=smooth', p: 0.0067987788242606885},
+          ];
+          function sourceFor(test) {
+            return `from noon import *
+          class MatchingTiming(Scene):
+              def construct(self):
+                  points = [(-1, -1, 0), (1, -.5, 0), (-.25, 1, 0), (-1, -1, 0)]
+                  source_leaf = VMobject().set_points_as_corners(points).set_fill(BLUE, opacity=.9).set_stroke(opacity=0).shift(LEFT * 2)
+                  target_leaf = VMobject().set_points_as_corners(points).set_fill(BLUE, opacity=.9).set_stroke(opacity=0).shift(RIGHT * 4)
+                  source = VGroup(source_leaf)
+                  target = VGroup(target_leaf)
+                  self.add(source)
+                  self.play(TransformMatchingShapes(source, target${test.ctor ? ', ' + test.ctor : ''})${test.play})
+                  assert self.mobjects == [target]
+                  assert target[0] is target_leaf and source[0] is source_leaf
+                  assert abs(target_leaf.get_center()[0] - 4) < 1e-5
+                  assert abs(source_leaf.get_center()[0] + 2) < 1e-5
+                  self.play(Indicate(target), run_time=.2)
+                  assert self.mobjects == [target]
+                  assert abs(target_leaf.get_center()[0] - 4) < 1e-5
+                  assert abs(target_leaf.get_fill_opacity() - .9) < 1e-5
+                  self.add(source)
+                  self.wait(.1)
+                  assert self.mobjects == [target, source]
+                  assert target[0] is target_leaf and source[0] is source_leaf
+                  assert abs(source_leaf.get_center()[0] + 2) < 1e-5
+          `;
+          }
+          try {
+            for (const backend of ['webgpu', 'webgl']) {
+              const browser = await playwright.chromium.launch({channel: 'chromium', headless: true, args: browserArgs(backend)});
+              try {
+                const page = await browser.newPage();
+                page.setDefaultTimeout(30000);
+                const browserErrors = [];
+                page.on('pageerror', error => browserErrors.push(String(error)));
+                await page.goto(`${server.baseUrl}/web/qualify-public-matching-timing.html`);
+                for (const test of cases) {
+                  const result = await page.evaluate(async ({source, label}) => {
+                    if (!crossOriginIsolated) throw new Error('qualification must exercise the isolated synchronous path');
+                    const {PythonAuthoringClient} = await import('./authoring-client.js');
+                    const {AuthoringExecutionClient} = await import('./authoring-execution-client.js');
+                    const client = new PythonAuthoringClient();
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 960; canvas.height = 540; document.body.append(canvas);
+                    let resolveAttached, rejectAttached;
+                    const attached = new Promise((resolve, reject) => { resolveAttached = resolve; rejectAttached = reject; });
+                    const errors = [];
+                    const execution = new AuthoringExecutionClient(canvas, {onError(error, owner) {
+                      const text = `${owner}: ${error}`; errors.push(text); rejectAttached(new Error(text));
+                    }});
+                    let started = false;
+                    let timer;
+                    const timeout = new Promise((_, reject) => {timer = setTimeout(() => reject(new Error(`${label}: timed out`)), 60000);});
+                    const work = (async () => {
+                      await client.ready();
+                      const authored = client.run(source, {}, {async onSemanticContinuation(registration) {
+                        const options = {authoringClient: client, loopDurationSeconds: registration.duration};
+                        if (started) await execution.reconcileSemanticExecution(registration.semanticExecution, options);
+                        else {
+                          await execution.startSemanticExecution(registration.semanticExecution, {...options, transportMode: 'transferable', pacing: 'external_samples'});
+                          started = true;
+                        }
+                        resolveAttached();
+                      }});
+                      authored.catch(rejectAttached);
+                      await attached;
+                      const samples = [];
+                      for (const time of [0, .5, 1, 1.5, 2]) {
+                        await execution.sampleToAuthoredTime(time);
+                        samples.push({time, frame: await execution.debugFrame(), metrics: await execution.metrics()});
+                      }
+                      await execution.sampleToAuthoredTime(2.1);
+                      await execution.sampleToAuthoredTime(2.2);
+                      const [, finished] = await Promise.all([execution.sampleToAuthoredTime(2.4), authored]);
+                      if (errors.length) throw new Error(errors.join('; '));
+                      return {duration: finished.duration, samples, finalFrame: await execution.debugFrame(), finalMetrics: await execution.metrics()};
+                    })();
+                    try { return await Promise.race([work, timeout]); }
+                    finally { clearTimeout(timer); execution.terminate(); client.terminate(); canvas.remove(); }
+                  }, {source: sourceFor(test), label: `${backend}/${test.name}`});
+                  results.push({backend, name: test.name, result});
+                  await writeFile(path.join(artifacts, 'report.json'), JSON.stringify(results, null, 2));
+                  const expectedBackend = backend === 'webgpu' ? 'WebGPU' : 'WebGL2';
+                  const progress = [0, test.p, .5, 1-test.p, 1];
+                  for (const [i, sample] of result.samples.entries()) {
+                    const rows = sample.frame.objects.filter(row => row.present !== false);
+                    assert.equal(rows.length, 1, `${test.name}@${sample.time}: visible leaf count`);
+                    assert.ok(Math.abs(rows[0].center[0] - (-2 + 6*progress[i])) < 1e-5,
+                      `${test.name}@${sample.time}: center ${rows[0].center[0]} vs ${-2+6*progress[i]}`);
+                    assert.equal(sample.metrics.metrics.backend, expectedBackend, 'must use the requested backend');
+                    assert.ok(sample.metrics.metrics.presentedFrames > 0, 'must have presented actual frames');
+                  }
+                  assert.ok(Math.abs(result.duration-2.3) < 1e-9, 'matching + Indicate + wait duration');
+                  assert.equal(result.finalMetrics.metrics.objectCount, 2, 'restored source and original target');
+                  assert.deepEqual(browserErrors, []);
+                  console.log(`PASS ${backend}/${test.name}: quarter/half/three-quarter/end plus target Indicate and source re-add`);
+                }
+                await page.close();
+              } finally { await browser.close(); }
+            }
+          } finally { await server.close(); }
+          JS
+          node --check scripts/qualify-public-matching-timing.mjs
+          node scripts/qualify-public-matching-timing.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: public-matching-timing-evidence
+          path: timing-browser-artifacts
+          if-no-files-found: error
+          retention-days: 14
