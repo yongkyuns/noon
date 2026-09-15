@@ -9,6 +9,9 @@ use noon_core::{
 
 use crate::NativeHostError;
 
+#[cfg(test)]
+mod viewport_tests;
+
 /// The narrow execution surface consumed by the native platform loop.
 ///
 /// Both implementations retain their canonical runtime owner. This trait only

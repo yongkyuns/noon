@@ -18,11 +18,13 @@ fn renderer_viewport_keeps_offscreen_anchor_for_onscreen_transient() {
     target_right.shift(-18.0, 0.0).unwrap();
     let mut target_extra = scene.circle(0.5).unwrap();
     target_extra.shift(20.0, 0.0).unwrap();
+    // A 2 -> 3 expansion aligns [s0, copy(s0), s1] with the target order.
+    // The second target must move the copy; the third keeps s1 offscreen.
     let target = scene
         .family(&[
             (&target_left).into(),
-            (&target_right).into(),
             (&target_extra).into(),
+            (&target_right).into(),
         ])
         .unwrap();
 
@@ -63,7 +65,11 @@ fn renderer_viewport_keeps_offscreen_anchor_for_onscreen_transient() {
             < 1.0e-5,
         "the derived occurrence should cross the viewport while its stable anchor remains offscreen"
     );
-    assert!(!spatial.object_indices().contains(&anchor));
-    assert!(renderer.object_indices().contains(&anchor));
+    assert_eq!(
+        publication.frame().objects[anchor].transform.translation.x,
+        -20.0
+    );
+    assert!(spatial.object_indices().is_empty());
+    assert_eq!(renderer.object_indices(), &[anchor]);
     assert_eq!(renderer.spatial_stats(), spatial.spatial_stats());
 }
