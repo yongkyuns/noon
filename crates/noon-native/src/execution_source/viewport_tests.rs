@@ -215,7 +215,7 @@ fn native_viewport_seek_matches_forward_presentation() {
 
 #[test]
 fn native_viewport_releases_transient_anchors_after_completion() {
-    let (mut scene, mut source, segment) = expansion_source(true);
+    let (scene, mut source, segment) = expansion_source(true);
     source.session.advance_segment_to(segment, 1.0).unwrap();
     scene
         .live(&mut source.session)
