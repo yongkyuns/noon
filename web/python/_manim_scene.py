@@ -167,12 +167,15 @@ def _membership_registry(scene: _base.Scene) -> dict[str, object]:
     return registry
 
 
-def _register_membership_wrappers(scene: _base.Scene, value: object) -> None:
-    registry = _membership_registry(scene)
+def _register_membership_wrappers(
+    scene: _base.Scene, value: object, *, registry: dict[str, object] | None = None
+) -> None:
+    if registry is None:
+        registry = _membership_registry(scene)
     registry[_semantic_wrapper_key(value)] = value
     if isinstance(value, _compat.Group):
         for member in value.submobjects:
-            _register_membership_wrappers(scene, member)
+            _register_membership_wrappers(scene, member, registry=registry)
 
 
 def _membership_wrapper_leaves(candidate: object):
@@ -309,6 +312,48 @@ def _sync_membership_wrapper_attachments(
             # its edits publish through the same semantic/runtime revision.
             wrapper._canonical_live_target_context = context
             wrapper._scene = None
+
+
+def _reconcile_completed_family_bindings(
+    scene: _base.Scene, families: tuple[object, ...]
+) -> None:
+    """Refresh affected wrapper identities from completed Rust membership only."""
+    if not families:
+        return
+    context = _context(scene)
+    wrappers: dict[str, object] = {}
+    for family in families:
+        _register_membership_wrappers(scene, family, registry=wrappers)
+    batch = engine_call(context.beginMembershipBatch, "add", operation="Scene.completion")
+    next_object_id = scene._next_object_id
+    reservations = []
+    detached = []
+    binding_keys: set[str] = set()
+    for wrapper in wrappers.values():
+        if isinstance(wrapper, _compat.Group):
+            continue
+        if wrapper._scene is not None and wrapper._scene is not scene:
+            raise ValueError("completion wrapper belongs to another Scene")
+        present = bool(engine_call(
+            context.containsMobject, wrapper._semantic_handle, operation="Scene.completion"
+        ))
+        if present:
+            next_object_id, appended = _membership_leaf_bindings(
+                scene, batch, wrapper, next_object_id=next_object_id,
+                key=None, binding_keys=binding_keys,
+            )
+            reservations.extend(appended)
+        elif wrapper._scene is scene:
+            detached.append(wrapper)
+    # This validates the entire binding batch against published Rust membership.
+    # It does not add/remove objects, relower, or repeat matching cleanup.
+    engine_call(context.associatePublishedMobjects, batch, operation="Scene.completion")
+    for wrapper, reservation, handle in reservations:
+        _commit_typed_binding(wrapper, scene, reservation, handle)
+    _membership_registry(scene).update(wrappers)
+    for wrapper in detached:
+        wrapper._canonical_live_target_context = context
+        wrapper._scene = None
 
 
 def _canonical_scene_mobjects(scene: _base.Scene) -> list[object]:
@@ -1567,6 +1612,7 @@ def _build_canonical_composition_candidate(
     family_registrations: list[_compat.Group] = []
     removals: list[_base.Mobject] = []
     tracker_associations: list[_reactive.ValueTracker] = []
+    completed_families: list[object] = []
     next_object_id = self._next_object_id
 
     def reserve(target: _base.Mobject):
@@ -1967,6 +2013,8 @@ def _build_canonical_composition_candidate(
                 float(child.lag_ratio),
                 float(child.path_arc),
             )
+            if type(leaf) is _animate.TransformMatchingShapes:
+                completed_families.extend((source, target))
             return
         if isinstance(animation, _composition.Add):
             if child_kwargs:
@@ -2148,6 +2196,7 @@ def _build_canonical_composition_candidate(
         family_registrations,
         removals,
         tracker_associations,
+        tuple(completed_families),
     ) if supported else False
 
 
@@ -2158,6 +2207,7 @@ def _play_canonical_composition(
     family_registrations: list[_compat.Group],
     removals: list[_base.Mobject],
     tracker_associations: list[_reactive.ValueTracker],
+    completed_families: tuple[object, ...] = (),
 ) -> _base.Scene | _SemanticContinuationAwaitable:
     _start_default_synchronous_continuation(self)
     context = _context(self)
@@ -2183,6 +2233,7 @@ def _play_canonical_composition(
         for family in family_registrations:
             register(family)
     def completed() -> None:
+        _reconcile_completed_family_bindings(self, completed_families)
         for target in removals:
             _reconcile_fade_membership(self, target, "out")
 
