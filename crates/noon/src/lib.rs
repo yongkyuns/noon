@@ -96,6 +96,7 @@ mod path_alignment;
 mod path_editing;
 mod path_queries;
 mod path_smoothing;
+mod plot_authoring;
 mod point_matching;
 mod rotation_authoring;
 mod rounded_rectangle_authoring;
@@ -176,11 +177,13 @@ pub use noon_core::{
     YELLOW, YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D, YELLOW_E,
 };
 pub use noon_geometry::{
-    StaticVectorFieldError, VectorFieldAxis, VectorFieldAxisRange, VectorFieldPoint,
-    VectorFieldRanges2D, DEFAULT_VECTOR_FIELD_STEP,
+    PlotPreparationError, PlotSamplingOptions, PlotSamplingPlan, StaticVectorFieldError,
+    VectorFieldAxis, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D,
+    DEFAULT_VECTOR_FIELD_STEP,
 };
 pub use noon_runtime::EvaluationError;
 pub use path_queries::PathQuery;
+pub use plot_authoring::PlotAuthoringError;
 pub use rotation_authoring::ManimRotationPivot;
 pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
@@ -210,10 +213,10 @@ pub mod prelude {
         EffectiveMobjectState, ExecutionSession, FadeEndpoint, FadeTranslation, LiveContinuation,
         LiveProgram, LiveSession, LiveSessionError, ManimArrow, ManimArrowOptions,
         ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget, NativeBoolSignal,
-        NativeVectorSignal, RateFunction, Scene, SemanticObjectState, SemanticStyle,
-        StoredGeometry, StyleUpdate, SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature,
-        TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange, VectorFieldPoint,
-        VectorFieldRanges2D, VectorPath,
+        NativeVectorSignal, PlotAuthoringError, PlotSamplingOptions, RateFunction, Scene,
+        SemanticObjectState, SemanticStyle, StoredGeometry, StyleUpdate, SvgAuthoringError,
+        SvgImportOptions, SvgUnsupportedFeature, TrackerPosition, ValueTracker, Vec2,
+        VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, VectorPath,
     };
 }
 
