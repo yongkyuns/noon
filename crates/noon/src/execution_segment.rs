@@ -74,6 +74,19 @@ pub(crate) struct PendingSegmentCompletion {
     pub kind: PendingSegmentCompletionKind,
 }
 
+/// One exact semantic family replacement to publish at segment completion.
+///
+/// This is continuation metadata, not semantic or execution identity. It is carried
+/// only by the returned segment so the existing completion barrier can publish the
+/// source-family removal and detached target-family admission atomically with driver
+/// reconciliation. Ordinary segments leave it absent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ExecutionSegmentFamilyReplacement {
+    pub root: SemanticNodeId,
+    pub source: SemanticNodeId,
+    pub target: SemanticNodeId,
+}
+
 /// One authored-time continuation boundary owned by the execution session layer.
 ///
 /// A segment is not a timeline track or scheduler entry. It records only the
@@ -85,6 +98,7 @@ pub struct ExecutionSegment {
     start_time: f64,
     end_time: f64,
     token: Option<ExecutionSegmentToken>,
+    family_replacement: Option<ExecutionSegmentFamilyReplacement>,
 }
 
 impl ExecutionSegment {
@@ -106,6 +120,7 @@ impl ExecutionSegment {
             start_time,
             end_time,
             token: None,
+            family_replacement: None,
         })
     }
 
@@ -114,8 +129,28 @@ impl ExecutionSegment {
         self
     }
 
+    // Staged for the next family-transform activation slice.
+    #[allow(dead_code)]
+    pub(crate) const fn with_family_replacement(
+        mut self,
+        root: SemanticNodeId,
+        source: SemanticNodeId,
+        target: SemanticNodeId,
+    ) -> Self {
+        self.family_replacement = Some(ExecutionSegmentFamilyReplacement {
+            root,
+            source,
+            target,
+        });
+        self
+    }
+
     pub(crate) const fn token(self) -> Option<ExecutionSegmentToken> {
         self.token
+    }
+
+    pub(crate) const fn family_replacement(self) -> Option<ExecutionSegmentFamilyReplacement> {
+        self.family_replacement
     }
 
     pub const fn start_time(self) -> f64 {
@@ -597,7 +632,6 @@ mod tests {
         registration.apply(&mut store).unwrap();
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         let wait = session.wait_segment(1.0).unwrap();
-
         let overlay = match session
             .advance_segment_to_callback_barrier(wait, wait.end_time())
             .unwrap()

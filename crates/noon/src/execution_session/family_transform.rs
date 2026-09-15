@@ -248,7 +248,8 @@ impl std::error::Error for MatchingFamilyCompletionSwapError {}
 /// The source must be one unaliased direct member of `execution_root`; the authored
 /// target must be detached. Only outer membership changes, so both families retain
 /// their internal authored topology and no execution identity is manufactured. The
-/// target occupies the source family's exact sibling slot rather than being appended.
+/// target is appended after the surviving root members, matching Manim's cleanup-time
+/// remove-source / add-target scene ordering.
 #[allow(dead_code)]
 pub(super) fn stage_matching_family_completion_swap(
     store: &SemanticStore,
@@ -257,7 +258,7 @@ pub(super) fn stage_matching_family_completion_swap(
     target_root: SemanticNodeId,
     semantic: &mut SemanticMutationTransaction,
 ) -> Result<(), MatchingFamilyCompletionSwapError> {
-    let execution = store
+    store
         .node(execution_root)
         .filter(|node| matches!(node.kind(), noon_core::SemanticNodeKind::Family(_)))
         .ok_or(MatchingFamilyCompletionSwapError::InvalidExecutionRoot(
@@ -293,12 +294,8 @@ pub(super) fn stage_matching_family_completion_swap(
         ));
     }
 
-    let next_sibling = execution.next_member(source_root);
     semantic.remove_member(execution_root, source_root);
     semantic.add_member(execution_root, target_root);
-    if let Some(next_sibling) = next_sibling {
-        semantic.reorder_member(execution_root, target_root, Some(next_sibling));
-    }
     Ok(())
 }
 
@@ -323,7 +320,7 @@ mod matching_completion_tests {
     }
 
     #[test]
-    fn completion_swap_preserves_source_sibling_slot_and_family_internals() {
+    fn completion_swap_appends_authored_target_and_preserves_family_internals() {
         let mut store = SemanticStore::new();
         let before = object(&mut store);
         let after = object(&mut store);
@@ -357,7 +354,7 @@ mod matching_completion_tests {
             committed
                 .semantic_family_members_checked(execution_root)
                 .unwrap(),
-            &[before, target, after]
+            &[before, after, target]
         );
         assert_eq!(
             committed.semantic_family_members_checked(source).unwrap(),
