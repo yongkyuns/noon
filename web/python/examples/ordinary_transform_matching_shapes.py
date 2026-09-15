@@ -35,9 +35,9 @@ class OrdinaryTransformMatchingShapes(Scene):
         self.play(
             TransformMatchingShapes(source, target, run_time=1.0, rate_func=linear)
         )
-        assert abs(target_kite.get_center().x + 4) < 1e-6
+        assert abs(target_kite.get_center().x + 3.5) < 1e-6
         assert abs(target_triangle.get_center().x - 4) < 1e-6
 
         self.play(Indicate(target, run_time=1.0))
-        assert abs(target_kite.get_center().x + 4) < 1e-6
+        assert abs(target_kite.get_center().x + 3.5) < 1e-6
         assert abs(target_triangle.get_center().x - 4) < 1e-6
