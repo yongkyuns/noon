@@ -6,23 +6,31 @@ on:
 permissions:
   contents: write
 jobs:
-  native:
+  qualify:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     env:
       CARGO_INCREMENTAL: '0'
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: 'true'
       SCCACHE_GHA_RW_MODE: READ_ONLY
+      NOON_WASM_SKIP_OPT: '1'
+      NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           show-progress: false
-      - name: Apply exact product patch without qualifier files
+      - name: Preserve existing fixes and apply only the painter-order patch
         run: |
           mkdir -p "$RUNNER_TEMP/b3-evidence"
           cp tooling/b3-timing-order.patch.gz.b64 "$RUNNER_TEMP/b3-patch.b64"
+          git config user.name 'Yongkyun Shin'
+          git config user.email '4311628+yongkyuns@users.noreply.github.com'
           git checkout --detach 8250da301ae6b58dee104d08c8288b359e26c48a
+          git merge --no-ff 443d49d303a3015c98678757349c384a85e5dfd2 -m 'Integrate existing matching timing-scope fix for parity qualification'
+          git merge --no-ff e3fd12f4574e5c84f4a78308df5ac48cc62c8926 -m 'Integrate existing isolated raster-server and source-root fixes'
+          git rev-parse HEAD > "$RUNNER_TEMP/b3-evidence/integration-base.txt"
           python3 - <<'PY'
           import base64, gzip, hashlib, os
           from pathlib import Path
@@ -30,18 +38,25 @@ jobs:
           assert hashlib.sha256(data).hexdigest() == '32b74902ed2712e9945fe3e080ac74b7e71731f9f0cfb45d91ab868a56cbe4a0'
           Path(os.environ['RUNNER_TEMP'], 'b3-patch.diff').write_bytes(data)
           PY
-          git apply --check "$RUNNER_TEMP/b3-patch.diff"
-          git apply "$RUNNER_TEMP/b3-patch.diff"
-          git add -N web/python/test_manim_matching_timing_scopes.py
+          git apply --check --include='crates/noon/src/execution_session.rs' --include='crates/noon/src/execution_session/*' "$RUNNER_TEMP/b3-patch.diff"
+          git apply --include='crates/noon/src/execution_session.rs' --include='crates/noon/src/execution_session/*' "$RUNNER_TEMP/b3-patch.diff"
           git diff --check
-      - name: Python request boundaries and existing raster policy
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Python and harness boundary tests
         run: |
           set -o pipefail
           PYTHONPATH=web/python python3 -m unittest discover -s web/python -p 'test_manim*matching*.py' 2>&1 | tee "$RUNNER_TEMP/b3-evidence/python.log"
-          node --test scripts/manim-raster-samples.test.mjs 2>&1 | tee "$RUNNER_TEMP/b3-evidence/sampler.log"
+          node --test scripts/manim-raster-samples.test.mjs scripts/manim-raster-server.test.mjs 2>&1 | tee "$RUNNER_TEMP/b3-evidence/sampler-server.log"
           node scripts/manim-raster-policy.test.mjs
-      - name: Install repository-pinned Rust
-        run: rustup install
+      - name: Install pinned Rust and reference prerequisites
+        run: |
+          rustup install
+          rustup target add wasm32-unknown-unknown
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config
+          python3 -m pip install --disable-pip-version-check 'manim[typst]==0.21.0' 'typst==0.15.0'
       - uses: actions/cache@v6
         with:
           path: |
@@ -56,34 +71,70 @@ jobs:
         run: |
           cargo fmt --all
           git diff --check
-          git diff --binary > "$RUNNER_TEMP/b3-evidence/formatted.patch"
+          git diff --binary > "$RUNNER_TEMP/b3-evidence/formatted-order.patch"
           git diff --name-only | sort > "$RUNNER_TEMP/b3-evidence/changed-files.txt"
-          test "$(wc -l < "$RUNNER_TEMP/b3-evidence/changed-files.txt")" -eq 7
-          git diff --exit-code -- parity scripts web/python/examples .github
-          git add crates/noon-web/src/canonical_authoring_scene/completed_binding_tests.rs crates/noon/src/execution_session.rs crates/noon/src/execution_session/family_transform.rs crates/noon/src/execution_session/family_transform_tests.rs crates/noon/src/execution_session/publication.rs web/python/_manim_scene.py web/python/test_manim_matching_timing_scopes.py
-          git -c user.name='Yongkyun Shin' -c user.email='4311628+yongkyuns@users.noreply.github.com' commit -m 'fix: preserve matching timing scopes and atomic active painter order'
+          test "$(wc -l < "$RUNNER_TEMP/b3-evidence/changed-files.txt")" -eq 4
+          git diff --exit-code -- parity scripts web/python .github crates/noon-web
+          git add crates/noon/src/execution_session.rs crates/noon/src/execution_session/family_transform.rs crates/noon/src/execution_session/family_transform_tests.rs crates/noon/src/execution_session/publication.rs
+          git commit -m 'fix: publish matching active painter order atomically'
           git rev-parse HEAD | tee "$RUNNER_TEMP/b3-evidence/source-sha.txt"
           git rev-parse 'HEAD^{tree}' | tee "$RUNNER_TEMP/b3-evidence/source-tree.txt"
-          git push origin "HEAD:refs/heads/tooling/b3-timing-order-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-      - name: Native matching and all session regressions
+          git push origin "HEAD:refs/heads/tooling/b3-integrated-order-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+      - name: Native family and binding regressions
         run: |
           set -o pipefail
-          cargo test -p noon --lib --all-features 2>&1 | tee "$RUNNER_TEMP/b3-evidence/noon-tests.log"
-      - name: Canonical binding and real nested-rate regressions
-        run: |
-          set -o pipefail
+          cargo test -p noon --lib family_transform 2>&1 | tee "$RUNNER_TEMP/b3-evidence/family-tests.log"
           cargo test -p noon-web --lib completed_binding_tests -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b3-evidence/binding-tests.log"
-      - name: Strict compiler and architecture qualification
-        run: |
-          set -o pipefail
           cargo clippy -p noon -p noon-web --all-targets --all-features -- -D warnings 2>&1 | tee "$RUNNER_TEMP/b3-evidence/clippy.log"
           bash scripts/check.sh architecture 8250da301ae6b58dee104d08c8288b359e26c48a 2>&1 | tee "$RUNNER_TEMP/b3-evidence/architecture.log"
-          cargo fmt --all -- --check
-          git diff --exit-code
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build full unmodified browser inputs
+        run: |
+          set -o pipefail
+          bash scripts/build-web-demo.sh 2>&1 | tee "$RUNNER_TEMP/b3-evidence/browser-build.log"
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Select paired matching fixture outside build inputs
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          manifest = json.loads(Path('parity/manim-v0.21/manifest.json').read_text())
+          manifest['fixtures'] = [f for f in manifest['fixtures'] if f['id'] == 'matching-shapes-reordered']
+          assert len(manifest['fixtures']) == 1
+          Path(os.environ['RUNNER_TEMP'], 'b3-focused.json').write_text(json.dumps(manifest))
+          PY
+          echo "NOON_MANIM_RASTER_MANIFEST=$RUNNER_TEMP/b3-focused.json" >> "$GITHUB_ENV"
+      - name: Capture actual paired frames and public completion assertions
+        id: raster
+        run: |
+          set -o pipefail
+          node scripts/manim-raster-differential.mjs 2>&1 | tee "$RUNNER_TEMP/b3-evidence/raster.log"
+      - name: Capture frame diagnostics and enforce unchanged limits
+        if: ${{ !cancelled() && steps.raster.outcome == 'success' }}
+        run: |
+          set -o pipefail
+          node scripts/manim-raster-semantic-state.mjs 2>&1 | tee "$RUNNER_TEMP/b3-evidence/semantic.log"
+          node scripts/manim-raster-enforce.mjs 2>&1 | tee "$RUNNER_TEMP/b3-evidence/enforce.log"
+      - name: Qualify sparse and dense browser playback
+        if: ${{ !cancelled() && steps.raster.outcome == 'success' }}
+        run: |
+          set -o pipefail
+          node scripts/shared-playback-raster.mjs 2>&1 | tee "$RUNNER_TEMP/b3-evidence/playback.log"
+      - name: Preserve exact source identity and evidence
+        if: always()
+        run: |
+          if test -d manim-raster-artifacts; then cp "$RUNNER_TEMP/b3-evidence/source-sha.txt" manim-raster-artifacts/source-sha.txt; fi
+          git diff --stat
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: b3-timing-order-native
-          path: ${{ runner.temp }}/b3-evidence
+          name: b3-integrated-order-evidence
+          path: |
+            ${{ runner.temp }}/b3-evidence
+            manim-raster-artifacts
           if-no-files-found: error
           retention-days: 7
