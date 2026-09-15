@@ -65,7 +65,7 @@ pub(crate) fn compile_transform_geometry_values(
                     noon_geometry::MorphOptions::DEFAULT,
                 )
                 .map_err(|_| TransformCompileFailure::UnsupportedGeometry)?;
-                // Filled-path safety is style-dependent and was validated before
+                // Filled-path support is style-dependent and was validated before
                 // PreparedMorph construction. This second pass has no style context, so
                 // it deliberately revalidates only renderer-independent correspondence.
                 Ok(Some(TransformGeometryPlan::PathPair {
@@ -249,7 +249,7 @@ fn compile_path_pair(
         return Err(TransformCompileFailure::RequiresRetessellation);
     }
     let fill_topology_required = morph_requires_filled_topology(from_style, to_style);
-    if fill_topology_required && !filled_morph_plan_is_safe(&source, &target) {
+    if fill_topology_required && !filled_morph_is_supported(&source, &target) {
         return Err(TransformCompileFailure::UnsafeFilledPath);
     }
     // A fixed world frame keeps both stroke tessellation and path resource identity
@@ -261,7 +261,7 @@ fn compile_path_pair(
     {
         let world_source = source.transformed(from_transform);
         let world_target = target.transformed(to_transform);
-        // Overflowed derived points and unsafe world-space filled topology retain
+        // Overflowed derived points and unsupported world-space correspondence retain
         // the established local plan rather than installing an invalid resource.
         if world_source.is_finite()
             && world_target.is_finite()
@@ -271,7 +271,7 @@ fn compile_path_pair(
                 from_transform,
                 to_transform,
             )
-            && (!fill_topology_required || filled_morph_plan_is_safe(&world_source, &world_target))
+            && (!fill_topology_required || filled_morph_is_supported(&world_source, &world_target))
         {
             return Ok(TransformGeometryPlan::PathPair {
                 geometry: Arc::new(GeometryRef::path(
@@ -287,7 +287,7 @@ fn compile_path_pair(
     })
 }
 
-fn filled_morph_plan_is_safe(source: &VectorPath, target: &VectorPath) -> bool {
+fn filled_morph_is_supported(source: &VectorPath, target: &VectorPath) -> bool {
     // Prefer exact ordered affine reflection when winding changes. The general
     // planner remains the fallback for the established non-inverting class.
     noon_geometry::plan_filled_affine_winding_flip_preserving_order(
@@ -302,6 +302,10 @@ fn filled_morph_plan_is_safe(source: &VectorPath, target: &VectorPath) -> bool {
             noon_geometry::MorphOptions::DEFAULT,
         )
         .is_ok()
+        // Complex/concave and changing-contour fills have no valid retained fan.
+        // They retain the SAME ordered endpoint resource and progress channel;
+        // the renderer samples/tessellates only that affected path locally.
+        || noon_geometry::PreparedPathInterpolation::new(source, target).is_ok()
 }
 
 // Independent drivers can take over a fixed frame only if its conversion back
@@ -600,7 +604,7 @@ mod tests {
             fill: Some(Color::WHITE),
             ..style
         };
-        assert_eq!(
+        assert!(
             compile_path_pair(
                 visible_fill,
                 visible_fill,
@@ -608,8 +612,9 @@ mod tests {
                 Transform2D::IDENTITY,
                 source,
                 target,
-            ),
-            Err(TransformCompileFailure::UnsafeFilledPath)
+            )
+            .is_ok(),
+            "open fills use the same implicit closure as ordinary tessellation"
         );
     }
 }

@@ -87,7 +87,13 @@ impl FramePreparer {
                     "path preload requires vector geometry".into(),
                 ));
             };
-            let (index, _) = self.cache_path_mesh(path, request.style, request.transform)?;
+            let (index, _) = match self.cache_path_mesh(path, request.style, request.transform) {
+                Ok(cached) => cached,
+                Err(_) if sampled_morph::prepare_sampled_path(path, request.style).is_ok() => {
+                    continue
+                }
+                Err(error) => return Err(error),
+            };
             if self.path_mesh_cache[index].resident.is_some() {
                 continue;
             }
@@ -142,7 +148,15 @@ impl FramePreparer {
                     ));
                 };
                 let (index, cache_miss) =
-                    self.cache_path_mesh(path, request.style, request.transform)?;
+                    match self.cache_path_mesh(path, request.style, request.transform) {
+                        Ok(cached) => cached,
+                        Err(_)
+                            if sampled_morph::prepare_sampled_path(path, request.style).is_ok() =>
+                        {
+                            return Ok(())
+                        }
+                        Err(error) => return Err(error),
+                    };
                 geometry_cache_misses += usize::from(cache_miss);
                 if self.path_mesh_cache[index].resident.is_none() && !cache_indices.contains(&index)
                 {

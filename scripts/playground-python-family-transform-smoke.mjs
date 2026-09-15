@@ -27,19 +27,16 @@ class SyntheticFamilyRoundTrip(Scene):
         source = VGroup(Square(), Square(), Square())
         contracted = VGroup(Square(), Square())
         returned = source.copy()
-        returned.set_fill(opacity=0)
-        contracted.set_fill(opacity=0)
+        source.set_fill(WHITE, opacity=1)
+        returned.set_fill(WHITE, opacity=1)
+        contracted.set_fill(WHITE, opacity=1)
 
         self.add(source)
         self.wait(0.5)
-        self.play(source.animate.set_fill(opacity=0), run_time=0.35)
         self.play(Transform(source, contracted), run_time=1.8)
-        source.set_fill(opacity=1)
         self.wait(0.75)
-        source.set_fill(opacity=0)
-        self.wait(0.35)
         self.play(Transform(source, returned), run_time=1.8)
-        self.play(source.animate.set_fill(opacity=1), run_time=0.35)
+        self.wait(0.85)
 `;
 
 await mkdir(artifacts, { recursive: true });
@@ -102,52 +99,39 @@ try {
   await page.waitForFunction(() => window.__noonExampleGallery !== undefined, null, {
     timeout: 45000,
   });
-  await page.waitForFunction(() => {
-    const gallery = window.__noonExampleGallery;
-    const runButton = document.querySelector('#replace-scene');
-    return gallery?.runInFlight === false &&
-      runButton instanceof HTMLButtonElement &&
-      !runButton.disabled;
-  }, null, {
-    timeout: 90000,
-  });
+  // Do not join the gallery's initial run and mistake its completion for ours.
+  await page.waitForFunction(() => !window.__noonExampleGallery.runInFlight &&
+    document.querySelector('#patch-status')?.dataset.state === 'applied', null, { timeout: 90000 });
   await page.evaluate((pythonSource) => {
     const editor = document.querySelector('#python-scene-source');
     if (!(editor instanceof HTMLTextAreaElement)) {
       throw new Error('Python scene editor is unavailable');
     }
     editor.value = pythonSource;
-    editor.dispatchEvent(new Event('input', { bubbles: true }));
+    // This fixture explicitly invokes Run. Dispatching input also queues an
+    // automatic rerun, whose overlapping completion is not this test's subject.
+    window.__pythonFamilyTransformDone = false;
+    window.__pythonFamilyTransformError = null;
+    Promise.resolve(window.__noonExampleGallery.run())
+      .catch(error => {
+        window.__pythonFamilyTransformError = String(error);
+      })
+      .finally(() => {
+        window.__pythonFamilyTransformDone = true;
+      });
   }, source);
 
-  await page.waitForFunction(() => {
-    const gallery = window.__noonExampleGallery;
-    const runButton = document.querySelector('#replace-scene');
-    if (gallery?.runInFlight === true) return true;
-    if (gallery?.runInFlight !== false ||
-        !(runButton instanceof HTMLButtonElement) ||
-        runButton.disabled) {
-      return false;
-    }
-    runButton.click();
-    return true;
-  }, null, {
-    timeout: 90000,
-  });
-  await page.waitForFunction(() => {
-    const gallery = window.__noonExampleGallery;
-    const patchState = document.querySelector('#patch-status')?.dataset.state;
-    return patchState === 'error' ||
-      (patchState === 'applied' && gallery?.runInFlight === false);
-  }, null, {
+  await page.waitForFunction(() => window.__pythonFamilyTransformDone === true, null, {
     timeout: 90000,
   });
   const state = await page.evaluate(() => ({
+    runError: window.__pythonFamilyTransformError,
     inFlight: window.__noonExampleGallery.runInFlight,
     patchState: document.querySelector('#patch-status')?.dataset.state,
     patchText: document.querySelector('#patch-status')?.value,
   }));
   result.state = state;
+  assert.equal(state.runError, null, state.runError ?? undefined);
   assert.equal(state.inFlight, false, 'synthetic Python family Transform run did not settle');
   assert.notEqual(state.patchState, 'error', state.patchText);
   assert.equal(state.patchState, 'applied', state.patchText);
@@ -173,11 +157,7 @@ try {
   result.runtimeResources = runtimeCache?.stats();
   await writeFile(
     path.join(artifacts, 'python-family-transform.json'),
-    JSON.stringify(
-      result,
-      (_key, value) => typeof value === 'bigint' ? value.toString() : value,
-      2,
-    ),
+    JSON.stringify(result, (_, value) => typeof value === 'bigint' ? value.toString() : value, 2),
   );
   await context?.close();
   await browser?.close();
