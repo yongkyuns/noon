@@ -1472,7 +1472,7 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn require_completed_live_segment(&self) -> Result<(), AuthoringFailure> {
+    pub(crate) fn require_completed_live_segment(&self) -> Result<(), AuthoringFailure> {
         self.require_callback_progression_available()?;
         if self.has_pending_live_segment() {
             return Err(AuthoringFailure::from(

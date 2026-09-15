@@ -40,6 +40,44 @@ async function waitForServer() {
   throw new Error(`Manim compatibility smoke server did not start: ${lastError}\n${serverOutput}`);
 }
 
+const matchingCompletionSource = `
+from noon import *
+
+class MatchingCompletion(Scene):
+    def construct(self):
+        leaf = VMobject().set_points_as_corners(
+            [(-1, -1, 0), (1, -0.5, 0), (-0.25, 1, 0), (-1, -1, 0)]
+        ).set_fill(BLUE, opacity=0.9).set_stroke(opacity=0)
+        source = VGroup(leaf)
+        self.add(source)
+        target_leaf = leaf.copy().shift(RIGHT * 4)
+        target = VGroup(target_leaf)
+        original_source_id = leaf.id
+        original_target_handle = target_leaf._semantic_handle
+
+        self.play(TransformMatchingShapes(source, target, run_time=0.2, rate_func=linear))
+        assert self.mobjects == [target]
+        assert target[0] is target_leaf
+        assert target_leaf._semantic_handle is original_target_handle
+        assert target_leaf._scene is self
+        assert leaf._scene is None
+        assert abs(target_leaf.get_center().x - 4) < 1e-6
+        self.play(Indicate(target, run_time=0.2))
+        self.play(target_leaf.animate.shift(UP), run_time=0.2, rate_func=linear)
+        assert abs(target_leaf.get_center().x - 4) < 1e-6
+        assert abs(target_leaf.get_center().y - 1) < 1e-6
+
+        # Re-add the removed source only AFTER proving the replacement target's
+        # independent lifecycle. This is not a target-association workaround.
+        self.add(source)
+        assert self.mobjects == [target, source]
+        assert source[0] is leaf and leaf.id == original_source_id
+        self.play(Indicate(source, run_time=0.2))
+        self.remove(source)
+        self.wait(0.05)
+        assert self.mobjects == [target]
+`;
+
 const foundationSource = `
 from noon import *
 
@@ -530,6 +568,15 @@ try {
   assert.ok(foundation.metrics.presentedFrames > 0);
   assert.ok(Math.abs(foundation.frame.objects[0].center[1] - 1.5) < 1e-6);
   assert.ok(foundation.frame.objects.slice(0, 2).every(object => object.reveal === 1));
+
+  const matchingCompletion = await page.evaluate(
+    pythonSource => window.noonManimCompat.runLive(pythonSource), matchingCompletionSource,
+  );
+  assert.ok(Math.abs(matchingCompletion.duration - 0.85) < 1e-9);
+  assert.equal(matchingCompletion.metrics.objectCount, 1, "matching retains the original target only");
+  assert.ok(matchingCompletion.metrics.presentedFrames > 0, "Python matching lifecycle must present");
+  assert.ok(Math.abs(matchingCompletion.frame.objects[0].center[0] - 4) < 1e-6);
+  assert.ok(Math.abs(matchingCompletion.frame.objects[0].center[1] - 1) < 1e-6);
 
   const groupFades = await page.evaluate(
     pythonSource => window.noonManimCompat.runLive(pythonSource), groupFadeSource,

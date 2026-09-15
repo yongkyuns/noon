@@ -1,6 +1,8 @@
 use crate::authoring_error::AuthoringFailure;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod membership_bindings;
+
 #[cfg(any(target_arch = "wasm32", test))]
 mod player_ownership;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -2192,43 +2194,9 @@ impl CanonicalAuthoringScene {
     }
 
     fn edit_membership(&mut self, batch: SceneMembershipBatch) -> Result<(), AuthoringFailure> {
-        let mut new_bindings = Vec::new();
-        let mut seen_ids = BTreeSet::new();
+        let new_bindings = self.prepare_membership_bindings(&batch)?;
         let mut seen_nodes = BTreeSet::new();
-        for (wrapper_id, handle) in &batch.bindings {
-            if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
-                return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
-                    .with_message("membership mobject belongs to another authoring store"));
-            }
-            handle.validate().map_err(AuthoringFailure::from)?;
-            let node = handle.node_id();
-            if !seen_ids.insert(*wrapper_id) || !seen_nodes.insert(node) {
-                return Err(AuthoringFailure::new(
-                    "invalid_input",
-                    "boundary.duplicate_binding",
-                    "membership batch contains a duplicate mobject binding",
-                ));
-            }
-            match (self.bindings.get(wrapper_id), self.identities.get(&node)) {
-                (Some(bound_node), Some(bound_id))
-                    if *bound_node == node && *bound_id == *wrapper_id => {}
-                (None, None)
-                    if matches!(
-                        batch.kind,
-                        SceneMembershipBatchKind::Add | SceneMembershipBatchKind::Replace
-                    ) =>
-                {
-                    new_bindings.push((*wrapper_id, node));
-                }
-                _ => {
-                    return Err(format!(
-                        "canonical object {} has inconsistent membership binding",
-                        wrapper_id.get()
-                    )
-                    .into());
-                }
-            }
-        }
+        seen_nodes.extend(batch.bindings.iter().map(|(_, handle)| handle.node_id()));
         let mut borrowed = Vec::with_capacity(batch.members.len());
         for member in &batch.members {
             match member {
@@ -4306,6 +4274,17 @@ mod wasm {
         pub fn edit_membership(&mut self, batch: WasmSceneMembershipBatch) -> Result<(), JsValue> {
             self.inner
                 .edit_membership(batch.inner)
+                .map_err(typed_js_error)
+        }
+
+        /// Associate wrapper identities after an engine-owned membership change.
+        #[wasm_bindgen(js_name = associatePublishedBindings)]
+        pub fn associate_published_bindings(
+            &mut self,
+            batch: WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .associate_published_bindings(batch.inner)
                 .map_err(typed_js_error)
         }
 
