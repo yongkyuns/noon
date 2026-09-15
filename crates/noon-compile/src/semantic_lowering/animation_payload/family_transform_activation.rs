@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use noon_core::{
-    ObjectId, PreparedSemanticMutationTransaction, SemanticNodeId, SemanticTransactionNodeRef,
+    ObjectId, PreparedSemanticMutationTransaction, SemanticFamilyTransformMode, SemanticNodeId,
+    SemanticTransactionNodeRef,
 };
 
 use super::super::{PreparedSemanticAnimationScheduleProjection, SemanticExecutionIndex};
@@ -74,6 +75,10 @@ pub enum PreparedFamilyTransformActivationError {
         source: SemanticNodeId,
         execution_object_id: ObjectId,
     },
+    UnsupportedMode {
+        animation: SemanticTransactionNodeRef,
+        mode: SemanticFamilyTransformMode,
+    },
     TooManyOccurrences(usize),
 }
 
@@ -104,6 +109,10 @@ impl std::fmt::Display for PreparedFamilyTransformActivationError {
                 source.slot(),
                 source.generation(),
                 execution_object_id.get()
+            ),
+            Self::UnsupportedMode { animation, mode } => write!(
+                formatter,
+                "prepared structural family Transform {animation:?} cannot lower correspondence mode {mode:?}"
             ),
             Self::TooManyOccurrences(count) => write!(
                 formatter,
@@ -143,6 +152,12 @@ where
     let mut occurrences = Vec::new();
 
     for family in schedule.family_transforms() {
+        if family.mode != SemanticFamilyTransformMode::Structural {
+            return Err(PreparedFamilyTransformActivationError::UnsupportedMode {
+                animation: family.animation,
+                mode: family.mode,
+            });
+        }
         let source_family = existing_endpoint(family.animation, family.source)?;
         let target_family = existing_endpoint(family.animation, family.target_state)?;
         let correspondence =

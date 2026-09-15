@@ -1,6 +1,6 @@
 use noon_core::{
-    continuous_time_map_interval, ObjectId, PreparedSemanticMutationTransaction, SemanticNodeId,
-    SemanticTransactionNodeRef,
+    continuous_time_map_interval, ObjectId, PreparedSemanticMutationTransaction,
+    SemanticFamilyTransformMode, SemanticNodeId, SemanticTransactionNodeRef,
 };
 
 use super::super::{PreparedSemanticScheduledFamilyTransform, SemanticExecutionIndex};
@@ -45,6 +45,10 @@ pub enum PreparedMatchingFamilyTransformActivationError {
         animation: SemanticTransactionNodeRef,
         error: noon_core::CompositionTimeMapError,
     },
+    UnsupportedMode {
+        animation: SemanticTransactionNodeRef,
+        mode: SemanticFamilyTransformMode,
+    },
     Matching {
         animation: SemanticTransactionNodeRef,
         error: PreparedMatchingShapeActivationError,
@@ -65,6 +69,10 @@ impl std::fmt::Display for PreparedMatchingFamilyTransformActivationError {
                 formatter,
                 "prepared matching family Transform {animation:?} has an invalid activation interval: {error}"
             ),
+            Self::UnsupportedMode { animation, mode } => write!(
+                formatter,
+                "prepared matching family Transform {animation:?} cannot lower correspondence mode {mode:?}"
+            ),
             Self::Matching { animation, error } => write!(
                 formatter,
                 "prepared matching family Transform {animation:?} activation matching failed: {error}"
@@ -78,7 +86,7 @@ impl std::error::Error for PreparedMatchingFamilyTransformActivationError {
         match self {
             Self::InvalidActivationInterval { error, .. } => Some(error),
             Self::Matching { error, .. } => Some(error),
-            Self::PendingFamilyEndpoint { .. } => None,
+            Self::PendingFamilyEndpoint { .. } | Self::UnsupportedMode { .. } => None,
         }
     }
 }
@@ -99,6 +107,14 @@ pub fn prepare_matching_family_transform_activation<F>(
 where
     F: FnMut(ObjectId) -> Option<EffectiveAnimationProperties>,
 {
+    if family.mode != SemanticFamilyTransformMode::MatchingShapes {
+        return Err(
+            PreparedMatchingFamilyTransformActivationError::UnsupportedMode {
+                animation: family.animation,
+                mode: family.mode,
+            },
+        );
+    }
     let source_root = existing_endpoint(family.animation, family.source)?;
     let target_root = existing_endpoint(family.animation, family.target_state)?;
     let (activation_start, _) = continuous_time_map_interval(family.timing, &family.time_map)
