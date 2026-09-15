@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   apply-and-test:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
         with:
@@ -23,7 +23,7 @@ jobs:
             echo 'source patch already applied'
             exit 0
           fi
-          python - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
 
           def replace_once(text, old, new, label):
