@@ -253,17 +253,25 @@ fn complex_filled_family_round_trip_restores_padding_without_repainting() {
             TimelineWakeState::Continuous
         );
         live.advance_segment_to(segment, 0.9).unwrap();
+        let midpoint = live.effective(&source_objects[1]).unwrap();
+        assert_eq!(midpoint.style.fill, Some(Color::WHITE));
+        let opacity = midpoint.appearance * midpoint.style.opacity;
+        assert!(
+            (opacity - 0.5).abs() < 1e-6,
+            "contraction must apply one fade, not multiply two fades: {opacity}"
+        );
         finish(&mut live, segment);
     }
     drain(&mut execution);
-    assert_eq!(
-        scene
-            .live(&mut execution)
-            .effective(&source_objects[1])
-            .unwrap()
-            .appearance,
-        0.0
-    );
+    let contracted = scene
+        .live(&mut execution)
+        .effective(&source_objects[1])
+        .unwrap();
+    // Completion persists padding visibility in authored opacity and releases
+    // the execution-only Appearance driver; it must not keep a hidden overlay.
+    assert_eq!(contracted.appearance, 1.0);
+    assert_eq!(contracted.style.opacity, 0.0);
+    assert_eq!(contracted.style.fill, Some(Color::WHITE));
     {
         let wait = scene.live(&mut execution).wait_segment(0.75).unwrap();
         finish(&mut scene.live(&mut execution), wait);
@@ -271,6 +279,9 @@ fn complex_filled_family_round_trip_restores_padding_without_repainting() {
     drain(&mut execution);
     {
         let mut live = scene.live(&mut execution);
+        let held = live.effective(&source_objects[1]).unwrap();
+        assert_eq!(held.appearance, 1.0);
+        assert_eq!(held.style.opacity, 0.0, "padding reappeared during hold");
         let segment = family_transform(&mut live, &source, returned.root(), 1.8);
         assert_eq!(
             live.segment_state(segment).timeline(),
@@ -278,10 +289,16 @@ fn complex_filled_family_round_trip_restores_padding_without_repainting() {
         );
         live.advance_segment_to(segment, segment.start_time() + segment.duration() * 0.5)
             .unwrap();
-        let appearance = live.effective(&source_objects[1]).unwrap().appearance;
+        let midpoint = live.effective(&source_objects[1]).unwrap();
+        assert_eq!(
+            midpoint.appearance, 1.0,
+            "return Transform must not reacquire the released Appearance domain"
+        );
+        assert_eq!(midpoint.style.fill, Some(Color::WHITE));
+        let opacity = midpoint.style.opacity;
         assert!(
-            appearance > 0.0 && appearance < 1.0,
-            "padding must recover continuously: {appearance}"
+            (opacity - 0.5).abs() < 1e-6,
+            "padding must recover continuously through authored opacity: {opacity}"
         );
         finish(&mut live, segment);
     }
@@ -293,7 +310,10 @@ fn complex_filled_family_round_trip_restores_padding_without_repainting() {
     drain(&mut execution);
     let mut live = scene.live(&mut execution);
     for object in &source_objects {
-        assert_eq!(live.effective(object).unwrap().appearance, 1.0);
+        let state = live.effective(object).unwrap();
+        assert_eq!(state.appearance, 1.0);
+        assert_eq!(state.style.opacity, 1.0);
+        assert_eq!(state.style.fill, Some(Color::WHITE));
     }
     live.copy_family(&source)
         .expect("returned filled family remains capturable after hold/drain");
