@@ -1,0 +1,102 @@
+name: B3 matching timing scope qualification
+on:
+  push:
+    branches: [tooling/qualify-1614-timing-scopes]
+permissions:
+  contents: write
+concurrency:
+  group: b3-matching-timing-scopes
+  cancel-in-progress: true
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: 0619d5726f4eeee86d30f4ea115157bb711203f1
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+          show-progress: false
+      - name: Preserve preparer and select exact product source
+        run: |
+          cp .github/qualify-1614-timing.py "$RUNNER_TEMP/prepare-timing.py"
+          git fetch --no-tags --depth=1 origin "$SOURCE_SHA"
+          git checkout --detach "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git fetch --no-tags --depth=1 origin master:refs/remotes/origin/master
+          mkdir -p "$RUNNER_TEMP/timing-evidence"
+          printf '%s\n' "$SOURCE_SHA" > "$RUNNER_TEMP/timing-evidence/source-sha.txt"
+      - name: Prove the transport regression fails on the unchanged baseline
+        run: |
+          python "$RUNNER_TEMP/prepare-timing.py" --test-only
+          if python web/python/test_manim_matching_timing.py > "$RUNNER_TEMP/timing-evidence/baseline-tests.txt" 2>&1; then
+            cat "$RUNNER_TEMP/timing-evidence/baseline-tests.txt"
+            echo 'Regression unexpectedly passed on baseline' >&2
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/timing-evidence/baseline-tests.txt"
+          grep -q 'not an instance of' "$RUNNER_TEMP/timing-evidence/baseline-tests.txt"
+      - name: Apply bounded candidate and run Python regressions
+        run: |
+          python "$RUNNER_TEMP/prepare-timing.py"
+          python web/python/test_manim_matching_timing.py -v 2>&1 | tee "$RUNNER_TEMP/timing-evidence/timing-tests.txt"
+          python web/python/test_manim_matching_completion_bindings.py -v 2>&1 | tee "$RUNNER_TEMP/timing-evidence/completion-tests.txt"
+          python -m py_compile web/python/_manim_scene.py
+      - name: Install repository Rust toolchain
+        run: rustup install
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Test real shared nested timing and completion
+        run: |
+          cargo fmt --all
+          cargo test -p noon-web --lib canonical_authoring_scene::completed_binding_tests -- --nocapture 2>&1 | tee "$RUNNER_TEMP/timing-evidence/native-timing-tests.txt"
+          cargo test -p noon --lib matching_family -- --nocapture 2>&1 | tee "$RUNNER_TEMP/timing-evidence/native-matching-tests.txt"
+          cargo clippy -p noon-web --all-targets -- -D warnings
+          git diff --check
+      - name: Run existing web static preflight
+        env:
+          NOON_WEB_PREFLIGHT_ONLY: '1'
+        run: bash scripts/build-web-demo.sh
+      - name: Publish isolated source-only candidate, never a product PR ref
+        run: |
+          git add web/python/_manim_scene.py web/python/test_manim_matching_timing.py crates/noon-web/src/canonical_authoring_scene/completed_binding_tests.rs
+          python - <<'PY'
+          import subprocess
+          expected = {'web/python/_manim_scene.py', 'web/python/test_manim_matching_timing.py', 'crates/noon-web/src/canonical_authoring_scene/completed_binding_tests.rs'}
+          actual = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines())
+          assert actual == expected, (actual, expected)
+          PY
+          git diff --cached > "$RUNNER_TEMP/timing-evidence/product.patch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: preserve matching child and play-level timing scopes'
+          git diff --exit-code
+          git rev-parse HEAD > "$RUNNER_TEMP/timing-evidence/candidate-sha.txt"
+          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/timing-evidence/candidate-tree.txt"
+          git show --stat --oneline HEAD
+          git push origin "HEAD:refs/heads/tooling/qualify-1614-timing-result-${GITHUB_RUN_ID}"
+          cat "$RUNNER_TEMP/timing-evidence/candidate-sha.txt"
+          cat "$RUNNER_TEMP/timing-evidence/candidate-tree.txt"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: matching-timing-scope-evidence
+          path: ${{ runner.temp }}/timing-evidence
+          if-no-files-found: error
+          retention-days: 14
