@@ -11,6 +11,7 @@ mod prepared_composition;
 mod scheduled_captures;
 mod text_write;
 mod transform_payload;
+mod transient_painter_placement;
 
 pub use affine::*;
 pub use family_transform::*;
@@ -24,3 +25,4 @@ pub use matching_shape_leftovers::*;
 pub use prepared_composition::*;
 pub use text_write::*;
 pub use transform_payload::*;
+pub use transient_painter_placement::*;
