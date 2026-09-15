@@ -1,0 +1,19 @@
+name: B3 Matching Parity Qualification
+on:
+  push:
+    branches: [b3-matching-parity-qualification]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Export qualification source
+        run: |
+          git archive --format=tar.gz HEAD > b3-matching-source.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: b3-matching-source
+          path: b3-matching-source.tar.gz
+          retention-days: 1
