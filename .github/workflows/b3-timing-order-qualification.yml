@@ -1,0 +1,26 @@
+name: B3 timing and painter-order qualification
+on:
+  push:
+    branches: [tooling/b3-timing-order-qualification]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 5b32772413e72e56b814a78941b7adc0b86ea3d0
+      - name: Export exact product source
+        run: |
+          test "$(git rev-parse HEAD)" = 5b32772413e72e56b814a78941b7adc0b86ea3d0
+          mkdir -p "$RUNNER_TEMP/b3-source"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/b3-source/source.tar.gz"
+          git rev-parse HEAD > "$RUNNER_TEMP/b3-source/source-sha.txt"
+          sha256sum "$RUNNER_TEMP/b3-source/source.tar.gz"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: b3-timing-order-source
+          path: ${{ runner.temp }}/b3-source
+          if-no-files-found: error
+          retention-days: 2
