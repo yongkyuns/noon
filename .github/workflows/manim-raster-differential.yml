@@ -12,6 +12,10 @@ on:
       - "scripts/manim-differential.py"
       - "scripts/manim-differential-noon.mjs"
       - "scripts/manim-raster-*.mjs"
+      - "scripts/manim-raster-*.py"
+      - "scripts/test_manim_raster_manifest.py"
+      - "scripts/browser-test-server.mjs"
+      - "scripts/shared-playback-raster.mjs"
       - ".github/workflows/manim-raster-differential.yml"
   push:
     branches:
@@ -43,7 +47,7 @@ jobs:
       - name: Validate raster ratchet policy
         run: |
           node scripts/manim-raster-policy.test.mjs
-          node --test scripts/manim-raster-samples.test.mjs
+          node --test scripts/manim-raster-samples.test.mjs scripts/manim-raster-server.test.mjs
       - name: Validate preview session lifecycle and authoring context
         run: node --test web/semantic-preview-session.test.mjs web/semantic-preview-context.test.mjs
       - name: Validate capture-to-artifact contract
@@ -64,6 +68,8 @@ jobs:
             pkg-config
       - name: Install pinned ManimCE reference
         run: python -m pip install --disable-pip-version-check "manim[typst]==0.21.0" "typst==0.15.0"
+      - name: Verify relocated manifests use repository-relative sources
+        run: python scripts/test_manim_raster_manifest.py
       - name: Use repository-pinned Rust and WASM target
         run: |
           rustup install
