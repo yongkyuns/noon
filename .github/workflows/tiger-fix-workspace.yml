@@ -181,7 +181,7 @@ jobs:
       - name: Execute the same SVGs with direct native Rust authoring
         if: ${{ !cancelled() }}
         run: |
-          cargo run -p noon --example svg_morph_probe -- browser-smoke-artifacts/tiger-manim-reference/tiger.svg browser-smoke-artifacts/tiger-manim-reference/rocket.svg > browser-smoke-artifacts/tiger-differential/native.json
+          cargo run -p noon --features diagnostics --example svg_morph_probe -- browser-smoke-artifacts/tiger-manim-reference/tiger.svg browser-smoke-artifacts/tiger-manim-reference/rocket.svg > browser-smoke-artifacts/tiger-differential/native.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
