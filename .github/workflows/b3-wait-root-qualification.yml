@@ -1,0 +1,132 @@
+name: B3 Wait-root reference qualification
+on:
+  push:
+    branches: [tooling/qualify-1616-wait-roots]
+    paths: [.github/workflows/b3-wait-root-qualification.yml]
+permissions:
+  contents: read
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONHASHSEED: '0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install pinned Manim reference
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev ffmpeg pkg-config
+          python -m pip install 'manim==0.21.0'
+      - name: Reproduce baseline failure and qualify precise Wait-root observation
+        run: |
+          python - <<'PY'
+          import importlib.util
+          import json
+          import subprocess
+          from pathlib import Path
+          from manim import Mobject, tempconfig
+          path = Path('parity/manim-v0.21/core-examples/matching_shapes_reordered.py')
+          blob = subprocess.check_output(['git', 'hash-object', str(path)], text=True).strip()
+          assert blob == '22a987859e91bd39025a641d7908e361aa52878c', blob
+          spec = importlib.util.spec_from_file_location('semantic_reference', 'scripts/manim-raster-semantic-reference.py')
+          reference = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(reference)
+          manifest = json.loads(Path('parity/manim-v0.21/manifest.json').read_text())
+          fixture = next(f for f in manifest['fixtures'] if f['id'] == 'matching-shapes-reordered')
+          settings = dict(renderer='cairo', frame_rate=30, pixel_width=960, pixel_height=540,
+                          progress_bar='none', disable_caching=True, save_last_frame=False, write_to_movie=False)
+          baseline = reference._load_source(path)
+          observed = []
+          original_teardown = baseline.MatchingShapesReordered.tear_down
+          def teardown(scene):
+              observed.extend(scene.mobjects)
+              original_teardown(scene)
+          baseline.MatchingShapesReordered.tear_down = teardown
+          with tempconfig(settings):
+              try:
+                  reference._render_fixture(baseline, fixture, 30)
+              except AssertionError as error:
+                  assert str(error) == 'matching cleanup must append the original target after surviving roots', str(error)
+              else:
+                  raise AssertionError('unmodified fixture must reproduce the current failure')
+          assert len(observed) == 4, [type(root).__name__ for root in observed]
+          assert type(observed[3]) is Mobject
+          assert observed[3].get_num_points() == 0 and not observed[3].submobjects
+          print('BASELINE: first completion succeeded; first Wait appended exactly one inert Mobject')
+          text = path.read_text()
+          text = text.replace('def assert_completed_state():', 'def assert_completed_state(*, completed_waits=0):')
+          text = text.replace('assert len(roots) == 3 and all(', 'assert 3 <= len(roots) <= 3 + completed_waits and all(')
+          text = text.replace('zip(roots, (before, after, target))', 'zip(roots[:3], (before, after, target))')
+          old = '            for family, members in ((source, source_members), (target, target_members)):'
+          new = '''            # Manim 0.21 admits one empty Mobject for each Wait and leaves it
+                      # in the root list. Permit only those inert trailing placeholders;
+                      # authored root identity/order and source removal remain exact.
+                      assert all(
+                          type(root) is Mobject and root.get_num_points() == 0 and not root.submobjects
+                          for root in roots[3:]
+                      ), "only inert Wait placeholders may follow the completed authored roots"
+                      for family, members in ((source, source_members), (target, target_members)):'''
+          # The extra indentation above belongs to this YAML block, not Python source.
+          new = '\n'.join(line[10:] if index else line for index, line in enumerate(new.splitlines()))
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+          old_waits = '        self.wait(0.1)\n        assert_completed_state()\n        self.wait(0.1)\n        assert_completed_state()'
+          new_waits = '        self.wait(0.1)\n        assert_completed_state(completed_waits=1)\n        self.wait(0.1)\n        assert_completed_state(completed_waits=2)'
+          assert text.count(old_waits) == 1
+          text = text.replace(old_waits, new_waits)
+          compile(text, str(path), 'exec')
+          path.write_text(text)
+          candidate = reference._load_source(path)
+          with tempconfig(settings):
+              result = reference._render_fixture(candidate, fixture, 30)
+          assert result['frame_count'] == 62, result['frame_count']
+          times = [result['frames'][i]['time'] for i in [0, 15, 30, 45, 60, 61]]
+          assert all(abs(a-b) < 1e-9 for a,b in zip(times, [0, 0.5, 1, 1.5, 2, 2.1])), times
+          assert result['logical_duration'] == 2.2
+          Path('wait-root-reference.json').write_text(json.dumps(result, indent=2))
+          print('CANDIDATE: 62 frames; exact samples', times, '; all identity/getter assertions passed')
+          PY
+      - name: Verify real Cairo PNG pixels did not change
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+          from PIL import Image
+          source = 'parity/manim-v0.21/core-examples/matching_shapes_reordered.py'
+          work = Path(os.environ['RUNNER_TEMP']) / 'wait-root-pixels'
+          work.mkdir()
+          old = subprocess.check_output(['git', 'show', '9890ad9d88f87e10f6c65287e6b857a256600f9a:' + source], text=True)
+          baseline = work / 'baseline.py'
+          baseline.write_text(old)
+          for label, path in [('baseline', baseline), ('candidate', Path(source))]:
+              command = ['python', '-m', 'manim', '--renderer=cairo', '--disable_caching', '--format=png',
+                         '--media_dir', str(work / label), '-r', '960,540', '--fps', '30', str(path), 'MatchingShapesReordered']
+              process = subprocess.run(command, text=True, capture_output=True)
+              assert process.returncode == 0, process.stdout + process.stderr
+          left = sorted((work / 'baseline').rglob('MatchingShapesReordered[0-9]*.png'))
+          right = sorted((work / 'candidate').rglob('MatchingShapesReordered[0-9]*.png'))
+          assert len(left) == len(right) == 62, (len(left), len(right))
+          for index, (a, b) in enumerate(zip(left, right)):
+              with Image.open(a) as ia, Image.open(b) as ib:
+                  assert ia.size == ib.size == (960, 540)
+                  assert ia.convert('RGBA').tobytes() == ib.convert('RGBA').tobytes(), index
+          print('PASS: all 62 real Cairo PNGs are pixel-identical to the pre-assertion fixture')
+          subprocess.run(['git', 'diff', '--check'], check=True)
+          Path('wait-root-fixture.patch').write_text(subprocess.check_output(['git', 'diff', '--', source], text=True))
+          PY
+      - name: Upload exact evidence and product-only patch
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: matching-wait-root-reference-evidence
+          path: |
+            wait-root-reference.json
+            wait-root-fixture.patch
+            parity/manim-v0.21/core-examples/matching_shapes_reordered.py
