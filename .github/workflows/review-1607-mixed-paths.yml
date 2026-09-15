@@ -1,0 +1,48 @@
+name: Review 1607 mixed path regression
+on:
+  push:
+    branches: [review/1607-mixed-sampled-mega]
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install pinned toolchain
+        run: rustup install
+      - name: Test unchanged PR engine
+        id: original
+        continue-on-error: true
+        run: |
+          mkdir -p review-artifacts
+          cargo test -p noon-render-wgpu --test review_1607_mixed_paths -- --nocapture 2>&1 | tee review-artifacts/original.log
+      - name: Verify focused guard against the same regressions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon-render-wgpu/src/mega_mesh.rs')
+          s = p.read_text()
+          old = '        if self.individual_path_draws\n            || self.mega_path_indices.is_empty()'
+          new = '''        if self.individual_path_draws
+              || !self.mega_path_segments.get(path_batch_index).is_some_and(Option::is_some)
+              || self.mega_path_indices.is_empty()'''
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, new))
+          PY
+          cargo test -p noon-render-wgpu --test review_1607_mixed_paths -- --nocapture 2>&1 | tee review-artifacts/guard.log
+          git diff -- crates/noon-render-wgpu/src/mega_mesh.rs > review-artifacts/proposed-guard.patch
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: review-1607-mixed-paths
+          path: review-artifacts
+          retention-days: 7
