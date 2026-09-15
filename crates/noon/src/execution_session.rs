@@ -1823,6 +1823,11 @@ impl ExecutionSession {
                 .map_err(|error| {
                     ExecutionSessionAnimationError::InvalidComposition(error.to_string())
                 })?;
+                // Manim admits the matching presentation after surviving roots
+                // during play setup. Preserve source identity and internal topology:
+                // its existing family-order mutation is part of this same atomic
+                // declaration, never a renderer-only z-index or draw-order override.
+                declaration.reorder_member(root, *source, None);
                 Ok(declaration.create_matching_family_transform_animation(
                     *source,
                     *target_state,
@@ -3254,6 +3259,7 @@ impl ExecutionSession {
                     let plan = family_transform::build_matching_family_transform_plan(
                         &self.runtime,
                         &payload,
+                        activation.matching().source_members(),
                     )
                     .map_err(ExecutionSessionAnimationError::InvalidComposition)?;
                     let replacement_root = lifecycle
@@ -3490,7 +3496,7 @@ impl ExecutionSession {
             .apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
                 prepared,
                 execution_prefix,
-                None,
+                family_replacement.map(|(root, _, _)| root),
                 publication::SemanticPublicationPurpose::AuthoredMutation,
                 reactive_enrollment,
                 handled_scalar_signals,
