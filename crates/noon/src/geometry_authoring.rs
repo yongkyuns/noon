@@ -475,6 +475,75 @@ mod tests {
     }
 
     #[test]
+    fn running_scene_path_creation_stays_detached_and_admits_without_reimport() {
+        let mut scene = Scene::new();
+        let seed = scene.circle(0.5).unwrap();
+        scene.add(&seed).unwrap();
+        let execution = scene.execution_session().unwrap();
+        scene.install_execution(execution);
+        let seed_row = scene.owned_execution().frame().objects[0].clone();
+        let seed_id = scene.owned_execution().execution_object_id(seed.node_id());
+        let before = scene.revision();
+        let mut options = ManimGeometryOptions::path(manim_triangle_path()).unwrap();
+        options.set_translation(2.0, 1.0).unwrap();
+        options.set_fill_opacity(0.6).unwrap();
+        let path = scene.geometry(options).unwrap();
+        let resources = scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .stats();
+        assert_eq!(scene.revision().get(), before.get() + 1);
+        assert_eq!(scene.owned_execution().frame().objects.len(), 1);
+        assert!(scene
+            .owned_execution()
+            .execution_object_id(path.node_id())
+            .is_none());
+        assert_eq!(
+            scene
+                .owned_execution()
+                .publication_context()
+                .scene_revision(),
+            scene.revision()
+        );
+        let expected = path.path_query().unwrap().point_from_proportion(0.0).unwrap();
+
+        scene.add(&path).unwrap();
+        assert_eq!(scene.owned_execution().frame().objects.len(), 2);
+        assert!(scene
+            .owned_execution()
+            .execution_object_id(path.node_id())
+            .is_some());
+        assert_eq!(
+            scene.owned_execution().execution_object_id(seed.node_id()),
+            seed_id
+        );
+        assert_eq!(scene.owned_execution().frame().objects[0], seed_row);
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .geometry_resources()
+                .stats(),
+            resources
+        );
+        let actual = scene
+            .effective_path_query(&path)
+            .unwrap()
+            .point_from_proportion(0.0)
+            .unwrap();
+        assert!((actual.0 - expected.0).abs() < EPSILON);
+        assert!((actual.1 - expected.1).abs() < EPSILON);
+        assert_eq!(
+            scene
+                .owned_execution()
+                .publication_context()
+                .scene_revision(),
+            scene.revision()
+        );
+    }
+
+    #[test]
     fn running_scene_geometry_rejects_stale_execution_before_object_creation() {
         let mut scene = Scene::new();
         let seed = scene.circle(1.0).unwrap();
@@ -482,11 +551,20 @@ mod tests {
         let execution = scene.execution_session().unwrap();
         scene.install_execution(execution);
 
-        // Deliberately use a remaining cold-only constructor to make the installed
-        // execution revision stale. Scene::geometry must reject before creating a
-        // second semantic identity.
-        let _stale_marker = scene.circle(0.25).unwrap();
+        // Invalidate execution through explicit out-of-band integration access,
+        // independent of which ordinary constructors have migrated to Scene.
+        let mut external = noon_core::SemanticMutationTransaction::new();
+        external.add_node(noon_core::SemanticNodeCreation::family());
+        external
+            .apply(&mut scene.integration_store().borrow_mut())
+            .unwrap();
         let revision = scene.revision();
+        let context = scene.owned_execution().publication_context();
+        let resources = scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .stats();
         let root_members = scene
             .integration_store()
             .borrow()
@@ -496,7 +574,7 @@ mod tests {
             .to_vec();
 
         let error = scene
-            .geometry(ManimGeometryOptions::square(0.5).unwrap())
+            .geometry(ManimGeometryOptions::path(manim_triangle_path()).unwrap())
             .unwrap_err();
         assert!(matches!(
             error,
@@ -505,6 +583,15 @@ mod tests {
             )
         ));
         assert_eq!(scene.revision(), revision);
+        assert_eq!(scene.owned_execution().publication_context(), context);
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .geometry_resources()
+                .stats(),
+            resources
+        );
         assert_eq!(
             scene
                 .integration_store()
