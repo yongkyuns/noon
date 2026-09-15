@@ -49,6 +49,20 @@ jobs:
       - name: Apply bounded candidate and run Python regressions
         run: |
           python "$RUNNER_TEMP/prepare-timing.py"
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon-web/src/canonical_authoring_scene/completed_binding_tests.rs')
+          before = '        let actual = context.mobject_layout(&source_leaf).unwrap().0;'
+          after = '''        // Public layout getters intentionally reject active path morphs.
+                  // Observe the same canonical frame rows consumed by the renderer.
+                  let session = context.active_live_player().unwrap().session_mut_for_test();
+                  assert_eq!(session.painter_order().len(), 1);
+                  let index = session.painter_order()[0] as usize;
+                  let actual = f64::from(session.frame().objects[index].transform.translation.x);'''
+          text = path.read_text()
+          assert text.count(before) == 1
+          path.write_text(text.replace(before, after))
+          PY
           python web/python/test_manim_matching_timing.py -v 2>&1 | tee "$RUNNER_TEMP/timing-evidence/timing-tests.txt"
           python web/python/test_manim_matching_completion_bindings.py -v 2>&1 | tee "$RUNNER_TEMP/timing-evidence/completion-tests.txt"
           python -m py_compile web/python/_manim_scene.py
