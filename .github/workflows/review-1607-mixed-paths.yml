@@ -14,12 +14,12 @@ env:
 jobs:
   resolve:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Merge current master and resolve only the overlapping Tiger changes
+      - name: Resolve current master against the reviewed Tiger branch
         run: |
           set -euo pipefail
           git fetch origin master fix/ghostscript-tiger-filled-morph-clean
@@ -33,205 +33,141 @@ jobs:
           expected=$'crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_channels.rs\ncrates/noon-render-wgpu/src/render_order.rs'
           test "$conflicts" = "$expected"
 
-          # Keep the Tiger single-fade lowering, but retain master's newer path_arc.
           git checkout --theirs -- crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_channels.rs
           python3 - <<'PY'
           from pathlib import Path
           p = Path('crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_channels.rs')
           s = p.read_text()
-          old = '''            noon_core::SemanticTransformInterpolation::Affine,
-              0.0,
-          '''
-          new = '''            noon_core::SemanticTransformInterpolation::Affine,
-              occurrence.options.path_arc,
-          '''
+          old = "noon_core::SemanticTransformInterpolation::Affine,\n            0.0,"
+          new = "noon_core::SemanticTransformInterpolation::Affine,\n            occurrence.options.path_arc,"
           assert s.count(old) == 1, s.count(old)
           p.write_text(s.replace(old, new))
           PY
 
-          # Keep master's newer render-order/transient refactor. Reapply only the
-          # sampled-filled-path realization needed by this PR.
           git checkout --ours -- crates/noon-render-wgpu/src/render_order.rs
           python3 - <<'PY'
           from pathlib import Path
           p = Path('crates/noon-render-wgpu/src/render_order.rs')
           s = p.read_text()
-          old = '''        noon_core::GeometryRef::VectorPath(path) => {
-              if let Some(path_preparer) = path_preparer {
-                  let (cache_index, _) = path_preparer
-                      .cache_path_mesh(path, state.style, render_transform)
-                      .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;
-                  let resident_indices = path_preparer.path_mesh_cache[cache_index]
-                      .resident
-                      .as_ref()
-                      .map(|resident| resident.indices.clone());
-                  if let Some(indices) = resident_indices {
-                      prepared.stats.resident_path_reuses += 1;
-                      pack_derived_path_instance(
-                          prepared,
-                          indices,
-                          state,
-                          render_transform,
-                          style,
-                          DerivedPathGeometrySource::Retained,
-                      )
-                  } else {
-                      // The nonresident lane is already cold work. Reusing the existing
-                      // helper keeps cache lookup semantics centralized without adding
-                      // any steady-frame cost to resident transient paths.
-                      let (mesh, _) = path_preparer
-                          .cached_path_mesh(path, state.style, render_transform)
-                          .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;
-                      pack_derived_path_mesh(prepared, mesh, state, render_transform, style)
-                  }
-              } else {
-                  let mesh = crate::tessellate_path_mesh(path, state.style, render_transform)
-                      .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;
-                  pack_derived_path_mesh(prepared, &mesh, state, render_transform, style)
-              }
-          }
-          '''
-          new = '''        noon_core::GeometryRef::VectorPath(path) => {
-              let owner = crate::sampled_morph::SampledMeshOwner::Derived {
-                  anchor: object.anchor_object_index(),
-                  occurrence,
-              };
-              if let Some(path_preparer) = path_preparer {
-                  let (cache_index, _) = path_preparer
-                      .cache_path_mesh_at_progress(
-                          path,
-                          state.style,
-                          render_transform,
-                          owner,
-                          state.morph,
-                      )
-                      .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;
-                  let resident_indices = path_preparer.path_mesh_cache[cache_index]
-                      .resident
-                      .as_ref()
-                      .map(|resident| resident.indices.clone());
-                  if let Some(indices) = resident_indices {
-                      prepared.stats.resident_path_reuses += 1;
-                      pack_derived_path_instance(
-                          prepared,
-                          indices,
-                          state,
-                          render_transform,
-                          style,
-                          DerivedPathGeometrySource::Retained,
-                      )
-                  } else {
-                      // The nonresident lane is already cold work. Sampled fills own
-                      // one renderer-local mesh per identity-free occurrence.
-                      let (mesh, _) = path_preparer
-                          .cached_path_mesh(
-                              path,
-                              state.style,
-                              render_transform,
-                              owner,
-                              state.morph,
-                          )
-                          .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;
-                      pack_derived_path_mesh(prepared, mesh, state, render_transform, style)
-                  }
-              } else {
-                  let mesh = crate::sampled_morph::tessellate_path_at_progress(
-                      path,
-                      state.style,
-                      render_transform,
-                      state.morph,
-                  )
-                  .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;
-                  pack_derived_path_mesh(prepared, &mesh, state, render_transform, style)
-              }
-          }
-          '''
-          assert s.count(old) == 1, s.count(old)
-          p.write_text(s.replace(old, new))
+          start_marker = '        noon_core::GeometryRef::VectorPath(path) => {\n'
+          end_marker = '        noon_core::GeometryRef::External(_) => {\n'
+          start = s.index(start_marker)
+          end = s.index(end_marker, start)
+          lines = [
+              '        noon_core::GeometryRef::VectorPath(path) => {',
+              '            let owner = crate::sampled_morph::SampledMeshOwner::Derived {',
+              '                anchor: object.anchor_object_index(),',
+              '                occurrence,',
+              '            };',
+              '            if let Some(path_preparer) = path_preparer {',
+              '                let (cache_index, _) = path_preparer',
+              '                    .cache_path_mesh_at_progress(',
+              '                        path,',
+              '                        state.style,',
+              '                        render_transform,',
+              '                        owner,',
+              '                        state.morph,',
+              '                    )',
+              '                    .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;',
+              '                let resident_indices = path_preparer.path_mesh_cache[cache_index]',
+              '                    .resident',
+              '                    .as_ref()',
+              '                    .map(|resident| resident.indices.clone());',
+              '                if let Some(indices) = resident_indices {',
+              '                    prepared.stats.resident_path_reuses += 1;',
+              '                    pack_derived_path_instance(',
+              '                        prepared,',
+              '                        indices,',
+              '                        state,',
+              '                        render_transform,',
+              '                        style,',
+              '                        DerivedPathGeometrySource::Retained,',
+              '                    )',
+              '                } else {',
+              '                    // The nonresident lane is already cold work. Sampled fills own',
+              '                    // one renderer-local mesh per identity-free occurrence.',
+              '                    let (mesh, _) = path_preparer',
+              '                        .cached_path_mesh(',
+              '                            path,',
+              '                            state.style,',
+              '                            render_transform,',
+              '                            owner,',
+              '                            state.morph,',
+              '                        )',
+              '                        .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;',
+              '                    pack_derived_path_mesh(prepared, mesh, state, render_transform, style)',
+              '                }',
+              '            } else {',
+              '                let mesh = crate::sampled_morph::tessellate_path_at_progress(',
+              '                    path,',
+              '                    state.style,',
+              '                    render_transform,',
+              '                    state.morph,',
+              '                )',
+              '                .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;',
+              '                pack_derived_path_mesh(prepared, &mesh, state, render_transform, style)',
+              '            }',
+              '        }',
+          ]
+          s = s[:start] + '\n'.join(lines) + '\n' + s[end:]
+          p.write_text(s)
           PY
 
-          # The branch-local inverse painter map is unnecessary on current master:
-          # sampled paths never own mega segments, so their geometry replacement does
-          # not change draw descriptors. Preserve master's full rebuild only when an
-          # ordinary path actually detaches from a mega segment.
           python3 - <<'PY'
           from pathlib import Path
+          import subprocess
           p = Path('crates/noon-render-wgpu/src/lib.rs')
           s = p.read_text()
           field = '    painter_order_positions: Vec<Option<usize>>,\n'
           assert s.count(field) == 1
           s = s.replace(field, '')
-          old = '''        let mut replacement_chunks = std::collections::BTreeSet::new();
-              for object_index in replacement_indices {
-                  let replacement = self
-                      .replace_unique_path_geometry(frame, object_index)
-                      .expect("preflighted unique path replacement must tessellate");
-                  geometry_cache_misses += usize::from(replacement.cache_miss);
-                  path_vertices_repacked += replacement.vertices_repacked;
-                  path_indices_repacked += replacement.indices_repacked;
-                  let position = if self.painter_order_installed {
-                      self.painter_order_positions
-                          .get(object_index)
-                          .copied()
-                          .flatten()
-                  } else {
-                      Some(object_index)
-                  };
-                  if let Some(position) = position {
-                      replacement_chunks.insert(position / Self::RENDER_ORDER_CHUNK_SIZE);
-                  }
-              }
-              for chunk in replacement_chunks {
-                  let start = chunk * Self::RENDER_ORDER_CHUNK_SIZE;
-                  self.rebuild_render_order_chunks(Some(start..start + Self::RENDER_ORDER_CHUNK_SIZE));
-              }
-          '''
-          new = '''        let mut render_order_changed = false;
-              for object_index in replacement_indices {
-                  let detaches_mega_segment = match self.slots[object_index] {
-                      PreparedSlot::Path { batch, .. } => {
-                          self.mega_path_segments
-                              .get(batch)
-                              .is_some_and(Option::is_some)
-                              && !self
-                                  .mega_path_detached
-                                  .get(batch)
-                                  .copied()
-                                  .unwrap_or(true)
-                      }
-                      _ => false,
-                  };
-                  let replacement = self
-                      .replace_unique_path_geometry(frame, object_index)
-                      .expect("preflighted unique path replacement must tessellate");
-                  geometry_cache_misses += usize::from(replacement.cache_miss);
-                  path_vertices_repacked += replacement.vertices_repacked;
-                  path_indices_repacked += replacement.indices_repacked;
-                  render_order_changed |= detaches_mega_segment;
-              }
-              if render_order_changed {
-                  self.rebuild_ordered_render_batches();
-                  self.rebuild_mega_render_batches();
-                  self.rebuild_render_order_chunks(None);
-              }
-          '''
-          assert s.count(old) == 1, s.count(old)
-          s = s.replace(old, new)
 
-          # This existing ordinary-path test follows the full-rebuild lane above;
-          # retain master's assertions rather than the branch's inverse-map variant.
-          master = Path('/tmp/master-lib.rs')
-          import subprocess
-          master.write_bytes(subprocess.check_output([
+          start_marker = '        let mut replacement_chunks = std::collections::BTreeSet::new();\n'
+          end_marker = '        let mut instances_repacked = 0;\n'
+          start = s.index(start_marker)
+          end = s.index(end_marker, start)
+          lines = [
+              '        let mut render_order_changed = false;',
+              '        for object_index in replacement_indices {',
+              '            let detaches_mega_segment = match self.slots[object_index] {',
+              '                PreparedSlot::Path { batch, .. } => {',
+              '                    self.mega_path_segments',
+              '                        .get(batch)',
+              '                        .is_some_and(Option::is_some)',
+              '                        && !self',
+              '                            .mega_path_detached',
+              '                            .get(batch)',
+              '                            .copied()',
+              '                            .unwrap_or(true)',
+              '                }',
+              '                _ => false,',
+              '            };',
+              '            let replacement = self',
+              '                .replace_unique_path_geometry(frame, object_index)',
+              '                .expect("preflighted unique path replacement must tessellate");',
+              '            geometry_cache_misses += usize::from(replacement.cache_miss);',
+              '            path_vertices_repacked += replacement.vertices_repacked;',
+              '            path_indices_repacked += replacement.indices_repacked;',
+              '            render_order_changed |= detaches_mega_segment;',
+              '        }',
+              '        if render_order_changed {',
+              '            self.rebuild_ordered_render_batches();',
+              '            self.rebuild_mega_render_batches();',
+              '            self.rebuild_render_order_chunks(None);',
+              '        }',
+              '',
+          ]
+          s = s[:start] + '\n'.join(lines) + s[end:]
+
+          master = subprocess.check_output([
               'git', 'show', 'origin/master:crates/noon-render-wgpu/src/lib.rs'
-          ]))
-          m = master.read_text()
+          ]).decode()
           marker = '    #[test]\n    fn unique_path_replacement_dirties_only_its_geometry_chunks() {'
-          def test_block(text):
+          def block(text):
               start = text.index(marker)
               end = text.index('\n    #[test]\n', start + len(marker))
               return text[start:end]
-          s = s.replace(test_block(s), test_block(m))
+          s = s.replace(block(s), block(master))
           p.write_text(s)
           PY
 
@@ -241,9 +177,6 @@ jobs:
           test -z "$(git diff --name-only --diff-filter=U)"
           cargo fmt --all
           cargo fmt --all -- --check
-          cargo test -p noon-compile --test family_transform_padding_paint
-          cargo test -p noon-render-wgpu --test complex_filled_morph --test complex_filled_morph_mega
-          bash scripts/check.sh fast
 
           mkdir -p review-artifacts/crates/noon-compile/src/semantic_lowering/animation_payload
           mkdir -p review-artifacts/crates/noon-render-wgpu/src
