@@ -350,12 +350,14 @@ impl ExecutionSession {
         // use that existing authority rather than inventing a completion-only path.
         let order_root = order_root.or_else(|| {
             (purpose == SemanticPublicationPurpose::SegmentCompletion).then_some(())?;
-            prepared.candidate_mutations().find_map(|mutation| match mutation {
-                SemanticMutation::ReorderMember { family, .. } => family
-                    .existing()
-                    .filter(|family| self.reachability.is_execution_root(*family)),
-                _ => None,
-            })
+            prepared
+                .candidate_mutations()
+                .find_map(|mutation| match mutation {
+                    SemanticMutation::ReorderMember { family, .. } => family
+                        .existing()
+                        .filter(|family| self.reachability.is_execution_root(*family)),
+                    _ => None,
+                })
         });
         if order_root.is_none() {
             if let Some(SemanticMutation::ReorderMember { family, .. }) = prepared
@@ -577,6 +579,6 @@ impl ExecutionSession {
 }
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod segment_completion_order_tests;
+#[cfg(test)]
+mod tests;
