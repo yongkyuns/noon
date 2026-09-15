@@ -4,16 +4,105 @@ on:
     branches: [b3-matching-parity-qualification]
 permissions:
   contents: read
+concurrency:
+  group: b3-matching-parity-qualification
+  cancel-in-progress: true
 jobs:
-  source:
+  parity:
     runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      NOON_WASM_SKIP_OPT: "1"
+      NOON_SKIP_WEB_PREFLIGHT: "1"
+      NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
     steps:
-      - uses: actions/checkout@v4
-      - name: Export qualification source
-        run: |
-          git archive --format=tar.gz HEAD > b3-matching-source.tar.gz
-      - uses: actions/upload-artifact@v4
+      - uses: actions/checkout@v7
         with:
-          name: b3-matching-source
-          path: b3-matching-source.tar.gz
-          retention-days: 1
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install reference dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config
+          python -m pip install --disable-pip-version-check 'manim[typst]==0.21.0' 'typst==0.15.0'
+      - name: Select matching fixtures without changing product source
+        run: |
+          mkdir -p manim-raster-artifacts
+          git rev-parse HEAD | tee manim-raster-artifacts/source-head.txt
+          cp parity/manim-v0.21/manifest.json "$RUNNER_TEMP/original-manifest.json"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('parity/manim-v0.21/manifest.json')
+          m = json.loads(p.read_text())
+          existing = [f for f in m['fixtures'] if f['id'].startswith('matching-shapes-')]
+          m['fixtures'] = existing or [dict(id=i, scene=s, source='parity/manim-v0.21/core-examples/transform_matching_shapes.py', expected_duration=2.2) for i,s in [('matching-shapes-reordered','MatchingShapesReordered'),('matching-shapes-default-mismatches','MatchingShapesDefaultMismatches')]]
+          p.write_text(json.dumps(m, indent=2)+'\n')
+          PY
+      - name: Verify original-target cleanup in real ManimCE
+        run: python scripts/manim-raster-semantic-reference.py --manifest parity/manim-v0.21/manifest.json --output "$RUNNER_TEMP/manim-matching.json"
+      - name: Use pinned Rust and WASM target
+        run: |
+          rustup install
+          rustup target add wasm32-unknown-unknown
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Focused native and adapter tests
+        run: |
+          cargo test -p noon --no-default-features --lib matching_family
+          if test -f crates/noon/tests/transform_matching_shapes.rs; then
+            cargo test -p noon --no-default-features --test transform_matching_shapes
+          fi
+          PYTHONPATH=web/python python -m unittest discover -s web/python -p 'test_manim_transform_matching_shapes.py'
+          node --test scripts/manim-raster-support.test.mjs
+      - name: Build real browser package
+        run: bash scripts/build-web-demo.sh
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install browser harness
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Compare matching scenes with pinned ManimCE
+        run: node scripts/manim-raster-differential.mjs
+      - name: Enforce existing raster bounds
+        run: node scripts/manim-raster-enforce.mjs
+      - name: Verify sparse versus dense playback
+        run: node scripts/shared-playback-raster.mjs
+      - name: Restore selection and record exact tested source
+        if: always()
+        run: |
+          cp "$RUNNER_TEMP/original-manifest.json" parity/manim-v0.21/manifest.json
+          git rev-parse HEAD
+          git diff --stat
+          mkdir -p manim-raster-artifacts
+          cp "$RUNNER_TEMP/manim-matching.json" manim-raster-artifacts/initial-manim-matching.json || true
+          git rev-parse HEAD > manim-raster-artifacts/source-head.txt
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: b3-matching-parity
+          path: manim-raster-artifacts
+          retention-days: 7
+          if-no-files-found: warn
