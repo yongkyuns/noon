@@ -1,8 +1,7 @@
 use std::collections::HashSet;
 
 use noon_core::{
-    SemanticMutationTransaction, SemanticNodeId, SemanticObjectState, SemanticStore,
-    StoredGeometry,
+    SemanticMutationTransaction, SemanticNodeId, SemanticObjectState, SemanticStore, StoredGeometry,
 };
 
 use super::{ExecutionSession, SemanticPublicationPurpose};
