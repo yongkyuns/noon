@@ -5,7 +5,7 @@ class MatchingShapesReordered(Scene):
     """Distinct shapes cross by shape key, then the original target is appended.
 
     The two-second linear animation puts every quarter on a 30 fps frame.
-    The hold provides a real frame after cleanup, not an extrapolated endpoint.
+    Separate holds materialize both cleanup and post-cleanup reference frames.
     """
 
     def construct(self):
@@ -27,4 +27,6 @@ class MatchingShapesReordered(Scene):
         target = VGroup(kite(-4, YELLOW), triangle(4, GREEN))
         self.add(before, source, after)
         self.play(TransformMatchingShapes(source, target), run_time=2, rate_func=linear)
-        self.wait(0.2)
+        # Cairo emits only one PNG per static wait, regardless of its duration.
+        self.wait(0.1)
+        self.wait(0.1)
