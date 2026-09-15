@@ -1178,6 +1178,8 @@ def _canonical_family_transform_animation(
 ) -> tuple[_compat.Group, _compat.Group, object] | None:
     if isinstance(animation, _animate._AlignedGroupAnimationBuilder):
         source, target = animation.source, animation.target
+    elif type(animation) is _animate.TransformMatchingShapes:
+        source, target = animation.source, animation.target
     elif type(animation) is _base.Transform and isinstance(animation.source, _compat.Group):
         source, target = animation.source, animation.target
     else:
@@ -1952,7 +1954,12 @@ def _build_canonical_composition_candidate(
                 raise NotImplementedError(
                     "canonical family Transform requires linear or smooth easing"
                 )
-            builder.appendFamilyTransformTo(
+            append_family_transform = (
+                builder.appendMatchingFamilyTransformTo
+                if type(leaf) is _animate.TransformMatchingShapes
+                else builder.appendFamilyTransformTo
+            )
+            append_family_transform(
                 source._semantic_family_handle,
                 target._semantic_family_handle,
                 float(child.run_time),

@@ -110,6 +110,11 @@ enum OrdinaryCompositionChild {
         target_state: noon::MobjectFamily,
         options: noon_core::AnimationOptions,
     },
+    MatchingFamilyTransformTo {
+        source: noon::MobjectFamily,
+        target_state: noon::MobjectFamily,
+        options: noon_core::AnimationOptions,
+    },
     Indicate {
         target: noon::Mobject,
         indication: noon::IndicateOptions,
@@ -1160,6 +1165,15 @@ impl CanonicalAuthoringScene {
                     target_state,
                     options: *options,
                 },
+                OrdinaryCompositionChild::MatchingFamilyTransformTo {
+                    source,
+                    target_state,
+                    options,
+                } => noon::AnimationCompositionRequest::MatchingFamilyTransformTo {
+                    source,
+                    target_state,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::Indicate {
                     target,
                     indication,
@@ -1471,6 +1485,7 @@ impl CanonicalAuthoringScene {
                 | OrdinaryCompositionChild::Wait { .. } => {}
                 OrdinaryCompositionChild::ValueTracker { .. } => {}
                 OrdinaryCompositionChild::FamilyTransformTo { .. }
+                | OrdinaryCompositionChild::MatchingFamilyTransformTo { .. }
                 | OrdinaryCompositionChild::Indicate { .. }
                 | OrdinaryCompositionChild::FamilyIndicate { .. } => {}
                 OrdinaryCompositionChild::Composition { children, .. } => {
@@ -1764,6 +1779,11 @@ impl CanonicalAuthoringScene {
                     continue;
                 }
                 OrdinaryCompositionChild::FamilyTransformTo {
+                    source,
+                    target_state,
+                    options,
+                }
+                | OrdinaryCompositionChild::MatchingFamilyTransformTo {
                     source,
                     target_state,
                     options,
@@ -3462,6 +3482,29 @@ mod wasm {
             }
             self.children
                 .push(OrdinaryCompositionChild::FamilyTransformTo {
+                    source: source.semantic_family()?,
+                    target_state: target_state.semantic_family()?,
+                    options,
+                });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendMatchingFamilyTransformTo)]
+        pub fn append_matching_family_transform_to(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            target_state: &crate::WasmAuthoringFamilyHandle,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+            path_arc: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?;
+            if let Some(path_arc) = path_arc {
+                options = options.path_arc(path_arc);
+            }
+            self.children
+                .push(OrdinaryCompositionChild::MatchingFamilyTransformTo {
                     source: source.semantic_family()?,
                     target_state: target_state.semantic_family()?,
                     options,
@@ -11081,5 +11124,28 @@ mod tests {
         context.live_player(1.0).unwrap();
         assert!(context.pointer_position_signal().is_err());
         assert!(context.bind_opacity(&square, &opacity).is_err());
+    }
+}
+
+#[cfg(test)]
+mod matching_family_selector_tests {
+    use super::*;
+
+    #[test]
+    fn matching_family_child_is_constructible_in_shared_rust_model() {
+        let scene = noon::Scene::new();
+        let source_leaf = scene.square(1.0).unwrap();
+        let target_leaf = scene.square(1.0).unwrap();
+        let source = scene.family(&[(&source_leaf).into()]).unwrap();
+        let target_state = scene.family(&[(&target_leaf).into()]).unwrap();
+        let child = OrdinaryCompositionChild::MatchingFamilyTransformTo {
+            source,
+            target_state,
+            options: noon_core::AnimationOptions::new(),
+        };
+        assert!(matches!(
+            child,
+            OrdinaryCompositionChild::MatchingFamilyTransformTo { .. }
+        ));
     }
 }

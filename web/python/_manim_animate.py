@@ -197,16 +197,38 @@ class TransformFromCopy:
 
 
 class TransformMatchingShapes:
+    """Inert ManimCE matching request; Rust owns activation-time correspondence."""
+
     def __init__(
         self,
-        sources: object,
-        targets: object,
-        key: str | None = None,
+        mobject: object,
+        target_mobject: object,
+        transform_mismatches: bool = False,
+        fade_transform_mismatches: bool = False,
+        key_map: dict[object, object] | None = None,
         **kwargs: Any,
     ) -> None:
-        self.sources = sources
-        self.targets = targets
-        self.key = key
+        if transform_mismatches:
+            raise NotImplementedError(
+                "TransformMatchingShapes transform_mismatches is not yet supported"
+            )
+        if fade_transform_mismatches:
+            raise NotImplementedError(
+                "TransformMatchingShapes fade_transform_mismatches is not yet supported"
+            )
+        if key_map is not None and not isinstance(key_map, dict):
+            raise TypeError("TransformMatchingShapes key_map must be a dict or None")
+        if key_map:
+            raise NotImplementedError(
+                "TransformMatchingShapes key_map is not yet exposed by the public adapter"
+            )
+        self.mobject = mobject
+        self.target_mobject = target_mobject
+        self.source = mobject
+        self.target = target_mobject
+        self.transform_mismatches = False
+        self.fade_transform_mismatches = False
+        self.key_map = {} if key_map is None else dict(key_map)
         _store_animation_args(self, kwargs)
 
 
