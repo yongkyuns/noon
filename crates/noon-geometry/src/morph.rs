@@ -1,4 +1,5 @@
 mod correspondence;
+pub use correspondence::PreparedPathInterpolation;
 use noon_core::{Vec2, VectorPath};
 
 use crate::{

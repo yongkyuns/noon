@@ -330,7 +330,7 @@ fn certified_closed_filled_path_transform_compiles() {
 }
 
 #[test]
-fn unsafe_filled_path_transform_is_rejected_before_runtime() {
+fn self_intersecting_filled_path_transform_retains_ordered_endpoints() {
     let style = Style {
         fill: Some(Color::rgb(0.4, 0.2, 0.9)),
         stroke: Some(Color::WHITE),
@@ -374,10 +374,7 @@ fn unsafe_filled_path_transform_is_rejected_before_runtime() {
         time_map: CompositionTimeMap::identity(),
     });
 
-    assert!(matches!(
-        CompiledScene::compile_objects(source_objects, &source_tracks),
-        Err(CompileError::UnsafeFilledPathTransform(_))
-    ));
+    assert!(CompiledScene::compile_objects(source_objects, &source_tracks).is_ok());
 }
 
 #[test]

@@ -4,7 +4,7 @@ use super::{compiled_render_geometries, compiled_render_geometry_preparations};
 use noon_core::{GeometryRef, Vec2};
 
 #[test]
-fn compiled_table_keeps_stable_local_pairs_but_excludes_dynamic_screen_space_fallback() {
+fn compiled_table_retains_fixed_world_pairs_including_sampled_fills() {
     use noon_core::{
         ObjectId, Property, RateFunction, StrokeWidthMode, Style, TrackDefinition, TrackId,
         TrackTiming, TrackValues, Transform2D, TransformTrackEndpoint,
@@ -20,9 +20,12 @@ fn compiled_table_keeps_stable_local_pairs_but_excludes_dynamic_screen_space_fal
         (
             StrokeWidthMode::ScreenSpace,
             StrokeWidthMode::ScreenSpace,
+            // A changing-winding fill now retains the immutable world
+            // endpoints too. Its preparation hint is not a promise of a fixed
+            // GPU fan: renderer-local sampling handles the singular interior.
             -1.0,
-            0,
-            0,
+            1,
+            1,
         ),
         (
             StrokeWidthMode::ScaleWithObject,

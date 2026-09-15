@@ -72,31 +72,71 @@ fn aligned_contours(
         .collect()
 }
 
+/// Prepared canonical cubic correspondence for a path whose fill topology can change.
+///
+/// Preparation is independent of playback time. Sampling preserves the same point,
+/// contour and closure ordering used by ordinary path transforms; no endpoint fan
+/// triangulation is assumed. The renderer can tessellate the current filled path
+/// without mutating or retransmitting its immutable execution resource.
+#[derive(Clone, Debug)]
+pub struct PreparedPathInterpolation {
+    contours: Vec<PreparedContourInterpolation>,
+}
+
+#[derive(Clone, Debug)]
+struct PreparedContourInterpolation {
+    curves: Vec<([Vec2; 4], [Vec2; 4])>,
+    closed: bool,
+}
+
+impl PreparedPathInterpolation {
+    pub fn new(source: &VectorPath, target: &VectorPath) -> Result<Self, MorphError> {
+        if !source.is_finite() || !target.is_finite() {
+            return Err(GeometryError::NonFinitePoint.into());
+        }
+        let contours = aligned_contours(source, target)?
+            .into_iter()
+            .map(|(source, target)| PreparedContourInterpolation {
+                curves: source.curves.into_iter().zip(target.curves).collect(),
+                closed: source.closed,
+            })
+            .collect();
+        Ok(Self { contours })
+    }
+
+    pub fn interpolate(&self, progress: f32) -> Result<VectorPath, MorphError> {
+        if !progress.is_finite() || !(0.0..=1.0).contains(&progress) {
+            return Err(MorphError::PathAlignment(
+                crate::PathProportionError::InvalidProportion(progress),
+            ));
+        }
+        let mut path = VectorPath::new();
+        for contour in &self.contours {
+            for (index, (a, b)) in contour.curves.iter().enumerate() {
+                let p: [Vec2; 4] =
+                    std::array::from_fn(|index| a[index] * (1.0 - progress) + b[index] * progress);
+                if index == 0 {
+                    path = path.move_to(p[0]);
+                }
+                path = path.cubic_to(p[1], p[2], p[3]);
+            }
+            if contour.closed {
+                path = path.close();
+            }
+        }
+        if !path.is_finite() {
+            return Err(GeometryError::NonFinitePoint.into());
+        }
+        Ok(path)
+    }
+}
+
 pub(super) fn interpolate(
     source: &VectorPath,
     target: &VectorPath,
     progress: f32,
 ) -> Result<VectorPath, MorphError> {
-    if !progress.is_finite() || !(0.0..=1.0).contains(&progress) {
-        return Err(MorphError::PathAlignment(
-            crate::PathProportionError::InvalidProportion(progress),
-        ));
-    }
-    let mut path = VectorPath::new();
-    for (source, target) in aligned_contours(source, target)? {
-        for (index, (a, b)) in source.curves.into_iter().zip(target.curves).enumerate() {
-            let p: [Vec2; 4] =
-                std::array::from_fn(|index| a[index] * (1.0 - progress) + b[index] * progress);
-            if index == 0 {
-                path = path.move_to(p[0]);
-            }
-            path = path.cubic_to(p[1], p[2], p[3]);
-        }
-        if source.closed {
-            path = path.close();
-        }
-    }
-    Ok(path)
+    PreparedPathInterpolation::new(source, target)?.interpolate(progress)
 }
 
 fn split(p: [Vec2; 4]) -> ([Vec2; 4], [Vec2; 4]) {
