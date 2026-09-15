@@ -121,14 +121,17 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
     }
     drain(&mut execution);
 
+    let contracted_state = scene
+        .live(&mut execution)
+        .effective(&source_objects[1])
+        .unwrap();
     assert_eq!(
-        scene
-            .live(&mut execution)
-            .effective(&source_objects[1])
-            .unwrap()
-            .appearance,
-        0.0,
-        "contracted source leaf lost its retained hidden appearance before return activation"
+        contracted_state.appearance, 1.0,
+        "contraction retained execution-only Appearance instead of releasing it"
+    );
+    assert_eq!(
+        contracted_state.style.opacity, 0.0,
+        "contracted source leaf lost its authored hidden opacity before return activation"
     );
 
     let restoration = {
@@ -142,17 +145,26 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
         );
         let midpoint = segment.start_time() + segment.duration() * 0.5;
         live.advance_segment_to(segment, midpoint).unwrap();
-        let midpoint_appearance = live.effective(&source_objects[1]).unwrap().appearance;
+        let midpoint_state = live.effective(&source_objects[1]).unwrap();
+        assert_eq!(
+            midpoint_state.appearance, 1.0,
+            "return Transform reacquired the released Appearance domain"
+        );
         assert!(
-            midpoint_appearance > 0.0 && midpoint_appearance < 1.0,
-            "source leaf 1 did not animate appearance at midpoint: {midpoint_appearance}"
+            midpoint_state.style.opacity > 0.0 && midpoint_state.style.opacity < 1.0,
+            "source leaf 1 did not animate authored opacity at midpoint: {}",
+            midpoint_state.style.opacity
         );
         live.advance_segment_to(segment, segment.end_time())
             .unwrap();
         for (index, object) in source_objects.iter().enumerate() {
+            let state = live.effective(object).unwrap();
             assert_eq!(
-                live.effective(object).unwrap().appearance,
-                1.0,
+                state.appearance, 1.0,
+                "source leaf {index} did not keep neutral Appearance at the return endpoint"
+            );
+            assert_eq!(
+                state.style.opacity, 1.0,
                 "source leaf {index} was not restored at the return endpoint"
             );
         }
@@ -163,10 +175,14 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
         let mut live = scene.live(&mut execution);
         live.complete_segment(restoration).unwrap();
         for (index, object) in source_objects.iter().enumerate() {
+            let state = live.effective(object).unwrap();
             assert_eq!(
-                live.effective(object).unwrap().appearance,
-                1.0,
-                "source leaf {index} lost restored appearance during completion"
+                state.appearance, 1.0,
+                "source leaf {index} lost neutral Appearance during completion"
+            );
+            assert_eq!(
+                state.style.opacity, 1.0,
+                "source leaf {index} lost restored authored opacity during completion"
             );
         }
     }
@@ -175,10 +191,14 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
 
     let mut live = scene.live(&mut execution);
     for (index, object) in source_objects.iter().enumerate() {
+        let state = live.effective(object).unwrap();
         assert_eq!(
-            live.effective(object).unwrap().appearance,
-            1.0,
-            "source leaf {index} lost restored appearance after renderer drain"
+            state.appearance, 1.0,
+            "source leaf {index} lost neutral Appearance after renderer drain"
+        );
+        assert_eq!(
+            state.style.opacity, 1.0,
+            "source leaf {index} lost restored authored opacity after renderer drain"
         );
     }
     live.copy_family(&source).unwrap();

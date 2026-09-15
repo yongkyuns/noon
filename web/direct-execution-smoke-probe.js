@@ -1350,53 +1350,69 @@ async function directFamilyTransformIndicateProof(expectedBackend) {
   const canvas = new OffscreenCanvas(960, 540);
   const renderer = await createDirectFamilyTransformIndicateSmokeRenderer(canvas);
   const samples = [];
+  const pink = (pixel) => pixel.red > pixel.green + 40 && pixel.blue > pixel.green + 40;
+  const blue = (pixel) => pixel.blue > pixel.red + 25;
+  const yellow = (pixel) => pixel.red > 180 && pixel.green > 150 && pixel.blue < pixel.green - 40;
   try {
     renderer.resize(canvas.width, canvas.height);
     await presentDirectFrame(renderer);
-    for (const [time, leftX, rightX, highlighted] of [
-      [0, -2, 0, null],
-      [500, -1.625, 0, null],
-      [1000, -1.25, 0.25, null],
-      [2000, -1, 1, null],
-      [8000 / 3, -1.2, 1, "left"],
-      [10000 / 3, -1, 1.2, "right"],
-      [4000, -1, 1, null],
-      [4250, 0, 1, null],
-      [4500, 0, 1, null],
-    ]) {
-      renderer.advanceDirectRealtime(time);
-      const directive = await settleDirectPublication(renderer, time);
-      const left = await sampleRenderedColor(canvas, leftX, 0);
-      const right = await sampleRenderedColor(canvas, rightX, 0);
-      if (left.alpha < 128 || right.alpha < 128) {
-        throw new Error(
-          `direct family transform/Indicate at ${time}ms missed its expected members: ${JSON.stringify({ left, right })}`,
-        );
-      }
-      if (highlighted !== null) {
-        const color = highlighted === "left" ? left : right;
-        if (!(color.red > 180 && color.green > 150 && color.blue < color.green - 40)) {
-          throw new Error(
-            `direct family Indicate did not reach its shared outward state: ${JSON.stringify({ left, right })}`,
-          );
-        }
-      }
-      if (time === 4000 || time === 4500) {
-        const restored = left.red > left.green + 40 && left.blue > left.green + 40
-          && right.blue > right.red + 25;
-        if (!restored) {
-          throw new Error(
-            `direct family Indicate did not restore its captured transformed state: ${JSON.stringify({ left, right })}`,
-          );
-        }
-      }
-      samples.push({ time, leftX, rightX, highlighted, left, right, cadence: directive.cadence });
+
+    renderer.advanceDirectRealtime(0);
+    let directive = await settleDirectPublication(renderer, 0);
+    const initialLeft = await sampleRenderedColor(canvas, -2, 0);
+    const initialRight = await sampleRenderedColor(canvas, 0, 0);
+    if (!pink(initialLeft) || !blue(initialRight) || renderer.objectCount() !== 2) {
+      throw new Error(`direct unequal-family Transform missed its initial source: ${JSON.stringify({ initialLeft, initialRight, objects: renderer.objectCount() })}`);
     }
+    samples.push({ time: 0, initialLeft, initialRight, cadence: directive.cadence });
+
+    // Midpoint occurrence identity/order is interpolation-only. Exercising this
+    // publication is enough here; stable lifecycle checks begin at completion.
+    renderer.advanceDirectRealtime(1000);
+    directive = await settleDirectPublication(renderer, 1000);
+    samples.push({ time: 1000, objects: renderer.objectCount(), cadence: directive.cadence });
+
+    renderer.advanceDirectRealtime(2000);
+    directive = await settleDirectPublication(renderer, 2000);
+    const endpointLeft = await sampleRenderedColor(canvas, -1, 0);
+    const endpointMiddle = await sampleRenderedColor(canvas, 0, 0);
+    const endpointRight = await sampleRenderedColor(canvas, 1, 0);
+    if (renderer.objectCount() !== 3 || !pink(endpointLeft) || !pink(endpointMiddle) || !blue(endpointRight)) {
+      throw new Error(`direct unequal-family Transform did not publish its persistent 3-member endpoint: ${JSON.stringify({ endpointLeft, endpointMiddle, endpointRight, objects: renderer.objectCount() })}`);
+    }
+    samples.push({ time: 2000, endpointLeft, endpointMiddle, endpointRight, cadence: directive.cadence });
+
+    // The Rust continuation starts Indicate only after asserting that the
+    // semantic source family itself has three persistent members.
+    renderer.advanceDirectRealtime(3000);
+    directive = await settleDirectPublication(renderer, 3000);
+    const indicated = await Promise.all([-1, 0, 1].map((x) => sampleRenderedColor(canvas, x, 0)));
+    if (renderer.objectCount() !== 3 || !indicated.some(yellow)) {
+      throw new Error(`direct family Indicate did not consume the persisted endpoint: ${JSON.stringify({ indicated, objects: renderer.objectCount() })}`);
+    }
+    samples.push({ time: 3000, indicated, cadence: directive.cadence });
+
+    renderer.advanceDirectRealtime(4000);
+    directive = await settleDirectPublication(renderer, 4000);
+    const restored = await Promise.all([-1, 0, 1].map((x) => sampleRenderedColor(canvas, x, 0)));
+    if (renderer.objectCount() !== 3 || !pink(restored[0]) || !pink(restored[1]) || !blue(restored[2])) {
+      throw new Error(`direct family Indicate did not restore the persistent endpoint: ${JSON.stringify({ restored, objects: renderer.objectCount() })}`);
+    }
+    samples.push({ time: 4000, restored, cadence: directive.cadence });
+
+    renderer.advanceDirectRealtime(4250);
+    await settleDirectPublication(renderer, 4250);
+    renderer.advanceDirectRealtime(4500);
+    directive = await settleDirectPublication(renderer, 4500);
+    const finalLeft = await sampleRenderedColor(canvas, 0, 0);
+    const finalRight = await sampleRenderedColor(canvas, 1, 0);
     const wake = JSON.parse(renderer.directWakeDirectiveJson(4500));
     if (renderer.rendererBackend() !== expectedBackend || renderer.time() !== 4.5
-        || renderer.objectCount() !== 2 || wake.cadence !== "idle") {
-      throw new Error("direct family transform/Indicate did not complete its shared continuation");
+        || renderer.objectCount() !== 3 || wake.cadence !== "idle"
+        || !pink(finalLeft) || !blue(finalRight)) {
+      throw new Error(`direct family transform/Indicate did not complete its shared continuation: ${JSON.stringify({ backend: renderer.rendererBackend(), time: renderer.time(), objects: renderer.objectCount(), wake, finalLeft, finalRight })}`);
     }
+    samples.push({ time: 4500, finalLeft, finalRight, cadence: directive.cadence });
     return samples;
   } finally {
     renderer.free();

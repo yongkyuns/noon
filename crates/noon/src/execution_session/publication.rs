@@ -323,6 +323,28 @@ impl ExecutionSession {
         )
     }
 
+    pub(crate) fn apply_prepared_scalar_timeline_transaction_with_execution_at_root(
+        &mut self,
+        prepared: PreparedSemanticMutationTransaction<'_>,
+        execution_prefix: Vec<ExecutionPatch>,
+        effective: Option<PreparedEffectivePropertyBatch>,
+        purpose: SemanticPublicationPurpose,
+        handled_scalar_signals: std::collections::HashSet<SemanticNodeId>,
+        order_root: SemanticNodeId,
+    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+        self.apply_prepared_semantic_transaction_with_execution_contract(
+            prepared,
+            execution_prefix,
+            effective,
+            purpose,
+            Some(PreparedScalarPublicationContract {
+                handled_signals: handled_scalar_signals,
+                reactive_enrollment: None,
+            }),
+            Some(order_root),
+        )
+    }
+
     fn apply_prepared_semantic_transaction_with_execution_contract(
         &mut self,
         prepared: PreparedSemanticMutationTransaction<'_>,

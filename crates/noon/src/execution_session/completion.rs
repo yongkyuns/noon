@@ -4,8 +4,8 @@ use noon_compile::{
     ExecutionPatch, PreparedScalarSignalTimelineError, SemanticAnimationCompletion,
 };
 use noon_core::{
-    ReactiveValue, SemanticFadeDirection, SemanticMutationTransaction, SemanticNodeId,
-    SemanticObjectProperty, SemanticSignalValue, SemanticStore,
+    ReactiveValue, SemanticFadeDirection, SemanticMutationTransaction, SemanticNodeCreation,
+    SemanticNodeId, SemanticObjectProperty, SemanticSignalValue, SemanticStore,
 };
 use noon_runtime::{EffectivePropertyWrite, FrameState, RuntimeIdentity};
 
@@ -35,6 +35,7 @@ pub enum ExecutionSegmentCompletionError {
     CallbackNotCoherent,
     CallbackTerminated(CallbackTermination),
     MissingLifecycleRoot(SemanticNodeId),
+    MissingFamilyTransformRoot(SemanticNodeId),
     /// A host-modified domain cannot be released without guessing whether it
     /// should persist. The first reconciliation slice supports only callbacks
     /// that remain active at the endpoint.
@@ -81,6 +82,12 @@ impl std::fmt::Display for ExecutionSegmentCompletionError {
                 "fade completion for semantic object {}:{} has no execution root",
                 object.slot(),
                 object.generation()
+            ),
+            Self::MissingFamilyTransformRoot(source) => write!(
+                formatter,
+                "unequal family Transform completion for source {}:{} has no execution root",
+                source.slot(),
+                source.generation()
             ),
             Self::UnsupportedHostDriverRelease(object) => write!(
                 formatter,
@@ -203,6 +210,7 @@ impl ExecutionSession {
         let crate::execution_segment::PendingSegmentCompletionKind {
             lifecycle_root,
             lifecycle_removals,
+            family_transform,
             object_entries: entries,
             scalar_entries,
         } = &pending.kind;
@@ -306,6 +314,14 @@ impl ExecutionSession {
                 _ => unreachable!("style-domain completion was classified above"),
             };
         }
+        if let Some(completion) = family_transform {
+            stage_unequal_family_transform_completion(
+                store,
+                &mut semantic,
+                &mut completed_styles,
+                *completion,
+            );
+        }
         for (object, style) in &completed_styles {
             semantic.replace_style(*object, style.clone());
         }
@@ -368,7 +384,7 @@ impl ExecutionSession {
             if should_reconcile_execution_track(
                 entry.property,
                 &entry.completion,
-                entry.retain_effective,
+                entry.retain_effective && family_transform.is_none(),
             ) {
                 release.push(ExecutionPatch::ReconcileTrack {
                     track: entry.track,
@@ -459,17 +475,43 @@ impl ExecutionSession {
             .signal_timeline
             .prepare_append_batch(timeline_entries, actual_time)
             .map_err(ExecutionSegmentCompletionError::ScalarTimeline)?;
-        self.apply_prepared_scalar_timeline_transaction_with_execution(
-            prepared,
-            release,
-            Some(effective),
-            super::publication::SemanticPublicationPurpose::SegmentCompletion,
-            handled_scalar_signals,
-        )?;
+        if family_transform.is_some() {
+            let root = (*lifecycle_root).ok_or_else(|| {
+                ExecutionSegmentCompletionError::MissingFamilyTransformRoot(
+                    family_transform
+                        .as_ref()
+                        .expect("family Transform completion is present")
+                        .source,
+                )
+            })?;
+            self.apply_prepared_scalar_timeline_transaction_with_execution_at_root(
+                prepared,
+                release,
+                Some(effective),
+                super::publication::SemanticPublicationPurpose::SegmentCompletion,
+                handled_scalar_signals,
+                root,
+            )?;
+        } else {
+            self.apply_prepared_scalar_timeline_transaction_with_execution(
+                prepared,
+                release,
+                Some(effective),
+                super::publication::SemanticPublicationPurpose::SegmentCompletion,
+                handled_scalar_signals,
+            )?;
+        }
         self.signal_timeline.commit_append(timeline);
         self.pending_segment_completion = None;
         self.completed_segment_sequence = Some(token.sequence());
-        if self.derived_display_plan.is_some() {
+        if family_transform.is_some() && self.derived_display_plan.is_some() {
+            // Stable source topology is now authoritative in the same completion
+            // publication, so the identity-free interpolation occurrence must not
+            // survive for one extra frame and double-render its endpoint.
+            self.derived_display_plan = None;
+            self.derived_display_objects.clear();
+            self.derived_display_expire_after_publication = false;
+        } else if self.derived_display_plan.is_some() {
             self.derived_display_expire_after_publication = true;
         }
         self.last_callback_receipt = None;
@@ -478,6 +520,89 @@ impl ExecutionSession {
             .carry_completed_publication(actual_time, publication);
         Ok(self.frame())
     }
+}
+
+fn stage_unequal_family_transform_completion(
+    store: &SemanticStore,
+    semantic: &mut SemanticMutationTransaction,
+    completed_styles: &mut BTreeMap<SemanticNodeId, noon_core::SemanticStyle>,
+    completion: crate::execution_segment::UnequalFamilyTransformCompletion,
+) {
+    let source_members = store
+        .semantic_family_members_checked(completion.source)
+        .expect("pending unequal family Transform source remains a family at one scene revision")
+        .to_vec();
+    let target_members = store
+        .semantic_family_members_checked(completion.target_state)
+        .expect("pending unequal family Transform target remains a family at one scene revision")
+        .to_vec();
+    debug_assert!(!source_members.is_empty());
+    debug_assert!(!target_members.is_empty());
+    debug_assert_ne!(source_members.len(), target_members.len());
+
+    if source_members.len() < target_members.len() {
+        // Match Manim's repeat-index alignment. The first occurrence keeps the
+        // original source identity; only repeated source occurrences become new
+        // semantic children. They copy source-only metadata/bindings, then receive
+        // the same authored endpoint domains as the corresponding target child.
+        let mut seen_source_indices = BTreeSet::new();
+        for (position, &target_member) in target_members.iter().enumerate() {
+            let source_index =
+                aligned_repeat_index(position, source_members.len(), target_members.len());
+            if seen_source_indices.insert(source_index) {
+                continue;
+            }
+            let mut state = store
+                .semantic_object_state_checked(source_members[source_index])
+                .expect("aligned source member remains an ordinary semantic object")
+                .clone();
+            let target_state = store
+                .semantic_object_state_checked(target_member)
+                .expect("aligned target member remains an ordinary semantic object");
+            state.content = target_state.content;
+            state.transform = target_state.transform;
+            state.style = target_state.style.clone();
+            // Ordinary Transform preserves source priority. This persistent child
+            // is a legitimate copy of the repeated source occurrence, so it keeps
+            // source-owned z/role/bindings while receiving target visual domains.
+
+            let copy = semantic.create_node(SemanticNodeCreation::object(state));
+            semantic.add_member(completion.source, copy);
+            semantic.reorder_member(
+                completion.source,
+                copy,
+                source_members.get(source_index + 1).copied(),
+            );
+        }
+        return;
+    }
+
+    // When the target is shorter, Manim pads its copy and fades the repeated
+    // target occurrence to zero. Persist that visibility in authored source style
+    // so copy/save-state/future sessions observe the same completed topology, then
+    // release the execution-only Appearance driver normally.
+    let mut seen_target_indices = BTreeSet::new();
+    for (position, &source_member) in source_members.iter().enumerate() {
+        let target_index =
+            aligned_repeat_index(position, target_members.len(), source_members.len());
+        if seen_target_indices.insert(target_index) {
+            continue;
+        }
+        let style = completed_styles.entry(source_member).or_insert_with(|| {
+            store
+                .semantic_object_state_checked(source_member)
+                .expect("aligned source member remains live through completion")
+                .style
+                .clone()
+        });
+        style.object_opacity = 0.0;
+    }
+}
+
+fn aligned_repeat_index(position: usize, original_count: usize, aligned_count: usize) -> usize {
+    debug_assert!(original_count > 0);
+    debug_assert!(aligned_count >= original_count);
+    position * original_count / aligned_count
 }
 
 fn has_ancestor_in(

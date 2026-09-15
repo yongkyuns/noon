@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use noon_core::{
     resolve_uniform_composition_schedule, CompositionError, CompositionTimeMapStep, ObjectId,
-    PreparedSemanticMutationTransaction, RateFunction, SemanticNodeId, SemanticTransactionNodeRef,
+    PreparedSemanticMutationTransaction, RateFunction, SemanticNodeId, SemanticNodeKind,
+    SemanticStore, SemanticTransactionNodeRef,
 };
 
 use super::super::{PreparedSemanticAnimationScheduleProjection, SemanticExecutionIndex};
@@ -62,6 +63,10 @@ pub enum PreparedFamilyTransformActivationError {
         animation: SemanticTransactionNodeRef,
         endpoint: SemanticTransactionNodeRef,
     },
+    UnsupportedNestedTopology {
+        animation: SemanticTransactionNodeRef,
+        endpoint: SemanticNodeId,
+    },
     Correspondence {
         animation: SemanticTransactionNodeRef,
         error: FamilyTransformCorrespondenceError,
@@ -88,6 +93,15 @@ impl std::fmt::Display for PreparedFamilyTransformActivationError {
             Self::PendingFamilyEndpoint { animation, endpoint } => write!(
                 formatter,
                 "prepared family Transform {animation:?} retains pending family endpoint {endpoint:?}"
+            ),
+            Self::UnsupportedNestedTopology {
+                animation,
+                endpoint,
+            } => write!(
+                formatter,
+                "prepared family Transform {animation:?} endpoint {}:{} has nested family topology; persistent unequal-family completion currently supports flat object-only families",
+                endpoint.slot(),
+                endpoint.generation()
             ),
             Self::Correspondence { animation, error } => write!(
                 formatter,
@@ -137,6 +151,9 @@ impl std::error::Error for PreparedFamilyTransformActivationError {
 ///
 /// Family endpoints used by the current live-session API are existing semantic
 /// families. Pending endpoints fail closed here rather than receiving guessed identity.
+/// The persistent unequal-family completion contract is currently flat-only, so nested
+/// endpoints are rejected at this pre-publication activation boundary instead of being
+/// accepted for interpolation and panicking later during semantic completion.
 /// Repeated source padding occurrences deliberately reuse the same captured effective
 /// source value; independent visual evolution is introduced only by the later
 /// identity-free derived-display materializer.
@@ -155,6 +172,8 @@ where
     for family in schedule.family_transforms() {
         let source_family = existing_endpoint(family.animation, family.source)?;
         let target_family = existing_endpoint(family.animation, family.target_state)?;
+        require_flat_family_endpoint(prepared.store(), family.animation, source_family)?;
+        require_flat_family_endpoint(prepared.store(), family.animation, target_family)?;
         let correspondence =
             derive_family_transform_correspondence(prepared.store(), source_family, target_family)
                 .map_err(
@@ -233,6 +252,32 @@ where
     Ok(PreparedFamilyTransformActivationProjection { occurrences })
 }
 
+fn require_flat_family_endpoint(
+    store: &SemanticStore,
+    animation: SemanticTransactionNodeRef,
+    endpoint: SemanticNodeId,
+) -> Result<(), PreparedFamilyTransformActivationError> {
+    let members = store
+        .semantic_family_members_checked(endpoint)
+        .map_err(|_| PreparedFamilyTransformActivationError::Correspondence {
+            animation,
+            error: FamilyTransformCorrespondenceError::InvalidFamily(endpoint),
+        })?;
+    if members.iter().any(|member| {
+        store
+            .node(*member)
+            .is_some_and(|node| matches!(node.kind(), SemanticNodeKind::Family(_)))
+    }) {
+        return Err(
+            PreparedFamilyTransformActivationError::UnsupportedNestedTopology {
+                animation,
+                endpoint,
+            },
+        );
+    }
+    Ok(())
+}
+
 fn existing_endpoint(
     animation: SemanticTransactionNodeRef,
     endpoint: SemanticTransactionNodeRef,
@@ -243,4 +288,50 @@ fn existing_endpoint(
             endpoint,
         },
     )
+}
+
+#[cfg(test)]
+mod persistent_completion_boundary_tests {
+    use super::*;
+    use noon_core::{SemanticObjectState, StoredGeometry};
+
+    fn object(store: &mut SemanticStore) -> SemanticNodeId {
+        store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+            radius: 1.0,
+        }))
+    }
+
+    fn family(store: &mut SemanticStore, members: &[SemanticNodeId]) -> SemanticNodeId {
+        let family = store.insert_family();
+        for &member in members {
+            store.add_member(family, member).unwrap();
+        }
+        family
+    }
+
+    #[test]
+    fn nested_completion_topology_fails_closed_at_activation_boundary() {
+        let mut store = SemanticStore::new();
+        let leaf = object(&mut store);
+        let nested = family(&mut store, &[leaf]);
+        let source = family(&mut store, &[nested]);
+
+        assert!(matches!(
+            require_flat_family_endpoint(&store, source.into(), source),
+            Err(PreparedFamilyTransformActivationError::UnsupportedNestedTopology {
+                endpoint,
+                ..
+            }) if endpoint == source
+        ));
+    }
+
+    #[test]
+    fn flat_completion_topology_remains_supported() {
+        let mut store = SemanticStore::new();
+        let first = object(&mut store);
+        let second = object(&mut store);
+        let source = family(&mut store, &[first, second]);
+
+        require_flat_family_endpoint(&store, source.into(), source).unwrap();
+    }
 }

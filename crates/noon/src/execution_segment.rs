@@ -59,10 +59,22 @@ pub(crate) struct ScalarSegmentCompletionEntry {
     pub end_time: f64,
 }
 
+/// Persistent semantic handoff for the bounded flat unequal-family Transform path.
+///
+/// Interpolation padding remains compiler/runtime-local. Completion uses only the
+/// authored source/target family identities to materialize the Manim-aligned source
+/// endpoint before releasing those transient presentation resources.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct UnequalFamilyTransformCompletion {
+    pub source: SemanticNodeId,
+    pub target_state: SemanticNodeId,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct PendingSegmentCompletionKind {
     pub lifecycle_root: Option<SemanticNodeId>,
     pub lifecycle_removals: Vec<(SemanticNodeId, SemanticNodeId)>,
+    pub family_transform: Option<UnequalFamilyTransformCompletion>,
     pub object_entries: Vec<SegmentCompletionEntry>,
     pub scalar_entries: Vec<ScalarSegmentCompletionEntry>,
 }

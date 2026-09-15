@@ -129,31 +129,43 @@ fn unequal_family_transform_publishes_one_identity_free_expansion_copy() {
 
     session.advance_segment_to(segment, 1.0).unwrap();
     session.complete_segment(&mut store, segment).unwrap();
-    {
-        let publication = session.take_renderer_publication();
-        assert_eq!(publication.transient_presentations().len(), 1);
+    let persisted = store
+        .semantic_family_members_checked(source)
+        .unwrap()
+        .to_vec();
+    assert_eq!(persisted.len(), 3);
+    assert_eq!(persisted[0], s0);
+    assert_eq!(persisted[2], s1);
+    let expanded = persisted[1];
+    assert!(!source_members.contains(&expanded));
+    assert!(!target_members.contains(&expanded));
+    assert_eq!(
+        store.semantic_family_members_checked(target).unwrap(),
+        target_members
+    );
+    for (&member, expected_x) in persisted.iter().zip([10.0, 12.0, 14.0]) {
         assert_eq!(
-            publication.transient_presentations()[0].state().appearance,
-            1.0
+            store
+                .semantic_object_state_checked(member)
+                .unwrap()
+                .transform
+                .translation,
+            SemanticVec3::new(expected_x, 0.0, 0.0)
         );
     }
-    // Completion grants the endpoint one coherent publication, then queues one
-    // presentation-only follow-up so the transient occurrence is erased without
-    // claiming stable frame, painter-order, or spatial dirtiness.
-    assert!(session.wake_state().frame_pending());
-    let removal = session.take_renderer_publication();
-    assert!(!removal.changes().is_all());
-    assert!(removal.changes().requires_presentation_redraw());
-    assert!(!removal.changes().is_structural());
-    assert!(!removal.changes().has_painter_order_change());
-    assert!(removal.changes().object_indices().is_empty());
-    assert!(removal.changes().added_indices().is_empty());
-    assert!(removal.changes().removed_indices().is_empty());
-    assert!(removal.transient_presentations().is_empty());
+
+    // Completion replaces the identity-free interpolation copy with the new stable
+    // semantic child in the same publication, so the endpoint never double-renders.
+    let publication = session.take_renderer_publication();
+    assert!(publication.transient_presentations().is_empty());
+    assert_eq!(session.frame().objects.len(), 3);
+
+    session.advance_to(2.0).unwrap();
     assert_eq!(
         store.semantic_family_members_checked(source).unwrap(),
-        source_members
+        persisted
     );
+    assert_eq!(session.frame().objects.len(), 3);
 }
 
 #[test]
@@ -185,6 +197,66 @@ fn unequal_family_transform_scene_root_member_publishes_expansion_copy() {
     assert_eq!(publication.transient_presentations().len(), 1);
     let copy = &publication.transient_presentations()[0];
     assert!(copy.state().appearance > 0.0 && copy.state().appearance < 1.0);
+
+    session.advance_segment_to(segment, 1.0).unwrap();
+    session.complete_segment(&mut store, segment).unwrap();
+    assert_eq!(
+        store.semantic_family_members_checked(source).unwrap().len(),
+        3
+    );
+    assert_eq!(session.frame().objects.len(), 3);
+    assert!(session
+        .take_renderer_publication()
+        .transient_presentations()
+        .is_empty());
+}
+
+#[test]
+fn unequal_family_transform_rejects_unreachable_helper_family_before_publication() {
+    let mut store = SemanticStore::new();
+    let s0 = object(&mut store, 0.0);
+    let s1 = object(&mut store, 2.0);
+    let source = family(&mut store, &[s0, s1]);
+    let execution_root = family(&mut store, &[s0, s1]);
+    let t0 = object(&mut store, 10.0);
+    let t1 = object(&mut store, 12.0);
+    let t2 = object(&mut store, 14.0);
+    let target = family(&mut store, &[t0, t1, t2]);
+
+    let mut session = ExecutionSession::from_semantic_root(&store, execution_root).unwrap();
+    let before_publication = session.publication_context();
+    let before_revision = store.scene_revision();
+    let before_nodes = store.len();
+    let before_frame = session.frame().clone();
+    let request = SemanticCompositionRequest::FamilyTransformTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear),
+    };
+
+    let error = session
+        .declare_and_activate_composition(
+            &mut store,
+            execution_root,
+            &request,
+            AnimationOptions::new(),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ExecutionSessionAnimationError::InvalidComposition(message)
+            if message.contains("source family to be reachable")
+    ));
+    assert_eq!(store.scene_revision(), before_revision);
+    assert_eq!(store.len(), before_nodes);
+    assert_eq!(session.publication_context(), before_publication);
+    assert_eq!(session.frame(), &before_frame);
+    assert_eq!(
+        store.semantic_family_members_checked(source).unwrap(),
+        &[s0, s1]
+    );
 }
 
 #[test]
@@ -223,6 +295,77 @@ fn unequal_family_transform_direct_seek_matches_forward_playback() {
 }
 
 #[test]
+fn unequal_family_transform_completed_direct_seek_matches_forward_playback() {
+    let make = || {
+        let mut store = SemanticStore::new();
+        let s0 = object(&mut store, 0.0);
+        let s1 = object(&mut store, 2.0);
+        let source = family(&mut store, &[s0, s1]);
+        let t0 = object(&mut store, 10.0);
+        let t1 = object(&mut store, 12.0);
+        let t2 = object(&mut store, 14.0);
+        let target = family(&mut store, &[t0, t1, t2]);
+        let mut session = ExecutionSession::from_semantic_root(&store, source).unwrap();
+        let request = SemanticCompositionRequest::FamilyTransformTo {
+            source,
+            target_state: target,
+            options: AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        };
+        let segment = session
+            .declare_and_activate_composition(&mut store, source, &request, AnimationOptions::new())
+            .unwrap();
+        (store, source, target, session, segment)
+    };
+
+    let (mut forward_store, forward_source, forward_target, mut forward, forward_segment) = make();
+    forward.advance_segment_to(forward_segment, 0.25).unwrap();
+    forward.take_renderer_publication();
+    forward.advance_segment_to(forward_segment, 1.0).unwrap();
+    forward
+        .complete_segment(&mut forward_store, forward_segment)
+        .unwrap();
+    assert!(forward
+        .take_renderer_publication()
+        .transient_presentations()
+        .is_empty());
+
+    let (mut direct_store, direct_source, direct_target, mut direct, direct_segment) = make();
+    direct.seek(1.0).unwrap();
+    direct
+        .complete_segment(&mut direct_store, direct_segment)
+        .unwrap();
+    assert!(direct
+        .take_renderer_publication()
+        .transient_presentations()
+        .is_empty());
+
+    let states = |store: &SemanticStore, family: SemanticNodeId| {
+        store
+            .semantic_family_members_checked(family)
+            .unwrap()
+            .iter()
+            .map(|member| {
+                store
+                    .semantic_object_state_checked(*member)
+                    .unwrap()
+                    .clone()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        states(&forward_store, forward_source),
+        states(&direct_store, direct_source)
+    );
+    assert_eq!(
+        states(&forward_store, forward_target),
+        states(&direct_store, direct_target)
+    );
+    assert_eq!(forward.frame(), direct.frame());
+}
+
+#[test]
 fn unequal_family_path_transform_is_seek_equivalent_and_retires_locally() {
     let (mut forward_store, mut forward, forward_segment) = path_expansion_session();
     forward.advance_segment_to(forward_segment, 0.5).unwrap();
@@ -255,22 +398,9 @@ fn unequal_family_path_transform_is_seek_equivalent_and_retires_locally() {
     forward
         .complete_segment(&mut forward_store, forward_segment)
         .unwrap();
-    {
-        let endpoint = forward.take_renderer_publication();
-        assert_eq!(endpoint.transient_presentations().len(), 1);
-        let copy = &endpoint.transient_presentations()[0];
-        assert_eq!(copy.state().appearance, 1.0);
-        assert!(matches!(
-            copy.state().effective_render_geometry(),
-            Some(GeometryRef::VectorPath(_))
-        ));
-    }
-
-    assert!(forward.wake_state().frame_pending());
-    let retirement = forward.take_renderer_publication();
-    assert!(retirement.changes().requires_presentation_redraw());
-    assert!(!retirement.changes().has_stable_changes());
-    assert!(retirement.transient_presentations().is_empty());
+    let endpoint = forward.take_renderer_publication();
+    assert!(endpoint.transient_presentations().is_empty());
+    assert_eq!(forward.frame().objects.len(), 3);
 }
 
 #[test]
@@ -285,6 +415,10 @@ fn unequal_family_contraction_retains_only_effective_padding_fade() {
     let target = family(&mut store, &[t0, t1]);
     let source_members = store
         .semantic_family_members_checked(source)
+        .unwrap()
+        .to_vec();
+    let target_members = store
+        .semantic_family_members_checked(target)
         .unwrap()
         .to_vec();
 
@@ -311,10 +445,17 @@ fn unequal_family_contraction_retains_only_effective_padding_fade() {
         .execution_object_id(s1)
         .and_then(|object| session.runtime.frame_index_for_object(object))
         .unwrap();
-    assert_eq!(session.frame().objects[hidden_index].appearance, 0.0);
+    // Completion releases the execution-only Appearance fade back to its
+    // neutral value while authored object opacity preserves the same hidden result.
+    assert_eq!(session.frame().objects[hidden_index].appearance, 1.0);
+    assert_eq!(session.frame().objects[hidden_index].style.opacity, 0.0);
     assert_eq!(
         store.semantic_family_members_checked(source).unwrap(),
         source_members
+    );
+    assert_eq!(
+        store.semantic_family_members_checked(target).unwrap(),
+        target_members
     );
     assert_eq!(
         store
@@ -322,8 +463,22 @@ fn unequal_family_contraction_retains_only_effective_padding_fade() {
             .unwrap()
             .style
             .object_opacity,
-        1.0
+        0.0
     );
+
+    // Once the hidden endpoint is authored, the temporary Appearance driver is
+    // released; a later authored visibility write can therefore take effect.
+    let mut show = noon_core::SemanticMutationTransaction::new();
+    show.set_property(
+        s1,
+        noon_core::SemanticObjectProperty::ObjectOpacity,
+        1.0_f64,
+    );
+    session
+        .apply_semantic_transaction(&mut store, show)
+        .unwrap();
+    assert_eq!(session.frame().objects[hidden_index].appearance, 1.0);
+    assert_eq!(session.frame().objects[hidden_index].style.opacity, 1.0);
 }
 
 #[test]
