@@ -11,6 +11,9 @@ permissions:
 concurrency:
   group: tiger-padding-paint
   cancel-in-progress: true
+defaults:
+  run:
+    shell: bash
 env:
   CARGO_INCREMENTAL: '0'
   CARGO_PROFILE_DEV_DEBUG: '0'
@@ -26,7 +29,6 @@ jobs:
       - name: Use pinned Rust
         run: rustup install
       - name: Prove the new regression detects the old double fade
-        shell: bash
         run: |
           mkdir -p browser-smoke-artifacts/tiger-padding-paint
           file=crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_channels.rs
