@@ -1,0 +1,19 @@
+name: Tiger fix workspace
+on:
+  push:
+    branches: [fix/ghostscript-tiger-filled-morph]
+    paths: [.github/workflows/tiger-fix-workspace.yml]
+permissions:
+  contents: read
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Export exact source for local inspection
+        run: git archive --format=tar -o /tmp/noon-source.tar HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tiger-fix-source
+          path: /tmp/noon-source.tar
+          retention-days: 1
