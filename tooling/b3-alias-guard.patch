@@ -1,0 +1,101 @@
+--- a/crates/noon/src/execution_session/family_transform.rs
++++ b/crates/noon/src/execution_session/family_transform.rs
+@@ -308,6 +308,7 @@
+         source: SemanticNodeId,
+     },
+     TargetNotDetached(SemanticNodeId),
++    AliasedSourceDescendant(SemanticNodeId),
+ }
+ 
+ impl std::fmt::Display for MatchingFamilyCompletionSwapError {
+@@ -323,8 +324,10 @@
+ 
+ /// Stage the exact-end source-family -> target-family replacement without publishing it.
+ ///
+-/// The source must be one unaliased direct member of `execution_root`; the authored
+-/// target must be detached. Only outer membership changes, so both families retain
++/// The source must be one direct member of `execution_root` with no shared
++/// descendants; the authored target must be detached. Shared descendants require
++/// membership restructuring before their active presentation can move to the tail,
++/// so this bounded path rejects them before staging any edit. Both families retain
+ /// their internal authored topology and no execution identity is manufactured. The
+ /// target is appended after the surviving root members, matching Manim's cleanup-time
+ /// remove-source / add-target scene ordering.
+@@ -371,6 +374,25 @@
+         ));
+     }
+ 
++    // Root-only admission is insufficient: an earlier surviving family may own
++    // the first occurrence of a source leaf or nested family. Moving just the
++    // source root would leave that row behind and invalidate LayerEnd anchors.
++    // Inspect only this source subtree and its maintained parent links.
++    for descendant in store
++        .ordered_authoring_nodes(source_root)
++        .map_err(|_| MatchingFamilyCompletionSwapError::InvalidSourceFamily(source_root))?
++    {
++        if descendant != source_root
++            && store
++                .node(descendant)
++                .is_none_or(|node| node.parents().len() != 1)
++        {
++            return Err(MatchingFamilyCompletionSwapError::AliasedSourceDescendant(
++                descendant,
++            ));
++        }
++    }
++
+     semantic.remove_member(execution_root, source_root);
+     semantic.add_member(execution_root, target_root);
+     Ok(())
+--- a/crates/noon/src/execution_session/family_transform_tests.rs
++++ b/crates/noon/src/execution_session/family_transform_tests.rs
+@@ -969,3 +969,49 @@
+     session.complete_segment(&mut store, segment).unwrap();
+     assert_eq!(store.semantic_family_members_checked(root).unwrap(), &[before, after, target]);
+ }
++
++
++#[test]
++fn matching_family_rejects_shared_descendants_before_reordering_or_publication() {
++    // Sharing a leaf, sharing a nested family, and aliasing within the source
++    // are all outside the bounded root-only matching presentation contract.
++    for alias_kind in 0..3 {
++        let mut store = SemanticStore::new();
++        let leaf = matching_path_object(&mut store, matching_triangle(), 0.0);
++        let nested = family(&mut store, &[leaf]);
++        let source = family(&mut store, &[nested]);
++        let alias = family(&mut store, &[if alias_kind == 1 { nested } else { leaf }]);
++        if alias_kind == 2 {
++            store.add_member(source, alias).unwrap();
++        }
++        let target_leaf = matching_path_object(&mut store, matching_triangle(), 1.0);
++        let target = family(&mut store, &[target_leaf]);
++        let after = object(&mut store, 4.0);
++        let root = if alias_kind == 2 {
++            family(&mut store, &[source, after])
++        } else {
++            family(&mut store, &[alias, source, after])
++        };
++        let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
++        let revision = store.scene_revision();
++        let roots = store.semantic_family_members_checked(root).unwrap().to_vec();
++        let painter_order = session.painter_order().to_vec();
++        let frame = session.frame().clone();
++        let request = SemanticCompositionRequest::MatchingFamilyTransformTo {
++            source,
++            target_state: target,
++            options: AnimationOptions::new().run_time(1.0),
++        };
++        let error = session
++            .declare_and_activate_composition(&mut store, root, &request, AnimationOptions::new())
++            .unwrap_err();
++        assert!(error.to_string().contains("AliasedSourceDescendant"), "{error}");
++        assert_eq!(store.scene_revision(), revision);
++        assert_eq!(store.semantic_family_members_checked(root).unwrap(), roots);
++        assert_eq!(session.painter_order(), painter_order);
++        assert_eq!(session.frame().objects, frame.objects);
++        assert_eq!(session.frame().time, frame.time);
++        assert!(session.pending_segment_completion.is_none());
++        assert!(session.derived_display_plan.is_none());
++    }
++}
