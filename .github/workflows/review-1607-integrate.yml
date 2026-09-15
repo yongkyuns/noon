@@ -1,0 +1,63 @@
+name: Integrate PR 1607 with master
+on:
+  push:
+    branches: [review/1607-mixed-sampled-mega]
+permissions:
+  contents: write
+  actions: read
+defaults:
+  run:
+    shell: bash
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+jobs:
+  integrate:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - name: Fetch reviewed resolution artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            https://api.github.com/repos/yongkyuns/noon/actions/artifacts/10414036346/zip \
+            -o /tmp/resolved.zip
+          rm -rf /tmp/resolved && mkdir /tmp/resolved
+          unzip -q /tmp/resolved.zip -d /tmp/resolved
+      - name: Build exact two-parent integration
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=64 origin master fix/ghostscript-tiger-filled-morph-clean
+          test "$(git rev-parse origin/master)" = "$(cat /tmp/resolved/base-sha.txt)"
+          git checkout --detach origin/master
+          set +e
+          git merge --no-commit --no-ff origin/fix/ghostscript-tiger-filled-morph-clean
+          merge_status=$?
+          set -e
+          test "$merge_status" -ne 0
+          test "$(git diff --name-only --diff-filter=U)" = 'crates/noon-render-wgpu/src/render_order.rs'
+          cp /tmp/resolved/crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_channels.rs \
+             crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_channels.rs
+          cp /tmp/resolved/crates/noon-render-wgpu/src/render_order.rs \
+             crates/noon-render-wgpu/src/render_order.rs
+          git add crates/noon-compile/src/semantic_lowering/animation_payload/family_transform_channels.rs \
+                  crates/noon-render-wgpu/src/render_order.rs
+          test -z "$(git diff --name-only --diff-filter=U)"
+          rustup install
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo test -p noon-compile --test family_transform_padding_paint
+          cargo test -p noon-render-wgpu --test complex_filled_morph --test complex_filled_morph_mega
+          git add -A
+          git config user.name 'Yongkyun Shin'
+          git config user.email 'yongkyuns@gmail.com'
+          git commit -m 'Merge master into filled SVG transform fix'
+          git push --force origin HEAD:refs/heads/review/1607-integrated
