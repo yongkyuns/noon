@@ -1126,19 +1126,28 @@ fn pack_derived_display_object(
                 let (cache_index, _) = path_preparer
                     .cache_path_mesh(path, state.style, render_transform)
                     .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;
-                let cached = &path_preparer.path_mesh_cache[cache_index];
-                if let Some(resident) = &cached.resident {
+                let resident_indices = path_preparer.path_mesh_cache[cache_index]
+                    .resident
+                    .as_ref()
+                    .map(|resident| resident.indices.clone());
+                if let Some(indices) = resident_indices {
                     prepared.stats.resident_path_reuses += 1;
                     pack_derived_path_instance(
                         prepared,
-                        resident.indices.clone(),
+                        indices,
                         state,
                         render_transform,
                         style,
                         DerivedPathGeometrySource::Retained,
                     )
                 } else {
-                    pack_derived_path_mesh(prepared, &cached.mesh, state, render_transform, style)
+                    // The nonresident lane is already cold work. Reusing the existing
+                    // helper keeps cache lookup semantics centralized without adding
+                    // any steady-frame cost to resident transient paths.
+                    let (mesh, _) = path_preparer
+                        .cached_path_mesh(path, state.style, render_transform)
+                        .map_err(|_| DerivedDisplayRenderError::UnsupportedGeometry(occurrence))?;
+                    pack_derived_path_mesh(prepared, mesh, state, render_transform, style)
                 }
             } else {
                 let mesh = crate::tessellate_path_mesh(path, state.style, render_transform)
