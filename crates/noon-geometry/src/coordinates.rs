@@ -17,7 +17,9 @@ pub enum CoordinateError {
 impl std::fmt::Display for CoordinateError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
-            Self::InvalidRange => "coordinate range must be finite and increasing with positive step",
+            Self::InvalidRange => {
+                "coordinate range must be finite and increasing with positive step"
+            }
             Self::InvalidLength => "axis length must be finite and positive",
             Self::InvalidPoint => "coordinate query requires finite inputs and output",
             Self::DegenerateAxis => "coordinate query cannot invert a collapsed axis",
@@ -50,11 +52,7 @@ pub struct NumberLineFrame {
 }
 
 impl NumberLineFrame {
-    pub fn new(
-        range: [f64; 3],
-        start: [f64; 2],
-        end: [f64; 2],
-    ) -> Result<Self, CoordinateError> {
+    pub fn new(range: [f64; 3], start: [f64; 2], end: [f64; 2]) -> Result<Self, CoordinateError> {
         validate_coordinate_range(range)?;
         finite_point(start)?;
         finite_point(end)?;
@@ -68,11 +66,7 @@ impl NumberLineFrame {
     }
 
     /// Prepare the centered line before applying the requested rotation.
-    pub fn centered(
-        range: [f64; 3],
-        length: f64,
-        rotation: f64,
-    ) -> Result<Self, CoordinateError> {
+    pub fn centered(range: [f64; 3], length: f64, rotation: f64) -> Result<Self, CoordinateError> {
         if !length.is_finite() || length <= 0.0 {
             return Err(CoordinateError::InvalidLength);
         }
@@ -252,10 +246,7 @@ fn append_ticks(
     limit: usize,
 ) -> Result<(), CoordinateError> {
     let count = ((stop - start) / step).ceil().max(0.0);
-    if !stop.is_finite()
-        || !count.is_finite()
-        || count > limit.saturating_sub(ticks.len()) as f64
-    {
+    if !stop.is_finite() || !count.is_finite() || count > limit.saturating_sub(ticks.len()) as f64 {
         return Err(CoordinateError::TickLimitExceeded);
     }
     let count = count as usize;
@@ -289,8 +280,14 @@ mod tests {
     use super::*;
 
     fn near(left: [f64; 2], right: [f64; 2]) {
-        assert!((left[0] - right[0]).abs() < 1.0e-10, "{left:?} != {right:?}");
-        assert!((left[1] - right[1]).abs() < 1.0e-10, "{left:?} != {right:?}");
+        assert!(
+            (left[0] - right[0]).abs() < 1.0e-10,
+            "{left:?} != {right:?}"
+        );
+        assert!(
+            (left[1] - right[1]).abs() < 1.0e-10,
+            "{left:?} != {right:?}"
+        );
     }
 
     #[test]
@@ -300,8 +297,7 @@ mod tests {
         near(frame.number_to_point(4.0).unwrap(), [0.0, 0.0]);
         assert_eq!(frame.unit_size(), 2.0);
         let rotated =
-            NumberLineFrame::centered([2.0, 6.0, 1.0], 8.0, std::f64::consts::FRAC_PI_2)
-                .unwrap();
+            NumberLineFrame::centered([2.0, 6.0, 1.0], 8.0, std::f64::consts::FRAC_PI_2).unwrap();
         near(rotated.number_to_point(6.0).unwrap(), [0.0, 4.0]);
     }
 
@@ -316,8 +312,7 @@ mod tests {
 
     #[test]
     fn positive_and_negative_only_axes_have_centered_range_midpoints() {
-        let frame = AxesFrame::centered([2.0, 6.0, 1.0], [-6.0, -2.0, 1.0], 8.0, 4.0)
-            .unwrap();
+        let frame = AxesFrame::centered([2.0, 6.0, 1.0], [-6.0, -2.0, 1.0], 8.0, 4.0).unwrap();
         near(frame.coords_to_point(4.0, -4.0).unwrap(), [0.0, 0.0]);
         near(frame.coords_to_point(2.0, -6.0).unwrap(), [-4.0, -2.0]);
         near(frame.point_to_coords([4.0, 2.0]).unwrap(), [6.0, -2.0]);
@@ -356,8 +351,14 @@ mod tests {
         assert!(NumberLineFrame::centered([0.0, 1.0, 1.0], 0.0, 0.0).is_err());
         let frame = NumberLineFrame::new([0.0, 1.0, 0.1], [2.0, 3.0], [2.0, 3.0]).unwrap();
         near(frame.number_to_point(0.5).unwrap(), [2.0, 3.0]);
-        assert_eq!(frame.point_to_number([2.0, 3.0]), Err(CoordinateError::DegenerateAxis));
-        assert_eq!(frame.number_to_point(f64::NAN), Err(CoordinateError::InvalidPoint));
+        assert_eq!(
+            frame.point_to_number([2.0, 3.0]),
+            Err(CoordinateError::DegenerateAxis)
+        );
+        assert_eq!(
+            frame.number_to_point(f64::NAN),
+            Err(CoordinateError::InvalidPoint)
+        );
         assert_eq!(
             number_line_tick_values([0.0, 100.0, 0.01], false, false, 10),
             Err(CoordinateError::TickLimitExceeded)

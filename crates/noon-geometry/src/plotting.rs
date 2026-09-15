@@ -37,10 +37,16 @@ impl std::fmt::Display for PlotPreparationError {
             Self::SampleLimitExceeded => formatter.write_str("plot sample limit exceeded"),
             Self::AllocationFailed => formatter.write_str("plot preparation allocation failed"),
             Self::SampleCountMismatch { expected, actual } => {
-                write!(formatter, "expected {expected} plot samples, received {actual}")
+                write!(
+                    formatter,
+                    "expected {expected} plot samples, received {actual}"
+                )
             }
             Self::InvalidPoint { sample_index } => {
-                write!(formatter, "plot sample {sample_index} is not a finite renderable 2D point")
+                write!(
+                    formatter,
+                    "plot sample {sample_index} is not a finite renderable 2D point"
+                )
             }
             Self::SmoothingFailed => formatter.write_str("shared plot path smoothing failed"),
         }
@@ -74,10 +80,7 @@ impl PlotSamplingOptions {
 
     /// Resolve an Axes plot range. A two-element override changes the interval,
     /// not the shared default step of one tenth of the axis tick spacing.
-    pub fn axes(
-        axis_range: [f64; 3],
-        range: Option<&[f64]>,
-    ) -> Result<Self, PlotPreparationError> {
+    pub fn axes(axis_range: [f64; 3], range: Option<&[f64]>) -> Result<Self, PlotPreparationError> {
         let axis = normalize_range(&axis_range, 1.0)?;
         let step = axis[2] / GRAPH_SAMPLES_PER_TICK;
         let resolved = match range {
@@ -240,8 +243,7 @@ impl PlotSamplingPlan {
             }
         }
         if use_smoothing {
-            change_path_anchor_mode(&path, true)
-                .map_err(|_| PlotPreparationError::SmoothingFailed)
+            change_path_anchor_mode(&path, true).map_err(|_| PlotPreparationError::SmoothingFailed)
         } else {
             Ok(path)
         }
@@ -323,8 +325,7 @@ mod tests {
         assert_eq!(plan.parameters().last(), Some(&1.0));
         let options = PlotSamplingOptions::axes([0.0, 4.0, 2.0], Some(&[1.0, 3.0])).unwrap();
         assert_eq!(options.range, [1.0, 3.0, 0.2]);
-        let explicit =
-            PlotSamplingOptions::axes([0.0, 4.0, 2.0], Some(&[1.0, 3.0, 0.25])).unwrap();
+        let explicit = PlotSamplingOptions::axes([0.0, 4.0, 2.0], Some(&[1.0, 3.0, 0.25])).unwrap();
         assert_eq!(explicit.range, [1.0, 3.0, 0.25]);
     }
 
@@ -424,11 +425,17 @@ mod tests {
         }
         let mut options = PlotSamplingOptions::parametric(&[0.0, 1.0, 0.25]).unwrap();
         options.max_samples = 4;
-        assert_eq!(options.plan(), Err(PlotPreparationError::SampleLimitExceeded));
+        assert_eq!(
+            options.plan(),
+            Err(PlotPreparationError::SampleLimitExceeded)
+        );
         options.max_samples = 5;
         assert_eq!(options.plan().unwrap().parameters().len(), 5);
         options.dt = f64::NAN;
-        assert_eq!(options.plan(), Err(PlotPreparationError::InvalidDiscontinuity));
+        assert_eq!(
+            options.plan(),
+            Err(PlotPreparationError::InvalidDiscontinuity)
+        );
     }
 
     #[test]
