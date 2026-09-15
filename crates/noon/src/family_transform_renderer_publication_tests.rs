@@ -15,7 +15,8 @@ fn drain(session: &mut ExecutionSession) {
 }
 
 fn finish(live: &mut LiveSession<'_>, segment: ExecutionSegment) {
-    live.advance_segment_to(segment, segment.end_time()).unwrap();
+    live.advance_segment_to(segment, segment.end_time())
+        .unwrap();
     live.complete_segment(segment).unwrap();
 }
 
@@ -146,7 +147,8 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
             midpoint_appearance > 0.0 && midpoint_appearance < 1.0,
             "source leaf 1 did not animate appearance at midpoint: {midpoint_appearance}"
         );
-        live.advance_segment_to(segment, segment.end_time()).unwrap();
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
         for (index, object) in source_objects.iter().enumerate() {
             assert_eq!(
                 live.effective(object).unwrap().appearance,

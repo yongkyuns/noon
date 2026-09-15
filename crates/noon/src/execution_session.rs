@@ -1827,9 +1827,10 @@ impl ExecutionSession {
                 // keep the per-leaf path below because each leaf owns the authored path arc.
                 if !curved && is_flat_family(*source) && is_flat_family(*target_state) {
                     let mut options = *options;
-                    if options.path_arc.is_some_and(|arc| {
-                        arc.abs() < noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD
-                    }) {
+                    if options
+                        .path_arc
+                        .is_some_and(|arc| arc.abs() < noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD)
+                    {
                         options.path_arc = None;
                     }
                     return Ok(declaration.create_family_transform_animation(

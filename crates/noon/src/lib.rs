@@ -81,9 +81,9 @@ mod family_grid;
 mod family_layout;
 #[cfg(test)]
 mod family_layout_migration_tests;
+mod family_style;
 #[cfg(test)]
 mod family_transform_renderer_publication_tests;
-mod family_style;
 mod focus_on_authoring;
 mod geometry_authoring;
 mod host_callbacks;

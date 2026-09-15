@@ -170,14 +170,17 @@ where
                     family.options.lag_ratio,
                     1.0,
                 )
-                .map_err(|error| PreparedFamilyTransformActivationError::MemberTiming {
-                    animation: family.animation,
-                    error,
+                .map_err(|error| {
+                    PreparedFamilyTransformActivationError::MemberTiming {
+                        animation: family.animation,
+                        error,
+                    }
                 })
             })
             .transpose()?;
 
-        for (member_index, correspondence_member) in correspondence.occurrences().iter().enumerate() {
+        for (member_index, correspondence_member) in correspondence.occurrences().iter().enumerate()
+        {
             let source = correspondence_member.source();
             let execution_object_id = index.execution_object_id(source).ok_or(
                 PreparedFamilyTransformActivationError::MissingExecutionSource {

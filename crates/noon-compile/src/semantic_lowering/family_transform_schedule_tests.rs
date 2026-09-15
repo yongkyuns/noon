@@ -60,14 +60,9 @@ fn one_child_parallel_family_transform_keeps_full_root_time_map() {
 
     let mut index = SemanticExecutionIndex::new();
     index.lower_scene(&store).unwrap();
-    let schedule = lower_semantic_animation_schedule(
-        &store,
-        &index,
-        root,
-        3.75,
-        AnimationOptions::new(),
-    )
-    .unwrap();
+    let schedule =
+        lower_semantic_animation_schedule(&store, &index, root, 3.75, AnimationOptions::new())
+            .unwrap();
 
     assert_eq!(schedule.start_time(), 3.75);
     assert_eq!(schedule.run_time(), 1.8);
@@ -187,17 +182,12 @@ fn hidden_real_source_in_one_child_parallel_emits_restoring_appearance_track() {
         AnimationOptions::new(),
     )
     .unwrap();
-    let activation = prepare_family_transform_activations(
-        &prepared,
-        &index,
-        &schedule,
-        |object| {
-            Some(EffectiveAnimationProperties {
-                appearance: if object == hidden { 0.0 } else { 1.0 },
-                ..effective()
-            })
-        },
-    )
+    let activation = prepare_family_transform_activations(&prepared, &index, &schedule, |object| {
+        Some(EffectiveAnimationProperties {
+            appearance: if object == hidden { 0.0 } else { 1.0 },
+            ..effective()
+        })
+    })
     .unwrap();
     let channels = lower_prepared_family_transform_channels(&prepared, &activation).unwrap();
     let appearances = channels
