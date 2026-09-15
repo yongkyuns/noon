@@ -93,10 +93,7 @@ impl<'session, 'store> PreparedPublication<'session, 'store> {
     }
 }
 
-fn merge_ranked_viewport_rows(
-    visible: &[(u32, usize)],
-    anchors: &[(u32, usize)],
-) -> Vec<usize> {
+fn merge_ranked_viewport_rows(visible: &[(u32, usize)], anchors: &[(u32, usize)]) -> Vec<usize> {
     let mut merged = Vec::with_capacity(visible.len() + anchors.len());
     let mut visible = visible.iter().copied().peekable();
     let mut anchors = anchors.iter().copied().peekable();
@@ -179,9 +176,7 @@ impl ExecutionSession {
             .into_iter()
             .map(|object_index| {
                 let rank = self.runtime.painter_rank(object_index).unwrap_or_else(|| {
-                    panic!(
-                        "retained viewport object {object_index} has no runtime painter rank"
-                    )
+                    panic!("retained viewport object {object_index} has no runtime painter rank")
                 });
                 (rank, object_index)
             })
@@ -200,10 +195,7 @@ mod viewport_tests {
     #[test]
     fn renderer_viewport_anchor_merge_preserves_runtime_painter_order() {
         assert_eq!(
-            merge_ranked_viewport_rows(
-                &[(1, 20), (4, 50), (7, 80)],
-                &[(0, 10), (3, 40), (9, 100)],
-            ),
+            merge_ranked_viewport_rows(&[(1, 20), (4, 50), (7, 80)], &[(0, 10), (3, 40), (9, 100)],),
             [10, 20, 40, 50, 80, 100]
         );
     }
