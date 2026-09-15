@@ -124,7 +124,7 @@ try {
   result.failure = String(error);
   throw error;
 } finally {
-  await writeFile(path.join(artifacts, 'tiger-morph.json'), JSON.stringify(result, null, 2));
+  await writeFile(path.join(artifacts, 'tiger-morph.json'), JSON.stringify(result, (_, value) => typeof value === 'bigint' ? value.toString() : value, 2));
   await page?.screenshot({ path: path.join(artifacts, 'gallery.png'), timeout: 5000 }).catch(() => {});
   await context?.close();
   await browser?.close();

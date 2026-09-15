@@ -7,10 +7,9 @@
 
 use crate::{AuthoringError, MobjectFamily, Scene, StyleUpdate};
 use noon_core::{
-    semantic_path_bounds, Color, SemanticMutationTransaction, SemanticNodeCreation,
-    SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle, SemanticTransform2_5D,
-    SemanticVec3, SourceIdentity, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Vec2,
-    VectorPath,
+    Color, SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectState, SemanticPaint,
+    SemanticStore, SemanticStyle, SemanticTransform2_5D, SemanticVec3, SourceIdentity,
+    StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Vec2, VectorPath,
 };
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
@@ -879,7 +878,7 @@ fn svg_point(mut point: usvg::tiny_skia_path::Point, transform: usvg::Transform)
 fn aggregate_path_bounds(leaves: &[PreparedSvgLeaf]) -> Option<noon_core::Bounds2D64> {
     let mut aggregate: Option<noon_core::Bounds2D64> = None;
     for leaf in leaves {
-        let Some(bounds) = semantic_path_bounds(&leaf.path, 0.0).layout else {
+        let Some(bounds) = noon_geometry::cubic_control_point_bounds(&leaf.path) else {
             continue;
         };
         if let Some(aggregate) = &mut aggregate {
@@ -929,6 +928,38 @@ fn placement_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn svg_cubic_fitting_uses_manim_control_points_not_tight_extrema() {
+        // The curve reaches y=9, but its cubic handles reach y=12. Manim fits
+        // the latter to height 2; visible curve height is therefore 1.5.
+        let scene = Scene::new();
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12">
+            <path d="M0 0 C0 12 12 12 12 0 Z"/>
+        </svg>"#;
+        let family = scene.svg_from_str(svg).unwrap();
+        let bounds = family.layout_bounds().unwrap().unwrap();
+        assert!((bounds.width() - 2.0).abs() < 1e-6);
+        assert!((bounds.height() - 1.5).abs() < 1e-6);
+        assert!((bounds.min_y + 0.5).abs() < 1e-6);
+        assert!((bounds.max_y - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn svg_quadratic_fitting_uses_promoted_cubic_control_points() {
+        // Q's handle at y=12 promotes to cubic handles at y=8. Fitting the
+        // quadratic handle itself (12) or tight trace (6) would both be wrong.
+        let scene = Scene::new();
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12">
+            <path d="M0 0 Q6 12 12 0 Z"/>
+        </svg>"#;
+        let family = scene.svg_from_str(svg).unwrap();
+        let bounds = family.layout_bounds().unwrap().unwrap();
+        assert!((bounds.width() - 3.0).abs() < 1e-6);
+        assert!((bounds.height() - 1.5).abs() < 1e-6);
+        assert!((bounds.min_y + 0.5).abs() < 1e-6);
+        assert!((bounds.max_y - 1.0).abs() < 1e-6);
+    }
 
     fn raw_options() -> SvgImportOptions {
         SvgImportOptions {

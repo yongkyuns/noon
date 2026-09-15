@@ -5,6 +5,38 @@ use noon_core::{PathCommand, SemanticVec3, Vec2, VectorPath};
 
 const MANIM_LENGTH_SAMPLE_POINTS: usize = 10;
 
+/// Bounds of the canonical cubic control points, not the tight curve trace.
+///
+/// Manim's SVG centering and dimension fitting use its stored cubic point array.
+/// Keep this explicit authoring query separate from tight layout/render bounds.
+/// Lines and quadratic curves are promoted by the same canonical conversion used
+/// for path interpolation. This is O(path commands) work at SVG import time.
+pub fn cubic_control_point_bounds(path: &VectorPath) -> Option<noon_core::Bounds2D64> {
+    if !path.is_finite() {
+        return None;
+    }
+    let mut bounds: Option<noon_core::Bounds2D64> = None;
+    let mut include = |point: SemanticVec3| {
+        if let Some(bounds) = &mut bounds {
+            bounds.include(point.x, point.y);
+        } else {
+            bounds = Some(noon_core::Bounds2D64::point(point.x, point.y));
+        }
+    };
+    for curve in collect_curves(path) {
+        for point in curve_controls(curve) {
+            include(point);
+        }
+    }
+    // A trailing moveto is a stored anchor even when it has no following curve.
+    for command in path.commands() {
+        if let PathCommand::MoveTo { to } = command {
+            include(SemanticVec3::new(f64::from(to.x), f64::from(to.y), 0.0));
+        }
+    }
+    bounds
+}
+
 #[derive(Clone, Copy, Debug)]
 enum CurveKind {
     Line,

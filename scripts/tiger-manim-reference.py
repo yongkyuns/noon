@@ -74,7 +74,7 @@ report = {"manim_version": manim.__version__, "renderer": "cairo",
           "asset_sha256": hashlib.sha256(raw_tiger).hexdigest(),
           "samples": [], "notes": "Ordinary Transform; no outline phase, repaint, or replacement."}
 with tempconfig({"renderer": "cairo", "pixel_width": 960, "pixel_height": 540,
-                 "frame_width": 128/9, "frame_height": 8, "background_color": "#111111"}):
+                 "frame_width": 128/9, "frame_height": 8, "background_color": "#000000"}):
     tiger, rocket = make_objects()
     saved = tiger.copy()
     report["source_leaves"] = len(tiger)
@@ -100,7 +100,7 @@ with tempconfig({"renderer": "cairo", "pixel_width": 960, "pixel_height": 540,
                 "file": f"{label}.png", "leaf_count": len(tiger),
                 "paints": [paint(leaf) for leaf in tiger],
                 "points_sha256": hashlib.sha256(b"".join(leaf.points.tobytes() for leaf in tiger)).hexdigest(),
-                "foreground_pixels": int(np.any(np.abs(pixels[:,:,:3].astype(int)-17)>12, axis=2).sum())})
+                "foreground_pixels": int(np.any(np.abs(pixels[:,:,:3].astype(int))>12, axis=2).sum())})
         animation.finish()
     restored = capture(camera, tiger)
     report["restoration_changed_pixels"] = int(np.any(np.abs(original.astype(int)-restored.astype(int))>12, axis=2).sum())

@@ -157,7 +157,7 @@ try {
   result.runtimeResources = runtimeCache?.stats();
   await writeFile(
     path.join(artifacts, 'python-family-transform.json'),
-    JSON.stringify(result, null, 2),
+    JSON.stringify(result, (_, value) => typeof value === 'bigint' ? value.toString() : value, 2),
   );
   await context?.close();
   await browser?.close();

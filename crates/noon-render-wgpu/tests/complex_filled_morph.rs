@@ -65,7 +65,9 @@ fn cross(a: [f32; 2], b: [f32; 2], p: [f32; 2]) -> f32 {
 fn mesh_contains(prepared: &PreparedFrame<'_>, point: [f32; 2]) -> bool {
     let batch = &prepared.path_batches[0];
     prepared.path_indices[batch.index_range.start as usize..batch.index_range.end as usize]
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .any(|triangle| {
             let a = prepared.path_vertices[triangle[0] as usize].position;
             let b = prepared.path_vertices[triangle[1] as usize].position;

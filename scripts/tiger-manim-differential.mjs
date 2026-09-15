@@ -24,7 +24,7 @@ for (const [direction, start] of [['forward', 0.5], ['return', 3.05]]) {
 }
 samples.push({ label: 'restored-hold', time: 5.6 });
 const times = [...new Set([...Array.from({ length: 172 }, (_, i) => i / 30), ...samples.map(x => x.time)])].sort((a,b) => a-b);
-const result = { candidate: process.env.GITHUB_SHA, runtimeReference: '116d4003de85648559299960da9394195f619501', errors: [], captures: [] };
+const result = { candidate: process.env.GITHUB_SHA, runtimeReference: JSON.parse(await readFile(path.join(root, 'web/runtime-build-identity.json'), 'utf8')), errors: [], captures: [] };
 let server, browser, context, page;
 try {
   server = spawn('python3', ['-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', root], { stdio: 'ignore' });
