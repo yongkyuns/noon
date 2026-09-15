@@ -22,10 +22,10 @@ use super::prepared_composition::{
 /// One ordinary stable-source family Transform track plus its completion policy.
 ///
 /// `retain_effective` is execution-session release metadata, not authored animation
-/// meaning. It is used only for a real source occurrence that maps to a padded target:
-/// the padding fade has no authored property to receive its endpoint, so completion
-/// must leave that exact presentation value effective instead of reconciling it to
-/// the stable row's base appearance.
+/// meaning. It is used only for a real source occurrence that maps to a padded target
+/// while interpolation is active. Unequal-family completion later persists that fade
+/// into authored source style and can therefore reconcile the execution-only Appearance
+/// driver instead of retaining presentation state as a second authority.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreparedFamilyTransformStableTrack {
     pub track: PreparedSemanticAnimationTrack,
@@ -187,9 +187,10 @@ impl std::error::Error for PreparedFamilyTransformChannelError {
 /// - a real target ends at appearance 1.
 ///
 /// For a real source mapping to target padding, the appearance channel is marked
-/// `retain_effective`; the session completion layer must keep only that presentation
-/// endpoint while canonical geometry/transform/style channels complete normally.
-/// This function remains pure and publishes nothing.
+/// `retain_effective` during interpolation. The session's unequal-family completion
+/// handoff persists the hidden endpoint semantically and then reconciles that temporary
+/// presentation driver with the rest of the stable channels. This function remains pure
+/// and publishes nothing.
 pub fn lower_prepared_family_transform_channels(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     activation: &PreparedFamilyTransformActivationProjection,
