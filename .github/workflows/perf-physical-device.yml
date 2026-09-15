@@ -72,7 +72,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+      - uses: taiki-e/install-action@9534c84618278caac52cb373bb164ed464dbd8af
         with:
           tool: wasm-pack@0.15.0
           fallback: none
