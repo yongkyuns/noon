@@ -2,6 +2,7 @@ use noon_compile::{
     PreparedFamilyTransformChannelProjection, PreparedMatchingShapeTargetLeftoverFade,
     PreparedTransientPainterPlacement,
 };
+use noon_core::{SemanticMutationTransaction, SemanticNodeId, SemanticStore};
 use noon_runtime::{
     DerivedDisplayAnimationOccurrence, DerivedDisplayAnimationPlan, DerivedDisplayAnimationTrack,
     DerivedDisplayObjectState, SceneInstance, TransientPresentationPainterPlacement,
@@ -214,6 +215,206 @@ fn stable_layer_tail(runtime: &SceneInstance, z_index: f64) -> Option<u32> {
                     .get(index)
                     .is_some_and(|object| object.z_index == z_index)
         })
+}
+
+/// Unsupported topology for exact-end matching-family replacement.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MatchingFamilyCompletionSwapError {
+    InvalidExecutionRoot(SemanticNodeId),
+    InvalidSourceFamily(SemanticNodeId),
+    InvalidTargetFamily(SemanticNodeId),
+    SourceEqualsTarget(SemanticNodeId),
+    SourceNotDirectMember {
+        execution_root: SemanticNodeId,
+        source: SemanticNodeId,
+    },
+    TargetNotDetached(SemanticNodeId),
+}
+
+impl std::fmt::Display for MatchingFamilyCompletionSwapError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "unsupported matching-family completion swap topology: {self:?}"
+        )
+    }
+}
+
+impl std::error::Error for MatchingFamilyCompletionSwapError {}
+
+/// Stage the exact-end source-family -> target-family replacement without publishing it.
+///
+/// The source must be one unaliased direct member of `execution_root`; the authored
+/// target must be detached. Only outer membership changes, so both families retain
+/// their internal authored topology and no execution identity is manufactured. The
+/// target occupies the source family's exact sibling slot rather than being appended.
+#[allow(dead_code)]
+pub(super) fn stage_matching_family_completion_swap(
+    store: &SemanticStore,
+    execution_root: SemanticNodeId,
+    source_root: SemanticNodeId,
+    target_root: SemanticNodeId,
+    semantic: &mut SemanticMutationTransaction,
+) -> Result<(), MatchingFamilyCompletionSwapError> {
+    let execution = store
+        .node(execution_root)
+        .filter(|node| matches!(node.kind(), noon_core::SemanticNodeKind::Family(_)))
+        .ok_or(MatchingFamilyCompletionSwapError::InvalidExecutionRoot(
+            execution_root,
+        ))?;
+    let source = store
+        .node(source_root)
+        .filter(|node| matches!(node.kind(), noon_core::SemanticNodeKind::Family(_)))
+        .ok_or(MatchingFamilyCompletionSwapError::InvalidSourceFamily(
+            source_root,
+        ))?;
+    let target = store
+        .node(target_root)
+        .filter(|node| matches!(node.kind(), noon_core::SemanticNodeKind::Family(_)))
+        .ok_or(MatchingFamilyCompletionSwapError::InvalidTargetFamily(
+            target_root,
+        ))?;
+
+    if source_root == target_root {
+        return Err(MatchingFamilyCompletionSwapError::SourceEqualsTarget(
+            source_root,
+        ));
+    }
+    if source_root == execution_root || source.parents() != [execution_root] {
+        return Err(MatchingFamilyCompletionSwapError::SourceNotDirectMember {
+            execution_root,
+            source: source_root,
+        });
+    }
+    if target.is_scene_owned() || !target.parents().is_empty() {
+        return Err(MatchingFamilyCompletionSwapError::TargetNotDetached(
+            target_root,
+        ));
+    }
+
+    let next_sibling = execution.next_member(source_root);
+    semantic.remove_member(execution_root, source_root);
+    semantic.add_member(execution_root, target_root);
+    if let Some(next_sibling) = next_sibling {
+        semantic.reorder_member(execution_root, target_root, Some(next_sibling));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod matching_completion_tests {
+    use noon_core::{SemanticObjectState, StoredGeometry};
+
+    use super::*;
+
+    fn object(store: &mut SemanticStore) -> SemanticNodeId {
+        store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+            radius: 1.0,
+        }))
+    }
+
+    fn family(store: &mut SemanticStore, members: &[SemanticNodeId]) -> SemanticNodeId {
+        let family = store.insert_family();
+        for &member in members {
+            store.add_member(family, member).unwrap();
+        }
+        family
+    }
+
+    #[test]
+    fn completion_swap_preserves_source_sibling_slot_and_family_internals() {
+        let mut store = SemanticStore::new();
+        let before = object(&mut store);
+        let after = object(&mut store);
+        let source_leaf = object(&mut store);
+        let target_leaf = object(&mut store);
+        let source = family(&mut store, &[source_leaf]);
+        let target = family(&mut store, &[target_leaf]);
+        let execution_root = family(&mut store, &[before, source, after]);
+        let source_members = store
+            .semantic_family_members_checked(source)
+            .unwrap()
+            .to_vec();
+        let target_members = store
+            .semantic_family_members_checked(target)
+            .unwrap()
+            .to_vec();
+
+        let mut semantic = SemanticMutationTransaction::new();
+        stage_matching_family_completion_swap(
+            &store,
+            execution_root,
+            source,
+            target,
+            &mut semantic,
+        )
+        .unwrap();
+        let prepared = semantic.prepare(&mut store).unwrap();
+        let (_result, committed) = prepared.commit_with_store();
+
+        assert_eq!(
+            committed
+                .semantic_family_members_checked(execution_root)
+                .unwrap(),
+            &[before, target, after]
+        );
+        assert_eq!(
+            committed.semantic_family_members_checked(source).unwrap(),
+            source_members
+        );
+        assert_eq!(
+            committed.semantic_family_members_checked(target).unwrap(),
+            target_members
+        );
+    }
+
+    #[test]
+    fn completion_swap_rejects_aliased_source() {
+        let mut store = SemanticStore::new();
+        let source = family(&mut store, &[]);
+        let target = family(&mut store, &[]);
+        let execution_root = family(&mut store, &[source]);
+        let alias_root = store.insert_family();
+        store.add_member(alias_root, source).unwrap();
+
+        let mut semantic = SemanticMutationTransaction::new();
+        assert_eq!(
+            stage_matching_family_completion_swap(
+                &store,
+                execution_root,
+                source,
+                target,
+                &mut semantic,
+            ),
+            Err(MatchingFamilyCompletionSwapError::SourceNotDirectMember {
+                execution_root,
+                source,
+            })
+        );
+    }
+
+    #[test]
+    fn completion_swap_rejects_mounted_target() {
+        let mut store = SemanticStore::new();
+        let source = family(&mut store, &[]);
+        let target = family(&mut store, &[]);
+        let execution_root = family(&mut store, &[source]);
+        let target_root = family(&mut store, &[target]);
+        assert_ne!(execution_root, target_root);
+
+        let mut semantic = SemanticMutationTransaction::new();
+        assert_eq!(
+            stage_matching_family_completion_swap(
+                &store,
+                execution_root,
+                source,
+                target,
+                &mut semantic,
+            ),
+            Err(MatchingFamilyCompletionSwapError::TargetNotDetached(target))
+        );
+    }
 }
 
 #[cfg(test)]
