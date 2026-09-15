@@ -2,25 +2,88 @@ name: B3 timing and painter-order qualification
 on:
   push:
     branches: [tooling/b3-timing-order-qualification]
+    paths: [.github/workflows/b3-timing-order-qualification.yml]
 permissions:
-  contents: read
+  contents: write
 jobs:
-  source:
+  native:
     runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 5b32772413e72e56b814a78941b7adc0b86ea3d0
-      - name: Export exact product source
+          fetch-depth: 0
+          show-progress: false
+      - name: Apply exact product patch without qualifier files
         run: |
-          test "$(git rev-parse HEAD)" = 5b32772413e72e56b814a78941b7adc0b86ea3d0
-          mkdir -p "$RUNNER_TEMP/b3-source"
-          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/b3-source/source.tar.gz"
-          git rev-parse HEAD > "$RUNNER_TEMP/b3-source/source-sha.txt"
-          sha256sum "$RUNNER_TEMP/b3-source/source.tar.gz"
-      - uses: actions/upload-artifact@v7
+          mkdir -p "$RUNNER_TEMP/b3-evidence"
+          cp tooling/b3-timing-order.patch.gz.b64 "$RUNNER_TEMP/b3-patch.b64"
+          git checkout --detach 8250da301ae6b58dee104d08c8288b359e26c48a
+          python3 - <<'PY'
+          import base64, gzip, hashlib, os
+          from pathlib import Path
+          data = gzip.decompress(base64.b64decode(Path(os.environ['RUNNER_TEMP'], 'b3-patch.b64').read_text()))
+          assert hashlib.sha256(data).hexdigest() == '32b74902ed2712e9945fe3e080ac74b7e71731f9f0cfb45d91ab868a56cbe4a0'
+          Path(os.environ['RUNNER_TEMP'], 'b3-patch.diff').write_bytes(data)
+          PY
+          git apply --check "$RUNNER_TEMP/b3-patch.diff"
+          git apply "$RUNNER_TEMP/b3-patch.diff"
+          git add -N web/python/test_manim_matching_timing_scopes.py
+          git diff --check
+      - name: Python request boundaries and existing raster policy
+        run: |
+          set -o pipefail
+          PYTHONPATH=web/python python3 -m unittest discover -s web/python -p 'test_manim*matching*.py' 2>&1 | tee "$RUNNER_TEMP/b3-evidence/python.log"
+          node --test scripts/manim-raster-samples.test.mjs 2>&1 | tee "$RUNNER_TEMP/b3-evidence/sampler.log"
+          node scripts/manim-raster-policy.test.mjs
+      - name: Install repository-pinned Rust
+        run: rustup install
+      - uses: actions/cache@v6
         with:
-          name: b3-timing-order-source
-          path: ${{ runner.temp }}/b3-source
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Format and publish immutable source-only candidate
+        run: |
+          cargo fmt --all
+          git diff --check
+          git diff --binary > "$RUNNER_TEMP/b3-evidence/formatted.patch"
+          git diff --name-only | sort > "$RUNNER_TEMP/b3-evidence/changed-files.txt"
+          test "$(wc -l < "$RUNNER_TEMP/b3-evidence/changed-files.txt")" -eq 7
+          git diff --exit-code -- parity scripts web/python/examples .github
+          git add crates/noon-web/src/canonical_authoring_scene/completed_binding_tests.rs crates/noon/src/execution_session.rs crates/noon/src/execution_session/family_transform.rs crates/noon/src/execution_session/family_transform_tests.rs crates/noon/src/execution_session/publication.rs web/python/_manim_scene.py web/python/test_manim_matching_timing_scopes.py
+          git -c user.name='Yongkyun Shin' -c user.email='4311628+yongkyuns@users.noreply.github.com' commit -m 'fix: preserve matching timing scopes and atomic active painter order'
+          git rev-parse HEAD | tee "$RUNNER_TEMP/b3-evidence/source-sha.txt"
+          git rev-parse 'HEAD^{tree}' | tee "$RUNNER_TEMP/b3-evidence/source-tree.txt"
+          git push origin "HEAD:refs/heads/tooling/b3-timing-order-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+      - name: Native matching and all session regressions
+        run: |
+          set -o pipefail
+          cargo test -p noon --lib --all-features 2>&1 | tee "$RUNNER_TEMP/b3-evidence/noon-tests.log"
+      - name: Canonical binding and real nested-rate regressions
+        run: |
+          set -o pipefail
+          cargo test -p noon-web --lib completed_binding_tests -- --nocapture 2>&1 | tee "$RUNNER_TEMP/b3-evidence/binding-tests.log"
+      - name: Strict compiler and architecture qualification
+        run: |
+          set -o pipefail
+          cargo clippy -p noon -p noon-web --all-targets --all-features -- -D warnings 2>&1 | tee "$RUNNER_TEMP/b3-evidence/clippy.log"
+          bash scripts/check.sh architecture 8250da301ae6b58dee104d08c8288b359e26c48a 2>&1 | tee "$RUNNER_TEMP/b3-evidence/architecture.log"
+          cargo fmt --all -- --check
+          git diff --exit-code
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: b3-timing-order-native
+          path: ${{ runner.temp }}/b3-evidence
           if-no-files-found: error
-          retention-days: 2
+          retention-days: 7
