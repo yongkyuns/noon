@@ -4,10 +4,15 @@ on:
     branches: [b3-matching-shapes-parity-qualification]
 permissions:
   contents: read
+concurrency:
+  group: b3-fixed-snapshot-raster
+  cancel-in-progress: true
 jobs:
   raster:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
+      SOURCE_SHA: 9890ad9d88f87e10f6c65287e6b857a256600f9a
       CARGO_INCREMENTAL: '0'
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: 'true'
@@ -18,25 +23,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 22301a6481baecfa5626294758cee6a4c2a8176d
+          ref: 9890ad9d88f87e10f6c65287e6b857a256600f9a
+          fetch-depth: 2
           show-progress: false
       - name: Validate exact candidate and sampler
         run: |
-          test "$(git rev-parse HEAD)" = 22301a6481baecfa5626294758cee6a4c2a8176d
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           node --test scripts/manim-raster-samples.test.mjs
           node scripts/manim-raster-policy.test.mjs
           python3 -m py_compile parity/manim-v0.21/core-examples/matching_shapes_reordered.py
           cp parity/manim-v0.21/manifest.json "$RUNNER_TEMP/b3-full-manifest.json"
           python3 - <<'PY'
-          import json
+          import json, os
           from pathlib import Path
-          p = Path('parity/manim-v0.21/manifest.json')
-          manifest = json.loads(p.read_text())
+          manifest = json.loads(Path('parity/manim-v0.21/manifest.json').read_text())
           manifest['fixtures'] = [f for f in manifest['fixtures'] if f['id'] == 'matching-shapes-reordered']
           assert len(manifest['fixtures']) == 1
-          p.write_text(json.dumps(manifest, indent=2) + '\n')
+          Path(os.environ['RUNNER_TEMP'], 'b3-focused-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
           PY
-          cp parity/manim-v0.21/manifest.json "$RUNNER_TEMP/b3-focused-manifest.json"
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
@@ -45,17 +49,49 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config
           python -m pip install --disable-pip-version-check 'manim[typst]==0.21.0' 'typst==0.15.0'
-      - name: Verify all requested times exist in real Manim output
+      - name: Verify equivalent Manim geometry and real reference times
         run: |
-          python scripts/manim-raster-semantic-reference.py --manifest parity/manim-v0.21/manifest.json --output manim-raster-artifacts/materialized-reference-probe.json
+          python - <<'PY'
+          import subprocess
+          from pathlib import Path
+          import numpy as np
+          from manim import tempconfig
+          path = 'parity/manim-v0.21/core-examples/matching_shapes_reordered.py'
+          sources = [subprocess.check_output(['git', 'show', 'HEAD^:' + path], text=True), Path(path).read_text()]
+          scenes = []
+          for source in sources:
+              namespace = {}
+              exec(source, namespace)
+              with tempconfig({'dry_run': True}):
+                  scene = namespace['MatchingShapesReordered']()
+                  animations = []
+                  scene.play = lambda *args, **kwargs: animations.extend(args)
+                  scene.wait = lambda *args, **kwargs: None
+                  scene.construct()
+                  scenes.append((scene, animations))
+          for old_root, new_root in zip(scenes[0][0].mobjects, scenes[1][0].mobjects, strict=True):
+              for old, new in zip(old_root.family_members_with_points(), new_root.family_members_with_points(), strict=True):
+                  np.testing.assert_array_equal(old.points, new.points)
+                  np.testing.assert_array_equal(old.get_fill_rgbas(), new.get_fill_rgbas())
+                  np.testing.assert_array_equal(old.get_stroke_rgbas(), new.get_stroke_rgbas())
+                  assert old.get_stroke_width() == new.get_stroke_width()
+          for old_anim, new_anim in zip(scenes[0][1], scenes[1][1], strict=True):
+              for old, new in zip(old_anim.to_add.family_members_with_points(), new_anim.to_add.family_members_with_points(), strict=True):
+                  np.testing.assert_array_equal(old.points, new.points)
+                  np.testing.assert_array_equal(old.get_fill_rgbas(), new.get_fill_rgbas())
+                  np.testing.assert_array_equal(old.get_stroke_rgbas(), new.get_stroke_rgbas())
+          print('Original Polygon and supported VMobject fixture geometry/paint agree exactly')
+          PY
+          cp "$RUNNER_TEMP/b3-focused-manifest.json" parity/manim-v0.21/manifest.json
+          python scripts/manim-raster-semantic-reference.py --manifest parity/manim-v0.21/manifest.json --output "$RUNNER_TEMP/b3-reference-probe.json"
           node --input-type=module <<'JS'
           import fs from 'node:fs';
           import { sampleRasterFrames } from './scripts/manim-raster-support.mjs';
-          const reference = JSON.parse(fs.readFileSync('manim-raster-artifacts/materialized-reference-probe.json'));
+          const reference = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/b3-reference-probe.json`));
           const fixture = JSON.parse(fs.readFileSync('parity/manim-v0.21/manifest.json')).fixtures[0];
           const frames = reference.fixtures[0].frames;
           const samples = sampleRasterFrames(frames.map(f => f.time), [0, .25, .5, .75, 1], fixture.sample_times);
-          console.log(JSON.stringify({ source_sha: '22301a6481baecfa5626294758cee6a4c2a8176d', frame_count: frames.length, samples }, null, 2));
+          console.log(JSON.stringify({ source_sha: process.env.SOURCE_SHA, frame_count: frames.length, samples }, null, 2));
           JS
           cp "$RUNNER_TEMP/b3-full-manifest.json" parity/manim-v0.21/manifest.json
           git diff --exit-code
@@ -104,12 +140,15 @@ jobs:
         if: always()
         run: |
           if test -f "$RUNNER_TEMP/b3-full-manifest.json"; then cp "$RUNNER_TEMP/b3-full-manifest.json" parity/manim-v0.21/manifest.json; fi
-          find manim-raster-artifacts -maxdepth 3 -type f -name '*.json' -print || true
+          mkdir -p manim-raster-artifacts
+          printf '%s\n' "$SOURCE_SHA" > manim-raster-artifacts/source-sha.txt
+          if test -f "$RUNNER_TEMP/b3-reference-probe.json"; then cp "$RUNNER_TEMP/b3-reference-probe.json" manim-raster-artifacts/materialized-reference-probe.json; fi
+          find manim-raster-artifacts -maxdepth 3 -type f -name '*.json' -print
           git diff --stat
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: b3-matching-materialized-frames
           path: manim-raster-artifacts
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
