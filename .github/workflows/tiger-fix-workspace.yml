@@ -30,20 +30,22 @@ jobs:
           fetch-depth: 0
       - name: Use repository-pinned Rust
         run: rustup install
-      - name: Apply shared SVG correction and publish formatted exact candidate
+      - name: Apply shared corrections and publish formatted exact candidate
         id: publish
         run: |
-          if test -f scripts/tiger-parity-finish.py; then
-            python3 scripts/tiger-parity-finish.py
-            rm scripts/tiger-parity-finish.py
-          fi
+          for script in scripts/tiger-parity-finish.py scripts/tiger-validation-finish.py; do
+            if test -f "$script"; then
+              python3 "$script"
+              rm "$script"
+            fi
+          done
           cargo fmt --all
           git diff --check
           git config user.name 'Noon fix validation'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -u
           if ! git diff --cached --quiet; then
-            git commit -m 'fix: match Manim SVG placement and remove validation blockers'
+            git commit -m 'fix: converge SVG placement on canonical Manim bounds'
             git push origin HEAD:refs/heads/fix/ghostscript-tiger-filled-morph
           fi
           echo "candidate=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -84,16 +86,49 @@ jobs:
           cargo test -p noon --lib family_transform_renderer_publication_tests
           cargo test -p noon-compile --test family_transform_padding_paint
           cargo test -p noon-render-wgpu --all-features --test complex_filled_morph
-      - name: Repository Rust gate including all integration tests
+      - name: Repository fast gate
         if: ${{ !cancelled() }}
         run: |
           mkdir -p browser-smoke-artifacts/tiger-rust
-          bash scripts/check.sh rust 6d6cc95cc307379df700cf22a8b889e0cb60b442 2>&1 | tee browser-smoke-artifacts/tiger-rust/check.log
+          bash scripts/check.sh fast 6d6cc95cc307379df700cf22a8b889e0cb60b442 2>&1 | tee browser-smoke-artifacts/tiger-rust/fast.log
+      - name: All workspace integration tests
+        if: ${{ !cancelled() }}
+        run: bash scripts/check.sh test 6d6cc95cc307379df700cf22a8b889e0cb60b442 2>&1 | tee browser-smoke-artifacts/tiger-rust/all-tests.log
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: tiger-rust-proof
           path: browser-smoke-artifacts/tiger-rust
+          retention-days: 7
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 6d6cc95cc307379df700cf22a8b889e0cb60b442
+      - name: Use pinned Rust
+        run: rustup install
+      - name: Reproduce the three apparently unrelated failures on the untouched base
+        run: |
+          mkdir -p browser-smoke-artifacts/tiger-baseline
+          git rev-parse HEAD > browser-smoke-artifacts/tiger-baseline/commit.txt
+          set +e
+          cargo test -p noon --test family_state --test live_creation_resource_atomicity --no-fail-fast 2>&1 | tee browser-smoke-artifacts/tiger-baseline/noon.log
+          noon_result=${PIPESTATUS[0]}
+          cargo test -p noon-render-wgpu --all-features --test lifecycle_churn_locality 2>&1 | tee browser-smoke-artifacts/tiger-baseline/renderer.log
+          render_result=${PIPESTATUS[0]}
+          set -e
+          test "$noon_result" -ne 0
+          test "$render_result" -ne 0
+          grep -q 'unequal_family_become_reuses_receiver_identity_and_never_imports_target_ids.*FAILED' browser-smoke-artifacts/tiger-baseline/noon.log
+          grep -q 'invalid_publication_context_rejects_before_resource_import.*FAILED' browser-smoke-artifacts/tiger-baseline/noon.log
+          grep -q 'lifecycle_churn_presence_transitions_keep_morphed_paths_resident_on_the_exact_sample_grid.*FAILED' browser-smoke-artifacts/tiger-baseline/renderer.log
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: tiger-baseline-proof
+          path: browser-smoke-artifacts/tiger-baseline
           retention-days: 7
   browser:
     needs: prepare
@@ -129,7 +164,7 @@ jobs:
           npx playwright install --with-deps chromium
           sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config
           python -m pip install --disable-pip-version-check 'manim==0.21.0'
-      - name: Render real Manim reference on the same black background
+      - name: Render real Manim reference and independent placement fixtures
         run: python scripts/tiger-manim-reference.py
       - name: Capture exact-time production browser frames
         if: ${{ !cancelled() }}
@@ -143,6 +178,10 @@ jobs:
       - name: Exercise actual gallery tiger playback
         if: ${{ !cancelled() }}
         run: node scripts/playground-tiger-morph-smoke.mjs
+      - name: Execute the same SVGs with direct native Rust authoring
+        if: ${{ !cancelled() }}
+        run: |
+          cargo run -p noon --example svg_morph_probe -- browser-smoke-artifacts/tiger-manim-reference/tiger.svg browser-smoke-artifacts/tiger-manim-reference/rocket.svg > browser-smoke-artifacts/tiger-differential/native.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
