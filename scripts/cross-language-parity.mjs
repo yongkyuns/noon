@@ -13,7 +13,7 @@ execFileSync("cargo", ["build", "--quiet", "--workspace", "--all-features", "--e
   { cwd: repoRoot, stdio: "inherit" });
 const binary = path.resolve(repoRoot, process.env.CARGO_TARGET_DIR ?? "target", "debug/examples/cross_language_parity");
 const corpus = execFileSync(binary, [], { cwd: repoRoot, encoding: "utf8" }).trim().split("\n").map(JSON.parse);
-assert.equal(corpus.length, 15, "paired live program inventory changed");
+assert.equal(corpus.length, 16, "paired live program inventory changed");
 const requestedCases = process.env.NOON_PARITY_CASES?.split(",").filter(Boolean);
 if (requestedCases) {
   for (const name of requestedCases) assert.ok(corpus.some((item) => item.name === name), `unknown parity case: ${name}`);

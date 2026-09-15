@@ -1781,7 +1781,7 @@ impl CanonicalAuthoringScene {
                     }
                     source.validate().map_err(|error| error.to_string())?;
                     target_state.validate().map_err(|error| error.to_string())?;
-                    noon_core::resolve_animation_options(
+                    noon_core::resolve_transform_animation_options(
                         noon_core::AnimationDefaults::MANIM,
                         *options,
                         noon_core::AnimationOptions::new(),
@@ -1917,7 +1917,13 @@ impl CanonicalAuthoringScene {
                 );
             }
             target.validate().map_err(|error| error.to_string())?;
-            let resolved = if matches!(child, OrdinaryCompositionChild::Add { .. }) {
+            let resolved = if matches!(child, OrdinaryCompositionChild::TransformTo { .. }) {
+                noon_core::resolve_transform_animation_options(
+                    noon_core::AnimationDefaults::MANIM,
+                    options,
+                    noon_core::AnimationOptions::new(),
+                )
+            } else if matches!(child, OrdinaryCompositionChild::Add { .. }) {
                 noon_core::resolve_add_animation_options(
                     noon_core::AnimationDefaults::MANIM,
                     options,
@@ -8261,7 +8267,8 @@ mod tests {
         context.bind_mobject(ObjectId::new(1), &right).unwrap();
         let child = AnimationOptions::new()
             .run_time(2.0)
-            .rate_func(RateFunction::Linear);
+            .rate_func(RateFunction::Linear)
+            .path_arc(std::f64::consts::FRAC_PI_2);
         let children = [
             bound_transform_child(&left, left_target, child),
             bound_transform_child(&right, right_target, child),
