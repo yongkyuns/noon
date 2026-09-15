@@ -18,11 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: dfb53177eb258092a2628cc0dbc1411fc9fca747
+          ref: 22301a6481baecfa5626294758cee6a4c2a8176d
           show-progress: false
       - name: Validate exact candidate and sampler
         run: |
-          test "$(git rev-parse HEAD)" = dfb53177eb258092a2628cc0dbc1411fc9fca747
+          test "$(git rev-parse HEAD)" = 22301a6481baecfa5626294758cee6a4c2a8176d
           node --test scripts/manim-raster-samples.test.mjs
           node scripts/manim-raster-policy.test.mjs
           python3 -m py_compile parity/manim-v0.21/core-examples/matching_shapes_reordered.py
@@ -36,6 +36,7 @@ jobs:
           assert len(manifest['fixtures']) == 1
           p.write_text(json.dumps(manifest, indent=2) + '\n')
           PY
+          cp parity/manim-v0.21/manifest.json "$RUNNER_TEMP/b3-focused-manifest.json"
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
@@ -54,8 +55,12 @@ jobs:
           const fixture = JSON.parse(fs.readFileSync('parity/manim-v0.21/manifest.json')).fixtures[0];
           const frames = reference.fixtures[0].frames;
           const samples = sampleRasterFrames(frames.map(f => f.time), [0, .25, .5, .75, 1], fixture.sample_times);
-          console.log(JSON.stringify({ source_sha: 'dfb53177eb258092a2628cc0dbc1411fc9fca747', frame_count: frames.length, samples }, null, 2));
+          console.log(JSON.stringify({ source_sha: '22301a6481baecfa5626294758cee6a4c2a8176d', frame_count: frames.length, samples }, null, 2));
           JS
+          cp "$RUNNER_TEMP/b3-full-manifest.json" parity/manim-v0.21/manifest.json
+          git diff --exit-code
+      - name: Verify completed wrapper binding regression
+        run: python web/python/test_manim_matching_completion_bindings.py
       - name: Install repository-pinned Rust and WASM target
         run: |
           rustup install
@@ -75,12 +80,14 @@ jobs:
         with:
           tool: wasm-pack@0.15.0
           fallback: none
-      - name: Build normal browser package
+      - name: Build normal browser package with full manifest
         run: bash scripts/build-web-demo.sh
       - name: Install existing harness dependencies
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
+      - name: Select only the new fixture for raster qualification
+        run: cp "$RUNNER_TEMP/b3-focused-manifest.json" parity/manim-v0.21/manifest.json
       - name: Paired actual-frame raster comparison
         id: capture
         run: node scripts/manim-raster-differential.mjs
