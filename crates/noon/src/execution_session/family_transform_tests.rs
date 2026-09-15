@@ -616,6 +616,31 @@ fn matching_family_succession_uses_completed_prior_morph_for_activation_key() {
         store.semantic_family_members_checked(root).unwrap(),
         &[target]
     );
+    // Cleanup restores the matching child's activation-effective source,
+    // not the authored triangle from before the earlier Morph child.
+    let restored = store.semantic_object_state_checked(source_leaf).unwrap();
+    let prior_endpoint = store.semantic_object_state_checked(morph_target).unwrap();
+    assert_eq!(restored.content, prior_endpoint.content);
+    assert_eq!(restored.transform, prior_endpoint.transform);
+    assert_eq!(restored.style, prior_endpoint.style);
+    let mut readd = SemanticMutationTransaction::new();
+    readd.add_member(root, source);
+    session
+        .apply_semantic_transaction(&mut store, readd)
+        .unwrap();
+    session.advance_to(segment.end_time() + 0.25).unwrap();
+    let source_index = session
+        .runtime
+        .frame_index_for_object(source_object)
+        .unwrap();
+    assert_eq!(
+        session.frame().objects[source_index]
+            .transform
+            .translation
+            .x,
+        0.0
+    );
+    assert_eq!(session.frame().objects[source_index].appearance, 1.0);
 }
 
 #[test]
@@ -684,4 +709,80 @@ fn matching_family_completion_appends_target_in_same_z_painter_order() {
         .map(|&index| session.frame().objects[index as usize].id)
         .collect::<Vec<_>>();
     assert_eq!(next_painter_ids, painter_ids);
+}
+
+#[test]
+fn matching_family_cleanup_restores_matched_padded_and_unmatched_sources() {
+    let mut store = SemanticStore::new();
+    let sources = [
+        matching_path_object(&mut store, matching_triangle(), -3.0),
+        matching_path_object(&mut store, matching_triangle(), 0.0),
+        matching_path_object(&mut store, matching_kite(), 3.0),
+    ];
+    let source = family(&mut store, &sources);
+    let geometry = store.insert_geometry_path(matching_triangle()).unwrap();
+    let mut target_state = SemanticObjectState::new(StoredGeometry::Resource(geometry));
+    target_state.transform.translation = SemanticVec3::new(6.0, 0.0, 0.0);
+    target_state.style.fill = Some(noon_core::SemanticPaint::Solid(noon_core::Color::RED));
+    target_state.style.fill_opacity = 0.5;
+    let target_leaf = store.insert_semantic_object(target_state);
+    let target = family(&mut store, &[target_leaf]);
+    let root = family(&mut store, &[source]);
+    let before = sources.map(|node| store.semantic_object_state_checked(node).unwrap().clone());
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    let execution_ids =
+        sources.map(|node| session.execution_index.execution_object_id(node).unwrap());
+    let initial_rows = execution_ids.map(|id| {
+        let index = session.runtime.frame_index_for_object(id).unwrap();
+        session.frame().objects[index].clone()
+    });
+    let request = SemanticCompositionRequest::MatchingFamilyTransformTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear),
+    };
+    let segment = session
+        .declare_and_activate_composition(&mut store, root, &request, AnimationOptions::new())
+        .unwrap();
+    session.advance_segment_to(segment, 0.5).unwrap();
+    let padded_index = session
+        .runtime
+        .frame_index_for_object(execution_ids[1])
+        .unwrap();
+    let leftover_index = session
+        .runtime
+        .frame_index_for_object(execution_ids[2])
+        .unwrap();
+    assert!(session.frame().objects[padded_index].appearance < 1.0);
+    assert!(session.frame().objects[leftover_index].appearance < 1.0);
+    session
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    session.complete_segment(&mut store, segment).unwrap();
+    for (node, expected) in sources.iter().zip(&before) {
+        assert_eq!(
+            store.semantic_object_state_checked(*node).unwrap(),
+            expected
+        );
+    }
+    assert_eq!(
+        store.semantic_family_members_checked(root).unwrap(),
+        &[target]
+    );
+    let mut readd = SemanticMutationTransaction::new();
+    readd.add_member(root, source);
+    session
+        .apply_semantic_transaction(&mut store, readd)
+        .unwrap();
+    session.advance_to(segment.end_time() + 0.25).unwrap();
+    for (id, expected) in execution_ids.iter().zip(initial_rows) {
+        let index = session.runtime.frame_index_for_object(*id).unwrap();
+        let restored = &session.frame().objects[index];
+        assert!(session.frame().is_present(index));
+        assert_eq!(restored.transform, expected.transform);
+        assert_eq!(restored.style, expected.style);
+        assert_eq!(restored.appearance, expected.appearance);
+    }
 }
