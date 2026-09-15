@@ -34,26 +34,23 @@ jobs:
           from pathlib import Path
           p = Path('crates/noon/src/execution_session/family_transform_tests.rs')
           s = p.read_text()
-          before = '''            let steps = if dense { 16 } else { 1 };
-                      for step in 1..=steps {
-                          session
-                              .advance_segment_to(segment, sample_time * f64::from(step) / f64::from(steps))
-                              .unwrap();
-                      }'''
-          before = '\n'.join(line[10:] if i else line for i, line in enumerate(before.splitlines()))
-          assert s.count(before) == 1
-          after = '''            if dense {
-                          for step in 1..=16 {
-                              session
-                                  .advance_segment_to(segment, sample_time * f64::from(step) / 16.0)
-                                  .unwrap();
-                          }
-                      } else {
-                          session.seek(sample_time).unwrap();
-                      }'''
-          after = '\n'.join(line[10:] if i else line for i, line in enumerate(after.splitlines()))
-          s = s.replace(before, after)
-          p.write_text(s)
+          marker = '            let steps = if dense { 16 } else { 1 };'
+          assert s.count(marker) == 1
+          start = s.index(marker)
+          end = s.index('            let positions =', start)
+          replacement = '\n'.join([
+              '            if dense {',
+              '                for step in 1..=16 {',
+              '                    session',
+              '                        .advance_segment_to(segment, sample_time * f64::from(step) / 16.0)',
+              '                        .unwrap();',
+              '                }',
+              '            } else {',
+              '                session.seek(sample_time).unwrap();',
+              '            }',
+              '',
+          ])
+          p.write_text(s[:start] + replacement + s[end:])
           PY
           rm .github/workflows/b3-parity-qualify-once.yml .github/workflows/b3-parity-retry-once.yml
       - name: Format and validate source-only candidate
