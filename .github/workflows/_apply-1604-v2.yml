@@ -1,0 +1,38 @@
+name: Qualify issue 1604 become ownership contract
+
+on:
+  push:
+    branches: [fix/1604-family-become-state-contract]
+
+permissions:
+  contents: write
+
+jobs:
+  qualify:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/1604-family-become-state-contract
+          fetch-depth: 0
+      - name: Apply contract patch
+        run: python3 .github/tmp/apply_1604.py
+      - name: Format and focused tests
+        run: |
+          cargo fmt --all
+          git diff --check
+          cargo test -p noon-core visual_state_copy_preserves_receiver_owned_metadata
+          cargo test -p noon --test family_state unequal_family_become_reuses_receiver_identity_and_never_imports_target_ids
+          cargo test -p noon --test family_state live_unequal_family_become_preserves_same_z_receiver_painter_order
+          cargo test -p noon --test family_state
+      - name: Publish source candidate
+        run: |
+          if git diff --quiet; then
+            echo 'candidate already applied'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/noon-core/src/semantic_store/object_content.rs crates/noon/src/state_replacement.rs crates/noon/tests/family_state.rs
+          git commit -m 'fix(become): preserve receiver-owned state on expansion'
+          git push origin HEAD:fix/1604-family-become-state-contract
