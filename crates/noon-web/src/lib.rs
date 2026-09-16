@@ -8,11 +8,15 @@ mod authoring_arrow;
 mod authoring_arrow_endpoints;
 #[cfg(target_arch = "wasm32")]
 mod authoring_brace;
+#[cfg(target_arch = "wasm32")]
+mod authoring_coordinates;
 mod authoring_error;
 #[cfg(target_arch = "wasm32")]
 mod authoring_geometry;
 mod authoring_mobject;
 mod authoring_options;
+#[cfg(target_arch = "wasm32")]
+mod authoring_plotting;
 #[cfg(target_arch = "wasm32")]
 mod authoring_svg;
 #[cfg(target_arch = "wasm32")]
@@ -62,11 +66,15 @@ mod text_parts;
 
 #[cfg(target_arch = "wasm32")]
 pub use authoring_arrow::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_coordinates::*;
 pub use authoring_error::AuthoringFailure;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_geometry::*;
 pub use authoring_mobject::*;
 pub use authoring_options::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_plotting::*;
 pub use canonical_authoring_scene::*;
 pub use clock::{ClockError, PlaybackClock};
 pub use determinism::*;

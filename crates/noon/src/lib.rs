@@ -61,6 +61,9 @@ mod boolean_authoring;
 mod camera_authoring;
 mod compact_value_authoring;
 mod coordinate_authoring;
+/// Paired plotting scene shared by native and direct WASM qualification.
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod coordinate_plotting_example;
 mod cyclic_replace;
 mod dashed_line_authoring;
 #[cfg(feature = "diagnostics")]
