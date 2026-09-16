@@ -101,6 +101,7 @@ mod path_editing;
 mod path_queries;
 mod path_smoothing;
 mod plot_authoring;
+pub mod plot_presentation;
 mod point_matching;
 mod rotation_authoring;
 mod rounded_rectangle_authoring;
@@ -117,6 +118,8 @@ mod tangent_line_authoring;
 mod text_authoring;
 #[cfg(any(feature = "native-text", feature = "typst"))]
 mod text_part_authoring;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod time_series_plotting_example;
 mod vector_field_authoring;
 mod z_index;
 
