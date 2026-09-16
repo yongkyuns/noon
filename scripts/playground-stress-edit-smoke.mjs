@@ -55,9 +55,12 @@ async function snapshot(page) {
       presentedFrames: Number(status?.dataset.presentedFrames ?? "0"),
       patchState: patch?.dataset.state ?? "",
       patchText: patch?.value ?? patch?.textContent ?? "",
+      patchOperation: patch?.dataset.operation ?? "",
       patchSequence: patch?.dataset.sequence ?? "",
       exampleId: patch?.dataset.exampleId ?? "",
       objectCount: document.querySelector("#metric-objects")?.value ?? "",
+      runInFlight: window.__noonExampleGallery?.runInFlight ?? false,
+      runDisabled: document.querySelector("#replace-scene")?.disabled ?? true,
       editorHeight: pane?.getBoundingClientRect().height ?? 0,
       bodyHeight: document.body.scrollHeight,
       editorScrollHeight: scroller?.scrollHeight ?? 0,
@@ -84,7 +87,6 @@ async function waitForPreloadedRuntime(page) {
       }
       return (
         status?.dataset.liveAuthoring === "ready" &&
-        status?.dataset.state === "running" &&
         Number(status?.dataset.presentedFrames ?? "0") > 0 &&
         patch?.dataset.state === "applied" &&
         !document.querySelector("#replace-scene")?.disabled
@@ -94,11 +96,7 @@ async function waitForPreloadedRuntime(page) {
     { timeout: 120_000 },
   );
   const state = await snapshot(page);
-  assert.notEqual(
-    state.patchState,
-    "error",
-    `stress Run must succeed: ${state.patchText}`,
-  );
+  assert.notEqual(state.patchState, "error", `stress Run must succeed: ${state.patchText}`);
   assert.notEqual(state.runtimeState, "error", "stress runtime must start successfully");
   assert.equal(
     state.runtimeStartup,
@@ -111,7 +109,29 @@ async function waitForPreloadedRuntime(page) {
   return state;
 }
 
-async function waitForAutomaticRun(page, previousObjectCount) {
+async function waitForSourceOwnedPlayback(page) {
+  await page.waitForFunction(
+    () => {
+      const patch = document.querySelector("#patch-status");
+      const run = document.querySelector("#replace-scene");
+      return (
+        window.__noonExampleGallery?.runInFlight === true &&
+        patch?.dataset.state === "running" &&
+        (patch?.value ?? patch?.textContent ?? "").includes("edit freely or Run again") &&
+        run?.disabled === false
+      );
+    },
+    null,
+    { timeout: 120_000 },
+  );
+  const state = await snapshot(page);
+  assert.equal(state.runInFlight, true);
+  assert.equal(state.runDisabled, false, "Run must stay available during source-owned playback");
+  assert.match(state.patchText, /edit freely or Run again/);
+  return state;
+}
+
+async function waitForAppliedRun(page, previousObjectCount) {
   await page.waitForFunction(
     (priorObjectCount) => {
       const patch = document.querySelector("#patch-status");
@@ -134,6 +154,17 @@ async function waitForAutomaticRun(page, previousObjectCount) {
     "successful structural edit must publish a different object count",
   );
   return state;
+}
+
+async function replaceSource(editor, page, nextSource) {
+  await editor.click();
+  await page.keyboard.press(selectAllShortcut);
+  await page.keyboard.insertText(nextSource);
+  await page.waitForFunction(
+    (expected) => document.querySelector("#python-scene-source")?.value === expected,
+    nextSource,
+    { timeout: 15_000 },
+  );
 }
 
 const diagnostics = {
@@ -201,7 +232,6 @@ try {
     { timeout: 30_000 },
   );
 
-  // Highlighting must arrive without requiring the user to focus/click the source first.
   await page.waitForSelector(
     "#scene-editor-panel .python-code-editor[data-editor-ready='true'] .cm-content",
     { timeout: 30_000 },
@@ -229,62 +259,77 @@ try {
   diagnostics.snapshots.baseline = await waitForPreloadedRuntime(page);
   assert.equal(diagnostics.snapshots.baseline.exampleId, "manim-parity-stress-grid");
   assert.equal(diagnostics.snapshots.baseline.executionMode, "semantic");
-  assert.match(diagnostics.snapshots.baseline.patchText, /Scene rebuilt atomically/);
+  assert.equal(diagnostics.snapshots.baseline.patchOperation, "Scene rebuilt atomically");
 
   const source = await page.evaluate(
     () => document.querySelector("#python-scene-source")?.value ?? "",
   );
   assert.match(source, /rows = 20/);
-  let editedSource = source;
-  let previousObjectCount = diagnostics.snapshots.baseline.objectCount;
-  for (const rows of [5, 7, 20]) {
-    const nextSource = editedSource.replace(/rows = \d+/, `rows = ${rows}`);
-    assert.notEqual(nextSource, editedSource);
+  const rows5Source = source.replace(/rows = \d+/, "rows = 5");
+  const rows7Source = rows5Source.replace(/rows = \d+/, "rows = 7");
+  const rows20Source = rows7Source.replace(/rows = \d+/, "rows = 20");
+  const baselineObjectCount = diagnostics.snapshots.baseline.objectCount;
 
-    // Use the real CodeMirror input path on every edit so identity stabilization and the
-    // latest-source debounce are exercised across consecutive automatic authoring results.
-    await editor.click();
-    await page.keyboard.press(selectAllShortcut);
-    await page.keyboard.insertText(nextSource);
-    await page.waitForFunction(
-      (expected) => document.querySelector("#python-scene-source")?.value === expected,
-      nextSource,
-      { timeout: 15_000 },
-    );
-    diagnostics.snapshots[`rows${rows}Edited`] = await snapshot(page);
-    assert.ok(
-      Math.abs(
-        diagnostics.snapshots[`rows${rows}Edited`].editorHeight -
-          diagnostics.snapshots.loaded.editorHeight,
-      ) <= 2,
-      "editing the long source must not grow the editor pane",
-    );
+  // Editing is now deliberately non-destructive. Prove that the existing replay and
+  // object count remain untouched until explicit Run.
+  await replaceSource(editor, page, rows5Source);
+  diagnostics.snapshots.rows5Edited = await snapshot(page);
+  assert.match(diagnostics.snapshots.rows5Edited.patchText, /current preview continues · Run to apply/);
+  assert.equal(diagnostics.snapshots.rows5Edited.objectCount, baselineObjectCount);
+  await page.waitForTimeout(350);
+  diagnostics.snapshots.rows5StillIdle = await snapshot(page);
+  assert.equal(
+    diagnostics.snapshots.rows5StillIdle.objectCount,
+    baselineObjectCount,
+    "editing alone must not autorun or replace the current scene",
+  );
 
-    diagnostics.snapshots[`rows${rows}Rerun`] = await waitForAutomaticRun(
-      page,
-      previousObjectCount,
-    );
-    assert.equal(diagnostics.snapshots[`rows${rows}Rerun`].executionMode, "semantic");
-    assert.match(
-      diagnostics.snapshots[`rows${rows}Rerun`].patchText,
-      /Scene rebuilt atomically/,
-    );
-    previousObjectCount = diagnostics.snapshots[`rows${rows}Rerun`].objectCount;
-    editedSource = nextSource;
-  }
+  // Start rows=5 and catch it while Python still owns the active animation. Then edit
+  // again and press Run before that animation completes. This is the product contract:
+  // edit leaves playback alone; Run is the explicit supersession boundary.
+  await page.locator("#replace-scene").click();
+  diagnostics.snapshots.rows5Playing = await waitForSourceOwnedPlayback(page);
+  await replaceSource(editor, page, rows7Source);
+  diagnostics.snapshots.rows7EditedDuringRows5 = await snapshot(page);
+  assert.equal(diagnostics.snapshots.rows7EditedDuringRows5.runtimeState, "running");
+  assert.match(
+    diagnostics.snapshots.rows7EditedDuringRows5.patchText,
+    /current preview continues · Run to apply/,
+  );
+  assert.equal(
+    diagnostics.snapshots.rows7EditedDuringRows5.runDisabled,
+    false,
+    "editing during an active source-owned animation must leave Run available",
+  );
+
+  await page.locator("#replace-scene").click();
+  diagnostics.snapshots.rows7Rerun = await waitForAppliedRun(page, baselineObjectCount);
+  assert.equal(diagnostics.snapshots.rows7Rerun.executionMode, "semantic");
+  assert.equal(diagnostics.snapshots.rows7Rerun.patchOperation, "Scene rebuilt atomically");
+
+  // One more ordinary explicit edit/run verifies the post-supersession session remains reusable.
+  const rows7ObjectCount = diagnostics.snapshots.rows7Rerun.objectCount;
+  await replaceSource(editor, page, rows20Source);
+  diagnostics.snapshots.rows20Edited = await snapshot(page);
+  assert.equal(diagnostics.snapshots.rows20Edited.objectCount, rows7ObjectCount);
+  assert.match(diagnostics.snapshots.rows20Edited.patchText, /current preview continues · Run to apply/);
+  await page.locator("#replace-scene").click();
+  diagnostics.snapshots.rows20Rerun = await waitForAppliedRun(page, rows7ObjectCount);
+  assert.equal(diagnostics.snapshots.rows20Rerun.executionMode, "semantic");
+  assert.equal(diagnostics.snapshots.rows20Rerun.patchOperation, "Scene rebuilt atomically");
 
   assert.deepEqual(diagnostics.pageErrors, [], `unhandled page errors: ${diagnostics.pageErrors.join("\n")}`);
   assert.deepEqual(
     diagnostics.consoleErrors,
     [],
-    `valid repeated structural stress edits emitted console errors: ${diagnostics.consoleErrors.join("\n")}`,
+    `valid explicit structural reruns emitted console errors: ${diagnostics.consoleErrors.join("\n")}`,
   );
 
   diagnostics.serverOutput = serverOutput;
   await page.screenshot({ path: path.join(artifactDir, "stress-edited.png"), fullPage: true });
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   console.log(
-    `playground live structural stress edits ok: ${diagnostics.snapshots.loaded.editorHeight}px editor, rows=5 -> 7 -> 20 applied`,
+    `playground explicit structural reruns ok: ${diagnostics.snapshots.loaded.editorHeight}px editor, edit-inert rows=5 then mid-animation rows=7 supersession and rows=20 replay`,
   );
 } catch (error) {
   diagnostics.failure = error instanceof Error ? error.stack ?? error.message : String(error);
