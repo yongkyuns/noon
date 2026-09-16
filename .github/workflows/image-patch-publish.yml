@@ -1,0 +1,51 @@
+name: Materialize image implementation (temporary)
+on:
+  push:
+    branches: [codex/b2-image-workspace-bootstrap]
+    paths: [.github/workflows/image-patch-publish.yml]
+permissions:
+  contents: write
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 0e1b616550988c3b570f041f4ed15e563a9f50aa
+          path: patch-input
+          persist-credentials: false
+      - name: Verify and decode product patch
+        run: |
+          python - <<'PY'
+          import base64, hashlib, lzma, pathlib
+          parts = pathlib.Path('patch-input/.image-patch')
+          encoded = ''.join((parts / f'{i:02}.b64').read_text().strip() for i in range(6))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          digest = hashlib.sha256(patch).hexdigest()
+          assert digest == '3e4079c762d1a97edf771f8c736fa3c0f20dfe5e1f1572d7e7dcbb5a89ce0226', digest
+          pathlib.Path('/tmp/image-product.patch').write_bytes(patch)
+          print(f'Verified {len(patch)} patch bytes: {digest}')
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: 3397f0ff49dc44559e5e0323eedb3d3893f2e62f
+          path: product
+      - name: Apply only product changes and create staging branch
+        working-directory: product
+        run: |
+          set -euo pipefail
+          git apply --check --binary /tmp/image-product.patch
+          git apply --binary /tmp/image-product.patch
+          git diff --check
+          git config user.name 'Yongkyun Shin'
+          git config user.email '4311628+yongkyuns@users.noreply.github.com'
+          git add -A
+          git commit -m 'B2: implement atomic retained raster images across authoring and rendering'
+          git push origin HEAD:refs/heads/codex/b2-image-validation-20260916
+          git rev-parse HEAD | tee /tmp/image-product-head.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noon-image-product-head
+          path: /tmp/image-product-head.txt
+          retention-days: 1
