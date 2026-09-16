@@ -4,10 +4,9 @@ The small pure-numerical example owns all displayed values. Named explanation
 beats own composition only; there is no per-frame numerical calculation.
 """
 from math import ceil, log, sqrt
-from noon import Dot
 from measurement import PositionFixExample, compare_position_fix, fix_matvec
 from uncertainty import confidence_contour
-from visuals import Stage, Plot, text, equation, notes, arrow, FUSED, GNSS, INS, MUTED, UNCERTAINTY
+from visuals import Stage, Plot, text, equation, notes, arrow, FUSED, GNSS, INS, MUTED
 
 FIX_READ_HOLD = 7.0
 FIX_LEFT = -3.25
@@ -56,7 +55,8 @@ async def _fix_correlated_noise(stage, example):
                       f'Observed: {fix_vector_text(example.observation)}'], start_y=1.5, gap=.6),
               text('Measurement-noise 95% joint contour', (FIX_LEFT, -2.85), 20, GNSS, max_width=6))
     await stage.say('The tilted ellipse says the two errors tend to move together. It is a noise model, not a vehicle trajectory.', hold=FIX_READ_HOLD)
-    await stage.reveal(equation('R = '+fix_matrix_tex(example.noise, 0), (FIX_RIGHT, -1.35), 32), hold=4)
+    await stage.reveal(equation('R = '+fix_matrix_tex(example.noise, 0), (FIX_RIGHT-1.35, -1.35), 32),
+                       equation('P^- = '+fix_matrix_tex(example.covariance, 0), (FIX_RIGHT+1.35, -1.35), 32), hold=4)
     await stage.say('This covariance also results from rotating independent variances 9 and 1 m² by 45 degrees.', hold=FIX_READ_HOLD)
     await stage.clear()
 

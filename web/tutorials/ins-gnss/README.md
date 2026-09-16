@@ -1,15 +1,14 @@
 # INS + GNSS: a Noon navigation tutorial
 
-An original, chaptered tutorial based on Fedor Baklanov's *INS/GNSS loose coupling
-filter* documentation. Fourteen chapters introduce sensor errors, frames,
-mechanization, Kalman correction, covariance, error states, vehicle constraints,
-calibration and failure detection. The current sequence is **662.65 authored
-seconds**, with pauseable reading notes; it is not the planned 45–60-minute course.
+Fourteen chapters based on Fedor Baklanov's *INS/GNSS loose coupling filter*
+documentation. The current sequence is **817.70 authored seconds** (about 13½
+minutes), with pauseable reading notes. It is **not yet the planned full course**.
 
-**Numerical scope:** the computed results use a reproducible **1D
-position/velocity/physical-accelerometer-bias KF**. The full **24-error-state ECEF
-filter is explained, not numerically reproduced or validated**. The animation,
-reading notes and page footer retain this distinction.
+The numerical material comprises a reproducible **1D position/velocity/physical
+accelerometer-bias KF** and a separate **single 2D linear position-fix example**.
+The full **24-error-state ECEF filter is explained, not numerically reproduced or
+validated**. Neither receiver GNSS nor a posterior estimate is presented as
+independent ground truth.
 
 ## Run
 
@@ -20,110 +19,105 @@ bash scripts/build-web-demo.sh
 python3 -m http.server --bind 127.0.0.1 --directory web 8080
 ```
 
-Open `http://127.0.0.1:8080/tutorials/ins-gnss/`. After editing tutorial Python,
-rebuild just its single-source browser entry with:
+Open `http://127.0.0.1:8080/tutorials/ins-gnss/`. Rebuild only the tutorial after
+editing Python with `python3 web/tutorials/ins-gnss/tools/build.py`.
 
-```sh
-python3 web/tutorials/ins-gnss/tools/build.py
-```
+The page uses Noon's existing Python/rendering workers and configured Pyodide
+resources. Do not install a separate package named `noon` or substitute Manim.
+**Only Noon and the Python standard library are required**: no NumPy, SciPy,
+Matplotlib, Pandas or runtime package installer.
 
-The page uses Noon's existing Python and rendering workers. Do not install a
-separate package named `noon` or substitute Manim. The browser must be able to load
-Noon's configured Pyodide resources. Scene code uses **only Noon and the Python
-standard library**: no NumPy, SciPy, Matplotlib, Pandas or package installer.
-
-Play/Pause controls forward sampling. Restart creates a fresh chapter session.
+Play/Pause controls forward sampling; Restart creates a fresh chapter session.
 Arbitrary backward seek is not qualified and is not offered. Pausing stops host
-sample requests; it does not invoke the unsupported source-owned runtime pause
-operation. Desktop or landscape viewing is recommended for equations.
+sample requests rather than invoking the unsupported source-owned runtime pause
+operation. Desktop or landscape viewing is recommended for the equations.
 
 ## Code organization
 
 | Path | Responsibility |
 | --- | --- |
-| `src/model.py` | Immutable configuration, deterministic sensor generation, 3-state KF, retained update snapshots and metrics. No rendering imports. |
-| `src/uncertainty.py` | Independently tested 2D Gaussian contour geometry. No Noon dependency. |
-| `src/prediction.py` | Closed-form covariance checks and a signed variance budget for measurement-free propagation. No second estimator. |
-| `src/visuals.py` | Shared layout, typography and small helpers constructing ordinary Noon objects. |
-| `src/lessons/` | Lesson functions in teaching order. Explicit async helpers cross the normal authoring continuation barriers. |
-| `src/entry.py` | One Scene entry and chapter selection. |
+| `src/model.py` | Deterministic sensor generation, 3-state KF, immutable update snapshots and metrics. No rendering imports. |
+| `src/uncertainty.py` | Tested 2D Gaussian contour geometry. |
+| `src/prediction.py` | Closed-form checks of the existing predictor and a signed variance budget. No second estimator. |
+| `src/measurement.py` | One 2D position fix: correlated noise, whitening, batch/sequential comparison, innovation distance. |
+| `src/visuals.py` | Shared layout/typography and helpers constructing ordinary Noon objects. |
+| `src/lessons/` | Small named explanation functions in teaching order. |
+| `src/entry.py` | One Scene entry point and chapter selection. |
 | `chapters.json` | Titles, reading notes, expected durations and selected review times. |
-| `player.js` | Existing worker lifecycle and forward-playback controls; no numerical model or alternative renderer. |
-| `tools/` | Reproducible source bundle and numerical export. |
-| `tests/` | Numerical, Pyodide, actual browser-frame and playback checks. |
+| `player.js` | Existing worker lifecycle and forward playback. No numerical model, renderer or semantic state mirror. |
+| `tools/` | Reproducible single-source browser bundle and numerical export. |
+| `tests/` | Numerical, actual Pyodide, browser-frame and playback checks. |
 
-Edit `src/`, not generated `scene.py`. Physical assumptions belong in `Experiment`;
-shared visual settings belong in `Layout` and the palette. Diagram-specific
+Edit `src/`, not generated `scene.py`. Physical assumptions live in `Experiment`
+and `PositionFixExample`; shared visual settings live in `Layout`. Diagram-specific
 coordinates describe composition, not hidden numerical results. The bundler removes
-only imports of the known local modules; it does not add another Python loader.
+only known local imports and rejects colliding top-level definitions. It introduces
+no runtime loader or second animation system.
 
-## Worked event: chapter 7
+## Detailed worked lessons
 
-The expanded lesson freezes simulation time at the **75-second GNSS reacquisition**.
-It progresses through the innovation, gain entries and units, actual state
-corrections, prior/posterior uncertainty, a controlled comparison and evaluation
-against truth. Each beat is a small named async function.
+**Chapter 7 — How a position fix learns bias (133.2 s).** Freeze simulation time at
+75-second reacquisition. Inspect the same update's innovation, gain entries and
+units, corrections, covariance contours and truth comparison. Removing only the
+cross-covariances preserves the position correction but eliminates indirect velocity
+and bias corrections. The actual position–bias contours use fixed prior-based
+normalization, equal display scales and 95% joint Gaussian probability. Scalar
+whiskers are separately labelled ±1 standard deviation. The noisy fix overshoots the
+true bias; uncertainty is not confused with accuracy.
 
-All displayed values come from the same retained update. A controlled comparison
-removes only cross-covariances while retaining means, marginal variances, the fix
-and measurement variance. Position receives the same correction; velocity and bias
-receive zero correction. The final truth comparison shows that an accepted noisy
-fix can overshoot the true bias rather than magically recovering it.
+**Chapter 9 — What grows without GNSS? (140.1 s).** Follow error transport, the exact
+teaching-model transition, the recorded outage and a signed position-variance
+budget. The last accepted fix is at 44 s, not 45 s: 3,100 IMU steps precede the
+75 s pre-update snapshot. Eleven tests compare closed-form accumulation with the
+samplewise predictor. Removing only NEW process noise still leaves inherited
+velocity/bias uncertainty to propagate. The graph explicitly uses true-minus-
+estimated error, opposite chapter 1's overview convention. Marginal ±2σ bounds are
+not joint contours or empirical coverage. Reacquisition is a discontinuity at one
+timestamp, never physical travel smoothed over time.
 
-The joint position–bias contours use the actual covariance, fixed prior-based
-normalization and equal display scale on both axes. They are **modelled 95% joint
-Gaussian contours**, not empirical coverage results. The separate scalar whiskers
-show **±1 standard deviation**, not joint confidence intervals.
+**Chapter 10 — One complete GNSS update (198.45 s).** Nine small explanation functions
+follow correlated measurement noise, Cholesky whitening, conditional scalar
+residuals, Joseph covariance, batch equivalence, incorrect independence and invariant
+innovation distance. `PositionFixExample` supplies prior mean `(0,0)` m, `P = 4I`
+m², observation `(4,2)` m and `R = [[5,4],[4,5]]` m². The 2x2 routines intentionally
+do not pretend to be a general linear algebra package.
 
-## Worked prediction: chapter 9
+The animation transforms the *same* contour vertices by W. Each panel has equal
+horizontal/vertical scales; original coordinates are metres and whitened coordinates
+are dimensionless. These are modelled 95% noise contours, not observed coverage.
+The second scalar residual changes sign after row 1: about −0.894 becomes +0.166.
+Whitening both r and H gives the same posterior as a batch solve; deleting R's
+cross-terms changes the model. Whitening R does not whiten S: the correct NIS is
+about 1.784615, whereas the squared noise-whitened residual norm is 4. All state
+corrections remain in metres at one frozen event. No ground truth or full ECEF
+performance claim is invented for this single-fix example.
 
-The 140.1-second lesson follows error transport → exact teaching-model Phi →
-the recorded outage → a signed position-variance budget → removal of new noise
-only → the reference's different discretization. `src/prediction.py` is pure
-analysis of the existing KF, not another estimator. The exporter adds
-`prediction.json` and its source/output hashes.
+## Numerical assumptions and export
 
-The last accepted fix is at 44 s, not 45 s: the covariance propagates 3,100
-100-Hz samples to the 75 s pre-update snapshot. Eleven additional tests check
-that closed-form accumulation agrees with the original samplewise predictor,
-including intermediate checkpoints, cross-term signs and zero-new-noise behavior.
-The current chapter explicitly plots true-minus-estimated error; its sign is
-opposite chapter 1's estimate-minus-truth overview. Bounds are marginal ±2σ,
-not joint probability contours or empirical coverage. The correction is a
-vertical jump at one timestamp; no time interpolation smooths it into motion.
+Default drive: 120 seconds, 100 Hz IMU, 1 Hz GNSS, constant physical bias
+0.02 m/s², independent acceleration-sample noise 0.04 m/s², receiver position
+standard deviation 3 m and outage `[45,75)`. Separate seeded noise streams keep
+paired experiments comparable. The state is `[p,v,b]`; compensation is `raw - b`.
+The predictor is exact for this held-input/constant-bias model. Q uses per-sample
+variance, not continuous-time spectral density. Corrections use a scalar position
+measurement, a Joseph covariance update and a scalar 3-sigma gate (NIS threshold 9,
+not a universal multidimensional threshold).
 
-## Numerical assumptions and provenance
-
-Defaults: 120 seconds, 100 Hz IMU, 1 Hz GNSS, constant physical bias 0.02 m/s²,
-independent acceleration sample noise 0.04 m/s², GNSS standard deviation 3 m and
-outage `[45,75)` seconds. Separate seeded streams preserve paired noise realizations.
-
-The state is `[p,v,b]`; acceleration compensation is `raw - b`. The filter uses the
-exact held-input transition for this model, sample-noise process covariance, scalar
-position observations and Joseph covariance correction. A scalar 3-sigma innovation
-gate has NIS threshold 9; this is not a universal multidimensional threshold.
-
-Truth generates observations and evaluates error; it is not supplied to the KF.
-Initial position/velocity means are explicitly zero with nonzero covariance.
-Simulation uses integer sensor ticks, never animation-frame wall time. Plots retain
-both sides of position, velocity and bias corrections at each measurement timestamp.
-The opening graph is a complete recorded trace with a cursor, not a live trace reveal.
-
-`Sample` retains immutable prior/posterior state and covariance at observation
-events. Candidate gain and injected correction are distinct: a rejected event keeps
-its candidate gain but injects zero correction. Prediction-only samples have no
-measurement snapshot.
+Truth is used for sensor generation/evaluation, not supplied to the KF. Initial
+position/velocity means are zero with nonzero covariance. The integer sensor clock,
+not wall time or animation frames, drives the simulation. Immutable snapshots retain
+prior/posterior state and covariance at fixes. Rejected fixes keep candidate gain
+but inject zero correction. Plots preserve both sides of state-update jumps.
 
 ```sh
 python3 web/tutorials/ins-gnss/tools/export.py /tmp/ins-gnss-trace
 ```
 
-The export includes `trace.csv` with 12,001 samples, `updates.json` with complete
-before/after observation events, `prediction.json` with the outage covariance
-budget, and `manifest.json` with settings, metrics and SHA-256 provenance.
-Evaluation truth is explicitly labeled. For the default run, position errors at
-74.99 s are 53.3366 m IMU-only and 4.8927 m fused; the final bias estimate is
-0.0209436 m/s². This is a declared teaching run, not a product benchmark.
+The export contains `trace.csv` (12,001 samples), `updates.json`, `prediction.json`,
+`measurement.json` and a provenance `manifest.json` with source/output hashes.
+The 2D example is separate from the drive trace. For the default drive, errors at
+74.99 s are 53.3366 m IMU-only and 4.8927 m fused; final physical-bias estimate is
+0.0209436 m/s². These are one declared teaching run, not a product benchmark.
 
 ## Validation
 
@@ -134,14 +128,14 @@ node web/tutorials/ins-gnss/tests/pyodide_model.mjs \
   web/tutorials/ins-gnss/src/model.py
 ```
 
-The same **33 tests** execute in CPython and Pyodide. They cover the original model,
-retained-event replay, indirect correction, Joseph versus conditional covariance,
-update discontinuities, rejected snapshots, the Mahalanobis radius of every
-contour vertex and closed-form prediction against the samplewise filter.
-Pyodide qualification uses the repository-pinned runtime, not a claim that desktop
-Python compatibility proves browser functionality.
+The same **49 numerical tests** execute in CPython and Pyodide. They cover retained
+update replay, indirect correction, Joseph covariance, discontinuities, rejection,
+contour radii, closed-form prediction, factor reconstruction, analytic batch results,
+sequential equivalence, row ordering without per-row gates, units, translation,
+wrong-H/wrong-R counterexamples and invalid input. A desktop Python pass does not
+establish browser execution; use the repository-pinned Pyodide runtime.
 
-With the repository browser-test dependencies and built web package:
+With repository browser-test dependencies and a built web package:
 
 ```sh
 NOON_TUTORIAL_BACKEND=webgpu node web/tutorials/ins-gnss/tests/review.mjs
@@ -150,38 +144,37 @@ NOON_TUTORIAL_BACKEND=webgpu node web/tutorials/ins-gnss/tests/player.mjs
 NOON_TUTORIAL_BACKEND=webgl node web/tutorials/ins-gnss/tests/player.mjs
 ```
 
-The review uses Noon's semantic preview host and captures actual intermediate
-frames. Playback tests cover frozen pause output, identical fresh replay, repeated
-resume, all chapter completions, mobile horizontal overflow and 91 dense cursor
-samples. Inspect the PNGs as well as the assertions. Sample-and-screenshot timing
-is **not** a real-time rendering benchmark or universal browser-parity guarantee.
+The review captures intermediate frames through Noon's semantic preview host.
+Playback checks cover frozen pause output, identical fresh replay, repeated resume,
+all source-completion boundaries, mobile horizontal overflow and dense cursor
+samples. Inspect PNGs as well as assertions; sample-and-screenshot timings are not
+real-time rendering benchmarks or universal browser-parity guarantees.
 
-CI builds the tested checkout through `scripts/build-web-demo.sh`, including its
-preflight, then supplies that same run's compiled runtime to both browser jobs.
-It no longer depends on an expiring deployment artifact from another commit.
-The focused build disables the extra wasm-opt pass; production optimization and
-full native/repository qualification remain separate gates. Reports retain runtime
-identity, tested tutorial source and numerical exports.
+CI builds the tested checkout through `scripts/build-web-demo.sh`, including
+preflight, then passes the same run's compiled runtime to both browser jobs. It
+uses no expiring deployment artifact from a different commit. The focused build
+omits the extra wasm-opt pass; production optimization and full native/repository
+qualification are separate gates. Exact outcomes belong to run reports and PR
+comments, not a blanket statement that all revisions pass.
 
-## Reference conventions and remaining scope
+## Reference and remaining scope
 
-Upstream revision: `0d33f229a0abbefeee084cc4306bdc3a47d5862f` in
-[fedorbaklanov/open-aided-navigation](https://github.com/fedorbaklanov/open-aided-navigation/tree/0d33f229a0abbefeee084cc4306bdc3a47d5862f).
-Relevant files under `demo/insGnssLoose/` are:
+Pinned upstream: `fedorbaklanov/open-aided-navigation` at
+`0d33f229a0abbefeee084cc4306bdc3a47d5862f`. Under `demo/insGnssLoose/`, use
+`Documentation_InsGnssFilterLoose.pdf` for the formulation,
+`StateMapInsGnssLoose.m`/`ErrorStateMapInsGnssLoose.m` for state ordering,
+`insGnssLooseOde.m` for ECEF propagation,
+`insGnssLooseTransMat.m`/`insGnssLooseSysNoiseMat.m` for first-order discretization,
+and `InsGnssFilterLoose.m` for observations, whitening, gating, NHC and correction.
 
-- `Documentation_InsGnssFilterLoose.pdf`: technical reference.
-- `StateMapInsGnssLoose.m` / `ErrorStateMapInsGnssLoose.m`: 26 nominal coefficients and 24 error coordinates.
-- `insGnssLooseOde.m`: ECEF mechanization and Earth-rate terms.
-- `insGnssLooseTransMat.m` / `insGnssLooseSysNoiseMat.m`: first-order discretization.
-- `InsGnssFilterLoose.m`: initialization, observations, whitening, gating, NHC and correction.
+Rotation notation uses destination superscript/source subscript; the displayed
+attitude injection is explicitly left/navigation-frame. The source's additive
+corrective offsets differ from our subtractive physical-bias convention. General
+reset requirements are not a claim that the upstream code implements an exact
+exponential-map/reset. Source-specific rate-dependent variance scaling is separate
+from the 2D whitening example. Reference code and equations need an audit before
+literal reproduction or a full-system validation claim.
 
-Rotation notation uses destination superscript/source subscript. Quaternion
-injection is explicitly left/navigation-frame. The reference's additive corrective
-offsets differ in sign from this simulator's subtractive physical-bias convention.
-General error-state reset requirements do not claim that the upstream code uses an
-exact exponential-map/reset implementation. Receiver GNSS is an observation, not
-independent ground truth.
-
-The detailed full course, complete ECEF model audit/reproduction, NHC and mounting
+The detailed full course, complete ECEF audit/reproduction, NHC and mounting
 experiments, recorded-drive provenance and broader statistical evaluation remain
-unfinished. No such numerical result is fabricated by the 1D teaching model.
+unfinished. No such result is fabricated by either teaching model.
