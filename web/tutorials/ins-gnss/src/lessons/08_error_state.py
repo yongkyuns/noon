@@ -35,9 +35,9 @@ async def _attitude_dimensions(stage):
 async def _attitude_rotation_vector(stage, result):
     stage.add(equation(r'phi = theta u', (ATTITUDE_LEFT, 1.5), 42),
               equation(r'Q(phi) = (cos(theta/2), u sin(theta/2))', (0, .3), 36, max_width=12),
-              *notes(['θ: rotation angle in radians', 'u: unit rotation axis', 'Hamilton quaternion; scalar first'],
+              *notes(['θ: rotation angle in radians', 'u: unit rotation axis'],
                      start_y=1.65, gap=.56),
-              text('Q maps a 3-vector into a unit quaternion.', (0, -1), 25, MUTED))
+              text('Scalar first: Q maps a 3-vector into a unit quaternion.', (0, -1), 25, MUTED))
     await stage.say('A rotation vector carries an axis and an angle. The half-angle formula produces the four quaternion coefficients.', hold=ATTITUDE_READ_HOLD)
     await stage.reveal(text('Prescribed correction: '+attitude_numbers(result['correction_rad'])+' rad',
                            (0, -1.8), 24, GNSS, max_width=12),
@@ -98,7 +98,7 @@ async def _attitude_specific_force(stage, config, result):
     force_end = (origin[0]+scale*rotated_force[0], origin[1]-scale*rotated_force[1])
     accel_end = (origin[0]+scale*a[0], origin[1]-scale*a[2])
     stage.add(arrow(origin, force_end, INS), arrow(force_end, accel_end, GNSS),
-              text('Rotated force', (ATTITUDE_LEFT-1.05, .9), 21, INS, max_width=3),
+              text('Rotated force', (ATTITUDE_LEFT-1.85, .9), 21, INS, max_width=3),
               text('Add gravity', (ATTITUDE_LEFT+1.2, .9), 21, GNSS, max_width=3),
               text('Resting sensor; unchanged raw measurement', (0, 1.95), 26),
               equation(r'hat(a)^n = C(hat(q)) f^s + g^n', (ATTITUDE_RIGHT, 1.25), 32, max_width=6),
