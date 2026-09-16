@@ -501,7 +501,16 @@ impl ExecutionSession {
         self.signal_timeline.commit_append(timeline);
         self.pending_segment_completion = None;
         self.completed_segment_sequence = Some(token.sequence());
-        if self.derived_display_plan.is_some() {
+        if segment.family_replacement().is_some() {
+            // Matching-family cleanup has admitted the authored target, so every
+            // exact-end target occurrence now has stable membership and painter
+            // placement. Source-anchored interpolation transients must retire in
+            // the same publication; carrying them one frame farther would leave
+            // anchors on source rows that the replacement just removed.
+            self.derived_display_plan = None;
+            self.derived_display_objects.clear();
+            self.derived_display_expire_after_publication = false;
+        } else if self.derived_display_plan.is_some() {
             self.derived_display_expire_after_publication = true;
         }
         self.last_callback_receipt = None;

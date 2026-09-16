@@ -38,20 +38,14 @@ fn run_case(source_count: usize, target_count: usize) {
     let source_leaves = (0..source_count)
         .map(|index| shape(&scene, index as f64 * 2.0 - 3.0))
         .collect::<Vec<_>>();
-    let source_members = source_leaves
-        .iter()
-        .map(Into::into)
-        .collect::<Vec<_>>();
+    let source_members = source_leaves.iter().map(Into::into).collect::<Vec<_>>();
     let source = scene.family(&source_members).unwrap();
     scene.add_many(&[(&source).into()]).unwrap();
 
     let target_leaves = (0..target_count)
         .map(|index| shape(&scene, index as f64 * 2.0 - 2.0))
         .collect::<Vec<_>>();
-    let target_members = target_leaves
-        .iter()
-        .map(Into::into)
-        .collect::<Vec<_>>();
+    let target_members = target_leaves.iter().map(Into::into).collect::<Vec<_>>();
     let target = scene.family(&target_members).unwrap();
 
     let store = Rc::clone(scene.integration_store());
