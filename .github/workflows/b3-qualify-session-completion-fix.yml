@@ -1,0 +1,34 @@
+name: B3 Qualify Matching Completion Fix
+on:
+  push:
+    branches: [b3-qualify-session-completion-fix]
+permissions:
+  contents: read
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      NOON_QUALIFICATION_SOURCE: d2043293adb34ea94cbd722cb731fcf9d0618d55
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.NOON_QUALIFICATION_SOURCE }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify clean candidate
+        run: |
+          test "$(git rev-parse HEAD)" = "$NOON_QUALIFICATION_SOURCE"
+          test ! -e .github/workflows/b3-qualify-session-completion-fix.yml
+          git diff --check
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Check workspace
+        run: cargo check --workspace --all-targets
+      - name: Strict clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Exact unequal completion publication
+        run: cargo test -p noon --test matching_nested_unequal_completion -- --nocapture
+      - name: Matching family regression group
+        run: cargo test -p noon --lib matching_family -- --nocapture
