@@ -9,6 +9,7 @@ const { chromium } = playwright;
 const port = Number(process.env.NOON_PLAYGROUND_STRESS_EDIT_PORT ?? "4191");
 const baseUrl = `http://127.0.0.1:${port}`;
 const selectAllShortcut = process.platform === "darwin" ? "Meta+A" : "Control+A";
+const runShortcut = process.platform === "darwin" ? "Meta+Enter" : "Control+Enter";
 const artifactDir = path.resolve(
   process.env.NOON_PLAYGROUND_STRESS_EDIT_ARTIFACTS ??
     "browser-smoke-artifacts/playground-stress-edit",
@@ -60,6 +61,7 @@ async function snapshot(page) {
       exampleId: patch?.dataset.exampleId ?? "",
       objectCount: document.querySelector("#metric-objects")?.value ?? "",
       runInFlight: window.__noonExampleGallery?.runInFlight ?? false,
+      runGeneration: window.__noonExampleGallery?.generationDiagnostics.runGeneration ?? null,
       runDisabled: document.querySelector("#replace-scene")?.disabled ?? true,
       editorHeight: pane?.getBoundingClientRect().height ?? 0,
       bodyHeight: document.body.scrollHeight,
@@ -69,6 +71,42 @@ async function snapshot(page) {
       textareaHidden: document.querySelector("#python-scene-source")?.hidden ?? false,
     };
   });
+}
+
+// The UI deliberately skips metrics polling during source execution. Read the
+// existing runtime hook instead: a static DOM counter cannot prove live playback.
+async function sourcePlaybackFrame(page) {
+  return page.evaluate(async () => {
+    const gallery = window.__noonExampleGallery;
+    const report = await gallery.executionMetrics();
+    return {
+      runInFlight: gallery.runInFlight,
+      runGeneration: gallery.generationDiagnostics.runGeneration,
+      presentedFrames: report?.metrics.presentedFrames ?? null,
+    };
+  });
+}
+
+async function assertSourcePlaybackAdvances(page, before) {
+  assert.equal(before.runInFlight, true, "the source must still own the animation");
+  assert.ok(Number.isSafeInteger(before.presentedFrames), "runtime frame evidence must be present");
+  await page.waitForFunction(
+    async (prior) => {
+      const gallery = window.__noonExampleGallery;
+      if (!gallery.runInFlight || gallery.generationDiagnostics.runGeneration !== prior.runGeneration) {
+        return true; // Surface premature completion/replacement in the assertions below.
+      }
+      const report = await gallery.executionMetrics();
+      return report?.metrics.presentedFrames > prior.presentedFrames;
+    },
+    before,
+    { timeout: 15_000, polling: 100 },
+  );
+  const after = await sourcePlaybackFrame(page);
+  assert.equal(after.runInFlight, true, "editing must be tested before source completion");
+  assert.equal(after.runGeneration, before.runGeneration, "editing must not start or invalidate a run");
+  assert.ok(after.presentedFrames > before.presentedFrames, "the original animation must keep presenting frames");
+  return after;
 }
 
 async function waitForPreloadedRuntime(page) {
@@ -270,8 +308,8 @@ try {
   const rows20Source = rows7Source.replace(/rows = \d+/, "rows = 20");
   const baselineObjectCount = diagnostics.snapshots.baseline.objectCount;
 
-  // Editing is now deliberately non-destructive. Prove that the existing replay and
-  // object count remain untouched until explicit Run.
+  // Editing is deliberately non-destructive. Prove that the existing replay and
+  // run generation remain untouched until explicit Run, including after debounce.
   await replaceSource(editor, page, rows5Source);
   diagnostics.snapshots.rows5Edited = await snapshot(page);
   assert.match(diagnostics.snapshots.rows5Edited.patchText, /current preview continues · Run to apply/);
@@ -283,12 +321,22 @@ try {
     baselineObjectCount,
     "editing alone must not autorun or replace the current scene",
   );
+  assert.equal(diagnostics.snapshots.rows5StillIdle.runGeneration, diagnostics.snapshots.baseline.runGeneration);
+  assert.equal(diagnostics.snapshots.rows5StillIdle.runInFlight, false);
 
-  // Start rows=5 and catch it while Python still owns the active animation. Then edit
-  // again and press Run before that animation completes. This is the product contract:
-  // edit leaves playback alone; Run is the explicit supersession boundary.
+  // Start rows=5 and catch it while Python still owns the active animation.
   await page.locator("#replace-scene").click();
   diagnostics.snapshots.rows5Playing = await waitForSourceOwnedPlayback(page);
+
+  // Reset changes only the source, too. Use live runtime evidence to prove that
+  // the same source-owned animation continues rather than relying on UI labels.
+  const beforeReset = await sourcePlaybackFrame(page);
+  await page.locator(".reset-example").click();
+  assert.equal(await page.locator("#python-scene-source").inputValue(), source);
+  diagnostics.snapshots.resetDuringRows5 = await snapshot(page);
+  assert.match(diagnostics.snapshots.resetDuringRows5.patchText, /current preview continues · Run to apply/);
+  diagnostics.snapshots.rows5AdvancedAfterReset = await assertSourcePlaybackAdvances(page, beforeReset);
+
   await replaceSource(editor, page, rows7Source);
   diagnostics.snapshots.rows7EditedDuringRows5 = await snapshot(page);
   assert.equal(diagnostics.snapshots.rows7EditedDuringRows5.runtimeState, "running");
@@ -301,22 +349,33 @@ try {
     false,
     "editing during an active source-owned animation must leave Run available",
   );
+  // Take the baseline AFTER typing, so a last frame queued before the edit cannot
+  // by itself satisfy the progress assertion.
+  const afterEdit = await sourcePlaybackFrame(page);
+  assert.equal(afterEdit.runGeneration, beforeReset.runGeneration);
+  diagnostics.snapshots.rows5AdvancedAfterEdit = await assertSourcePlaybackAdvances(page, afterEdit);
 
+  // This click must supersede a still-active run, not wait for natural completion.
   await page.locator("#replace-scene").click();
+  diagnostics.snapshots.rows7Playing = await waitForSourceOwnedPlayback(page);
+  assert.ok(diagnostics.snapshots.rows7Playing.runGeneration > beforeReset.runGeneration);
   diagnostics.snapshots.rows7Rerun = await waitForAppliedRun(page, baselineObjectCount);
   assert.equal(diagnostics.snapshots.rows7Rerun.executionMode, "semantic");
   assert.equal(diagnostics.snapshots.rows7Rerun.patchOperation, "Scene rebuilt atomically");
+  assert.equal(diagnostics.snapshots.rows7Rerun.runGeneration, diagnostics.snapshots.rows7Playing.runGeneration);
 
-  // One more ordinary explicit edit/run verifies the post-supersession session remains reusable.
+  // Reuse the post-supersession session via the keyboard Run route, restoring the
+  // original dense workload without changing the canonical scene or its timing.
   const rows7ObjectCount = diagnostics.snapshots.rows7Rerun.objectCount;
   await replaceSource(editor, page, rows20Source);
   diagnostics.snapshots.rows20Edited = await snapshot(page);
   assert.equal(diagnostics.snapshots.rows20Edited.objectCount, rows7ObjectCount);
   assert.match(diagnostics.snapshots.rows20Edited.patchText, /current preview continues · Run to apply/);
-  await page.locator("#replace-scene").click();
+  await page.keyboard.press(runShortcut);
   diagnostics.snapshots.rows20Rerun = await waitForAppliedRun(page, rows7ObjectCount);
   assert.equal(diagnostics.snapshots.rows20Rerun.executionMode, "semantic");
   assert.equal(diagnostics.snapshots.rows20Rerun.patchOperation, "Scene rebuilt atomically");
+  assert.ok(diagnostics.snapshots.rows20Rerun.runGeneration > diagnostics.snapshots.rows7Rerun.runGeneration);
 
   assert.deepEqual(diagnostics.pageErrors, [], `unhandled page errors: ${diagnostics.pageErrors.join("\n")}`);
   assert.deepEqual(
@@ -329,7 +388,7 @@ try {
   await page.screenshot({ path: path.join(artifactDir, "stress-edited.png"), fullPage: true });
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   console.log(
-    `playground explicit structural reruns ok: ${diagnostics.snapshots.loaded.editorHeight}px editor, edit-inert rows=5 then mid-animation rows=7 supersession and rows=20 replay`,
+    `playground explicit structural reruns ok: ${diagnostics.snapshots.loaded.editorHeight}px editor, uninterrupted Reset/edit during rows=5, mid-animation rows=7 supersession and keyboard rows=20 replay`,
   );
 } catch (error) {
   diagnostics.failure = error instanceof Error ? error.stack ?? error.message : String(error);
