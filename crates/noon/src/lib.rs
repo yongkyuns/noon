@@ -113,6 +113,9 @@ mod sector_authoring;
 mod semantic_mobject;
 mod state_replacement;
 mod svg_authoring;
+pub mod synchronized_plot_presentation;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod synchronized_plotting_example;
 mod tangent_line_authoring;
 #[cfg(any(feature = "native-text", feature = "typst"))]
 mod text_authoring;

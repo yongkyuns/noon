@@ -22,6 +22,8 @@ mod authoring_plotting;
 #[cfg(target_arch = "wasm32")]
 mod authoring_svg;
 #[cfg(target_arch = "wasm32")]
+mod authoring_synchronized_plotting;
+#[cfg(target_arch = "wasm32")]
 mod authoring_tangent_line;
 mod canonical_authoring_scene;
 mod clock;
@@ -79,6 +81,8 @@ pub use authoring_options::*;
 pub use authoring_plot_presentation::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_plotting::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_synchronized_plotting::*;
 pub use canonical_authoring_scene::*;
 pub use clock::{ClockError, PlaybackClock};
 pub use determinism::*;
