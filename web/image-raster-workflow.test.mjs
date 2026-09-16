@@ -16,3 +16,13 @@ test("image raster qualification builds release-capable fixtures and runs late r
   assert.match(engine, new RegExp(guard.source + "mod raster_image_smoke;"));
   assert.match(engine, new RegExp(guard.source + "pub use raster_image_smoke::\\*;"));
 });
+
+
+test("native oracle paths remain workspace-rooted when Cargo changes the working directory", async () => {
+  const workflow = await readFile(new URL("image-raster-qualification.yml", workflowDir), "utf8");
+  assert.match(workflow, /NOON_IMAGE_RASTER_OUTPUT="\$GITHUB_WORKSPACE\/browser-smoke-artifacts\/images\/native\.png"/);
+  assert.match(workflow, /NOON_IMAGE_MANIM_DIRECTORY: \$\{\{ github\.workspace \}\}\/browser-smoke-artifacts\/images\/manim/);
+  assert.match(workflow, /NOON_IMAGE_ARTIFACTS: \$\{\{ github\.workspace \}\}\/browser-smoke-artifacts\/images/);
+  assert.match(workflow, /--test image_raster_qualification -- --ignored --nocapture/);
+  assert.match(workflow, /mkdir -p browser-smoke-artifacts\/images/);
+});

@@ -8,6 +8,7 @@ on:
       - 'rust-toolchain.toml'
       - 'web/python/_manim_image.py'
       - 'web/python/test_manim_image.py'
+      - 'web/image-raster-workflow.test.mjs'
       - 'web/python/examples/raster_image.py'
       - 'web/python-worker.source.js'
       - 'scripts/image-*'
@@ -45,7 +46,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config mesa-vulkan-drivers
           python -m pip install --disable-pip-version-check manim==0.21.0
       - name: Rust target
-        run: rustup target add wasm32-unknown-unknown
+        run: |
+          rustup install
+          rustup target add wasm32-unknown-unknown
       - uses: actions/cache@v4
         with:
           path: |
@@ -63,7 +66,7 @@ jobs:
           cargo test -p noon --no-default-features --lib image --features image-decode
           cargo test -p noon --no-default-features --test image_mobject --test image_publication_atomicity --test image_late_publication_failure --test live_creation_resource_atomicity --test retained_images --features image-decode
           mkdir -p browser-smoke-artifacts/images
-          NOON_IMAGE_RASTER_OUTPUT=browser-smoke-artifacts/images/native.png cargo test -p noon --no-default-features --test retained_images --features image-decode -- --ignored
+          NOON_IMAGE_RASTER_OUTPUT="$GITHUB_WORKSPACE/browser-smoke-artifacts/images/native.png" cargo test -p noon --no-default-features --test retained_images --features image-decode -- --ignored
       - name: Build ordinary browser product
         run: bash scripts/build-web-demo.sh
       - name: Browser and reference tools
@@ -74,8 +77,8 @@ jobs:
         run: python scripts/image-manim-reference.py browser-smoke-artifacts/images/manim
       - name: Native retained images against the same pinned reference
         env:
-          NOON_IMAGE_MANIM_DIRECTORY: browser-smoke-artifacts/images/manim
-          NOON_IMAGE_ARTIFACTS: browser-smoke-artifacts/images
+          NOON_IMAGE_MANIM_DIRECTORY: ${{ github.workspace }}/browser-smoke-artifacts/images/manim
+          NOON_IMAGE_ARTIFACTS: ${{ github.workspace }}/browser-smoke-artifacts/images
         run: cargo test -p noon --no-default-features --features image-decode --test image_raster_qualification -- --ignored --nocapture
       - name: Direct Rust WASM and Python on WebGPU and WebGL2
         run: timeout --signal=TERM 300s node scripts/image-raster-smoke.mjs
