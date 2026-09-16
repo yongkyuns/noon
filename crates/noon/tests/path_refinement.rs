@@ -3,7 +3,7 @@ use noon_core::{PathCommand, Vec2, VectorPath};
 
 #[test]
 fn queries_promote_primitives_and_capture_transformed_controls_once() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut object = scene
         .geometry(
             ManimGeometryOptions::path(
