@@ -34,7 +34,9 @@ try{
       const initial=await page.evaluate(s=>window.noonAgentPreviewHost.open(s,600),`context={'chapter':${chapter}}\n${source}`);
       const duration=durations[chapter-1];
       const times=[0,0.25,0.55,5,8,12,16,20,24,28,34,38,42,46].filter(t=>t<duration-0.05);
-      times.push(duration);
+      // The strict preview cannot overshoot even by floating-point roundoff.
+      // Check the final hold here; player.mjs tests exact source completion.
+      times.push(duration-1e-8);
       for(const time of times){
         const state=time===0?initial:await page.evaluate(t=>window.noonAgentPreviewHost.sample(t),time);
         await page.locator('#scene').screenshot({path:path.join(folder,`${time.toFixed(3)}.png`)});

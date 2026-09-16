@@ -12,10 +12,11 @@ const backend = process.env.NOON_TUTORIAL_BACKEND ?? 'webgpu';
 const base = 'web/tutorials/ins-gnss';
 const output = `browser-smoke-artifacts/ins-gnss/player-${backend}`;
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+const metadata = JSON.parse(await readFile(path.join(base, 'chapters.json'), 'utf8'));
 const server = await serveRepository(process.cwd(), 4198);
 const browser = await chromium.launch({headless: true, args: browserArgs(backend)});
 const page = await browser.newPage({viewport: {width: 1360, height: 1000}});
-const errors = [], motion = [];
+const errors = [], motion = [], completions = [];
 let paused, metrics, completion;
 await mkdir(path.join(output, 'motion'), {recursive: true});
 page.on('pageerror', error => errors.push(String(error)));
@@ -86,11 +87,25 @@ try {
   await sample(100);
   completion = await state();
   assert.equal(completion.completed, true);
-  assert.ok(Math.abs(completion.time - 46.75) < 1e-5, 'Stop at exact chapter completion');
+  assert.ok(Math.abs(completion.time - metadata.chapters[0].expected_duration) < 1e-5);
+  completions.push(completion);
+  // Request beyond the end deliberately. The player must stop at the actual
+  // Python source boundary, not a rounded duration or a manufactured final frame.
+  for (const item of metadata.chapters.slice(1)) {
+    await page.evaluate(n => window.tutorial.open(n), item.number);
+    await ready();
+    await sample(item.expected_duration + 1);
+    const done = await state();
+    assert.equal(done.completed, true, `Chapter ${item.number} completion`);
+    assert.ok(Math.abs(done.time - item.expected_duration) < 1e-5, `Chapter ${item.number} duration`);
+    assert.deepEqual(done.errors, []);
+    completions.push(done);
+    await screenshot(`complete-${String(item.number).padStart(2, '0')}.png`);
+  }
   await page.locator('#chapter').selectOption('6');
   await ready();
   assert.equal((await state()).chapter, 6);
-  await sample(33.75);
+  await sample(metadata.chapters[5].expected_duration);
   await page.screenshot({path: path.join(output, 'desktop.png'), fullPage: true});
   await page.setViewportSize({width: 390, height: 844});
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'No mobile horizontal overflow');
@@ -100,10 +115,16 @@ try {
   errors.push(String(error));
   await page.screenshot({path: path.join(output, 'failure.png'), fullPage: true}).catch(() => {});
 } finally {
-  await writeFile(path.join(output, 'report.json'), JSON.stringify({backend, browser: browser.version(),
-    sourceSha256: hash(await readFile(path.join(base, 'scene.py'))),
-    playerSha256: hash(await readFile(path.join(base, 'player.js'))), paused, metrics, completion, motion, errors}, null, 2));
-  await browser.close();
-  await server.close();
+  try {
+    const report = {backend, browser: browser.version(),
+      sourceSha256: hash(await readFile(path.join(base, 'scene.py'))),
+      playerSha256: hash(await readFile(path.join(base, 'player.js'))),
+      paused, metrics, completion, completions, motion, errors};
+    await writeFile(path.join(output, 'report.json'),
+      JSON.stringify(report, (_key, value) => typeof value === 'bigint' ? value.toString() : value, 2));
+  } finally {
+    await browser.close();
+    await server.close();
+  }
 }
 assert.deepEqual(errors, []);
