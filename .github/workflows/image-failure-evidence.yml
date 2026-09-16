@@ -16,14 +16,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh api repos/yongkyuns/noon/actions/jobs/104861043563/logs > /tmp/image-job.log
+          gh api --allow-escape-sequences repos/yongkyuns/noon/actions/jobs/104861043563/logs > /tmp/image-job.log
           python3 - <<'PY'
           from pathlib import Path
+          import re
           text = Path('/tmp/image-job.log').read_text(encoding='utf-8-sig')
+          text = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', text)
           start = text.rfind('##[group]Run timeout --signal=TERM 300s node scripts/image-raster-smoke.mjs')
-          assert start >= 0, 'browser step is absent from requested job log'
-          end = text.find('##[group]Run actions/upload-artifact', start)
-          excerpt = text[start:end if end >= 0 else None]
+          if start < 0:
+              excerpt = '\n'.join(text.splitlines()[-120:])
+          else:
+              end = text.find('##[group]Run actions/upload-artifact', start)
+              excerpt = text[start:end if end >= 0 else None]
           Path('/tmp/image-browser-failure.txt').write_text(excerpt)
           print(excerpt)
           PY
