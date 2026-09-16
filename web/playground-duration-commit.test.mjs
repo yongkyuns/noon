@@ -36,6 +36,9 @@ const runBody = main.slice(runStart, runEnd);
 const beforeReconcileCheck = runBody.indexOf(
   'return recordStale(runToken, "before-reconcile");',
 );
+const continuationCommitCheck = runBody.indexOf(
+  'return recordStale(runToken, "after-continuation-replay");',
+);
 const coldCommitCheck = runBody.indexOf(
   'if (!isCurrentRun(runToken)) return recordStale(runToken, "after-runtime-start");',
 );
@@ -45,10 +48,16 @@ const warmCommitCheck = runBody.indexOf(
 const durationCommit = runBody.indexOf("playbackDurationSeconds = authored.duration;");
 
 assert.ok(beforeReconcileCheck >= 0, "run must reject stale authored results before execution commit");
-assert.ok(coldCommitCheck > beforeReconcileCheck, "cold startup must have a post-start freshness check");
+assert.ok(
+  continuationCommitCheck > beforeReconcileCheck,
+  "continuation-to-replay adoption must have a post-transition freshness check",
+);
+assert.ok(coldCommitCheck > continuationCommitCheck, "cold startup must have a post-start freshness check");
 assert.ok(warmCommitCheck > coldCommitCheck, "warm reconciliation must have a post-reconcile freshness check");
 assert.ok(
-  durationCommit > coldCommitCheck && durationCommit > warmCommitCheck,
+  durationCommit > continuationCommitCheck &&
+    durationCommit > coldCommitCheck &&
+    durationCommit > warmCommitCheck,
   "global playback duration must commit only after the current scene has committed successfully",
 );
 assert.equal(
