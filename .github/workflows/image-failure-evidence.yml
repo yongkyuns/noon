@@ -1,0 +1,34 @@
+name: Image failure evidence (temporary)
+on:
+  push:
+    branches: [codex/b2-image-workspace-bootstrap]
+    paths: [.github/workflows/image-failure-evidence.yml]
+permissions:
+  actions: read
+  contents: read
+jobs:
+  evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Preserve the failing browser step without unrelated build output
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api repos/yongkyuns/noon/actions/jobs/104861043563/logs > /tmp/image-job.log
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('/tmp/image-job.log').read_text(encoding='utf-8-sig')
+          start = text.rfind('##[group]Run timeout --signal=TERM 300s node scripts/image-raster-smoke.mjs')
+          assert start >= 0, 'browser step is absent from requested job log'
+          end = text.find('##[group]Run actions/upload-artifact', start)
+          excerpt = text[start:end if end >= 0 else None]
+          Path('/tmp/image-browser-failure.txt').write_text(excerpt)
+          print(excerpt)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-browser-failure-evidence
+          path: /tmp/image-browser-failure.txt
+          retention-days: 2
