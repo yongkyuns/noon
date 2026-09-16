@@ -53,7 +53,8 @@ jobs:
               raise SystemExit(f'expected one completion transient-retirement block, found {text.count(old)}')
           path.write_text(text.replace(old, new))
           PY
-          cargo fmt --all -- --check
+          cargo fmt --all
+          git diff --check
       - name: Qualify exact completion publication
         run: |
           cargo test -p noon --test matching_nested_unequal_completion -- --nocapture
