@@ -1,0 +1,61 @@
+name: B5 atomicity candidate preparation
+on:
+  push:
+    branches: [codex/b5-atomicity-candidate]
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: true
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify source and prepare candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object crates/noon/src/live_session.rs)" = e748fc560e879c2249de0d4dc2cb476ec3e9979a
+          test "$(git hash-object crates/noon/src/semantic_mobject.rs)" = 5b49ddfd668980d903cabc790b34c91423548849
+          mkdir -p candidate-evidence
+          git rev-parse HEAD > candidate-evidence/preparation-head.txt
+          git apply --check .github/diagnostics/live-path-atomicity.patch
+          git apply .github/diagnostics/live-path-atomicity.patch
+      - name: Install repository-pinned Rust
+        run: rustup install
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Format and record the candidate (not the preparation commit)
+        run: |
+          cargo fmt --all
+          git add -N crates/noon/src/semantic_mobject/publication_atomicity_tests.rs
+          git diff --check
+          git diff --binary -- crates/noon/src/semantic_mobject.rs crates/noon/src/live_session.rs crates/noon/src/semantic_mobject/publication_atomicity_tests.rs > candidate-evidence/candidate.patch
+          git hash-object crates/noon/src/semantic_mobject.rs crates/noon/src/live_session.rs crates/noon/src/semantic_mobject/publication_atomicity_tests.rs > candidate-evidence/source-blobs.txt
+          tar -czf candidate-evidence/sources.tar.gz crates/noon/src/semantic_mobject.rs crates/noon/src/live_session.rs crates/noon/src/semantic_mobject/publication_atomicity_tests.rs
+      - name: Run real post-import rollback regressions
+        run: cargo test -p noon --lib --all-features publication_atomicity_tests -- --nocapture 2>&1 | tee candidate-evidence/focused-tests.txt
+      - name: Run complete Noon library tests
+        run: cargo test -p noon --lib --all-features 2>&1 | tee candidate-evidence/library-tests.txt
+      - name: Strict all-target Noon Clippy
+        run: cargo clippy -p noon --all-targets --all-features -- -D warnings 2>&1 | tee candidate-evidence/clippy.txt
+      - name: Export candidate evidence without repository writes
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: b5-atomicity-candidate-${{ github.sha }}
+          path: candidate-evidence/
+          retention-days: 7
