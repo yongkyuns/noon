@@ -9,17 +9,23 @@ import playwright from "playwright";
 import { PNG } from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
+import { assertGapPixels, gapArgumentSource, gapCheckpoints } from "./gapped-plotting-checks.mjs";
 
 const mode = process.argv[2] ?? "single";
-assert.ok(["single", "synchronized"].includes(mode) && process.argv.length <= 3,
-  "expected no argument, single, or synchronized");
-const synchronized = mode === "synchronized";
-const factoryName = synchronized ? "createSynchronizedPlottingRenderer" : "createTimeSeriesPlottingRenderer";
-const exampleName = synchronized ? "synchronized_plotting" : "time_series_plotting";
+const cases = {
+  single: ["createTimeSeriesPlottingRenderer", "time_series_plotting", "time-series", 35],
+  synchronized: ["createSynchronizedPlottingRenderer", "synchronized_plotting", "synchronized-series", 43],
+  gapped: ["createGappedPlottingRenderer", "gapped_plotting", "gapped-series", 51],
+};
+assert.ok(Object.hasOwn(cases, mode) && process.argv.length <= 3,
+  "expected no argument, single, synchronized, or gapped");
+const synchronized = mode !== "single";
+const gapped = mode === "gapped";
+const [factoryName, exampleName, outputName, expectedObjectCount] = cases[mode];
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const output = path.join(root, synchronized ? "plotting-artifacts/synchronized-series" : "plotting-artifacts/time-series");
+const output = path.join(root, `plotting-artifacts/${outputName}`);
 const source = await readFile(path.join(root, `web/python/examples/${exampleName}.py`), "utf8");
-const checkpoints = [0.15, 0.6, 1.8, 4.5, 6];
+const checkpoints = gapped ? gapCheckpoints : [0.15, 0.6, 1.8, 4.5, 6];
 // Include exact segment boundaries so the normal direct realtime host can
 // re-anchor on source resumption without charging setup to the next interval.
 const data = [[0, 0.4], [0.5, 1], [1.5, 1.7], [2, 1.2], [4, 0.6], [7, 2.1], [10, 1.4]];
@@ -146,7 +152,7 @@ async function capture(context, language, backend) {
       captures.push({ time, metrics, png: PNG.sync.read(bytes) });
     }
     assert.deepEqual(errors, []);
-    assert.equal(captures.at(-1).metrics.objectCount, synchronized ? 43 : 35);
+    assert.equal(captures.at(-1).metrics.objectCount, expectedObjectCount);
     return captures;
   } finally {
     await page.close();
@@ -198,7 +204,7 @@ class PresentationValidation(Scene):
         }
         return { passed: true, synchronized: Boolean(extraChecks) };
       } finally { client.terminate(); }
-    }, synchronized ? synchronizedArgumentSource : ""), "Pyodide argument validation");
+    }, gapped ? gapArgumentSource : synchronized ? synchronizedArgumentSource : ""), "Pyodide argument validation");
   } finally { await page.close(); }
 }
 
@@ -320,7 +326,9 @@ try {
         assert.equal(a.png.height, 540);
         assert.equal(b.png.width, a.png.width);
         assert.equal(b.png.height, a.png.height);
-        const oracle = synchronized ? assertSynchronizedMarkers : assertMarker;
+        const oracle = gapped
+          ? (png, time) => assertGapPixels(png, time, recordings, unionTimes, regionCount)
+          : synchronized ? assertSynchronizedMarkers : assertMarker;
         oracle(a.png, a.time);
         oracle(b.png, b.time);
         let differingPixels = 0;
@@ -332,7 +340,7 @@ try {
       }
       result.arguments = await validateArguments(context);
       result.passed = true;
-      console.log(`[PASS] ${backend} (${mode}): numeric labels and five paired data-time frames`);
+      console.log(`[PASS] ${backend} (${mode}): numeric labels and ${checkpoints.length} paired data-time frames`);
     } catch (error) {
       result.passed = false;
       result.error = error.stack ?? String(error);

@@ -10,6 +10,9 @@ use crate::{
     GREEN, ORANGE, WHITE,
 };
 
+/// Explicit outage variant using the same ordinary authoring primitives.
+pub mod gaps;
+
 type BuildResult<T> = Result<T, Box<dyn std::error::Error>>;
 pub const RUN_TIME: f64 = 6.0;
 pub const RECORDINGS: [&[[f64; 2]]; 2] = [

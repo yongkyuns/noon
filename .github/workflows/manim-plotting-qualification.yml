@@ -11,6 +11,7 @@ on:
       - 'web/manim-compat-smoke.html'
       - 'scripts/plotting-qualification.mjs'
       - 'scripts/time-series-plotting-qualification.mjs'
+      - 'scripts/gapped-plotting-checks.mjs'
       - '.github/workflows/manim-plotting-qualification.yml'
   workflow_dispatch:
 
@@ -47,6 +48,8 @@ jobs:
         run: node scripts/time-series-plotting-qualification.mjs
       - name: Qualify synchronized multi-series playback
         run: node scripts/time-series-plotting-qualification.mjs synchronized
+      - name: Qualify explicit outages and marker recovery
+        run: node scripts/time-series-plotting-qualification.mjs gapped
       - name: Record tested checkout and isolated gap diagnostics
         if: always()
         run: |
