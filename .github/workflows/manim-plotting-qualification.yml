@@ -8,6 +8,7 @@ on:
       - 'web/python-worker.source.js'
       - 'web/python-compat-modules.js'
       - 'web/plotting-smoke.js'
+      - 'web/number-label-smoke.js'
       - 'web/manim-compat-smoke.html'
       - 'scripts/plotting-qualification.mjs'
       - 'scripts/time-series-plotting-qualification.mjs'
