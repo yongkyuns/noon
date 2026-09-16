@@ -31,171 +31,90 @@ export function installTutorialDiscovery(documentLike = globalThis.document) {
     return false;
   }
 
-  const workspace = documentLike.querySelector(".workspace");
-  if (!workspace || typeof workspace.before !== "function") {
+  const topbar = documentLike.querySelector(".topbar");
+  if (!topbar || typeof topbar.append !== "function") {
     return false;
   }
 
-  const section = documentLike.createElement("section");
-  section.className = "tutorial-discovery";
-  section.setAttribute(DISCOVERY_MARKER, "true");
-  section.setAttribute("aria-label", "Noon tutorials");
+  const nav = documentLike.createElement("nav");
+  nav.className = "tutorial-discovery";
+  nav.setAttribute(DISCOVERY_MARKER, "true");
+  nav.setAttribute("aria-label", "Noon tutorials");
 
-  const heading = documentLike.createElement("div");
-  heading.className = "tutorial-discovery-head";
-  appendTextElement(documentLike, heading, "strong", "tutorial-discovery-title", "Tutorials");
-  appendTextElement(
-    documentLike,
-    heading,
-    "span",
-    "tutorial-discovery-subtitle",
-    "Long-form Noon demonstrations and worked technical lessons",
-  );
-  section.append(heading);
-
-  const grid = documentLike.createElement("div");
-  grid.className = "tutorial-discovery-grid";
   for (const tutorial of TUTORIALS) {
     const link = documentLike.createElement("a");
-    link.className = "tutorial-card";
+    link.className = "tutorial-link";
     link.href = tutorial.href;
     link.setAttribute("data-tutorial-id", tutorial.id);
+    link.setAttribute("title", `${tutorial.eyebrow}: ${tutorial.summary}`);
 
-    const copy = documentLike.createElement("span");
-    copy.className = "tutorial-card-copy";
-    appendTextElement(documentLike, copy, "span", "tutorial-card-eyebrow", tutorial.eyebrow);
-    appendTextElement(documentLike, copy, "strong", "tutorial-card-title", tutorial.title);
-    appendTextElement(documentLike, copy, "span", "tutorial-card-summary", tutorial.summary);
-
-    const action = documentLike.createElement("span");
-    action.className = "tutorial-card-action";
-    appendTextElement(documentLike, action, "span", "tutorial-card-badge", tutorial.badge);
-    appendTextElement(documentLike, action, "span", "tutorial-card-open", "Open tutorial →");
-
-    link.append(copy, action);
-    grid.append(link);
+    appendTextElement(documentLike, link, "span", "tutorial-link-prefix", "Tutorial");
+    appendTextElement(documentLike, link, "strong", "tutorial-link-title", tutorial.title);
+    appendTextElement(documentLike, link, "span", "tutorial-link-badge", tutorial.badge);
+    nav.append(link);
   }
-  section.append(grid);
 
   const style = documentLike.createElement("style");
   style.setAttribute(DISCOVERY_MARKER, "styles");
   style.textContent = `
     .tutorial-discovery {
-      margin-bottom: 1rem;
-      overflow: hidden;
-      border: 1px solid var(--border);
-      border-radius: 1rem;
-      background:
-        radial-gradient(circle at 85% 0%, rgb(142 124 255 / 12%), transparent 24rem),
-        rgb(7 10 16 / 78%);
-    }
-    .tutorial-discovery-head {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 1rem;
-      padding: 0.82rem 1rem;
-      border-bottom: 1px solid var(--border);
-    }
-    .tutorial-discovery-title {
-      color: #e4e8f2;
-      font-size: 0.86rem;
-    }
-    .tutorial-discovery-subtitle {
-      color: var(--muted-2);
-      font-size: 0.68rem;
-      text-align: right;
-    }
-    .tutorial-discovery-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
-      gap: 0.72rem;
-      padding: 0.85rem;
-    }
-    .tutorial-card {
       display: flex;
       min-width: 0;
+      flex: none;
       align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-      padding: 0.9rem 1rem;
-      border: 1px solid #323b5d;
-      border-radius: 0.8rem;
-      background: linear-gradient(135deg, #111627, #0c111b 65%);
-      color: inherit;
+    }
+    .tutorial-link {
+      display: flex;
+      height: 2rem;
+      align-items: center;
+      gap: 0.38rem;
+      padding: 0 0.58rem;
+      border: 1px solid #40386f;
+      border-radius: 0.62rem;
+      background: rgb(142 124 255 / 8%);
+      color: #e7e3ff;
       text-decoration: none;
+      white-space: nowrap;
     }
-    .tutorial-card:hover {
-      border-color: #6f61c9;
-      background: linear-gradient(135deg, #171d32, #0d121d 65%);
+    .tutorial-link:hover {
+      border-color: #7061d1;
+      background: rgb(142 124 255 / 15%);
     }
-    .tutorial-card:focus-visible {
+    .tutorial-link:focus-visible {
       outline: 2px solid var(--accent-strong);
       outline-offset: 2px;
     }
-    .tutorial-card-copy {
-      display: block;
-      min-width: 0;
-    }
-    .tutorial-card-eyebrow,
-    .tutorial-card-title,
-    .tutorial-card-summary,
-    .tutorial-card-badge,
-    .tutorial-card-open {
-      display: block;
-    }
-    .tutorial-card-eyebrow {
-      margin-bottom: 0.22rem;
+    .tutorial-link-prefix {
       color: #9d91ef;
-      font: 0.61rem ui-monospace, SFMono-Regular, Menlo, monospace;
-      letter-spacing: 0.055em;
+      font: 0.58rem ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: 0.045em;
       text-transform: uppercase;
     }
-    .tutorial-card-title {
-      color: #f0f2f8;
-      font-size: 0.92rem;
+    .tutorial-link-title {
+      font-size: 0.69rem;
+      letter-spacing: -0.01em;
     }
-    .tutorial-card-summary {
-      max-width: 48rem;
-      margin-top: 0.28rem;
-      color: #8e9ab2;
-      font-size: 0.7rem;
-      line-height: 1.45;
+    .tutorial-link-badge {
+      padding-left: 0.38rem;
+      border-left: 1px solid #40386f;
+      color: #8f9ab1;
+      font: 0.58rem ui-monospace, SFMono-Regular, Menlo, monospace;
     }
-    .tutorial-card-action {
-      display: flex;
-      flex: none;
-      flex-direction: column;
-      align-items: flex-end;
-      gap: 0.35rem;
-    }
-    .tutorial-card-badge {
-      padding: 0.2rem 0.4rem;
-      border: 1px solid #514691;
-      border-radius: 999px;
-      color: #c2b8ff;
-      font: 0.6rem ui-monospace, SFMono-Regular, Menlo, monospace;
-    }
-    .tutorial-card-open {
-      color: #d9d4ff;
-      font-size: 0.68rem;
-      font-weight: 750;
-      white-space: nowrap;
+    @media (max-width: 52rem) {
+      .tutorial-link-badge { display: none; }
     }
     @media (max-width: 44rem) {
-      .tutorial-discovery-head {
-        align-items: flex-start;
-        flex-direction: column;
-        gap: 0.2rem;
+      .tutorial-link {
+        height: 1.85rem;
+        padding: 0 0.42rem;
       }
-      .tutorial-discovery-subtitle { text-align: left; }
-      .tutorial-discovery-grid { grid-template-columns: 1fr; padding: 0.6rem; }
-      .tutorial-card { align-items: flex-start; flex-direction: column; }
-      .tutorial-card-action { width: 100%; align-items: flex-start; }
+      .tutorial-link-prefix { display: none; }
+      .tutorial-link-title { font-size: 0.62rem; }
     }
   `;
+
   documentLike.head?.append(style);
-  workspace.before(section);
+  topbar.append(nav);
   return true;
 }
 
