@@ -1,0 +1,45 @@
+name: B3 Public Matching Restack Qualification
+on:
+  push:
+    branches: [b3-public-restack-qualification]
+permissions:
+  contents: read
+concurrency:
+  group: b3-public-restack-qualification
+  cancel-in-progress: true
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 5db35827a36c2dc94c053713fe064e104edf9770
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify exact clean upstream candidate
+        run: |
+          test "$(git rev-parse HEAD)" = 5db35827a36c2dc94c053713fe064e104edf9770
+          test "$(git rev-parse HEAD^{tree})" = 0859ecd0becaad44d3b0c707ae105cc4f17449a4
+          test ! -e .github/workflows/b3-public-restack-qualification.yml
+          git diff --check 0619d5726f4eeee86d30f4ea115157bb711203f1
+      - name: Adapter and completion regressions
+        run: |
+          PYTHONPATH=web/python python3 -m unittest discover -s web/python -p 'test_manim_transform_matching_shapes.py' -v
+          PYTHONPATH=web/python python3 -m unittest discover -s web/python -p 'test_manim_matching_completion_bindings.py' -v
+          PYTHONPATH=web/python python3 -m unittest discover -s web/python -p 'test_manim_matching_timing.py' -v
+      - name: Install pinned Rust
+        run: rustup install
+      - name: Focused native matching and binding regressions
+        run: |
+          cargo test -p noon --lib matching_family -- --nocapture
+          cargo test -p noon-web --lib completed_binding -- --nocapture
+      - name: Full repository fast gate in upstream context
+        run: bash scripts/check.sh fast origin/master
