@@ -11,7 +11,7 @@ from visuals import (Stage, Plot, text, equation, notes, FUSED,
                      GNSS, UNCERTAINTY, MUTED)
 from noon import Dot, Line
 
-READ_HOLD = 7.0
+PREDICTION_READ_HOLD = 7.0
 REPLAY_SECONDS = 8.0
 EXAMPLE_BIAS_ERROR = .01  # A declared thought experiment, not the run's estimate.
 BUDGET_COLUMNS = (-3.3, 1.5, 4.8)
@@ -24,12 +24,12 @@ async def _error_transport(stage, elapsed):
               equation(r'dot(delta p) = delta v', (-3.1, .1), 38, max_width=6),
               *notes(['Teaching state: position, velocity, bias', 'Corrected acceleration = raw − bias',
                       'Bias is constant in this model.'], start_y=.65, gap=.70))
-    await stage.say('Position error inherits velocity error. A constant unknown bias keeps changing velocity error.', hold=READ_HOLD)
+    await stage.say('Position error inherits velocity error. A constant unknown bias keeps changing velocity error.', hold=PREDICTION_READ_HOLD)
     await stage.reveal(equation(r'delta v(T) = delta v_0 - T delta b_0', (-3.1, -1.0), 33, max_width=6), hold=4)
     await stage.reveal(equation(r'delta p(T) = delta p_0 + T delta v_0 - 1/2 T^2 delta b_0',
                                (0, -2.10), 33, max_width=12.5), hold=5)
     drift = -.5 * elapsed**2 * EXAMPLE_BIAS_ERROR
-    await stage.say(f'Example: bias error +{EXAMPLE_BIAS_ERROR:g} m/s² alone gives {drift:.3f} m position error after {elapsed:g} s.', hold=READ_HOLD)
+    await stage.say(f'Example: bias error +{EXAMPLE_BIAS_ERROR:g} m/s² alone gives {drift:.3f} m position error after {elapsed:g} s.', hold=PREDICTION_READ_HOLD)
     await stage.clear()
 
 
@@ -39,8 +39,8 @@ async def _exact_transition(stage, elapsed):
               *notes(['Each row says where an error goes.', 'Row 1: position at the end', 'Row 2: velocity at the end',
                       'Row 3: unchanged bias error'], gap=.72),
               text('Exact for this constant-bias 1D model, before new noise is added.', (0, -2.1), 22, MUTED))
-    await stage.say('Phi packages those three equations. The negative signs follow from subtracting the estimated physical bias.', hold=READ_HOLD)
-    await stage.say(f'At T = {elapsed:g} s, the position row is [1, {elapsed:g}, {-elapsed**2/2:g}]. Bias uncertainty gets a large multiplier.', hold=READ_HOLD)
+    await stage.say('Phi packages those three equations. The negative signs follow from subtracting the estimated physical bias.', hold=PREDICTION_READ_HOLD)
+    await stage.say(f'At T = {elapsed:g} s, the position row is [1, {elapsed:g}, {-elapsed**2/2:g}]. Bias uncertainty gets a large multiplier.', hold=PREDICTION_READ_HOLD)
     await stage.clear()
 
 
@@ -65,13 +65,13 @@ async def _outage_replay(stage, samples, start, event, config):
                       f'Next observed fix: {event.time:g} s',
                       f'Prediction interval: {event.time-start.time:g} s',
                       'Complete recorded trace + cursor'], gap=.66))
-    await stage.say(f'The outage label spans {config.outage_end-config.outage_start:g} seconds. But {event.time-start.time:g} seconds separate the last accepted fix and reacquisition.', hold=READ_HOLD)
+    await stage.say(f'The outage label spans {config.outage_end-config.outage_start:g} seconds. But {event.time-start.time:g} seconds separate the last accepted fix and reacquisition.', hold=PREDICTION_READ_HOLD)
     middle = (start.time + event.time)/2
     await plot.move_cursor(stage.scene, cursor, start.time, middle, REPLAY_SECONDS)
     mid = samples[round(middle * config.imu_hz)]
-    await stage.say(f'At {middle:g} s: position σ = {mid.sigma:.3f} m. Estimated bias and its variance are unchanged without a fix.', hold=READ_HOLD)
+    await stage.say(f'At {middle:g} s: position σ = {mid.sigma:.3f} m. Estimated bias and its variance are unchanged without a fix.', hold=PREDICTION_READ_HOLD)
     await plot.move_cursor(stage.scene, cursor, middle, event.time, REPLAY_SECONDS)
-    await stage.say(f'Before the {event.time:g}-second update, position σ has grown from {start.sigma:.3f} m to {sqrt(event.prior_covariance[0][0]):.3f} m.', hold=READ_HOLD)
+    await stage.say(f'Before the {event.time:g}-second update, position σ has grown from {start.sigma:.3f} m to {sqrt(event.prior_covariance[0][0]):.3f} m.', hold=PREDICTION_READ_HOLD)
     # A correction is a discontinuity at one timestamp, not physical motion.
     correction = Line(plot.point(event.time, event.truth-event.prior_position),
                       plot.point(event.time, -event.error), color=GNSS)
@@ -87,7 +87,7 @@ async def _outage_replay(stage, samples, start, event, config):
                        Dot(radius=.06, color=GNSS).move_to(plot.point(event.time, -event.error)),
                        text('Blue caps: updated ±2σ', (3.58, -1.9), 20, UNCERTAINTY, max_width=5.2),
                        hold=4)
-    await stage.say(f'The fix changes the estimate at the same timestamp. Position σ drops to {event.sigma:.3f} m; the vehicle does not jump.', hold=READ_HOLD)
+    await stage.say(f'The fix changes the estimate at the same timestamp. Position σ drops to {event.sigma:.3f} m; the vehicle does not jump.', hold=PREDICTION_READ_HOLD)
     await stage.clear()
 
 
@@ -104,8 +104,8 @@ async def _variance_budget(stage, event, process, terms):
         stage.add(text(name, (columns[0], y), 23, max_width=6.0),
                   text(f'{value:+.3f} m²', (columns[1], y), 24, FUSED, max_width=3),
                   text('P₀' if name.startswith('Initial') else 'Q', (columns[2], y), 23, MUTED))
-    await stage.say('Propagate the complete covariance, not just its diagonal. Here the cross-terms add substantial position variance.', hold=READ_HOLD)
-    await stage.say('Cross-terms can be negative in other cases. These signed algebraic terms are not independent noise sources.', hold=READ_HOLD)
+    await stage.say('Propagate the complete covariance, not just its diagonal. Here the cross-terms add substantial position variance.', hold=PREDICTION_READ_HOLD)
+    await stage.say('Cross-terms can be negative in other cases. These signed algebraic terms are not independent noise sources.', hold=PREDICTION_READ_HOLD)
     await stage.clear()
 
 
@@ -118,8 +118,8 @@ async def _no_new_noise(stage, start, event, inherited):
             (-1.70, 'Actual pre-update prediction', sqrt(event.prior_covariance[0][0]), FUSED)):
         stage.add(text(name, (-2.45, y), 25, color, max_width=7.4),
                   text(f'σp = {value:.3f} m', (3.7, y), 27, color, max_width=4.6))
-    await stage.say('Even a noiseless new acceleration sample cannot erase the uncertainty already present in velocity and bias.', hold=READ_HOLD)
-    await stage.say('This is a covariance-only comparison from the same starting point, not a second drive or a perfect-IMU accuracy claim.', hold=READ_HOLD)
+    await stage.say('Even a noiseless new acceleration sample cannot erase the uncertainty already present in velocity and bias.', hold=PREDICTION_READ_HOLD)
+    await stage.say('This is a covariance-only comparison from the same starting point, not a second drive or a perfect-IMU accuracy claim.', hold=PREDICTION_READ_HOLD)
     await stage.clear()
 
 
@@ -130,7 +130,7 @@ async def _reference_discretization(stage):
               *notes(['Full ECEF model is nonlinear.', 'F and G are local linearizations.', 'Reference uses first-order steps:',
                       'Φ ≈ I + F Δt', 'Qd ≈ G Qc Gᵀ Δt'], gap=.64),
               text('Our closed form is exact for the teaching model only.', (0, -2.13), 22, GNSS))
-    await stage.say('The same propagation structure applies, but our simple Phi is not the reference’s full ECEF transition matrix.', hold=READ_HOLD)
+    await stage.say('The same propagation structure applies, but our simple Phi is not the reference’s full ECEF transition matrix.', hold=PREDICTION_READ_HOLD)
     await stage.finish('Covariance remembers coupled errors. New process noise adds uncertainty; it is not the only reason uncertainty grows.')
 
 
