@@ -79,6 +79,14 @@ fn run_case(source_count: usize, target_count: usize) {
     live.advance_segment_to(segment, 2.0).unwrap();
     live.complete_segment(segment).unwrap();
 
+    drop(live);
+    let publication = session.take_renderer_publication();
+    assert!(
+        publication.transient_presentations().is_empty(),
+        "authored matching target owns the exact endpoint without transient duplicates"
+    );
+    let mut live = LiveSession::new(&store, root, &mut session);
+
     let indicate = live
         .declare_and_activate_family_indicate(
             &target,
