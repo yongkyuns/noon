@@ -337,7 +337,12 @@ impl ManimGeometryOptions {
             ),
             GeometryRef::Rectangle { size } => publish(
                 store,
-                manim_geometry_state(StoredGeometry::Rectangle { size }, transform, style, z_index),
+                manim_geometry_state(
+                    StoredGeometry::Rectangle { size },
+                    transform,
+                    style,
+                    z_index,
+                ),
             ),
             GeometryRef::Line { start, end } => publish(
                 store,
@@ -363,13 +368,6 @@ impl ManimGeometryOptions {
                 crate::UnsupportedAuthoringOperation::ExternalGeometry,
             )),
         }
-    }
-
-    pub(crate) fn into_state(
-        self,
-        store: &mut SemanticStore,
-    ) -> Result<SemanticObjectState, AuthoringError> {
-        self.with_state(store, |_store, state| Ok(state))
     }
 }
 
