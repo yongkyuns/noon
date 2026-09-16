@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      NOON_QUALIFICATION_SOURCE: d2043293adb34ea94cbd722cb731fcf9d0618d55
+      NOON_QUALIFICATION_SOURCE: afe8d46541d25230c5e0bd1e6257b225df142f52
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
