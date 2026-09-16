@@ -1,0 +1,49 @@
+name: Materialize checked image correctness patch (temporary)
+on:
+  push:
+    branches: [codex/b2-image-workspace-bootstrap]
+    paths: [.github/workflows/image-correctness-publish.yml]
+permissions:
+  contents: write
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 1418e12c4434cd176354f28710d6b64d07c8ff67
+          path: input
+          persist-credentials: false
+      - name: Verify source patch before applying
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, pathlib
+          encoded = pathlib.Path('input/.image-patch/correctness-20260916.b64').read_bytes()
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '095c57ad5a779691e1aa9bff5ad2beec7e1337a1e57ef5f1c14d5375d8f02559'
+          pathlib.Path('/tmp/image-correctness.patch').write_bytes(patch)
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: 00ceda4779b591a92de1500f89f56b48313a875d
+          path: product
+      - name: Apply verified source to the pinned PR checkpoint
+        working-directory: product
+        run: |
+          set -euo pipefail
+          git apply --check /tmp/image-correctness.patch
+          git apply /tmp/image-correctness.patch
+          git diff --check
+          git add -A
+          test "$(git write-tree)" = '819d42ed3a6b459e0aa3119c5fa4d83e3c487309'
+          git config user.name 'Yongkyun Shin'
+          git config user.email '4311628+yongkyuns@users.noreply.github.com'
+          git commit -m 'fix: preserve image corner correspondence and qualify native Manim raster parity'
+          git push origin HEAD:refs/heads/codex/b2-image-correctness-20260916
+          git rev-parse HEAD | tee /tmp/image-correctness-head.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noon-image-correctness-head
+          path: /tmp/image-correctness-head.txt
+          retention-days: 2
