@@ -360,6 +360,33 @@ function setRuntimeStatus(message, state) {
   status.dataset.state = state;
 }
 
+function playbackPresentation(playbackState, durationSeconds = playbackDurationSeconds) {
+  const time = playbackState?.time;
+  const playing = playbackState?.playing === true;
+  const atEnd =
+    Number.isFinite(time) &&
+    Number.isFinite(durationSeconds) &&
+    durationSeconds > 0 &&
+    time >= Math.max(0, durationSeconds - 1e-3);
+  if (playing) return { label: "Playing", state: "running" };
+  if (atEnd) return { label: "Finished", state: "ready" };
+  return { label: "Paused", state: "ready" };
+}
+
+function setPlaybackRuntimeStatus(playbackState, detail = "") {
+  const phase = playbackPresentation(playbackState);
+  status.dataset.playbackPhase = phase.label.toLowerCase();
+  setRuntimeStatus(detail ? `${phase.label} · ${detail}` : phase.label, phase.state);
+  return phase;
+}
+
+function resetDisplayedMetrics() {
+  metricObjects.value = "—";
+  metricDraws.value = "—";
+  metricUpload.value = "—";
+  metricTime.value = "—";
+}
+
 function setBusy(busy) {
   sceneButton.disabled = busy;
   resetButton.disabled = busy || sceneSourceEditor.value === canonicalSource;
@@ -479,6 +506,7 @@ function updatePlaybackControls({ supported, player: nextPlayer, durationSeconds
   } else {
     playbackControls.setDuration(durationSeconds);
   }
+  playbackControls.setBusy(busyDepth > 0);
 }
 
 function ensureRuntimePreparation() {
@@ -500,10 +528,9 @@ function ensureRuntimePreparation() {
       }
     },
     (error) => {
+      if (runtimePreparation !== preparation) return;
       adoptRuntimeCanvas(candidate);
-      if (runtimePreparation === preparation) {
-        runtimePreparation = null;
-      }
+      runtimePreparation = null;
       console.warn("Execution runtime preparation failed", error);
     },
   );
@@ -548,23 +575,18 @@ async function ensureRuntimeReady({
       status.dataset.executionTopology = "python-semantic-engine-render-worker";
       status.dataset.runtimeStartup = "started-on-demand";
       const sourceOwnsExecution = semanticExecution.continuationGeneration != null;
-      status.dataset.playbackControls = sourceOwnsExecution ? "unavailable" : "available";
-      if (!sourceOwnsExecution) {
-        playbackControls = new PlaygroundPlaybackControls(
-          nextPlayer,
-          document.querySelector(".preview-pane"),
-          { durationSeconds: loopDurationSeconds, onError: showPlaybackError },
-        );
-      }
+      updatePlaybackControls({
+        supported: !sourceOwnsExecution,
+        player: nextPlayer,
+        durationSeconds: loopDurationSeconds,
+      });
 
       patchStatus.dataset.sequence = String(initialState.nextPatchSequence);
-      if (playbackControls !== null) {
-        playbackControls.sync({
-          time: initialState.time,
-          playing: initialState.playing,
-          durationSeconds: loopDurationSeconds,
-        });
-      }
+      playbackControls?.sync({
+        time: initialState.time,
+        playing: initialState.playing,
+        durationSeconds: loopDurationSeconds,
+      });
       startMetricsPolling();
       return {
         ...initialState,
@@ -757,6 +779,41 @@ function discardEarlyContinuationRuntime(attachedPlayer) {
   stopMetricsPolling();
 }
 
+function resetViewportForSourceEdit() {
+  const interruptedRun = sceneRunPromise !== null;
+  if (interruptedRun) {
+    generations.invalidateRun();
+  }
+
+  stopMetricsPolling();
+  playbackControls?.destroy();
+  playbackControls = null;
+
+  const activePlayer = player;
+  player = null;
+  if (activePlayer !== null) {
+    activePlayer.terminate();
+    adoptRuntimeCanvas(activePlayer);
+  }
+
+  const preparation = runtimePreparation;
+  runtimePreparation = null;
+  if (preparation !== null) {
+    preparation.candidate.terminate();
+    adoptRuntimeCanvas(preparation.candidate);
+  }
+
+  playerNeedsRestart = false;
+  rendererBackend = "";
+  status.dataset.playbackControls = "unavailable";
+  status.dataset.executionMode = "";
+  status.dataset.rendererBackend = "";
+  status.dataset.runtimeStartup = "deferred-after-edit";
+  status.dataset.executionTopology = "deferred-until-run";
+  resetDisplayedMetrics();
+  return interruptedRun;
+}
+
 function sameSemanticContinuation(left, right) {
   return left?.contextId === right?.contextId &&
     left?.continuationGeneration === right?.continuationGeneration;
@@ -773,7 +830,7 @@ async function runScene() {
   const task = (async () => {
     let earlyContinuation = null;
     try {
-      setRuntimeStatus("Preparing animation…", "running");
+      setRuntimeStatus("Building Python scene…", "running");
       patchStatus.value = `Building ${example.title} in the Python worker…`;
       patchStatus.dataset.state = "running";
       const preparation = player === null ? ensureRuntimePreparation() : null;
@@ -823,7 +880,18 @@ async function runScene() {
               discardEarlyContinuationRuntime(attachedPlayer);
               throw new Error("Python semantic continuation was superseded during startup");
             }
+            updatePlaybackControls({
+              supported: false,
+              player: attachedPlayer,
+              durationSeconds: loopDurationSeconds,
+            });
             earlyContinuation = { registration, attachedPlayer, result };
+            setPlaybackRuntimeStatus(
+              result,
+              `${example.title} · Python source continuing`,
+            );
+            patchStatus.value = `Playing ${example.title} · Python source continuing…`;
+            patchStatus.dataset.state = "running";
           },
         });
         status.dataset.authoringWarmup = "ready";
@@ -852,14 +920,6 @@ async function runScene() {
 
       const loopDurationSeconds = authored.duration > 0 ? authored.duration : playbackDurationSeconds;
 
-      if (player !== null) {
-        updatePlaybackControls({
-          supported: semanticExecution.continuationGeneration == null,
-          player,
-          durationSeconds: loopDurationSeconds,
-        });
-      }
-
       await runPlaygroundTestHook("beforeReconcile", {
         exampleId: example.id,
         selectionGeneration: runToken.selectionGeneration,
@@ -883,11 +943,18 @@ async function runScene() {
         if (player !== earlyContinuation.attachedPlayer) {
           throw new Error("semantic continuation runtime changed before final adoption");
         }
-        const finalState = await player.state();
-        result = {
-          ...earlyContinuation.result,
-          ...finalState,
+        const replayExecution = {
+          contextId: semanticExecution.contextId,
+          callbackSessionId: semanticExecution.callbackSessionId ?? null,
+          continuationGeneration: null,
         };
+        result = await player.reconcileSemanticExecution(replayExecution, {
+          authoringClient: client,
+          loopDurationSeconds,
+        });
+        if (!isCurrentRun(runToken)) {
+          return recordStale(runToken, "after-continuation-replay");
+        }
         earlyContinuation = null;
       } else if (player === null) {
         result = await ensureRuntimeReady({
@@ -910,6 +977,11 @@ async function runScene() {
         if (!isCurrentRun(runToken)) return recordStale(runToken, "after-reconcile");
       }
 
+      updatePlaybackControls({
+        supported: true,
+        player,
+        durationSeconds: loopDurationSeconds,
+      });
       if (authored.duration > 0) {
         playbackDurationSeconds = authored.duration;
       }
@@ -926,11 +998,16 @@ async function runScene() {
       if (!isCurrentRun(runToken)) return recordStale(runToken, "after-metrics");
 
       const operation = result.incremental ? "Scene updated incrementally" : "Scene rebuilt atomically";
-      patchStatus.value = `${operation} · ${example.title} · ${report.metrics.objectCount} objects`;
+      const phase = setPlaybackRuntimeStatus(
+        result,
+        `${report.metrics.objectCount} objects · ${rendererBackend} ${player.mode} worker`,
+      );
+      patchStatus.value = `${phase.label} · ${example.title} · ${report.metrics.objectCount} objects · timeline ready`;
       patchStatus.dataset.state = "applied";
       patchStatus.dataset.exampleId = example.id;
       patchStatus.dataset.parityStatus = example.parityStatus;
       patchStatus.dataset.sequence = String(result.nextPatchSequence);
+      patchStatus.dataset.operation = operation;
       return { stale: false, result };
     } catch (error) {
       discardEarlyContinuationRuntime(earlyContinuation?.attachedPlayer);
@@ -1057,10 +1134,14 @@ sceneButton.addEventListener("click", runScene);
 resetButton.addEventListener("click", () => {
   const example = currentExample();
   if (!example) return;
+  if (player !== null || runtimePreparation !== null || sceneRunPromise !== null) {
+    resetViewportForSourceEdit();
+  }
   drafts.delete(example.id);
   sceneSourceEditor.value = canonicalSource;
   resetButton.disabled = true;
-  patchStatus.value = `${example.title} reset to canonical source`;
+  setRuntimeStatus("Reset · preview cleared", "ready");
+  patchStatus.value = `${example.title} reset to canonical source · Run to replay`;
   patchStatus.dataset.state = "ready";
 });
 sceneSourceEditor.addEventListener(
@@ -1072,8 +1153,18 @@ sceneSourceEditor.addEventListener(
 );
 sceneSourceEditor.addEventListener("input", () => {
   const example = currentExample();
+  const hadActivePreview =
+    player !== null || runtimePreparation !== null || sceneRunPromise !== null;
+  const interruptedRun = hadActivePreview ? resetViewportForSourceEdit() : false;
   if (example) drafts.set(example.id, sceneSourceEditor.value);
   resetButton.disabled = sceneSourceEditor.value === canonicalSource;
+  if (hadActivePreview) {
+    setRuntimeStatus("Edited · preview reset", "ready");
+    patchStatus.value = interruptedRun
+      ? `${example?.title ?? "Scene"} changed · current run discarded · Run to replay`
+      : `${example?.title ?? "Scene"} changed · Run to replay`;
+    patchStatus.dataset.state = "ready";
+  }
 });
 window.addEventListener("popstate", () => {
   const id = requestedExampleId();
@@ -1099,23 +1190,28 @@ async function updateWorkerMetrics() {
   ) {
     return;
   }
+  const activePlayer = player;
   metricsPending = true;
   try {
-    const report = await player.metrics();
+    const [report, playbackState] = await Promise.all([
+      activePlayer.metrics(),
+      activePlayer.state(),
+    ]);
+    if (player !== activePlayer) return;
     const metrics = report.metrics;
     const host = report.engineMetrics.host;
-    rendererBackend = player.rendererBackend;
+    rendererBackend = activePlayer.rendererBackend;
     status.dataset.rendererBackend = rendererBackend;
     status.dataset.executionMode = report.executionMode;
-    setRuntimeStatus(
+    setPlaybackRuntimeStatus(
+      playbackState,
       `${metrics.objectCount} objects · ${rendererBackend} ${report.executionMode} worker`,
-      "running",
     );
     metricObjects.value = String(metrics.objectCount);
     metricDraws.value = String(metrics.drawCalls);
     metricUpload.value = formatBytes(metrics.bytesUploaded);
-    metricTime.value = `${metrics.time.toFixed(2)} s`;
-    playbackControls?.updateTime(metrics.time);
+    metricTime.value = `${playbackState.time.toFixed(2)} s`;
+    playbackControls?.updateTime(playbackState.time);
     status.dataset.instances = String(metrics.instancesDrawn);
     status.dataset.uploadBytes = String(metrics.bytesUploaded);
     status.dataset.geometryCacheMisses = String(metrics.geometryCacheMisses);
@@ -1123,7 +1219,7 @@ async function updateWorkerMetrics() {
     status.dataset.hostDroppedLateResults = String(host.droppedLateResults);
     status.dataset.presentedFrames = String(metrics.presentedFrames);
   } catch (error) {
-    if (!playerNeedsRestart) {
+    if (player === activePlayer && !playerNeedsRestart) {
       showError(error);
     }
   } finally {
