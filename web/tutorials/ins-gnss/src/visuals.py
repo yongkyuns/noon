@@ -159,7 +159,7 @@ class Plot:
     async def move_cursor(self, scene, cursor, start, end, duration):
         """Translate unchanged line geometry; do not morph newly baked endpoints."""
         dx = self.point(end, self.ylim[0])[0] - self.point(start, self.ylim[0])[0]
-        await self.scene.play(Transform(cursor, cursor.copy().shift((dx, 0))),
+        await scene.play(Transform(cursor, cursor.copy().shift((dx, 0))),
                          run_time=duration, rate_func=linear)
 
 
