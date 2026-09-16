@@ -1,0 +1,32 @@
+name: B3 Qualify Target Leftover Fade Fix
+on:
+  push:
+    branches: [b3-qualify-target-leftover-fade-fix]
+permissions:
+  contents: read
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      NOON_QUALIFICATION_SOURCE: b175e29405fc2f2089f4a53c4c1d6d805dc19a3f
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.NOON_QUALIFICATION_SOURCE }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify clean candidate
+        run: |
+          test "$(git rev-parse HEAD)" = "$NOON_QUALIFICATION_SOURCE"
+          test ! -e .github/workflows/b3-qualify-target-leftover-fade-fix.yml
+          git diff --check
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Check compiler
+        run: cargo check -p noon-compile --all-targets
+      - name: Strict clippy compiler
+        run: cargo clippy -p noon-compile --all-targets -- -D warnings
+      - name: Matching leftover fade tests
+        run: cargo test -p noon-compile matching_shape -- --nocapture
