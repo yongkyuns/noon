@@ -48,7 +48,37 @@ assert.match(sourceOwnedStress, /example=manim-parity-stress-grid/);
 assert.match(sourceOwnedStress, /selectedExampleId === "manim-parity-stress-grid"/);
 assert.match(sourceOwnedStress, /const source = await page\.evaluate/);
 assert.match(sourceOwnedStress, /assert\.match\(source, \/rows = 20\//);
-assert.match(sourceOwnedStress, /for \(const rows of \[5, 7, 20\]\)/);
+
+// The rows=5 run is deliberately superseded before completion, so the three
+// workloads no longer share a completion-waiting loop. Keep every workload and
+// require the ordered edit/play/rerun scenario instead of its old loop spelling.
+for (const rows of [5, 7, 20]) {
+  assert.match(
+    sourceOwnedStress,
+    new RegExp(`const rows${rows}Source = [^;]+"rows = ${rows}"`),
+    `the source-owned stress scenario must retain rows=${rows}`,
+  );
+}
+const playingStart = sourceOwnedStress.indexOf(
+  "diagnostics.snapshots.rows5Playing = await waitForSourceOwnedPlayback(page)",
+);
+const replacementStart = sourceOwnedStress.indexOf(
+  "diagnostics.snapshots.rows7Rerun = await waitForAppliedRun(page, baselineObjectCount)",
+  playingStart,
+);
+assert.ok(playingStart >= 0 && replacementStart > playingStart);
+const midAnimationEdit = sourceOwnedStress.slice(playingStart, replacementStart);
+assert.match(midAnimationEdit, /await replaceSource\(editor, page, rows7Source\)/);
+assert.match(midAnimationEdit, /current preview continues · Run to apply/);
+assert.match(midAnimationEdit, /rows7EditedDuringRows5\.runDisabled,\s*false/);
+assert.match(midAnimationEdit, /await page\.locator\("#replace-scene"\)\.click\(\)/);
+assert.doesNotMatch(
+  midAnimationEdit,
+  /await waitForAppliedRun\(/,
+  "the replacement Run must not wait for the rows=5 source to finish",
+);
+assert.match(sourceOwnedStress, /rows5StillIdle\.objectCount,\s*baselineObjectCount/);
+assert.match(sourceOwnedStress, /rows20Rerun = await waitForAppliedRun\(page, rows7ObjectCount\)/);
 assert.match(sourceOwnedStress, /Scene rebuilt atomically/);
 
 console.log("✓ stress runtime capability and browser-execution contract");
