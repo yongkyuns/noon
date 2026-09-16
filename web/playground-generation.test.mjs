@@ -61,6 +61,20 @@ test("a newer run supersedes an older run for the same example", () => {
   assert.equal(generations.isRunCurrent(second, "scene"), true);
 });
 
+test("editing can invalidate an active run without starting a replacement run", () => {
+  const generations = new PlaygroundGeneration();
+  generations.commitSelection(generations.beginSelectionRequest("scene"));
+  const current = generations.beginRun("scene");
+  const invalidatedGeneration = generations.invalidateRun();
+
+  assert.equal(generations.isRunCurrent(current, "scene"), false);
+  assert.equal(invalidatedGeneration, generations.diagnostics.runGeneration);
+
+  const replacement = generations.beginRun("scene");
+  assert.equal(generations.isRunCurrent(replacement, "scene"), true);
+  assert.equal(replacement.runGeneration, invalidatedGeneration + 1);
+});
+
 test("invalid selection requests do not consume freshness generations", () => {
   const generations = new PlaygroundGeneration();
   const before = generations.diagnostics;
