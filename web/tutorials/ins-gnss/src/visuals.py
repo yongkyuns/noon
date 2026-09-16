@@ -1,15 +1,11 @@
 """Small layout helpers over ordinary Noon objects, not another scene system."""
 from dataclasses import dataclass
 from math import cos, sin, pi
-from noon import (Color, Text, MathTypst, Line, VMobject, Dot, Rectangle,
-                  Ellipse, FadeIn, FadeOut, Transform, Rotate, linear)
+from noon import (Color, Text, MathTypst, Line, VMobject, FadeIn, FadeOut, Transform, Rotate, linear)
 
 
 @dataclass(frozen=True)
 class Layout:
-    width: float = 14.222222
-    height: float = 8.0
-    margin: float = 0.65
     title_y: float = 3.38
     question_y: float = 2.76
     caption_y: float = -3.38
@@ -112,9 +108,6 @@ def notes(lines, start_y=1.5, gap=0.72, color=INK):
             for i,line in enumerate(lines)]
 
 
-def formulas(lines, start_y=1.55, gap=1.15):
-    return [equation(line,(LAYOUT.note_x,start_y-i*gap)) for i,line in enumerate(lines)]
-
 
 class Plot:
     """Explicit axes in data units. No autoscale, hidden clipping, or chart library."""
@@ -149,18 +142,9 @@ class Plot:
     async def move_cursor(self, scene, cursor, start, end, duration):
         """Translate unchanged line geometry; do not morph newly baked endpoints."""
         dx = self.point(end, self.ylim[0])[0] - self.point(start, self.ylim[0])[0]
-        await scene.play(Transform(cursor, cursor.copy().shift((dx, 0))),
+        await self.scene.play(Transform(cursor, cursor.copy().shift((dx, 0))),
                          run_time=duration, rate_func=linear)
 
-    def dots(self,xy,color=GNSS,radius=.035):
-        return [Dot(radius=radius,color=color).move_to(self.point(x,y)) for x,y in xy]
-
-
-def axes_glyph(centre, angle, length=1.65, color=FUSED):
-    cx,cy=centre
-    endpoints=[(cx+length*cos(angle),cy+length*sin(angle)),
-               (cx-length*sin(angle),cy+length*cos(angle))]
-    return [arrow(centre,p,color) for p in endpoints]
 
 
 def car(centre,color=TRUTH):
@@ -191,6 +175,6 @@ def confidence_ellipse(centre,covariance,scale_x=1,scale_y=1,probability=.95):
 
 def rotating_frame(centre,length=1.45,color=FUSED):
     """A symmetric leaf path: Rotate's centre is exactly the frame origin."""
-    points=[(-length,0),(length,0),(length-.15,.08),(length,0),(length-.15,-.08),
-            (0,0),(0,-length),(0,length),(-.08,length-.15),(0,length),(.08,length-.15)]
+    points=[(-length,0),(length,0),(length-.15,.08),(length,0),(length-.15,-.08),(length,0),
+            (0,0),(0,-length),(0,length),(-.08,length-.15),(0,length),(.08,length-.15),(0,length)]
     return path(points,color,2.5).shift(centre)

@@ -14,7 +14,7 @@
     {
       "number": 2,
       "title": "Small errors accumulate",
-      "expected_duration": 47.9,
+      "expected_duration": 47.85,
       "notes": [
         "For constant acceleration error b with initially correct position and velocity, integrating once gives velocity error bt and integrating twice gives position error ½bt². At b = 0.02 m/s² and t = 60 s, this is 36 m. Random noise and feedback corrections are deliberately excluded from this analytic example.",
         "A small fixed tilt projects part of gravity into a horizontal acceleration component. Using 9.81 sin(0.5°) gives approximately 0.0856 m/s² and 154 m after 60 seconds under the same idealized integration assumptions. A real INS has coupled attitude dynamics and feedback, so this is an explanation of sensitivity, not a system performance forecast."

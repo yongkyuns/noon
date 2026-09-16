@@ -29,11 +29,13 @@ jobs:
           tar -xf /tmp/noon-built/artifact.tar -C web
           npm install --no-save --ignore-scripts --no-audit --no-fund playwright@1.62.1 pngjs@7.0.0
           python3 web/tutorials/ins-gnss/tools/build.py
+          python3 web/tutorials/ins-gnss/tests/test_model.py
       - name: Inspect all chapter boundaries and intermediate frames
         env:
           NOON_TUTORIAL_BACKEND: ${{ matrix.backend }}
         run: node web/tutorials/ins-gnss/tests/review.mjs
       - name: Verify playback, pause, fresh replay, dense motion, and responsive layout
+        if: always()
         env:
           NOON_TUTORIAL_BACKEND: ${{ matrix.backend }}
         run: node web/tutorials/ins-gnss/tests/player.mjs
