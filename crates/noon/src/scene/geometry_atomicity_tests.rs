@@ -91,6 +91,9 @@ fn geometry_publication_scope_rolls_back_path_after_late_runtime_error() {
     );
     assert_eq!(seed.state().unwrap(), before_seed);
     assert_eq!(retained.state().unwrap(), before_retained);
-    assert_eq!(scene.owned_execution().publication_context(), before_context);
+    assert_eq!(
+        scene.owned_execution().publication_context(),
+        before_context
+    );
     assert_eq!(scene.owned_execution().frame(), &before_frame);
 }
