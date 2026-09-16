@@ -32,12 +32,17 @@ fn pixel(point: vec2<i32>) -> vec4<f32> {
     let limits = vec2<i32>(textureDimensions(image, 0))-vec2<i32>(1);
     let rgba = textureLoad(image, clamp(point, vec2<i32>(0), limits), 0);
     // Interpolate premultiplied colors so transparent colored pixels do not halo.
-    return vec4(rgba.rgb*rgba.a, rgba.a);
+    // Manim image opacity scales source alpha before resampling. In particular,
+    // bicubic overshoot must not be clamped before this factor is applied.
+    let alpha = rgba.a*object.opacity;
+    return vec4(rgba.rgb*alpha, alpha);
 }
 fn cubic(value: f32) -> f32 {
     let x = abs(value);
-    if x <= 1.0 { return (1.5*x-2.5)*x*x+1.0; }
-    if x < 2.0 { return ((-0.5*x+2.5)*x-4.0)*x+2.0; }
+    // Keys cubic with a=-1, matching the perspective transform filter used
+    // by ManimCE 0.21/Pillow (not Pillow resize's a=-0.5 kernel).
+    if x <= 1.0 { return (x-2.0)*x*x+1.0; }
+    if x < 2.0 { return ((-x+5.0)*x-8.0)*x+4.0; }
     return 0.0;
 }
 @fragment
@@ -62,5 +67,5 @@ fn fs_image(input: VertexOutput) -> @location(0) vec4<f32> {
         color.a = clamp(color.a, 0.0, 1.0);
         color = vec4(clamp(color.rgb, vec3(0.0), vec3(color.a)), color.a);
     }
-    return color*object.opacity;
+    return color;
 }
