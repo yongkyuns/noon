@@ -169,4 +169,6 @@ class ModelTests(unittest.TestCase):
             with self.assertRaises(ValueError): display_points(self.rows, 'bias', stride)
 
 
+from test_prediction import PredictionTests
+
 if __name__=='__main__':unittest.main()

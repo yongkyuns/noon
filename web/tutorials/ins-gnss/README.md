@@ -3,7 +3,7 @@
 An original, chaptered tutorial based on Fedor Baklanov's *INS/GNSS loose coupling
 filter* documentation. Fourteen chapters introduce sensor errors, frames,
 mechanization, Kalman correction, covariance, error states, vehicle constraints,
-calibration and failure detection. The current sequence is **549.3 authored
+calibration and failure detection. The current sequence is **662.65 authored
 seconds**, with pauseable reading notes; it is not the planned 45–60-minute course.
 
 **Numerical scope:** the computed results use a reproducible **1D
@@ -43,6 +43,7 @@ operation. Desktop or landscape viewing is recommended for equations.
 | --- | --- |
 | `src/model.py` | Immutable configuration, deterministic sensor generation, 3-state KF, retained update snapshots and metrics. No rendering imports. |
 | `src/uncertainty.py` | Independently tested 2D Gaussian contour geometry. No Noon dependency. |
+| `src/prediction.py` | Closed-form covariance checks and a signed variance budget for measurement-free propagation. No second estimator. |
 | `src/visuals.py` | Shared layout, typography and small helpers constructing ordinary Noon objects. |
 | `src/lessons/` | Lesson functions in teaching order. Explicit async helpers cross the normal authoring continuation barriers. |
 | `src/entry.py` | One Scene entry and chapter selection. |
@@ -74,6 +75,23 @@ normalization and equal display scale on both axes. They are **modelled 95% join
 Gaussian contours**, not empirical coverage results. The separate scalar whiskers
 show **±1 standard deviation**, not joint confidence intervals.
 
+## Worked prediction: chapter 9
+
+The 140.1-second lesson follows error transport → exact teaching-model Phi →
+the recorded outage → a signed position-variance budget → removal of new noise
+only → the reference's different discretization. `src/prediction.py` is pure
+analysis of the existing KF, not another estimator. The exporter adds
+`prediction.json` and its source/output hashes.
+
+The last accepted fix is at 44 s, not 45 s: the covariance propagates 3,100
+100-Hz samples to the 75 s pre-update snapshot. Eleven additional tests check
+that closed-form accumulation agrees with the original samplewise predictor,
+including intermediate checkpoints, cross-term signs and zero-new-noise behavior.
+The current chapter explicitly plots true-minus-estimated error; its sign is
+opposite chapter 1's estimate-minus-truth overview. Bounds are marginal ±2σ,
+not joint probability contours or empirical coverage. The correction is a
+vertical jump at one timestamp; no time interpolation smooths it into motion.
+
 ## Numerical assumptions and provenance
 
 Defaults: 120 seconds, 100 Hz IMU, 1 Hz GNSS, constant physical bias 0.02 m/s²,
@@ -101,10 +119,11 @@ python3 web/tutorials/ins-gnss/tools/export.py /tmp/ins-gnss-trace
 ```
 
 The export includes `trace.csv` with 12,001 samples, `updates.json` with complete
-before/after observation events, and `manifest.json` with settings, metrics and
-SHA-256 provenance. Evaluation truth is explicitly labeled. For the default run,
-position errors at 74.99 s are 53.3366 m IMU-only and 4.8927 m fused; the final bias
-estimate is 0.0209436 m/s². This is a declared teaching run, not a product benchmark.
+before/after observation events, `prediction.json` with the outage covariance
+budget, and `manifest.json` with settings, metrics and SHA-256 provenance.
+Evaluation truth is explicitly labeled. For the default run, position errors at
+74.99 s are 53.3366 m IMU-only and 4.8927 m fused; the final bias estimate is
+0.0209436 m/s². This is a declared teaching run, not a product benchmark.
 
 ## Validation
 
@@ -115,11 +134,12 @@ node web/tutorials/ins-gnss/tests/pyodide_model.mjs \
   web/tutorials/ins-gnss/src/model.py
 ```
 
-The same **22 tests** execute in CPython and Pyodide. They cover the original model,
+The same **33 tests** execute in CPython and Pyodide. They cover the original model,
 retained-event replay, indirect correction, Joseph versus conditional covariance,
-update discontinuities, rejected snapshots and the Mahalanobis radius of every
-contour vertex. Pyodide qualification uses the repository-pinned runtime, not a
-claim that desktop Python compatibility proves browser functionality.
+update discontinuities, rejected snapshots, the Mahalanobis radius of every
+contour vertex and closed-form prediction against the samplewise filter.
+Pyodide qualification uses the repository-pinned runtime, not a claim that desktop
+Python compatibility proves browser functionality.
 
 With the repository browser-test dependencies and built web package:
 

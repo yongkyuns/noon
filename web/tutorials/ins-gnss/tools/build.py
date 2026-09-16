@@ -7,7 +7,7 @@ import ast
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
-SOURCES=[ROOT/'src/model.py',ROOT/'src/uncertainty.py',ROOT/'src/visuals.py',
+SOURCES=[ROOT/'src/model.py',ROOT/'src/uncertainty.py',ROOT/'src/prediction.py',ROOT/'src/visuals.py',
          *sorted((ROOT/'src/lessons').glob('*.py')),ROOT/'src/entry.py']
 
 def bundle():
@@ -18,7 +18,7 @@ def bundle():
         lines=text.splitlines(keepends=True)
         removed=set()
         for node in tree.body:
-            if isinstance(node,ast.ImportFrom) and node.module in {'model','uncertainty','visuals'}:
+            if isinstance(node,ast.ImportFrom) and node.module in {'model','uncertainty','prediction','visuals'}:
                 removed.update(range(node.lineno-1,node.end_lineno))
         body=''.join(line for i,line in enumerate(lines) if i not in removed)
         sections.append(f'\n# ---- {source.relative_to(ROOT)} ----\n'+body)

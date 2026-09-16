@@ -10,6 +10,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from model import Experiment, metrics, simulate
+from prediction import outage_prediction
 
 
 def export(destination: Path) -> None:
@@ -48,6 +49,16 @@ def export(destination: Path) -> None:
         'evaluation_truth_only': (sample.truth, sample.truth_velocity, config.bias),
     } for sample in samples if sample.prior_state is not None]
     (destination / 'updates.json').write_text(json.dumps(updates, indent=2) + '\n')
+    start, event, inherited, process, terms = outage_prediction(samples, config)
+    prediction = {
+        'start_time_s': start.time, 'end_time_s': event.time,
+        'end_snapshot': 'prior to reacquisition update',
+        'start_covariance': start.covariance, 'end_covariance': event.prior_covariance,
+        'inherited_covariance': inherited, 'new_noise_covariance': process,
+        'position_variance_terms_m2': terms,
+        'interpretation': 'Signed algebraic terms; cross terms are not independent sources',
+    }
+    (destination / 'prediction.json').write_text(json.dumps(prediction, indent=2) + '\n')
     manifest = {
         'model': '1D position/velocity/physical-acceleration-bias Kalman filter',
         'scope': 'Teaching simulation, not the 24-error-state ECEF reference',
@@ -58,6 +69,8 @@ def export(destination: Path) -> None:
         'noise_convention': 'Independent acceleration sample standard deviation, not a PSD',
         'truth_use': 'Sensor generation and evaluation only; declared initial means are zero',
         'worked_update_time_s': config.outage_end,
+        'prediction_model_sha256': sha256((ROOT / 'src/prediction.py').read_bytes()).hexdigest(),
+        'prediction_sha256': sha256((destination / 'prediction.json').read_bytes()).hexdigest(),
         'updates_sha256': sha256((destination / 'updates.json').read_bytes()).hexdigest(),
         'trace_sha256': sha256((destination / 'trace.csv').read_bytes()).hexdigest(),
     }
