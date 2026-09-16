@@ -1,13 +1,74 @@
 name: INS GNSS tutorial review
+
 on:
   push:
-    branches: [demo/ins-gnss-tutorial]
-    paths: ['web/tutorials/ins-gnss/**', '.github/workflows/ins-gnss-tutorial-review.yml']
+    branches: [master, demo/ins-gnss-tutorial]
+    paths:
+      - 'web/tutorials/ins-gnss/**'
+      - '.github/workflows/ins-gnss-tutorial-review.yml'
+      - 'scripts/build-web-demo.sh'
+  pull_request:
+    paths:
+      - 'web/tutorials/ins-gnss/**'
+      - '.github/workflows/ins-gnss-tutorial-review.yml'
+      - 'scripts/build-web-demo.sh'
+  workflow_dispatch:
+
 permissions:
   contents: read
-  actions: read
+
+concurrency:
+  group: ins-gnss-tutorial-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  build:
+    name: Build tested checkout
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+      - name: Use repository-pinned Rust and WASM target
+        run: |
+          rustup install
+          rustup show active-toolchain
+          rustup target add wasm32-unknown-unknown
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build through repository entry point
+        env:
+          NOON_WASM_SKIP_OPT: '1'
+        run: bash scripts/build-web-demo.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ins-gnss-built-runtime
+          path: |
+            web/pkg
+            web/python-worker.js
+            web/runtime-build-identity.json
+            web/python/compat-bundle.*.json
+          if-no-files-found: error
+          retention-days: 3
+
   browser:
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -20,13 +81,10 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
-          name: github-pages
-          run-id: 35031382952
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: /tmp/noon-built
-      - name: Install browser dependencies and verified engine
+          name: ins-gnss-built-runtime
+          path: web
+      - name: Prepare tutorial and test dependencies
         run: |
-          tar -xf /tmp/noon-built/artifact.tar -C web
           npm install --no-save --ignore-scripts --no-audit --no-fund playwright@1.62.1 pngjs@7.0.0
           python3 web/tutorials/ins-gnss/tools/build.py
           python3 web/tutorials/ins-gnss/tests/test_model.py
@@ -39,10 +97,12 @@ jobs:
         env:
           NOON_TUTORIAL_BACKEND: ${{ matrix.backend }}
         run: node web/tutorials/ins-gnss/tests/player.mjs
-      - name: Archive exact tested source
+      - name: Archive exact tested source and numerical evidence
         if: always()
         run: |
           mkdir -p browser-smoke-artifacts/ins-gnss
+          cp web/runtime-build-identity.json browser-smoke-artifacts/ins-gnss/
+          python3 web/tutorials/ins-gnss/tools/export.py browser-smoke-artifacts/ins-gnss/data
           tar -czf browser-smoke-artifacts/ins-gnss/tested-source.tar.gz web/tutorials/ins-gnss
       - uses: actions/upload-artifact@v7
         if: always()

@@ -33,7 +33,8 @@ try{
       await page.locator('#scene').evaluate(c=>{c.width=1280;c.height=720;c.style.width='1280px';c.style.height='720px';});
       const initial=await page.evaluate(s=>window.noonAgentPreviewHost.open(s,600),`context={'chapter':${chapter}}\n${source}`);
       const duration=durations[chapter-1];
-      const times=[0,0.25,0.55,5,8,12,16,20,24,28,34,38,42,46].filter(t=>t<duration-0.05);
+      const requestedTimes=metadata.chapters[chapter-1].review_times ?? [0,0.25,0.55,5,8,12,16,20,24,28,34,38,42,46];
+      const times=requestedTimes.filter(t=>t<duration-0.05);
       // The strict preview cannot overshoot even by floating-point roundoff.
       // Check the final hold here; player.mjs tests exact source completion.
       times.push(duration-1e-8);

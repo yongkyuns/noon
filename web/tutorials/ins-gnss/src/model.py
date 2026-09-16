@@ -53,7 +53,30 @@ class Sample:
     innovation: float | None = None
     innovation_variance: float | None = None
     accepted: bool | None = None
-    prior_position: float | None = None
+    prior_state: tuple | None = None
+    prior_covariance: tuple | None = None
+
+    @property
+    def state(self):
+        return (self.position, self.velocity, self.bias)
+
+    @property
+    def prior_position(self):
+        return self.prior_state[0] if self.prior_state is not None else None
+
+    @property
+    def gain(self):
+        """Candidate gain for this position observation, even if gated out."""
+        if self.prior_covariance is None:
+            return None
+        return tuple(row[0] / self.innovation_variance for row in self.prior_covariance)
+
+    @property
+    def correction(self):
+        """Actual injected correction; zero for a rejected observation."""
+        if self.prior_state is None:
+            return None
+        return tuple(post - prior for post, prior in zip(self.state, self.prior_state))
 
     @property
     def error(self):
@@ -153,7 +176,7 @@ def simulate(config=Experiment()):
         inertial_position += inertial_velocity * dt + 0.5 * measured * dt**2
         inertial_velocity += measured * dt
         state, covariance = predict(state, covariance, measured, dt, config.acceleration_sigma)
-        observation = residual = innovation_variance = accepted = prior = None
+        observation = residual = innovation_variance = accepted = prior = prior_covariance = None
         if tick % gnss_stride == 0:
             # Draw even during outage, so comparisons use identical noise streams.
             candidate = position + gnss_rng.gauss(0, config.position_sigma)
@@ -161,13 +184,14 @@ def simulate(config=Experiment()):
                 observation = candidate
                 if abs(time - config.outlier_time) < dt / 2:
                     observation += config.outlier_metres
-                prior = state[0]
+                prior = tuple(state)
+                prior_covariance = tuple(map(tuple, covariance))
                 state, covariance, residual, innovation_variance, accepted = correct(
                     state, covariance, observation, config.position_sigma**2,
                     config.gate_sigma, config.gate_enabled)
         samples.append(Sample(time, position, velocity, inertial_position, *state,
                               tuple(map(tuple, covariance)), observation, residual,
-                              innovation_variance, accepted, prior))
+                              innovation_variance, accepted, prior, prior_covariance))
     return samples
 
 
@@ -189,11 +213,15 @@ def metrics(samples, config):
 
 def display_points(samples, field, stride=50):
     """Decimate smooth propagation, but retain every position-update jump."""
+    if not isinstance(stride, int) or stride < 1:
+        raise ValueError("Display stride must be a positive integer")
+    state_fields = {"position": 0, "error": 0, "velocity": 1, "bias": 2}
     points=[]
     for i,s in enumerate(samples):
         if i % stride and s.observation is None and i != len(samples)-1:
             continue
-        if field=='error' and s.prior_position is not None:
-            points.append((s.time,s.prior_position-s.truth))
+        if field in state_fields and s.prior_state is not None:
+            prior = s.prior_state[state_fields[field]]
+            points.append((s.time, prior - s.truth if field == "error" else prior))
         points.append((s.time,getattr(s,field)))
     return points

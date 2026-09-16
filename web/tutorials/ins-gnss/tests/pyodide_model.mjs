@@ -11,6 +11,8 @@ const testSource = path.join(path.dirname(source), '../tests/test_model.py');
 pyodide.FS.mkdirTree('/tutorial/src');
 pyodide.FS.mkdirTree('/tutorial/tests');
 pyodide.FS.writeFile('/tutorial/src/model.py', await readFile(source, 'utf8'));
+pyodide.FS.writeFile('/tutorial/src/uncertainty.py',
+  await readFile(path.join(path.dirname(source), 'uncertainty.py'), 'utf8'));
 pyodide.FS.writeFile('/tutorial/tests/test_model.py', await readFile(testSource, 'utf8'));
 
 const report = JSON.parse(await pyodide.runPythonAsync(`

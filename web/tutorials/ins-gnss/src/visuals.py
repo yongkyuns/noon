@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from math import cos, sin, pi
 from textwrap import wrap
+from uncertainty import confidence_contour
 from noon import (Color, Text, MathTypst, Line, VMobject, FadeIn, FadeOut,
                   Transform, Rotate, linear)
 
@@ -158,7 +159,7 @@ class Plot:
     async def move_cursor(self, scene, cursor, start, end, duration):
         """Translate unchanged line geometry; do not morph newly baked endpoints."""
         dx = self.point(end, self.ylim[0])[0] - self.point(start, self.ylim[0])[0]
-        await scene.play(Transform(cursor, cursor.copy().shift((dx, 0))),
+        await self.scene.play(Transform(cursor, cursor.copy().shift((dx, 0))),
                          run_time=duration, rate_func=linear)
 
 
@@ -171,21 +172,9 @@ def car(centre,color=TRUTH):
 
 def confidence_ellipse(centre,covariance,scale_x=1,scale_y=1,probability=.95):
     """Joint 2D confidence region, not two independent +/-sigma intervals."""
-    from math import atan2, log, sqrt
-    a,b,d=covariance[0][0],covariance[0][1],covariance[1][1]
-    disc=sqrt((a-d)**2+4*b*b)
-    major,minor=(a+d+disc)/2,(a+d-disc)/2
-    if minor < -1e-10:
-        raise ValueError('Covariance must be positive semidefinite')
-    angle=.5*atan2(2*b,a-d)
-    radius=sqrt(-2*log(1-probability))
-    points=[]
-    for i in range(97):
-        phase=2*pi*i/96
-        u,v=radius*sqrt(max(0,major))*cos(phase),radius*sqrt(max(0,minor))*sin(phase)
-        points.append((centre[0]+scale_x*(u*cos(angle)-v*sin(angle)),
-                       centre[1]+scale_y*(u*sin(angle)+v*cos(angle))))
-    return path(points,UNCERTAINTY,2.5)
+    points = confidence_contour((0, 0), covariance, probability)
+    return path([(centre[0] + scale_x*x, centre[1] + scale_y*y) for x, y in points],
+                UNCERTAINTY, 2.5)
 
 
 def rotating_frame(centre,length=1.45,color=FUSED):

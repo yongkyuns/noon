@@ -60,12 +60,17 @@
     },
     {
       "number": 7,
-      "title": "Information travels through covariance",
-      "expected_duration": 26.75,
+      "title": "How a position fix learns bias",
+      "expected_duration": 133.2,
+      "review_times": [0, 0.25, 0.55, 7.6, 12, 20, 23.3, 24, 28, 32, 36, 45, 52.8, 58, 62.9, 63.3, 68, 70.25, 70.5, 71, 80, 86, 93, 101.6, 108, 109.25, 112, 121, 126, 132],
       "notes": [
-        "For a position observation, the gain for bias is K_b = P_bp/(P_pp + R). If cross-covariance P_bp were zero, this observation would not directly correct bias. Prediction creates cross-covariance because bias errors influence later velocity and position errors.",
-        "The teaching filter subtracts physical bias: corrected acceleration = raw acceleration − estimated bias. With errors defined as true minus estimated, a positive bias error and its induced position error are negatively correlated. A negative position residual can therefore increase the estimated physical bias.",
-        "The first ellipse is an illustrative normalized two-variable Gaussian, not a covariance extracted from the numerical run. Its 95% joint contour uses χ² with two degrees of freedom, whose threshold is −2 ln(0.05) ≈ 5.991. That is not the same as independently plotting ±2σ on both axes. The final bias graph is actual simulated data."
+        "Follow the first GNSS fix at the end of the declared outage. Every number in the gain table, state table and covariance contours comes from the same retained before/after update. Simulation time is frozen while the lesson explains it; only authored presentation time advances.",
+        "The innovation is observed position minus predicted position. Its variance S combines the prior position variance and receiver measurement variance R. The direct measurement sensitivity is H = [1,0,0], but K = P Hᵀ/S selects the entire position column of P. Position, velocity and physical bias therefore receive different corrections from the same scalar residual.",
+        "Cross-covariances have units: Ppp is m², Pvp is m²/s, and Pbp is m²/s². Dividing by S in m² gives gains with units 1, 1/s, and 1/s². Multiplying these by a residual in metres yields corrections in m, m/s, and m/s². Variance and standard deviation are not interchangeable.",
+        "This filter subtracts physical acceleration bias from raw acceleration. Its negative position–bias cross-covariance gives a negative bias gain. A negative position residual therefore increases the estimated bias. The counterfactual erases only cross-covariances while retaining means, marginal variances, the observation and R: the position correction is identical, but velocity and bias corrections become zero. This is a controlled single-update ablation, not a different sensor-noise realization.",
+        "The covariance graphic is an actual position–bias marginal of the three-state filter, not the earlier illustrative ellipse. The x coordinate is (position − prior position mean)/prior position standard deviation; the y coordinate is (bias − prior bias mean)/prior bias standard deviation. Both prior and posterior use these same fixed scales. Both contours have 95% joint Gaussian probability, using the chi-square threshold with two degrees of freedom. The gold vertical line marks the observation mean, not a zero-noise constraint.",
+        "The final truth column is for evaluation only. A valid noisy fix need not put the state at truth: the bias correction in this run goes in the right direction but overshoots the injected bias. The full-run bias plot preserves both sides of every GNSS correction at the same physical timestamp; it does not interpolate discrete corrections across measurement intervals.",
+        "The numerical export includes immutable prior state and covariance, posterior state and covariance, candidate gain, injected correction, innovations and acceptance decisions. This remains a one-dimensional teaching model, not a numerical reproduction of the complete ECEF INS/GNSS filter."
       ]
     },
     {
