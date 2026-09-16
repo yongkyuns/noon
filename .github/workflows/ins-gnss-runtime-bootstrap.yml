@@ -18,14 +18,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p runtime/pyodide runtime/source
-          base=https://cdn.jsdelivr.net/pyodide/v314.0.5/full
-          for file in pyodide.mjs pyodide.asm.js pyodide.asm.wasm python_stdlib.zip pyodide-lock.json; do
-            curl --fail --location --retry 2 "$base/$file" -o "runtime/pyodide/$file"
-          done
+          mkdir -p runtime/pyodide runtime/source runtime/reference
+          curl --fail --location --retry 2 https://github.com/pyodide/pyodide/releases/download/314.0.5/pyodide-core-314.0.5.tar.bz2 -o /tmp/pyodide.tar.bz2
+          echo 'f528dccea95fa8ec54295fd65bf86dd61183d11f0e52563dc8eadda45e0f78d6  /tmp/pyodide.tar.bz2' | sha256sum --check --strict
+          tar -xjf /tmp/pyodide.tar.bz2 -C runtime/pyodide --strip-components=1
           sha256sum runtime/pyodide/* > runtime/pyodide-sha256.txt
           cp AGENTS.md README.md package.json runtime/source/
           cp -r skills compat scripts docs tools runtime/source/
+          curl --fail --location --retry 2 https://raw.githubusercontent.com/fedorbaklanov/open-aided-navigation/0d33f229a0abbefeee084cc4306bdc3a47d5862f/demo/insGnssLoose/Documentation_InsGnssFilterLoose.pdf -o runtime/reference/Documentation_InsGnssFilterLoose.pdf
           printf '%s\n' "$GITHUB_SHA" > runtime/source-revision.txt
       - uses: actions/upload-artifact@v7
         with:
