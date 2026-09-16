@@ -42,6 +42,14 @@ class ImageFacadeTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises((ValueError, TypeError)):
                 images._rgba8_array(invalid)
 
+    def test_nested_single_channel_pixels_match_scalar_grayscale(self):
+        scalar = [[0, 127], [255, 42]]
+        nested = [[[value] for value in row] for row in scalar]
+        self.assertEqual(images._rgba8_array(nested), images._rgba8_array(scalar))
+        for invalid in [[[[0], 1]], [[0, [1]]], [[[0], [1, 2, 3]]]]:
+            with self.subTest(invalid=invalid), self.assertRaises((ValueError, TypeError)):
+                images._rgba8_array(invalid)
+
     def test_numpy_style_buffer_path_is_one_bulk_read_in_row_order(self):
         calls = []
         class Array:

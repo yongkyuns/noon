@@ -170,9 +170,9 @@ fn invalid_publication_context_rejects_before_resource_import() -> TestResult {
             edit.add_node(SemanticNodeCreation::family());
             edit.apply(&mut scene.integration_store().borrow_mut())?;
         }
-        // Resource-producing constructors share the same pre-admission error precedence.
+        // Ordinary publication is the pre-admission error-precedence oracle.
         let expected = LiveSession::new(owner.integration_store(), root, &mut session)
-            .create_manim_geometry(noon::ManimGeometryOptions::circle(1.0)?)
+            .apply(SemanticMutationTransaction::new())
             .unwrap_err();
         session.take_frame_changes();
         let before_resources = resources(owner);
