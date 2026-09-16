@@ -1,0 +1,27 @@
+name: B3 Matching Unequal Completion Diagnostic
+on:
+  push:
+    branches: [b3-matching-duplicate-parity-qualification]
+permissions:
+  contents: read
+concurrency:
+  group: b3-matching-unequal-completion-diagnostic
+  cancel-in-progress: true
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RUST_BACKTRACE: "1"
+      CARGO_INCREMENTAL: "0"
+      NOON_DIAGNOSTIC_SOURCE: c95b97f610db26a06934be703b9c58f35efde8c5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.NOON_DIAGNOSTIC_SOURCE }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify exact diagnostic source
+        run: test "$(git rev-parse HEAD)" = "$NOON_DIAGNOSTIC_SOURCE"
+      - name: Reproduce nested unequal matching completion
+        run: cargo test -p noon --test matching_nested_unequal_completion -- --nocapture
