@@ -18,10 +18,10 @@ use crate::{
 /// Inert input only. No family or shaft identity exists until `createCoordinates`.
 #[wasm_bindgen]
 pub struct WasmCoordinateOptions {
-    request: CoordinateRequest,
+    pub(crate) request: CoordinateRequest,
 }
 
-enum CoordinateRequest {
+pub(crate) enum CoordinateRequest {
     NumberLine(ManimNumberLineOptions),
     Axes(ManimAxesOptions),
 }
@@ -380,6 +380,19 @@ impl CanonicalAuthoringSceneContext {
             ),
         })
     }
+}
+
+#[cfg(all(
+    feature = "renderer",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+#[wasm_bindgen(js_name = createLiveCoordinatePlottingRenderer)]
+pub async fn create_live_coordinate_plotting_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::live_coordinate_plotting_example::program()
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    crate::WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
 /// Qualification bootstrap only: native and direct WASM execute one Rust builder.

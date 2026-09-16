@@ -12,6 +12,7 @@ on:
       - 'web/manim-compat-smoke.html'
       - 'scripts/plotting-qualification.mjs'
       - 'scripts/time-series-plotting-qualification.mjs'
+      - 'scripts/live-coordinate-checks.mjs'
       - 'scripts/gapped-plotting-checks.mjs'
       - '.github/workflows/manim-plotting-qualification.yml'
   workflow_dispatch:
@@ -51,6 +52,8 @@ jobs:
         run: node scripts/time-series-plotting-qualification.mjs synchronized
       - name: Qualify explicit outages and marker recovery
         run: node scripts/time-series-plotting-qualification.mjs gapped
+      - name: Qualify coordinates constructed after playback starts
+        run: node scripts/time-series-plotting-qualification.mjs live
       - name: Record tested checkout
         if: always()
         run: |

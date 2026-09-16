@@ -26,6 +26,7 @@ pub enum CoordinateAuthoringError {
     Coordinate(CoordinateError),
     Authoring(AuthoringError),
     Plot(PlotAuthoringError),
+    Live(crate::LiveSessionError),
     InvalidOptions(&'static str),
     InvalidTopology,
 }
@@ -36,6 +37,7 @@ impl std::fmt::Display for CoordinateAuthoringError {
             Self::Coordinate(error) => std::fmt::Display::fmt(error, formatter),
             Self::Authoring(error) => std::fmt::Display::fmt(error, formatter),
             Self::Plot(error) => std::fmt::Display::fmt(error, formatter),
+            Self::Live(error) => std::fmt::Display::fmt(error, formatter),
             Self::InvalidOptions(reason) => formatter.write_str(reason),
             Self::InvalidTopology => formatter.write_str("coordinate family topology is invalid"),
         }
@@ -48,6 +50,7 @@ impl std::error::Error for CoordinateAuthoringError {
             Self::Coordinate(error) => Some(error),
             Self::Authoring(error) => Some(error),
             Self::Plot(error) => Some(error),
+            Self::Live(error) => Some(error),
             Self::InvalidOptions(_) | Self::InvalidTopology => None,
         }
     }
@@ -66,6 +69,12 @@ impl From<AuthoringError> for CoordinateAuthoringError {
 impl From<PlotAuthoringError> for CoordinateAuthoringError {
     fn from(error: PlotAuthoringError) -> Self {
         Self::Plot(error)
+    }
+}
+
+impl From<crate::LiveSessionError> for CoordinateAuthoringError {
+    fn from(error: crate::LiveSessionError) -> Self {
+        Self::Live(error)
     }
 }
 
@@ -243,7 +252,7 @@ impl ManimNumberLine {
         })
     }
 
-    fn snapshot_with(
+    pub(crate) fn snapshot_with(
         &self,
         query: &mut impl FnMut(&Mobject) -> Result<PathQuery, AuthoringError>,
     ) -> Result<NumberLineFrame, CoordinateAuthoringError> {
@@ -332,7 +341,7 @@ impl ManimAxes {
             .map_err(CoordinateAuthoringError::from)
     }
 
-    fn snapshot_with(
+    pub(crate) fn snapshot_with(
         &self,
         query: &mut impl FnMut(&Mobject) -> Result<PathQuery, AuthoringError>,
     ) -> Result<AxesFrame, CoordinateAuthoringError> {
@@ -440,7 +449,7 @@ fn coordinate_members(
     Ok([first, second])
 }
 
-fn resolve_family(
+pub(crate) fn resolve_family(
     store: Rc<RefCell<SemanticStore>>,
     result: &SemanticMutationTransactionResult,
     root: SemanticLocalNodeToken,
@@ -451,7 +460,7 @@ fn resolve_family(
     Ok(MobjectFamily::from_node(store, id)?)
 }
 
-fn prepare_number_line(
+pub(crate) fn prepare_number_line(
     options: &ManimNumberLineOptions,
 ) -> Result<(SemanticMutationTransaction, SemanticLocalNodeToken), CoordinateAuthoringError> {
     let states = prepare_line(options.frame()?, options.ticks, &options.style)?;
@@ -460,7 +469,7 @@ fn prepare_number_line(
     Ok((transaction, root))
 }
 
-fn prepare_axes(
+pub(crate) fn prepare_axes(
     options: &ManimAxesOptions,
 ) -> Result<(SemanticMutationTransaction, SemanticLocalNodeToken), CoordinateAuthoringError> {
     let frame = AxesFrame::centered(

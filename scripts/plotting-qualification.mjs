@@ -121,7 +121,7 @@ try {
       const lifecycle = await page.evaluate(async () => (await window.noonManimCompat.ready()).plotting);
       assert.equal(lifecycle.backend, expectedBackend);
       assert.equal(lifecycle.objectCount, 14);
-      assert.ok(Math.abs(lifecycle.duration - 0.6) < 1e-6);
+      assert.ok(Math.abs(lifecycle.duration - 0.8) < 1e-6);
       assert.ok(lifecycle.presentedFrames > 0);
       result.lifecycle = lifecycle;
       await page.close();

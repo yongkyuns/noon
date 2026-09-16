@@ -11,21 +11,26 @@ import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { assertGapPixels, gapArgumentSource, gapCheckpoints } from "./gapped-plotting-checks.mjs";
 
+import { assertLiveCoordinatePixels } from "./live-coordinate-checks.mjs";
 const mode = process.argv[2] ?? "single";
+const liveCoordinates = mode === "live";
+const runTime = liveCoordinates ? 1.5 : 6;
 const cases = {
+  live: ["createLiveCoordinatePlottingRenderer", "live_coordinate_plotting", "live-coordinates", 17],
   single: ["createTimeSeriesPlottingRenderer", "time_series_plotting", "time-series", 35],
   synchronized: ["createSynchronizedPlottingRenderer", "synchronized_plotting", "synchronized-series", 43],
   gapped: ["createGappedPlottingRenderer", "gapped_plotting", "gapped-series", 51],
 };
 assert.ok(Object.hasOwn(cases, mode) && process.argv.length <= 3,
-  "expected no argument, single, synchronized, or gapped");
-const synchronized = mode !== "single";
+  "expected no argument, single, synchronized, gapped, or live");
+const synchronized = mode === "synchronized" || mode === "gapped";
 const gapped = mode === "gapped";
 const [factoryName, exampleName, outputName, expectedObjectCount] = cases[mode];
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const output = path.join(root, `plotting-artifacts/${outputName}`);
 const source = await readFile(path.join(root, `web/python/examples/${exampleName}.py`), "utf8");
-const checkpoints = gapped ? gapCheckpoints : [0.15, 0.6, 1.8, 4.5, 6];
+const checkpoints = liveCoordinates ? [0.125, 0.25, 0.5, 0.75, 1, 1.25, 1.5]
+  : gapped ? gapCheckpoints : [0.15, 0.6, 1.8, 4.5, 6];
 // Include exact segment boundaries so the normal direct realtime host can
 // re-anchor on source resumption without charging setup to the next interval.
 const data = [[0, 0.4], [0.5, 1], [1.5, 1.7], [2, 1.2], [4, 0.6], [7, 2.1], [10, 1.4]];
@@ -36,7 +41,7 @@ const recordings = [
 const unionTimes = [...new Set([0, 10, ...recordings.flat().map(([t]) => t)
   .filter(t => t > 0 && t < 10)])].sort((a, b) => a - b);
 const boundaries = synchronized ? unionTimes : data.map(([t]) => t);
-const driveTimes = [...new Set([0, ...checkpoints, ...boundaries.map(t => (t / 10) * 6)])]
+const driveTimes = [...new Set([0, ...checkpoints, ...(liveCoordinates ? [0.25, 0.75, 1.25, 1.5] : boundaries.map(t => (t / 10) * 6))])]
   .sort((a, b) => a - b);
 const report = { mode, pythonSourceSha256: createHash("sha256").update(source).digest("hex"), backends: [] };
 const server = await serveRepository(root, 4198);
@@ -59,7 +64,7 @@ async function capture(context, language, backend) {
   try {
     await page.goto(`${server.baseUrl}/web/manim-raster-host.html`);
     await page.waitForFunction(() => window.noonHostRaster);
-    await bounded(page.evaluate(async ({ language, source, factoryName }) => {
+    await bounded(page.evaluate(async ({ language, source, factoryName, runTime }) => {
       const canvas = document.querySelector("#scene");
       window.timeSeriesErrors = [];
       if (language === "rust-wasm") {
@@ -118,9 +123,9 @@ async function capture(context, language, backend) {
       await attached;
       window.sampleTimeSeries = async time => {
         await execution.sampleToAuthoredTime(time);
-        if (time === 6) {
+        if (time === runTime) {
           const completed = await authored;
-          if (Math.abs(completed.duration - 6) > 1e-6) throw new Error("wrong data playback duration");
+          if (Math.abs(completed.duration - runTime) > 1e-6) throw new Error("wrong data playback duration");
         }
         for (let attempt = 0; attempt < 200; attempt++) {
           if (window.timeSeriesErrors.length) throw new Error(window.timeSeriesErrors.join("; "));
@@ -138,7 +143,7 @@ async function capture(context, language, backend) {
         }
         throw new Error(`Python time-series sample ${time} was not presented`);
       };
-    }, { language, source, factoryName }), `${language} attachment`);
+    }, { language, source, factoryName, runTime }), `${language} attachment`);
     const captures = [];
     for (const time of driveTimes) {
       const metrics = await bounded(page.evaluate(time => window.sampleTimeSeries(time), time),
@@ -326,7 +331,7 @@ try {
         assert.equal(a.png.height, 540);
         assert.equal(b.png.width, a.png.width);
         assert.equal(b.png.height, a.png.height);
-        const oracle = gapped
+        const oracle = liveCoordinates ? (png, time) => assertLiveCoordinatePixels(png, time, regionCount) : gapped
           ? (png, time) => assertGapPixels(png, time, recordings, unionTimes, regionCount)
           : synchronized ? assertSynchronizedMarkers : assertMarker;
         oracle(a.png, a.time);

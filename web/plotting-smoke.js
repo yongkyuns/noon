@@ -129,18 +129,30 @@ class PlottingQualification(Scene):
         self.play(Create(later), run_time=0.2, rate_func=linear)
         near(sentinel.get_center(), (4, 2))
         assert len(calls) == 5
-        try:
-            Axes([-1, 1, 1], [-1, 1, 1], x_length=2, y_length=2)
-        except NotImplementedError:
-            pass
-        else:
-            raise AssertionError("unsupported live axis construction was silently accepted")
+        for bad_length in (float("nan"), -1, 0):
+            try:
+                Axes([-1, 1, 1], [-1, 1, 1], x_length=2, y_length=bad_length)
+            except NoonValueError:
+                pass
+            else:
+                raise AssertionError("invalid live axis length was accepted")
+        fresh = Axes([-1, 1, 1], [-1, 1, 1], x_length=2, y_length=2)
+        fresh.shift(LEFT)
+        near(fresh.c2p(0, 0), LEFT)
+        near(fresh.p2c(fresh.c2p(0.5, 0.25)), (0.5, 0.25))
+        line = NumberLine([0, 2, 1], length=2).shift(DOWN)
+        assert abs(line.p2n(line.n2p(1)) - 1) < 2e-5
+        self.add(fresh, line)
+        self.play(fresh.animate.shift(UP), run_time=0.2, rate_func=linear)
+        near(fresh.c2p(0, 0), LEFT + UP)
+        self.remove(fresh, line)
+        near(sentinel.get_center(), (4, 2))
 `;
 
 export async function qualifyPlotting(runLive) {
   directWasmPreparation();
   const result = await runLive(source);
-  if (Math.abs(result.duration - 0.6) > 1e-6 || result.metrics.objectCount !== 14) {
+  if (Math.abs(result.duration - 0.8) > 1e-6 || result.metrics.objectCount !== 14) {
     throw new Error(`plotting lifecycle produced unexpected duration/membership: ${JSON.stringify(result)}`);
   }
   if (!result.metrics.ready || !result.metrics.retained || result.metrics.presentedFrames < 1 ||
