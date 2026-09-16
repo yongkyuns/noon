@@ -85,3 +85,26 @@ test("source-owned first pass keeps playback controls unavailable until the repl
     "controls must become available only after the completed source is attached as an ordinary replay",
   );
 });
+
+test("source-owned playback reports Playing even when the attachment's initial state is paused", () => {
+  const presentationStart = main.indexOf("function setPlaybackRuntimeStatus(");
+  const presentationEnd = main.indexOf("function setBusy(", presentationStart);
+  const presentation = main.slice(presentationStart, presentationEnd);
+  assert.match(
+    presentation,
+    /sceneRunPromise !== null && activeSourceContinuation !== null/,
+    "source continuation ownership must be part of playback presentation state",
+  );
+  assert.match(
+    presentation,
+    /sourceOwnsPlayback[\s\S]*\{ label: "Playing", state: "running" \}[\s\S]*playbackPresentation\(playbackState\)/,
+    "source-owned playback must report Playing/running while ordinary replay remains runtime-derived",
+  );
+
+  const ownerPublished = runScene.indexOf("activeSourceContinuation = earlyContinuation;");
+  const statusPublished = runScene.indexOf("setPlaybackRuntimeStatus(", ownerPublished);
+  assert.ok(
+    ownerPublished >= 0 && statusPublished > ownerPublished,
+    "the continuation owner must be published before its playback status is derived",
+  );
+});
