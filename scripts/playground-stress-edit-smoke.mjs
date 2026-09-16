@@ -303,9 +303,17 @@ try {
     () => document.querySelector("#python-scene-source")?.value ?? "",
   );
   assert.match(source, /rows = 20/);
-  const rows5Source = source.replace(/rows = \d+/, "rows = 5");
-  const rows7Source = rows5Source.replace(/rows = \d+/, "rows = 7");
+
+  // Only the run that must remain source-owned while we exercise Reset/edit gets
+  // an extended first animation. The replacement runs keep the canonical timing.
+  // This removes CI scheduling luck from the cancellation boundary without
+  // weakening the canonical dense workload or the actual rerun path.
+  const rows5Source = source
+    .replace(/rows = \d+/, "rows = 5")
+    .replace("run_time=0.35,", "run_time=8.0,");
+  const rows7Source = source.replace(/rows = \d+/, "rows = 7");
   const rows20Source = rows7Source.replace(/rows = \d+/, "rows = 20");
+  assert.match(rows5Source, /run_time=8\.0,/);
   const baselineObjectCount = diagnostics.snapshots.baseline.objectCount;
 
   // Editing is deliberately non-destructive. Prove that the existing replay and
@@ -324,7 +332,7 @@ try {
   assert.equal(diagnostics.snapshots.rows5StillIdle.runGeneration, diagnostics.snapshots.baseline.runGeneration);
   assert.equal(diagnostics.snapshots.rows5StillIdle.runInFlight, false);
 
-  // Start rows=5 and catch it while Python still owns the active animation.
+  // Start rows=5 and catch it while Python still owns the deliberately long first animation.
   await page.locator("#replace-scene").click();
   diagnostics.snapshots.rows5Playing = await waitForSourceOwnedPlayback(page);
 
