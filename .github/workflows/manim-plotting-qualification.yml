@@ -24,6 +24,7 @@ concurrency:
 jobs:
   plotting:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: Build exact-source browser package
@@ -44,14 +45,11 @@ jobs:
         run: node scripts/plotting-qualification.mjs
       - name: Qualify numeric labels and timestamp-synchronized playback
         run: node scripts/time-series-plotting-qualification.mjs
-      - name: Record tested checkout and isolated formatting diagnostics
+      - name: Record tested checkout
         if: always()
         run: |
           mkdir -p plotting-artifacts
           git rev-parse HEAD > plotting-artifacts/source-sha.txt
-          git worktree add --detach "$RUNNER_TEMP/noon-format" HEAD
-          (cd "$RUNNER_TEMP/noon-format" && cargo fmt --all && git diff --binary) > plotting-artifacts/rustfmt.patch
-          git worktree remove --force "$RUNNER_TEMP/noon-format"
       - uses: actions/upload-artifact@v7
         if: always()
         with:

@@ -70,16 +70,22 @@ pub fn number_labels(
         Some(numbers) => numbers,
         None => {
             generated = noon_geometry::number_line_tick_values(
-                frame.range(), false, exclude_zero, MAX_PLOT_LABELS,
+                frame.range(),
+                false,
+                exclude_zero,
+                MAX_PLOT_LABELS,
             )?;
             &generated
         }
     };
     if numbers.len() > MAX_PLOT_LABELS {
-        return Err(PlotPresentationError::InvalidInput("number-label limit exceeded"));
+        return Err(PlotPresentationError::InvalidInput(
+            "number-label limit exceeded",
+        ));
     }
     let mut labels = Vec::new();
-    labels.try_reserve_exact(numbers.len())
+    labels
+        .try_reserve_exact(numbers.len())
         .map_err(|_| PlotPresentationError::AllocationFailed)?;
     for &number in numbers {
         let point = frame.number_to_point(number)?;
@@ -91,7 +97,11 @@ pub fn number_labels(
         if text.starts_with('-') && text[1..].chars().all(|c| c == '0' || c == '.') {
             text.remove(0);
         }
-        labels.push(NumberLabel { number, text, point });
+        labels.push(NumberLabel {
+            number,
+            text,
+            point,
+        });
     }
     Ok(labels)
 }
@@ -132,7 +142,9 @@ impl TimeSeriesPlan {
                 "time-series run_time must be finite and positive",
             ));
         }
-        if samples.iter().any(|s| !s.time.is_finite() || !s.value.is_finite())
+        if samples
+            .iter()
+            .any(|s| !s.time.is_finite() || !s.value.is_finite())
             || samples.windows(2).any(|s| s[1].time <= s[0].time)
         {
             return Err(PlotPresentationError::InvalidInput(
@@ -142,19 +154,39 @@ impl TimeSeriesPlan {
         let first = samples[0].time;
         let span = samples[samples.len() - 1].time - first;
         if !span.is_finite() {
-            return Err(PlotPresentationError::InvalidInput("time-series timestamp span overflow"));
+            return Err(PlotPresentationError::InvalidInput(
+                "time-series timestamp span overflow",
+            ));
         }
         let y_range = frame.y().range();
         let y_mid = y_range[0] + (y_range[1] - y_range[0]) * 0.5;
         let mut result = Self {
-            samples: Vec::new(), points: Vec::new(), cursor_points: Vec::new(),
-            key_times: Vec::new(), durations: Vec::new(),
+            samples: Vec::new(),
+            points: Vec::new(),
+            cursor_points: Vec::new(),
+            key_times: Vec::new(),
+            durations: Vec::new(),
         };
-        result.samples.try_reserve_exact(samples.len()).map_err(allocation_error)?;
-        result.points.try_reserve_exact(samples.len()).map_err(allocation_error)?;
-        result.cursor_points.try_reserve_exact(samples.len()).map_err(allocation_error)?;
-        result.key_times.try_reserve_exact(samples.len()).map_err(allocation_error)?;
-        result.durations.try_reserve_exact(samples.len() - 1).map_err(allocation_error)?;
+        result
+            .samples
+            .try_reserve_exact(samples.len())
+            .map_err(allocation_error)?;
+        result
+            .points
+            .try_reserve_exact(samples.len())
+            .map_err(allocation_error)?;
+        result
+            .cursor_points
+            .try_reserve_exact(samples.len())
+            .map_err(allocation_error)?;
+        result
+            .key_times
+            .try_reserve_exact(samples.len())
+            .map_err(allocation_error)?;
+        result
+            .durations
+            .try_reserve_exact(samples.len() - 1)
+            .map_err(allocation_error)?;
         for (index, sample) in samples.iter().enumerate() {
             let elapsed = if index + 1 == samples.len() {
                 run_time
@@ -171,29 +203,50 @@ impl TimeSeriesPlan {
                 result.durations.push(duration);
             }
             result.samples.push(*sample);
-            result.points.push(frame.coords_to_point(sample.time, sample.value)?);
-            result.cursor_points.push(frame.coords_to_point(sample.time, y_mid)?);
+            result
+                .points
+                .push(frame.coords_to_point(sample.time, sample.value)?);
+            result
+                .cursor_points
+                .push(frame.coords_to_point(sample.time, y_mid)?);
             result.key_times.push(elapsed);
         }
         Ok(result)
     }
 
-    pub fn samples(&self) -> &[TimedPlotSample] { &self.samples }
-    pub fn points(&self) -> &[[f64; 2]] { &self.points }
-    pub fn cursor_points(&self) -> &[[f64; 2]] { &self.cursor_points }
-    pub fn key_times(&self) -> &[f64] { &self.key_times }
-    pub fn durations(&self) -> &[f64] { &self.durations }
-    pub fn run_time(&self) -> f64 { self.key_times[self.key_times.len() - 1] }
+    pub fn samples(&self) -> &[TimedPlotSample] {
+        &self.samples
+    }
+    pub fn points(&self) -> &[[f64; 2]] {
+        &self.points
+    }
+    pub fn cursor_points(&self) -> &[[f64; 2]] {
+        &self.cursor_points
+    }
+    pub fn key_times(&self) -> &[f64] {
+        &self.key_times
+    }
+    pub fn durations(&self) -> &[f64] {
+        &self.durations
+    }
+    pub fn run_time(&self) -> f64 {
+        self.key_times[self.key_times.len() - 1]
+    }
 
     /// An O(log N) diagnostic/reference observation, with no retained cursor.
     /// Examples do not call this per frame: ordinary linear compositions drive
     /// each interval. Out-of-range times fail instead of silently clamping.
     pub fn point_at(&self, elapsed: f64) -> Result<[f64; 2], PlotPresentationError> {
         if !elapsed.is_finite() || elapsed < 0.0 || elapsed > self.run_time() {
-            return Err(PlotPresentationError::InvalidInput("time-series sample time is out of range"));
+            return Err(PlotPresentationError::InvalidInput(
+                "time-series sample time is out of range",
+            ));
         }
-        let index = self.key_times.partition_point(|&t| t <= elapsed)
-            .saturating_sub(1).min(self.durations.len() - 1);
+        let index = self
+            .key_times
+            .partition_point(|&t| t <= elapsed)
+            .saturating_sub(1)
+            .min(self.durations.len() - 1);
         let alpha = (elapsed - self.key_times[index]) / self.durations[index];
         Ok(std::array::from_fn(|axis| {
             (1.0 - alpha) * self.points[index][axis] + alpha * self.points[index + 1][axis]

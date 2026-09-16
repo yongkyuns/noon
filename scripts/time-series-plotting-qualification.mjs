@@ -16,10 +16,21 @@ const source = await readFile(path.join(root, "web/python/examples/time_series_p
 const checkpoints = [0.15, 0.6, 1.8, 4.5, 6];
 // Include exact segment boundaries so the normal direct realtime host can
 // re-anchor on source resumption without charging setup to the next interval.
-const driveTimes = [0, 0.15, 0.3, 0.6, 0.9, 1.2, 1.8, 2.4, 4.2, 4.5, 6];
+const data = [[0, 0.4], [0.5, 1], [1.5, 1.7], [2, 1.2], [4, 0.6], [7, 2.1], [10, 1.4]];
+const driveTimes = [...new Set([0, ...checkpoints, ...data.map(([t]) => (t / 10) * 6)])]
+  .sort((a, b) => a - b);
 const report = { pythonSourceSha256: createHash("sha256").update(source).digest("hex"), backends: [] };
 const server = await serveRepository(root, 4198);
 await mkdir(output, { recursive: true });
+
+async function bounded(promise, label) {
+  let timer;
+  try {
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out`)), 90_000);
+    })]);
+  } finally { clearTimeout(timer); }
+}
 
 async function capture(context, language, backend) {
   const page = await context.newPage();
@@ -29,7 +40,7 @@ async function capture(context, language, backend) {
   try {
     await page.goto(`${server.baseUrl}/web/manim-raster-host.html`);
     await page.waitForFunction(() => window.noonHostRaster);
-    await page.evaluate(async ({ language, source }) => {
+    await bounded(page.evaluate(async ({ language, source }) => {
       const canvas = document.querySelector("#scene");
       window.timeSeriesErrors = [];
       if (language === "rust-wasm") {
@@ -91,10 +102,11 @@ async function capture(context, language, backend) {
         }
         throw new Error(`Python time-series sample ${time} was not presented`);
       };
-    }, { language, source });
+    }, { language, source }), `${language} attachment`);
     const captures = [];
     for (const time of driveTimes) {
-      const metrics = await page.evaluate(time => window.sampleTimeSeries(time), time);
+      const metrics = await bounded(page.evaluate(time => window.sampleTimeSeries(time), time),
+        `${language} sample ${time}`);
       assert.ok(Math.abs(metrics.time - time) < 1e-6, `${language}: ${JSON.stringify(metrics)}`);
       assert.equal(metrics.backend, backend);
       assert.ok(metrics.drawCalls > 0);
@@ -111,21 +123,77 @@ async function capture(context, language, backend) {
   }
 }
 
-// Independent data-time oracle, not another implementation used by the demo.
-const values = [[0, 0.4], [0.5, 1], [1.5, 1.7], [2, 1.2], [4, 0.6], [7, 2.1], [10, 1.4]];
-function assertMarker(png, time) {
-  const t = time / 6 * 10;
-  const end = Math.max(1, values.findIndex(pair => pair[0] >= t));
-  const [a, b] = t === 10 ? values.slice(-2) : [values[end - 1], values[end]];
-  const value = a[1] + (b[1] - a[1]) * (t - a[0]) / (b[0] - a[0]);
-  const x = t - 5, y = value * 1.6 - 2;
+async function validateArguments(context) {
+  const page = await context.newPage();
+  try {
+    await page.goto(`${server.baseUrl}/web/manim-raster-host.html`);
+    return await bounded(page.evaluate(async () => {
+      const { PythonAuthoringClient } = await import("./authoring-client.js");
+      const client = new PythonAuthoringClient();
+      try {
+        const result = await client.run(`from noon import *
+class PresentationValidation(Scene):
+    def construct(self):
+        axes = Axes((0, 10, 2), (0, 2.5, 0.5), x_length=10, y_length=4)
+        labels = axes.x_axis.label_plan((-0.004, -0.006), decimal_places=2, exclude_zero=False)
+        assert tuple(x.text for x in labels) == ("0.00", "-0.01")
+        assert axes.x_axis.label_plan(()) == ()
+        for precision in (-1, 13, 2**32, 2**32 + 1):
+            try:
+                axes.x_axis.label_plan(decimal_places=precision)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("invalid precision was accepted")
+        before = axes.c2p(0, 0)
+        for samples in ((), ((1, 2),), ((1, 2), (1, 3)), ((2, 1), (1, 2)), ((0, 0), (1, float("nan")))):
+            try:
+                axes.time_series_plan(samples, run_time=6)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("invalid timestamps were accepted")
+        assert axes.c2p(0, 0) == before
+        plan = axes.time_series_plan(((0, 1), (1, 2), (10, 1)), run_time=5)
+        assert plan.durations == (0.5, 4.5)
+        assert plan.points[0] == axes.c2p(0, 1)
+        axes.shift((1, 0))
+        assert plan.points[0] != axes.c2p(0, 1)
+        self.add(axes)
+`);
+        if (result.duration !== 0) throw new Error("preparation checks invented playback");
+        return { passed: true };
+      } finally { client.terminate(); }
+    }), "Pyodide argument validation");
+  } finally { await page.close(); }
+}
+
+// Independent data-time/pixel oracle, never called by either scene.
+function regionCount(png, x, y, predicate) {
   const cx = Math.round(480 + x * 67.5), cy = Math.round(270 - y * 67.5);
-  let yellow = 0;
+  let count = 0;
   for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
     const i = ((cy + dy) * png.width + cx + dx) * 4;
-    if (png.data[i] > png.data[i + 2] + 40 && png.data[i + 1] > png.data[i + 2] + 40) yellow++;
+    if (predicate(png.data[i], png.data[i + 1], png.data[i + 2])) count++;
   }
+  return count;
+}
+function assertMarker(png, time) {
+  const t = time / 6 * 10;
+  const end = Math.max(1, data.findIndex(pair => pair[0] >= t));
+  const [a, b] = t === 10 ? data.slice(-2) : [data[end - 1], data[end]];
+  const point = timestamp => [timestamp - 5,
+    (a[1] + (b[1] - a[1]) * (timestamp - a[0]) / (b[0] - a[0])) * 1.6 - 2];
+  const [x, y] = point(t);
+  const yellow = regionCount(png, x, y, (r, g, b) => r > b + 40 && g > b + 40);
   assert.ok(yellow > 5, `marker is not at data time ${t}: ${yellow} yellow pixels`);
+  const green = regionCount(png, x, -1.8, (r, g, b) => g > r + 25 && g > b + 25);
+  assert.ok(green > 2, `cursor is not at data time ${t}`);
+  const blue = (r, g, b) => b > r + 35 && g > r + 20;
+  assert.ok(regionCount(png, ...point((a[0] + t) / 2), blue) > 2,
+    `revealed curve has not reached data time ${t}`);
+  if (t < b[0]) assert.equal(regionCount(png, ...point((t + b[0]) / 2), blue), 0,
+    `curve reveals future data beyond time ${t}`);
 }
 
 try {
@@ -153,6 +221,7 @@ try {
         result.samples.push({ time: a.time, differingPixels, rust: a.metrics, python: b.metrics });
         assert.equal(differingPixels, 0, `paired ${backend} data-time pixels differ at ${a.time}`);
       }
+      result.arguments = await validateArguments(context);
       result.passed = true;
       console.log(`[PASS] ${backend}: numeric labels and five paired data-time frames`);
     } catch (error) {
