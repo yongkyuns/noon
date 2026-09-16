@@ -37,6 +37,21 @@ jobs:
         with:
           preflight: 'true'
           cache-ref: ${{ github.event.pull_request.base.sha }}
+      # Run before npm and screenshot output create untracked files. The shared
+      # architecture gate must inspect source, not generated browser dependencies.
+      - name: Validate full integrated repository
+        shell: bash
+        env:
+          VALIDATION_BASE: ${{ github.event.pull_request.base.sha || github.sha }}
+          NOON_WASM_PROFILE: dev
+          NOON_WASM_SKIP_OPT: '1'
+          NOON_SKIP_WEB_PREFLIGHT: '0'
+          NOON_WEB_PREFLIGHT_ONLY: '0'
+        run: |
+          set -euo pipefail
+          mkdir -p ci-artifacts/plotting-integration
+          git status --porcelain --untracked-files=all > ci-artifacts/plotting-integration/worktree-before.txt
+          bash scripts/check.sh full "$VALIDATION_BASE" 2>&1 | tee ci-artifacts/plotting-integration/full-check.log
       - name: Cache Playwright Chromium
         uses: actions/cache@v6
         with:
@@ -56,16 +71,6 @@ jobs:
         run: node scripts/time-series-plotting-qualification.mjs gapped
       - name: Qualify coordinates constructed after playback starts
         run: node scripts/time-series-plotting-qualification.mjs live
-      - name: Validate full integrated repository
-        shell: bash
-        env:
-          VALIDATION_BASE: ${{ github.event.pull_request.base.sha || github.sha }}
-          NOON_WASM_PROFILE: dev
-          NOON_WASM_SKIP_OPT: '1'
-        run: |
-          set -euo pipefail
-          mkdir -p plotting-artifacts
-          bash scripts/check.sh full "$VALIDATION_BASE" 2>&1 | tee plotting-artifacts/full-check.log
       - name: Record tested checkout
         if: always()
         shell: bash
@@ -77,6 +82,9 @@ jobs:
           git rev-parse HEAD > plotting-artifacts/source-sha.txt
           printf '%s\n' "$VALIDATION_BASE" > plotting-artifacts/base-sha.txt
           git diff --binary "$VALIDATION_BASE"...HEAD > plotting-artifacts/integration.diff
+          if [[ -d ci-artifacts/plotting-integration ]]; then
+            cp ci-artifacts/plotting-integration/*.log ci-artifacts/plotting-integration/*.txt plotting-artifacts/
+          fi
       - uses: actions/upload-artifact@v7
         if: always()
         with:
