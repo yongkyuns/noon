@@ -1,0 +1,30 @@
+name: Image final source export (temporary)
+on:
+  push:
+    branches: [codex/b2-image-workspace-bootstrap]
+    paths: [.github/workflows/image-final-source-export.yml]
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: a0005a6d13d59cb7b37a4e1bd1e62426ada6034d
+          persist-credentials: false
+          fetch-depth: 50
+      - name: Export exact source trees only
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/image-review
+          git archive --format=tar HEAD | gzip -1 > /tmp/image-review/head.tar.gz
+          git archive --format=tar 6aad6282be4a6ef5dbc557087656b55ab3f1d7c7 | gzip -1 > /tmp/image-review/base.tar.gz
+          git diff --binary 6aad6282be4a6ef5dbc557087656b55ab3f1d7c7 HEAD > /tmp/image-review/pr.patch
+          git rev-parse HEAD HEAD^{tree} 6aad6282be4a6ef5dbc557087656b55ab3f1d7c7^{tree} > /tmp/image-review/provenance.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noon-image-final-review-source
+          path: /tmp/image-review
+          retention-days: 2
