@@ -339,7 +339,8 @@ mod tests {
         assert_eq!(plan.parameters()[0], 0.0);
         assert_eq!(plan.parameters()[4], 1.0);
         assert!((plan.parameters()[3] - 0.9).abs() < 1.0e-14);
-        assert_eq!(plan.subpaths(), &[0..5]);
+        assert_eq!(plan.subpaths().len(), 1);
+        assert_eq!(plan.subpaths()[0], 0..5);
     }
 
     #[test]
