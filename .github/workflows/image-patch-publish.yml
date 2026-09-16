@@ -29,14 +29,14 @@ jobs:
           PY
       - uses: actions/checkout@v4
         with:
-          ref: 3397f0ff49dc44559e5e0323eedb3d3893f2e62f
+          ref: 47c375ec085371280b5bb8e38fbc6ad8af0d8d39
           path: product
-      - name: Apply only product changes and create staging branch
+      - name: Apply only product source changes
         working-directory: product
         run: |
           set -euo pipefail
-          git apply --check --binary /tmp/image-product.patch
-          git apply --binary /tmp/image-product.patch
+          git apply --check --binary --exclude=.github/workflows/image-raster-qualification.yml /tmp/image-product.patch
+          git apply --binary --exclude=.github/workflows/image-raster-qualification.yml /tmp/image-product.patch
           git diff --check
           git config user.name 'Yongkyun Shin'
           git config user.email '4311628+yongkyuns@users.noreply.github.com'
