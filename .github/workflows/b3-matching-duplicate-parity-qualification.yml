@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      NOON_QUALIFICATION_SOURCE: 626bd1aac094aafe4f2fcfd35cfa3aae2fcf78bd
+      NOON_QUALIFICATION_SOURCE: 37c1197fda129e0a132aef430aba482ac3e14a4f
       CARGO_INCREMENTAL: "0"
       NOON_WASM_SKIP_OPT: "1"
       NOON_MANIM_RASTER_BACKENDS: webgpu,webgl
