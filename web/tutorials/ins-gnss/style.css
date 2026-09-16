@@ -1,0 +1,13 @@
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#080c13;color:#eef3fb;line-height:1.55}
+*{box-sizing:border-box}body{margin:0}a{color:#72dcca;text-decoration:none}
+header{display:flex;align-items:center;gap:1.4rem;padding:1rem 4vw;border-bottom:1px solid #263341;color:#a3b1c3;font-size:.9rem}
+header a{font-weight:800;letter-spacing:.15em}.badge{margin-left:auto;font-size:.78rem}
+main{max-width:1400px;margin:auto;padding:1.5rem 3vw 3rem}.heading{display:flex;justify-content:space-between;gap:1.5rem;align-items:center;margin-bottom:1.2rem}
+h1{font-weight:650;font-size:1.7rem;line-height:1.2;margin:.3rem 0}.eyebrow{color:#8497b0;font-size:.7rem;letter-spacing:.15em;margin:0}
+label{font-size:.8rem;color:#a3b1c3}select,button{font:inherit;border:1px solid #334358;border-radius:.4rem;background:#111a27;color:#edf4fc;padding:.55rem .8rem}
+select{display:block;max-width:28rem;margin-top:.3rem}button{cursor:pointer}button:disabled{opacity:.5;cursor:wait}button:hover:not(:disabled){border-color:#72dcca}
+button:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid #72dcca;outline-offset:3px}
+#play{min-width:5rem;background:#12332e}.stage{width:100%;aspect-ratio:16/9;background:#000;border:1px solid #263341;border-radius:.6rem;overflow:hidden}
+canvas{display:block;width:100%;height:100%;object-fit:contain}.controls{display:flex;gap:.55rem;align-items:center;flex-wrap:wrap;margin-top:.8rem;font-size:.85rem}output{font-variant-numeric:tabular-nums;margin-left:auto;color:#a3b1c3}
+#status{font-size:.8rem;color:#9cafc5;min-height:1.3rem}details{border-top:1px solid #263341;padding-top:1rem;margin-top:1.6rem}summary{cursor:pointer;font-weight:650}#reading{max-width:85ch;color:#c8d3e0}#reading p{margin:1rem 0}footer{font-size:.78rem;color:#899bb1;border-top:1px solid #263341;padding-top:1.3rem;margin-top:2rem}
+@media(max-width:760px){header{gap:.8rem}.badge{display:none}.heading{display:block}label{display:block;margin-top:1rem}select{width:100%;max-width:none}main{padding:1rem 2vw}.controls{font-size:.75rem;gap:.35rem}h1{font-size:1.3rem}}

@@ -1,0 +1,4 @@
+# Generated browser entry and optional numerical exports.
+scene.py
+__pycache__/
+data/

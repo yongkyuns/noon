@@ -1,0 +1,169 @@
+{
+  "schema": 1,
+  "chapters": [
+    {
+      "number": 1,
+      "title": "Two sensors, one estimate",
+      "expected_duration": 46.75,
+      "notes": [
+        "The opening graph is a recorded-run overview, not a live strip chart. The entire numerical trace is visible from the start; the gold cursor moves through simulation time. Each motion segment uses linear time and the lesson pauses between segments for explanation.",
+        "The actual experiment uses a 100 Hz accelerometer, 1 Hz position fixes, 3 m GNSS standard deviation, a constant physical acceleration bias of 0.02 m/s², and independent acceleration sample noise of 0.04 m/s². Initial position and velocity means are zero; their uncertainties are nonzero. GNSS is absent over [45,75) seconds. The estimator does not receive simulated truth.",
+        "This is a one-dimensional teaching filter with states [position, velocity, physical acceleration bias]. It is deliberately simpler than the full ECEF INS/GNSS reference. The displayed position error just before reacquisition is measured at 74.99 s from the start of the experiment, not only the error accumulated during the outage."
+      ]
+    },
+    {
+      "number": 2,
+      "title": "Small errors accumulate",
+      "expected_duration": 47.85,
+      "notes": [
+        "For constant acceleration error b with initially correct position and velocity, integrating once gives velocity error bt and integrating twice gives position error ½bt². At b = 0.02 m/s² and t = 60 s, this is 36 m. Random noise and feedback corrections are deliberately excluded from this analytic example.",
+        "A small fixed tilt projects part of gravity into a horizontal acceleration component. Using 9.81 sin(0.5°) gives approximately 0.0856 m/s² and 154 m after 60 seconds under the same idealized integration assumptions. A real INS has coupled attitude dynamics and feedback, so this is an explanation of sensitivity, not a system performance forecast."
+      ]
+    },
+    {
+      "number": 3,
+      "title": "What the IMU measures",
+      "expected_duration": 25.2,
+      "notes": [
+        "Accelerometers measure specific force, not velocity and not gravity-inclusive kinematic acceleration. In a simplified local frame f = a − g. A resting supported sensor therefore measures a force opposing gravity; a freely falling ideal sensor approaches zero specific force.",
+        "The rotation C_s^n maps sensor-frame components into navigation-frame components. Only after that rotation can the navigation gravity vector be added. Gyroscope angular rate must be integrated to obtain attitude; it is not an absolute heading measurement. The displayed local equations omit Earth rotation."
+      ]
+    },
+    {
+      "number": 4,
+      "title": "One vector, different coordinates",
+      "expected_duration": 25.2,
+      "notes": [
+        "This chapter uses superscript = destination and subscript = source for rotation matrices. Thus C_s^e maps sensor coordinates into Earth-centred Earth-fixed coordinates; its transpose performs the reverse mapping. The same physical vector does not rotate merely because we change its coordinates.",
+        "The car-frame velocity is v^c = C_s^c (C_s^e)ᵀ v^e. This is the key frame chain behind vehicle constraints. Sensor-to-car installation alignment differs from sensor attitude relative to Earth. Both can be uncertain.",
+        "The reference propagates position and velocity in ECEF. NED is a local North–East–Down frame. The drawings are explicitly planar projections; they are not a 3D attitude renderer or a full global Earth visualization."
+      ]
+    },
+    {
+      "number": 5,
+      "title": "From measurements to motion",
+      "expected_duration": 39.85,
+      "notes": [
+        "In the simplified local model, the scalar-first quaternion q maps sensor vectors into navigation coordinates and obeys q̇ = ½ q ⊗ [0,ω] when the navigation frame is treated as non-rotating. ⊗ denotes quaternion multiplication. Rotating specific force and adding gravity produces velocity derivative; velocity is position derivative.",
+        "The constant-acceleration formulas are exact over one held-input interval. The reference instead propagates a full ECEF nominal state with second-order Runge–Kutta and includes Earth-rate contributions in attitude and velocity. The tutorial’s numerical experiment does not claim to reproduce that mechanization.",
+        "In the reference formulation, v̇^e = C_s^e f^s + g^e − 2Ω_ie^e v^e, with the gravity convention defined consistently with the chosen model. The source uses a J2 ECEF gravity helper. Care is needed not to double-count centrifugal acceleration when changing conventions."
+      ]
+    },
+    {
+      "number": 6,
+      "title": "How much should we trust a fix?",
+      "expected_duration": 33.75,
+      "notes": [
+        "The worked prior is 10 m with variance 9 m²; the observation is 14 m with variance 4 m². K = 9/13, so the posterior mean is 10 + (9/13)×4 = 12.7692308 m. The posterior variance is 36/13 m² and standard deviation is 1.6641 m.",
+        "The green posterior is narrower because the calculation combines independent Gaussian information under the stated model. Increasing R gives a measurement less weight. A receiver’s quoted accuracy must be interpreted correctly; a standard deviation cannot be inserted where a variance is required."
+      ]
+    },
+    {
+      "number": 7,
+      "title": "How a position fix learns bias",
+      "expected_duration": 133.2,
+      "review_times": [0, 0.25, 0.55, 7.6, 12, 20, 23.3, 24, 28, 32, 36, 45, 52.8, 58, 62.9, 63.3, 68, 70.25, 70.5, 71, 80, 86, 93, 101.6, 108, 109.25, 112, 121, 126, 132],
+      "notes": [
+        "Follow the first GNSS fix at the end of the declared outage. Every number in the gain table, state table and covariance contours comes from the same retained before/after update. Simulation time is frozen while the lesson explains it; only authored presentation time advances.",
+        "The innovation is observed position minus predicted position. Its variance S combines the prior position variance and receiver measurement variance R. The direct measurement sensitivity is H = [1,0,0], but K = P Hᵀ/S selects the entire position column of P. Position, velocity and physical bias therefore receive different corrections from the same scalar residual.",
+        "Cross-covariances have units: Ppp is m², Pvp is m²/s, and Pbp is m²/s². Dividing by S in m² gives gains with units 1, 1/s, and 1/s². Multiplying these by a residual in metres yields corrections in m, m/s, and m/s². Variance and standard deviation are not interchangeable.",
+        "This filter subtracts physical acceleration bias from raw acceleration. Its negative position–bias cross-covariance gives a negative bias gain. A negative position residual therefore increases the estimated bias. The counterfactual erases only cross-covariances while retaining means, marginal variances, the observation and R: the position correction is identical, but velocity and bias corrections become zero. This is a controlled single-update ablation, not a different sensor-noise realization.",
+        "The covariance graphic is an actual position–bias marginal of the three-state filter, not the earlier illustrative ellipse. The x coordinate is (position − prior position mean)/prior position standard deviation; the y coordinate is (bias − prior bias mean)/prior bias standard deviation. Both prior and posterior use these same fixed scales. Both contours have 95% joint Gaussian probability, using the chi-square threshold with two degrees of freedom. The gold vertical line marks the observation mean, not a zero-noise constraint.",
+        "The final truth column is for evaluation only. A valid noisy fix need not put the state at truth: the bias correction in this run goes in the right direction but overshoots the injected bias. The full-run bias plot preserves both sides of every GNSS correction at the same physical timestamp; it does not interpolate discrete corrections across measurement intervals.",
+        "The numerical export includes immutable prior state and covariance, posterior state and covariance, candidate gain, injected correction, innovations and acceptance decisions. This remains a one-dimensional teaching model, not a numerical reproduction of the complete ECEF INS/GNSS filter."
+      ]
+    },
+    {
+      "number": 8,
+      "title": "Correcting attitude without moving the vehicle",
+      "expected_duration": 180.05,
+      "review_times": [0, 0.25, 0.55, 5, 9, 14, 19, 21, 25, 33, 40, 42, 46, 49, 50, 51, 52, 53, 54, 55, 58, 65, 69, 74, 80, 87, 91, 96, 104, 110, 113, 118, 122, 126, 132, 136, 144, 150, 156, 162, 166, 173, 179],
+      "rotation_review": {"start": 48.95, "duration": 6.0, "origin": [-3.25, -0.05]},
+      "notes": [
+        "Conventions are part of the model: Hamilton multiplication, scalar-first unit quaternions q=(w,x,y,z), and active sensor-to-NED vector rotation. Left/navigation error means q_true = Q(delta_theta_n) ⊗ q_nominal. Internally all rotation vectors use radians. The side-view drawing uses North right and Up = −Down upward; its axes represent sensor forward and sensor up (−z_s). No perspective or angular exaggeration is used.",
+        "A unit quaternion has four coefficients subject to one norm constraint, hence three independent rotation coordinates. For phi=theta*u with unit axis u, Q(phi)=(cos(theta/2), u*sin(theta/2)). The limiting small-angle form is (1, phi/2). Multiplying the exact Q by q gives a unit corrected orientation. Simply adding their coefficients, even followed by normalization, does not implement this rotation correction.",
+        "The declared synthetic true pitch is 12 degrees, the nominal pitch 20 degrees, and the prescribed navigation-frame y correction −6 degrees. The corrected estimate is 14 degrees. True-minus-estimated pitch errors are −8 and −2 degrees. This correction is chosen as an inspectable example, NOT estimated by a full EKF or extracted from GNSS. Animated rotation illustrates an instantaneous estimate change at frozen sensor time; the vehicle does not rotate during a filter update.",
+        "The noncommuting example uses a 90-degree nominal yaw and 30-degree x-axis correction. Applying the same numeric correction on the left versus right gives rotated sensor-forward NED vectors (0,0.866,0.500) and (0,1,0). These are different physical axes. Equivalent body/right and navigation/left corrections instead satisfy phi_s = C_s^n transpose * phi_n. Thirty degrees is an exact composition illustration, not a recommended linearized EKF correction size.",
+        "The supported resting sensor measures specific force (approximately 2.040,0,−9.596) m/s² in sensor axes. Holding that same measurement fixed, C(q)*f + g yields north accelerations −1.365 and −0.342 m/s² before and after the correction. The exact horizontal error is −g sin(estimated_pitch−true_pitch). The force arrows share a single length scale; the small residual is reported numerically.",
+        "The two position curves are analytic thought experiments starting from exact position and velocity. They hold the respective tilt errors fixed for 10 seconds with no noise, aiding, or attitude propagation. Position error is one-half acceleration error times elapsed time squared, giving approximately −68.26 and −17.12 m. They are NOT full INS trajectories or a prediction of product performance. This plot uses estimated-minus-true position error, as in chapter 1.",
+        "After injection, the old error is recentered: Q(delta_theta_new)=Q(delta_theta_old) ⊗ Q(phi)^−1. Resetting the estimated local error mean to zero means zero correction around the NEW nominal, not zero true error. For a left error, the reset derivative has small-angle form J≈I+½[phi]×. The numerical covariance example uses the exact derivative of Log(Exp(phi+e) Exp(−phi)) at e=0, verified by centered finite differences. For a full filter, apply the complete block reset Jacobian to all cross-covariances as well.",
+        "The attitude-only covariance illustration starts from diagonal variances (4,1,9) deg² and develops a roll/yaw cross-term of about −0.261 deg² after resetting around the −6-degree pitch correction. All computation is in radians; degree units are only display conversion. This changes local coordinates and is not additional measurement information. A nonlinear coordinate change is represented locally by J P Jᵀ; it is not an exact transformation of a finite Gaussian distribution.",
+        "Supplementary convention reference: Joan Solà, Quaternion kinematics for the error-state Kalman filter, arXiv:1711.02508, sections 6.2–6.3 and 7.3 (especially the global/left reset). The source tutorial uses a small Euler rotation for injection; the exact rotation-vector example is not claimed as literal upstream reproduction."
+      ]
+    },
+    {
+      "number": 9,
+      "title": "What grows without GNSS?",
+      "expected_duration": 140.1,
+      "notes": [
+        "We use the same truth-known 1D [position, velocity, physical acceleration bias] example as chapter 7. In the error equations and this chapter’s graph, delta = true minus estimated for every component. Therefore the plotted position-error trace is the negative of the estimate-minus-truth graph in chapter 1. Compensation remains raw minus estimated physical bias; the signs are not the reference’s additive correction-offset convention.",
+        "With no new noise and constant bias, delta b(T) = delta b(0), delta v(T) = delta v(0) − T delta b(0), and delta p(T) = delta p(0) + T delta v(0) − T² delta b(0)/2. Stacking these equations gives Phi(T) = [[1,T,−T²/2],[0,1,−T],[0,0,1]]. This transition is exact for the teaching model, not a full ECEF transition.",
+        "The outage is [45,75) seconds, but the last accepted fix is at 44 s and reacquisition is at 75 s: there are 31 seconds and 3,100 IMU predictions between these accepted fixes. The comparison ends at the retained PRE-update covariance at 75 s, not the posterior after the fix. Estimated bias and bias variance are constant throughout the prediction-only interval because this example has no bias random walk.",
+        "The complete recorded trace is visible before the cursor starts. The cursor uses linear time within each segment and freezes during explanations. The error and marginal ±2-standard-deviation bounds share fixed metre and second axes. The bounds are a Gaussian model statement, not empirical coverage or a joint 2D confidence region. A correction is displayed as a discontinuity at one timestamp, not a smooth motion of the physical vehicle.",
+        "The position variance is h P0 hᵀ + Qpp with h = [1,T,−T²/2]. Its expansion is Ppp,0 + T² Pvv,0 + T⁴ Pbb,0/4 + 2T Ppv,0 − T² Ppb,0 − T³ Pvb,0 + Qpp. All terms have units m². Cross-covariances can contribute negative algebraic terms; they are not independent noise sources or percentages of a physical error.",
+        "For N independent held acceleration samples of standard deviation sigma_a and interval dt, Qpp = sigma_a² dt⁴ N(4N²−1)/12, Qpv = sigma_a² dt³ N²/2 and Qvv = sigma_a² dt² N. Other entries are zero in this constant-bias model. The closed form sums the effect of each sample and is checked against the existing samplewise predictor. Do not model the entire outage as one held noise sample.",
+        "The Q = 0 comparison preserves the starting covariance and interval and removes only NEW driving noise. Inherited velocity/bias uncertainty still propagates. This is a covariance-only comparison, not a second drive, a perfect-IMU accuracy result, or an assertion that process noise is generally negligible.",
+        "The full reference uses local error dynamics delta x dot = F delta x + G w, Phi approximately I + F dt, and Qd approximately G Qc Gᵀ dt. Those are first-order discretizations of a different model. Qc is a continuous-time noise density; the teaching simulator instead specifies independent per-sample acceleration noise. Their units and rate dependence must not be mixed."
+      ],
+      "review_times": [0, 0.275, 0.55, 7.8, 13, 20, 25.5, 26.2, 36, 41.7, 45, 48.94, 49, 51, 53, 55, 56.9, 57.5, 64.49, 64.5, 66.5, 68.5, 70.5, 72.49, 76, 80.04, 80.3, 80.6, 86, 92, 93.5, 104, 110, 119, 125.5, 135, 139]
+    },
+    {
+      "number": 10,
+      "title": "One complete GNSS update",
+      "expected_duration": 198.45,
+      "notes": [
+        "The reference observes three receiver-position coordinates in ECEF. This chapter isolates one linear two-coordinate fix with H = I, prior mean (0,0) m, prior covariance 4I m², observation (4,2) m, and measurement covariance R = [[5,4],[4,5]] m². It is an analytic teaching example, not a drive, a full ECEF update, or a ground-truth accuracy claim. Every numeric readout is computed in src/measurement.py and exported in measurement.json.",
+        "The covariance R describes positively correlated noise (correlation 0.8). It is also obtained by rotating independent variances 9 and 1 m² through 45 degrees: R_destination = C R_source Cᵀ when C maps source coordinates into destination coordinates. The contour graphics show modelled 95% joint Gaussian regions. They use equal horizontal and vertical scales within each panel; whitened coordinates are dimensionless, so comparisons of physical sizes across panels would be misleading.",
+        "For a lower Cholesky factor R = LLᵀ, solve L r_w = r and L H_w = H. Then R_w = I. Transforming the residual but not H changes the observation model and gives a wrong update. The implementation uses two-dimensional triangular solves; it does not require NumPy or explicitly invert a general matrix. MATLAB chol returns an upper factor U; the reference uses the transpose to construct its whitening transform.",
+        "For sequential processing, each whitened row has independent noise with variance one. After processing a row, recompute the next conditional innovation r_i = r_w,i − h_i δx_hat using the correction accumulated so far. In this example the second residual changes from −0.894 to +0.166. Reusing the original residual would apply the wrong correction. This is conditioning at one frozen timestamp, not another sensor sample.",
+        "Batch and whitened sequential updates agree: posterior position is (1.723077,0.123077) m and covariance is [[1.784615,0.984615],[0.984615,1.784615]] m². Reversing the row order gives the same result for this linear, fixed-linearization example with no per-row rejection. A nonlinear relinearization or changing acceptance decisions can invalidate that equivalence.",
+        "Whitening preserves the complete covariance. Simply deleting off-diagonal entries does not: using diag(R) would instead give (1.777778,0.888889) m. This is a different noise model. Depending on direction it may overstate or understate confidence; neither posterior is asserted to be the true position here.",
+        "Whitening measurement noise does not make the full innovation covariance identity: S_w = H_w P H_wᵀ + I. Correct NIS = rᵀS⁻¹r = r_wᵀS_w⁻¹r_w is 1.784615 in either coordinate system, whereas the noise-only squared norm r_wᵀr_w is 4. A gate threshold depends on residual dimension and chosen false-alarm probability. The example deliberately does not confuse these quantities or apply separate per-row gates.",
+        "The Joseph covariance update retains both propagated-prior and measurement-noise contributions. The same structure carries to the reference, but its rate-dependent observation-variance scaling is a separate operation and is not reproduced by this single-fix example. Nominal-state injection and error-coordinate reset must still obey the chosen attitude-error convention. Numerical agreement in this chapter does not validate the entire upstream ECEF filter."
+      ],
+      "review_times": [0, 0.25, 0.55, 5, 10, 16, 21.4, 22, 28, 34, 39, 41.7, 42, 50, 55, 61.9, 63, 71, 78, 83.1, 84, 93, 101, 106, 114, 118, 120, 129, 136, 139.2, 140, 149, 156, 160.4, 162, 168, 170, 176, 181.9, 184, 189, 195]
+    },
+    {
+      "number": 11,
+      "title": "Let the vehicle help",
+      "expected_duration": 17.65,
+      "notes": [
+        "Non-holonomic vehicle constraints state that lateral and vertical car-frame velocity are approximately zero during suitable motion. They are pseudo-measurements with nonzero variance, not exact clamps or additional physical sensors.",
+        "The residual uses the negative predicted lateral and vertical velocity. Its Jacobian depends on velocity, attitude, and mounting alignment because all three affect the transformed car-frame velocity. This explains why NHC can inform calibration as well as velocity.",
+        "The source gates these updates using angular rate and acceleration magnitude. Side-slip, impacts, wheel lift, road geometry, and lever-arm effects can violate a simple constraint. This chapter illustrates the model; the included 1D numerical simulation does not contain NHC or mounting-state estimation."
+      ]
+    },
+    {
+      "number": 12,
+      "title": "Calibration and observability",
+      "expected_duration": 17.65,
+      "notes": [
+        "The source compensation is corrected = scale ⊙ raw + corrective offset. Scale starts near one. Those additive corrective offsets are not the same signed quantity as the physical raw-measurement bias in the 1D example, which is subtracted.",
+        "The full reference includes three accelerometer scale factors, three gyro scale factors, and three mounting-error coordinates beyond a basic 15-error-state model. Adding states creates more unknowns; it does not create new information.",
+        "At rest, gravity constrains tilt but not yaw. GNSS course can initialize vehicle heading only under suitable speed and motion assumptions; reverse motion and side-slip require care. A one-dimensional position/bias model has different observability properties from a full inertial navigation model.",
+        "Observability depends on measurements and motion across time, not only on one H matrix or the number of states. A small covariance is only an internal model claim; informative maneuvers, residual checks, and independent truth are needed to assess calibration."
+      ]
+    },
+    {
+      "number": 13,
+      "title": "When a measurement is wrong",
+      "expected_duration": 25.65,
+      "notes": [
+        "The two filters use identical truth and identical sensor noise. A 35 m outlier is inserted at 90 s; only innovation-gating behavior differs. This paired experiment isolates the effect of the gate rather than comparing two lucky or unlucky noise realizations.",
+        "For a scalar Gaussian innovation, NIS = r²/S. A 3-standard-deviation test corresponds to NIS ≤ 9. Multidimensional residuals require a chi-square threshold with the correct number of effective measurement dimensions; do not reuse nine as a universal threshold.",
+        "Outlier rejection is not a guarantee of correctness. Slowly biased or correlated GNSS errors can remain plausible. A poor prediction can also cause a valid measurement to be rejected. Sustained rejection and outage recovery need explicit system-level policies beyond this teaching example."
+      ]
+    },
+    {
+      "number": 14,
+      "title": "The complete reference filter",
+      "expected_duration": 40.2,
+      "notes": [
+        "The reference error state has eight three-component blocks: ECEF position, ECEF velocity, navigation attitude error, accelerometer corrective offsets, gyro corrective offsets, accelerometer scale factors, gyro scale factors, and mounting error. This totals 24.",
+        "The nominal state uses quaternions for navigation attitude and sensor-to-car rotation, hence 26 stored coefficients. StateMapInsGnssLoose.m and ErrorStateMapInsGnssLoose.m are the authoritative source maps at the pinned upstream revision.",
+        "The main implementation separates initialization, nominal propagation, covariance propagation, observation preparation, correction, and mode control. Relevant helpers include insGnssLooseOde.m, insGnssLooseTransMat.m, insGnssLooseSysNoiseMat.m, and InsGnssFilterLoose.m.",
+        "This demo explains the reference and includes a separately validated 1D simulation. It does not implement a full 24-error-state ECEF simulator, validate the upstream filter end-to-end, or supply independent truth for its recorded drive. Those distinctions are shown in the animation and on the page, not hidden in a footnote."
+      ]
+    }
+  ]
+}

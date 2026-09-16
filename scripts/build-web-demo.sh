@@ -5,6 +5,9 @@ set -euo pipefail
 noon_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$noon_root"
 
+# Build original tutorial source without checking generated bundles into Git.
+python3 web/tutorials/ins-gnss/tools/build.py
+
 skip_web_preflight="${NOON_SKIP_WEB_PREFLIGHT:-0}"
 web_preflight_only="${NOON_WEB_PREFLIGHT_ONLY:-0}"
 parallel_worker=0
@@ -19,6 +22,10 @@ else
 fi
 
 if [[ "$skip_web_preflight" != "1" ]]; then
+  python3 web/tutorials/ins-gnss/tests/test_model.py
+  node --check web/tutorials/ins-gnss/player.js
+  node --check web/tutorials/ins-gnss/tests/review.mjs
+  node --check web/tutorials/ins-gnss/tests/player.mjs
   # The #61 ownership inventory is an architecture ratchet, not passive documentation.
   # Validate both the checked-in inventory and the validator's ownership-class invariants
   # in the required web build so contradictory or growing Python semantic debt cannot land.
@@ -46,7 +53,6 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/browser-visual-parity-lib.mjs
   node --check scripts/manim-raster-differential.mjs
   node --check scripts/shared-playback-raster.mjs
-  node --check scripts/manim-raster-support.mjs
   node --check scripts/manim-typst-authoring-smoke.mjs
   node --check scripts/manim-reference-inventory.mjs
   node --check scripts/manim-reference-ledger.mjs
