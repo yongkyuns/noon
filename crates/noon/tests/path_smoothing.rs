@@ -8,7 +8,7 @@ fn corners() -> [Vec2; 3] {
 #[test]
 fn smoothing_and_jagged_edits_preserve_identity_style_and_world_anchors() {
     for live_mode in [false, true] {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut source = scene
             .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
             .unwrap();
@@ -52,7 +52,7 @@ fn smoothing_and_jagged_edits_preserve_identity_style_and_world_anchors() {
 #[test]
 fn family_smoothing_deduplicates_aliases_and_publishes_once() {
     for live_mode in [false, true] {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut first = scene
             .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
             .unwrap();
