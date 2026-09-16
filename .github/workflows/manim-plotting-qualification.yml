@@ -47,11 +47,16 @@ jobs:
         run: node scripts/time-series-plotting-qualification.mjs
       - name: Qualify synchronized multi-series playback
         run: node scripts/time-series-plotting-qualification.mjs synchronized
-      - name: Record tested checkout
+      - name: Record tested checkout and isolated gap diagnostics
         if: always()
         run: |
           mkdir -p plotting-artifacts
           git rev-parse HEAD > plotting-artifacts/source-sha.txt
+          git ls-files | grep -E '\.(rs|py|js|mjs|toml|md|sh|yml|yaml|json|html|css)$' > /tmp/noon-text-files
+          tar -czf plotting-artifacts/sources.tar.gz -T /tmp/noon-text-files
+          git worktree add --detach /tmp/noon-gap-format HEAD
+          (cd /tmp/noon-gap-format && cargo fmt --all && git diff --binary) > plotting-artifacts/format.patch
+          git worktree remove --force /tmp/noon-gap-format
       - uses: actions/upload-artifact@v7
         if: always()
         with:
