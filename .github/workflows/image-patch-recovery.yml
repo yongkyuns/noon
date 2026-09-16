@@ -1,4 +1,4 @@
-name: Recover interrupted image patch (temporary)
+name: Recover image qualification workspace (temporary)
 on:
   push:
     branches: [codex/b2-image-workspace-bootstrap]
@@ -8,32 +8,25 @@ permissions:
 jobs:
   recover:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 0e1b616550988c3b570f041f4ed15e563a9f50aa
+          ref: 07685b6f261e3e27db40a739c10f5f8d4690f732
+          fetch-depth: 100
           persist-credentials: false
-      - name: Decode for inspection, without applying or executing recovered code
+      - name: Export source history only
         run: |
-          python3 - <<'PY'
-          import base64, hashlib, json, lzma, pathlib, subprocess
-          parts = [pathlib.Path('.image-patch') / f'{i:02}.b64' for i in range(6)]
-          encoded = b''.join(p.read_bytes().strip() for p in parts)
-          compressed = base64.b64decode(encoded, validate=True)
-          patch = lzma.decompress(compressed)
-          digest = hashlib.sha256(patch).hexdigest()
-          assert digest == '3e4079c762d1a97edf771f8c736fa3c0f20dfe5e1f1572d7e7dcbb5a89ce0226', digest
-          out = pathlib.Path('/tmp/image-recovery'); out.mkdir()
-          (out/'image-product.patch').write_bytes(patch)
-          report = {'parts': [p.name for p in parts], 'complete': True,
-                    'decoded_bytes': len(patch), 'compressed_bytes': len(compressed),
-                    'sha256': digest, 'source_commit': subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()}
-          (out/'recovery.json').write_text(json.dumps(report, indent=2)+'\n')
-          print(json.dumps(report))
-          PY
+          set -euo pipefail
+          git branch image-head HEAD
+          git fetch --no-tags --depth=150 origin master
+          git branch image-base FETCH_HEAD
+          mkdir -p /tmp/image-workspace
+          git bundle create /tmp/image-workspace/source.bundle image-head image-base
+          git rev-parse image-head image-base > /tmp/image-workspace/revisions.txt
+          sha256sum /tmp/image-workspace/source.bundle
       - uses: actions/upload-artifact@v4
         with:
-          name: noon-image-patch-recovery
-          path: /tmp/image-recovery
+          name: noon-image-current-workspace
+          path: /tmp/image-workspace
           retention-days: 2
