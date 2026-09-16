@@ -73,39 +73,23 @@ async function snapshot(page) {
   });
 }
 
-// The UI deliberately skips metrics polling during source execution. Read the
-// existing runtime hook instead: a static DOM counter cannot prove live playback.
-async function sourcePlaybackFrame(page) {
-  return page.evaluate(async () => {
-    const gallery = window.__noonExampleGallery;
-    const report = await gallery.executionMetrics();
-    return {
-      runInFlight: gallery.runInFlight,
-      runGeneration: gallery.generationDiagnostics.runGeneration,
-      presentedFrames: report?.metrics.presentedFrames ?? null,
-    };
-  });
-}
-
-async function assertSourcePlaybackAdvances(page, before) {
-  assert.equal(before.runInFlight, true, "the source must still own the animation");
-  assert.ok(Number.isSafeInteger(before.presentedFrames), "runtime frame evidence must be present");
-  await page.waitForFunction(
-    async (prior) => {
-      const gallery = window.__noonExampleGallery;
-      if (!gallery.runInFlight || gallery.generationDiagnostics.runGeneration !== prior.runGeneration) {
-        return true; // Surface premature completion/replacement in the assertions below.
-      }
-      const report = await gallery.executionMetrics();
-      return report?.metrics.presentedFrames > prior.presentedFrames;
-    },
-    before,
-    { timeout: 15_000, polling: 100 },
+async function assertSourcePlaybackContinues(page, before, action) {
+  assert.equal(before.runInFlight, true, `${action} must happen while the source owns execution`);
+  const beforeFrame = await page.locator("#scene").screenshot();
+  await page.waitForTimeout(300);
+  const after = await snapshot(page);
+  assert.equal(after.runInFlight, true, `${action} must not wait for source completion`);
+  assert.equal(
+    after.runGeneration,
+    before.runGeneration,
+    `${action} must not start or invalidate a run`,
   );
-  const after = await sourcePlaybackFrame(page);
-  assert.equal(after.runInFlight, true, "editing must be tested before source completion");
-  assert.equal(after.runGeneration, before.runGeneration, "editing must not start or invalidate a run");
-  assert.ok(after.presentedFrames > before.presentedFrames, "the original animation must keep presenting frames");
+  const afterFrame = await page.locator("#scene").screenshot();
+  assert.notEqual(
+    Buffer.compare(beforeFrame, afterFrame),
+    0,
+    `${action} must leave the original animation visibly advancing`,
+  );
   return after;
 }
 
@@ -305,15 +289,14 @@ try {
   assert.match(source, /rows = 20/);
 
   // Only the run that must remain source-owned while we exercise Reset/edit gets
-  // an extended first animation. The replacement runs keep the canonical timing.
-  // This removes CI scheduling luck from the cancellation boundary without
-  // weakening the canonical dense workload or the actual rerun path.
+  // an extended first animation. Replacement runs keep canonical timings, and
+  // explicit Run cancels this long phase before it can increase test duration.
   const rows5Source = source
     .replace(/rows = \d+/, "rows = 5")
-    .replace("run_time=0.35,", "run_time=8.0,");
+    .replace("run_time=0.35,", "run_time=30.0,");
   const rows7Source = source.replace(/rows = \d+/, "rows = 7");
   const rows20Source = rows7Source.replace(/rows = \d+/, "rows = 20");
-  assert.match(rows5Source, /run_time=8\.0,/);
+  assert.match(rows5Source, /run_time=30\.0,/);
   const baselineObjectCount = diagnostics.snapshots.baseline.objectCount;
 
   // Editing is deliberately non-destructive. Prove that the existing replay and
@@ -332,22 +315,30 @@ try {
   assert.equal(diagnostics.snapshots.rows5StillIdle.runGeneration, diagnostics.snapshots.baseline.runGeneration);
   assert.equal(diagnostics.snapshots.rows5StillIdle.runInFlight, false);
 
-  // Start rows=5 and catch it while Python still owns the deliberately long first animation.
+  // Start rows=5 and catch it while Python owns the deliberately long first animation.
   await page.locator("#replace-scene").click();
   diagnostics.snapshots.rows5Playing = await waitForSourceOwnedPlayback(page);
+  const sourceOwnedGeneration = diagnostics.snapshots.rows5Playing.runGeneration;
 
-  // Reset changes only the source, too. Use live runtime evidence to prove that
-  // the same source-owned animation continues rather than relying on UI labels.
-  const beforeReset = await sourcePlaybackFrame(page);
+  // Reset changes only source text. Canvas evidence proves the same animation
+  // continues to advance after Reset without asking the source-owned control path
+  // for metrics (which intentionally serializes behind continuation execution).
   await page.locator(".reset-example").click();
   assert.equal(await page.locator("#python-scene-source").inputValue(), source);
   diagnostics.snapshots.resetDuringRows5 = await snapshot(page);
+  assert.equal(diagnostics.snapshots.resetDuringRows5.runInFlight, true);
+  assert.equal(diagnostics.snapshots.resetDuringRows5.runGeneration, sourceOwnedGeneration);
   assert.match(diagnostics.snapshots.resetDuringRows5.patchText, /current preview continues · Run to apply/);
-  diagnostics.snapshots.rows5AdvancedAfterReset = await assertSourcePlaybackAdvances(page, beforeReset);
+  diagnostics.snapshots.rows5AdvancedAfterReset = await assertSourcePlaybackContinues(
+    page,
+    diagnostics.snapshots.resetDuringRows5,
+    "Reset",
+  );
 
   await replaceSource(editor, page, rows7Source);
   diagnostics.snapshots.rows7EditedDuringRows5 = await snapshot(page);
-  assert.equal(diagnostics.snapshots.rows7EditedDuringRows5.runtimeState, "running");
+  assert.equal(diagnostics.snapshots.rows7EditedDuringRows5.runInFlight, true);
+  assert.equal(diagnostics.snapshots.rows7EditedDuringRows5.runGeneration, sourceOwnedGeneration);
   assert.match(
     diagnostics.snapshots.rows7EditedDuringRows5.patchText,
     /current preview continues · Run to apply/,
@@ -357,16 +348,16 @@ try {
     false,
     "editing during an active source-owned animation must leave Run available",
   );
-  // Take the baseline AFTER typing, so a last frame queued before the edit cannot
-  // by itself satisfy the progress assertion.
-  const afterEdit = await sourcePlaybackFrame(page);
-  assert.equal(afterEdit.runGeneration, beforeReset.runGeneration);
-  diagnostics.snapshots.rows5AdvancedAfterEdit = await assertSourcePlaybackAdvances(page, afterEdit);
+  diagnostics.snapshots.rows5AdvancedAfterEdit = await assertSourcePlaybackContinues(
+    page,
+    diagnostics.snapshots.rows7EditedDuringRows5,
+    "editing",
+  );
 
   // This click must supersede a still-active run, not wait for natural completion.
   await page.locator("#replace-scene").click();
   diagnostics.snapshots.rows7Playing = await waitForSourceOwnedPlayback(page);
-  assert.ok(diagnostics.snapshots.rows7Playing.runGeneration > beforeReset.runGeneration);
+  assert.ok(diagnostics.snapshots.rows7Playing.runGeneration > sourceOwnedGeneration);
   diagnostics.snapshots.rows7Rerun = await waitForAppliedRun(page, baselineObjectCount);
   assert.equal(diagnostics.snapshots.rows7Rerun.executionMode, "semantic");
   assert.equal(diagnostics.snapshots.rows7Rerun.patchOperation, "Scene rebuilt atomically");
