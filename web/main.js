@@ -376,7 +376,10 @@ function playbackPresentation(playbackState, durationSeconds = playbackDurationS
 }
 
 function setPlaybackRuntimeStatus(playbackState, detail = "") {
-  const phase = playbackPresentation(playbackState);
+  const sourceOwnsPlayback = sceneRunPromise !== null && activeSourceContinuation !== null;
+  const phase = sourceOwnsPlayback
+    ? { label: "Playing", state: "running" }
+    : playbackPresentation(playbackState);
   status.dataset.playbackPhase = phase.label.toLowerCase();
   setRuntimeStatus(detail ? `${phase.label} · ${detail}` : phase.label, phase.state);
   return phase;
