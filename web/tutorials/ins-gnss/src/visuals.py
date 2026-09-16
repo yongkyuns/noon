@@ -1,7 +1,8 @@
 """Small layout helpers over ordinary Noon objects, not another scene system."""
 from dataclasses import dataclass
 from math import cos, sin, pi
-from noon import (Color, Text, MathTypst, Line, VMobject, FadeIn, FadeOut, Transform, Rotate, linear)
+from noon import (Color, Text, MathTypst, Line, VMobject, FadeIn, FadeOut,
+                  Transform, Rotate, linear)
 
 
 @dataclass(frozen=True)
@@ -108,7 +109,6 @@ def notes(lines, start_y=1.5, gap=0.72, color=INK):
             for i,line in enumerate(lines)]
 
 
-
 class Plot:
     """Explicit axes in data units. No autoscale, hidden clipping, or chart library."""
     def __init__(self, xlim, ylim, xlabel, ylabel, *, bounds=None, xticks=(), yticks=()):
@@ -142,9 +142,8 @@ class Plot:
     async def move_cursor(self, scene, cursor, start, end, duration):
         """Translate unchanged line geometry; do not morph newly baked endpoints."""
         dx = self.point(end, self.ylim[0])[0] - self.point(start, self.ylim[0])[0]
-        await self.scene.play(Transform(cursor, cursor.copy().shift((dx, 0))),
+        await scene.play(Transform(cursor, cursor.copy().shift((dx, 0))),
                          run_time=duration, rate_func=linear)
-
 
 
 def car(centre,color=TRUTH):

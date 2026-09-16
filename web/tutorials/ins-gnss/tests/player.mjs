@@ -20,6 +20,7 @@ let paused, metrics, completion;
 await mkdir(path.join(output, 'motion'), {recursive: true});
 page.on('pageerror', error => errors.push(String(error)));
 page.on('console', message => {if (message.type() === 'error') errors.push(message.text());});
+page.on('response', response => {if(response.status() >= 400) errors.push(`${response.status()} ${response.url()}`);});
 const ready = () => page.waitForFunction(() => window.tutorial && !window.tutorial.status().busy, null, {timeout: 90000});
 const sample = time => page.evaluate(t => window.tutorial.sample(t), time);
 const state = () => page.evaluate(() => window.tutorial.status());
@@ -43,7 +44,7 @@ function cursorColumn(bytes) {
 }
 
 try {
-  await page.goto(`${server.baseUrl}/${base}/`);
+  await page.goto(`${server.baseUrl}/${base}/index.html`);
   await ready();
   assert.deepEqual((await state()).errors, []);
   await sample(7);
