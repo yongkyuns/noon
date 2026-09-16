@@ -107,7 +107,14 @@ async function capture(context, language, backend) {
           if (window.timeSeriesErrors.length) throw new Error(window.timeSeriesErrors.join("; "));
           const { metrics } = await execution.metrics();
           if (metrics.ready && metrics.retained && metrics.presentedFrames > 0 &&
-              Math.abs(metrics.time - time) < 1e-6) return metrics;
+              Math.abs(metrics.time - time) < 1e-6) {
+            // Keep this external report to scalar raster observations. Full
+            // diagnostics include BigInt publication identities, not scene data
+            // that this pixel comparison needs to serialize.
+            return { time: metrics.time, objectCount: metrics.objectCount,
+              backend: metrics.backend, drawCalls: metrics.drawCalls,
+              presentedFrames: metrics.presentedFrames };
+          }
           await new Promise(resolve => setTimeout(resolve, 10));
         }
         throw new Error(`Python time-series sample ${time} was not presented`);
