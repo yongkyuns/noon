@@ -1,0 +1,69 @@
+name: B3 Publish Matching Completion Transient Fix
+on:
+  push:
+    branches: [b3-matching-duplicate-parity-qualification]
+permissions:
+  contents: write
+concurrency:
+  group: b3-publish-matching-completion-transient-fix
+  cancel-in-progress: true
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      EXPECTED_SOURCE: ff3c01dd8c009bb021068194b333f95c0507f812
+      SOURCE_BRANCH: b3-matching-duplicates-source-candidate
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_BRANCH }}
+          fetch-depth: 2
+      - name: Verify source head
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE"
+      - name: Retire matching transients with authored target admission
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon/src/execution_session/completion.rs')
+          text = path.read_text()
+          old = '''        self.pending_segment_completion = None;
+                  self.completed_segment_sequence = Some(token.sequence());
+                  if self.derived_display_plan.is_some() {
+                      self.derived_display_expire_after_publication = true;
+                  }
+          '''
+          new = '''        self.pending_segment_completion = None;
+                  self.completed_segment_sequence = Some(token.sequence());
+                  if segment.family_replacement().is_some() {
+                      // Matching-family cleanup has admitted the authored target, so every
+                      // exact-end target occurrence now has stable membership and painter
+                      // placement. Source-anchored interpolation transients must retire in
+                      // the same publication; carrying them one frame farther would leave
+                      // anchors on source rows that the replacement just removed.
+                      self.derived_display_plan = None;
+                      self.derived_display_objects.clear();
+                      self.derived_display_expire_after_publication = false;
+                  } else if self.derived_display_plan.is_some() {
+                      self.derived_display_expire_after_publication = true;
+                  }
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one completion transient-retirement block, found {text.count(old)}')
+          path.write_text(text.replace(old, new))
+          PY
+          cargo fmt --all -- --check
+      - name: Qualify exact completion publication
+        run: |
+          cargo test -p noon --test matching_nested_unequal_completion -- --nocapture
+          cargo test -p noon --lib matching_family -- --nocapture
+      - name: Commit and publish
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE"
+          git diff --check
+          git config user.name "Noon qualification"
+          git config user.email "actions@users.noreply.github.com"
+          git add crates/noon/src/execution_session/completion.rs crates/noon/tests/matching_nested_unequal_completion.rs
+          git commit -m "Retire matching transients at authored target completion"
+          git push origin HEAD:"$SOURCE_BRANCH"
