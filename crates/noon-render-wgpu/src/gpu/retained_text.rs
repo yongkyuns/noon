@@ -2710,11 +2710,42 @@ pub struct RetainedUploadStats {
     pub text: TextGpuUploadStats,
 }
 
+impl RetainedUploadStats {
+    /// Bytes written for all retained image, geometry, and text instances/resources.
+    /// Transient-presentation uploads are reported separately by their caller.
+    pub fn bytes_uploaded(&self) -> usize {
+        self.geometry
+            .bytes_uploaded
+            .saturating_add(self.text.bytes_uploaded)
+            .saturating_add(self.images.pixel_bytes_uploaded)
+            .saturating_add(self.images.instance_bytes_uploaded)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RetainedDrawStats {
     pub images: usize,
     pub geometry: DrawStats,
     pub text: TextGpuDrawStats,
+}
+
+impl RetainedDrawStats {
+    /// Total submitted draw calls across all retained domains.
+    pub fn draw_calls(&self) -> usize {
+        // Each encoded raster image is one quad draw with one instance.
+        self.geometry
+            .draw_calls
+            .saturating_add(self.text.draw_calls)
+            .saturating_add(self.images)
+    }
+
+    /// Total submitted instances across all retained domains.
+    pub fn instances_drawn(&self) -> usize {
+        self.geometry
+            .instances_drawn
+            .saturating_add(self.text.instances_drawn)
+            .saturating_add(self.images)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3206,6 +3237,60 @@ mod tests {
     use noon_runtime::{FrameObjectState, SceneInstance};
 
     use super::*;
+
+    #[test]
+    fn retained_upload_totals_include_pixels_and_instances_from_every_domain() {
+        let mut upload = RetainedUploadStats::default();
+        assert_eq!(upload.bytes_uploaded(), 0);
+        upload.images.pixel_bytes_uploaded = 16;
+        upload.images.instance_bytes_uploaded = 96;
+        assert_eq!(upload.bytes_uploaded(), 112);
+        upload.geometry.bytes_uploaded = 200;
+        upload.text.bytes_uploaded = 300;
+        assert_eq!(upload.bytes_uploaded(), 612);
+        // Counts and retirements do not describe additional byte writes.
+        upload.images.textures_uploaded = 1;
+        upload.images.instances_uploaded = 2;
+        upload.images.textures_retired = 3;
+        assert_eq!(upload.bytes_uploaded(), 612);
+    }
+
+    #[test]
+    fn retained_draw_totals_include_images_without_conflating_geometry_instances() {
+        let mut draw = RetainedDrawStats::default();
+        assert_eq!(draw.draw_calls(), 0);
+        assert_eq!(draw.instances_drawn(), 0);
+        draw.images = 2;
+        assert_eq!(draw.draw_calls(), 2);
+        assert_eq!(draw.instances_drawn(), 2);
+        draw.geometry.draw_calls = 3;
+        draw.geometry.instances_drawn = 8;
+        draw.text.draw_calls = 4;
+        draw.text.instances_drawn = 12;
+        draw.text.deferred_items = 5;
+        assert_eq!(draw.draw_calls(), 9);
+        assert_eq!(draw.instances_drawn(), 22);
+    }
+
+    #[test]
+    fn retained_totals_saturate_instead_of_wrapping() {
+        let mut upload = RetainedUploadStats::default();
+        upload.images.pixel_bytes_uploaded = usize::MAX;
+        upload.images.instance_bytes_uploaded = 1;
+        assert_eq!(upload.bytes_uploaded(), usize::MAX);
+        upload.images.pixel_bytes_uploaded = 0;
+        upload.geometry.bytes_uploaded = usize::MAX;
+        upload.text.bytes_uploaded = 1;
+        assert_eq!(upload.bytes_uploaded(), usize::MAX);
+        let mut draw = RetainedDrawStats {
+            images: 1,
+            ..RetainedDrawStats::default()
+        };
+        draw.geometry.draw_calls = usize::MAX;
+        draw.text.instances_drawn = usize::MAX;
+        assert_eq!(draw.draw_calls(), usize::MAX);
+        assert_eq!(draw.instances_drawn(), usize::MAX);
+    }
 
     fn mixed_text_frame() -> (
         FrameState,

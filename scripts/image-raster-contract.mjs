@@ -11,6 +11,16 @@ export function validateDirectImageCapture(capture, requestedTime, backend) {
   assert.equal(capture.count, requestedTime < 1 || requestedTime >= WAIT_START ? 2 : 3,
     'image add/FadeOut membership must match the shared program');
   assert.equal(capture.wake.presentNow, false, 'capture requires a settled publication');
+  // This fixture has one background quad and one quad per visible image.
+  assert.equal(capture.drawCalls, capture.count, 'all visible image draws must be counted');
+  assert.equal(capture.instancesDrawn, capture.count, 'all image instances must be counted');
+  assert.ok(Number.isSafeInteger(capture.bytesUploaded) && capture.bytesUploaded >= 0,
+    'upload bytes must be an actual nonnegative counter');
+  if ([0.5, 1.5, 2.5].includes(requestedTime)) {
+    // Only the first image changes at these mid-segment samples: exactly one
+    // 48-byte instance update, without another 16-byte texture upload.
+    assert.equal(capture.bytesUploaded, 48, 'image-only updates must count instance bytes without reuploading pixels');
+  }
   if (requestedTime >= WAIT_START && requestedTime < WAIT_END) {
     // wait(1) has no active visual channels. The ordinary realtime host schedules
     // its deadline instead of advancing/publishing at arbitrary intermediate times.

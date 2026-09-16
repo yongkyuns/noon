@@ -61,6 +61,7 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
     assert_eq!(first.images.textures_uploaded, 1);
     assert_eq!(first.images.pixel_bytes_uploaded, PIXELS.len());
     assert_eq!(first.images.instances_uploaded, 2);
+    assert_eq!(first.bytes_uploaded(), PIXELS.len() + 2 * 48);
     assert_eq!(renderer.image_residency_stats().objects, 2);
     let baseline = preparer.incremental_stats();
     for tick in 1..=128 {
@@ -80,6 +81,7 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
         assert_eq!(changed.images.pixel_bytes_uploaded, 0);
         assert_eq!(changed.images.instances_uploaded, 1);
         assert_eq!(changed.images.instance_bytes_uploaded, 48);
+        assert_eq!(changed.bytes_uploaded(), 48);
     }
     let after = preparer.incremental_stats();
     assert_eq!(after.scratch_rebuilds, baseline.scratch_rebuilds);
@@ -126,6 +128,7 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
         &mut text,
     );
     assert_eq!(idle.images, Default::default());
+    assert_eq!(idle.bytes_uploaded(), 0);
     scene.live(&mut session).remove(&a).unwrap();
     let removal = upload(
         &mut session,

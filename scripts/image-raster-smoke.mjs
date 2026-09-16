@@ -83,6 +83,8 @@ try {
             captures.push({ requestedTime: time, publishedTime: renderer.time(),
               wake: JSON.parse(renderer.directWakeDirectiveJson(time * 1000)),
               count: renderer.objectCount(), backend: renderer.rendererBackend(),
+              drawCalls: renderer.lastDrawCalls(), instancesDrawn: renderer.lastInstancesDrawn(),
+              bytesUploaded: renderer.lastBytesUploaded(),
               png: Array.from(new Uint8Array(await blob.arrayBuffer())) });
           }
           return captures;
@@ -137,6 +139,8 @@ try {
       for (const [i, time] of times.entries()) {
         const metrics = await page.evaluate(({i, times}) => window.noonHostRaster.renderThrough(i, times), {i, times});
         assert.equal(metrics.time, time);
+        assert.equal(metrics.drawCalls, captures[i].drawCalls,
+          'worker-backed and direct hosts must both count image draws');
         const screenshot = await page.locator('#scene').screenshot();
         await writeFile(path.join(artifacts, `${backend}-python-${time}.png`), screenshot);
         const a = PNG.sync.read(Buffer.from(captures[i].png));

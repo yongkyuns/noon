@@ -7,6 +7,9 @@ function capture(time, backend = 'WebGPU') {
   return {
     requestedTime: time, publishedTime: waiting ? 3 : time, backend,
     count: time < 1 || waiting ? 2 : 3,
+    drawCalls: time < 1 || waiting ? 2 : 3,
+    instancesDrawn: time < 1 || waiting ? 2 : 3,
+    bytesUploaded: [0.5, 1.5, 2.5].includes(time) ? 48 : 0,
     wake: { presentNow: false, cadence: waiting ? 'timer' : 'animation-frame',
       delayMs: waiting ? (4 - time) * 1000 : null },
   };
@@ -37,5 +40,16 @@ test('idle capture proves no intermediate publication, polling, or deadline drif
     { wake: { ...idle.wake, presentNow: true } },
   ]) {
     assert.throws(() => validateDirectImageCapture({ ...idle, ...change }, 3.5, 'webgpu'));
+  }
+});
+
+test('image statistics cannot omit the image lane or hide pixel reuploads', () => {
+  for (const change of [
+    { drawCalls: 1 }, { instancesDrawn: 1 }, { drawCalls: undefined },
+    { instancesDrawn: undefined }, { bytesUploaded: undefined },
+    { bytesUploaded: NaN }, { bytesUploaded: -1 }, { bytesUploaded: 0.5 },
+    { bytesUploaded: 0 }, { bytesUploaded: 48 + 16 },
+  ]) {
+    assert.throws(() => validateDirectImageCapture({ ...capture(1.5), ...change }, 1.5, 'webgpu'));
   }
 });
