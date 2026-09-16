@@ -80,10 +80,13 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
   const sampleFrames = (async () => {
     while (sampling) {
       const sample = await page.evaluate(async () => {
-        const report = await window.__noonExampleGallery?.executionMetrics?.();
+        const gallery = window.__noonExampleGallery;
+        const report = await gallery?.executionMetrics?.();
         return {
           frames: Number(report?.metrics?.presentedFrames ?? 0),
           now: performance.now(),
+          runInFlight: gallery?.runInFlight ?? false,
+          playbackControls: document.querySelector("#status")?.dataset.playbackControls ?? "",
         };
       });
       frameSamples.push(sample);
@@ -116,11 +119,18 @@ function changedPixelStats(buffer) {
 }
 
 function sampleRendererFps(frameSamples) {
-  // The frame counter is sampled while the animation is running. Sampling after
-  // waitForApplied measures the finished scene's idle policy instead of render work.
-  const changes = frameSamples.filter((sample, index) => index > 0 &&
-    sample.frames > frameSamples[index - 1].frames);
-  assert.ok(changes.length >= 2, "active product run did not expose enough presentation samples");
+  // Measure only the source-owned animation. A candidate that promotes the same
+  // semantic context to ordinary replay may have a legitimate attachment gap and
+  // a later replay frame before Run becomes applied; neither belongs in source
+  // playback cadence. Baseline and candidate therefore use the same ownership
+  // window: Run in flight with replay controls unavailable.
+  const sourceOwned = frameSamples.filter(
+    (sample) => sample.runInFlight && sample.playbackControls === "unavailable",
+  );
+  const changes = sourceOwned.filter(
+    (sample, index) => index > 0 && sample.frames > sourceOwned[index - 1].frames,
+  );
+  assert.ok(changes.length >= 2, "active source-owned product run did not expose enough presentation samples");
   const start = changes[0];
   const end = changes.at(-1);
   const elapsedSeconds = Math.max((end.now - start.now) / 1000, 0.001);
@@ -132,7 +142,28 @@ function sampleRendererFps(frameSamples) {
   };
 }
 
-async function pauseAndSeek(page, seconds) {
+async function seekPlayback(page, seconds) {
+  const scrubber = page.locator(".playback-scrubber");
+  await scrubber.evaluate((input, target) => {
+    input.value = String(target);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }, seconds);
+  await page.waitForFunction(
+    (target) => {
+      const root = document.querySelector(".playback-controls");
+      const input = document.querySelector(".playback-scrubber");
+      return (
+        root?.dataset.busy === "false" &&
+        input instanceof HTMLInputElement &&
+        Math.abs(Number(input.value) - target) <= 0.001
+      );
+    },
+    seconds,
+    { timeout: 10_000 },
+  );
+}
+
+async function exerciseSeekAndRestoreFinal(page, seconds) {
   const capability = await page.locator("#status").getAttribute("data-playback-controls");
   assert.ok(
     capability === "available" || capability === "unavailable",
@@ -153,11 +184,17 @@ async function pauseAndSeek(page, seconds) {
       () => document.querySelector(".playback-toggle")?.getAttribute("aria-label") === "Play animation",
     );
   }
-  await page.locator(".playback-scrubber").evaluate((input, target) => {
-    input.value = String(target);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  }, seconds);
-  await page.waitForTimeout(150);
+
+  const scrubber = page.locator(".playback-scrubber");
+  const durationSeconds = Number(await scrubber.getAttribute("max"));
+  assert.ok(Number.isFinite(durationSeconds) && durationSeconds > 0, "playback duration must be available");
+  assert.ok(seconds >= 0 && seconds <= durationSeconds, "seek probe must fall within playback duration");
+
+  // Exercise the new replay timeline at a non-terminal frame, then restore the
+  // exact final frame so product visual comparison remains apples-to-apples with
+  // baselines that predate seekable replay controls.
+  await seekPlayback(page, seconds);
+  await seekPlayback(page, durationSeconds);
   return true;
 }
 
@@ -223,8 +260,8 @@ try {
   }, marker);
   const edited = await runAndMeasure(page);
 
-  const sought = await pauseAndSeek(page, 0.5);
-  const screenshotName = sought ? "frame-0.5.png" : "frame-final.png";
+  const sought = await exerciseSeekAndRestoreFinal(page, 0.5);
+  const screenshotName = "frame-final.png";
   const screenshotPath = path.join(artifactDir, screenshotName);
   const screenshot = await page.locator("#scene").screenshot({ path: screenshotPath });
   const visual = changedPixelStats(screenshot);
