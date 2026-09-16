@@ -39,9 +39,7 @@ class FakeElement {
   }
 }
 
-const inserted = [];
-const workspace = new FakeElement("section");
-workspace.before = (node) => inserted.push(node);
+const topbar = new FakeElement("header");
 const head = new FakeElement("head");
 const fakeDocument = {
   head,
@@ -49,10 +47,11 @@ const fakeDocument = {
     return new FakeElement(tagName);
   },
   querySelector(selector) {
-    if (selector === ".workspace") return workspace;
+    if (selector === ".topbar") return topbar;
     if (selector === "[data-noon-tutorial-discovery]") {
       return (
-        inserted.find((node) => node.attributes?.has("data-noon-tutorial-discovery")) ?? null
+        topbar.children.find((node) => node.attributes?.has("data-noon-tutorial-discovery")) ??
+        null
       );
     }
     return null;
@@ -60,18 +59,17 @@ const fakeDocument = {
 };
 
 assert.equal(installTutorialDiscovery(fakeDocument), true);
-assert.equal(inserted.length, 1, "discovery surface should be inserted exactly once");
-assert.equal(inserted[0].className, "tutorial-discovery");
-assert.equal(inserted[0].attributes.get("aria-label"), "Noon tutorials");
-assert.equal(head.children.length, 1, "tutorial styling should be installed with the surface");
+assert.equal(topbar.children.length, 1, "discovery navigation should be inserted exactly once");
+const nav = topbar.children[0];
+assert.equal(nav.className, "tutorial-discovery");
+assert.equal(nav.attributes.get("aria-label"), "Noon tutorials");
+assert.equal(head.children.length, 1, "tutorial styling should be installed with the navigation");
 
-const grid = inserted[0].children.find((child) => child.className === "tutorial-discovery-grid");
-assert.ok(grid);
-const card = grid.children.find((child) => child.attributes.get("data-tutorial-id") === "ins-gnss");
-assert.ok(card, "INS/GNSS tutorial should render as a main-playground tutorial card");
-assert.equal(card.tagName, "A");
-assert.equal(card.href, "./tutorials/ins-gnss/index.html");
+const link = nav.children.find((child) => child.attributes.get("data-tutorial-id") === "ins-gnss");
+assert.ok(link, "INS/GNSS tutorial should render as a top-bar tutorial link");
+assert.equal(link.tagName, "A");
+assert.equal(link.href, "./tutorials/ins-gnss/index.html");
 assert.equal(installTutorialDiscovery(fakeDocument), false, "installation must be idempotent");
-assert.equal(inserted.length, 1);
+assert.equal(topbar.children.length, 1);
 
-console.log("✓ tutorial discovery surface + INS/GNSS route contract");
+console.log("✓ tutorial top-bar discovery + INS/GNSS route contract");
