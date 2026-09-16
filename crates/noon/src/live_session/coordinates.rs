@@ -1,6 +1,7 @@
 //! Coordinate construction through the ordinary running publication transaction.
 use super::*;
 use crate::coordinate_authoring::{prepare_axes, prepare_number_line, resolve_family};
+use crate::AuthoringError;
 use crate::{
     AxesFrame, CoordinateAuthoringError, ManimAxes, ManimAxesOptions, ManimNumberLine,
     ManimNumberLineOptions, NumberLineFrame,
