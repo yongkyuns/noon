@@ -222,4 +222,73 @@ mod tests {
             host.local_path_query().unwrap().anchors_and_handles()
         );
     }
+
+    #[test]
+    fn extreme_parameter_ranges_retain_both_renderable_endpoints() {
+        for range in [[0.0, 1.0e-300, 1.0e100], [1.0e308, 1.25e308, 1.0e308]] {
+            let mut scene = Scene::new();
+            let calls = Cell::new(0);
+            let sampling = PlotSamplingOptions::parametric(&range).unwrap();
+            let curve = scene
+                .parametric_plot(
+                    &sampling,
+                    |t| {
+                        calls.set(calls.get() + 1);
+                        let alpha = (t - range[0]) / (range[1] - range[0]);
+                        [alpha, alpha]
+                    },
+                    false,
+                )
+                .unwrap();
+            assert_eq!(calls.get(), 2);
+            assert_eq!(curve.path_query().unwrap().start().unwrap(), (0.0, 0.0));
+            assert_eq!(curve.path_query().unwrap().end().unwrap(), (1.0, 1.0));
+            assert_eq!(curve.path_query().unwrap().curve_count(), 1);
+            scene.add(&curve).unwrap();
+            let session = scene.execution_session().unwrap();
+            assert_eq!(session.frame().objects.len(), 1);
+            assert_eq!(calls.get(), 2);
+        }
+    }
+
+    #[test]
+    fn under_capacity_tiny_plot_rejects_before_callback_or_scene_mutation() {
+        let scene = Scene::new();
+        let sentinel = scene.sampled_plot(&[[0.0, 0.0], [1.0, 1.0]]).unwrap();
+        let before = sentinel.state().unwrap();
+        let revision = scene.revision();
+        let resources = scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len();
+        let calls = Cell::new(0);
+        let mut sampling = PlotSamplingOptions::parametric(&[0.0, 1.0e-300, 1.0e100]).unwrap();
+        sampling.max_samples = 1;
+        let result = scene.parametric_plot(
+            &sampling,
+            |_| {
+                calls.set(calls.get() + 1);
+                [0.0, 0.0]
+            },
+            false,
+        );
+        assert!(matches!(
+            result,
+            Err(PlotAuthoringError::Preparation(
+                PlotPreparationError::SampleLimitExceeded
+            ))
+        ));
+        assert_eq!(calls.get(), 0);
+        assert_eq!(scene.revision(), revision);
+        assert_eq!(sentinel.state().unwrap(), before);
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .geometry_resources()
+                .len(),
+            resources
+        );
+    }
 }

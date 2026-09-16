@@ -157,18 +157,25 @@ impl PlotSamplingOptions {
             .map_err(|_| PlotPreparationError::AllocationFailed)?;
         for (pair, count) in boundaries.as_chunks::<2>().0.iter().zip(counts) {
             let first = parameters.len();
-            // NumPy's floating arange increment is the representable difference,
-            // not repeated addition of the originally requested step.
-            let increment = (pair[0] + step) - pair[0];
-            if !increment.is_finite() {
-                return Err(PlotPreparationError::InvalidRange);
-            }
-            for index in 0..count - 1 {
-                let value = pair[0] + index as f64 * increment;
-                if !value.is_finite() {
+            let regular = count - 1;
+            if regular == 1 {
+                // A single regular sample is exactly the span start. Computing
+                // an unused next increment could overflow for a valid range.
+                parameters.push(pair[0]);
+            } else if regular > 1 {
+                // NumPy's floating arange increment is the representable
+                // difference, not repeated addition of the requested step.
+                let increment = (pair[0] + step) - pair[0];
+                if !increment.is_finite() {
                     return Err(PlotPreparationError::InvalidRange);
                 }
-                parameters.push(value);
+                for index in 0..regular {
+                    let value = pair[0] + index as f64 * increment;
+                    if !value.is_finite() {
+                        return Err(PlotPreparationError::InvalidRange);
+                    }
+                    parameters.push(value);
+                }
             }
             parameters.push(pair[1]);
             subpaths.push(first..parameters.len());
@@ -293,6 +300,13 @@ fn regular_sample_count(
     limit: usize,
 ) -> Result<usize, PlotPreparationError> {
     let count = ((end - start) / step).ceil();
+    // A nonempty half-open span always contains its start, even when the
+    // positive span/step quotient underflows to zero. Equal endpoints do not.
+    let count = if start < end && count == 0.0 {
+        1.0
+    } else {
+        count
+    };
     if !count.is_finite() || count < 0.0 || count >= limit as f64 {
         return Err(PlotPreparationError::SampleLimitExceeded);
     }
@@ -308,6 +322,9 @@ fn checked_point(point: [f64; 2], sample_index: usize) -> Result<Vec2, PlotPrepa
     }
     Ok(Vec2::new(point[0] as f32, point[1] as f32))
 }
+
+#[cfg(test)]
+mod boundary_tests;
 
 #[cfg(test)]
 mod tests {

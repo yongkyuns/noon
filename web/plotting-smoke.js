@@ -59,6 +59,26 @@ function directWasmPreparation() {
     }
   } finally { offsetStore.free(); }
 
+  // Exact parameter assertions matter here: a scene-space tolerance could
+  // conceal a missing start on the tiny domains. Both points count to the cap.
+  for (const range of [[0, 1e-300, 1e100], [0, Number.MIN_VALUE, 2], [1e308, 1.25e308, 1e308]]) {
+    const boundary = WasmPlotSamplingPlan.parametric(range, [], undefined, 2);
+    try {
+      const values = Array.from(boundary.parameters());
+      if (values.length !== 2 || values[0] !== range[0] || values[1] !== range[1]) {
+        throw new Error(`extreme plot range lost its endpoints: ${values}`);
+      }
+    } finally { boundary.free(); }
+    let limited = false;
+    try {
+      const unexpected = WasmPlotSamplingPlan.parametric(range, [], undefined, 1);
+      unexpected.free();
+    } catch (error) {
+      limited = error.category === "resource_limit" && error.code === "plot.preparation";
+    }
+    if (!limited) throw new Error("two-endpoint plot did not retain exact budget rejection");
+  }
+
   const split = WasmPlotSamplingPlan.parametric([-1, 1, 0.25], [0], 0.05, undefined);
   if (Array.from(split.parameters()).includes(0)) throw new Error("discontinuity gap was sampled");
   split.free();
@@ -86,6 +106,22 @@ class PlottingQualification(Scene):
             near(mapped.get_end(), (4, 2))
             offset.shift(RIGHT)
             near(offset.c2p(limits[0], limits[0]), (-3, -2))
+
+        # Extreme parameter values may still map to ordinary visible geometry.
+        # The callback must see both exact endpoints, once each, in that order.
+        endpoint_visits = []
+        for limits in ((0, 1e-300, 1e100), (0, 5e-324, 2), (1e308, 1.25e308, 1e308)):
+            visited = []
+            def normalized(t):
+                visited.append(t)
+                alpha = (t - limits[0]) / (limits[1] - limits[0])
+                return (alpha, alpha)
+            boundary_curve = ParametricFunction(normalized, limits, use_smoothing=False)
+            assert visited == [limits[0], limits[1]], visited
+            near(boundary_curve.get_start(), (0, 0))
+            near(boundary_curve.get_end(), (1, 1))
+            assert boundary_curve.get_num_curves() == 1
+            endpoint_visits.append(visited)
 
         line = NumberLine([2, 6, 1], length=8, rotation=pi / 2)
         near(line.n2p(4), (0, 0))
@@ -189,6 +225,7 @@ class PlottingQualification(Scene):
         near(fresh.c2p(0, 0), LEFT + UP)
         self.remove(fresh, line)
         near(sentinel.get_center(), (4, 2))
+        assert all(len(visited) == 2 for visited in endpoint_visits)
 `;
 
 export async function qualifyPlotting(runLive) {
