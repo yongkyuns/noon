@@ -79,14 +79,15 @@ def _rgba8_array(source):
         if not width:
             raise ValueError("image array must be nonempty")
         first = source[0][0]
-        channels = 1 if isinstance(first, Integral) else len(first)
+        scalar_pixels = isinstance(first, Integral)
+        channels = 1 if scalar_pixels else len(first)
         _validate_shape(width, height, channels)
         raw = bytearray()
         for row in source:
             if len(row) != width:
                 raise ValueError("image array rows must have equal width")
             for pixel in row:
-                values = (pixel,) if channels == 1 else pixel
+                values = (pixel,) if scalar_pixels else pixel
                 if len(values) != channels:
                     raise ValueError("image array must have consistent channel counts")
                 for value in values:
