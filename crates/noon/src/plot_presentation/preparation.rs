@@ -159,7 +159,6 @@ impl TimeSeriesPlan {
             ));
         }
         let y_range = frame.y().range();
-        let y_mid = y_range[0] + (y_range[1] - y_range[0]) * 0.5;
         let mut result = Self {
             samples: Vec::new(),
             points: Vec::new(),
@@ -206,9 +205,13 @@ impl TimeSeriesPlan {
             result
                 .points
                 .push(frame.coords_to_point(sample.time, sample.value)?);
-            result
-                .cursor_points
-                .push(frame.coords_to_point(sample.time, y_mid)?);
+            // Center the mapped endpoints, not their absolute data values:
+            // an odd midpoint between adjacent large values is unrepresentable.
+            let lower = frame.coords_to_point(sample.time, y_range[0])?;
+            let upper = frame.coords_to_point(sample.time, y_range[1])?;
+            result.cursor_points.push(std::array::from_fn(|axis| {
+                0.5 * lower[axis] + 0.5 * upper[axis]
+            }));
             result.key_times.push(elapsed);
         }
         Ok(result)
@@ -258,5 +261,7 @@ fn allocation_error(_: std::collections::TryReserveError) -> PlotPresentationErr
     PlotPresentationError::AllocationFailed
 }
 
+#[cfg(test)]
+mod cursor_tests;
 #[cfg(test)]
 mod tests;

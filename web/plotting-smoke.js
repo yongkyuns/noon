@@ -48,6 +48,10 @@ function directWasmPreparation() {
       try {
         near(Array.from(offsetFrame.coordsToPoint(range[0], range[0])), [-4, -2], "large-offset start");
         near(Array.from(offsetFrame.coordsToPoint(range[1], range[1])), [4, 2], "large-offset end");
+        const timed = offsetFrame.timeSeriesPlan([range[0], range[0], range[1], range[1]], 1);
+        try {
+          near(Array.from(timed.cursorPoints()), [-4, 0, 4, 0], "large-offset cursor centers");
+        } finally { timed.free(); }
         const mapped = offsetStore.createManimGeometry(
           offsetFrame.sampledPlot([range[0], range[0], range[1], range[1]]));
         const mappedPath = mapped.pathQuery();
@@ -104,8 +108,14 @@ class PlottingQualification(Scene):
             mapped = offset.plot_samples(((limits[0], limits[0]), (limits[1], limits[1])))
             near(mapped.get_start(), (-4, -2))
             near(mapped.get_end(), (4, 2))
+            timed = offset.time_series_plan(((limits[0], limits[0]), (limits[1], limits[1])), run_time=1)
+            near(timed.cursor_points[0], (-4, 0))
+            near(timed.cursor_points[1], (4, 0))
             offset.shift(RIGHT)
             near(offset.c2p(limits[0], limits[0]), (-3, -2))
+            shifted = offset.time_series_plan(((limits[0], limits[0]), (limits[1], limits[1])), run_time=1)
+            near(shifted.cursor_points[0], (-3, 0))
+            near(timed.cursor_points[0], (-4, 0))
 
         # Extreme parameter values may still map to ordinary visible geometry.
         # The callback must see both exact endpoints, once each, in that order.
