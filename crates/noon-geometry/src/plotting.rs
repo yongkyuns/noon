@@ -135,7 +135,7 @@ impl PlotSamplingOptions {
         counts
             .try_reserve_exact(boundaries.len() / 2)
             .map_err(|_| PlotPreparationError::AllocationFailed)?;
-        for pair in boundaries.chunks_exact(2) {
+        for pair in boundaries.as_chunks::<2>().0 {
             let regular = regular_sample_count(pair[0], pair[1], step, self.max_samples)?;
             let count = regular
                 .checked_add(1)
@@ -155,7 +155,7 @@ impl PlotSamplingOptions {
         subpaths
             .try_reserve_exact(counts.len())
             .map_err(|_| PlotPreparationError::AllocationFailed)?;
-        for (pair, count) in boundaries.chunks_exact(2).zip(counts) {
+        for (pair, count) in boundaries.as_chunks::<2>().0.iter().zip(counts) {
             let first = parameters.len();
             // NumPy's floating arange increment is the representable difference,
             // not repeated addition of the originally requested step.
