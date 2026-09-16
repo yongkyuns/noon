@@ -1,0 +1,39 @@
+name: Recover interrupted image patch (temporary)
+on:
+  push:
+    branches: [codex/b2-image-workspace-bootstrap]
+    paths: [.github/workflows/image-patch-recovery.yml]
+permissions:
+  contents: read
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Decode for inspection, without applying or executing recovered code
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, lzma, pathlib, subprocess
+          parts = sorted(pathlib.Path('.image-patch').glob('*.b64'))
+          encoded = b''.join(p.read_bytes().strip() for p in parts)
+          compressed = base64.b64decode(encoded, validate=True)
+          decoder = lzma.LZMADecompressor()
+          prefix = decoder.decompress(compressed)
+          out = pathlib.Path('/tmp/image-recovery'); out.mkdir()
+          (out/'recovered-prefix.patch').write_bytes(prefix)
+          (out/'patch-fragments.xz').write_bytes(compressed)
+          report = {'parts': [p.name for p in parts], 'complete': decoder.eof,
+                    'decoded_bytes': len(prefix), 'compressed_bytes': len(compressed),
+                    'sha256': hashlib.sha256(prefix).hexdigest(),
+                    'source_commit': subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()}
+          (out/'recovery.json').write_text(json.dumps(report, indent=2)+'\n')
+          print(json.dumps(report))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noon-image-patch-recovery
+          path: /tmp/image-recovery
+          retention-days: 2
