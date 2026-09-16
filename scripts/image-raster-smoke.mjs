@@ -7,11 +7,12 @@ import playwright from 'playwright';
 import { PNG } from 'pngjs';
 import { serveRepository } from './browser-test-server.mjs';
 import { browserArgs } from './manim-raster-support.mjs';
+import { IMAGE_SAMPLE_TIMES, validateDirectImageCapture } from './image-raster-contract.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const artifacts = path.resolve(process.env.NOON_IMAGE_ARTIFACTS ?? 'browser-smoke-artifacts/images');
 await mkdir(artifacts, { recursive: true });
-const times = [0.5, 1, 1.5, 2, 2.5, 3, 3.5];
+const times = IMAGE_SAMPLE_TIMES;
 const source = await readFile(path.join(root, 'web/python/examples/raster_image.py'), 'utf8');
 const server = await serveRepository(root, Number(process.env.NOON_IMAGE_PORT ?? '4187'));
 const reports = [];
@@ -78,16 +79,20 @@ try {
             renderer.advanceDirectRealtime(time * 1000);
             await settle(time * 1000);
             const blob = await canvas.convertToBlob({type: 'image/png'});
-            captures.push({ time: renderer.time(), count: renderer.objectCount(), backend: renderer.rendererBackend(),
+            captures.push({ requestedTime: time, publishedTime: renderer.time(),
+              wake: JSON.parse(renderer.directWakeDirectiveJson(time * 1000)),
+              count: renderer.objectCount(), backend: renderer.rendererBackend(),
               png: Array.from(new Uint8Array(await blob.arrayBuffer())) });
           }
           return captures;
         } finally { renderer.free(); }
       }, times);
       for (const [i, capture] of captures.entries()) {
-        assert.equal(capture.time, times[i]);
-        assert.equal(capture.backend, backend === 'webgpu' ? 'WebGPU' : 'WebGL2');
-        await writeFile(path.join(artifacts, `${backend}-direct-${times[i]}.png`), Buffer.from(capture.png));
+        // Preserve evidence before assertions, including the two distinct clocks.
+        const { png, ...observation } = capture;
+        reports.push({ kind: 'direct-publication', ...observation });
+        await writeFile(path.join(artifacts, `${backend}-direct-${times[i]}.png`), Buffer.from(png));
+        validateDirectImageCapture(capture, times[i], backend);
       }
       for (const sampler of ['nearest', 'bilinear', 'bicubic']) {
         for (const opacity of [1, 0.5]) {
@@ -112,7 +117,7 @@ try {
         }
       }
       for (const capture of captures) {
-        await compareOracle(Buffer.from(capture.png), `lifecycle-${capture.time.toFixed(1)}.png`, `${backend}/lifecycle/${capture.time}`);
+        await compareOracle(Buffer.from(capture.png), `lifecycle-${capture.requestedTime.toFixed(1)}.png`, `${backend}/lifecycle/${capture.requestedTime}`);
       }
       await direct.close();
       console.log(`[PASS] ${backend}: ${captures.length} direct Rust/WASM image frames`);
@@ -149,4 +154,9 @@ try {
     } finally { await browser.close(); }
   }
   await writeFile(path.join(artifacts, 'report.json'), JSON.stringify(reports, null, 2) + '\n');
+} catch (error) {
+  await writeFile(path.join(artifacts, 'failure.json'), JSON.stringify({
+    message: error.message, stack: error.stack,
+  }, null, 2) + '\n');
+  throw error;
 } finally { await writeFile(path.join(artifacts, 'report.json'), JSON.stringify(reports, null, 2) + '\n'); await server.close(); }
