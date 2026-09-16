@@ -26,6 +26,7 @@ const exactFamilies = new Map([
   ["branch-cleanup-once.yml", "maintenance"],
   ["noon-agent-foundation.yml", "agent-authoring"],
   ["ins-gnss-tutorial-review.yml", "playground"],
+  ["image-raster-qualification.yml", "renderer"],
 ]);
 
 function classifyWorkflow(name) {
