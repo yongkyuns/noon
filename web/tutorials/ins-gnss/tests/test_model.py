@@ -171,5 +171,6 @@ class ModelTests(unittest.TestCase):
 
 from test_prediction import PredictionTests
 from test_measurement import MeasurementTests
+from test_attitude import AttitudeTests
 
 if __name__=='__main__':unittest.main()

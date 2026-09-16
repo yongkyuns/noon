@@ -97,6 +97,11 @@ jobs:
         env:
           NOON_TUTORIAL_BACKEND: ${{ matrix.backend }}
         run: node web/tutorials/ins-gnss/tests/player.mjs
+      - name: Verify attitude rotation angles and anchoring
+        if: always()
+        env:
+          NOON_TUTORIAL_BACKEND: ${{ matrix.backend }}
+        run: node web/tutorials/ins-gnss/tests/attitude-motion.mjs
       - name: Archive exact tested source and numerical evidence
         if: always()
         run: |

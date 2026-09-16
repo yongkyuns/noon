@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / 'src'))
 from model import Experiment, metrics, simulate
 from prediction import outage_prediction
 from measurement import PositionFixExample, compare_position_fix
+from attitude import AttitudeExample, attitude_example
 
 
 def export(destination: Path) -> None:
@@ -67,7 +68,11 @@ def export(destination: Path) -> None:
         'result': asdict(compare_position_fix()),
     }
     (destination / 'measurement.json').write_text(json.dumps(measurement, indent=2) + '\n')
+    attitude = {'config': asdict(AttitudeExample()), 'result': attitude_example()}
+    (destination / 'attitude.json').write_text(json.dumps(attitude, indent=2) + '\n')
     manifest = {
+        'attitude_model_sha256': sha256((ROOT / 'src/attitude.py').read_bytes()).hexdigest(),
+        'attitude_sha256': sha256((destination / 'attitude.json').read_bytes()).hexdigest(),
         'model': '1D position/velocity/physical-acceleration-bias Kalman filter',
         'scope': 'Teaching simulation, not the 24-error-state ECEF reference',
         'model_sha256': sha256((ROOT / 'src/model.py').read_bytes()).hexdigest(),

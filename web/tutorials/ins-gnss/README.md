@@ -1,14 +1,14 @@
 # INS + GNSS: a Noon navigation tutorial
 
 Fourteen chapters based on Fedor Baklanov's *INS/GNSS loose coupling filter*
-documentation. The current sequence is **817.70 authored seconds** (about 13½
-minutes), with pauseable reading notes. It is **not yet the planned full course**.
+documentation. The current sequence is **971.55 authored seconds** (about 16 minutes
+12 seconds), with pauseable reading notes. It is **not yet the planned full course**.
 
 The numerical material comprises a reproducible **1D position/velocity/physical
-accelerometer-bias KF** and a separate **single 2D linear position-fix example**.
-The full **24-error-state ECEF filter is explained, not numerically reproduced or
-validated**. Neither receiver GNSS nor a posterior estimate is presented as
-independent ground truth.
+accelerometer-bias KF**, a **single 2D linear position-fix example**, and a
+**prescribed quaternion correction**. The full **24-error-state ECEF filter is
+explained, not numerically reproduced or validated**. Neither receiver GNSS nor a
+posterior estimate is presented as independent ground truth.
 
 ## Run
 
@@ -40,6 +40,7 @@ operation. Desktop or landscape viewing is recommended for the equations.
 | `src/uncertainty.py` | Tested 2D Gaussian contour geometry. |
 | `src/prediction.py` | Closed-form checks of the existing predictor and a signed variance budget. No second estimator. |
 | `src/measurement.py` | One 2D position fix: correlated noise, whitening, batch/sequential comparison, innovation distance. |
+| `src/attitude.py` | Quaternion composition, prescribed correction, gravity leakage and local reset derivative. No attitude estimator. |
 | `src/visuals.py` | Shared layout/typography and helpers constructing ordinary Noon objects. |
 | `src/lessons/` | Small named explanation functions in teaching order. |
 | `src/entry.py` | One Scene entry point and chapter selection. |
@@ -48,11 +49,11 @@ operation. Desktop or landscape viewing is recommended for the equations.
 | `tools/` | Reproducible single-source browser bundle and numerical export. |
 | `tests/` | Numerical, actual Pyodide, browser-frame and playback checks. |
 
-Edit `src/`, not generated `scene.py`. Physical assumptions live in `Experiment`
-and `PositionFixExample`; shared visual settings live in `Layout`. Diagram-specific
-coordinates describe composition, not hidden numerical results. The bundler removes
-only known local imports and rejects colliding top-level definitions. It introduces
-no runtime loader or second animation system.
+Edit `src/`, not generated `scene.py`. Physical assumptions live in `Experiment`,
+`PositionFixExample` and `AttitudeExample`; shared visual settings live in `Layout`.
+Diagram-specific coordinates describe composition, not hidden numerical results.
+The bundler removes only known local imports and rejects colliding top-level
+definitions. It introduces no runtime loader or second animation system.
 
 ## Detailed worked lessons
 
@@ -65,6 +66,30 @@ normalization, equal display scales and 95% joint Gaussian probability. Scalar
 whiskers are separately labelled ±1 standard deviation. The noisy fix overshoots the
 true bias; uncertainty is not confused with accuracy.
 
+**Chapter 8 — Attitude correction and reset (180.05 s).** Eight explanation functions
+connect quaternion coefficients, rotation-vector corrections, frame/order choices,
+gravity leakage and covariance reset. The prescribed example is true pitch 12°,
+nominal pitch 20°, correction −6°, corrected estimate 14°. True-minus-estimated
+error changes from −8° to −2°. Animated correction is not physical vehicle motion.
+The 6° change is drawn without angular exaggeration. The same resting specific-force
+sample gives false north accelerations about −1.365 and −0.342 m/s². The two coast
+curves hold tilt fixed and start from exact position/velocity; they are not full INS
+performance results.
+
+Quaternion conventions are Hamilton multiplication, scalar first, sensor-to-NED,
+left/navigation-frame errors, and radians internally. The reset covariance example
+uses the exact local derivative of Log(Exp(c+e) Exp(−c)); its displayed first-order
+approximation has the **plus** skew term for this left error. Twenty numerical tests
+check conventions, wrong multiplication order, gravity cancellation, reset Jacobian
+finite differences and preservation of physical orientation. Covariances are
+computed in rad²; deg² is a display conversion only. Reset is a coordinate change,
+not new measurement information. For a full filter, transform cross-covariances too.
+
+Supplementary reference: Joan Solà, *Quaternion kinematics for the error-state
+Kalman filter*, [arXiv:1711.02508](https://arxiv.org/abs/1711.02508), sections 6.2–6.3
+and 7.3. This exact rotation-vector example is distinct from upstream's small-Euler
+injection; it is not a literal reproduction or full ECEF attitude-filter validation.
+
 **Chapter 9 — What grows without GNSS? (140.1 s).** Follow error transport, the exact
 teaching-model transition, the recorded outage and a signed position-variance
 budget. The last accepted fix is at 44 s, not 45 s: 3,100 IMU steps precede the
@@ -75,7 +100,7 @@ estimated error, opposite chapter 1's overview convention. Marginal ±2σ bounds
 not joint contours or empirical coverage. Reacquisition is a discontinuity at one
 timestamp, never physical travel smoothed over time.
 
-**Chapter 10 — One complete GNSS update (198.45 s).** Nine small explanation functions
+**Chapter 10 — One complete GNSS update (198.45 s).** Nine explanation functions
 follow correlated measurement noise, Cholesky whitening, conditional scalar
 residuals, Joseph covariance, batch equivalence, incorrect independence and invariant
 innovation distance. `PositionFixExample` supplies prior mean `(0,0)` m, `P = 4I`
@@ -114,10 +139,10 @@ python3 web/tutorials/ins-gnss/tools/export.py /tmp/ins-gnss-trace
 ```
 
 The export contains `trace.csv` (12,001 samples), `updates.json`, `prediction.json`,
-`measurement.json` and a provenance `manifest.json` with source/output hashes.
-The 2D example is separate from the drive trace. For the default drive, errors at
-74.99 s are 53.3366 m IMU-only and 4.8927 m fused; final physical-bias estimate is
-0.0209436 m/s². These are one declared teaching run, not a product benchmark.
+`measurement.json`, `attitude.json` and a provenance `manifest.json` with source/output
+hashes. The 2D fix and attitude correction are separate from the drive trace. For the
+default drive, errors at 74.99 s are 53.3366 m IMU-only and 4.8927 m fused; final
+physical-bias estimate is 0.0209436 m/s². These are one teaching run, not a benchmark.
 
 ## Validation
 
@@ -128,11 +153,10 @@ node web/tutorials/ins-gnss/tests/pyodide_model.mjs \
   web/tutorials/ins-gnss/src/model.py
 ```
 
-The same **49 numerical tests** execute in CPython and Pyodide. They cover retained
+The same **69 numerical tests** execute in CPython and Pyodide. They cover retained
 update replay, indirect correction, Joseph covariance, discontinuities, rejection,
-contour radii, closed-form prediction, factor reconstruction, analytic batch results,
-sequential equivalence, row ordering without per-row gates, units, translation,
-wrong-H/wrong-R counterexamples and invalid input. A desktop Python pass does not
+contour radii, closed-form prediction, whitening, sequential equivalence, quaternion
+conventions, reset derivatives and invalid input. A desktop Python pass does not
 establish browser execution; use the repository-pinned Pyodide runtime.
 
 With repository browser-test dependencies and a built web package:
@@ -142,13 +166,17 @@ NOON_TUTORIAL_BACKEND=webgpu node web/tutorials/ins-gnss/tests/review.mjs
 NOON_TUTORIAL_BACKEND=webgl node web/tutorials/ins-gnss/tests/review.mjs
 NOON_TUTORIAL_BACKEND=webgpu node web/tutorials/ins-gnss/tests/player.mjs
 NOON_TUTORIAL_BACKEND=webgl node web/tutorials/ins-gnss/tests/player.mjs
+NOON_TUTORIAL_BACKEND=webgpu node web/tutorials/ins-gnss/tests/attitude-motion.mjs
+NOON_TUTORIAL_BACKEND=webgl node web/tutorials/ins-gnss/tests/attitude-motion.mjs
 ```
 
 The review captures intermediate frames through Noon's semantic preview host.
 Playback checks cover frozen pause output, identical fresh replay, repeated resume,
 all source-completion boundaries, mobile horizontal overflow and dense cursor
-samples. Inspect PNGs as well as assertions; sample-and-screenshot timings are not
-real-time rendering benchmarks or universal browser-parity guarantees.
+samples. The attitude test measures the red frame's angle from 31 browser rasters,
+checking anchoring, angular accuracy and monotonic motion against the example's
+angles. Inspect PNGs as well as assertions; sampled-frame tests are not real-time
+rendering benchmarks or universal browser-parity guarantees.
 
 CI builds the tested checkout through `scripts/build-web-demo.sh`, including
 preflight, then passes the same run's compiled runtime to both browser jobs. It
@@ -167,14 +195,13 @@ Pinned upstream: `fedorbaklanov/open-aided-navigation` at
 `insGnssLooseTransMat.m`/`insGnssLooseSysNoiseMat.m` for first-order discretization,
 and `InsGnssFilterLoose.m` for observations, whitening, gating, NHC and correction.
 
-Rotation notation uses destination superscript/source subscript; the displayed
-attitude injection is explicitly left/navigation-frame. The source's additive
-corrective offsets differ from our subtractive physical-bias convention. General
-reset requirements are not a claim that the upstream code implements an exact
+Rotation notation uses destination superscript/source subscript. The source's
+additive corrective offsets differ from our subtractive physical-bias convention.
+General reset requirements do not imply that upstream implements an exact
 exponential-map/reset. Source-specific rate-dependent variance scaling is separate
-from the 2D whitening example. Reference code and equations need an audit before
-literal reproduction or a full-system validation claim.
+from the 2D whitening example. Source equations need auditing before full-system
+reproduction or validation claims.
 
 The detailed full course, complete ECEF audit/reproduction, NHC and mounting
 experiments, recorded-drive provenance and broader statistical evaluation remain
-unfinished. No such result is fabricated by either teaching model.
+unfinished. No such result is fabricated by these teaching examples.
