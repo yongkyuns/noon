@@ -4,6 +4,9 @@ on:
     branches: [codex/b5-atomicity-candidate]
 permissions:
   contents: read
+defaults:
+  run:
+    shell: bash
 jobs:
   candidate:
     runs-on: ubuntu-latest
@@ -17,7 +20,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Verify source and prepare candidate
-        shell: bash
         run: |
           set -euo pipefail
           test "$(git hash-object crates/noon/src/live_session.rs)" = e748fc560e879c2249de0d4dc2cb476ec3e9979a
@@ -26,6 +28,24 @@ jobs:
           git rev-parse HEAD > candidate-evidence/preparation-head.txt
           git apply --check .github/diagnostics/live-path-atomicity.patch
           git apply .github/diagnostics/live-path-atomicity.patch
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon/src/semantic_mobject/publication_atomicity_tests.rs')
+          source = path.read_text()
+          old = 'let (mut scene, retained, sentinel, mut session) = fixture();'
+          assert source.count(old) == 2
+          path.write_text(source.replace(old, 'let (scene, retained, sentinel, mut session) = fixture();'))
+          path = Path('crates/noon/src/semantic_mobject.rs')
+          source = path.read_text()
+          old = '''    /// Compatibility state materialization for callers that have not yet moved
+              /// their publication boundary into `with_state`. Scene-owned geometry creation
+              /// deliberately does not use this route; its resource scope spans publication.'''
+          new = '''    /// State-only materialization for remaining callers tracked by #1603.
+              /// Geometry constructors must use `with_state` so path admission stays
+              /// inside their fallible publication boundary.'''
+          assert source.count(old) == 1
+          path.write_text(source.replace(old, new))
+          PY
       - name: Install repository-pinned Rust
         run: rustup install
       - uses: actions/cache@v6
@@ -52,6 +72,36 @@ jobs:
         run: cargo test -p noon --lib --all-features 2>&1 | tee candidate-evidence/library-tests.txt
       - name: Strict all-target Noon Clippy
         run: cargo clippy -p noon --all-targets --all-features -- -D warnings 2>&1 | tee candidate-evidence/clippy.txt
+      - name: Negative control proves the post-import checks detect missing rollback
+        run: |
+          cp crates/noon/src/semantic_mobject.rs candidate-evidence/scoped-source.rs
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/noon/src/semantic_mobject.rs')
+          source = path.read_text()
+          old = 'GeometryRef::VectorPath(path) => store.with_geometry_path(path, |store, handle| {'
+          new = 'GeometryRef::VectorPath(path) => { let handle = store.insert_geometry_path(path)?; (|store: &mut SemanticStore, handle| {'
+          assert source.count(old) == 1
+          source = source.replace(old, new)
+          old = '''            }),
+                      GeometryRef::External(_) => Err(AuthoringError::Unsupported('''
+          new = '''            })(store, handle) },
+                      GeometryRef::External(_) => Err(AuthoringError::Unsupported('''
+          assert source.count(old) == 1
+          path.write_text(source.replace(old, new))
+          PY
+          set +e
+          cargo test -p noon --lib --all-features publication_atomicity_tests -- --nocapture > candidate-evidence/negative-control.txt 2>&1
+          status=$?
+          set -e
+          cp candidate-evidence/scoped-source.rs crates/noon/src/semantic_mobject.rs
+          test "$status" -ne 0
+          grep -q 'test result: FAILED' candidate-evidence/negative-control.txt
+          grep -q 'geometry_publication_scope_rolls_back_a_real_late_lowering_failure ... FAILED' candidate-evidence/negative-control.txt
+          grep -q 'geometry_publication_scope_preserves_injected_runtime_errors_and_existing_paths ... FAILED' candidate-evidence/negative-control.txt
+          cargo fmt --all -- --check
+          git hash-object crates/noon/src/semantic_mobject.rs crates/noon/src/live_session.rs crates/noon/src/semantic_mobject/publication_atomicity_tests.rs > candidate-evidence/restored-source-blobs.txt
+          diff -u candidate-evidence/source-blobs.txt candidate-evidence/restored-source-blobs.txt
       - name: Export candidate evidence without repository writes
         if: always()
         uses: actions/upload-artifact@v7
