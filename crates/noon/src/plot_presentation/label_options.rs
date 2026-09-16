@@ -41,25 +41,33 @@ pub enum NumberLabelAuthoringError {
 impl std::fmt::Display for NumberLabelAuthoringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Preparation(e) => e.fmt(f), Self::Coordinate(e) => e.fmt(f),
-            Self::Text(e) => e.fmt(f), Self::Authoring(e) => e.fmt(f),
-            Self::Import(e) => e.fmt(f), Self::Allocation(e) => e.fmt(f),
+            Self::Preparation(e) => e.fmt(f),
+            Self::Coordinate(e) => e.fmt(f),
+            Self::Text(e) => e.fmt(f),
+            Self::Authoring(e) => e.fmt(f),
+            Self::Import(e) => e.fmt(f),
+            Self::Allocation(e) => e.fmt(f),
         }
     }
 }
 impl std::error::Error for NumberLabelAuthoringError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Preparation(e) => Some(e), Self::Coordinate(e) => Some(e),
-            Self::Text(e) => Some(e), Self::Authoring(e) => Some(e),
-            Self::Import(e) => Some(e), Self::Allocation(e) => Some(e),
+            Self::Preparation(e) => Some(e),
+            Self::Coordinate(e) => Some(e),
+            Self::Text(e) => Some(e),
+            Self::Authoring(e) => Some(e),
+            Self::Import(e) => Some(e),
+            Self::Allocation(e) => Some(e),
         }
     }
 }
 macro_rules! label_error_from {
     ($source:ty, $variant:ident) => {
         impl From<$source> for NumberLabelAuthoringError {
-            fn from(value: $source) -> Self { Self::$variant(value) }
+            fn from(value: $source) -> Self {
+                Self::$variant(value)
+            }
         }
     };
 }

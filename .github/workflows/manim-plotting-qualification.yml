@@ -51,14 +51,11 @@ jobs:
         run: node scripts/time-series-plotting-qualification.mjs synchronized
       - name: Qualify explicit outages and marker recovery
         run: node scripts/time-series-plotting-qualification.mjs gapped
-      - name: Record tested checkout and isolated label formatting
+      - name: Record tested checkout
         if: always()
         run: |
           mkdir -p plotting-artifacts
           git rev-parse HEAD > plotting-artifacts/source-sha.txt
-          git worktree add --detach /tmp/noon-label-format HEAD
-          (cd /tmp/noon-label-format && rustup install && cargo fmt --all && git diff --binary) > plotting-artifacts/format.patch
-          git worktree remove --force /tmp/noon-label-format
       - uses: actions/upload-artifact@v7
         if: always()
         with:

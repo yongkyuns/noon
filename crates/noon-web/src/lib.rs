@@ -14,9 +14,9 @@ mod authoring_error;
 #[cfg(target_arch = "wasm32")]
 mod authoring_geometry;
 mod authoring_mobject;
-mod authoring_options;
 #[cfg(target_arch = "wasm32")]
 mod authoring_number_labels;
+mod authoring_options;
 #[cfg(target_arch = "wasm32")]
 mod authoring_plot_presentation;
 #[cfg(target_arch = "wasm32")]
@@ -78,9 +78,9 @@ pub use authoring_error::AuthoringFailure;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_geometry::*;
 pub use authoring_mobject::*;
-pub use authoring_options::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_number_labels::*;
+pub use authoring_options::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_plot_presentation::*;
 #[cfg(target_arch = "wasm32")]

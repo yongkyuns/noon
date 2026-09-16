@@ -1,9 +1,9 @@
 //! Canonical text objects and atomic numeric-label families.
 use super::TextAuthoringError;
-#[cfg(feature = "native-text")]
-use super::{Text, NATIVE_POINT_TO_SCENE_SCALE};
 #[cfg(feature = "typst")]
 use super::{MathTypst, Typst, TypstSpec};
+#[cfg(feature = "native-text")]
+use super::{Text, NATIVE_POINT_TO_SCENE_SCALE};
 
 mod objects;
 #[cfg(feature = "native-text")]
