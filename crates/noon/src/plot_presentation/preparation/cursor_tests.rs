@@ -1,14 +1,9 @@
 //! Cursor placement must not require a representable absolute data midpoint.
 use super::*;
-use crate::synchronized_plot_presentation::{
-    GappedTimeSeriesPlan, SynchronizedTimeSeriesPlan,
-};
+use crate::synchronized_plot_presentation::{GappedTimeSeriesPlan, SynchronizedTimeSeriesPlan};
 
 fn ranges() -> [[f64; 3]; 2] {
-    [
-        [1.0e16, 1.0e16 + 2.0, 2.0],
-        [-1.0e16 - 2.0, -1.0e16, 2.0],
-    ]
+    [[1.0e16, 1.0e16 + 2.0, 2.0], [-1.0e16 - 2.0, -1.0e16, 2.0]]
 }
 
 fn data(range: [f64; 3]) -> [TimedPlotSample; 3] {
@@ -65,11 +60,9 @@ fn synchronized_and_gapped_plans_share_the_correct_cursor_centers() {
         let mut second = first;
         second[1].time = 0.5;
         let rows: [&[TimedPlotSample]; 2] = [&first, &second];
-        let synchronized =
-            SynchronizedTimeSeriesPlan::new(frame, &rows, [0.0, 2.0], 2.0).unwrap();
+        let synchronized = SynchronizedTimeSeriesPlan::new(frame, &rows, [0.0, 2.0], 2.0).unwrap();
         let breaks: [&[usize]; 2] = [&[0], &[]];
-        let gapped =
-            GappedTimeSeriesPlan::new(frame, &rows, &breaks, [0.0, 2.0], 2.0).unwrap();
+        let gapped = GappedTimeSeriesPlan::new(frame, &rows, &breaks, [0.0, 2.0], 2.0).unwrap();
         let centers = [[-4.0, 0.0], [-2.0, 0.0], [0.0, 0.0], [4.0, 0.0]];
         assert_eq!(synchronized.cursor_points(), centers);
         assert_eq!(gapped.cursor_points(), centers);
