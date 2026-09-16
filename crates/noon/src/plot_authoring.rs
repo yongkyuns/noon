@@ -156,7 +156,11 @@ mod tests {
     fn rejected_plot_preserves_scene_revision_and_resources() {
         let scene = Scene::new();
         let revision = scene.revision();
-        let resources = scene.integration_store().borrow().geometry_resources().len();
+        let resources = scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len();
         let sampling = PlotSamplingOptions::parametric(&[0.0, 1.0, 0.5]).unwrap();
         let result = scene.parametric_plot(&sampling, |_| [f64::NAN, 0.0], false);
         assert!(matches!(
@@ -167,7 +171,11 @@ mod tests {
         ));
         assert_eq!(scene.revision(), revision);
         assert_eq!(
-            scene.integration_store().borrow().geometry_resources().len(),
+            scene
+                .integration_store()
+                .borrow()
+                .geometry_resources()
+                .len(),
             resources
         );
         assert!(scene.sampled_plot(&[[0.0, 0.0], [1.0, 1.0]]).is_ok());
@@ -178,13 +186,21 @@ mod tests {
         let scene = Scene::new();
         let mut curve = scene.sampled_plot(&[[0.0, 0.0], [1.0, 2.0]]).unwrap();
         let content = curve.state().unwrap().content;
-        let resources = scene.integration_store().borrow().geometry_resources().len();
+        let resources = scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .len();
         curve.shift(3.0, -2.0).unwrap();
         assert_eq!(curve.state().unwrap().content, content);
         assert_eq!(curve.path_query().unwrap().start().unwrap(), (3.0, -2.0));
         assert_eq!(curve.path_query().unwrap().end().unwrap(), (4.0, 0.0));
         assert_eq!(
-            scene.integration_store().borrow().geometry_resources().len(),
+            scene
+                .integration_store()
+                .borrow()
+                .geometry_resources()
+                .len(),
             resources
         );
     }
