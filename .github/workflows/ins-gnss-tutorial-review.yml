@@ -23,7 +23,7 @@ jobs:
       - name: Install exact browser test dependencies and built engine
         run: |
           tar -xf /tmp/noon-built/artifact.tar -C web
-          npm ci --prefix web --ignore-scripts --no-audit --no-fund
+          npm install --no-save --ignore-scripts --no-audit --no-fund playwright@1.62.1 pngjs@7.0.0
       - name: Exercise tutorial requirements before chapter authoring
         run: node web/tutorials/ins-gnss/tests/review.mjs
       - uses: actions/upload-artifact@v7
