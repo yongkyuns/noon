@@ -1,0 +1,75 @@
+name: Image raster qualification
+on:
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'web/python/_manim_image.py'
+      - 'web/python/examples/raster_image.py'
+      - 'web/python-worker.source.js'
+      - 'scripts/image-*'
+      - '.github/workflows/image-raster-qualification.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: image-raster-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      NOON_WASM_SKIP_OPT: '1'
+      XDG_RUNTIME_DIR: /tmp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install reference and native raster dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config mesa-vulkan-drivers
+          python -m pip install --disable-pip-version-check manim==0.21.0
+      - name: Rust target
+        run: rustup target add wasm32-unknown-unknown
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: image-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'crates/**/Cargo.toml') }}
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Native image contract and actual Vulkan pixels
+        run: |
+          cargo test -p noon --lib image --features image-decode
+          cargo test -p noon --test image_mobject --test image_publication_atomicity --test retained_images --features image-decode
+          mkdir -p browser-smoke-artifacts/images
+          NOON_IMAGE_RASTER_OUTPUT=browser-smoke-artifacts/images/native.png cargo test -p noon --test retained_images --features image-decode -- --ignored
+      - name: Build ordinary browser product
+        run: bash scripts/build-web-demo.sh
+      - name: Browser and reference tools
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Pinned reference
+        run: python scripts/image-manim-reference.py browser-smoke-artifacts/images/manim
+      - name: Direct Rust WASM and Python on WebGPU and WebGL2
+        run: timeout --signal=TERM 300s node scripts/image-raster-smoke.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: image-raster-qualification
+          path: browser-smoke-artifacts/images
+          if-no-files-found: warn
+          retention-days: 7
