@@ -369,6 +369,16 @@ impl ManimGeometryOptions {
             )),
         }
     }
+
+    /// Compatibility state materialization for callers that have not yet moved
+    /// their publication boundary into `with_state`. Scene-owned geometry creation
+    /// deliberately does not use this route; its resource scope spans publication.
+    pub(crate) fn into_state(
+        self,
+        store: &mut SemanticStore,
+    ) -> Result<SemanticObjectState, AuthoringError> {
+        self.with_state(store, |_store, state| Ok(state))
+    }
 }
 
 fn manim_geometry_state(
