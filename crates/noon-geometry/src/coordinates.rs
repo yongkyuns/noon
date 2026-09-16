@@ -229,7 +229,15 @@ pub fn number_line_tick_values(
         append_ticks(&mut ticks, start, stop, step, 1.0, false, limit)?;
     } else {
         let first = if exclude_origin { step } else { 0.0 };
-        append_ticks(&mut ticks, first, start.abs() + 1.0e-6, step, -1.0, false, limit)?;
+        append_ticks(
+            &mut ticks,
+            first,
+            start.abs() + 1.0e-6,
+            step,
+            -1.0,
+            false,
+            limit,
+        )?;
         // The negative pass already owns zero. Do not charge its duplicate to
         // the admission budget, or an exact-capacity valid line is rejected.
         let skip_origin = !exclude_origin && !ticks.is_empty();
@@ -252,7 +260,10 @@ fn append_ticks(
     let count = ((stop - start) / step).ceil().max(0.0);
     let skipped = usize::from(skip_first && count > 0.0);
     let appended = count - skipped as f64;
-    if !stop.is_finite() || !count.is_finite() || appended > limit.saturating_sub(ticks.len()) as f64 {
+    if !stop.is_finite()
+        || !count.is_finite()
+        || appended > limit.saturating_sub(ticks.len()) as f64
+    {
         return Err(CoordinateError::TickLimitExceeded);
     }
     let count = count as usize;

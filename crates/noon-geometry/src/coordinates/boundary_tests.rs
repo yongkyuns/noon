@@ -3,7 +3,10 @@ use super::*;
 
 fn near(actual: [f64; 2], expected: [f64; 2]) {
     for (actual, expected) in actual.into_iter().zip(expected) {
-        assert!((actual - expected).abs() < 1.0e-12, "{actual} != {expected}");
+        assert!(
+            (actual - expected).abs() < 1.0e-12,
+            "{actual} != {expected}"
+        );
     }
 }
 

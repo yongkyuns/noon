@@ -4,7 +4,8 @@ import { qualifyNumberLabels } from "./number-label-smoke.js";
 import { WasmAuthoringStore, WasmCoordinateOptions, WasmPlotSamplingPlan } from "./pkg/noon_web.js";
 
 function near(actual, expected, label) {
-  if (actual.length !== expected.length || actual.some((value, i) => Math.abs(value - expected[i]) > 2e-5)) {
+  if (actual.length !== expected.length || actual.some((value, i) =>
+      !Number.isFinite(value) || Math.abs(value - expected[i]) > 2e-5)) {
     throw new Error(`${label}: ${actual} != ${expected}`);
   }
 }
@@ -104,7 +105,7 @@ class PlottingQualification(Scene):
         copy = axes.copy().shift(UP)
         near(copy.c2p(0, 0), axes.c2p(0, 0) + UP)
 
-        calls = [];
+        calls = []
         def function(x):
             calls.append(x)
             return x * x / 2
