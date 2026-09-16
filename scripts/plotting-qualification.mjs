@@ -29,9 +29,34 @@ async function capture(context, label, expectedBackend) {
     await page.waitForFunction(() => window.noonHostRaster);
     const metrics = await page.evaluate(async ({ label, source }) => {
       if (label === "python") {
-        const loaded = await window.noonHostRaster.load(source, 1);
-        if (loaded.duration !== 0) throw new Error("static example must not invent a timeline");
-        return window.noonHostRaster.renderThrough(0, [0]);
+        const { PythonAuthoringClient } = await import("./authoring-client.js");
+        const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
+        const client = new PythonAuthoringClient();
+        const failures = [];
+        const execution = new AuthoringExecutionClient(document.querySelector("#scene"), {
+          onError: error => failures.push(String(error)),
+        });
+        window.plottingAuthoring = client;
+        window.plottingExecution = execution;
+        const result = await client.run(source);
+        if (result.duration !== 0 || !result.semanticExecution ||
+            result.semanticExecution.continuationGeneration !== undefined) {
+          throw new Error("static example must return a context without inventing a continuation");
+        }
+        await execution.startSemanticExecution(result.semanticExecution, {
+          authoringClient: client, initiallyPaused: true, transportMode: "transferable",
+        });
+        await execution.advanceTo(0);
+        for (let attempt = 0; attempt < 100; attempt++) {
+          if (failures.length) throw new Error(failures.join("; "));
+          const { metrics } = await execution.metrics();
+          if (metrics.ready && metrics.retained && metrics.presentedFrames > 0) {
+            return { presented: true, time: metrics.time, objectCount: metrics.objectCount,
+              drawCalls: metrics.drawCalls, rendererBackend: metrics.backend };
+          }
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        throw new Error("static Python plotting context did not present");
       }
       const wasm = await import("./pkg/noon_web.js");
       await wasm.default();

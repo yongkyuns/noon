@@ -384,7 +384,10 @@ impl CanonicalAuthoringSceneContext {
 
 /// Qualification bootstrap only: native and direct WASM execute one Rust builder.
 /// JavaScript supplies the platform canvas, not a serialized scene.
-#[cfg(all(feature = "renderer", any(debug_assertions, feature = "renderer-smoke")))]
+#[cfg(all(
+    feature = "renderer",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
 #[wasm_bindgen(js_name = createCoordinatePlottingRenderer)]
 pub async fn create_coordinate_plotting_renderer(
     canvas: web_sys::OffscreenCanvas,
