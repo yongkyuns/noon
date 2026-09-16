@@ -60,6 +60,7 @@ mod authoring_error;
 mod boolean_authoring;
 mod camera_authoring;
 mod compact_value_authoring;
+mod coordinate_authoring;
 mod cyclic_replace;
 mod dashed_line_authoring;
 #[cfg(feature = "diagnostics")]
@@ -129,6 +130,10 @@ pub use arrow_endpoints::{
 pub use arrow_scale::ArrowScaleError;
 pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
 pub use boolean_authoring::{BooleanOperation, BooleanPathError};
+pub use coordinate_authoring::{
+    CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
+    ManimNumberLineOptions,
+};
 pub use dashed_line_authoring::DashedLineAuthoringError;
 pub use dimension_fit::LayoutDimension;
 pub use elbow_authoring::ElbowAuthoringError;
@@ -176,6 +181,7 @@ pub use noon_core::{
     RED_E, RIGHT, SMALL_BUFF, TAU, TEAL, TEAL_A, TEAL_B, TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE,
     YELLOW, YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D, YELLOW_E,
 };
+pub use noon_geometry::{AxesFrame, CoordinateError, NumberLineFrame};
 pub use noon_geometry::{
     PlotPreparationError, PlotSamplingOptions, PlotSamplingPlan, StaticVectorFieldError,
     VectorFieldAxis, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D,
@@ -217,6 +223,10 @@ pub mod prelude {
         SemanticObjectState, SemanticStyle, StoredGeometry, StyleUpdate, SvgAuthoringError,
         SvgImportOptions, SvgUnsupportedFeature, TrackerPosition, ValueTracker, Vec2,
         VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, VectorPath,
+    };
+    pub use crate::{
+        CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
+        ManimNumberLineOptions,
     };
 }
 
