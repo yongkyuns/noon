@@ -5,6 +5,7 @@
 mod derived_display_evaluation;
 mod execution_slots;
 mod frame;
+mod pointwise_affine;
 mod prepared_frame;
 mod reactive;
 mod renderer_publication;
@@ -1374,6 +1375,12 @@ fn affine_base_at_time(
             ) => transform.translation = *from,
             (Property::Rotation, TrackValues::Scalar { from, .. }) => transform.rotation = *from,
             (Property::Scale, TrackValues::Vec2 { from, .. }) => transform.scale = *from,
+            (Property::Rotation, TrackValues::PointwiseRotation(endpoints)) => {
+                transform.rotation = endpoints.from().rotation
+            }
+            (Property::Scale, TrackValues::PointwiseScale(endpoints)) => {
+                transform.scale = endpoints.from().scale
+            }
             _ => unreachable!("validated affine track must carry matching values"),
         }
     }
@@ -2095,6 +2102,12 @@ fn interpolate_track_values(values: &TrackValues, progress: f32) -> Option<Evalu
             lerp(from.x, to.x, progress),
             lerp(from.y, to.y, progress),
         ))),
+        TrackValues::PointwiseRotation(endpoints) => Some(EvaluatedValue::Scalar(
+            pointwise_affine::components(*endpoints, progress).0,
+        )),
+        TrackValues::PointwiseScale(endpoints) => Some(EvaluatedValue::Vec2(
+            pointwise_affine::components(*endpoints, progress).1,
+        )),
         TrackValues::ArcVec2 {
             from,
             to,

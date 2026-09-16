@@ -1977,6 +1977,49 @@ pub(super) fn lower_transform_channels(
         return Ok(channels);
     }
 
+    if source.content.image().is_some() && source.content == target.content {
+        let mut channels = lower_affine_channels(source, target, from)?;
+        let to = lower_semantic_transform_value(target)
+            .map_err(|_| AffinePayloadIssue::InvalidEffectiveTransform)?;
+        if from.transform.rotation != to.rotation {
+            let endpoints = noon_core::PointwiseAffineEndpoints::new(from.transform, to)
+                .ok_or(AffinePayloadIssue::UnsupportedPointCorrespondence)?;
+            // A corner-linear rotation also changes intermediate scale even when
+            // both endpoint scales are equal. Reserve both ordinary channels.
+            channels.retain(|channel| {
+                !matches!(channel.property, Property::Rotation | Property::Scale)
+            });
+            for (semantic_property, property, values, value) in [
+                (
+                    SemanticObjectProperty::RotationZ,
+                    Property::Rotation,
+                    TrackValues::PointwiseRotation(endpoints),
+                    SemanticSignalValue::Scalar(target.transform.rotation_z),
+                ),
+                (
+                    SemanticObjectProperty::Scale,
+                    Property::Scale,
+                    TrackValues::PointwiseScale(endpoints),
+                    SemanticSignalValue::Vec3(target.transform.scale),
+                ),
+            ] {
+                push_affine_channel(
+                    source,
+                    semantic_property,
+                    property,
+                    values,
+                    SemanticAnimationCompletion::Property {
+                        property: semantic_property,
+                        value,
+                    },
+                    true,
+                    &mut channels,
+                )?;
+            }
+        }
+        return Ok(channels);
+    }
+
     let point_transform = matches!(
         (source.content.geometry(), target.content.geometry()),
         (

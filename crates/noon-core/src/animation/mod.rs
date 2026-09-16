@@ -4,6 +4,9 @@
 //! SemanticStore owns authored meaning; lowering and Runtime consume the same
 //! renderer-independent contracts through the crate's public API.
 
+mod pointwise_affine;
+pub use pointwise_affine::*;
+
 mod composition;
 pub use composition::*;
 

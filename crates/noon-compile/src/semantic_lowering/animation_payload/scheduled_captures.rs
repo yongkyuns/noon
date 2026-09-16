@@ -199,6 +199,20 @@ fn apply_effective_track_endpoint(
         (Property::Rotation, TrackValues::Scalar { from, to }) => {
             value.transform.rotation = if at_end { *to } else { *from };
         }
+        (Property::Scale, TrackValues::PointwiseScale(endpoints)) => {
+            value.transform.scale = if at_end {
+                endpoints.to().scale
+            } else {
+                endpoints.from().scale
+            };
+        }
+        (Property::Rotation, TrackValues::PointwiseRotation(endpoints)) => {
+            value.transform.rotation = if at_end {
+                endpoints.to().rotation
+            } else {
+                endpoints.from().rotation
+            };
+        }
         (Property::Fill, TrackValues::Color { from, to }) => {
             value.style.fill = if at_end { *to } else { *from };
         }

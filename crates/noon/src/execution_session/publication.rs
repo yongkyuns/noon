@@ -173,11 +173,11 @@ impl ExecutionSession {
     ) -> Result<(), ExecutionSessionPublicationError> {
         self.require_published_store(store)?;
         self.require_publication_ready(SemanticPublicationPurpose::AuthoredMutation)?;
-        noon_compile::validate_semantic_publication_root(store, root)
-            .map_err(ExecutionSessionPublicationError::Lowering)?;
         if !self.reachability.is_execution_root(root) {
             return Err(ExecutionSessionPublicationError::UnknownObject(root));
         }
+        noon_compile::validate_semantic_publication_root(store, root)
+            .map_err(ExecutionSessionPublicationError::Lowering)?;
         Ok(())
     }
 

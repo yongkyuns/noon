@@ -196,6 +196,9 @@ pub enum TrackValues {
         to: Vec2,
         arc_angle: f64,
     },
+    /// Correlated corner-linear affine components on the ordinary scalar/vector channels.
+    PointwiseRotation(crate::PointwiseAffineEndpoints),
+    PointwiseScale(crate::PointwiseAffineEndpoints),
     Color {
         from: Option<crate::Color>,
         to: Option<crate::Color>,
@@ -221,8 +224,8 @@ impl TrackValues {
         match self {
             Self::Bool { .. } => ValueKind::Bool,
             Self::ZIndex { .. } => ValueKind::ZIndex,
-            Self::Scalar { .. } => ValueKind::Scalar,
-            Self::Vec2 { .. } | Self::ArcVec2 { .. } => ValueKind::Vec2,
+            Self::Scalar { .. } | Self::PointwiseRotation(_) => ValueKind::Scalar,
+            Self::Vec2 { .. } | Self::ArcVec2 { .. } | Self::PointwiseScale(_) => ValueKind::Vec2,
             Self::Color { .. } => ValueKind::Color,
             Self::PreparedMorph { .. } => ValueKind::Scalar,
             Self::Object { .. } => ValueKind::Object,
@@ -273,6 +276,12 @@ impl TrackValues {
                     property,
                     value: *arc_angle,
                 })
+            }
+            Self::PointwiseRotation(endpoints) | Self::PointwiseScale(endpoints) => {
+                if !endpoints.is_valid() {
+                    return Err(TimelineError::InvalidPointwiseAffine(property));
+                }
+                Ok(())
             }
             Self::Color { from, to } => {
                 for (endpoint, color) in [
@@ -431,6 +440,7 @@ pub enum TimelineError {
         endpoint: TrackValueEndpoint,
         field: ObjectStateField,
     },
+    InvalidPointwiseAffine(Property),
     InvalidCompositionTimeMap(CompositionTimeMapError),
     InstantTrackCannotUseTimeMap(Property),
 }
@@ -491,6 +501,10 @@ impl std::fmt::Display for TimelineError {
             } => write!(
                 formatter,
                 "non-finite {field} state in {endpoint} object value for {property:?}"
+            ),
+            Self::InvalidPointwiseAffine(property) => write!(
+                formatter,
+                "invalid or shear-requiring pointwise affine endpoints for {property:?}"
             ),
             Self::InvalidCompositionTimeMap(error) => error.fmt(formatter),
             Self::InstantTrackCannotUseTimeMap(property) => write!(
@@ -562,6 +576,13 @@ pub fn validate_track_definition(track: &TrackDefinition) -> Result<(), Timeline
     if matches!(&track.values, TrackValues::ArcVec2 { .. }) && track.property != Property::Position
     {
         return Err(TimelineError::ArcVec2PropertyMismatch(track.property));
+    }
+    if matches!(&track.values, TrackValues::PointwiseRotation(_))
+        && track.property != Property::Rotation
+        || matches!(&track.values, TrackValues::PointwiseScale(_))
+            && track.property != Property::Scale
+    {
+        return Err(TimelineError::InvalidPointwiseAffine(track.property));
     }
     track
         .values
