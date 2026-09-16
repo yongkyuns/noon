@@ -49,7 +49,7 @@ fn subcurve_copies_preserve_style_source_and_coherent_live_state() {
 
 #[test]
 fn closed_subcurve_wraps_seam_and_keeps_curve_count_parameterization() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let source = scene
         .geometry(
             ManimGeometryOptions::path(
@@ -78,7 +78,7 @@ fn closed_subcurve_wraps_seam_and_keeps_curve_count_parameterization() {
 
 #[test]
 fn invalid_copy_inputs_publish_no_identity_or_resource_and_singleton_is_retained() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let source = scene.line((0., 0.), (4., 0.)).unwrap();
     let empty = scene
         .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
@@ -118,7 +118,7 @@ fn invalid_copy_inputs_publish_no_identity_or_resource_and_singleton_is_retained
 
 #[test]
 fn subpath_observations_use_world_tolerance_and_keep_snapshot_immutable() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut source = scene
         .geometry(
             ManimGeometryOptions::path(
