@@ -1,0 +1,85 @@
+name: Plotting qualification
+
+on:
+  pull_request:
+    paths:
+      - 'crates/noon*/**'
+      - 'web/python/**'
+      - 'web/python-worker.source.js'
+      - 'web/python-compat-modules.js'
+      - 'web/plotting-smoke.js'
+      - 'web/number-label-smoke.js'
+      - 'web/manim-compat-smoke.html'
+      - 'scripts/plotting-qualification.mjs'
+      - 'scripts/time-series-plotting-qualification.mjs'
+      - 'scripts/live-coordinate-checks.mjs'
+      - 'scripts/gapped-plotting-checks.mjs'
+      - '.github/workflows/manim-plotting-qualification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plotting-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plotting:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Build exact-source browser package
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          preflight: 'true'
+          cache-ref: ${{ github.event.pull_request.base.sha }}
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install pinned browser dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Qualify paired plotting and resumed Python authoring
+        run: node scripts/plotting-qualification.mjs
+      - name: Qualify numeric labels and timestamp-synchronized playback
+        run: node scripts/time-series-plotting-qualification.mjs
+      - name: Qualify synchronized multi-series playback
+        run: node scripts/time-series-plotting-qualification.mjs synchronized
+      - name: Qualify explicit outages and marker recovery
+        run: node scripts/time-series-plotting-qualification.mjs gapped
+      - name: Qualify coordinates constructed after playback starts
+        run: node scripts/time-series-plotting-qualification.mjs live
+      - name: Validate full integrated repository
+        shell: bash
+        env:
+          VALIDATION_BASE: ${{ github.event.pull_request.base.sha || github.sha }}
+          NOON_WASM_PROFILE: dev
+          NOON_WASM_SKIP_OPT: '1'
+        run: |
+          set -euo pipefail
+          mkdir -p plotting-artifacts
+          bash scripts/check.sh full "$VALIDATION_BASE" 2>&1 | tee plotting-artifacts/full-check.log
+      - name: Record tested checkout
+        if: always()
+        shell: bash
+        env:
+          VALIDATION_BASE: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p plotting-artifacts
+          git rev-parse HEAD > plotting-artifacts/source-sha.txt
+          printf '%s\n' "$VALIDATION_BASE" > plotting-artifacts/base-sha.txt
+          git diff --binary "$VALIDATION_BASE"...HEAD > plotting-artifacts/integration.diff
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: plotting-${{ github.event.pull_request.head.sha || github.sha }}
+          path: plotting-artifacts/
+          retention-days: 7

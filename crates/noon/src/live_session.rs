@@ -6,6 +6,7 @@
 //! Existing affine declarations use session-local segments, whose endpoint
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
+mod coordinates;
 mod family_layout;
 mod path_editing;
 pub use family_layout::LiveLayoutTarget;
@@ -809,10 +810,28 @@ impl<'a> LiveSession<'a> {
     ) -> Result<Mobject, LiveSessionError> {
         self.session
             .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let state = options
-            .into_state(&mut self.store.borrow_mut())
-            .map_err(LiveSessionError::from)?;
-        self.create_detached_mobject(state)
+        // Keep path admission inside the same scope as every fallible
+        // semantic/compiler/runtime check, just like retained path editing.
+        let result = {
+            let mut store = self.store.borrow_mut();
+            options.with_state(&mut store, |store, state| {
+                let mut transaction = SemanticMutationTransaction::new();
+                transaction.add_node(noon_core::SemanticNodeCreation::object(state));
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(crate::AuthoringError::from)
+            })
+        }
+        .map_err(|error| match error {
+            crate::AuthoringError::ExecutionPublication(error) => {
+                LiveSessionError::Publication(error)
+            }
+            error => LiveSessionError::from(error),
+        })?;
+        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one detached primitive creation has one exact semantic impact")
+        };
+        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
     }
 
     /// Shape and publish one detached plain Text object through this live session.
