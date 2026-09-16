@@ -1,42 +1,50 @@
 name: Image workspace bootstrap (temporary)
-
 on:
   push:
     branches: [codex/b2-image-workspace-bootstrap]
     paths: [.github/workflows/image-workspace-bootstrap.yml]
-
 permissions:
   contents: read
-
 concurrency:
   group: image-workspace-bootstrap
   cancel-in-progress: true
-
 jobs:
-  browser-tools:
+  oracle:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 3397f0ff49dc44559e5e0323eedb3d3893f2e62f
           persist-credentials: false
-      - uses: taiki-e/install-action@v2
+      - uses: actions/setup-python@v5
         with:
-          tool: wasm-pack@0.15.0,wasm-bindgen-cli@0.2.128
-      - name: Export only public browser tools and packages
-        shell: bash
+          python-version: '3.12'
+      - name: Prepare pinned reference
         run: |
-          set -euo pipefail
-          mkdir -p /tmp/noon-tools/bin /tmp/noon-tools/browser
-          cp "$(command -v wasm-pack)" "$(command -v wasm-bindgen)" /tmp/noon-tools/bin/
-          cd /tmp/noon-tools/browser
-          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0 pyodide@314.0.5
-          cd /tmp/noon-tools
-          tar -czf /tmp/noon-browser-tools.tar.gz bin browser
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config
+          python -m pip install --disable-pip-version-check manim==0.21.0
+      - name: Capture actual Manim image output
+        run: python scripts/image-manim-reference.py /tmp/noon-image-oracle
+      - name: Export NumPy and its public Pyodide dependencies
+        run: |
+          python - <<'PY'
+          import json, pathlib, urllib.request
+          base = 'https://cdn.jsdelivr.net/pyodide/v314.0.5/full/'
+          data = json.load(urllib.request.urlopen(base + 'pyodide-lock.json'))
+          output = pathlib.Path('/tmp/noon-image-oracle/pyodide-packages'); output.mkdir()
+          seen = set()
+          def fetch(name):
+              if name in seen: return
+              seen.add(name)
+              package = data['packages'][name]
+              for dependency in package.get('depends', []): fetch(dependency)
+              filename = package['file_name']
+              urllib.request.urlretrieve(base + filename, output / filename)
+          fetch('numpy')
+          PY
       - uses: actions/upload-artifact@v4
         with:
-          name: noon-image-browser-tools
-          path: /tmp/noon-browser-tools.tar.gz
+          name: noon-image-manim-oracle
+          path: /tmp/noon-image-oracle
           retention-days: 1
-          compression-level: 0
