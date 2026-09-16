@@ -12,23 +12,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: 0e1b616550988c3b570f041f4ed15e563a9f50aa
           persist-credentials: false
       - name: Decode for inspection, without applying or executing recovered code
         run: |
           python3 - <<'PY'
           import base64, hashlib, json, lzma, pathlib, subprocess
-          parts = sorted(pathlib.Path('.image-patch').glob('*.b64'))
+          parts = [pathlib.Path('.image-patch') / f'{i:02}.b64' for i in range(6)]
           encoded = b''.join(p.read_bytes().strip() for p in parts)
           compressed = base64.b64decode(encoded, validate=True)
-          decoder = lzma.LZMADecompressor()
-          prefix = decoder.decompress(compressed)
+          patch = lzma.decompress(compressed)
+          digest = hashlib.sha256(patch).hexdigest()
+          assert digest == '3e4079c762d1a97edf771f8c736fa3c0f20dfe5e1f1572d7e7dcbb5a89ce0226', digest
           out = pathlib.Path('/tmp/image-recovery'); out.mkdir()
-          (out/'recovered-prefix.patch').write_bytes(prefix)
-          (out/'patch-fragments.xz').write_bytes(compressed)
-          report = {'parts': [p.name for p in parts], 'complete': decoder.eof,
-                    'decoded_bytes': len(prefix), 'compressed_bytes': len(compressed),
-                    'sha256': hashlib.sha256(prefix).hexdigest(),
-                    'source_commit': subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()}
+          (out/'image-product.patch').write_bytes(patch)
+          report = {'parts': [p.name for p in parts], 'complete': True,
+                    'decoded_bytes': len(patch), 'compressed_bytes': len(compressed),
+                    'sha256': digest, 'source_commit': subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()}
           (out/'recovery.json').write_text(json.dumps(report, indent=2)+'\n')
           print(json.dumps(report))
           PY
