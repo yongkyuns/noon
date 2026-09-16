@@ -1,6 +1,7 @@
 """Small layout helpers over ordinary Noon objects, not another scene system."""
 from dataclasses import dataclass
 from math import cos, sin, pi
+from textwrap import wrap
 from noon import (Color, Text, MathTypst, Line, VMobject, FadeIn, FadeOut,
                   Transform, Rotate, linear)
 
@@ -10,6 +11,10 @@ class Layout:
     title_y: float = 3.38
     question_y: float = 2.76
     caption_y: float = -3.38
+    caption_columns: int = 82
+    caption_font_size: int = 23
+    caption_line_gap: float = 0.38
+    caption_width: float = 12.7
     plot_left: float = -5.80
     plot_right: float = 0.30
     plot_bottom: float = -1.95
@@ -69,7 +74,7 @@ class Stage:
     def __init__(self, scene, number, title, question):
         self.scene = scene
         self.content = []
-        self.caption = None
+        self.caption = []
         scene.add(text(f'{number:02d} / INS + GNSS',(-4.95,LAYOUT.title_y),16,MUTED,max_width=3),
                   text(title,(1.25,LAYOUT.title_y),31,max_width=9.3),
                   text(question,(0,LAYOUT.question_y),23,MUTED),
@@ -86,11 +91,22 @@ class Stage:
             await self.scene.wait(hold)
 
     async def say(self, words, hold=LAYOUT.hold):
-        new = text(words,(0,LAYOUT.caption_y),23,max_width=12.7)
-        animations = [FadeIn(new)]
-        if self.caption is not None:
-            animations.append(FadeOut(self.caption))
-        await self.scene.play(*animations,run_time=LAYOUT.transition)
+        # Keep explanations readable instead of shrinking a long single line.
+        lines = wrap(words, width=LAYOUT.caption_columns,
+                     break_long_words=False, break_on_hyphens=False)
+        if not 1 <= len(lines) <= 2:
+            raise ValueError('Use one or two caption lines; split longer explanations into beats')
+        top = LAYOUT.caption_y + (len(lines) - 1) * LAYOUT.caption_line_gap / 2
+        new = [text(line, (0, top - i * LAYOUT.caption_line_gap),
+                    LAYOUT.caption_font_size, max_width=LAYOUT.caption_width)
+               for i, line in enumerate(lines)]
+        fade_in_time = LAYOUT.transition
+        if self.caption:
+            # Sequential fades avoid briefly superimposing two explanations.
+            fade_in_time /= 2
+            await self.scene.play(*(FadeOut(o) for o in self.caption),
+                                  run_time=LAYOUT.transition - fade_in_time)
+        await self.scene.play(*(FadeIn(o) for o in new), run_time=fade_in_time)
         self.caption = new
         if hold:
             await self.scene.wait(hold)
