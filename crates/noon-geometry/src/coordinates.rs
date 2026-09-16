@@ -156,10 +156,10 @@ impl AxesFrame {
         }
         let x_span = x_range[1] - x_range[0];
         let y_span = y_range[1] - y_range[0];
-        let x_mid = x_range[0] + x_span * 0.5;
-        let y_mid = y_range[0] + y_span * 0.5;
-        let x_origin = (origin_shift(x_range) - x_mid) / x_span * x_length;
-        let y_origin = (origin_shift(y_range) - y_mid) / y_span * y_length;
+        // Normalize before centering: a large absolute range midpoint can
+        // round onto an endpoint even though the span is representable.
+        let x_origin = ((origin_shift(x_range) - x_range[0]) / x_span - 0.5) * x_length;
+        let y_origin = ((origin_shift(y_range) - y_range[0]) / y_span - 0.5) * y_length;
         Ok(Self::new(
             NumberLineFrame::new(
                 x_range,
@@ -226,11 +226,22 @@ pub fn number_line_tick_values(
     let stop = end + if include_tip { 0.0 } else { 1.0e-6 };
     let mut ticks = Vec::new();
     if (start < stop && stop < 0.0) || (stop > start && start > 0.0) {
-        append_ticks(&mut ticks, start, stop, step, 1.0, limit)?;
+        append_ticks(&mut ticks, start, stop, step, 1.0, false, limit)?;
     } else {
         let first = if exclude_origin { step } else { 0.0 };
-        append_ticks(&mut ticks, first, start.abs() + 1.0e-6, step, -1.0, limit)?;
-        append_ticks(&mut ticks, first, stop, step, 1.0, limit)?;
+        append_ticks(
+            &mut ticks,
+            first,
+            start.abs() + 1.0e-6,
+            step,
+            -1.0,
+            false,
+            limit,
+        )?;
+        // The negative pass already owns zero. Do not charge its duplicate to
+        // the admission budget, or an exact-capacity valid line is rejected.
+        let skip_origin = !exclude_origin && !ticks.is_empty();
+        append_ticks(&mut ticks, first, stop, step, 1.0, skip_origin, limit)?;
         ticks.sort_by(f64::total_cmp);
         ticks.dedup_by(|left, right| *left == *right);
     }
@@ -243,10 +254,16 @@ fn append_ticks(
     stop: f64,
     step: f64,
     sign: f64,
+    skip_first: bool,
     limit: usize,
 ) -> Result<(), CoordinateError> {
     let count = ((stop - start) / step).ceil().max(0.0);
-    if !stop.is_finite() || !count.is_finite() || count > limit.saturating_sub(ticks.len()) as f64 {
+    let skipped = usize::from(skip_first && count > 0.0);
+    let appended = count - skipped as f64;
+    if !stop.is_finite()
+        || !count.is_finite()
+        || appended > limit.saturating_sub(ticks.len()) as f64
+    {
         return Err(CoordinateError::TickLimitExceeded);
     }
     let count = count as usize;
@@ -255,9 +272,9 @@ fn append_ticks(
         return Err(CoordinateError::InvalidRange);
     }
     ticks
-        .try_reserve_exact(count)
+        .try_reserve_exact(count - skipped)
         .map_err(|_| CoordinateError::AllocationFailed)?;
-    for index in 0..count {
+    for index in skipped..count {
         let value = sign * (start + increment * index as f64);
         if !value.is_finite() {
             return Err(CoordinateError::InvalidRange);
@@ -274,6 +291,9 @@ fn finite_point(point: [f64; 2]) -> Result<[f64; 2], CoordinateError> {
         Err(CoordinateError::InvalidPoint)
     }
 }
+
+#[cfg(test)]
+mod boundary_tests;
 
 #[cfg(test)]
 mod tests {

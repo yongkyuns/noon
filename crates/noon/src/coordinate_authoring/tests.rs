@@ -285,3 +285,47 @@ fn direct_and_forward_effective_coordinate_samples_agree() {
         forward_axes.effective_frame(forward.session()).unwrap(),
     );
 }
+
+#[test]
+fn large_offset_axes_map_retained_data_without_midpoint_rounding() {
+    let mut scene = Scene::new();
+    let low = 1.0e16;
+    let high = low + 2.0;
+    let mut options = ManimAxesOptions::new([low, high, 2.0], [-1.0, 1.0, 1.0], 8.0, 4.0);
+    options.ticks.enabled = false;
+    let axes = scene.axes(&options).unwrap();
+    let frame = axes.authored_frame().unwrap();
+    near(frame.coords_to_point(low, -1.0).unwrap(), [-4.0, -2.0]);
+    near(frame.coords_to_point(high, 1.0).unwrap(), [4.0, 2.0]);
+    let points = [[low, -1.0], [high, 1.0]];
+    let data = ManimGeometryOptions::axes_sampled_plot(frame, &points).unwrap();
+    let curve = scene.geometry(data).unwrap();
+    assert_eq!(curve.path_query().unwrap().start().unwrap(), (-4.0, -2.0));
+    assert_eq!(curve.path_query().unwrap().end().unwrap(), (4.0, 2.0));
+    assert_eq!(axes.x_axis().unwrap().range().unwrap(), [low, high, 2.0]);
+}
+
+#[test]
+fn exact_tick_capacity_constructs_and_one_less_rejects_atomically() {
+    let mut scene = Scene::new();
+    let mut options = ManimNumberLineOptions::new([-2.0, 2.0, 1.0]);
+    options.ticks.limit = 5;
+    let line = scene.number_line(&options).unwrap();
+    let ticks = line.ticks().unwrap();
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .semantic_family_members_checked(ticks.node_id())
+            .unwrap()
+            .len(),
+        5
+    );
+    let revision = scene.revision();
+    let shaft_before = line.shaft().unwrap().state().unwrap();
+    options.ticks.limit = 4;
+    assert!(scene.number_line(&options).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(line.shaft().unwrap().state().unwrap(), shaft_before);
+    assert_eq!(resources(&scene), 0);
+}

@@ -4,7 +4,8 @@ import { qualifyNumberLabels } from "./number-label-smoke.js";
 import { WasmAuthoringStore, WasmCoordinateOptions, WasmPlotSamplingPlan } from "./pkg/noon_web.js";
 
 function near(actual, expected, label) {
-  if (actual.length !== expected.length || actual.some((value, i) => Math.abs(value - expected[i]) > 2e-5)) {
+  if (actual.length !== expected.length || actual.some((value, i) =>
+      !Number.isFinite(value) || Math.abs(value - expected[i]) > 2e-5)) {
     throw new Error(`${label}: ${actual} != ${expected}`);
   }
 }
@@ -35,6 +36,29 @@ function directWasmPreparation() {
   axes.free();
   store.free();
 
+  // Adjacent large data values have no representable midpoint. The shared
+  // mapper must still preserve the intended scene rectangle and curve bounds.
+  const offsetStore = new WasmAuthoringStore();
+  try {
+    for (const range of [[1e16, 1e16 + 2, 2], [-1e16 - 2, -1e16, 2]]) {
+      const options = WasmCoordinateOptions.axes(range, range, 8, 4);
+      options.setTicks(false, 0.1, true);
+      const offsetAxes = offsetStore.createCoordinates(options);
+      const offsetFrame = offsetAxes.axesFrame();
+      try {
+        near(Array.from(offsetFrame.coordsToPoint(range[0], range[0])), [-4, -2], "large-offset start");
+        near(Array.from(offsetFrame.coordsToPoint(range[1], range[1])), [4, 2], "large-offset end");
+        const mapped = offsetStore.createManimGeometry(
+          offsetFrame.sampledPlot([range[0], range[0], range[1], range[1]]));
+        const mappedPath = mapped.pathQuery();
+        try {
+          near(Array.from(mappedPath.start()), [-4, -2], "large-offset data start");
+          near(Array.from(mappedPath.end()), [4, 2], "large-offset data end");
+        } finally { mappedPath.free(); mapped.free(); }
+      } finally { offsetFrame.free(); offsetAxes.free(); }
+    }
+  } finally { offsetStore.free(); }
+
   const split = WasmPlotSamplingPlan.parametric([-1, 1, 0.25], [0], 0.05, undefined);
   if (Array.from(split.parameters()).includes(0)) throw new Error("discontinuity gap was sampled");
   split.free();
@@ -52,6 +76,17 @@ def near(actual, expected):
 
 class PlottingQualification(Scene):
     def construct(self):
+        # Exercise actual Rust mapping through Pyodide, not Python arithmetic.
+        for limits in ((1e16, 1e16 + 2, 2), (-1e16 - 2, -1e16, 2)):
+            offset = Axes(limits, limits, x_length=8, y_length=4, include_ticks=False)
+            near(offset.c2p(limits[0], limits[0]), (-4, -2))
+            near(offset.c2p(limits[1], limits[1]), (4, 2))
+            mapped = offset.plot_samples(((limits[0], limits[0]), (limits[1], limits[1])))
+            near(mapped.get_start(), (-4, -2))
+            near(mapped.get_end(), (4, 2))
+            offset.shift(RIGHT)
+            near(offset.c2p(limits[0], limits[0]), (-3, -2))
+
         line = NumberLine([2, 6, 1], length=8, rotation=pi / 2)
         near(line.n2p(4), (0, 0))
         near(line.n2p(6), (0, 4))
