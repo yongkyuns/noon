@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cp, mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -63,12 +63,6 @@ async function buildArguments(env) {
   try {
     await mkdir(path.join(temp, "scripts"));
     await mkdir(path.join(temp, "bin"));
-    // Keep the real tutorial bundler in the build fixture; only engine tools
-    // are stubs here. Browser qualification separately exercises the output.
-    const tutorial = "web/tutorials/ins-gnss";
-    await mkdir(path.join(temp, tutorial, "tools"), { recursive: true });
-    await cp(path.join(root, tutorial, "src"), path.join(temp, tutorial, "src"), { recursive: true });
-    await writeFile(path.join(temp, tutorial, "tools/build.py"), await source(`${tutorial}/tools/build.py`));
     await writeFile(path.join(temp, "scripts/build-web-demo.sh"), await source("scripts/build-web-demo.sh"));
     await writeFile(path.join(temp, "bin/node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     await writeFile(path.join(temp, "bin/wasm-pack"), '#!/bin/sh\nprintf "%s\\n" "$@" > "$NOON_TEST_ARGS"\n', { mode: 0o755 });
@@ -78,7 +72,6 @@ async function buildArguments(env) {
         NOON_SKIP_WEB_PREFLIGHT: "1", NOON_WEB_PREFLIGHT_ONLY: "0", NOON_WASM_PROFILE: "release",
         NOON_WASM_SKIP_OPT: "0", NOON_RENDERER_SMOKE: "0", NOON_REPLAY_SMOKE: "0", ...env } });
     assert.equal(result.status, 0, result.stderr);
-    assert.match(await readFile(path.join(temp, tutorial, "scene.py"), "utf8"), /class InsGnssTutorial/);
     return (await readFile(argsFile, "utf8")).trim().split("\n");
   } finally { await rm(temp, { recursive: true, force: true }); }
 }

@@ -8,7 +8,7 @@ import path from "node:path";
 export async function serveRepository(repoRoot, port, { crossOriginIsolated = false } = {}) {
   const baseUrl = `http://127.0.0.1:${port}`;
   const contentTypes = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript",
-    ".css": "text/css", ".wasm": "application/wasm", ".json": "application/json", ".py": "text/x-python" };
+    ".wasm": "application/wasm", ".json": "application/json", ".py": "text/x-python" };
   const server = createServer(async (request, response) => {
     try {
       const relative = decodeURIComponent(new URL(request.url, baseUrl).pathname).replace(/^\/+/, "");
