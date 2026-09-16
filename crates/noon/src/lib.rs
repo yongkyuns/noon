@@ -92,6 +92,8 @@ mod focus_on_authoring;
 mod geometry_authoring;
 mod host_callbacks;
 pub mod integration;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod live_coordinate_plotting_example;
 mod live_program;
 mod live_session;
 mod matrix_authoring;

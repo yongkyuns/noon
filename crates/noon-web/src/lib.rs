@@ -47,6 +47,8 @@ mod manim_scale_bridge;
 mod manim_shape_matcher_handle_bridge;
 #[cfg(test)]
 mod morph_preload_cases;
+#[cfg(any(target_arch = "wasm32", test))]
+mod plot_error;
 mod renderer_observation;
 #[cfg(all(
     feature = "renderer",

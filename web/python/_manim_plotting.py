@@ -1,8 +1,9 @@
 """Linear 2D coordinates and preparation-only plots over shared Rust handles.
 
 The initial coordinate constructors require explicit three-value ranges and do
-not support tips or construction after execution starts. Numeric native Text
-label families can be attached before the first play/wait.
+not support tips. Coordinates may be constructed after ordinary plays/waits;
+add late coordinates to the Scene before querying or plotting against them.
+Numeric native Text label families must be constructed before the first play/wait.
 Existing coordinates remain queryable after plays; curves use ordinary live
 geometry publication. Python owns callables/coercion, never coordinate math.
 """
@@ -98,11 +99,15 @@ def _coordinate_context(shafts):
     _outside_callback()
     contexts = [context for shaft in shafts
                 if (context := _shared._live_mutation_context(shaft)) is not None]
-    if not contexts:
-        return _shared._live_constructor_context("coordinate query")
-    if any(context is not contexts[0] for context in contexts[1:]):
+    if contexts and any(context is not contexts[0] for context in contexts[1:]):
         raise RuntimeError("coordinate shafts belong to different execution contexts")
-    return contexts[0]
+    context = contexts[0] if contexts else _shared._live_constructor_context("coordinate query")
+    if context is not None and not all(_shared._is_bound(shaft) for shaft in shafts):
+        raise NotImplementedError(
+            "add live coordinates to the Scene before querying or plotting; "
+            "detached live coordinate reads are not yet exposed by the Python context"
+        )
+    return context
 
 
 def _family(wrapper, handle, members):
@@ -139,14 +144,11 @@ def _coordinate_style(options, color, kwargs):
     _shared._apply_constructor_color(options, color)
 
 
-def _cold_coordinates():
+def _coordinate_constructor_context():
     _outside_callback()
     if _create_coordinates is None:
         raise RuntimeError("coordinates require the shared Rust authoring host")
-    if _shared._live_constructor_context("coordinates") is not None:
-        raise NotImplementedError(
-            "create axes before the first play/wait; live coordinate-family construction is not yet supported"
-        )
+    return _shared._live_constructor_context("coordinates")
 
 
 class NumberLine(_compat.Group):
@@ -155,7 +157,7 @@ class NumberLine(_compat.Group):
     def __init__(self, x_range, *, length=None, unit_size=1.0, rotation=0.0,
                  include_ticks=True, tick_size=0.1, exclude_origin_tick=False,
                  include_tip=False, color=None, **kwargs):
-        _cold_coordinates()
+        context = _coordinate_constructor_context()
         if include_tip:
             raise NotImplementedError("NumberLine tips are not yet supported")
         options = engine_call(
@@ -168,7 +170,7 @@ class NumberLine(_compat.Group):
         except BaseException:
             options.free()
             raise
-        _attach_number_line(self, engine_call(_create_coordinates, options))
+        _attach_number_line(self, engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options))
 
     @property
     def shaft(self):
@@ -247,7 +249,7 @@ class Axes(_compat.Group):
 
     def __init__(self, x_range, y_range, *, x_length, y_length, tips=False,
                  include_ticks=True, tick_size=0.1, color=None, **kwargs):
-        _cold_coordinates()
+        context = _coordinate_constructor_context()
         if tips:
             raise NotImplementedError("Axes tips are not yet supported")
         options = engine_call(
@@ -260,7 +262,7 @@ class Axes(_compat.Group):
         except BaseException:
             options.free()
             raise
-        handle = engine_call(_create_coordinates, options)
+        handle = engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options)
         members = [_attach_number_line(object.__new__(NumberLine), engine_call(handle.coordinateAxis, index))
                    for index in (0, 1)]
         _family(self, handle, members)
