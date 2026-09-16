@@ -111,10 +111,10 @@ test("worker delegates every Scene construct lifecycle to the canonical adapter"
 
 
 test("retired callback sessions release only after the active Python run unwinds", async () => {
-  const retirementSource = source.slice(
-    source.indexOf("function retireSemanticContext"),
-    source.indexOf("async function handleHostRequest"),
-  );
+  const start = source.indexOf("function retireSemanticContext");
+  const end = source.indexOf("async function runAuthoringSource", start);
+  assert.ok(start >= 0 && end > start, "retirement function boundaries must exist");
+  const retirementSource = source.slice(start, end);
   let finishRun;
   const activeRun = new Promise((resolve) => { finishRun = resolve; });
   let releases = 0;

@@ -32,7 +32,9 @@ pub(crate) fn coordinate_failure(error: noon::CoordinateAuthoringError) -> Autho
         Authoring(error) => error.into(),
         Plot(error) => plot_failure(error),
         Coordinate(error) => coordinate_math_failure(error),
-        InvalidOptions(reason) => AuthoringFailure::new("invalid_input", "coordinate.options", reason),
+        InvalidOptions(reason) => {
+            AuthoringFailure::new("invalid_input", "coordinate.options", reason)
+        }
         InvalidTopology => AuthoringFailure::new(
             "invalid_input",
             "coordinate.topology",
@@ -144,7 +146,9 @@ impl WasmPlotSamplingPlan {
         self.require_count(values.len())?;
         let mut points = Vec::new();
         points.try_reserve_exact(values.len()).map_err(|_| {
-            js_error(sampling_failure(noon::PlotPreparationError::AllocationFailed))
+            js_error(sampling_failure(
+                noon::PlotPreparationError::AllocationFailed,
+            ))
         })?;
         points.extend(
             self.plan
@@ -172,7 +176,9 @@ impl WasmPlotSamplingPlan {
         self.require_count(values.len() / 2)?;
         let mut points = Vec::new();
         points.try_reserve_exact(values.len() / 2).map_err(|_| {
-            js_error(sampling_failure(noon::PlotPreparationError::AllocationFailed))
+            js_error(sampling_failure(
+                noon::PlotPreparationError::AllocationFailed,
+            ))
         })?;
         points.extend_from_slice(values.as_chunks::<2>().0);
         self.geometry(points, smooth)
@@ -194,7 +200,9 @@ pub(crate) fn data_points(values: &[f64]) -> Result<Vec<[f64; 2]>, JsValue> {
     }
     let mut points = Vec::new();
     points.try_reserve_exact(values.len() / 2).map_err(|_| {
-        js_error(sampling_failure(noon::PlotPreparationError::AllocationFailed))
+        js_error(sampling_failure(
+            noon::PlotPreparationError::AllocationFailed,
+        ))
     })?;
     points.extend_from_slice(values.as_chunks::<2>().0);
     Ok(points)

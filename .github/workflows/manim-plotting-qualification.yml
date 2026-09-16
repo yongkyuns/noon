@@ -1,0 +1,54 @@
+name: Plotting qualification
+
+on:
+  pull_request:
+    paths:
+      - 'crates/noon*/**'
+      - 'web/python/**'
+      - 'web/python-worker.source.js'
+      - 'web/python-compat-modules.js'
+      - 'web/plotting-smoke.js'
+      - 'web/manim-compat-smoke.html'
+      - 'scripts/plotting-qualification.mjs'
+      - '.github/workflows/manim-plotting-qualification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plotting-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plotting:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build exact-source browser package
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          preflight: 'true'
+          cache-ref: ${{ github.event.pull_request.base.sha }}
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install pinned browser dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Qualify paired plotting and resumed Python authoring
+        run: node scripts/plotting-qualification.mjs
+      - name: Record tested checkout
+        if: always()
+        run: |
+          mkdir -p plotting-artifacts
+          git rev-parse HEAD > plotting-artifacts/source-sha.txt
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: plotting-${{ github.event.pull_request.head.sha || github.sha }}
+          path: plotting-artifacts/
+          retention-days: 7

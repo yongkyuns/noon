@@ -99,9 +99,21 @@ impl WasmCoordinateOptions {
     }
 
     #[wasm_bindgen(js_name = setColor)]
-    pub fn set_color(&mut self, red: f64, green: f64, blue: f64, alpha: f64) -> Result<(), JsValue> {
+    pub fn set_color(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), JsValue> {
         let color = crate::authoring_mobject::family_color(true, red, green, blue, alpha)
-            .map_err(|error| js_error(AuthoringFailure::new("invalid_input", "coordinate.color", error)))?
+            .map_err(|error| {
+                js_error(AuthoringFailure::new(
+                    "invalid_input",
+                    "coordinate.color",
+                    error,
+                ))
+            })?
             .expect("enabled color");
         self.style_mut().stroke = Some(noon::SemanticPaint::Solid(color));
         Ok(())
@@ -312,10 +324,14 @@ impl WasmAuthoringFamilyHandle {
 }
 
 impl CanonicalAuthoringSceneContext {
-    fn coordinate_line_frame(&mut self, line: &ManimNumberLine) -> Result<NumberLineFrame, JsValue> {
+    fn coordinate_line_frame(
+        &mut self,
+        line: &ManimNumberLine,
+    ) -> Result<NumberLineFrame, JsValue> {
         let range = line.range().map_err(coordinate_failure).map_err(js_error)?;
         let shaft = line.shaft().map_err(coordinate_failure).map_err(js_error)?;
-        let path = self.query_mobject_path(&WasmAuthoringMobjectHandle::from_semantic_mobject(shaft))?;
+        let path =
+            self.query_mobject_path(&WasmAuthoringMobjectHandle::from_semantic_mobject(shaft))?;
         let start = path.start()?;
         let end = path.end()?;
         NumberLineFrame::new(range, [start[0], start[1]], [end[0], end[1]])
@@ -349,10 +365,31 @@ impl CanonicalAuthoringSceneContext {
         let axes = ManimAxes::from_family(handle.semantic_family()?)
             .map_err(coordinate_failure)
             .map_err(js_error)?;
-        let x = axes.x_axis().map_err(coordinate_failure).map_err(js_error)?;
-        let y = axes.y_axis().map_err(coordinate_failure).map_err(js_error)?;
+        let x = axes
+            .x_axis()
+            .map_err(coordinate_failure)
+            .map_err(js_error)?;
+        let y = axes
+            .y_axis()
+            .map_err(coordinate_failure)
+            .map_err(js_error)?;
         Ok(WasmAxesFrame {
-            frame: AxesFrame::new(self.coordinate_line_frame(&x)?, self.coordinate_line_frame(&y)?),
+            frame: AxesFrame::new(
+                self.coordinate_line_frame(&x)?,
+                self.coordinate_line_frame(&y)?,
+            ),
         })
     }
+}
+
+/// Qualification bootstrap only: native and direct WASM execute one Rust builder.
+/// JavaScript supplies the platform canvas, not a serialized scene.
+#[cfg(all(feature = "renderer", any(debug_assertions, feature = "renderer-smoke")))]
+#[wasm_bindgen(js_name = createCoordinatePlottingRenderer)]
+pub async fn create_coordinate_plotting_renderer(
+    canvas: web_sys::OffscreenCanvas,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::coordinate_plotting_example::session()
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    crate::WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
