@@ -1,0 +1,29 @@
+name: Image head export (temporary)
+on:
+  push:
+    branches: [codex/b2-image-workspace-bootstrap]
+    paths: [.github/workflows/image-head-export.yml]
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 591effcff8d3b32f93d7dc660d6a78589fc56b5e
+          persist-credentials: false
+      - name: Export exact source and commit provenance
+        run: |
+          mkdir -p /tmp/image-head
+          git archive --format=tar HEAD | gzip -1 > /tmp/image-head/source.tar.gz
+          git rev-parse HEAD > /tmp/image-head/commit.txt
+          git rev-parse HEAD^{tree} > /tmp/image-head/tree.txt
+          sha256sum /tmp/image-head/source.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noon-image-current-head
+          path: /tmp/image-head
+          retention-days: 2
+          compression-level: 0
