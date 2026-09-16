@@ -10,6 +10,25 @@ use noon_core::{
 };
 use std::{cell::RefCell, rc::Rc};
 
+fn publish_geometry_options(
+    options: crate::ManimGeometryOptions,
+    store: &mut SemanticStore,
+    publish: impl FnOnce(
+        &mut SemanticStore,
+        SemanticMutationTransaction,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
+) -> Result<SemanticNodeId, AuthoringError> {
+    options.with_state(store, |store, state| {
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_node(SemanticNodeCreation::object(state));
+        let result = publish(store, transaction)?;
+        let [SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one detached geometry creation has one exact semantic impact")
+        };
+        Ok(*node)
+    })
+}
+
 /// A scene owns its shared semantic store/root and, after bootstrap, the one
 /// execution component lowered from them. The optional execution slot is control
 /// ownership only; Runtime state remains owned by the contained [`ExecutionSession`].
@@ -69,31 +88,39 @@ impl Scene {
     ///
     /// The same operation is valid before and after execution bootstrap. Running
     /// Scenes preflight execution provenance before importing immutable resources,
-    /// then publish the semantic creation through the owned execution component so
-    /// its revision stays coherent. The new object remains detached until admitted
-    /// by an explicit membership/lifecycle operation.
+    /// then keep any retained-path import scoped through the complete semantic /
+    /// compiler / Runtime publication. A rejected publication therefore releases
+    /// only a newly imported unpublished path. The new object remains detached
+    /// until admitted by an explicit membership/lifecycle operation.
     pub fn geometry(
         &mut self,
         options: crate::ManimGeometryOptions,
     ) -> Result<Mobject, crate::AuthoringError> {
-        if let Some(execution) = self.execution.as_ref() {
-            let store = self.store.borrow();
-            execution
-                .require_resource_creation_at_root(&store, self.root)
-                .map_err(AuthoringError::from)?;
-        }
-
-        let state = {
-            let mut store = self.store.borrow_mut();
-            options.into_state(&mut store)?
+        let root = self.root;
+        let store_rc = Rc::clone(&self.store);
+        let node = match self.execution.as_mut() {
+            Some(execution) => {
+                {
+                    let store = store_rc.borrow();
+                    execution
+                        .require_resource_creation_at_root(&store, root)
+                        .map_err(AuthoringError::from)?;
+                }
+                let mut store = store_rc.borrow_mut();
+                publish_geometry_options(options, &mut store, |store, transaction| {
+                    execution
+                        .apply_semantic_transaction_at_root(store, root, transaction)
+                        .map_err(AuthoringError::from)
+                })?
+            }
+            None => {
+                let mut store = store_rc.borrow_mut();
+                publish_geometry_options(options, &mut store, |store, transaction| {
+                    transaction.apply(store).map_err(AuthoringError::from)
+                })?
+            }
         };
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_node(SemanticNodeCreation::object(state));
-        let result = self.apply_semantic_transaction(transaction)?;
-        let [SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
-            unreachable!("one detached geometry creation has one exact semantic impact")
-        };
-        Mobject::from_node(Rc::clone(&self.store), *node)
+        Mobject::from_node(store_rc, node)
     }
 
     /// Construct one detached Arrow-family object through the shared Rust
@@ -588,3 +615,5 @@ impl Scene {
 }
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod geometry_atomicity_tests;
