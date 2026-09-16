@@ -15,7 +15,11 @@ fn axes_options() -> ManimAxesOptions {
 }
 
 fn resources(scene: &Scene) -> usize {
-    scene.integration_store().borrow().geometry_resources().len()
+    scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .len()
 }
 
 #[test]
@@ -30,7 +34,9 @@ fn number_line_range_and_ticks_live_in_the_semantic_family() {
     assert_eq!(frame.unit_size(), 2.0);
     let ticks = line.ticks().unwrap();
     let store = scene.integration_store().borrow();
-    let tick_nodes = store.semantic_family_members_checked(ticks.node_id()).unwrap();
+    let tick_nodes = store
+        .semantic_family_members_checked(ticks.node_id())
+        .unwrap();
     assert_eq!(tick_nodes.len(), 5);
     let first = tick_nodes[0];
     drop(store);
@@ -43,7 +49,12 @@ fn number_line_range_and_ticks_live_in_the_semantic_family() {
 fn axes_positive_negative_ranges_use_numerical_midpoints() {
     let mut scene = Scene::new();
     let axes = scene
-        .axes(&ManimAxesOptions::new([2.0, 6.0, 1.0], [-6.0, -2.0, 1.0], 8.0, 4.0))
+        .axes(&ManimAxesOptions::new(
+            [2.0, 6.0, 1.0],
+            [-6.0, -2.0, 1.0],
+            8.0,
+            4.0,
+        ))
         .unwrap();
     let frame = axes.authored_frame().unwrap();
     near(frame.coords_to_point(4.0, -4.0).unwrap(), [0.0, 0.0]);
@@ -58,7 +69,9 @@ fn affine_family_edits_keep_ranges_and_round_trips() {
     let mut scene = Scene::new();
     let axes = scene.axes(&axes_options()).unwrap();
     axes.family().scale(-1.5, 2.0).unwrap();
-    axes.family().rotate(0.7, ManimRotationPivot::Center).unwrap();
+    axes.family()
+        .rotate(0.7, ManimRotationPivot::Center)
+        .unwrap();
     axes.family().shift(3.0, -2.0).unwrap();
     let frame = axes.authored_frame().unwrap();
     for point in [[0.0, 0.0], [1.0, 0.5], [-3.0, 2.0]] {
@@ -96,10 +109,25 @@ fn shared_family_copy_reconstructs_ranges_without_wrapper_metadata() {
     let copied = axes.family().copy_family().unwrap();
     let copy = ManimAxes::from_family(copied.root().clone()).unwrap();
     assert_ne!(copy.family().node_id(), axes.family().node_id());
-    assert_eq!(copy.authored_frame().unwrap(), axes.authored_frame().unwrap());
+    assert_eq!(
+        copy.authored_frame().unwrap(),
+        axes.authored_frame().unwrap()
+    );
     copy.family().shift(1.0, 0.0).unwrap();
-    near(axes.authored_frame().unwrap().coords_to_point(0.0, 0.0).unwrap(), [2.0, 3.0]);
-    near(copy.authored_frame().unwrap().coords_to_point(0.0, 0.0).unwrap(), [3.0, 3.0]);
+    near(
+        axes.authored_frame()
+            .unwrap()
+            .coords_to_point(0.0, 0.0)
+            .unwrap(),
+        [2.0, 3.0],
+    );
+    near(
+        copy.authored_frame()
+            .unwrap()
+            .coords_to_point(0.0, 0.0)
+            .unwrap(),
+        [3.0, 3.0],
+    );
 }
 
 #[test]
@@ -108,7 +136,10 @@ fn membership_edits_do_not_leave_a_cached_axis_behind() {
     let axes = scene.axes(&axes_options()).unwrap();
     let x = axes.x_axis().unwrap();
     axes.family().remove_many(&[x.family().into()]).unwrap();
-    assert!(matches!(axes.authored_frame(), Err(CoordinateAuthoringError::InvalidTopology)));
+    assert!(matches!(
+        axes.authored_frame(),
+        Err(CoordinateAuthoringError::InvalidTopology)
+    ));
 }
 
 #[test]
@@ -135,19 +166,22 @@ fn mapped_curves_share_the_coordinate_snapshot_and_data_order() {
             x * x
         },
         false,
-    ).unwrap();
+    )
+    .unwrap();
     let graph = scene.geometry(options).unwrap();
     assert_eq!(calls.get(), 5);
     assert_eq!(graph.path_query().unwrap().start().unwrap(), (1.0, 2.0));
     assert_eq!(graph.path_query().unwrap().end().unwrap(), (3.0, 2.0));
-    let data = ManimGeometryOptions::axes_sampled_plot(
-        frame, &[[1.0, 0.0], [1.0, 1.0], [-1.0, 0.0]],
-    ).unwrap();
+    let data =
+        ManimGeometryOptions::axes_sampled_plot(frame, &[[1.0, 0.0], [1.0, 1.0], [-1.0, 0.0]])
+            .unwrap();
     let data = scene.geometry(data).unwrap();
     assert_eq!(data.path_query().unwrap().curve_count(), 2);
     assert_eq!(data.path_query().unwrap().start().unwrap(), (3.0, 1.0));
     assert_eq!(data.path_query().unwrap().end().unwrap(), (1.0, 1.0));
-    scene.add_many(&[axes.family().into(), (&graph).into(), (&data).into()]).unwrap();
+    scene
+        .add_many(&[axes.family().into(), (&graph).into(), (&data).into()])
+        .unwrap();
     let session = scene.execution_session().unwrap();
     assert!(!session.frame().objects.is_empty());
     assert_eq!(calls.get(), 5);
@@ -170,7 +204,9 @@ impl LiveContinuation for MovingAxes {
         live.declare_and_activate_family_transform_to(
             self.source.family(),
             &self.target,
-            AnimationOptions::new().run_time(1.0).rate_func(RateFunction::Linear),
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
         )
         .map(ContinuationStep::Await)
         .map_err(|error| error.to_string())
@@ -183,29 +219,54 @@ fn moving_axes() -> (ManimAxes, LiveProgram<MovingAxes>) {
     let copy = axes.family().copy_family().unwrap();
     copy.root().shift(2.0, 4.0).unwrap();
     scene.add_many(&[axes.family().into()]).unwrap();
-    let program = scene.into_live_program(MovingAxes {
-        source: axes.clone(), target: copy.root().clone(), started: false,
-    }).unwrap();
+    let program = scene
+        .into_live_program(MovingAxes {
+            source: axes.clone(),
+            target: copy.root().clone(),
+            started: false,
+        })
+        .unwrap();
     (axes, program)
 }
 
 #[test]
 fn effective_axis_queries_follow_active_drivers_without_semantic_churn() {
     let (axes, mut program) = moving_axes();
-    assert!(matches!(program.resume().unwrap(), LiveProgramStatus::Awaiting(_)));
+    assert!(matches!(
+        program.resume().unwrap(),
+        LiveProgramStatus::Awaiting(_)
+    ));
     let revision = axes.family().integration_store().borrow().scene_revision();
     let mut callbacks = RustHostCallbackTable::new();
-    assert!(matches!(program.drive_to(&mut callbacks, 0.5).unwrap(), LiveProgramStatus::Awaiting(_)));
-    near(axes.authored_frame().unwrap().coords_to_point(0.0, 0.0).unwrap(), [0.0, 0.0]);
+    assert!(matches!(
+        program.drive_to(&mut callbacks, 0.5).unwrap(),
+        LiveProgramStatus::Awaiting(_)
+    ));
+    near(
+        axes.authored_frame()
+            .unwrap()
+            .coords_to_point(0.0, 0.0)
+            .unwrap(),
+        [0.0, 0.0],
+    );
     let frame = axes.effective_frame(program.session()).unwrap();
     near(frame.coords_to_point(0.0, 0.0).unwrap(), [1.0, 2.0]);
     near(frame.point_to_coords([1.5, 2.25]).unwrap(), [0.5, 0.25]);
-    assert_eq!(axes.family().integration_store().borrow().scene_revision(), revision);
+    assert_eq!(
+        axes.family().integration_store().borrow().scene_revision(),
+        revision
+    );
     let status = program.drive_to(&mut callbacks, 1.0).unwrap();
     assert!(matches!(status, LiveProgramStatus::PublicationPending(_)));
     let context = program.take_renderer_publication().context();
     program.admit_publication(context).unwrap();
-    near(axes.authored_frame().unwrap().coords_to_point(0.0, 0.0).unwrap(), [2.0, 4.0]);
+    near(
+        axes.authored_frame()
+            .unwrap()
+            .coords_to_point(0.0, 0.0)
+            .unwrap(),
+        [2.0, 4.0],
+    );
 }
 
 #[test]

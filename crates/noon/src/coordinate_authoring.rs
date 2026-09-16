@@ -131,7 +131,11 @@ impl ManimNumberLineOptions {
         let length = self
             .length
             .unwrap_or_else(|| (self.range[1] - self.range[0]) * self.unit_size);
-        Ok(NumberLineFrame::centered(self.range, length, self.rotation)?)
+        Ok(NumberLineFrame::centered(
+            self.range,
+            length,
+            self.rotation,
+        )?)
     }
 }
 
@@ -198,7 +202,10 @@ impl ManimNumberLine {
 
     pub fn shaft(&self) -> Result<Mobject, CoordinateAuthoringError> {
         let [shaft, _] = coordinate_members(&self.family)?;
-        Ok(Mobject::from_node(Rc::clone(self.family.integration_store()), shaft)?)
+        Ok(Mobject::from_node(
+            Rc::clone(self.family.integration_store()),
+            shaft,
+        )?)
     }
 
     pub fn ticks(&self) -> Result<MobjectFamily, CoordinateAuthoringError> {
@@ -352,7 +359,10 @@ impl Scene {
         )?)
     }
 
-    pub fn axes(&mut self, options: &ManimAxesOptions) -> Result<ManimAxes, CoordinateAuthoringError> {
+    pub fn axes(
+        &mut self,
+        options: &ManimAxesOptions,
+    ) -> Result<ManimAxes, CoordinateAuthoringError> {
         let (transaction, root) = prepare_axes(options)?;
         let result = self.apply_semantic_transaction(transaction)?;
         ManimAxes::from_family(resolve_family(
@@ -476,10 +486,14 @@ fn prepare_line(
     style: &SemanticStyle,
 ) -> Result<Vec<SemanticObjectState>, CoordinateAuthoringError> {
     if !ticks.half_length.is_finite() || ticks.half_length < 0.0 {
-        return Err(CoordinateAuthoringError::InvalidOptions("invalid tick size"));
+        return Err(CoordinateAuthoringError::InvalidOptions(
+            "invalid tick size",
+        ));
     }
     if !style.is_finite() || style.stroke_width < 0.0 {
-        return Err(CoordinateAuthoringError::InvalidOptions("invalid axis style"));
+        return Err(CoordinateAuthoringError::InvalidOptions(
+            "invalid axis style",
+        ));
     }
     let values = if ticks.enabled {
         number_line_tick_values(frame.range(), false, ticks.exclude_origin, ticks.limit)?
@@ -491,7 +505,9 @@ fn prepare_line(
         .try_reserve_exact(values.len() + 1)
         .map_err(|_| CoordinateError::AllocationFailed)?;
     let mut shaft = line_state(frame.start(), frame.end(), style)?;
-    shaft.set_role(SemanticObjectRole::NumberLine(SemanticNumberLineRole::new(frame.range())));
+    shaft.set_role(SemanticObjectRole::NumberLine(SemanticNumberLineRole::new(
+        frame.range(),
+    )));
     states.push(shaft);
     let start = frame.start();
     let end = frame.end();
