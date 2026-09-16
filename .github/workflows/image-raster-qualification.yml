@@ -64,7 +64,7 @@ jobs:
         run: |
           cargo test -p noon-core --lib image
           cargo test -p noon --no-default-features --lib image --features image-decode
-          cargo test -p noon --no-default-features --test image_mobject --test image_publication_atomicity --test image_late_publication_failure --test live_creation_resource_atomicity --test retained_images --features image-decode
+          cargo test -p noon --no-default-features --test image_mobject --test image_seek --test image_publication_atomicity --test image_late_publication_failure --test live_creation_resource_atomicity --test retained_images --features image-decode
           mkdir -p browser-smoke-artifacts/images
           NOON_IMAGE_RASTER_OUTPUT="$GITHUB_WORKSPACE/browser-smoke-artifacts/images/native.png" cargo test -p noon --no-default-features --test retained_images --features image-decode -- --ignored
       - name: Build ordinary browser product

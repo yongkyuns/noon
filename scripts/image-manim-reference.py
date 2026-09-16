@@ -15,9 +15,17 @@ pixels = np.array([[[255, 0, 0, 255], [0, 255, 0, 128]],
                    [[0, 0, 255, 0], [255, 255, 255, 255]]], dtype=np.uint8)
 Image.fromarray(pixels).save(output / "fixture.png")
 Image.fromarray(pixels[:, :, :3]).save(output / "fixture.jpg", quality=95)
+input_gray = np.array([[32, 96, 160], [64, 128, 224]], dtype=np.uint8)
+Image.fromarray(input_gray).save(output / "input-fixture.png")
+Image.fromarray(input_gray).save(output / "input-fixture.jpg", quality=100)
 report = {"manim": manim.__version__, "samples": [], "lifecycle": []}
 with tempconfig({"pixel_width": 256, "pixel_height": 256, "frame_width": 8.0,
                  "frame_height": 8.0, "background_color": "#14283c"}):
+    input_camera = Camera()
+    input_image = ImageMobject(input_gray).set(height=4)
+    input_image.set_resampling_algorithm(Image.Resampling.NEAREST)
+    input_camera.capture_mobjects([input_image])
+    input_camera.get_image().save(output / "input-raster.png")
     intrinsic = ImageMobject(pixels)
     report["intrinsic"] = {"width": float(intrinsic.width), "height": float(intrinsic.height)}
     for sampler in ["nearest", "bilinear", "bicubic"]:

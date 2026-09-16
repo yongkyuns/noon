@@ -26,3 +26,20 @@ test("native oracle paths remain workspace-rooted when Cargo changes the working
   assert.match(workflow, /--test image_raster_qualification -- --ignored --nocapture/);
   assert.match(workflow, /mkdir -p browser-smoke-artifacts\/images/);
 });
+
+
+test("image input qualification executes real worker input cases and a pinned raster oracle", async () => {
+  const workflow = await readFile(new URL("image-raster-qualification.yml", workflowDir), "utf8");
+  assert.match(workflow, /--test image_seek/);
+  const smoke = await readFile(new URL("../scripts/image-raster-smoke.mjs", import.meta.url), "utf8");
+  assert.match(smoke, /await qualifyPythonImageInputs\(/);
+  const source = await readFile(new URL("../scripts/image-input-smoke.py", import.meta.url), "utf8");
+  assert.match(source, /await pyodide_js\.loadPackage\("numpy"\)/);
+  assert.match(source, /not view\.flags\.c_contiguous/);
+  assert.match(source, /await ImageMobject\.from_url/);
+  assert.match(source, /await ImageMobject\.from_blob/);
+  assert.match(source, /np\.broadcast_to/);
+  const reference = await readFile(new URL("../scripts/image-manim-reference.py", import.meta.url), "utf8");
+  assert.match(reference, /input_camera\.capture_mobjects\(\[input_image\]\)/);
+  assert.match(reference, /input-raster\.png/);
+});

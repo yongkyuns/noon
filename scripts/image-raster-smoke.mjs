@@ -8,6 +8,7 @@ import { PNG } from 'pngjs';
 import { serveRepository } from './browser-test-server.mjs';
 import { browserArgs } from './manim-raster-support.mjs';
 import { IMAGE_SAMPLE_TIMES, validateDirectImageCapture } from './image-raster-contract.mjs';
+import { qualifyPythonImageInputs } from './image-input-qualification.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const artifacts = path.resolve(process.env.NOON_IMAGE_ARTIFACTS ?? 'browser-smoke-artifacts/images');
@@ -150,6 +151,7 @@ try {
       await page.evaluate(() => window.noonHostRaster.close());
       await page.close();
       console.log(`[PASS] ${backend}: paired Python-worker image frames`);
+      await qualifyPythonImageInputs({context, baseUrl: server.baseUrl, root, oracleRoot, artifacts, backend, reports});
       await context.close();
     } finally { await browser.close(); }
   }
