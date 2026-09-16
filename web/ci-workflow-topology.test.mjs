@@ -25,7 +25,6 @@ const exactFamilies = new Map([
   ["fuzz.yml", "fuzz"],
   ["branch-cleanup-once.yml", "maintenance"],
   ["noon-agent-foundation.yml", "agent-authoring"],
-  ["ins-gnss-tutorial-review.yml", "playground"],
 ]);
 
 function classifyWorkflow(name) {
@@ -235,17 +234,4 @@ test("architecture diagrams stay a read-only check with independently preserved 
   assert.match(preservation, /^        if: always\(\)$/m);
   assert.match(preservation, /uses: actions\/upload-artifact@/);
   assert.match(preservation, /docs\/diagrams\//);
-});
-
-
-test("INS/GNSS tutorial builds its own tested runtime before browser qualification", async () => {
-  const workflow = await readFile(new URL("ins-gnss-tutorial-review.yml", workflowDir), "utf8");
-  assert.match(workflow, /needs: build/);
-  assert.match(workflow, /run: bash scripts\/build-web-demo\.sh/);
-  assert.match(workflow, /backend: \[webgpu, webgl\]/);
-  assert.match(workflow, /name: ins-gnss-built-runtime/g);
-  assert.doesNotMatch(workflow, /run-id:|github-pages|NOON_SKIP_WEB_PREFLIGHT/);
-  assert.match(workflow, /python3 web\/tutorials\/ins-gnss\/tests\/test_model\.py/);
-  assert.match(workflow, /node web\/tutorials\/ins-gnss\/tests\/review\.mjs/);
-  assert.match(workflow, /node web\/tutorials\/ins-gnss\/tests\/player\.mjs/);
 });

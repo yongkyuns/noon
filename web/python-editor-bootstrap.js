@@ -1,5 +1,3 @@
-import "./tutorial-discovery.js";
-
 // Start presentation-only editor enhancement as soon as the playground DOM is ready.
 // Ruff's WASM linter remains lazy until the first real editor input.
 void import("./python-editor.js").catch((error) => {
