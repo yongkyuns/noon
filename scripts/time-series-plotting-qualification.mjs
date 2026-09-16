@@ -29,7 +29,7 @@ const [factoryName, exampleName, outputName, expectedObjectCount] = cases[mode];
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const output = path.join(root, `plotting-artifacts/${outputName}`);
 const source = await readFile(path.join(root, `web/python/examples/${exampleName}.py`), "utf8");
-const checkpoints = liveCoordinates ? [0.125, 0.25, 0.5, 0.75, 1, 1.25, 1.5]
+const checkpoints = liveCoordinates ? [0, 0.125, 0.25, 0.5, 0.75, 1, 1.25, 1.5]
   : gapped ? gapCheckpoints : [0.15, 0.6, 1.8, 4.5, 6];
 // Include exact segment boundaries so the normal direct realtime host can
 // re-anchor on source resumption without charging setup to the next interval.
@@ -89,7 +89,8 @@ async function capture(context, language, backend) {
                 continue;
               }
               return { time: actual, objectCount: renderer.objectCount(),
-                backend: renderer.rendererBackend(), drawCalls: renderer.lastDrawCalls() };
+                backend: renderer.rendererBackend(), drawCalls: renderer.lastDrawCalls(),
+                cadence: wake.cadence, delayMs: wake.delayMs };
             }
             if (!renderer.render()) await new Promise(resolve => setTimeout(resolve, 10));
           }
@@ -148,13 +149,29 @@ async function capture(context, language, backend) {
     for (const time of driveTimes) {
       const metrics = await bounded(page.evaluate(time => window.sampleTimeSeries(time), time),
         `${language} sample ${time}`);
-      assert.ok(Math.abs(metrics.time - time) < 1e-6, `${language}: ${JSON.stringify(metrics)}`);
+      if (liveCoordinates && language === "rust-wasm" && time < 0.25) {
+        // A quiet wait sleeps until its deadline; an early host tick must not
+        // force a fresh semantic/render frame. Verify the exact timer instead
+        // of relabeling the old frame as a newly evaluated requested time.
+        assert.equal(metrics.time, 0);
+        assert.equal(metrics.cadence, "timer");
+        assert.ok(Math.abs(metrics.delayMs - (0.25 - time) * 1000) < 1e-6,
+          `wrong initial wait deadline: ${JSON.stringify(metrics)}`);
+      } else {
+        assert.ok(Math.abs(metrics.time - time) < 1e-6, `${language}: ${JSON.stringify(metrics)}`);
+      }
       assert.equal(metrics.backend, backend);
       assert.ok(metrics.drawCalls > 0);
       if (!checkpoints.includes(time)) continue;
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const bytes = await page.locator("#scene").screenshot({ path: path.join(output, `${backend}-${language}-${time}.png`) });
       captures.push({ time, metrics, png: PNG.sync.read(bytes) });
+    }
+    if (liveCoordinates) {
+      assert.equal(captures[0].time, 0);
+      assert.equal(captures[1].time, 0.125);
+      assert.deepEqual(captures[0].png.data, captures[1].png.data,
+        "quiet wait changed the image before coordinate construction");
     }
     assert.deepEqual(errors, []);
     assert.equal(captures.at(-1).metrics.objectCount, expectedObjectCount);
