@@ -614,6 +614,6 @@ impl Scene {
     }
 }
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod geometry_atomicity_tests;
+#[cfg(test)]
+mod tests;
