@@ -29,24 +29,37 @@ impl LiveSession<'_> {
         ManimNumberLine::from_family(resolve_family(Rc::clone(self.store), &result, root)?)
     }
 
-    /// Observe both shafts at this owner's current coherent publication. Shared
-    /// path-query semantics also support its detached targets without admission.
+    /// Observe both shafts through one coherent publication. Reachable shafts
+    /// use effective path state; detached shafts have no execution row and use
+    /// their validated authored state, as with ordinary detached target capture.
+    /// A stale/foreign session or pending callback never falls back to authored.
     pub fn effective_axes_frame(
         &self,
         axes: &ManimAxes,
     ) -> Result<AxesFrame, CoordinateAuthoringError> {
-        axes.snapshot_with(&mut |shaft| {
-            crate::path_queries::effective_path_query(self.store, self.session, shaft)
-        })
+        self.require_family(axes.family())?;
+        self.require_target_capture()?;
+        axes.snapshot_with(&mut |shaft| self.coordinate_path_query(shaft))
     }
 
     pub fn effective_number_line_frame(
         &self,
         line: &ManimNumberLine,
     ) -> Result<NumberLineFrame, CoordinateAuthoringError> {
-        line.snapshot_with(&mut |shaft| {
+        self.require_family(line.family())?;
+        self.require_target_capture()?;
+        line.snapshot_with(&mut |shaft| self.coordinate_path_query(shaft))
+    }
+
+    fn coordinate_path_query(&self, shaft: &Mobject) -> Result<crate::PathQuery, AuthoringError> {
+        if self.session.semantic_object_is_reachable(shaft.node_id()) {
             crate::path_queries::effective_path_query(self.store, self.session, shaft)
-        })
+        } else {
+            // Preserve the ordinary detached-capture restrictions, including
+            // uncompiled reactive bindings. Do not select this branch on error.
+            crate::effective_capture::capture_mobject_state(self.store, self.session, shaft)?;
+            shaft.path_query()
+        }
     }
 }
 

@@ -1,8 +1,9 @@
 """Linear 2D coordinates and preparation-only plots over shared Rust handles.
 
 The initial coordinate constructors require explicit three-value ranges and do
-not support tips or construction after execution starts. Numeric native Text
-label families can be attached before the first play/wait.
+not support tips. Coordinates may be constructed after ordinary plays/waits;
+add late coordinates to the Scene before querying or plotting against them.
+Numeric native Text label families must be constructed before the first play/wait.
 Existing coordinates remain queryable after plays; curves use ordinary live
 geometry publication. Python owns callables/coercion, never coordinate math.
 """
@@ -98,11 +99,15 @@ def _coordinate_context(shafts):
     _outside_callback()
     contexts = [context for shaft in shafts
                 if (context := _shared._live_mutation_context(shaft)) is not None]
-    if not contexts:
-        return _shared._live_constructor_context("coordinate query")
-    if any(context is not contexts[0] for context in contexts[1:]):
+    if contexts and any(context is not contexts[0] for context in contexts[1:]):
         raise RuntimeError("coordinate shafts belong to different execution contexts")
-    return contexts[0]
+    context = contexts[0] if contexts else _shared._live_constructor_context("coordinate query")
+    if context is not None and not all(_shared._is_bound(shaft) for shaft in shafts):
+        raise NotImplementedError(
+            "add live coordinates to the Scene before querying or plotting; "
+            "detached live coordinate reads are not yet exposed by the Python context"
+        )
+    return context
 
 
 def _family(wrapper, handle, members):

@@ -159,3 +159,33 @@ fn live_coordinate_copy_and_readd_keep_identity_and_frame_mapping() {
         [0.0, 0.0],
     );
 }
+
+#[test]
+fn detached_coordinate_queries_reject_stale_and_foreign_publications() {
+    let scene = Scene::new();
+    let mut execution = scene.execution_session().unwrap();
+    let axes;
+    let line;
+    {
+        let mut live = LiveSession::new(scene.integration_store(), scene.root(), &mut execution);
+        axes = live.axes(&options()).unwrap();
+        line = live
+            .number_line(&ManimNumberLineOptions::new([0.0, 2.0, 1.0]))
+            .unwrap();
+    }
+    let other = Scene::new();
+    let mut foreign = other.execution_session().unwrap();
+    {
+        let live = LiveSession::new(other.integration_store(), other.root(), &mut foreign);
+        assert!(live.effective_axes_frame(&axes).is_err());
+        assert!(live.effective_number_line_frame(&line).is_err());
+    }
+    let context = execution.publication_context();
+    scene.circle(0.2).unwrap(); // Deliberate out-of-band edit after construction.
+    let revision = scene.revision();
+    let live = LiveSession::new(scene.integration_store(), scene.root(), &mut execution);
+    assert!(live.effective_axes_frame(&axes).is_err());
+    assert!(live.effective_number_line_frame(&line).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(execution.publication_context(), context);
+}

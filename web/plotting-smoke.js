@@ -138,11 +138,18 @@ class PlottingQualification(Scene):
                 raise AssertionError("invalid live axis length was accepted")
         fresh = Axes([-1, 1, 1], [-1, 1, 1], x_length=2, y_length=2)
         fresh.shift(LEFT)
+        line = NumberLine([0, 2, 1], length=2).shift(DOWN)
+        for observe in (lambda: fresh.c2p(0, 0), lambda: line.n2p(1)):
+            try:
+                observe()
+            except NotImplementedError:
+                pass
+            else:
+                raise AssertionError("unsupported detached live query was silently accepted")
+        self.add(fresh, line)
         near(fresh.c2p(0, 0), LEFT)
         near(fresh.p2c(fresh.c2p(0.5, 0.25)), (0.5, 0.25))
-        line = NumberLine([0, 2, 1], length=2).shift(DOWN)
         assert abs(line.p2n(line.n2p(1)) - 1) < 2e-5
-        self.add(fresh, line)
         self.play(fresh.animate.shift(UP), run_time=0.2, rate_func=linear)
         near(fresh.c2p(0, 0), LEFT + UP)
         self.remove(fresh, line)

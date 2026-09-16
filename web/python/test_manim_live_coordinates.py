@@ -60,9 +60,30 @@ class LiveCoordinateAdapterTests(TestCase):
         with self.assertRaises(NotImplementedError):self.construct()
         self.resolve.assert_not_called(); plotting._coordinate_options.numberLine.assert_not_called()
 
-    def test_missing_host_and_unsupported_tips_do_not_allocate(self):
+    def test_missing_host_does_not_allocate(self):
         plotting._create_coordinates=None
         with self.assertRaises(RuntimeError):self.construct()
         self.resolve.assert_not_called();plotting._coordinate_options.numberLine.assert_not_called()
+
+    def test_unsupported_tips_do_not_allocate_options(self):
+        with self.assertRaises(NotImplementedError):
+            plotting.NumberLine((0,2,1), include_tip=True)
+        with self.assertRaises(NotImplementedError):
+            plotting.Axes((0,2,1),(0,2,1),x_length=2,y_length=2,tips=True)
+        plotting._coordinate_options.numberLine.assert_not_called()
+        plotting._coordinate_options.axes.assert_not_called()
+        self.live.assert_not_called(); self.cold.assert_not_called()
+
+    def test_late_queries_require_binding_but_never_choose_authored_fallback(self):
+        shaft=object()
+        with patch.object(plotting._shared, "_live_mutation_context", return_value=None), \
+             patch.object(plotting._shared, "_is_bound", return_value=False) as bound:
+            with self.assertRaisesRegex(NotImplementedError, "add live coordinates"):
+                plotting._coordinate_context([shaft])
+            bound.return_value=True
+            self.assertIs(plotting._coordinate_context([shaft]), self.context)
+            self.resolve.return_value=None
+            bound.return_value=False
+            self.assertIsNone(plotting._coordinate_context([shaft]))
 
 if __name__=="__main__":main()
