@@ -10,6 +10,7 @@ on:
       - 'web/plotting-smoke.js'
       - 'web/manim-compat-smoke.html'
       - 'scripts/plotting-qualification.mjs'
+      - 'scripts/time-series-plotting-qualification.mjs'
       - '.github/workflows/manim-plotting-qualification.yml'
   workflow_dispatch:
 
@@ -23,6 +24,7 @@ concurrency:
 jobs:
   plotting:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: Build exact-source browser package
@@ -41,6 +43,8 @@ jobs:
           npx playwright install chromium
       - name: Qualify paired plotting and resumed Python authoring
         run: node scripts/plotting-qualification.mjs
+      - name: Qualify numeric labels and timestamp-synchronized playback
+        run: node scripts/time-series-plotting-qualification.mjs
       - name: Record tested checkout
         if: always()
         run: |

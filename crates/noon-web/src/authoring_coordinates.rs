@@ -163,7 +163,7 @@ impl WasmAuthoringStore {
 
 #[wasm_bindgen]
 pub struct WasmNumberLineFrame {
-    frame: NumberLineFrame,
+    pub(crate) frame: NumberLineFrame,
 }
 
 #[wasm_bindgen]
@@ -197,7 +197,7 @@ impl WasmNumberLineFrame {
 
 #[wasm_bindgen]
 pub struct WasmAxesFrame {
-    frame: AxesFrame,
+    pub(crate) frame: AxesFrame,
 }
 
 #[wasm_bindgen]

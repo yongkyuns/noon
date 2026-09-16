@@ -1,13 +1,14 @@
 """Linear 2D coordinates and preparation-only plots over shared Rust handles.
 
 The initial coordinate constructors require explicit three-value ranges and do
-not support tips, numeric labels, or construction after live execution starts.
+not support tips, automatic label objects, or construction after execution starts.
 Existing coordinates remain queryable after plays; curves use ordinary live
 geometry publication. Python owns callables/coercion, never coordinate math.
 """
 from __future__ import annotations
 
 from contextlib import contextmanager
+from typing import NamedTuple
 
 import noon as _base
 import _manim_compat as _compat
@@ -21,6 +22,26 @@ try:
     from pyodide.ffi import to_js as _to_js
 except ImportError:
     _coordinate_options = _create_coordinates = _sampling_plan = _to_js = None
+
+
+class _NumberLabel(NamedTuple):
+    number: float
+    text: str
+    point: _base.Vec2
+
+
+class _TimeSeriesPlan(NamedTuple):
+    points: tuple[_base.Vec2, ...]
+    cursor_points: tuple[_base.Vec2, ...]
+    key_times: tuple[float, ...]
+    durations: tuple[float, ...]
+    run_time: float
+
+
+def _point_pairs(values):
+    """Project an already validated Rust vector, without coordinate calculation."""
+    return tuple(_base.Vec2(float(values[i]), float(values[i + 1]))
+                 for i in range(0, len(values), 2))
 
 
 @contextmanager
@@ -159,6 +180,27 @@ class NumberLine(_compat.Group):
             return float(engine_call(frame.unitSize))
 
 
+    def label_plan(self, numbers=None, *, decimal_places=0, exclude_zero=True):
+        """Noon extension: immutable text/anchor preparation, not label objects.
+
+        None selects Rust's tick values; an empty iterable selects no labels.
+        Place ordinary Text objects with next_to(label.point, ...) and explicitly
+        group them with the axes when they should move together. Re-prepare after
+        moving the axes; this snapshot is not a live coordinate handle.
+        """
+        if not isinstance(decimal_places, int) or isinstance(decimal_places, bool):
+            raise TypeError("decimal_places must be an integer")
+        with _owned(self._coordinate_frame()) as frame:
+            with _owned(engine_call(
+                frame.numberLabelPlan, _array(() if numbers is None else numbers),
+                numbers is None, decimal_places, bool(exclude_zero),
+            )) as plan:
+                values = tuple(float(x) for x in engine_call(plan.numbers))
+                texts = tuple(str(x) for x in engine_call(plan.texts))
+                points = _point_pairs(engine_call(plan.points))
+                return tuple(_NumberLabel(*entry) for entry in zip(values, texts, points, strict=True))
+
+
 class Axes(_compat.Group):
     """Explicitly sized, linear 2D axes. Curves are independent retained paths."""
 
@@ -227,6 +269,24 @@ class Axes(_compat.Group):
         with _owned(self._coordinate_frame()) as frame:
             options = engine_call(frame.sampledPlot, _points(points))
         return _curve(object.__new__(_compat.VMobject), options, color, kwargs)
+
+
+    def time_series_plan(self, samples, *, run_time):
+        """Noon extension: map timestamp/value pairs and prepare interval timing.
+
+        Samples must be finite and strictly increasing in time. The immutable
+        result is preparation data for ordinary plays, not a clock or updater.
+        No interpolation, sorting, or timestamp normalization occurs in Python.
+        """
+        with _owned(self._coordinate_frame()) as frame:
+            with _owned(engine_call(frame.timeSeriesPlan, _points(samples), float(run_time))) as plan:
+                return _TimeSeriesPlan(
+                    _point_pairs(engine_call(plan.points)),
+                    _point_pairs(engine_call(plan.cursorPoints)),
+                    tuple(float(x) for x in engine_call(plan.keyTimes)),
+                    tuple(float(x) for x in engine_call(plan.durations)),
+                    float(engine_call(plan.runTime)),
+                )
 
 
 def _callable(function):
