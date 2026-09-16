@@ -1,19 +1,20 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
+import { serveRepository } from "./browser-test-server.mjs";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
 import pngjs from "pngjs";
-import { browserArgs, rasterFixtureSource } from "./manim-raster-support.mjs";
+import { browserArgs, rasterFixtureSource, sampleRasterFrames } from "./manim-raster-support.mjs";
 
 const { chromium } = playwright;
 const { PNG } = pngjs;
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
-const manifestPath = path.join(repoRoot, "parity", "manim-v0.21", "manifest.json");
+const manifestPath = path.resolve(repoRoot, process.env.NOON_MANIM_RASTER_MANIFEST ?? "parity/manim-v0.21/manifest.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const reference = manifest.reference;
 const fixtureSources = new Map();
@@ -41,7 +42,6 @@ const artifactRoot = path.resolve(
 const semanticRoot = path.join(artifactRoot, "semantic");
 const manimSemanticPath = path.join(semanticRoot, "manim-all-frames.json");
 const port = Number(process.env.NOON_MANIM_RASTER_PORT ?? "4191");
-const baseUrl = `http://127.0.0.1:${port}`;
 const enforce = process.env.NOON_MANIM_RASTER_ENFORCE === "1";
 const backends = (process.env.NOON_MANIM_RASTER_BACKENDS ?? "webgpu,webgl")
   .split(",")
@@ -110,23 +110,8 @@ async function findPngFrames(root, scene) {
   return frames;
 }
 
-function sampleFrames(frameTimes) {
-  const frameCount = frameTimes.length;
-  assert.ok(Number.isSafeInteger(frameCount) && frameCount > 0, "invalid reference frame count");
-  const previous = frameTimes.reduce((last, time, index) => {
-    assert.ok(Number.isFinite(time) && time >= 0, `invalid logical time for reference frame ${index}`);
-    assert.ok(time + 1e-12 >= last, `reference frame ${index} moves backwards in logical time`);
-    return time;
-  }, -Infinity);
-  void previous;
-  const indices = manifest.sample_fractions.map((fraction) =>
-    Math.round((frameCount - 1) * Number(fraction)),
-  );
-  return [...new Set(indices)].map((frameIndex) => ({
-    frameIndex,
-    time: frameTimes[frameIndex],
-    label: `frame-${String(frameIndex).padStart(4, "0")}`,
-  }));
+function sampleFrames(frameTimes, fixture) {
+  return sampleRasterFrames(frameTimes, manifest.sample_fractions, fixture?.sample_times);
 }
 
 async function renderManimReferences() {
@@ -193,7 +178,7 @@ async function renderManimReferences() {
     assert.equal(frames.width, reference.pixel_width, `${fixture.id}: Manim reference width`);
     assert.equal(frames.height, reference.pixel_height, `${fixture.id}: Manim reference height`);
 
-    const samples = sampleFrames(frameTimes);
+    const samples = sampleFrames(frameTimes, fixture);
     for (const sample of samples) {
       const outputPath = path.join(frameDir, `${sample.label}.png`);
       await writeFile(outputPath, await readFile(frameFiles[sample.frameIndex]));
@@ -206,6 +191,8 @@ async function renderManimReferences() {
 
 async function prepareHostCapturePage(page) {
   await page.goto(`${baseUrl}/web/manim-raster-host.html`, { waitUntil: "load" });
+  assert.equal(await page.evaluate(() => globalThis.crossOriginIsolated), true,
+    "raster capture requires the isolated shared test server");
   await page.waitForFunction(() => window.noonHostRaster, null, { timeout: 30_000 });
   await page.evaluate(() => window.noonHostRaster.ready());
 }
@@ -501,33 +488,13 @@ async function compareAll(references, backendResults) {
   return reportPath;
 }
 
-let serverOutput = "";
-const server = spawn(
-  "python3",
-  ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", repoRoot],
-  { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
-);
-server.stdout.on("data", (chunk) => (serverOutput += chunk));
-server.stderr.on("data", (chunk) => (serverOutput += chunk));
-
-async function waitForServer() {
-  let lastError = null;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/web/browser-smoke.html`);
-      if (response.ok) return;
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`Manim raster server did not start: ${lastError}\n${serverOutput}`);
-}
+// Ordinary synchronous construct uses the existing shared continuation host.
+// Serve the real document and workers with COOP/COEP, not a second server.
+const server = await serveRepository(repoRoot, port, { crossOriginIsolated: true });
+const { baseUrl } = server;
 
 try {
   const references = await renderManimReferences();
-  await waitForServer();
   const backendResults = new Map();
   for (const backend of backends) {
     backendResults.set(backend, await captureNoonBackend(backend, references));
@@ -538,5 +505,5 @@ try {
     console.log("Raster mismatches are report-only until NOON_MANIM_RASTER_ENFORCE=1 is enabled.");
   }
 } finally {
-  server.kill("SIGTERM");
+  await server.close();
 }
