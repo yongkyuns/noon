@@ -1,0 +1,32 @@
+name: Export image validation workspace (temporary)
+on:
+  push:
+    branches: [codex/b2-image-workspace-bootstrap]
+    paths: [.github/workflows/image-validation-workspace.yml]
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 591effcff8d3b32f93d7dc660d6a78589fc56b5e
+          fetch-depth: 60
+          persist-credentials: false
+      - name: Export pinned source and public git objects
+        run: |
+          set -euo pipefail
+          git branch image-qualification-head HEAD
+          git branch image-qualification-base 6aad6282be4a6ef5dbc557087656b55ab3f1d7c7
+          git bundle create /tmp/noon-image-validation.bundle --branches
+          git archive HEAD | gzip -1 > /tmp/noon-image-validation-source.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noon-image-validation-workspace
+          path: |
+            /tmp/noon-image-validation.bundle
+            /tmp/noon-image-validation-source.tar.gz
+          retention-days: 2
+          compression-level: 0
