@@ -10,6 +10,9 @@ use crate::plot_presentation::{
 };
 use crate::AxesFrame;
 
+mod gaps;
+pub use gaps::{GappedSeries, GappedTimeSeriesPlan, PlotSegment};
+
 pub const MAX_SYNCHRONIZED_SERIES: usize = 16;
 /// Bound the expanded series-by-union-grid product, not just each input series.
 pub const MAX_SYNCHRONIZED_POINTS: usize = 10_000;

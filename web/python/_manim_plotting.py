@@ -8,6 +8,7 @@ geometry publication. Python owns callables/coercion, never coordinate math.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from operator import index as _index
 from typing import NamedTuple
 
 import noon as _base
@@ -19,9 +20,9 @@ try:
     from js import noonAuthoringCoordinateOptions as _coordinate_options
     from js import noonCreateAuthoringCoordinateHandle as _create_coordinates
     from js import noonPlotSamplingPlan as _sampling_plan
-    from pyodide.ffi import to_js as _to_js
+    from pyodide.ffi import to_js as _to_js, jsnull as _jsnull
 except ImportError:
-    _coordinate_options = _create_coordinates = _sampling_plan = _to_js = None
+    _coordinate_options = _create_coordinates = _sampling_plan = _to_js = _jsnull = None
 
 
 class _NumberLabel(NamedTuple):
@@ -45,6 +46,22 @@ class _SynchronizedTimeSeriesPlan(NamedTuple):
     key_times: tuple[float, ...]
     durations: tuple[float, ...]
     run_time: float
+
+
+class _GappedTimeSeriesPlan(NamedTuple):
+    series_points: tuple[tuple[_base.Vec2 | None, ...], ...]
+    series_segments: tuple[tuple[tuple[_base.Vec2, _base.Vec2] | None, ...], ...]
+    data_times: tuple[float, ...]
+    cursor_points: tuple[_base.Vec2, ...]
+    key_times: tuple[float, ...]
+    durations: tuple[float, ...]
+    run_time: float
+
+
+def _break_index(value):
+    if isinstance(value, bool):
+        raise TypeError("break-after indices must be integers, not booleans")
+    return _index(value)
 
 
 def _point_pairs(values):
@@ -316,6 +333,38 @@ class Axes(_compat.Group):
                 return _SynchronizedTimeSeriesPlan(
                     tuple(_point_pairs(engine_call(plan.seriesPoints, index))
                           for index in range(int(engine_call(plan.seriesCount)))),
+                    tuple(float(x) for x in engine_call(plan.dataTimes)),
+                    _point_pairs(engine_call(plan.cursorPoints)),
+                    tuple(float(x) for x in engine_call(plan.keyTimes)),
+                    tuple(float(x) for x in engine_call(plan.durations)),
+                    float(engine_call(plan.runTime)),
+                )
+
+
+    def gapped_series_plan(self, series, *, break_after, time_range, run_time):
+        """Prepare explicitly disconnected recordings on one shared time grid.
+
+        Supply one strictly increasing list of source break-after indices per
+        recording. Index i disconnects samples i and i+1; both measured endpoints
+        remain known. Missing points AND missing drawable segments are None.
+        Never infer a line from two known points: consult series_segments.
+        NaN guessing, extrapolation, and hold-last-value filling are not provided.
+        """
+        with _owned(self._coordinate_frame()) as frame:
+            rows = tuple(tuple(_base._as_vec2(point) for point in row) for row in series)
+            breaks = tuple(tuple(_break_index(i) for i in row) for row in break_after)
+            values = _array(component for row in rows for point in row for component in point)
+            with _owned(engine_call(
+                frame.gappedSeriesPlan, values, _array(len(row) for row in rows),
+                _array(i for row in breaks for i in row), _array(len(row) for row in breaks),
+                _array(time_range), float(run_time),
+            )) as plan:
+                count = int(engine_call(plan.seriesCount))
+                return _GappedTimeSeriesPlan(
+                    tuple(tuple(None if p is None or p is _jsnull else _base.Vec2(*map(float, p))
+                                for p in engine_call(plan.seriesPoints, i)) for i in range(count)),
+                    tuple(tuple(None if pair is None or pair is _jsnull else _point_pairs(pair)
+                                for pair in engine_call(plan.seriesSegments, i)) for i in range(count)),
                     tuple(float(x) for x in engine_call(plan.dataTimes)),
                     _point_pairs(engine_call(plan.cursorPoints)),
                     tuple(float(x) for x in engine_call(plan.keyTimes)),

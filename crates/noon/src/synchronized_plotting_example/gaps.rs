@@ -1,32 +1,27 @@
-//! Two differently sampled illustrative recordings over one ordinary runtime.
-//! This is not navigation simulation data or a long-recording streaming player.
+//! Paired explicit-outage example. Measurements are illustrative, not GNSS data.
+//! Reuses the ordinary scene, Text, membership and animation operations.
 
+use super::{color, line, BuildResult, RECORDINGS, RUN_TIME};
 use crate::plot_presentation::{number_labels, TimedPlotSample};
-use crate::synchronized_plot_presentation::SynchronizedTimeSeriesPlan;
+use crate::synchronized_plot_presentation::GappedTimeSeriesPlan;
 use crate::{
-    AnimationCompositionRequest as Request, AnimationOptions, Color, ContinuationStep,
-    LiveContinuation, LiveProgram, LiveSession, ManimAxesOptions, ManimGeometryOptions, Mobject,
-    RateFunction, Scene, SemanticAnimationCompositionKind as Kind, Text, TransformToRequest, BLUE,
-    GREEN, ORANGE, WHITE,
+    AnimationCompositionRequest as Request, AnimationOptions, ContinuationStep, LiveContinuation,
+    LiveProgram, LiveSession, ManimAxesOptions, ManimGeometryOptions, Mobject, RateFunction, Scene,
+    SemanticAnimationCompositionKind as Kind, Text, TransformToRequest, BLUE, GREEN, ORANGE, WHITE,
 };
 
-/// Explicit outage variant using the same ordinary authoring primitives.
-pub mod gaps;
-
-type BuildResult<T> = Result<T, Box<dyn std::error::Error>>;
-pub const RUN_TIME: f64 = 6.0;
-pub const RECORDINGS: [&[[f64; 2]]; 2] = [
-    &[[0.0, 0.4], [0.5, 1.0], [2.0, 0.8], [5.0, 1.2], [10.0, 0.6]],
-    &[[-1.0, 2.5], [1.5, 1.9], [4.0, 2.4], [8.0, 1.8], [12.0, 2.6]],
-];
-
+struct Stroke {
+    line: Mobject,
+    target: Mobject,
+    start: [f64; 2],
+}
 struct Drawing {
     marker: Mobject,
-    segments: Vec<Mobject>,
-    targets: Vec<Mobject>,
+    strokes: Vec<Option<Stroke>>,
+    shown: bool,
 }
 
-pub struct SynchronizedPlayback {
+pub struct GappedPlayback {
     drawings: Vec<Drawing>,
     cursor: Mobject,
     cursor_targets: Vec<Mobject>,
@@ -34,7 +29,7 @@ pub struct SynchronizedPlayback {
     next_interval: usize,
 }
 
-impl LiveContinuation for SynchronizedPlayback {
+impl LiveContinuation for GappedPlayback {
     type Error = String;
 
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
@@ -42,20 +37,39 @@ impl LiveContinuation for SynchronizedPlayback {
         if index == self.durations.len() {
             return Ok(ContinuationStep::Finished);
         }
+        // Ordinary source control flow at interval boundaries, not per-frame
+        // callbacks. Reuse marker identity; never animate across a missing span.
+        for drawing in &mut self.drawings {
+            match &drawing.strokes[index] {
+                None if drawing.shown => {
+                    live.remove(&drawing.marker).map_err(|e| e.to_string())?;
+                    drawing.shown = false;
+                }
+                Some(stroke) if !drawing.shown => {
+                    live.move_to_point(&drawing.marker, stroke.start[0], stroke.start[1])
+                        .map_err(|e| e.to_string())?;
+                    live.add(&drawing.marker).map_err(|e| e.to_string())?;
+                    drawing.shown = true;
+                }
+                _ => {}
+            }
+        }
         let options = AnimationOptions::new()
             .run_time(self.durations[index])
             .rate_func(RateFunction::Linear);
         let mut children = Vec::with_capacity(self.drawings.len() * 2 + 1);
         for drawing in &self.drawings {
-            children.push(Request::Create {
-                target: &drawing.segments[index],
-                options,
-            });
-            children.push(Request::TransformTo(TransformToRequest::new(
-                &drawing.marker,
-                &drawing.targets[index],
-                options,
-            )));
+            if let Some(stroke) = &drawing.strokes[index] {
+                children.push(Request::Create {
+                    target: &stroke.line,
+                    options,
+                });
+                children.push(Request::TransformTo(TransformToRequest::new(
+                    &drawing.marker,
+                    &stroke.target,
+                    options,
+                )));
+            }
         }
         children.push(Request::TransformTo(TransformToRequest::new(
             &self.cursor,
@@ -69,31 +83,13 @@ impl LiveContinuation for SynchronizedPlayback {
         };
         let segment = live
             .declare_and_activate_composition(&request, options)
-            .map_err(|error| error.to_string())?;
+            .map_err(|e| e.to_string())?;
         self.next_interval += 1;
         Ok(ContinuationStep::Await(segment))
     }
 }
 
-fn color(options: &mut ManimGeometryOptions, color: Color) -> BuildResult<()> {
-    options.set_color(color.red.into(), color.green.into(), color.blue.into(), 1.0)?;
-    Ok(())
-}
-fn line(
-    scene: &mut Scene,
-    a: [f64; 2],
-    b: [f64; 2],
-    tint: Color,
-    width: f64,
-) -> BuildResult<Mobject> {
-    let mut options = ManimGeometryOptions::line(a[0], a[1], b[0], b[1])?;
-    color(&mut options, tint)?;
-    options.set_stroke_width(width)?;
-    Ok(scene.geometry(options)?)
-}
-
-/// Native and direct WASM call this same typed scene/continuation builder.
-pub fn program() -> BuildResult<LiveProgram<SynchronizedPlayback>> {
+pub fn program() -> BuildResult<LiveProgram<GappedPlayback>> {
     let mut scene = Scene::new();
     let axes = scene.axes(&ManimAxesOptions::new(
         [0.0, 10.0, 2.0],
@@ -111,7 +107,8 @@ pub fn program() -> BuildResult<LiveProgram<SynchronizedPlayback>> {
         })
         .collect();
     let refs: Vec<_> = data.iter().map(Vec::as_slice).collect();
-    let plan = SynchronizedTimeSeriesPlan::new(frame, &refs, [0.0, 10.0], RUN_TIME)?;
+    // Break A after its third sample: measured endpoints at t=2 and t=5.
+    let plan = GappedTimeSeriesPlan::new(frame, &refs, &[&[2], &[]], [0.0, 10.0], RUN_TIME)?;
     scene.add_many(&[axes.family().into()])?;
     for (axis, direction, exclude_zero) in [
         (frame.x(), (0.0, -1.0), false),
@@ -130,29 +127,29 @@ pub fn program() -> BuildResult<LiveProgram<SynchronizedPlayback>> {
         }
     }
     for (source, size, x, y, tint) in [
-        ("Two recordings, one data clock", 28.0, 0.0, 3.2, WHITE),
+        ("Missing measurements stay missing", 28.0, 0.0, 3.2, WHITE),
         (
-            "Different sample times; piecewise-linear interpolation",
+            "Explicit blue gap: 2-5 s; orange recording continues",
             17.0,
             0.0,
             2.72,
             WHITE,
         ),
         ("Data time (s)", 20.0, 0.0, -2.85, WHITE),
-        ("Series A", 18.0, -2.0, 2.25, BLUE),
-        ("Series B", 18.0, 2.0, 2.25, ORANGE),
+        ("Interrupted recording", 18.0, -2.4, 2.25, BLUE),
+        ("Continuous recording", 18.0, 2.4, 2.25, ORANGE),
     ] {
         let mut text = scene.text(Text::new(source).with_font_size(size).color(tint))?;
         text.move_to(x, y)?;
         scene.add(&text)?;
     }
+    // Even the dim reference is disconnected: no hidden bridge under the trace.
     for row in plan.series() {
-        let mut options = ManimGeometryOptions::sampled_plot(row.points())?;
-        color(&mut options, WHITE)?;
-        options.set_stroke_width(0.018)?;
-        options.set_object_opacity(0.2)?;
-        let reference = scene.geometry(options)?;
-        scene.add(&reference)?;
+        for &[start, end] in row.segments().iter().flatten() {
+            let mut reference = line(&mut scene, start, end, WHITE, 0.018)?;
+            reference.set_opacity(0.2)?;
+            scene.add(&reference)?;
+        }
     }
     let cursor = line(
         &mut scene,
@@ -169,20 +166,29 @@ pub fn program() -> BuildResult<LiveProgram<SynchronizedPlayback>> {
         options.set_fill_opacity(1.0)?;
         options.set_stroke_width(0.0)?;
         let mut marker = scene.geometry(options)?;
-        marker.move_to(row.points()[0][0], row.points()[0][1])?;
+        let start = row.points()[0].ok_or("example starts at a known sample")?;
+        marker.move_to(start[0], start[1])?;
         scene.add(&marker)?;
-        let mut segments = Vec::new();
-        let mut targets = Vec::new();
-        for pair in row.points().windows(2) {
-            segments.push(line(&mut scene, pair[0], pair[1], tint, 0.04)?);
-            let mut target = marker.copy_handle()?;
-            target.move_to(pair[1][0], pair[1][1])?;
-            targets.push(target);
+        let mut strokes = Vec::new();
+        for segment in row.segments() {
+            strokes.push(match *segment {
+                None => None,
+                Some([start, end]) => {
+                    let line = line(&mut scene, start, end, tint, 0.04)?;
+                    let mut target = marker.copy_handle()?;
+                    target.move_to(end[0], end[1])?;
+                    Some(Stroke {
+                        line,
+                        target,
+                        start,
+                    })
+                }
+            });
         }
         drawings.push(Drawing {
             marker,
-            segments,
-            targets,
+            strokes,
+            shown: true,
         });
     }
     let mut cursor_targets = Vec::new();
@@ -191,7 +197,7 @@ pub fn program() -> BuildResult<LiveProgram<SynchronizedPlayback>> {
         target.move_to(x, y)?;
         cursor_targets.push(target);
     }
-    Ok(scene.into_live_program(SynchronizedPlayback {
+    Ok(scene.into_live_program(GappedPlayback {
         drawings,
         cursor,
         cursor_targets,
