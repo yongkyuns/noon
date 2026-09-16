@@ -59,8 +59,8 @@ pub struct PreparedMatchingShapeTargetLeftoverFade {
 /// Directional default-leftover projection for one matching-shape activation.
 ///
 /// Matched groups are absent by construction. Every source-rest member uses the same
-/// source->target group displacement; every target-rest member uses its inverse. No
-/// source/target member is paired positionally.
+/// source->target group displacement. Every target-rest member stays at its authored
+/// target transform and fades in there. No source/target member is paired positionally.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PreparedMatchingShapeLeftoverFadeProjection {
     source_fades: Vec<PreparedMatchingShapeSourceLeftoverFade>,
@@ -152,10 +152,9 @@ impl From<PreparedMatchingShapeLeftoverLayoutError> for PreparedMatchingShapeLef
 /// painter placement.
 ///
 /// Source leftovers fade out while shifting by the shared source-rest -> target-rest
-/// group-center delta. Detached target leftovers start at the inverse-shifted authored
-/// target state and fade in to their exact authored transform/style. Runtime
-/// publication may consume these values only after it can place detached transients
-/// without inventing a stable source anchor.
+/// group-center delta. Detached target leftovers keep their exact authored target
+/// transform and fade in there. Runtime publication may consume these values only after
+/// it can place detached transients without inventing a stable source anchor.
 pub fn prepare_matching_shape_leftover_fades(
     store: &SemanticStore,
     activation: &PreparedMatchingFamilyTransformActivation,
@@ -229,12 +228,7 @@ pub fn prepare_matching_shape_leftover_fades(
                 reveal: 1.0,
                 morph: 0.0,
             },
-            tracks: target_fade_tracks(
-                member.transform,
-                layout.source_to_target,
-                activation.timing,
-                &activation.time_map,
-            ),
+            tracks: target_fade_tracks(activation.timing, &activation.time_map),
         });
     }
 
@@ -276,30 +270,15 @@ fn source_fade_tracks(
 }
 
 fn target_fade_tracks(
-    transform: Transform2D,
-    source_to_target: Vec2,
     timing: noon_core::TrackTiming,
     time_map: &noon_core::CompositionTimeMap,
 ) -> Vec<PreparedMatchingShapeLeftoverFadeTrack> {
-    let mut tracks = Vec::with_capacity(2);
-    if source_to_target != Vec2::ZERO {
-        tracks.push(leftover_track(
-            Property::Position,
-            TrackValues::Vec2 {
-                from: transform.translation - source_to_target,
-                to: transform.translation,
-            },
-            timing,
-            time_map,
-        ));
-    }
-    tracks.push(leftover_track(
+    vec![leftover_track(
         Property::Appearance,
         TrackValues::Scalar { from: 0.0, to: 1.0 },
         timing,
         time_map,
-    ));
-    tracks
+    )]
 }
 
 fn leftover_track(
@@ -356,23 +335,16 @@ mod tests {
     }
 
     #[test]
-    fn target_leftover_starts_at_source_group_and_appears_authored() {
+    fn target_leftover_fades_in_at_authored_position_without_motion() {
         let (timing, time_map) = timing();
-        let transform = Transform2D {
-            translation: Vec2::new(9.0, 4.0),
-            ..Transform2D::IDENTITY
-        };
-        let tracks = target_fade_tracks(transform, Vec2::new(8.0, -1.0), timing, &time_map);
-        assert_eq!(tracks.len(), 2);
+        let tracks = target_fade_tracks(timing, &time_map);
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].property, Property::Appearance);
         assert_eq!(
             tracks[0].values,
-            TrackValues::Vec2 {
-                from: Vec2::new(1.0, 5.0),
-                to: Vec2::new(9.0, 4.0),
-            }
+            TrackValues::Scalar { from: 0.0, to: 1.0 }
         );
-        assert_eq!(tracks[1].values, TrackValues::Scalar { from: 0.0, to: 1.0 });
-        assert_eq!(tracks[1].timing, timing);
-        assert_eq!(tracks[1].time_map, time_map);
+        assert_eq!(tracks[0].timing, timing);
+        assert_eq!(tracks[0].time_map, time_map);
     }
 }
