@@ -84,6 +84,7 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
         const report = await gallery?.executionMetrics?.();
         return {
           frames: Number(report?.metrics?.presentedFrames ?? 0),
+          authoredTime: Number(report?.metrics?.time ?? Number.NaN),
           now: performance.now(),
           runInFlight: gallery?.runInFlight ?? false,
           playbackControls: document.querySelector("#status")?.dataset.playbackControls ?? "",
@@ -119,24 +120,42 @@ function changedPixelStats(buffer) {
 }
 
 function sampleRendererFps(frameSamples) {
-  // Measure only the source-owned animation. A candidate that promotes the same
-  // semantic context to ordinary replay may have a legitimate attachment gap and
-  // a later replay frame before Run becomes applied; neither belongs in source
-  // playback cadence. Baseline and candidate therefore use the same ownership
-  // window: Run in flight with replay controls unavailable.
+  // The previous product metric accidentally rewarded the old lifecycle for
+  // replaying the source-owned endpoint after its first authored pass. The fixed
+  // playground explicitly hands that semantic context to ordinary replay instead.
+  // Compare physical cadence only over the first monotonic authored-time pass so
+  // baseline and candidate cover the same semantic work.
   const sourceOwned = frameSamples.filter(
-    (sample) => sample.runInFlight && sample.playbackControls === "unavailable",
+    (sample) =>
+      sample.runInFlight &&
+      sample.playbackControls === "unavailable" &&
+      Number.isFinite(sample.authoredTime),
   );
-  const changes = sourceOwned.filter(
-    (sample, index) => index > 0 && sample.frames > sourceOwned[index - 1].frames,
+  assert.ok(sourceOwned.length >= 3, "source-owned product run did not expose authored-time samples");
+
+  const firstPass = [];
+  let previousTime = null;
+  for (const sample of sourceOwned) {
+    if (previousTime !== null && sample.authoredTime + 1e-6 < previousTime) {
+      break;
+    }
+    firstPass.push(sample);
+    previousTime = sample.authoredTime;
+  }
+
+  const changes = firstPass.filter(
+    (sample, index) => index > 0 && sample.frames > firstPass[index - 1].frames,
   );
-  assert.ok(changes.length >= 2, "active source-owned product run did not expose enough presentation samples");
+  assert.ok(changes.length >= 2, "first authored pass did not expose enough presentation samples");
   const start = changes[0];
   const end = changes.at(-1);
   const elapsedSeconds = Math.max((end.now - start.now) / 1000, 0.001);
   return {
     startFrames: start.frames,
     endFrames: end.frames,
+    startAuthoredTime: start.authoredTime,
+    endAuthoredTime: end.authoredTime,
+    sampleCount: firstPass.length,
     elapsedMs: end.now - start.now,
     effectiveFps: Math.max(0, end.frames - start.frames) / elapsedSeconds,
   };
