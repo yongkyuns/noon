@@ -9,7 +9,11 @@ permissions:
 jobs:
   browser:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [webgpu, webgl]
     container:
       image: mcr.microsoft.com/playwright@sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e
     steps:
@@ -20,15 +24,23 @@ jobs:
           run-id: 35031382952
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: /tmp/noon-built
-      - name: Install exact browser test dependencies and built engine
+      - name: Install browser dependencies and verified engine
         run: |
           tar -xf /tmp/noon-built/artifact.tar -C web
           npm install --no-save --ignore-scripts --no-audit --no-fund playwright@1.62.1 pngjs@7.0.0
-      - name: Exercise tutorial requirements before chapter authoring
+          python3 web/tutorials/ins-gnss/tools/build.py
+      - name: Inspect all chapter boundaries and intermediate frames
+        env:
+          NOON_TUTORIAL_BACKEND: ${{ matrix.backend }}
         run: node web/tutorials/ins-gnss/tests/review.mjs
+      - name: Archive exact tested source
+        if: always()
+        run: |
+          mkdir -p browser-smoke-artifacts/ins-gnss
+          tar -czf browser-smoke-artifacts/ins-gnss/tested-source.tar.gz web/tutorials/ins-gnss
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: ins-gnss-browser-review
+          name: ins-gnss-review-${{ matrix.backend }}
           path: browser-smoke-artifacts/ins-gnss
           retention-days: 3
