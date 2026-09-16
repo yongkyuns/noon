@@ -45,6 +45,13 @@ function cursorColumn(bytes) {
 }
 
 try {
+  // Deliberately separate rAF's clock from performance.now(): the first rAF
+  // timestamp need not follow the click handler's performance.now() reading.
+  // This changes host timestamps only; Python, runtime, and renderer are real.
+  await page.addInitScript(() => {
+    const request = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = callback => request(time => callback(time - 100));
+  });
   await page.goto(`${server.baseUrl}/${base}/index.html`);
   await ready();
   assert.deepEqual((await state()).errors, []);
@@ -54,12 +61,26 @@ try {
   await page.locator('#play').click();
   await ready();
   paused = await state();
+  assert.deepEqual(paused.errors, [], 'Playback must not request a backward sample');
   assert.ok(paused.time > 7.5, 'Play must advance the authored timeline');
   assert.equal(paused.playing, false);
   const before = await screenshot('paused.png');
   await page.waitForTimeout(350);
   assert.equal(hash(await page.locator('#scene').screenshot()), hash(before), 'Pause must freeze raster output');
   assert.equal((await state()).time, paused.time, 'Paused lesson time must not drift');
+  // Resume repeatedly without resetting authored time or spawning a duplicate
+  // host frame loop. Wait for published progress, not an assumed frame rate.
+  for(let cycle=0;cycle<5;cycle++){
+    const initialTime=(await state()).time;
+    await page.evaluate(()=>window.tutorial.play());
+    await page.waitForFunction(t=>window.tutorial.status().time>t+.06,initialTime);
+    await page.evaluate(()=>window.tutorial.pause());
+    await ready();
+    const stopped=(await state()).time;
+    await page.waitForTimeout(120);
+    assert.equal((await state()).time,stopped,'Pause must retire the active frame loop');
+    assert.deepEqual((await state()).errors,[]);
+  }
   metrics = await page.evaluate(() => window.tutorial.metrics());
 
   await page.locator('#restart').click();

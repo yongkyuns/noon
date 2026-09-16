@@ -6,13 +6,25 @@ const $ = id => document.getElementById(id);
 const metadata = await (await fetch('./chapters.json')).json();
 const source = await (await fetch('./scene.py')).text();
 let authoring, execution, generation=0, chapter=1, time=0, playing=false, completed=false, busy=false;
-let lastClock=0, animationFrame=null;
+// Only animation-frame timestamps establish the playback clock. Mixing them
+// with performance.now() can make the first requested sample move backwards.
+const MAX_FRAME_STEP_SECONDS = 1 / 15;
+let lastClock=null, animationFrame=null, playbackEpoch=0;
 const errors=[];
 
-function stop(){ playing=false; cancelAnimationFrame(animationFrame); animationFrame=null; $('play').textContent='Play'; }
+function stop(){
+  playing=false;
+  playbackEpoch++;
+  cancelAnimationFrame(animationFrame);
+  animationFrame=null;
+  lastClock=null;
+  $('play').textContent='Play';
+}
 function fail(error){errors.push(String(error));stop();$('status').textContent=String(error);}
 
 async function open(number){
+  if(!Number.isInteger(number)||number<1||number>metadata.chapters.length)
+    throw new RangeError('Unknown tutorial chapter');
   const token=++generation;
   stop(); execution?.terminate(); authoring?.terminate();
   chapter=number;time=0;completed=false;busy=true;
@@ -55,6 +67,7 @@ async function open(number){
 
 async function sample(target){
   if(busy||!execution)throw new Error('Chapter is busy');
+  if(!Number.isFinite(target))throw new TypeError('Sample time must be finite');
   if(target<time)throw new Error('Restart the chapter before moving backwards');
   busy=true;
   const token=generation;
@@ -69,18 +82,30 @@ async function sample(target){
 }
 
 function play(){
-  if(busy||completed)return;
-  playing=true;lastClock=performance.now();$('play').textContent='Pause';
-  animationFrame=requestAnimationFrame(frame);
+  if(playing||completed||$('play').disabled)return;
+  playing=true;
+  lastClock=null;
+  $('play').textContent='Pause';
+  requestFrame(++playbackEpoch);
 }
-async function frame(now){
-  if(playing&&!busy){
-    // Drop wall-clock lag, not lesson content: slow hardware slows the lesson.
-    const delta=Math.min((now-lastClock)/1000,1/15);
-    lastClock=now;
-    try{await sample(time+delta);}catch(error){fail(error);}
+function requestFrame(epoch){
+  animationFrame=requestAnimationFrame(now=>frame(now,epoch));
+}
+async function frame(now,epoch){
+  if(!playing||epoch!==playbackEpoch)return;
+  animationFrame=null;
+  if(lastClock===null)lastClock=now;
+  // Keep lesson time monotonic. Slow hardware slows the lesson rather than
+  // skipping explanations; the runtime still owns the published authored time.
+  const delta=Math.max(0,Math.min((now-lastClock)/1000,MAX_FRAME_STEP_SECONDS));
+  lastClock=Math.max(lastClock,now);
+  if(!busy&&delta>0){
+    try{await sample(time+delta);}
+    catch(error){if(epoch===playbackEpoch)fail(error);}
   }
-  if(playing)animationFrame=requestAnimationFrame(frame);
+  // A paused or replaced session must not resurrect an old frame loop after
+  // an in-flight sample resolves. A new Play has its own epoch and clock.
+  if(playing&&epoch===playbackEpoch)requestFrame(epoch);
 }
 for(const [index,item] of metadata.chapters.entries()){
   const option=document.createElement('option');option.value=String(index+1);
