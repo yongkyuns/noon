@@ -1,0 +1,57 @@
+name: Image browser iteration (temporary)
+on:
+  push:
+    branches: [codex/b2-image-workspace-bootstrap]
+    paths: [.github/workflows/image-browser-iteration.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: e66f288f4e8740edd9df8c0fce29de9755535408
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 35115878492
+          artifact-ids: 10454453987
+          path: web
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 35115878488
+          artifact-ids: 10455033615
+          path: browser-smoke-artifacts/images
+          merge-multiple: true
+      - name: Check recorded build inputs and install browser tools
+        run: |
+          python3 - <<'PY'
+          import json, hashlib, pathlib
+          root = pathlib.Path('.')
+          stamp = json.loads((root/'web/ci-artifact.json').read_text())
+          for name, digest in stamp['build']['inputs'].items():
+              actual = hashlib.sha256((root/name).read_bytes()).hexdigest()
+              assert actual == digest, f'compiled input changed: {name}'
+          print('All recorded compiled inputs match the reused candidate artifact')
+          PY
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Execute actual browser image qualification
+        run: |
+          set -o pipefail
+          timeout --signal=TERM 300s node scripts/image-raster-smoke.mjs 2>&1 | tee browser-smoke-artifacts/images/browser.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: image-browser-iteration
+          path: browser-smoke-artifacts/images
+          retention-days: 2
