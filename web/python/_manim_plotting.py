@@ -38,6 +38,15 @@ class _TimeSeriesPlan(NamedTuple):
     run_time: float
 
 
+class _SynchronizedTimeSeriesPlan(NamedTuple):
+    series_points: tuple[tuple[_base.Vec2, ...], ...]
+    data_times: tuple[float, ...]
+    cursor_points: tuple[_base.Vec2, ...]
+    key_times: tuple[float, ...]
+    durations: tuple[float, ...]
+    run_time: float
+
+
 def _point_pairs(values):
     """Project an already validated Rust vector, without coordinate calculation."""
     return tuple(_base.Vec2(float(values[i]), float(values[i + 1]))
@@ -282,6 +291,32 @@ class Axes(_compat.Group):
             with _owned(engine_call(frame.timeSeriesPlan, _points(samples), float(run_time))) as plan:
                 return _TimeSeriesPlan(
                     _point_pairs(engine_call(plan.points)),
+                    _point_pairs(engine_call(plan.cursorPoints)),
+                    tuple(float(x) for x in engine_call(plan.keyTimes)),
+                    tuple(float(x) for x in engine_call(plan.durations)),
+                    float(engine_call(plan.runTime)),
+                )
+
+
+    def synchronized_series_plan(self, series, *, time_range, run_time):
+        """Noon extension: prepare multiple recordings in one explicit window.
+
+        Every recording must cover time_range. Rust splits at the union of input
+        timestamps and linearly interpolates each series there; it never fills
+        missing coverage or extrapolates. This immutable, bounded preparation is
+        for ordinary plays, not a streaming player or a live coordinate cache.
+        """
+        with _owned(self._coordinate_frame()) as frame:
+            rows = tuple(tuple(_base._as_vec2(point) for point in row) for row in series)
+            values = _array(component for row in rows for point in row for component in point)
+            with _owned(engine_call(
+                frame.synchronizedSeriesPlan, values, _array(len(row) for row in rows),
+                _array(time_range), float(run_time),
+            )) as plan:
+                return _SynchronizedTimeSeriesPlan(
+                    tuple(_point_pairs(engine_call(plan.seriesPoints, index))
+                          for index in range(int(engine_call(plan.seriesCount)))),
+                    tuple(float(x) for x in engine_call(plan.dataTimes)),
                     _point_pairs(engine_call(plan.cursorPoints)),
                     tuple(float(x) for x in engine_call(plan.keyTimes)),
                     tuple(float(x) for x in engine_call(plan.durations)),

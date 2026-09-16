@@ -10,16 +10,29 @@ import { PNG } from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 
+const mode = process.argv[2] ?? "single";
+assert.ok(["single", "synchronized"].includes(mode) && process.argv.length <= 3,
+  "expected no argument, single, or synchronized");
+const synchronized = mode === "synchronized";
+const factoryName = synchronized ? "createSynchronizedPlottingRenderer" : "createTimeSeriesPlottingRenderer";
+const exampleName = synchronized ? "synchronized_plotting" : "time_series_plotting";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const output = path.join(root, "plotting-artifacts/time-series");
-const source = await readFile(path.join(root, "web/python/examples/time_series_plotting.py"), "utf8");
+const output = path.join(root, synchronized ? "plotting-artifacts/synchronized-series" : "plotting-artifacts/time-series");
+const source = await readFile(path.join(root, `web/python/examples/${exampleName}.py`), "utf8");
 const checkpoints = [0.15, 0.6, 1.8, 4.5, 6];
 // Include exact segment boundaries so the normal direct realtime host can
 // re-anchor on source resumption without charging setup to the next interval.
 const data = [[0, 0.4], [0.5, 1], [1.5, 1.7], [2, 1.2], [4, 0.6], [7, 2.1], [10, 1.4]];
-const driveTimes = [...new Set([0, ...checkpoints, ...data.map(([t]) => (t / 10) * 6)])]
+const recordings = [
+  [[0, 0.4], [0.5, 1], [2, 0.8], [5, 1.2], [10, 0.6]],
+  [[-1, 2.5], [1.5, 1.9], [4, 2.4], [8, 1.8], [12, 2.6]],
+];
+const unionTimes = [...new Set([0, 10, ...recordings.flat().map(([t]) => t)
+  .filter(t => t > 0 && t < 10)])].sort((a, b) => a - b);
+const boundaries = synchronized ? unionTimes : data.map(([t]) => t);
+const driveTimes = [...new Set([0, ...checkpoints, ...boundaries.map(t => (t / 10) * 6)])]
   .sort((a, b) => a - b);
-const report = { pythonSourceSha256: createHash("sha256").update(source).digest("hex"), backends: [] };
+const report = { mode, pythonSourceSha256: createHash("sha256").update(source).digest("hex"), backends: [] };
 const server = await serveRepository(root, 4198);
 await mkdir(output, { recursive: true });
 
@@ -40,13 +53,13 @@ async function capture(context, language, backend) {
   try {
     await page.goto(`${server.baseUrl}/web/manim-raster-host.html`);
     await page.waitForFunction(() => window.noonHostRaster);
-    await bounded(page.evaluate(async ({ language, source }) => {
+    await bounded(page.evaluate(async ({ language, source, factoryName }) => {
       const canvas = document.querySelector("#scene");
       window.timeSeriesErrors = [];
       if (language === "rust-wasm") {
         const wasm = await import("./pkg/noon_web.js");
         await wasm.default();
-        const renderer = await wasm.createTimeSeriesPlottingRenderer(canvas.transferControlToOffscreen());
+        const renderer = await wasm[factoryName](canvas.transferControlToOffscreen());
         window.timeSeriesRenderer = renderer;
         renderer.resize(960, 540);
         window.sampleTimeSeries = async time => {
@@ -119,7 +132,7 @@ async function capture(context, language, backend) {
         }
         throw new Error(`Python time-series sample ${time} was not presented`);
       };
-    }, { language, source }), `${language} attachment`);
+    }, { language, source, factoryName }), `${language} attachment`);
     const captures = [];
     for (const time of driveTimes) {
       const metrics = await bounded(page.evaluate(time => window.sampleTimeSeries(time), time),
@@ -133,7 +146,7 @@ async function capture(context, language, backend) {
       captures.push({ time, metrics, png: PNG.sync.read(bytes) });
     }
     assert.deepEqual(errors, []);
-    assert.equal(captures.at(-1).metrics.objectCount, 35);
+    assert.equal(captures.at(-1).metrics.objectCount, synchronized ? 43 : 35);
     return captures;
   } finally {
     await page.close();
@@ -144,7 +157,7 @@ async function validateArguments(context) {
   const page = await context.newPage();
   try {
     await page.goto(`${server.baseUrl}/web/manim-raster-host.html`);
-    return await bounded(page.evaluate(async () => {
+    return await bounded(page.evaluate(async extraChecks => {
       const { PythonAuthoringClient } = await import("./authoring-client.js");
       const client = new PythonAuthoringClient();
       try {
@@ -179,9 +192,13 @@ class PresentationValidation(Scene):
         self.add(axes)
 `);
         if (result.duration !== 0) throw new Error("preparation checks invented playback");
-        return { passed: true };
+        if (extraChecks) {
+          const extra = await client.run(extraChecks);
+          if (extra.duration !== 0) throw new Error("synchronized preparation invented playback");
+        }
+        return { passed: true, synchronized: Boolean(extraChecks) };
       } finally { client.terminate(); }
-    }), "Pyodide argument validation");
+    }, synchronized ? synchronizedArgumentSource : ""), "Pyodide argument validation");
   } finally { await page.close(); }
 }
 
@@ -213,6 +230,80 @@ function assertMarker(png, time) {
     `curve reveals future data beyond time ${t}`);
 }
 
+
+const synchronizedArgumentSource = `from noon import *
+from _manim_plotting import _owned, _array
+from _noon_errors import engine_call
+class SynchronizedValidation(Scene):
+    def construct(self):
+        axes = Axes((0, 10, 2), (0, 10, 2), x_length=10, y_length=4)
+        rows = (((0, 0), (2, 2), (10, 10)), ((-1, 11), (5, 5), (12, -2)))
+        plan = axes.synchronized_series_plan(rows, time_range=(0, 10), run_time=5)
+        assert plan.data_times == (0, 2, 5, 10)
+        assert plan.durations == (1, 1.5, 2.5)
+        assert plan.series_points[0][2] == axes.c2p(5, 5)
+        assert plan.series_points[1][1] == axes.c2p(2, 8)
+        before = axes.c2p(0, 0)
+        for invalid in ((), ((),), (((0, 0), (0, 1)),), (((1, 0), (10, 1)),),
+                        (((0, 0), (9, 1)),), (((0, 0), (10, float("nan"))),)):
+            try:
+                axes.synchronized_series_plan(invalid, time_range=(0, 10), run_time=5)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("invalid recording or uncovered window was accepted")
+        with _owned(axes._coordinate_frame()) as frame:
+            values = _array((0, 0, 10, 10, 0, 10, 10, 0))
+            for counts in ((-2, 2), (2.5, 2), (2**32 + 2, 2), (2, 3), ()):
+                try:
+                    engine_call(frame.synchronizedSeriesPlan, values, _array(counts), _array((0, 10)), 5)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("malformed boundary counts were accepted")
+            with _owned(engine_call(frame.synchronizedSeriesPlan, values, _array((2, 2)), _array((0, 10)), 5)) as raw:
+                for index in (-1, 0.5, 2, 2**32, float("nan")):
+                    try:
+                        engine_call(raw.seriesPoints, index)
+                    except ValueError:
+                        pass
+                    else:
+                        raise AssertionError("invalid series index was accepted")
+        assert axes.c2p(0, 0) == before
+        axes.shift((1, 0))
+        assert plan.series_points[0][2] != axes.c2p(5, 5)
+        self.add(axes)
+`;
+
+// Separate oracle for the new case; the single-series oracle remains unchanged.
+function assertSynchronizedMarkers(png, time) {
+  const t = time / 6 * 10;
+  const end = t === 10 ? unionTimes.length - 1 : unionTimes.findIndex(value => value > t);
+  const left = unionTimes[end - 1], right = unionTimes[end];
+  const predicates = [
+    (r, g, b) => b > r + 35 && g > r + 20,
+    (r, g, b) => r > g + 20 && g > b + 20,
+  ];
+  for (let row = 0; row < recordings.length; row++) {
+    const point = timestamp => {
+      const source = recordings[row];
+      const next = Math.max(1, source.findIndex(([x]) => x >= timestamp));
+      const [a, b] = [source[next - 1], source[next]];
+      const value = a[1] + (b[1] - a[1]) * (timestamp - a[0]) / (b[0] - a[0]);
+      return [timestamp - 5, value * 4 / 3 - 2];
+    };
+    const color = predicates[row];
+    assert.ok(regionCount(png, ...point(t), color) > 35,
+      `series ${row} marker missing at data time ${t}`);
+    assert.ok(regionCount(png, ...point((left + t) / 2), color) > 2,
+      `series ${row} has not revealed data through ${t}`);
+    if (t < right) assert.equal(regionCount(png, ...point(t + (right - t) * 0.8), color), 0,
+      `series ${row} prematurely reveals future data after ${t}`);
+  }
+  assert.ok(regionCount(png, t - 5, -1.8, (r, g, b) => g > r + 25 && g > b + 25) > 2,
+    `shared cursor missing at data time ${t}`);
+}
+
 try {
   for (const selected of ["webgpu", "webgl"]) {
     const backend = selected === "webgpu" ? "WebGPU" : "WebGL2";
@@ -229,8 +320,9 @@ try {
         assert.equal(a.png.height, 540);
         assert.equal(b.png.width, a.png.width);
         assert.equal(b.png.height, a.png.height);
-        assertMarker(a.png, a.time);
-        assertMarker(b.png, b.time);
+        const oracle = synchronized ? assertSynchronizedMarkers : assertMarker;
+        oracle(a.png, a.time);
+        oracle(b.png, b.time);
         let differingPixels = 0;
         for (let i = 0; i < a.png.data.length; i += 4) {
           if (!a.png.data.subarray(i, i + 4).equals(b.png.data.subarray(i, i + 4))) differingPixels++;
@@ -240,7 +332,7 @@ try {
       }
       result.arguments = await validateArguments(context);
       result.passed = true;
-      console.log(`[PASS] ${backend}: numeric labels and five paired data-time frames`);
+      console.log(`[PASS] ${backend} (${mode}): numeric labels and five paired data-time frames`);
     } catch (error) {
       result.passed = false;
       result.error = error.stack ?? String(error);

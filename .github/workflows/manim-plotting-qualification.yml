@@ -45,6 +45,8 @@ jobs:
         run: node scripts/plotting-qualification.mjs
       - name: Qualify numeric labels and timestamp-synchronized playback
         run: node scripts/time-series-plotting-qualification.mjs
+      - name: Qualify synchronized multi-series playback
+        run: node scripts/time-series-plotting-qualification.mjs synchronized
       - name: Record tested checkout
         if: always()
         run: |
