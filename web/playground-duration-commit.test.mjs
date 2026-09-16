@@ -3,18 +3,28 @@ import { readFile } from "node:fs/promises";
 
 const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
 
+const controlsStart = main.indexOf("function updatePlaybackControls(");
+const controlsEnd = main.indexOf("function ensureRuntimePreparation()", controlsStart);
+assert.ok(controlsStart >= 0 && controlsEnd > controlsStart, "playback-control boundary must exist");
+const controlsBody = main.slice(controlsStart, controlsEnd);
+assert.match(
+  controlsBody,
+  /new PlaygroundPlaybackControls\([\s\S]*?\{ durationSeconds, onError: showPlaybackError \},/,
+  "playback-control construction must preserve the duration supplied by the caller",
+);
+
 const runtimeStart = main.indexOf("async function ensureRuntimeReady(");
 const runtimeEnd = main.indexOf("async function ensureExecutionReady()", runtimeStart);
 assert.ok(runtimeStart >= 0 && runtimeEnd > runtimeStart, "runtime startup boundary must exist");
 const runtimeBody = main.slice(runtimeStart, runtimeEnd);
 assert.match(
   runtimeBody,
-  /new PlaygroundPlaybackControls\([\s\S]*?durationSeconds: loopDurationSeconds,/,
+  /updatePlaybackControls\(\{[\s\S]*?supported: !sourceOwnsExecution,[\s\S]*?player: nextPlayer,[\s\S]*?durationSeconds: loopDurationSeconds,/,
   "cold playback controls must use the authored duration without publishing global scene state early",
 );
 assert.match(
   runtimeBody,
-  /playbackControls\.sync\(\{[\s\S]*?durationSeconds: loopDurationSeconds,/,
+  /playbackControls\?\.sync\(\{[\s\S]*?durationSeconds: loopDurationSeconds,/,
   "cold playback sync must use the startup-local authored duration",
 );
 
