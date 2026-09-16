@@ -14,7 +14,7 @@ jobs:
     env:
       RUST_BACKTRACE: "1"
       CARGO_INCREMENTAL: "0"
-      NOON_DIAGNOSTIC_SOURCE: c95b97f610db26a06934be703b9c58f35efde8c5
+      NOON_DIAGNOSTIC_SOURCE: ff3c01dd8c009bb021068194b333f95c0507f812
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,5 +23,5 @@ jobs:
           persist-credentials: false
       - name: Verify exact diagnostic source
         run: test "$(git rev-parse HEAD)" = "$NOON_DIAGNOSTIC_SOURCE"
-      - name: Reproduce nested unequal matching completion
+      - name: Reproduce nested unequal matching completion publication
         run: cargo test -p noon --test matching_nested_unequal_completion -- --nocapture
