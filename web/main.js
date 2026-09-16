@@ -343,6 +343,8 @@ let playbackControls = null;
 let playbackDurationSeconds = 4.0;
 let rendererBackend = "";
 let sceneRunPromise = null;
+let runTransitionPromise = null;
+let activeSourceContinuation = null;
 let runtimeStartPromise = null;
 let runtimePreparation = null;
 let playerNeedsRestart = false;
@@ -380,16 +382,11 @@ function setPlaybackRuntimeStatus(playbackState, detail = "") {
   return phase;
 }
 
-function resetDisplayedMetrics() {
-  metricObjects.value = "—";
-  metricDraws.value = "—";
-  metricUpload.value = "—";
-  metricTime.value = "—";
-}
-
 function setBusy(busy) {
-  sceneButton.disabled = busy;
-  resetButton.disabled = busy || sceneSourceEditor.value === canonicalSource;
+  const canSupersedeActiveAnimation =
+    sceneRunPromise !== null && activeSourceContinuation !== null;
+  sceneButton.disabled = busy && !canSupersedeActiveAnimation;
+  resetButton.disabled = sceneSourceEditor.value === canonicalSource;
   gallerySearch.disabled = busy;
   categorySelect.disabled = busy;
   paritySelect.disabled = busy;
@@ -779,39 +776,66 @@ function discardEarlyContinuationRuntime(attachedPlayer) {
   stopMetricsPolling();
 }
 
-function resetViewportForSourceEdit() {
-  const interruptedRun = sceneRunPromise !== null;
-  if (interruptedRun) {
-    generations.invalidateRun();
+async function supersedeActiveSourceContinuation() {
+  const continuation = activeSourceContinuation;
+  if (continuation === null) return false;
+
+  generations.invalidateRun();
+  patchStatus.value = "Restarting with edited Python…";
+  patchStatus.dataset.state = "running";
+  try {
+    await continuation.client.cancelSemanticContinuation(
+      continuation.registration.semanticExecution.contextId,
+      continuation.registration.semanticExecution.continuationGeneration,
+      "Superseded by an explicit playground Run",
+    );
+  } catch (error) {
+    // A completion can race the explicit Run click. If the source is still
+    // pending, terminating only its authoring worker is the bounded fallback;
+    // the invalidated generation keeps that expected cancellation out of UI errors.
+    if (!continuation.client.terminated) {
+      continuation.client.terminate();
+    }
+    if (authoringClient === continuation.client) {
+      authoringClient = null;
+    }
   }
 
-  stopMetricsPolling();
-  playbackControls?.destroy();
-  playbackControls = null;
+  if (activeSourceContinuation === continuation) {
+    activeSourceContinuation = null;
+  }
+  discardEarlyContinuationRuntime(continuation.attachedPlayer);
+  return true;
+}
 
-  const activePlayer = player;
-  player = null;
-  if (activePlayer !== null) {
-    activePlayer.terminate();
-    adoptRuntimeCanvas(activePlayer);
+async function requestSceneRun() {
+  if (runTransitionPromise !== null) {
+    await runTransitionPromise;
+    return requestSceneRun();
   }
 
-  const preparation = runtimePreparation;
-  runtimePreparation = null;
-  if (preparation !== null) {
-    preparation.candidate.terminate();
-    adoptRuntimeCanvas(preparation.candidate);
+  const priorRun = sceneRunPromise;
+  if (priorRun === null) {
+    return runScene();
   }
 
-  playerNeedsRestart = false;
-  rendererBackend = "";
-  status.dataset.playbackControls = "unavailable";
-  status.dataset.executionMode = "";
-  status.dataset.rendererBackend = "";
-  status.dataset.runtimeStartup = "deferred-after-edit";
-  status.dataset.executionTopology = "deferred-until-run";
-  resetDisplayedMetrics();
-  return interruptedRun;
+  const transition = (async () => {
+    const superseded = await supersedeActiveSourceContinuation();
+    if (!superseded) {
+      patchStatus.value = "Run queued until the current Python build reaches an execution boundary…";
+      patchStatus.dataset.state = "running";
+    }
+    await priorRun;
+  })();
+  runTransitionPromise = transition;
+  try {
+    await transition;
+  } finally {
+    if (runTransitionPromise === transition) {
+      runTransitionPromise = null;
+    }
+  }
+  return runScene();
 }
 
 function sameSemanticContinuation(left, right) {
@@ -885,12 +909,14 @@ async function runScene() {
               player: attachedPlayer,
               durationSeconds: loopDurationSeconds,
             });
-            earlyContinuation = { registration, attachedPlayer, result };
+            earlyContinuation = { registration, attachedPlayer, result, client, runToken };
+            activeSourceContinuation = earlyContinuation;
+            setBusy(true);
             setPlaybackRuntimeStatus(
               result,
               `${example.title} · Python source continuing`,
             );
-            patchStatus.value = `Playing ${example.title} · Python source continuing…`;
+            patchStatus.value = `Playing ${example.title} · edit freely or Run again to restart…`;
             patchStatus.dataset.state = "running";
           },
         });
@@ -955,6 +981,9 @@ async function runScene() {
         if (!isCurrentRun(runToken)) {
           return recordStale(runToken, "after-continuation-replay");
         }
+        if (activeSourceContinuation === earlyContinuation) {
+          activeSourceContinuation = null;
+        }
         earlyContinuation = null;
       } else if (player === null) {
         result = await ensureRuntimeReady({
@@ -1010,6 +1039,9 @@ async function runScene() {
       patchStatus.dataset.operation = operation;
       return { stale: false, result };
     } catch (error) {
+      if (activeSourceContinuation?.runToken === runToken) {
+        activeSourceContinuation = null;
+      }
       discardEarlyContinuationRuntime(earlyContinuation?.attachedPlayer);
       if (!isCurrentRun(runToken)) {
         return recordStale(runToken, "error");
@@ -1027,6 +1059,9 @@ async function runScene() {
   try {
     return await task;
   } finally {
+    if (activeSourceContinuation?.runToken === runToken) {
+      activeSourceContinuation = null;
+    }
     if (sceneRunPromise === task) {
       sceneRunPromise = null;
     }
@@ -1108,7 +1143,7 @@ async function selectExample(
   if (scroll) {
     selectedExampleStrip.scrollIntoView({ behavior: "smooth", block: "start" });
   }
-  if (run) return runScene();
+  if (run) return requestSceneRun();
   return { stale: false };
 }
 
@@ -1130,18 +1165,17 @@ categorySelect.addEventListener("change", refreshGalleryFilters);
 paritySelect.addEventListener("change", refreshGalleryFilters);
 previousGalleryPage.addEventListener("click", () => moveGalleryPage(-1));
 nextGalleryPage.addEventListener("click", () => moveGalleryPage(1));
-sceneButton.addEventListener("click", runScene);
+sceneButton.addEventListener("click", requestSceneRun);
 resetButton.addEventListener("click", () => {
   const example = currentExample();
   if (!example) return;
-  if (player !== null || runtimePreparation !== null || sceneRunPromise !== null) {
-    resetViewportForSourceEdit();
-  }
   drafts.delete(example.id);
   sceneSourceEditor.value = canonicalSource;
   resetButton.disabled = true;
-  setRuntimeStatus("Reset · preview cleared", "ready");
-  patchStatus.value = `${example.title} reset to canonical source · Run to replay`;
+  const previewContinues = player !== null || sceneRunPromise !== null;
+  patchStatus.value = previewContinues
+    ? `${example.title} reset to canonical source · current preview continues · Run to apply`
+    : `${example.title} reset to canonical source · Run to apply`;
   patchStatus.dataset.state = "ready";
 });
 sceneSourceEditor.addEventListener(
@@ -1153,16 +1187,13 @@ sceneSourceEditor.addEventListener(
 );
 sceneSourceEditor.addEventListener("input", () => {
   const example = currentExample();
-  const hadActivePreview =
-    player !== null || runtimePreparation !== null || sceneRunPromise !== null;
-  const interruptedRun = hadActivePreview ? resetViewportForSourceEdit() : false;
   if (example) drafts.set(example.id, sceneSourceEditor.value);
   resetButton.disabled = sceneSourceEditor.value === canonicalSource;
-  if (hadActivePreview) {
-    setRuntimeStatus("Edited · preview reset", "ready");
-    patchStatus.value = interruptedRun
-      ? `${example?.title ?? "Scene"} changed · current run discarded · Run to replay`
-      : `${example?.title ?? "Scene"} changed · Run to replay`;
+  if (example) {
+    const previewContinues = player !== null || sceneRunPromise !== null;
+    patchStatus.value = previewContinues
+      ? `${example.title} modified · current preview continues · Run to apply`
+      : `${example.title} modified · Run to apply`;
     patchStatus.dataset.state = "ready";
   }
 });
@@ -1175,7 +1206,7 @@ window.addEventListener("popstate", () => {
 document.addEventListener("keydown", (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
-    void runScene();
+    void requestSceneRun();
   }
 });
 
@@ -1293,7 +1324,7 @@ try {
       return selectExample(id, { run: true, updateUrl: true });
     },
     async run() {
-      return runScene();
+      return requestSceneRun();
     },
   };
 
