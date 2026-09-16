@@ -35,8 +35,7 @@ fn marker_disappears_without_a_bridge_and_returns_with_the_same_identity() {
         .iter()
         .enumerate()
         .find(|(_, o)| {
-            o.style.fill == Some(BLUE)
-                && matches!(o.geometry(), Some(GeometryRef::Circle { .. }))
+            o.style.fill == Some(BLUE) && matches!(o.geometry(), Some(GeometryRef::Circle { .. }))
         })
         .unwrap();
     assert!(frame.is_present(index));
@@ -55,8 +54,7 @@ fn marker_disappears_without_a_bridge_and_returns_with_the_same_identity() {
         .objects
         .iter()
         .find(|o| {
-            o.style.fill == Some(ORANGE)
-                && matches!(o.geometry(), Some(GeometryRef::Circle { .. }))
+            o.style.fill == Some(ORANGE) && matches!(o.geometry(), Some(GeometryRef::Circle { .. }))
         })
         .unwrap();
     assert!((orange.transform.translation.x + 2.0).abs() < 2e-5);
