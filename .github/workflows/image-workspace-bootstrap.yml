@@ -1,0 +1,56 @@
+name: Image workspace bootstrap (temporary)
+
+on:
+  push:
+    branches: [codex/b2-image-workspace-bootstrap]
+    paths: [.github/workflows/image-workspace-bootstrap.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy --target wasm32-unknown-unknown
+          rustup default stable
+      - name: Prepare offline source and dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/noon-export /tmp/noon-decode/src
+          printf '[package]\nname = "noon-decode-bootstrap"\nversion = "0.0.0"\nedition = "2021"\n[dependencies]\nimage = { version = "0.25", default-features = false, features = ["png", "jpeg"] }\n' > /tmp/noon-decode/Cargo.toml
+          printf 'fn main() {}\n' > /tmp/noon-decode/src/main.rs
+          cargo vendor --versioned-dirs --sync /tmp/noon-decode/Cargo.toml /tmp/noon-export/vendor > /tmp/noon-export/vendor-config.toml
+          git archive --format=tar 3397f0ff49dc44559e5e0323eedb3d3893f2e62f | gzip -1 > /tmp/noon-export/source.tar.gz
+          cp Cargo.lock /tmp/noon-export/Cargo.lock
+          cargo --version > /tmp/noon-export/toolchain-version.txt
+          rustc --version >> /tmp/noon-export/toolchain-version.txt
+          tar -C /tmp/noon-export -czf /tmp/noon-source.tar.gz source.tar.gz Cargo.lock vendor-config.toml toolchain-version.txt
+          tar -C /tmp/noon-export -czf /tmp/noon-vendor.tar.gz vendor
+          TOOLCHAIN="$(rustup toolchain list | awk '/^stable-/ {print $1; exit}')"
+          tar -C "$HOME/.rustup/toolchains/$TOOLCHAIN" -czf /tmp/noon-toolchain.tar.gz bin lib libexec
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noon-image-offline-source
+          path: /tmp/noon-source.tar.gz
+          retention-days: 1
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noon-image-offline-vendor
+          path: /tmp/noon-vendor.tar.gz
+          retention-days: 1
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noon-image-offline-toolchain
+          path: /tmp/noon-toolchain.tar.gz
+          retention-days: 1
+          compression-level: 0
