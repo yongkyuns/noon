@@ -13,24 +13,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: e66f288f4e8740edd9df8c0fce29de9755535408
+          ref: fe08275a4b6d571e1b211514c6b6bec31a9952c6
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
           github-token: ${{ github.token }}
           run-id: 35115878492
           artifact-ids: 10454453987
           path: web
-          merge-multiple: true
-      - uses: actions/download-artifact@v4
-        with:
-          github-token: ${{ github.token }}
-          run-id: 35115878488
-          artifact-ids: 10455033615
-          path: browser-smoke-artifacts/images
           merge-multiple: true
       - name: Check recorded build inputs and install browser tools
         run: |
@@ -45,6 +41,12 @@ jobs:
           PY
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install --with-deps chromium
+      - name: Generate expanded pinned Manim reference
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config
+          python -m pip install --disable-pip-version-check manim==0.21.0
+          python scripts/image-manim-reference.py browser-smoke-artifacts/images/manim
       - name: Execute actual browser image qualification
         run: |
           set -o pipefail
