@@ -23,6 +23,30 @@ fn path_object(store: &mut SemanticStore, x: f64) -> SemanticNodeId {
     store.insert_semantic_object(state)
 }
 
+fn matching_triangle() -> VectorPath {
+    VectorPath::new()
+        .move_to(Vec2::new(-1.0, -1.0))
+        .line_to(Vec2::new(1.0, -0.5))
+        .line_to(Vec2::new(-0.25, 1.0))
+        .close()
+}
+
+fn matching_kite() -> VectorPath {
+    VectorPath::new()
+        .move_to(Vec2::new(0.0, -1.0))
+        .line_to(Vec2::new(1.5, 0.0))
+        .line_to(Vec2::new(0.0, 1.0))
+        .line_to(Vec2::new(-0.5, 0.0))
+        .close()
+}
+
+fn matching_path_object(store: &mut SemanticStore, path: VectorPath, x: f64) -> SemanticNodeId {
+    let handle = store.insert_geometry_path(path).unwrap();
+    let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
+    state.transform.translation = SemanticVec3::new(x, 0.0, 0.0);
+    store.insert_semantic_object(state)
+}
+
 fn family(store: &mut SemanticStore, members: &[SemanticNodeId]) -> SemanticNodeId {
     let family = store.insert_family();
     for &member in members {
@@ -442,4 +466,222 @@ fn sub_threshold_unequal_family_path_arc_keeps_straight_fallback() {
         .unwrap();
     session.advance_segment_to(segment, 0.5).unwrap();
     assert_eq!(session.frame().time, 0.5);
+}
+
+#[test]
+fn matching_family_transform_matches_shapes_not_positions_and_replaces_family() {
+    let mut store = SemanticStore::new();
+    let source_triangle = matching_path_object(&mut store, matching_triangle(), -2.0);
+    let source_kite = matching_path_object(&mut store, matching_kite(), 2.0);
+    let source = family(&mut store, &[source_triangle, source_kite]);
+    let target_kite = matching_path_object(&mut store, matching_kite(), -4.0);
+    let target_triangle = matching_path_object(&mut store, matching_triangle(), 4.0);
+    let target = family(&mut store, &[target_kite, target_triangle]);
+    let root = family(&mut store, &[source]);
+
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    let request = SemanticCompositionRequest::MatchingFamilyTransformTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear),
+    };
+    let segment = session
+        .declare_and_activate_composition(&mut store, root, &request, AnimationOptions::new())
+        .unwrap();
+
+    session.advance_segment_to(segment, 0.5).unwrap();
+    let index_for = |session: &ExecutionSession, node| {
+        session
+            .execution_index
+            .execution_object_id(node)
+            .and_then(|object| session.runtime.frame_index_for_object(object))
+            .unwrap()
+    };
+    let triangle_x = session.frame().objects[index_for(&session, source_triangle)]
+        .transform
+        .translation
+        .x;
+    let kite_x = session.frame().objects[index_for(&session, source_kite)]
+        .transform
+        .translation
+        .x;
+    assert!((triangle_x - 1.0).abs() < 1e-5);
+    assert!((kite_x + 1.0).abs() < 1e-5);
+    assert_eq!(
+        store.semantic_family_members_checked(root).unwrap(),
+        &[source]
+    );
+
+    session
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    session.complete_segment(&mut store, segment).unwrap();
+    assert_eq!(
+        store.semantic_family_members_checked(root).unwrap(),
+        &[target]
+    );
+    let source_object = session
+        .execution_index
+        .execution_object_id(source_triangle)
+        .unwrap();
+    assert!(session
+        .runtime
+        .frame_index_for_object(source_object)
+        .is_none());
+    let target_object = session
+        .execution_index
+        .execution_object_id(target_triangle)
+        .unwrap();
+    let target_index = session
+        .runtime
+        .frame_index_for_object(target_object)
+        .unwrap();
+    assert!(
+        (session.frame().objects[target_index]
+            .transform
+            .translation
+            .x
+            - 4.0)
+            .abs()
+            < 1e-5
+    );
+}
+
+#[test]
+fn matching_family_succession_uses_completed_prior_morph_for_activation_key() {
+    let mut store = SemanticStore::new();
+    let source_leaf = matching_path_object(&mut store, matching_triangle(), 0.0);
+    let source = family(&mut store, &[source_leaf]);
+    let morph_target = matching_path_object(&mut store, matching_kite(), 0.0);
+    let target_leaf = matching_path_object(&mut store, matching_kite(), 3.0);
+    let target = family(&mut store, &[target_leaf]);
+    let root = family(&mut store, &[source]);
+
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    let request = SemanticCompositionRequest::Composition {
+        kind: SemanticAnimationCompositionKind::Sequence,
+        children: vec![
+            SemanticCompositionRequest::TransformTo {
+                source: source_leaf,
+                target_state: morph_target,
+                interpolation: noon_core::SemanticTransformInterpolation::PointCorrespondence,
+                complete_priority: false,
+                options: AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            },
+            SemanticCompositionRequest::MatchingFamilyTransformTo {
+                source,
+                target_state: target,
+                options: AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            },
+        ],
+        options: AnimationOptions::new().rate_func(RateFunction::Linear),
+    };
+    let segment = session
+        .declare_and_activate_composition(&mut store, root, &request, AnimationOptions::new())
+        .unwrap();
+    assert!((segment.end_time() - 2.0).abs() < 1e-12);
+
+    session.advance_segment_to(segment, 1.5).unwrap();
+    let publication = session.take_renderer_publication();
+    assert!(publication.transient_presentations().is_empty());
+    let source_object = session
+        .execution_index
+        .execution_object_id(source_leaf)
+        .unwrap();
+    let source_index = session
+        .runtime
+        .frame_index_for_object(source_object)
+        .unwrap();
+    assert!(
+        (session.frame().objects[source_index]
+            .transform
+            .translation
+            .x
+            - 1.5)
+            .abs()
+            < 1e-5
+    );
+
+    session
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    session.complete_segment(&mut store, segment).unwrap();
+    assert_eq!(
+        store.semantic_family_members_checked(root).unwrap(),
+        &[target]
+    );
+}
+
+#[test]
+fn matching_family_completion_appends_target_in_same_z_painter_order() {
+    let mut store = SemanticStore::new();
+    let before = object(&mut store, -4.0);
+    let source_leaf = matching_path_object(&mut store, matching_triangle(), 0.0);
+    let source = family(&mut store, &[source_leaf]);
+    let after = object(&mut store, 4.0);
+    let target_leaf = matching_path_object(&mut store, matching_triangle(), 0.0);
+    let target = family(&mut store, &[target_leaf]);
+    let root = family(&mut store, &[before, source, after]);
+
+    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+    let before_execution = session.execution_index.execution_object_id(before).unwrap();
+    let source_execution = session
+        .execution_index
+        .execution_object_id(source_leaf)
+        .unwrap();
+    let after_execution = session.execution_index.execution_object_id(after).unwrap();
+    let request = SemanticCompositionRequest::MatchingFamilyTransformTo {
+        source,
+        target_state: target,
+        options: AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear),
+    };
+    let segment = session
+        .declare_and_activate_composition(&mut store, root, &request, AnimationOptions::new())
+        .unwrap();
+
+    session
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    session.complete_segment(&mut store, segment).unwrap();
+
+    assert_eq!(
+        store.semantic_family_members_checked(root).unwrap(),
+        &[before, after, target]
+    );
+    assert!(session
+        .runtime
+        .frame_index_for_object(source_execution)
+        .is_none());
+    let target_execution = session
+        .execution_index
+        .execution_object_id(target_leaf)
+        .expect("original authored target must enter the execution domain");
+    let painter_ids = session
+        .painter_order()
+        .iter()
+        .map(|&index| session.frame().objects[index as usize].id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        painter_ids,
+        vec![before_execution, after_execution, target_execution]
+    );
+
+    // Retiring interpolation-only presentation state must not reorder the exact endpoint
+    // on the following deterministic publication.
+    session.take_renderer_publication();
+    session.advance_to(segment.end_time() + 0.25).unwrap();
+    let next_painter_ids = session
+        .painter_order()
+        .iter()
+        .map(|&index| session.frame().objects[index as usize].id)
+        .collect::<Vec<_>>();
+    assert_eq!(next_painter_ids, painter_ids);
 }
