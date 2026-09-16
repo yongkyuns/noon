@@ -43,6 +43,18 @@ class GappedPlottingAdapterTests(unittest.TestCase):
         self.frame.free.assert_called_once()
         self.plan.free.assert_called_once()
 
+    def test_explicit_js_null_singleton_becomes_python_none(self):
+        sentinel = object()
+        self.points[0][1] = sentinel
+        self.segments[0][0] = sentinel
+        with patch.object(plotting, "_jsnull", sentinel):
+            result = self.prepare()
+        self.assertIsNone(result.series_points[0][1])
+        self.assertIsNone(result.series_segments[0][0])
+        self.assertIsNone(result.series_segments[0][1])
+        self.frame.free.assert_called_once()
+        self.plan.free.assert_called_once()
+
     def test_normalizes_nested_iterables_once_and_preserves_payload_order(self):
         result = self.prepare(
             (iter(row) for row in (((0, 1), (10, 3)), ((0, 4), (10, 6)))),

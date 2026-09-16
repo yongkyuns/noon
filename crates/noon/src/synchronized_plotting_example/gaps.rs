@@ -5,10 +5,9 @@ use super::{color, line, BuildResult, RECORDINGS, RUN_TIME};
 use crate::plot_presentation::{number_labels, TimedPlotSample};
 use crate::synchronized_plot_presentation::GappedTimeSeriesPlan;
 use crate::{
-    AnimationCompositionRequest as Request, AnimationOptions, ContinuationStep,
-    LiveContinuation, LiveProgram, LiveSession, ManimAxesOptions, ManimGeometryOptions,
-    Mobject, RateFunction, Scene, SemanticAnimationCompositionKind as Kind, Text,
-    TransformToRequest, BLUE, GREEN, ORANGE, WHITE,
+    AnimationCompositionRequest as Request, AnimationOptions, ContinuationStep, LiveContinuation,
+    LiveProgram, LiveSession, ManimAxesOptions, ManimGeometryOptions, Mobject, RateFunction, Scene,
+    SemanticAnimationCompositionKind as Kind, Text, TransformToRequest, BLUE, GREEN, ORANGE, WHITE,
 };
 
 struct Stroke {
@@ -35,7 +34,9 @@ impl LiveContinuation for GappedPlayback {
 
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
         let index = self.next_interval;
-        if index == self.durations.len() { return Ok(ContinuationStep::Finished); }
+        if index == self.durations.len() {
+            return Ok(ContinuationStep::Finished);
+        }
         // Ordinary source control flow at interval boundaries, not per-frame
         // callbacks. Reuse marker identity; never animate across a missing span.
         for drawing in &mut self.drawings {
@@ -53,22 +54,35 @@ impl LiveContinuation for GappedPlayback {
                 _ => {}
             }
         }
-        let options = AnimationOptions::new().run_time(self.durations[index])
+        let options = AnimationOptions::new()
+            .run_time(self.durations[index])
             .rate_func(RateFunction::Linear);
         let mut children = Vec::with_capacity(self.drawings.len() * 2 + 1);
         for drawing in &self.drawings {
             if let Some(stroke) = &drawing.strokes[index] {
-                children.push(Request::Create { target: &stroke.line, options });
+                children.push(Request::Create {
+                    target: &stroke.line,
+                    options,
+                });
                 children.push(Request::TransformTo(TransformToRequest::new(
-                    &drawing.marker, &stroke.target, options,
+                    &drawing.marker,
+                    &stroke.target,
+                    options,
                 )));
             }
         }
         children.push(Request::TransformTo(TransformToRequest::new(
-            &self.cursor, &self.cursor_targets[index], options,
+            &self.cursor,
+            &self.cursor_targets[index],
+            options,
         )));
-        let request = Request::Composition { kind: Kind::Parallel, children, options };
-        let segment = live.declare_and_activate_composition(&request, options)
+        let request = Request::Composition {
+            kind: Kind::Parallel,
+            children,
+            options,
+        };
+        let segment = live
+            .declare_and_activate_composition(&request, options)
             .map_err(|e| e.to_string())?;
         self.next_interval += 1;
         Ok(ContinuationStep::Await(segment))
@@ -78,28 +92,49 @@ impl LiveContinuation for GappedPlayback {
 pub fn program() -> BuildResult<LiveProgram<GappedPlayback>> {
     let mut scene = Scene::new();
     let axes = scene.axes(&ManimAxesOptions::new(
-        [0.0, 10.0, 2.0], [0.0, 3.0, 1.0], 10.0, 4.0,
+        [0.0, 10.0, 2.0],
+        [0.0, 3.0, 1.0],
+        10.0,
+        4.0,
     ))?;
     let frame = axes.authored_frame()?;
-    let data: Vec<Vec<TimedPlotSample>> = RECORDINGS.iter().map(|row| {
-        row.iter().map(|&[time, value]| TimedPlotSample { time, value }).collect()
-    }).collect();
+    let data: Vec<Vec<TimedPlotSample>> = RECORDINGS
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|&[time, value]| TimedPlotSample { time, value })
+                .collect()
+        })
+        .collect();
     let refs: Vec<_> = data.iter().map(Vec::as_slice).collect();
     // Break A after its third sample: measured endpoints at t=2 and t=5.
     let plan = GappedTimeSeriesPlan::new(frame, &refs, &[&[2], &[]], [0.0, 10.0], RUN_TIME)?;
     scene.add_many(&[axes.family().into()])?;
     for (axis, direction, exclude_zero) in [
-        (frame.x(), (0.0, -1.0), false), (frame.y(), (-1.0, 0.0), true),
+        (frame.x(), (0.0, -1.0), false),
+        (frame.y(), (-1.0, 0.0), true),
     ] {
         for label in number_labels(axis, None, 0, exclude_zero)? {
             let mut text = scene.text(Text::new(label.text).with_font_size(18.0))?;
-            text.next_to_point(label.point[0], label.point[1], direction.0, direction.1, 0.12)?;
+            text.next_to_point(
+                label.point[0],
+                label.point[1],
+                direction.0,
+                direction.1,
+                0.12,
+            )?;
             scene.add(&text)?;
         }
     }
     for (source, size, x, y, tint) in [
         ("Missing measurements stay missing", 28.0, 0.0, 3.2, WHITE),
-        ("Explicit blue gap: 2-5 s; orange recording continues", 17.0, 0.0, 2.72, WHITE),
+        (
+            "Explicit blue gap: 2-5 s; orange recording continues",
+            17.0,
+            0.0,
+            2.72,
+            WHITE,
+        ),
         ("Data time (s)", 20.0, 0.0, -2.85, WHITE),
         ("Interrupted recording", 18.0, -2.4, 2.25, BLUE),
         ("Continuous recording", 18.0, 2.4, 2.25, ORANGE),
@@ -116,8 +151,13 @@ pub fn program() -> BuildResult<LiveProgram<GappedPlayback>> {
             scene.add(&reference)?;
         }
     }
-    let cursor = line(&mut scene, frame.coords_to_point(0.0, 0.0)?,
-        frame.coords_to_point(0.0, 3.0)?, GREEN, 0.025)?;
+    let cursor = line(
+        &mut scene,
+        frame.coords_to_point(0.0, 0.0)?,
+        frame.coords_to_point(0.0, 3.0)?,
+        GREEN,
+        0.025,
+    )?;
     scene.add(&cursor)?;
     let mut drawings = Vec::new();
     for (row, tint) in plan.series().iter().zip([BLUE, ORANGE]) {
@@ -137,11 +177,19 @@ pub fn program() -> BuildResult<LiveProgram<GappedPlayback>> {
                     let line = line(&mut scene, start, end, tint, 0.04)?;
                     let mut target = marker.copy_handle()?;
                     target.move_to(end[0], end[1])?;
-                    Some(Stroke { line, target, start })
+                    Some(Stroke {
+                        line,
+                        target,
+                        start,
+                    })
                 }
             });
         }
-        drawings.push(Drawing { marker, strokes, shown: true });
+        drawings.push(Drawing {
+            marker,
+            strokes,
+            shown: true,
+        });
     }
     let mut cursor_targets = Vec::new();
     for &[x, y] in &plan.cursor_points()[1..] {
@@ -150,7 +198,11 @@ pub fn program() -> BuildResult<LiveProgram<GappedPlayback>> {
         cursor_targets.push(target);
     }
     Ok(scene.into_live_program(GappedPlayback {
-        drawings, cursor, cursor_targets, durations: plan.durations().to_vec(), next_interval: 0,
+        drawings,
+        cursor,
+        cursor_targets,
+        durations: plan.durations().to_vec(),
+        next_interval: 0,
     })?)
 }
 

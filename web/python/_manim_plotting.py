@@ -20,9 +20,9 @@ try:
     from js import noonAuthoringCoordinateOptions as _coordinate_options
     from js import noonCreateAuthoringCoordinateHandle as _create_coordinates
     from js import noonPlotSamplingPlan as _sampling_plan
-    from pyodide.ffi import to_js as _to_js
+    from pyodide.ffi import to_js as _to_js, jsnull as _jsnull
 except ImportError:
-    _coordinate_options = _create_coordinates = _sampling_plan = _to_js = None
+    _coordinate_options = _create_coordinates = _sampling_plan = _to_js = _jsnull = None
 
 
 class _NumberLabel(NamedTuple):
@@ -361,9 +361,9 @@ class Axes(_compat.Group):
             )) as plan:
                 count = int(engine_call(plan.seriesCount))
                 return _GappedTimeSeriesPlan(
-                    tuple(tuple(None if p is None else _base.Vec2(*map(float, p))
+                    tuple(tuple(None if p is None or p is _jsnull else _base.Vec2(*map(float, p))
                                 for p in engine_call(plan.seriesPoints, i)) for i in range(count)),
-                    tuple(tuple(None if pair is None else _point_pairs(pair)
+                    tuple(tuple(None if pair is None or pair is _jsnull else _point_pairs(pair)
                                 for pair in engine_call(plan.seriesSegments, i)) for i in range(count)),
                     tuple(float(x) for x in engine_call(plan.dataTimes)),
                     _point_pairs(engine_call(plan.cursorPoints)),

@@ -1,10 +1,15 @@
 // Independent external-test expectations, not an engine or example dependency.
 import assert from "node:assert/strict";
 
-export const gapCheckpoints = [0.6, 1.19, 1.2, 1.21, 1.8, 2.99, 3, 3.01, 4.5, 6];
+// Sample the exact authored key produced by the explicit data-window mapping,
+// not the adjacent representable literal 1.2 (which is just before that key).
+const gapStart = (2 / 10) * 6;
+const gapEnd = (5 / 10) * 6;
+export const gapCheckpoints = [0.6, 1.19, gapStart, 1.21, 1.8, 2.99, gapEnd, 3.01, 4.5, 6];
 export const gapArgumentSource = `from noon import *
 from _manim_plotting import _owned, _array
 from _noon_errors import engine_call
+from pyodide.ffi import jsnull
 class GapValidation(Scene):
     def construct(self):
         axes = Axes((0, 10, 2), (0, 3, 1), x_length=10, y_length=4)
@@ -53,7 +58,7 @@ class GapValidation(Scene):
                 else:
                     raise AssertionError("invalid WASM break count accepted")
             with _owned(engine_call(frame.gappedSeriesPlan, values, counts, _array((0,)), _array((1,)), window, 6)) as raw:
-                assert list(engine_call(raw.seriesSegments, 0)) == [None]
+                assert list(engine_call(raw.seriesSegments, 0)) == [jsnull]
                 for index in (-1, 0.5, 1, 2**32, float("nan")):
                     for query in (raw.seriesPoints, raw.seriesSegments):
                         try:
@@ -71,7 +76,7 @@ export function assertGapPixels(png, time, recordings, unionTimes, regionCount) 
   const t = time / 6 * 10;
   // Markers represent the outgoing interval; at recovery they appear at its
   // first measured endpoint. The completed blue history keeps the pre-gap end.
-  const outage = time >= 1.2 && time < 3;
+  const outage = time >= gapStart && time < gapEnd;
   const colors = [
     (r, g, b) => b > r + 35 && g > r + 20,
     (r, g, b) => r > g + 20 && g > b + 20,

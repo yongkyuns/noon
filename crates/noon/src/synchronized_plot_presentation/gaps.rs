@@ -77,14 +77,27 @@ impl GappedTimeSeriesPlan {
             durations: copy_slice(dense.durations())?,
             cursor_points: copy_slice(dense.cursor_points())?,
         };
-        result.series.try_reserve_exact(series.len()).map_err(allocation_error)?;
+        result
+            .series
+            .try_reserve_exact(series.len())
+            .map_err(allocation_error)?;
         let grid = dense.series()[0].samples();
-        result.data_times.try_reserve_exact(grid.len()).map_err(allocation_error)?;
+        result
+            .data_times
+            .try_reserve_exact(grid.len())
+            .map_err(allocation_error)?;
         result.data_times.extend(grid.iter().map(|s| s.time));
         for ((source, breaks), aligned) in series.iter().zip(break_after).zip(dense.series()) {
-            let mut row = GappedSeries { points: Vec::new(), segments: Vec::new() };
-            row.points.try_reserve_exact(grid.len()).map_err(allocation_error)?;
-            row.segments.try_reserve_exact(grid.len() - 1).map_err(allocation_error)?;
+            let mut row = GappedSeries {
+                points: Vec::new(),
+                segments: Vec::new(),
+            };
+            row.points
+                .try_reserve_exact(grid.len())
+                .map_err(allocation_error)?;
+            row.segments
+                .try_reserve_exact(grid.len() - 1)
+                .map_err(allocation_error)?;
             let mut left = 0;
             let mut gap = 0;
             for (index, sample) in grid.iter().enumerate() {
@@ -95,11 +108,12 @@ impl GappedTimeSeriesPlan {
                     gap += 1;
                 }
                 let disconnected = gap < breaks.len() && breaks[gap] == left;
-                row.points.push(if disconnected && sample.time != source[left].time {
-                    None
-                } else {
-                    Some(aligned.points()[index])
-                });
+                row.points
+                    .push(if disconnected && sample.time != source[left].time {
+                        None
+                    } else {
+                        Some(aligned.points()[index])
+                    });
                 if index + 1 < grid.len() {
                     row.segments.push(if disconnected {
                         None
@@ -113,17 +127,31 @@ impl GappedTimeSeriesPlan {
         Ok(result)
     }
 
-    pub fn series(&self) -> &[GappedSeries] { &self.series }
-    pub fn data_times(&self) -> &[f64] { &self.data_times }
-    pub fn key_times(&self) -> &[f64] { &self.key_times }
-    pub fn durations(&self) -> &[f64] { &self.durations }
-    pub fn cursor_points(&self) -> &[[f64; 2]] { &self.cursor_points }
-    pub fn run_time(&self) -> f64 { *self.key_times.last().expect("validated time grid") }
+    pub fn series(&self) -> &[GappedSeries] {
+        &self.series
+    }
+    pub fn data_times(&self) -> &[f64] {
+        &self.data_times
+    }
+    pub fn key_times(&self) -> &[f64] {
+        &self.key_times
+    }
+    pub fn durations(&self) -> &[f64] {
+        &self.durations
+    }
+    pub fn cursor_points(&self) -> &[[f64; 2]] {
+        &self.cursor_points
+    }
+    pub fn run_time(&self) -> f64 {
+        *self.key_times.last().expect("validated time grid")
+    }
 }
 
 fn copy_slice<T: Clone>(source: &[T]) -> Result<Vec<T>, Error> {
     let mut result = Vec::new();
-    result.try_reserve_exact(source.len()).map_err(allocation_error)?;
+    result
+        .try_reserve_exact(source.len())
+        .map_err(allocation_error)?;
     result.extend_from_slice(source);
     Ok(result)
 }
