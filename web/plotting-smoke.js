@@ -1,3 +1,5 @@
+import { qualifyNumberLabels } from "./number-label-smoke.js";
+
 // Executed by the existing Manim/Pyodide smoke gate, not a mocked Python host.
 import { WasmAuthoringStore, WasmCoordinateOptions, WasmPlotSamplingPlan } from "./pkg/noon_web.js";
 
@@ -145,6 +147,7 @@ export async function qualifyPlotting(runLive) {
       result.metrics.drawCalls < 1 || result.metrics.instancesDrawn < 1) {
     throw new Error("plotting did not present through the retained renderer");
   }
-  return { backend: result.metrics.backend, objectCount: result.metrics.objectCount,
+  const numberLabels = await qualifyNumberLabels(runLive);
+  return { numberLabels, backend: result.metrics.backend, objectCount: result.metrics.objectCount,
     presentedFrames: result.metrics.presentedFrames, duration: result.duration };
 }

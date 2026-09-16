@@ -15,12 +15,10 @@ class TimeSeriesPlotting(Scene):
     def construct(self):
         axes = Axes((0, 10, 2), (0, 2.5, 0.5), x_length=10, y_length=4)
         self.add(axes)
-        for axis, decimals, direction, exclude_zero in (
-            (axes.x_axis, 0, DOWN, False),
-            (axes.y_axis, 1, LEFT, True),
-        ):
-            for label in axis.label_plan(decimal_places=decimals, exclude_zero=exclude_zero):
-                self.add(Text(label.text, font_size=18).next_to(label.point, direction, buff=0.12))
+        axes.add_coordinates(
+            x_config={"decimal_places": 0, "exclude_zero": False},
+            y_config={"decimal_places": 1, "exclude_zero": True},
+        )
         for text, size, y in (
             ("Time-synchronized sampled data", 28, 3.1),
             ("Uneven timestamps; one shared clock", 18, 2.55),

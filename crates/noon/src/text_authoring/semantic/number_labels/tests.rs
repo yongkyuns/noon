@@ -112,3 +112,102 @@ fn invalid_numbers_and_presentation_do_not_allocate_resources() {
     assert_eq!(counts(&scene), count);
     assert_eq!(scene.revision(), revision);
 }
+
+#[test]
+fn rejected_provisional_text_handles_never_revive_on_retry() {
+    let scene = Scene::new();
+    let frame = NumberLineFrame::centered([0.0, 2.0, 1.0], 2.0, 0.0).unwrap();
+    let label = prepare(frame, Some(&[1.0]), &NumberLabelOptions::default())
+        .unwrap().remove(0);
+    let input = (label.resource, label.fonts);
+    let mut rejected = None;
+    let mut store = scene.integration_store().borrow_mut();
+    let revision = store.scene_revision();
+    let result = store.apply_glyph_text_transaction::<Error>(vec![input.clone()], |handles| {
+        rejected = Some(handles[0]);
+        Err(PlotPresentationError::InvalidInput("builder rejected").into())
+    });
+    assert!(result.is_err());
+    let rejected = rejected.unwrap();
+    assert!(store.text_resources().get(rejected).is_none());
+    assert_eq!(store.text_resources().len(), 0);
+    assert_eq!(store.font_resources().len(), 0);
+    assert_eq!(store.scene_revision(), revision);
+    let mut accepted = None;
+    store.apply_glyph_text_transaction::<Error>(vec![input], |handles| {
+        accepted = Some(handles[0]);
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.create_node(SemanticNodeCreation::object(SemanticObjectState::new(handles[0])));
+        Ok(transaction)
+    }).unwrap();
+    assert_ne!(accepted.unwrap(), rejected);
+    assert!(store.text_resources().get(rejected).is_none());
+    assert!(store.text_resources().get(accepted.unwrap()).is_some());
+}
+
+#[test]
+fn conflicting_incoming_fonts_fail_before_any_batch_insertion() {
+    let scene = Scene::new();
+    let frame = NumberLineFrame::centered([0.0, 2.0, 1.0], 2.0, 0.0).unwrap();
+    let label = prepare(frame, Some(&[1.0]), &NumberLabelOptions::default())
+        .unwrap().remove(0);
+    let face = label.resource.runs[0].font.clone();
+    let mut conflicting = FontResourceArena::new();
+    conflicting.intern_face(&face, std::sync::Arc::from([1u8, 2, 3])).unwrap();
+    let mut store = scene.integration_store().borrow_mut();
+    let revision = store.scene_revision();
+    let result = store.apply_glyph_text_transaction::<Error>(vec![
+        (label.resource.clone(), label.fonts), (label.resource, conflicting),
+    ], |_| panic!("font conflict must reject before building a transaction"));
+    assert!(matches!(result, Err(Error::Import(noon_core::SemanticTextImportError::Font(_)))));
+    assert_eq!(store.text_resources().len(), 0);
+    assert_eq!(store.font_resources().len(), 0);
+    assert_eq!(store.scene_revision(), revision);
+}
+
+struct MoveLabels {
+    source: MobjectFamily,
+    target: MobjectFamily,
+    started: bool,
+}
+impl crate::LiveContinuation for MoveLabels {
+    type Error = String;
+    fn resume(&mut self, live: &mut crate::LiveSession<'_>) -> Result<crate::ContinuationStep, String> {
+        if self.started { return Ok(crate::ContinuationStep::Finished); }
+        self.started = true;
+        live.declare_and_activate_family_transform_to(&self.source, &self.target,
+            crate::AnimationOptions::new().run_time(1.0).rate_func(crate::RateFunction::Linear))
+            .map(crate::ContinuationStep::Await).map_err(|error| error.to_string())
+    }
+}
+
+#[test]
+fn effective_label_motion_uses_existing_family_drivers_without_resource_churn() {
+    let mut scene = Scene::new();
+    let line = scene.number_line(&ManimNumberLineOptions::new([-2.0, 2.0, 1.0])).unwrap();
+    let labels = line.add_numbers(None, &NumberLabelOptions::default()).unwrap();
+    line.family().scale(-0.8, 1.2).unwrap();
+    line.family().rotate(0.25, crate::ManimRotationPivot::Center).unwrap();
+    let label = leaves(&labels).remove(0);
+    let authored = label.state().unwrap();
+    let copied = line.family().copy_family().unwrap();
+    copied.root().shift(2.0, 4.0).unwrap();
+    scene.add_many(&[line.family().into()]).unwrap();
+    let count = counts(&scene);
+    let mut program = scene.into_live_program(MoveLabels {
+        source: line.family().clone(), target: copied.root().clone(), started: false,
+    }).unwrap();
+    program.resume().unwrap();
+    let before = program.session().frame().objects.iter().find(|o| o.text().is_some()).unwrap().clone();
+    let revision = program.session().publication_context().scene_revision();
+    let mut callbacks = crate::RustHostCallbackTable::new();
+    program.drive_to(&mut callbacks, 0.5).unwrap();
+    let effective = program.session().frame().objects.iter().find(|o| o.id == before.id).unwrap();
+    near(f64::from(effective.transform.translation.x - before.transform.translation.x), 1.0);
+    near(f64::from(effective.transform.translation.y - before.transform.translation.y), 2.0);
+    assert_eq!(effective.content, before.content);
+    assert_eq!(label.state().unwrap(), authored);
+    assert_eq!(program.session().publication_context().scene_revision(), revision);
+    let store = line.family().integration_store().borrow();
+    assert_eq!((store.geometry_resources().len(), store.text_resources().len(), store.font_resources().len()), count);
+}

@@ -1,7 +1,8 @@
 """Linear 2D coordinates and preparation-only plots over shared Rust handles.
 
 The initial coordinate constructors require explicit three-value ranges and do
-not support tips, automatic label objects, or construction after execution starts.
+not support tips or construction after execution starts. Numeric native Text
+label families can be attached before the first play/wait.
 Existing coordinates remain queryable after plays; curves use ordinary live
 geometry publication. Python owns callables/coercion, never coordinate math.
 """
@@ -205,6 +206,20 @@ class NumberLine(_compat.Group):
         with _owned(self._coordinate_frame()) as frame:
             return float(engine_call(frame.unitSize))
 
+    def get_number_mobjects(self, *numbers, **kwargs):
+        """Detached ordinary Text labels; no arguments selects automatic ticks."""
+        from _manim_number_labels import number_mobjects
+        return number_mobjects(self, numbers or None, attach=False, config=kwargs)
+
+    def add_numbers(self, x_values=None, **kwargs):
+        """Atomically append native Text labels before playback; expose .numbers.
+
+        Repeated calls append another label family, rather than replacing the
+        earlier one. This bounded subset does not construct DecimalNumber/TeX.
+        """
+        from _manim_number_labels import number_mobjects
+        number_mobjects(self, x_values, attach=True, config=kwargs)
+        return self
 
     def label_plan(self, numbers=None, *, decimal_places=0, exclude_zero=True):
         """Noon extension: immutable text/anchor preparation, not label objects.
@@ -296,6 +311,15 @@ class Axes(_compat.Group):
             options = engine_call(frame.sampledPlot, _points(points))
         return _curve(object.__new__(_compat.VMobject), options, color, kwargs)
 
+    def add_coordinates(self, x_values=None, y_values=None, *, x_config=None, y_config=None, **kwargs):
+        """Atomically append both axes' native Text label families before playback.
+
+        Options shared by both axes may be overridden with x_config/y_config.
+        Labels become members and follow subsequent transforms and copies.
+        """
+        from _manim_number_labels import add_coordinates
+        return add_coordinates(self, x_values, y_values, x_config=x_config,
+                               y_config=y_config, config=kwargs)
 
     def time_series_plan(self, samples, *, run_time):
         """Noon extension: map timestamp/value pairs and prepare interval timing.

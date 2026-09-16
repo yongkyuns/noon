@@ -1,7 +1,7 @@
 //! Numeric ticks and timestamp-synchronized drawing over the ordinary runtime.
 //! The measurements are illustrative, not an INS/GNSS simulation result.
 
-use crate::plot_presentation::{number_labels, TimeSeriesPlan, TimedPlotSample};
+use crate::plot_presentation::{NumberLabelOptions, TimeSeriesPlan, TimedPlotSample};
 use crate::{
     AnimationCompositionRequest as Request, AnimationOptions, Color, ContinuationStep,
     LiveContinuation, LiveProgram, LiveSession, ManimAxesOptions, ManimGeometryOptions, Mobject,
@@ -112,30 +112,21 @@ pub fn program() -> Result<LiveProgram<TimeSeriesPlayback>, String> {
         .add_many(&[axes.family().into()])
         .map_err(|error| error.to_string())?;
 
-    // These are ordinary authoring operations, not an atomic numeric-label
-    // constructor or an alternative text/layout engine. The shared pure plan
-    // supplies formatting/anchors; normal Text performs shaping and placement.
-    for (axis, decimals, direction, exclude_zero) in [
-        (frame.x(), 0, (0.0, -1.0), false),
-        (frame.y(), 1, (-1.0, 0.0), true),
-    ] {
-        for label in
-            number_labels(axis, None, decimals, exclude_zero).map_err(|error| error.to_string())?
-        {
-            let mut text = scene
-                .text(Text::new(label.text).with_font_size(18.0))
-                .map_err(|error| error.to_string())?;
-            text.next_to_point(
-                label.point[0],
-                label.point[1],
-                direction.0,
-                direction.1,
-                0.12,
-            )
-            .map_err(|error| error.to_string())?;
-            scene.add(&text).map_err(|error| error.to_string())?;
-        }
-    }
+    // Both label families attach atomically and are ordinary axes members.
+    axes.add_coordinates(
+        None,
+        None,
+        &NumberLabelOptions {
+            exclude_zero: false,
+            ..Default::default()
+        },
+        &NumberLabelOptions {
+            decimal_places: 1,
+            direction: [-1.0, 0.0],
+            ..Default::default()
+        },
+    )
+    .map_err(|error| error.to_string())?;
     for (source, size, y) in [
         ("Time-synchronized sampled data", 28.0, 3.1),
         ("Uneven timestamps; one shared clock", 18.0, 2.55),
