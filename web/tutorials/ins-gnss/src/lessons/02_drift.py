@@ -16,7 +16,7 @@ async def lesson_drift(scene):
     await stage.reveal(equation(r'delta p(t) = 1/2 b_a t^2',(3.58,-1.0)))
     cursor = plot.cursor(0)
     stage.add(cursor)
-    await scene.play(Transform(cursor,plot.cursor(horizon)),run_time=8,rate_func=linear)
+    await plot.move_cursor(scene, cursor, 0, horizon, duration=8)
     await stage.say(f'{bias:.2f} m/s² × {horizon:g} s × {horizon:g} s / 2 = {.5*bias*horizon*horizon:.0f} m.',hold=7)
     await stage.clear()
     gravity,tilt=9.81,.5

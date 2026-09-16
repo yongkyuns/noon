@@ -16,7 +16,7 @@ async def lesson_sensors(scene):
     await stage.clear()
     stage.add(equation(r'f^n = a^n - g^n',(-3.1,.6),48,max_width=6),
               equation(r'a^n = C_s^n f^s + g^n',(3.2,.6),35,max_width=6),
-              text('Sensor-frame measurement',(-3.1,-.7),24,FUSED),
+              text('Specific-force definition',(-3.1,-.7),24,FUSED),
               text('Navigation-frame acceleration',(3.2,-.7),24,GNSS),
               text('Local teaching model: Earth rotation is omitted here.',(0,-2),22,MUTED))
     await stage.say('A gyroscope measures angular rate. It does not directly report an orientation.',hold=7)
@@ -32,9 +32,9 @@ async def lesson_frames(scene):
               text('Planar yaw projection',(-3.1,2.02),20,MUTED),
               *notes(['Grey: navigation axes','Green: sensor axes','The physical vector is unchanged.']))
     await stage.say('A rotation changes a vector’s coordinates, not the physical vector itself.',hold=6)
-    await scene.play(Rotate(sensor,angle=pi/3),run_time=3)
     force=arrow(centre,(centre[0]+1.7,centre[1]+.8),GNSS)
     stage.add(force)
+    await scene.play(Rotate(sensor,angle=pi/3),run_time=3)
     await stage.say('The same arrow has different components in the grey and green frames.',hold=6)
     await stage.clear()
     stage.add(*notes(['s: sensor axes','c: car axes','n: local North–East–Down','e: Earth-centred, Earth-fixed'],start_y=1.6),

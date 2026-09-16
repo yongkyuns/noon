@@ -1,0 +1,146 @@
+{
+  "schema": 1,
+  "chapters": [
+    {
+      "number": 1,
+      "title": "Two sensors, one estimate",
+      "expected_duration": 46.75,
+      "notes": [
+        "The opening graph is a recorded-run overview, not a live strip chart. The entire numerical trace is visible from the start; the gold cursor moves through simulation time. Each motion segment uses linear time and the lesson pauses between segments for explanation.",
+        "The actual experiment uses a 100 Hz accelerometer, 1 Hz position fixes, 3 m GNSS standard deviation, a constant physical acceleration bias of 0.02 m/s², and independent acceleration sample noise of 0.04 m/s². Initial position and velocity means are zero; their uncertainties are nonzero. GNSS is absent over [45,75) seconds. The estimator does not receive simulated truth.",
+        "This is a one-dimensional teaching filter with states [position, velocity, physical acceleration bias]. It is deliberately simpler than the full ECEF INS/GNSS reference. The displayed position error just before reacquisition is measured at 74.99 s from the start of the experiment, not only the error accumulated during the outage."
+      ]
+    },
+    {
+      "number": 2,
+      "title": "Small errors accumulate",
+      "expected_duration": 47.9,
+      "notes": [
+        "For constant acceleration error b with initially correct position and velocity, integrating once gives velocity error bt and integrating twice gives position error ½bt². At b = 0.02 m/s² and t = 60 s, this is 36 m. Random noise and feedback corrections are deliberately excluded from this analytic example.",
+        "A small fixed tilt projects part of gravity into a horizontal acceleration component. Using 9.81 sin(0.5°) gives approximately 0.0856 m/s² and 154 m after 60 seconds under the same idealized integration assumptions. A real INS has coupled attitude dynamics and feedback, so this is an explanation of sensitivity, not a system performance forecast."
+      ]
+    },
+    {
+      "number": 3,
+      "title": "What the IMU measures",
+      "expected_duration": 25.2,
+      "notes": [
+        "Accelerometers measure specific force, not velocity and not gravity-inclusive kinematic acceleration. In a simplified local frame f = a − g. A resting supported sensor therefore measures a force opposing gravity; a freely falling ideal sensor approaches zero specific force.",
+        "The rotation C_s^n maps sensor-frame components into navigation-frame components. Only after that rotation can the navigation gravity vector be added. Gyroscope angular rate must be integrated to obtain attitude; it is not an absolute heading measurement. The displayed local equations omit Earth rotation."
+      ]
+    },
+    {
+      "number": 4,
+      "title": "One vector, different coordinates",
+      "expected_duration": 25.2,
+      "notes": [
+        "This chapter uses superscript = destination and subscript = source for rotation matrices. Thus C_s^e maps sensor coordinates into Earth-centred Earth-fixed coordinates; its transpose performs the reverse mapping. The same physical vector does not rotate merely because we change its coordinates.",
+        "The car-frame velocity is v^c = C_s^c (C_s^e)ᵀ v^e. This is the key frame chain behind vehicle constraints. Sensor-to-car installation alignment differs from sensor attitude relative to Earth. Both can be uncertain.",
+        "The reference propagates position and velocity in ECEF. NED is a local North–East–Down frame. The drawings are explicitly planar projections; they are not a 3D attitude renderer or a full global Earth visualization."
+      ]
+    },
+    {
+      "number": 5,
+      "title": "From measurements to motion",
+      "expected_duration": 39.85,
+      "notes": [
+        "In the simplified local model, the scalar-first quaternion q maps sensor vectors into navigation coordinates and obeys q̇ = ½ q ⊗ [0,ω] when the navigation frame is treated as non-rotating. ⊗ denotes quaternion multiplication. Rotating specific force and adding gravity produces velocity derivative; velocity is position derivative.",
+        "The constant-acceleration formulas are exact over one held-input interval. The reference instead propagates a full ECEF nominal state with second-order Runge–Kutta and includes Earth-rate contributions in attitude and velocity. The tutorial’s numerical experiment does not claim to reproduce that mechanization.",
+        "In the reference formulation, v̇^e = C_s^e f^s + g^e − 2Ω_ie^e v^e, with the gravity convention defined consistently with the chosen model. The source uses a J2 ECEF gravity helper. Care is needed not to double-count centrifugal acceleration when changing conventions."
+      ]
+    },
+    {
+      "number": 6,
+      "title": "How much should we trust a fix?",
+      "expected_duration": 33.75,
+      "notes": [
+        "The worked prior is 10 m with variance 9 m²; the observation is 14 m with variance 4 m². K = 9/13, so the posterior mean is 10 + (9/13)×4 = 12.7692308 m. The posterior variance is 36/13 m² and standard deviation is 1.6641 m.",
+        "The green posterior is narrower because the calculation combines independent Gaussian information under the stated model. Increasing R gives a measurement less weight. A receiver’s quoted accuracy must be interpreted correctly; a standard deviation cannot be inserted where a variance is required."
+      ]
+    },
+    {
+      "number": 7,
+      "title": "Information travels through covariance",
+      "expected_duration": 26.75,
+      "notes": [
+        "For a position observation, the gain for bias is K_b = P_bp/(P_pp + R). If cross-covariance P_bp were zero, this observation would not directly correct bias. Prediction creates cross-covariance because bias errors influence later velocity and position errors.",
+        "The teaching filter subtracts physical bias: corrected acceleration = raw acceleration − estimated bias. With errors defined as true minus estimated, a positive bias error and its induced position error are negatively correlated. A negative position residual can therefore increase the estimated physical bias.",
+        "The first ellipse is an illustrative normalized two-variable Gaussian, not a covariance extracted from the numerical run. Its 95% joint contour uses χ² with two degrees of freedom, whose threshold is −2 ln(0.05) ≈ 5.991. That is not the same as independently plotting ±2σ on both axes. The final bias graph is actual simulated data."
+      ]
+    },
+    {
+      "number": 8,
+      "title": "Nominal state versus error state",
+      "expected_duration": 26.2,
+      "notes": [
+        "The nominal state is the navigation solution being propagated. The error state describes a local correction around it. A unit quaternion uses four stored numbers but represents three independent rotation degrees of freedom; a local attitude error therefore uses three coordinates.",
+        "The displayed attitude injection uses a left multiplicative error expressed in the navigation frame: q⁺ = δq ⊗ q⁻. A right/body-frame error convention is also possible, but changes the relevant Jacobians and injection order. Do not mix conventions.",
+        "After injecting the estimated local error, reset its mean to zero and transform the covariance with the corresponding reset Jacobian. For small left-multiplicative rotation corrections, a first-order rotation reset has an identity plus a convention-dependent skew term. The source uses a small Euler rotation for injection; the tutorial does not silently claim it is an exact exponential-map implementation."
+      ]
+    },
+    {
+      "number": 9,
+      "title": "Predict the uncertainty too",
+      "expected_duration": 26.75,
+      "notes": [
+        "Linearization gives δẋ = Fδx + Gw. Over an interval, Φ maps old errors into new errors and Qd accumulates driving noise. Covariance propagation is P⁻ = ΦP⁺Φᵀ + Qd. This does not mean the actual error always grows monotonically in each direction.",
+        "The reference transition helper uses Φ ≈ I + FΔt; its noise helper uses Qd ≈ GQcGᵀΔt. The more general Qd integral contains the transition inside the integral. These first-order approximations should not be advertised as exact discretization.",
+        "Important ECEF blocks include position-from-velocity I, velocity-from-attitude −[C f]×, and velocity-from-corrective-accelerometer-offset C. Scale factors couple through C diag(raw sensor values). The sign of the bias block differs from a subtractive physical-bias convention.",
+        "Continuous-time white-noise density and per-sample variance have different units and rate dependence. The 1D simulator explicitly models independent held acceleration samples, giving process covariance σ_sample² BBᵀ with B = [½Δt², Δt, 0]ᵀ. It does not substitute that variance for Qc."
+      ]
+    },
+    {
+      "number": 10,
+      "title": "One complete GNSS update",
+      "expected_duration": 43.4,
+      "notes": [
+        "The reference uses GNSS receiver position converted to ECEF. The direct measurement sensitivity is H = [I₃, 0, …, 0], with further transformation if whitening is applied. Velocity, attitude, and calibration states are updated indirectly through covariance, not because the receiver directly measured them.",
+        "Compute innovation r = z − h(x̂⁻), innovation covariance S = HP⁻Hᵀ + R, and gain K = P⁻HᵀS⁻¹. Numerical code should solve systems rather than explicitly form an inverse. The reference avoids a joint inverse by whitening and processing scalar observations.",
+        "For R = LLᵀ with lower-triangular L, transform r_w = L⁻¹r and H_w = L⁻¹H. Their transformed measurement covariance is identity. MATLAB chol returns an upper-triangular factor, so the reference transposes it before forming the corresponding whitening transform.",
+        "The Joseph form is P⁺ = (I−KH)P⁻(I−KH)ᵀ + KRKᵀ. It expresses both covariance contributions and helps numerical robustness, but cannot repair a wrong model, frame convention, measurement variance, or a non-positive covariance supplied upstream."
+      ]
+    },
+    {
+      "number": 11,
+      "title": "Let the vehicle help",
+      "expected_duration": 17.65,
+      "notes": [
+        "Non-holonomic vehicle constraints state that lateral and vertical car-frame velocity are approximately zero during suitable motion. They are pseudo-measurements with nonzero variance, not exact clamps or additional physical sensors.",
+        "The residual uses the negative predicted lateral and vertical velocity. Its Jacobian depends on velocity, attitude, and mounting alignment because all three affect the transformed car-frame velocity. This explains why NHC can inform calibration as well as velocity.",
+        "The source gates these updates using angular rate and acceleration magnitude. Side-slip, impacts, wheel lift, road geometry, and lever-arm effects can violate a simple constraint. This chapter illustrates the model; the included 1D numerical simulation does not contain NHC or mounting-state estimation."
+      ]
+    },
+    {
+      "number": 12,
+      "title": "Calibration and observability",
+      "expected_duration": 17.65,
+      "notes": [
+        "The source compensation is corrected = scale ⊙ raw + corrective offset. Scale starts near one. Those additive corrective offsets are not the same signed quantity as the physical raw-measurement bias in the 1D example, which is subtracted.",
+        "The full reference includes three accelerometer scale factors, three gyro scale factors, and three mounting-error coordinates beyond a basic 15-error-state model. Adding states creates more unknowns; it does not create new information.",
+        "At rest, gravity constrains tilt but not yaw. GNSS course can initialize vehicle heading only under suitable speed and motion assumptions; reverse motion and side-slip require care. A one-dimensional position/bias model has different observability properties from a full inertial navigation model.",
+        "Observability depends on measurements and motion across time, not only on one H matrix or the number of states. A small covariance is only an internal model claim; informative maneuvers, residual checks, and independent truth are needed to assess calibration."
+      ]
+    },
+    {
+      "number": 13,
+      "title": "When a measurement is wrong",
+      "expected_duration": 25.65,
+      "notes": [
+        "The two filters use identical truth and identical sensor noise. A 35 m outlier is inserted at 90 s; only innovation-gating behavior differs. This paired experiment isolates the effect of the gate rather than comparing two lucky or unlucky noise realizations.",
+        "For a scalar Gaussian innovation, NIS = r²/S. A 3-standard-deviation test corresponds to NIS ≤ 9. Multidimensional residuals require a chi-square threshold with the correct number of effective measurement dimensions; do not reuse nine as a universal threshold.",
+        "Outlier rejection is not a guarantee of correctness. Slowly biased or correlated GNSS errors can remain plausible. A poor prediction can also cause a valid measurement to be rejected. Sustained rejection and outage recovery need explicit system-level policies beyond this teaching example."
+      ]
+    },
+    {
+      "number": 14,
+      "title": "The complete reference filter",
+      "expected_duration": 40.2,
+      "notes": [
+        "The reference error state has eight three-component blocks: ECEF position, ECEF velocity, navigation attitude error, accelerometer corrective offsets, gyro corrective offsets, accelerometer scale factors, gyro scale factors, and mounting error. This totals 24.",
+        "The nominal state uses quaternions for navigation attitude and sensor-to-car rotation, hence 26 stored coefficients. StateMapInsGnssLoose.m and ErrorStateMapInsGnssLoose.m are the authoritative source maps at the pinned upstream revision.",
+        "The main implementation separates initialization, nominal propagation, covariance propagation, observation preparation, correction, and mode control. Relevant helpers include insGnssLooseOde.m, insGnssLooseTransMat.m, insGnssLooseSysNoiseMat.m, and InsGnssFilterLoose.m.",
+        "This demo explains the reference and includes a separately validated 1D simulation. It does not implement a full 24-error-state ECEF simulator, validate the upstream filter end-to-end, or supply independent truth for its recorded drive. Those distinctions are shown in the animation and on the page, not hidden in a footnote."
+      ]
+    }
+  ]
+}

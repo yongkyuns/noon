@@ -25,12 +25,12 @@ async def lesson_fusion(scene):
     await stage.say('Start with the result. The red curve integrates an uncorrected sensor bias.',hold=6)
     cursor = plot.cursor(0)
     stage.add(cursor)
-    await scene.play(Transform(cursor,plot.cursor(config.outage_start)),run_time=6,rate_func=linear)
+    await plot.move_cursor(scene, cursor, 0, config.outage_start, duration=6)
     await stage.say('Now GNSS disappears. The filter predicts, but cannot obtain new position fixes.',hold=5)
-    await scene.play(Transform(cursor,plot.cursor(config.outage_end)),run_time=6,rate_func=linear)
+    await plot.move_cursor(scene, cursor, config.outage_start, config.outage_end, duration=6)
     await stage.say(f'Just before GNSS returns: {result["inertial_error_before_reacquisition_m"]:.1f} m IMU error, '
                     f'{result["filter_error_before_reacquisition_m"]:.1f} m fused error.',hold=7)
-    await scene.play(Transform(cursor,plot.cursor(config.duration)),run_time=6,rate_func=linear)
+    await plot.move_cursor(scene, cursor, config.outage_end, config.duration, duration=6)
     await stage.clear()
     stage.add(car((-4.6,0),TRUTH),car((-2.8,0),INS),car((-4.4,-1),FUSED),
               text('Physical vehicle',(-4.55,.8),21,TRUTH),

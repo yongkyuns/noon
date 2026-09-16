@@ -146,6 +146,12 @@ class Plot:
     def cursor(self,x):
         return Line(self.point(x,self.ylim[0]),self.point(x,self.ylim[1]),color=GNSS).set_stroke(width=1.5)
 
+    async def move_cursor(self, scene, cursor, start, end, duration):
+        """Translate unchanged line geometry; do not morph newly baked endpoints."""
+        dx = self.point(end, self.ylim[0])[0] - self.point(start, self.ylim[0])[0]
+        await scene.play(Transform(cursor, cursor.copy().shift((dx, 0))),
+                         run_time=duration, rate_func=linear)
+
     def dots(self,xy,color=GNSS,radius=.035):
         return [Dot(radius=radius,color=color).move_to(self.point(x,y)) for x,y in xy]
 
@@ -187,4 +193,4 @@ def rotating_frame(centre,length=1.45,color=FUSED):
     """A symmetric leaf path: Rotate's centre is exactly the frame origin."""
     points=[(-length,0),(length,0),(length-.15,.08),(length,0),(length-.15,-.08),
             (0,0),(0,-length),(0,length),(-.08,length-.15),(0,length),(.08,length-.15)]
-    return path([(centre[0]+x,centre[1]+y) for x,y in points],color,2.5)
+    return path(points,color,2.5).shift(centre)

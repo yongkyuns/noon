@@ -33,6 +33,10 @@ jobs:
         env:
           NOON_TUTORIAL_BACKEND: ${{ matrix.backend }}
         run: node web/tutorials/ins-gnss/tests/review.mjs
+      - name: Verify playback, pause, fresh replay, dense motion, and responsive layout
+        env:
+          NOON_TUTORIAL_BACKEND: ${{ matrix.backend }}
+        run: node web/tutorials/ins-gnss/tests/player.mjs
       - name: Archive exact tested source
         if: always()
         run: |
