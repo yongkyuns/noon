@@ -1,0 +1,34 @@
+name: INS GNSS tutorial review
+on:
+  push:
+    branches: [demo/ins-gnss-tutorial]
+    paths: ['web/tutorials/ins-gnss/**', '.github/workflows/ins-gnss-tutorial-review.yml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: mcr.microsoft.com/playwright@sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: github-pages
+          run-id: 35031382952
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: /tmp/noon-built
+      - name: Install exact browser test dependencies and built engine
+        run: |
+          tar -xf /tmp/noon-built/artifact.tar -C web
+          npm ci --prefix web --ignore-scripts --no-audit --no-fund
+      - name: Exercise tutorial requirements before chapter authoring
+        run: node web/tutorials/ins-gnss/tests/review.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ins-gnss-browser-review
+          path: browser-smoke-artifacts/ins-gnss
+          retention-days: 3
