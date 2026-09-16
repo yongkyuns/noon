@@ -45,14 +45,13 @@ jobs:
         run: node scripts/plotting-qualification.mjs
       - name: Qualify numeric labels and timestamp-synchronized playback
         run: node scripts/time-series-plotting-qualification.mjs
-      - name: Record tested checkout and isolated formatting diagnostics
+      - name: Qualify synchronized multi-series playback
+        run: node scripts/time-series-plotting-qualification.mjs synchronized
+      - name: Record tested checkout
         if: always()
         run: |
           mkdir -p plotting-artifacts
           git rev-parse HEAD > plotting-artifacts/source-sha.txt
-          git worktree add --detach /tmp/noon-synchronized-format HEAD
-          (cd /tmp/noon-synchronized-format && cargo fmt --all && git diff --binary) > plotting-artifacts/format.patch
-          git worktree remove --force /tmp/noon-synchronized-format
       - uses: actions/upload-artifact@v7
         if: always()
         with:

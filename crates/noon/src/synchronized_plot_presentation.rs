@@ -31,15 +31,13 @@ impl SynchronizedTimeSeriesPlan {
         run_time: f64,
     ) -> Result<Self, Error> {
         let [start, end] = time_range;
-        if !start.is_finite()
-            || !end.is_finite()
-            || start >= end
-            || !(end - start).is_finite()
-        {
+        if !start.is_finite() || !end.is_finite() || start >= end || !(end - start).is_finite() {
             return Err(Error::InvalidInput("invalid synchronized data-time window"));
         }
         if series.is_empty() || series.len() > MAX_SYNCHRONIZED_SERIES {
-            return Err(Error::InvalidInput("synchronized plots require 1..=16 series"));
+            return Err(Error::InvalidInput(
+                "synchronized plots require 1..=16 series",
+            ));
         }
         let count = series.iter().try_fold(0usize, |count, samples| {
             count.checked_add(samples.len()).ok_or(Error::InvalidInput(
@@ -47,7 +45,9 @@ impl SynchronizedTimeSeriesPlan {
             ))
         })?;
         if count > MAX_TIMED_PLOT_SAMPLES {
-            return Err(Error::InvalidInput("synchronized input sample limit exceeded"));
+            return Err(Error::InvalidInput(
+                "synchronized input sample limit exceeded",
+            ));
         }
         // Reuse the single-series admission contract rather than a second
         // validator. Temporary preparation is bounded by the input budget and
@@ -62,22 +62,36 @@ impl SynchronizedTimeSeriesPlan {
             }
         }
         let mut times = Vec::new();
-        times.try_reserve_exact(count + 2).map_err(allocation_error)?;
+        times
+            .try_reserve_exact(count + 2)
+            .map_err(allocation_error)?;
         times.extend([start, end]);
         for samples in series {
-            times.extend(samples.iter().map(|s| s.time).filter(|&t| t > start && t < end));
+            times.extend(
+                samples
+                    .iter()
+                    .map(|s| s.time)
+                    .filter(|&t| t > start && t < end),
+            );
         }
         times.sort_unstable_by(f64::total_cmp);
         // Exact equality only. Nearby but distinct timestamps are not silently
         // coalesced; unrepresentable playback intervals fail in TimeSeriesPlan.
         times.dedup_by(|a, b| *a == *b);
         if times.len() > MAX_SYNCHRONIZED_POINTS / series.len() {
-            return Err(Error::InvalidInput("synchronized expanded point limit exceeded"));
+            return Err(Error::InvalidInput(
+                "synchronized expanded point limit exceeded",
+            ));
         }
         let mut result = Self { series: Vec::new() };
-        result.series.try_reserve_exact(series.len()).map_err(allocation_error)?;
+        result
+            .series
+            .try_reserve_exact(series.len())
+            .map_err(allocation_error)?;
         let mut aligned = Vec::new();
-        aligned.try_reserve_exact(times.len()).map_err(allocation_error)?;
+        aligned
+            .try_reserve_exact(times.len())
+            .map_err(allocation_error)?;
         for samples in series {
             aligned.clear();
             let mut left = 0;
@@ -95,7 +109,9 @@ impl SynchronizedTimeSeriesPlan {
                 };
                 aligned.push(TimedPlotSample { time, value });
             }
-            result.series.push(TimeSeriesPlan::new(frame, &aligned, run_time)?);
+            result
+                .series
+                .push(TimeSeriesPlan::new(frame, &aligned, run_time)?);
         }
         Ok(result)
     }
