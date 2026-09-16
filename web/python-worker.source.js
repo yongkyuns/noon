@@ -1,6 +1,8 @@
 import initNoonWeb, {
   WasmAuthoringStore,
   WasmAuthoringVectorPath,
+  WasmCoordinateOptions,
+  WasmPlotSamplingPlan,
   WasmManimArrowOptions,
   WasmManimGeometryOptions,
   WasmSceneMembershipBatch,
@@ -124,6 +126,10 @@ async function initializePyodide() {
   };
   self.noonAuthoringGeometryOptions = WasmManimGeometryOptions;
   self.noonAuthoringArrowOptions = WasmManimArrowOptions;
+  self.noonAuthoringCoordinateOptions = WasmCoordinateOptions;
+  self.noonPlotSamplingPlan = WasmPlotSamplingPlan;
+  self.noonCreateAuthoringCoordinateHandle = (options) =>
+    authoringStore.createCoordinates(options);
   self.noonAuthoringVectorPath = () => new WasmAuthoringVectorPath();
   self.noonCreateAuthoringGeometryHandle = (options) =>
     authoringStore.createManimGeometry(options);
