@@ -2113,6 +2113,24 @@ impl CanonicalAuthoringScene {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn live_create_image(
+        &mut self,
+        options: noon::ImageMobjectOptions,
+    ) -> Result<noon::Mobject, AuthoringFailure> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.live_create_image(options)
+            }
+            PlayerOwnership::Unstarted => {
+                Err("live image construction requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
+        }
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_create_text(&mut self, text: noon::Text) -> Result<noon::Mobject, AuthoringFailure> {
         match &mut self.player_ownership {
@@ -6118,6 +6136,18 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        /// Publish a fully configured image through the current live session.
+        #[wasm_bindgen(js_name = liveCreateImage)]
+        pub fn live_create_image(
+            &mut self,
+            candidate: crate::WasmImageMobjectOptions,
+        ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+            self.inner
+                .live_create_image(candidate.options)
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(typed_js_error)
+        }
+
         /// Shape and publish one detached plain Text object through the current
         /// retained session. The object has no root membership or execution row
         /// until a later lifecycle operation admits it.
@@ -6522,6 +6552,21 @@ mod wasm {
                 .active_live_player()
                 .map_err(typed_js_error)?
                 .live_set_stroke_opacity(handle.semantic_mobject(), opacity)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = liveSetImageSampling)]
+        pub fn live_set_image_sampling(
+            &mut self,
+            handle: &crate::WasmAuthoringMobjectHandle,
+            value: &str,
+        ) -> Result<(), JsValue> {
+            handle.id_in_store(self.inner.scene.integration_store(), "live image sampling")?;
+            let sampling = crate::authoring_image::sampling(value)?;
+            self.inner
+                .active_live_player()
+                .map_err(typed_js_error)?
+                .live_set_image_sampling(handle.semantic_mobject(), sampling)
                 .map_err(typed_js_error)
         }
 

@@ -212,6 +212,24 @@ fn measure_content(
 ) -> Result<Option<Bounds2D64>, AuthoringError> {
     let geometry = match content {
         SemanticObjectContent::Geometry(geometry) => geometry,
+        SemanticObjectContent::Image(image) => {
+            let resource = store
+                .raster_image_resources()
+                .get(image.resource())
+                .ok_or(AuthoringError::MissingImageResource(image.resource()))?;
+            let half_x = f64::from(resource.width()) * 0.5;
+            let half_y = f64::from(resource.height()) * 0.5;
+            let mut bounds = None;
+            for (x, y) in [
+                (-half_x, -half_y),
+                (-half_x, half_y),
+                (half_x, -half_y),
+                (half_x, half_y),
+            ] {
+                include_layout_point(&mut bounds, transform_layout_xy(transform, x, y));
+            }
+            return Ok(bounds);
+        }
         SemanticObjectContent::Text(handle) => {
             let local = store
                 .text_resources()

@@ -13,6 +13,8 @@ pub enum RetainedAnimationMember {
     /// One ordinary retained geometry leaf. Path/analytic realization stays in the
     /// geometry renderer; the family planner only needs this leaf-level cardinality.
     Geometry,
+    /// One immutable raster-image leaf, with no vector/glyph reveal members.
+    Image,
     /// One rendered plain-Text glyph member in retained painter order.
     Text(TextAnimationMember),
 }
@@ -39,6 +41,7 @@ impl RetainedAnimationMembers {
             // the operation/renderer capability layer; family timing must not inspect
             // geometry variants.
             ObjectContentRef::Geometry(_) => vec![RetainedAnimationMember::Geometry],
+            ObjectContentRef::Image(_) => vec![RetainedAnimationMember::Image],
             ObjectContentRef::Text(handle) => {
                 let resource = texts
                     .get(*handle)

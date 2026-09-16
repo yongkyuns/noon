@@ -18,6 +18,7 @@ use crate::{CompiledObject, CompiledResources, ExecutionMutationTransaction, Exe
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticPublicationLoweringError {
+    Resource(crate::CompiledResourceError),
     UnsupportedMutation {
         index: usize,
     },
@@ -63,6 +64,7 @@ pub enum SemanticPublicationLoweringError {
 impl std::fmt::Display for SemanticPublicationLoweringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Resource(error) => error.fmt(f),
             Self::UnsupportedMutation { index } => write!(
                 f,
                 "semantic mutation {index} has no incremental live publication contract"
@@ -556,6 +558,12 @@ fn lower_prepared_entry(
                 .into(),
             None,
         ),
+        SemanticObjectContent::Image(image) => {
+            let content = resource_additions
+                .capture_image(prepared.store(), image)
+                .map_err(SemanticPublicationLoweringError::Resource)?;
+            (content.into(), None)
+        }
         SemanticObjectContent::Text(text) => {
             let node = object
                 .existing()

@@ -118,6 +118,14 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::Transaction(cause) => {
                 Self::caused_by("authoring.transaction", message, cause.into())
             }
+            AuthoringError::ImageResource(_) | AuthoringError::ImageDecode(_) => {
+                Self::new("invalid_input", "authoring.image_input", message)
+            }
+            AuthoringError::MissingImageResource(_) => Self::new(
+                "missing_resource",
+                "authoring.missing_image_resource",
+                message,
+            ),
             AuthoringError::MissingGeometryResource(_) => Self::new(
                 "missing_resource",
                 "authoring.missing_geometry_resource",

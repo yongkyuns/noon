@@ -1,3 +1,9 @@
+mod raster_image_gpu;
+mod raster_image_prepare;
+pub use raster_image_gpu::{
+    RasterImageDrawError, RasterImageResidencyStats, RasterImageUploadStats,
+};
+pub use raster_image_prepare::RasterImagePrepareError;
 use std::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
@@ -327,6 +333,7 @@ impl std::error::Error for PathPreloadUploadError {}
 
 #[derive(Debug)]
 pub struct GpuRenderer {
+    images: Option<raster_image_gpu::RasterImageGpuRenderer>,
     circle_pipeline: wgpu::RenderPipeline,
     rectangle_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
@@ -540,6 +547,7 @@ impl GpuRenderer {
             create_path_msaa_target(device, target_format, viewport_size);
 
         Self {
+            images: None,
             circle_pipeline,
             rectangle_pipeline,
             line_pipeline,

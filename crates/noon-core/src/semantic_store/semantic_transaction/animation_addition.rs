@@ -526,6 +526,20 @@ pub(super) fn preflight_transaction_animation(
     } else {
         preflight_animation_options(animation.options(), index)?;
     }
+    if let SemanticTransactionAnimationIntent::Create { target }
+    | SemanticTransactionAnimationIntent::Indicate { target, .. }
+    | SemanticTransactionAnimationIntent::DrawBorderThenFill { target, .. } = animation.intent()
+    {
+        catalog.ensure_animation_target(*target, index)?;
+        if catalog
+            .staged_object_state(staged_objects, staged_object_order, *target, index)?
+            .content
+            .image()
+            .is_some()
+        {
+            return Err(SemanticMutationTransactionError::UnsupportedImageAnimation { index });
+        }
+    }
     match animation.intent() {
         SemanticTransactionAnimationIntent::ObjectPropertyTrack {
             target,

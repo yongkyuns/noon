@@ -63,6 +63,31 @@ pub struct RasterImageResource {
 }
 
 impl RasterImageResource {
+    /// Prepare canonical pixels without admitting them to a semantic store.
+    pub fn from_rgba8(
+        width: u32,
+        height: u32,
+        rgba8: impl Into<Arc<[u8]>>,
+    ) -> Result<Self, RasterImageResourceError> {
+        let expected = expected_rgba8_len(width, height)?;
+        let rgba8 = rgba8.into();
+        if rgba8.len() != expected {
+            return Err(RasterImageResourceError::InvalidPixelLength {
+                expected,
+                actual: rgba8.len(),
+            });
+        }
+        Ok(Self {
+            width,
+            height,
+            rgba8,
+        })
+    }
+
+    pub fn into_rgba8(self) -> Arc<[u8]> {
+        self.rgba8
+    }
+
     pub const fn width(&self) -> u32 {
         self.width
     }
@@ -110,7 +135,8 @@ pub struct RasterImageResourceStats {
 #[derive(Debug)]
 pub struct RasterImageResourceArena {
     namespace: u64,
-    entries: Vec<RasterImageResourceEntry>,
+    entries: HashMap<RasterImageResourceId, RasterImageResourceEntry>,
+    next_id: u64,
     handles_by_content: HashMap<RasterImageResourceKey, RasterImageResourceHandle>,
     retained_bytes: usize,
     pixel_bytes: usize,
@@ -120,7 +146,8 @@ impl Default for RasterImageResourceArena {
     fn default() -> Self {
         Self {
             namespace: next_raster_image_resource_arena(),
-            entries: Vec::new(),
+            entries: HashMap::new(),
+            next_id: 0,
             handles_by_content: HashMap::new(),
             retained_bytes: 0,
             pixel_bytes: 0,
@@ -141,6 +168,7 @@ impl Clone for RasterImageResourceArena {
         Self {
             namespace,
             entries: self.entries.clone(),
+            next_id: self.next_id,
             handles_by_content,
             retained_bytes: self.retained_bytes,
             pixel_bytes: self.pixel_bytes,
@@ -163,29 +191,32 @@ impl RasterImageResourceArena {
         height: u32,
         rgba8: impl Into<Arc<[u8]>>,
     ) -> Result<RasterImageResourceHandle, RasterImageResourceError> {
-        let expected = expected_rgba8_len(width, height)?;
-        let rgba8 = rgba8.into();
-        if rgba8.len() != expected {
-            return Err(RasterImageResourceError::InvalidPixelLength {
-                expected,
-                actual: rgba8.len(),
-            });
-        }
+        self.admit_rgba8(width, height, rgba8)
+            .map(|(handle, _)| handle)
+    }
 
-        let resource = RasterImageResource {
-            width,
-            height,
-            rgba8,
-        };
+    /// Register a payload and report whether this admission owns a new resource.
+    /// The semantic publication guard uses that ownership to roll back only fresh
+    /// content. Deduplicated resources are never owned by a later admission.
+    pub(crate) fn admit_rgba8(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba8: impl Into<Arc<[u8]>>,
+    ) -> Result<(RasterImageResourceHandle, bool), RasterImageResourceError> {
+        let resource = RasterImageResource::from_rgba8(width, height, rgba8)?;
         let key = resource.key();
         if let Some(handle) = self.handles_by_content.get(&key).copied() {
-            return Ok(handle);
+            return Ok((handle, false));
         }
 
-        let id = RasterImageResourceId::new(
-            u64::try_from(self.entries.len())
-                .expect("Noon raster image resource ID space exhausted"),
-        );
+        // Aborted admissions do not recycle identity. This also avoids retaining
+        // a vector of tombstones after a long sequence of failed publications.
+        let id = RasterImageResourceId::new(self.next_id);
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .ok_or(RasterImageResourceError::IdentityExhausted)?;
         let handle = RasterImageResourceHandle {
             arena: self.namespace,
             id,
@@ -196,19 +227,43 @@ impl RasterImageResourceArena {
             .retained_bytes
             .saturating_add(resource.retained_bytes());
         self.pixel_bytes = self.pixel_bytes.saturating_add(resource.rgba8.len());
-        self.entries.push(RasterImageResourceEntry {
-            version: 0,
-            value: resource,
-        });
+        self.entries.insert(
+            id,
+            RasterImageResourceEntry {
+                version: 0,
+                value: resource,
+            },
+        );
         self.handles_by_content.insert(key, handle);
-        Ok(handle)
+        Ok((handle, true))
+    }
+
+    pub(crate) const fn namespace(&self) -> u64 {
+        self.namespace
+    }
+
+    /// Release exactly one resource owned by a failed, unpublished admission.
+    /// Only the semantic publication guard may use this operation.
+    pub(crate) fn discard_unpublished(&mut self, handle: RasterImageResourceHandle) {
+        assert_eq!(
+            handle.arena, self.namespace,
+            "image admission belongs to its arena"
+        );
+        let entry = self
+            .entries
+            .remove(&handle.id)
+            .expect("fresh unpublished image must remain resident until publication");
+        assert_eq!(entry.version, handle.version);
+        self.handles_by_content.remove(&entry.value.key());
+        self.retained_bytes -= entry.value.retained_bytes();
+        self.pixel_bytes -= entry.value.rgba8.len();
     }
 
     pub fn get(&self, handle: RasterImageResourceHandle) -> Option<&RasterImageResource> {
         if handle.arena != self.namespace {
             return None;
         }
-        let entry = self.entries.get(handle.id.get() as usize)?;
+        let entry = self.entries.get(&handle.id)?;
         (entry.version == handle.version).then_some(entry.value.as_ref())
     }
 
@@ -219,11 +274,11 @@ impl RasterImageResourceArena {
         if handle.arena != self.namespace {
             return None;
         }
-        let entry = self.entries.get(handle.id.get() as usize)?;
+        let entry = self.entries.get(&handle.id)?;
         (entry.version == handle.version).then(|| entry.value.clone())
     }
 
-    pub const fn stats(&self) -> RasterImageResourceStats {
+    pub fn stats(&self) -> RasterImageResourceStats {
         RasterImageResourceStats {
             live_resources: self.entries.len(),
             retained_bytes: self.retained_bytes,
@@ -231,11 +286,11 @@ impl RasterImageResourceArena {
         }
     }
 
-    pub const fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    pub const fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 }
@@ -253,6 +308,7 @@ fn expected_rgba8_len(width: u32, height: u32) -> Result<usize, RasterImageResou
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RasterImageResourceError {
+    IdentityExhausted,
     InvalidDimensions { width: u32, height: u32 },
     ImageTooLarge { width: u32, height: u32 },
     InvalidPixelLength { expected: usize, actual: usize },
@@ -261,6 +317,9 @@ pub enum RasterImageResourceError {
 impl std::fmt::Display for RasterImageResourceError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::IdentityExhausted => {
+                formatter.write_str("raster image resource identity exhausted")
+            }
             Self::InvalidDimensions { width, height } => write!(
                 formatter,
                 "raster image dimensions must be non-zero, got {width}x{height}",

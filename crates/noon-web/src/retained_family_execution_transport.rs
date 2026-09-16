@@ -54,7 +54,7 @@ impl RetainedTransientPresentationOccurrence {
         let state = object.state();
         let geometry = match &state.content {
             ObjectContentRef::Geometry(geometry) => geometry.clone(),
-            ObjectContentRef::Text(_) => {
+            ObjectContentRef::Text(_) | ObjectContentRef::Image(_) => {
                 return Err(
                     RetainedFamilyExecutionTransportError::UnsupportedTransientContent(
                         object.occurrence_index(),

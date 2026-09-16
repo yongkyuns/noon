@@ -222,7 +222,12 @@ pub(super) enum EffectiveBoundsBasis {
 impl EffectiveBoundsBasis {
     pub(super) fn from_frame(frame: &FrameState, object_index: usize) -> Option<Self> {
         let object = &frame.objects[object_index];
-        Self::from_content(frame.render_geometry(object_index), object.text_bounds)
+        Self::from_content(
+            frame.render_geometry(object_index),
+            object
+                .text_bounds
+                .or_else(|| object.content.image().map(|image| image.local_bounds())),
+        )
     }
 
     pub(super) fn from_content(

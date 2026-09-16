@@ -1855,6 +1855,21 @@ impl SemanticMutationTransaction {
         staged_objects.retain(|node, _| {
             !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token))
         });
+        // Only affected/provisional objects are staged; this remains local to
+        // the transaction and runs before any semantic resource publication.
+        for (object, state) in &staged_objects {
+            if state.content.image().is_some()
+                && (!crate::SemanticImageContent::supports_style(&state.style)
+                    || state
+                        .signal_bindings()
+                        .iter()
+                        .any(|binding| binding.property() == SemanticObjectProperty::StrokeWidth))
+            {
+                return Err(SemanticMutationTransactionError::UnsupportedImageStyle {
+                    object: *object,
+                });
+            }
+        }
         staged_family_z.retain(|node, _| !matches!(node, SemanticTransactionNodeRef::Pending(token) if removed_pending.contains(token)));
         Ok(SemanticTransactionPreflight {
             staged_family_z,
@@ -2019,6 +2034,15 @@ pub(super) fn validate_object_content_resource(
                         resource,
                     });
                 }
+            }
+        }
+        SemanticObjectContent::Image(content) => {
+            let resource = content.resource();
+            if store.raster_image_resources().get(resource).is_none() {
+                return Err(SemanticMutationTransactionError::InvalidImageResource {
+                    index,
+                    resource,
+                });
             }
         }
         SemanticObjectContent::Text(resource) => {
@@ -2381,6 +2405,16 @@ pub enum SemanticMutationTransactionError {
     InvalidTextResource {
         index: usize,
         resource: crate::TextResourceHandle,
+    },
+    UnsupportedImageStyle {
+        object: SemanticTransactionNodeRef,
+    },
+    UnsupportedImageAnimation {
+        index: usize,
+    },
+    InvalidImageResource {
+        index: usize,
+        resource: crate::RasterImageResourceHandle,
     },
     InvalidUpdaterActivation {
         index: usize,
@@ -2788,6 +2822,18 @@ impl std::fmt::Display for SemanticMutationTransactionError {
             Self::InvalidGeometryResource { index, resource } => write!(
                 formatter,
                 "semantic transaction mutation {index} references unavailable geometry resource {:?}",
+                resource
+            ),
+            Self::UnsupportedImageStyle { object } => write!(
+                formatter,
+                "image {object:?} supports alpha and affine edits, not recoloring, strokes or patterns",
+            ),
+            Self::UnsupportedImageAnimation { index } => write!(
+                formatter, "semantic transaction mutation {index} cannot apply vector/color animation to an image",
+            ),
+            Self::InvalidImageResource { index, resource } => write!(
+                formatter,
+                "semantic transaction mutation {index} references unavailable raster image resource {:?}",
                 resource
             ),
             Self::InvalidTextResource { index, resource } => write!(

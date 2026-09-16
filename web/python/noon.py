@@ -767,6 +767,8 @@ _PUBLIC_EXPORTS = {
     "Unwrite": "_manim_family_creation",
     "VMobject": "_manim_compat",
     "SVGMobject": "_manim_svg",
+    "ImageMobject": "_manim_image",
+    "RESAMPLING_ALGORITHMS": "_manim_image",
     "Circle": "_manim_compat",
     "Rectangle": "_manim_compat",
     "Square": "_manim_compat",

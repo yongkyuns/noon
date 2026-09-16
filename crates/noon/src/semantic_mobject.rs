@@ -1092,6 +1092,13 @@ pub(crate) fn validate_content(
                     .ok_or(AuthoringError::MissingGeometryResource(handle))?;
             }
         }
+        SemanticObjectContent::Image(image) => {
+            let handle = image.resource();
+            store
+                .raster_image_resources()
+                .get(handle)
+                .ok_or(AuthoringError::MissingImageResource(handle))?;
+        }
         SemanticObjectContent::Text(handle) => {
             store
                 .text_resources()

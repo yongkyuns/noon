@@ -387,7 +387,7 @@ mod wasm {
                     js_message("retained execution renderer has no frame snapshot")
                 })?;
                 self.preparer
-                    .prepare_with_changes(
+                    .prepare_with_image_resources(
                         &self.device,
                         &self.queue,
                         frame,
@@ -395,6 +395,7 @@ mod wasm {
                         resources.texts(),
                         resources.fonts(),
                         resources.geometries(),
+                        resources.images(),
                         metrics,
                     )
                     .map_err(js_error)?
@@ -405,7 +406,7 @@ mod wasm {
                     )
                 })?;
                 self.preparer
-                    .prepare_active_family_plan_set_with_changes(
+                    .prepare_active_family_with_image_resources(
                         &self.device,
                         &self.queue,
                         &family_frame,
@@ -415,6 +416,7 @@ mod wasm {
                         resources.texts(),
                         resources.fonts(),
                         resources.geometries(),
+                        resources.images(),
                         metrics,
                     )
                     .map_err(js_error)?

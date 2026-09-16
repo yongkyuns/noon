@@ -22,7 +22,7 @@ pub(crate) struct PreparedRetainedResourceAdditionsWithRender {
     ordinary: PreparedRetainedResourceAdditions,
     render_geometry_session: Option<u32>,
     render_geometries: Option<Arc<[Arc<GeometryRef>]>>,
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(test)]
     render_geometry_suffix_start: usize,
     render_geometry_preparations: Vec<RenderGeometryPreparation>,
 }
@@ -79,7 +79,7 @@ impl InstalledRetainedResources {
                 ordinary,
                 render_geometry_session: None,
                 render_geometries: None,
-                #[cfg(any(target_arch = "wasm32", test))]
+                #[cfg(test)]
                 render_geometry_suffix_start,
                 render_geometry_preparations: Vec::new(),
             });
@@ -108,7 +108,7 @@ impl InstalledRetainedResources {
             ordinary,
             render_geometry_session: Some(resources.session),
             render_geometries: Some(next),
-            #[cfg(any(target_arch = "wasm32", test))]
+            #[cfg(test)]
             render_geometry_suffix_start,
             render_geometry_preparations: preparations,
         })
@@ -122,7 +122,7 @@ impl InstalledRetainedResources {
             ordinary,
             render_geometry_session,
             render_geometries,
-            #[cfg(any(target_arch = "wasm32", test))]
+            #[cfg(test)]
                 render_geometry_suffix_start: _,
             render_geometry_preparations,
         } = additions;
@@ -138,6 +138,10 @@ impl InstalledRetainedResources {
 }
 
 impl PreparedRetainedResourceAdditionsWithRender {
+    pub(crate) fn image_handle_remap(&self) -> super::images::ImageHandles {
+        self.ordinary.image_handle_remap()
+    }
+
     pub(crate) fn text_handle_remap(
         &self,
     ) -> std::collections::HashMap<crate::TransportTextResourceHandle, noon_core::TextResourceHandle>
@@ -160,7 +164,7 @@ impl PreparedRetainedResourceAdditionsWithRender {
         self.render_geometries.clone()
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(test)]
     pub(crate) fn render_geometry_suffix(&self) -> &[Arc<GeometryRef>] {
         self.render_geometries
             .as_deref()

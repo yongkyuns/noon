@@ -154,7 +154,11 @@ fn resolve_family_spans(
                 .semantic_object_state_checked(*leaf)
                 .map_err(|_| TextGlyphLoweringError::MissingSemanticTarget((*leaf).into()))?;
             let content = match (mode, state.content) {
-                (_, noon_core::SemanticObjectContent::Geometry(_)) => None,
+                (
+                    _,
+                    noon_core::SemanticObjectContent::Geometry(_)
+                    | noon_core::SemanticObjectContent::Image(_),
+                ) => None,
                 (_, noon_core::SemanticObjectContent::Text(handle)) => Some(handle),
             };
             let count = match content {

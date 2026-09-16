@@ -106,6 +106,7 @@ impl RetainedFramePreparer {
             metrics,
             Some(visible_object_indices),
             Some(publication.active_family_animation_indices()),
+            Some(publication.raster_image_resources()),
         )?;
         *prepared.applied_publication = Some(received);
         Ok(prepared)
@@ -145,6 +146,7 @@ impl RetainedFramePreparer {
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
         self.prepare_family_plan_set_with_changes_inner(
             device, queue, frame, plans, changes, texts, fonts, geometries, metrics, None, None,
+            None,
         )
     }
 
@@ -177,11 +179,87 @@ impl RetainedFramePreparer {
             metrics,
             None,
             Some(active_indices),
+            None,
+        )
+    }
+
+    /// Worker equivalent with independently installed raster resources.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_active_family_with_image_resources<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &RetainedPlannedFamilyFrame<'_>,
+        plans: &[RetainedFamilyAnimationPlan],
+        active_indices: &std::collections::BTreeSet<usize>,
+        changes: &FrameChanges,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
+        images: &dyn RasterImageResourceLookup,
+        metrics: TextDeviceMetrics,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
+        self.prepare_family_plan_set_with_changes_inner(
+            device,
+            queue,
+            frame,
+            plans,
+            changes,
+            texts,
+            fonts,
+            geometries,
+            metrics,
+            None,
+            Some(active_indices),
+            Some(images),
         )
     }
 
     #[allow(clippy::too_many_arguments)]
     fn prepare_family_plan_set_with_changes_inner<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &RetainedPlannedFamilyFrame<'_>,
+        plans: &[RetainedFamilyAnimationPlan],
+        changes: &FrameChanges,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
+        metrics: TextDeviceMetrics,
+        visible_object_indices: Option<&[usize]>,
+        active_indices: Option<&std::collections::BTreeSet<usize>>,
+        images: Option<&dyn RasterImageResourceLookup>,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
+        let staged = self
+            .images
+            .stage(
+                frame.retained,
+                changes,
+                images,
+                device.limits().max_texture_dimension_2d,
+            )
+            .map_err(RetainedPrepareError::Image)?;
+        let mut prepared = self.prepare_family_geometry_text_inner(
+            device,
+            queue,
+            frame,
+            plans,
+            changes,
+            texts,
+            fonts,
+            geometries,
+            metrics,
+            visible_object_indices,
+            active_indices,
+        )?;
+        prepared.images.commit(staged);
+        prepared.stats.image_objects = prepared.images.objects.len();
+        Ok(prepared)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_family_geometry_text_inner<'a>(
         &'a mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -295,6 +373,7 @@ impl RetainedFramePreparer {
             .count();
         let outline_cache = self.outlines.stats();
         let stats = RetainedPrepareStats {
+            image_objects: self.images.objects.len(),
             semantic_objects: frame.retained.objects.len(),
             geometry_slots: self.scratch.objects.len(),
             glyph_batches,
@@ -322,6 +401,7 @@ impl RetainedFramePreparer {
             dirty_color_ranges: &self.dirty_color_ranges,
         };
         Ok(PreparedRetainedGpuFrame {
+            images: &mut self.images,
             applied_publication: &mut self.last_applied_publication,
             geometry_only: false,
             geometry,
@@ -358,6 +438,21 @@ impl RetainedFramePreparer {
 
         for source in baseline_sources {
             match source {
+                SourceItem::Image {
+                    object_id,
+                    object_index,
+                } => {
+                    if frame.family_animation(object_index).is_some() {
+                        return Err(RetainedPrepareError::Image(
+                            RasterImagePrepareError::UnsupportedReveal(object_id),
+                        )
+                        .into());
+                    }
+                    self.sources.push(SourceItem::Image {
+                        object_id,
+                        object_index,
+                    });
+                }
                 SourceItem::Geometry {
                     object_id,
                     scratch_id,
@@ -643,6 +738,7 @@ impl RetainedFramePreparer {
             .prepare_incremental(&self.scratch, &scratch_changes);
         let outline_cache = self.outlines.stats();
         let stats = RetainedPrepareStats {
+            image_objects: self.images.objects.len(),
             outline_cache_hits: outline_cache.hits,
             outline_cache_misses: outline_cache.misses,
             ..self.snapshot_prepare_stats
@@ -662,6 +758,7 @@ impl RetainedFramePreparer {
             dirty_color_ranges: &self.dirty_color_ranges,
         };
         Ok(PreparedRetainedGpuFrame {
+            images: &mut self.images,
             applied_publication: &mut self.last_applied_publication,
             geometry_only: false,
             geometry,

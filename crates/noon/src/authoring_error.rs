@@ -9,6 +9,8 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum UnsupportedAuthoringOperation {
+    /// This operation requires immutable raster-image content.
+    ImageContent,
     /// Point matching requires vector geometry on both operands.
     PointMatchContent,
     /// Persistent point editing requires retained vector geometry.
@@ -60,6 +62,7 @@ pub enum UnsupportedAuthoringOperation {
 impl std::fmt::Display for UnsupportedAuthoringOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            Self::ImageContent => "this operation requires raster-image content",
             Self::EffectiveFamilyLayoutRenderOverride => "effective family layout cannot use render-content overrides",
             Self::PlacementEffectiveAffineDriver => "move_to cannot compose with an active effective affine driver",
             Self::PlacementRenderOverride => "move_to cannot use an effective layout with render-content overrides",
@@ -97,6 +100,10 @@ impl std::error::Error for UnsupportedAuthoringOperation {}
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum AuthoringError {
+    #[cfg(feature = "image-decode")]
+    ImageDecode(crate::ImageDecodeError),
+    ImageResource(noon_core::RasterImageResourceError),
+    MissingImageResource(noon_core::RasterImageResourceHandle),
     /// The camera must be initialized before ordinary root content is added.
     CameraRequiresEmptyScene(noon_core::SemanticNodeId),
     /// A committed creation did not resolve its prepared local token.
@@ -110,13 +117,25 @@ pub enum AuthoringError {
     /// An object references a missing or stale text resource.
     MissingTextResource(noon_core::TextResourceHandle),
     /// The named input is non-finite or cannot be represented as f32.
-    InvalidRenderNumber { name: String, value: f64 },
+    InvalidRenderNumber {
+        name: String,
+        value: f64,
+    },
     /// The named input must be strictly positive.
-    NonPositiveNumber { name: String, value: f64 },
+    NonPositiveNumber {
+        name: String,
+        value: f64,
+    },
     /// The named opacity is outside the inclusive unit interval.
-    InvalidOpacity { name: String, value: f64 },
+    InvalidOpacity {
+        name: String,
+        value: f64,
+    },
     /// At least one validated ellipse dimension is nonpositive.
-    InvalidEllipseDimensions { width: f64, height: f64 },
+    InvalidEllipseDimensions {
+        width: f64,
+        height: f64,
+    },
     /// Geometry contains non-finite values.
     NonFiniteGeometry,
     /// Flattened XY point input has an incomplete coordinate pair.
@@ -184,7 +203,9 @@ pub enum AuthoringError {
     /// A detached-only tracker operation was requested after association.
     AlreadyScopedTracker(noon_core::SemanticNodeId),
     /// A native input declaration received an empty name.
-    EmptyInputName { kind: String },
+    EmptyInputName {
+        kind: String,
+    },
     /// This operation requires an unsupported payload or capability.
     Unsupported(UnsupportedAuthoringOperation),
     /// The semantic operation rejected a node, family, or membership request.
@@ -232,6 +253,12 @@ impl std::fmt::Display for AuthoringError {
             Self::ForeignStore => f.write_str("membership target belongs to another scene store"),
             Self::MissingGeometryResource(handle) => {
                 write!(f, "unknown or stale geometry resource {handle:?}")
+            }
+            #[cfg(feature = "image-decode")]
+            Self::ImageDecode(error) => error.fmt(f),
+            Self::ImageResource(error) => error.fmt(f),
+            Self::MissingImageResource(handle) => {
+                write!(f, "unknown or stale raster image resource {handle:?}")
             }
             Self::MissingTextResource(handle) => {
                 write!(f, "unknown or stale text resource {handle:?}")
@@ -331,6 +358,9 @@ impl std::error::Error for AuthoringError {
             Self::Transaction(error) => Some(error),
             Self::ExecutionPublication(error) => Some(error),
             Self::VectorLowering(error) => Some(error),
+            #[cfg(feature = "image-decode")]
+            Self::ImageDecode(error) => Some(error),
+            Self::ImageResource(error) => Some(error),
             Self::GeometryResource(error) => Some(error),
             Self::PathQuery(error) => Some(error),
             Self::MorphQuery(error) => Some(error),
@@ -435,5 +465,18 @@ impl From<noon_core::SemanticStoreError> for AuthoringError {
 impl From<noon_core::SemanticFamilyPairingError> for AuthoringError {
     fn from(error: noon_core::SemanticFamilyPairingError) -> Self {
         Self::FamilyPairing(error)
+    }
+}
+
+impl From<noon_core::RasterImageResourceError> for AuthoringError {
+    fn from(error: noon_core::RasterImageResourceError) -> Self {
+        Self::ImageResource(error)
+    }
+}
+
+#[cfg(feature = "image-decode")]
+impl From<crate::ImageDecodeError> for AuthoringError {
+    fn from(value: crate::ImageDecodeError) -> Self {
+        Self::ImageDecode(value)
     }
 }

@@ -122,6 +122,15 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPrepareError> {
+        let staged_images = self
+            .images
+            .stage(
+                frame.retained,
+                changes,
+                None,
+                device.limits().max_texture_dimension_2d,
+            )
+            .map_err(RetainedPrepareError::Image)?;
         self.prepare_canonical_mixed_baseline(
             device,
             queue,
@@ -142,6 +151,7 @@ impl RetainedFramePreparer {
             return Err(error);
         }
 
+        self.images.commit(staged_images);
         let geometry = self.geometry.prepare(&self.scratch);
         self.render_items.clear();
         rebuild_mixed_order(
@@ -161,6 +171,7 @@ impl RetainedFramePreparer {
             .count();
         let outline_cache = self.outlines.stats();
         let stats = RetainedPrepareStats {
+            image_objects: self.images.objects.len(),
             semantic_objects: frame.retained.objects.len(),
             geometry_slots: self.scratch.objects.len(),
             glyph_batches,
@@ -190,6 +201,7 @@ impl RetainedFramePreparer {
             dirty_color_ranges: &self.dirty_color_ranges,
         };
         Ok(PreparedRetainedGpuFrame {
+            images: &mut self.images,
             applied_publication: &mut self.last_applied_publication,
             geometry_only: false,
             geometry,
@@ -214,6 +226,21 @@ impl RetainedFramePreparer {
 
         for source in baseline_sources {
             match source {
+                SourceItem::Image {
+                    object_id,
+                    object_index,
+                } => {
+                    if frame.family_animation(object_index).is_some() {
+                        return Err(RetainedPrepareError::Image(
+                            RasterImagePrepareError::UnsupportedReveal(object_id),
+                        )
+                        .into());
+                    }
+                    self.sources.push(SourceItem::Image {
+                        object_id,
+                        object_index,
+                    });
+                }
                 SourceItem::Geometry {
                     object_id,
                     scratch_id,

@@ -993,7 +993,11 @@ fn cached_family_animation_member_count(
         for leaf in leaves {
             let state = store.semantic_object_state_checked(leaf).ok()?;
             let count = match (mode, state.content) {
-                (_, noon_core::SemanticObjectContent::Geometry(_)) => 1,
+                (
+                    _,
+                    noon_core::SemanticObjectContent::Geometry(_)
+                    | noon_core::SemanticObjectContent::Image(_),
+                ) => 1,
                 (_, noon_core::SemanticObjectContent::Text(handle)) => {
                     let resource = store.text_resources().get(handle)?;
                     if resource.kind != noon_core::TextSourceKind::Plain {

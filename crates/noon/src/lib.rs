@@ -50,6 +50,11 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "image-decode")]
+mod image_decode;
+#[cfg(feature = "image-decode")]
+pub use image_decode::{ImageDecodeError, ImageDecodeLimits};
+
 mod animation_authoring;
 mod arc_authoring;
 mod arrow_authoring;
@@ -87,6 +92,7 @@ mod family_transform_renderer_publication_tests;
 mod focus_on_authoring;
 mod geometry_authoring;
 mod host_callbacks;
+mod image_authoring;
 pub mod integration;
 mod live_program;
 mod live_session;
@@ -150,6 +156,7 @@ pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor, LiveLayo
 pub use family_style::StyleUpdate;
 pub use focus_on_authoring::FocusOnOptions;
 pub use host_callbacks::{RustHostCallbackContext, RustHostCallbackError, RustHostCallbackTable};
+pub use image_authoring::{ImageMobjectOptions, DEFAULT_IMAGE_SCALE_TO_RESOLUTION};
 pub use live_program::{
     ContinuationStep, LiveContinuation, LiveProgram, LiveProgramError, LiveProgramStatus,
 };
@@ -160,6 +167,7 @@ pub use live_session::{
     TransformToRequest,
 };
 pub use native_signal_authoring::{NativeBoolSignal, NativeVectorSignal};
+pub use noon_core::RasterImageSampling;
 pub use noon_core::{
     AnimationOptions, Bounds2D64, Color, ExecutionRevision, FrameEpoch, GeometryRef, PathCommand,
     PublicationContext, RateFunction, Rect, SceneRevision, SemanticAnimationCompositionKind,
@@ -215,6 +223,9 @@ pub mod prelude {
         TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange, VectorFieldPoint,
         VectorFieldRanges2D, VectorPath,
     };
+    #[cfg(feature = "image-decode")]
+    pub use crate::{ImageDecodeError, ImageDecodeLimits};
+    pub use crate::{ImageMobjectOptions, RasterImageSampling, DEFAULT_IMAGE_SCALE_TO_RESOLUTION};
 }
 
 pub use family_gradient::color_gradient;

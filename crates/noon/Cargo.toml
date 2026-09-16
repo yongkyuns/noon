@@ -6,8 +6,9 @@ license = "MIT"
 description = "Ergonomic language-neutral authoring facade for Noon"
 
 [features]
+image-decode = ["dep:image"]
 # Convenience product configuration. Geometry-only consumers disable defaults.
-default = ["native-text", "typst", "bundled-fonts"]
+default = ["native-text", "typst", "bundled-fonts", "image-decode"]
 native-text = ["dep:noon-text", "dep:swash"]
 typst = ["dep:noon-typst"]
 # Weak forwarding does not activate the Typst compiler for native-text consumers.
@@ -37,3 +38,14 @@ noon-typst = { path = "../noon-typst", optional = true, default-features = false
 swash = { version = "=0.2.10", optional = true }
 typst-assets = { version = "=0.15.1", features = ["fonts"], optional = true }
 usvg = { version = "=0.48.1", default-features = false }
+
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"], optional = true }
+
+[dev-dependencies]
+noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["ci-noop", "native"] }
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl"] }
+pollster = "=1.0.1"
+
+[[test]]
+name = "retained_images"
+required-features = ["image-decode"]

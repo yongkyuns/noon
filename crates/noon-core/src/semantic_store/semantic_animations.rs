@@ -504,6 +504,7 @@ pub enum SemanticAnimationError {
     NativeOwnedSignal(SemanticNodeId),
     InvalidScalarTarget(f64),
     InvalidObjectPropertyTrack,
+    UnsupportedImageAnimation,
 }
 
 impl std::fmt::Display for SemanticAnimationError {
@@ -571,6 +572,9 @@ impl std::fmt::Display for SemanticAnimationError {
                     formatter,
                     "scalar animation target must be finite, got {value}"
                 )
+            }
+            Self::UnsupportedImageAnimation => {
+                formatter.write_str("vector/color animation is not supported for immutable images")
             }
             Self::InvalidObjectPropertyTrack => formatter.write_str(
                 "object property track requires matching finite endpoints and valid exact timing",
@@ -727,7 +731,14 @@ impl SemanticStore {
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
-        self.semantic_object_state_checked(target)?;
+        if self
+            .semantic_object_state_checked(target)?
+            .content
+            .image()
+            .is_some()
+        {
+            return Err(SemanticAnimationError::UnsupportedImageAnimation);
+        }
         let color_is_finite = color.red.is_finite()
             && color.green.is_finite()
             && color.blue.is_finite()
@@ -845,7 +856,14 @@ impl SemanticStore {
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
-        self.semantic_object_state_checked(target)?;
+        if self
+            .semantic_object_state_checked(target)?
+            .content
+            .image()
+            .is_some()
+        {
+            return Err(SemanticAnimationError::UnsupportedImageAnimation);
+        }
         let color_is_finite = stroke_color.is_none_or(|color| {
             color.red.is_finite()
                 && color.green.is_finite()
@@ -1103,7 +1121,14 @@ impl SemanticStore {
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
-        self.semantic_object_state_checked(target)?;
+        if self
+            .semantic_object_state_checked(target)?
+            .content
+            .image()
+            .is_some()
+        {
+            return Err(SemanticAnimationError::UnsupportedImageAnimation);
+        }
         validate_authored_animation_options(options)?;
         Ok(
             self.insert_semantic_animation_state(SemanticAnimationState::new(

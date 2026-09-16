@@ -13,7 +13,10 @@ mod transform;
 use std::cmp::Ordering;
 use std::{collections::BTreeMap, sync::Arc};
 
-use noon_core::{continuous_time_map_interval, resolve_track_timing};
+use noon_core::{
+    continuous_time_map_interval, resolve_track_timing, RasterImageContentRef, RasterImageResource,
+    RasterImageResourceHandle, RasterImageResourceLookup, SemanticImageContent,
+};
 use noon_core::{
     validate_geometry, validate_style, validate_track_definition, validate_transform,
     CompositionTimeMap, GeometryRef, ObjectId, ObjectStateField, Property, Style, TimelineError,
@@ -131,11 +134,18 @@ impl CompiledObject {
 /// Dependency-closed immutable resources retained by one compiled execution plan.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CompiledResources {
+    images: BTreeMap<RasterImageResourceHandle, Arc<RasterImageResource>>,
     texts: BTreeMap<TextResourceHandle, Arc<TextResource>>,
     fonts: BTreeMap<FontResourceHandle, Arc<FontResource>>,
     font_handles: BTreeMap<FontResourceKey, FontResourceHandle>,
     geometries: BTreeMap<GeometryResourceHandle, GeometryResource>,
     geometry_handles: BTreeMap<GeometryId, GeometryResourceHandle>,
+}
+
+impl RasterImageResourceLookup for CompiledResources {
+    fn get(&self, handle: RasterImageResourceHandle) -> Option<&RasterImageResource> {
+        self.images.get(&handle).map(Arc::as_ref)
+    }
 }
 
 impl TextResourceLookup for CompiledResources {
@@ -168,6 +178,8 @@ impl GeometryResourceLookup for CompiledResources {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompiledResourceError {
+    MissingImage(RasterImageResourceHandle),
+    ImageDimensionsMismatch(RasterImageResourceHandle),
     MissingText(TextResourceHandle),
     MissingFont(FontResourceKey),
     MissingGeometry(GeometryResourceHandle),
@@ -176,6 +188,13 @@ pub enum CompiledResourceError {
 impl std::fmt::Display for CompiledResourceError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::MissingImage(handle) => {
+                write!(formatter, "missing raster image resource {handle:?}")
+            }
+            Self::ImageDimensionsMismatch(handle) => write!(
+                formatter,
+                "raster image dimensions differ from resource {handle:?}"
+            ),
             Self::MissingText(handle) => write!(
                 formatter,
                 "missing text resource {}@{}",
@@ -200,6 +219,28 @@ impl std::fmt::Display for CompiledResourceError {
 impl std::error::Error for CompiledResourceError {}
 
 impl CompiledResources {
+    pub fn image_count(&self) -> usize {
+        self.images.len()
+    }
+
+    pub(crate) fn capture_image(
+        &mut self,
+        store: &SemanticStore,
+        content: SemanticImageContent,
+    ) -> Result<RasterImageContentRef, CompiledResourceError> {
+        let handle = content.resource();
+        let resource = match self.images.entry(handle) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => entry.insert(
+                store
+                    .raster_image_resources()
+                    .get_shared(handle)
+                    .ok_or(CompiledResourceError::MissingImage(handle))?,
+            ),
+        };
+        Ok(RasterImageContentRef::from_resource(content, resource))
+    }
+
     pub fn text_count(&self) -> usize {
         self.texts.len()
     }
@@ -217,6 +258,7 @@ impl CompiledResources {
     /// Handles are immutable resource identities, so insertion is infallible after
     /// preparation has resolved every dependency against the owning semantic store.
     pub(crate) fn merge(&mut self, additions: Self) {
+        self.images.extend(additions.images);
         self.texts.extend(additions.texts);
         self.fonts.extend(additions.fonts);
         self.font_handles.extend(additions.font_handles);
@@ -885,6 +927,10 @@ impl CompiledScene {
 
     pub fn family_animations(&self) -> &[CompiledFamilyAnimationChannel] {
         &self.family_animations
+    }
+
+    pub fn raster_image_resources(&self) -> &impl RasterImageResourceLookup {
+        &self.resources
     }
 
     pub fn text_resources(&self) -> &impl TextResourceLookup {
@@ -1619,6 +1665,11 @@ fn validate_execution_content(
             }
             validate_geometry(object, geometry).map_err(map_object_state_error)
         }
+        ObjectContentRef::Image(image) => {
+            (text_bounds.is_none() && image.width() > 0 && image.height() > 0)
+                .then_some(())
+                .ok_or(CompilePatchError::InvalidContentBounds(object))
+        }
         ObjectContentRef::Text(_) => {
             let valid = text_bounds.is_some_and(|bounds| {
                 bounds.min.x.is_finite()
@@ -1642,6 +1693,22 @@ fn validate_execution_content_resource(
     content: &ObjectContentRef,
     text_bounds: Option<Rect>,
 ) -> Result<(), CompilePatchError> {
+    if let ObjectContentRef::Image(image) = content {
+        let handle = image.resource();
+        let resource = RasterImageResourceLookup::get(resources, handle)
+            .or_else(|| {
+                additions.and_then(|resources| RasterImageResourceLookup::get(resources, handle))
+            })
+            .ok_or(CompilePatchError::Resource(
+                CompiledResourceError::MissingImage(handle),
+            ))?;
+        if image.width() != resource.width() || image.height() != resource.height() {
+            return Err(CompilePatchError::Resource(
+                CompiledResourceError::ImageDimensionsMismatch(handle),
+            ));
+        }
+        return Ok(());
+    }
     let ObjectContentRef::Text(handle) = content else {
         return Ok(());
     };

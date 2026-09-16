@@ -281,6 +281,7 @@ impl SceneInstance {
             self.compiled.text_resources(),
             self.compiled.font_resources(),
             self.compiled.geometry_resources(),
+            self.compiled.raster_image_resources(),
             self.compiled.family_animation_plans(),
             &self.active_family_animation_indices,
             &self.painter_order,
@@ -306,6 +307,7 @@ impl SceneInstance {
             self.compiled.text_resources(),
             self.compiled.font_resources(),
             self.compiled.geometry_resources(),
+            self.compiled.raster_image_resources(),
             self.compiled.family_animation_plans(),
             &self.active_family_animation_indices,
             &self.painter_order,
@@ -361,6 +363,10 @@ impl SceneInstance {
     pub fn object_has_effective_driver(&self, id: ObjectId) -> bool {
         self.frame_index_for_object(id)
             .is_some_and(|index| self.effective_driver_rows.contains(&index))
+    }
+
+    pub fn raster_image_resources(&self) -> &impl noon_core::RasterImageResourceLookup {
+        self.compiled.raster_image_resources()
     }
 
     pub fn text_resources(&self) -> &impl noon_core::TextResourceLookup {

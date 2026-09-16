@@ -11,10 +11,14 @@ mod authoring_brace;
 mod authoring_error;
 #[cfg(target_arch = "wasm32")]
 mod authoring_geometry;
+#[cfg(target_arch = "wasm32")]
+mod authoring_image;
 mod authoring_mobject;
 mod authoring_options;
 #[cfg(target_arch = "wasm32")]
 mod authoring_svg;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_image::*;
 #[cfg(target_arch = "wasm32")]
 mod authoring_tangent_line;
 mod canonical_authoring_scene;
@@ -51,8 +55,10 @@ mod retained_execution_transport;
 mod retained_family_execution_encoder;
 mod retained_family_execution_transport;
 mod retained_family_transport;
+mod retained_image_transport;
 mod retained_resource_mutation_encoder;
 mod retained_resource_mutation_transport;
+pub use retained_image_transport::{TransportImageResourceHandle, TransportImageSampling};
 mod retained_resource_transport;
 #[cfg(feature = "renderer")]
 mod retained_typst_canvas;

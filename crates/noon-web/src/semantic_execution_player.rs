@@ -641,6 +641,34 @@ impl SemanticExecutionPlayer {
         .map_err(AuthoringFailure::from)
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_create_image(
+        &mut self,
+        options: noon::ImageMobjectOptions,
+    ) -> Result<noon::Mobject, AuthoringFailure> {
+        let semantics = self
+            .semantics
+            .clone()
+            .ok_or("execution player has no live semantic store")?;
+        noon::LiveSession::new(
+            &semantics,
+            self.semantic_root
+                .expect("live semantic store has one scene root"),
+            &mut self.session,
+        )
+        .create_image(options)
+        .map_err(AuthoringFailure::from)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn live_set_image_sampling(
+        &mut self,
+        object: &noon::Mobject,
+        sampling: noon::RasterImageSampling,
+    ) -> Result<(), AuthoringFailure> {
+        self.with_live_session(|live| live.set_image_sampling(object, sampling))
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_create_text(
         &mut self,
@@ -2089,6 +2117,16 @@ impl SemanticExecutionPlayer {
             session.geometry_resources(),
             session.font_resources(),
         )
+        .and_then(|bundle| {
+            bundle.with_images(
+                session
+                    .frame()
+                    .objects
+                    .iter()
+                    .filter_map(|object| object.content.image().map(|image| image.resource())),
+                session.raster_image_resources(),
+            )
+        })
         .map_err(|error| error.to_string())
     }
 
@@ -2124,6 +2162,7 @@ impl SemanticExecutionPlayer {
                     publication.text_resources(),
                     publication.geometry_resources(),
                     publication.font_resources(),
+                    publication.raster_image_resources(),
                 )
                 .map_err(|error| error.to_string())?;
             self.snapshot_sent = true;
@@ -2154,6 +2193,7 @@ impl SemanticExecutionPlayer {
                     publication.text_resources(),
                     publication.geometry_resources(),
                     publication.font_resources(),
+                    publication.raster_image_resources(),
                 )
                 .map_err(|error| error.to_string())?;
             delta
@@ -2177,6 +2217,7 @@ impl SemanticExecutionPlayer {
                     publication.text_resources(),
                     publication.geometry_resources(),
                     publication.font_resources(),
+                    publication.raster_image_resources(),
                 )
                 .map_err(|error| error.to_string())?;
             delta

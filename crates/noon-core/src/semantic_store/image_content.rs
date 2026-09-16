@@ -11,10 +11,28 @@ pub struct SemanticImageContent {
 }
 
 impl SemanticImageContent {
+    /// Immutable image color channels are not vector paint. This first image
+    /// contract supports alpha/affine edits, not recoloring, strokes or patterns.
+    pub fn supports_style(style: &crate::SemanticStyle) -> bool {
+        matches!(&style.fill, Some(crate::SemanticPaint::Solid(color))
+            if color.red == 1.0 && color.green == 1.0 && color.blue == 1.0)
+            && style.stroke.is_none()
+            && style.stroke_width == 0.0
+    }
+
+    /// Validate the same contract after style lowering/worker transport.
+    pub fn supports_render_style(style: &crate::Style) -> bool {
+        style
+            .fill
+            .is_some_and(|color| color.red == 1.0 && color.green == 1.0 && color.blue == 1.0)
+            && style.stroke.is_none()
+            && style.stroke_width == 0.0
+    }
+
     pub const fn new(resource: RasterImageResourceHandle) -> Self {
         Self {
             resource,
-            sampling: RasterImageSampling::Linear,
+            sampling: RasterImageSampling::Bicubic,
         }
     }
 
@@ -43,6 +61,58 @@ impl SemanticImageContent {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RasterImageSampling {
     Nearest,
-    #[default]
     Linear,
+    #[default]
+    Bicubic,
+}
+
+/// Compact execution reference. Dimensions are derived once from the immutable
+/// resource during lowering; no pixels enter per-frame object state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RasterImageContentRef {
+    content: SemanticImageContent,
+    width: u32,
+    height: u32,
+}
+
+impl RasterImageContentRef {
+    pub fn from_resource(
+        content: SemanticImageContent,
+        resource: &crate::RasterImageResource,
+    ) -> Self {
+        Self {
+            content,
+            width: resource.width(),
+            height: resource.height(),
+        }
+    }
+
+    pub const fn resource(self) -> RasterImageResourceHandle {
+        self.content.resource()
+    }
+    pub const fn sampling(self) -> RasterImageSampling {
+        self.content.sampling()
+    }
+    pub const fn width(self) -> u32 {
+        self.width
+    }
+    pub const fn height(self) -> u32 {
+        self.height
+    }
+    pub const fn with_sampling(self, sampling: RasterImageSampling) -> Self {
+        Self {
+            content: SemanticImageContent::with_sampling(self.resource(), sampling),
+            ..self
+        }
+    }
+    pub const fn semantic_content(self) -> SemanticImageContent {
+        self.content
+    }
+
+    /// Pixels define the intrinsic quad. Authoring scale expresses scene units
+    /// per pixel, and the ordinary transform path handles layout/animation.
+    pub fn local_bounds(self) -> crate::Rect {
+        let half = crate::Vec2::new(self.width as f32 * 0.5, self.height as f32 * 0.5);
+        crate::Rect::new(-half, half)
+    }
 }

@@ -1,3 +1,9 @@
+use super::raster_image_gpu::{
+    RasterImageDrawError, RasterImageGpuRenderer, RasterImageResidencyStats, RasterImageUploadStats,
+};
+use super::raster_image_prepare::RasterImageFramePreparer;
+use super::RasterImagePrepareError;
+use noon_core::RasterImageResourceLookup;
 use std::{
     collections::HashMap,
     hash::{Hash, Hasher},
@@ -43,6 +49,10 @@ pub const DEFAULT_GLYPH_OUTLINE_CACHE_MAX_RETAINED_BYTES: usize = 32 * 1024 * 10
 /// escape this adapter and never create a second semantic identity space.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RetainedRenderItem {
+    Image {
+        object_id: ObjectId,
+        object_index: usize,
+    },
     Geometry {
         object_id: ObjectId,
         batch: OrderedRenderBatch,
@@ -56,13 +66,16 @@ pub enum RetainedRenderItem {
 impl RetainedRenderItem {
     pub const fn object_id(&self) -> ObjectId {
         match self {
-            Self::Geometry { object_id, .. } | Self::Glyph { object_id, .. } => *object_id,
+            Self::Geometry { object_id, .. }
+            | Self::Glyph { object_id, .. }
+            | Self::Image { object_id, .. } => *object_id,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RetainedPrepareStats {
+    pub image_objects: usize,
     pub semantic_objects: usize,
     pub geometry_slots: usize,
     pub glyph_batches: usize,
@@ -133,6 +146,7 @@ impl PreparedRetainedTextSnapshot<'_> {
 /// Prepared mixed geometry/text frame. The geometry frame is intentionally kept
 /// private so its renderer-internal scratch IDs cannot be mistaken for semantic IDs.
 pub struct PreparedRetainedGpuFrame<'a> {
+    images: &'a mut RasterImageFramePreparer,
     applied_publication: &'a mut Option<PublicationContext>,
     geometry: PreparedFrame<'a>,
     geometry_only: bool,
@@ -146,6 +160,7 @@ pub struct PreparedRetainedGpuFrame<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RetainedPreparedObjectKind {
+    Image,
     Geometry,
     Text,
     Mixed,
@@ -274,7 +289,13 @@ impl PreparedRetainedGpuFrame<'_> {
             .filter(|item| matches!(item, RetainedRenderItem::Glyph { .. }))
             .count();
         let glyph_ranges = observed_glyph_ranges(&self.text, items);
-        let geometry_item_count = items.len().saturating_sub(glyph_item_count);
+        let image_item_count = items
+            .iter()
+            .filter(|item| matches!(item, RetainedRenderItem::Image { .. }))
+            .count();
+        let geometry_item_count = items
+            .len()
+            .saturating_sub(glyph_item_count + image_item_count);
         let geometry = self
             .source_geometry_slots
             .and_then(|slots| slots.get(frame_index))
@@ -317,11 +338,15 @@ impl PreparedRetainedGpuFrame<'_> {
         if items.is_empty() && geometry.is_none() {
             return Err(RetainedPreparedObjectOutcome::Absent);
         }
-        let kind = match (geometry_item_count > 0, glyph_item_count > 0) {
-            (true, true) => RetainedPreparedObjectKind::Mixed,
-            (true, false) => RetainedPreparedObjectKind::Geometry,
-            (false, true) => RetainedPreparedObjectKind::Text,
-            (false, false) => return Err(RetainedPreparedObjectOutcome::Absent),
+        let kind = if image_item_count > 0 {
+            RetainedPreparedObjectKind::Image
+        } else {
+            match (geometry_item_count > 0, glyph_item_count > 0) {
+                (true, true) => RetainedPreparedObjectKind::Mixed,
+                (true, false) => RetainedPreparedObjectKind::Geometry,
+                (false, true) => RetainedPreparedObjectKind::Text,
+                (false, false) => return Err(RetainedPreparedObjectOutcome::Absent),
+            }
         };
         Ok(RetainedPreparedObjectObservation {
             object,
@@ -400,6 +425,7 @@ fn sorted_ranges_overlap(ranges: &[std::ops::Range<u32>], target: &std::ops::Ran
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RetainedPrepareError {
+    Image(RasterImagePrepareError),
     StalePublication {
         received: PublicationContext,
         applied: PublicationContext,
@@ -424,6 +450,7 @@ impl std::fmt::Display for RetainedPrepareError {
                 received.frame_epoch().get(),
                 applied.frame_epoch().get()
             ),
+            Self::Image(error) => error.fmt(formatter),
             Self::MissingTextResource => formatter.write_str("retained text resource is missing"),
             Self::MissingGeometryResource => {
                 formatter.write_str("retained vector geometry resource is missing")
@@ -804,6 +831,10 @@ fn vector_path_retained_bytes(path: &VectorPath) -> usize {
 
 #[derive(Clone, Debug)]
 enum SourceItem {
+    Image {
+        object_id: ObjectId,
+        object_index: usize,
+    },
     Geometry {
         object_id: ObjectId,
         scratch_id: ObjectId,
@@ -821,6 +852,7 @@ enum SourceItem {
 /// outline-required glyphs are materialized as renderer-local paths, and every
 /// emitted painter item keeps the owning retained `ObjectId`.
 pub struct RetainedFramePreparer {
+    images: RasterImageFramePreparer,
     geometry: FramePreparer,
     text: RetainedTextQuadPreparer,
     outlines: GlyphOutlineCache,
@@ -863,6 +895,7 @@ pub struct RetainedFramePreparer {
 impl Default for RetainedFramePreparer {
     fn default() -> Self {
         Self {
+            images: RasterImageFramePreparer::default(),
             geometry: FramePreparer::for_individual_path_draws(),
             text: RetainedTextQuadPreparer::default(),
             outlines: GlyphOutlineCache::default(),
@@ -1068,7 +1101,7 @@ impl RetainedFramePreparer {
         } else if let Some(range) = publication.changes().painter_order_range() {
             self.set_painter_order_range(publication.painter_order(), range);
         }
-        let prepared = self.prepare_with_changes(
+        let prepared = self.prepare_with_changes_inner(
             device,
             queue,
             publication.frame(),
@@ -1077,6 +1110,9 @@ impl RetainedFramePreparer {
             publication.font_resources(),
             publication.geometry_resources(),
             metrics,
+            true,
+            None,
+            Some(publication.raster_image_resources()),
         )?;
         *prepared.applied_publication = Some(received);
         Ok(prepared)
@@ -1118,6 +1154,7 @@ impl RetainedFramePreparer {
             metrics,
             true,
             Some(visible_object_indices),
+            Some(publication.raster_image_resources()),
         )?;
         *prepared.applied_publication = Some(received);
         Ok(prepared)
@@ -1150,12 +1187,84 @@ impl RetainedFramePreparer {
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
         self.prepare_with_changes_inner(
-            device, queue, frame, changes, texts, fonts, geometries, metrics, true, None,
+            device, queue, frame, changes, texts, fonts, geometries, metrics, true, None, None,
+        )
+    }
+
+    /// Prepare a genuine host/worker frame using its installed immutable resources.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_with_image_resources<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
+        images: &dyn RasterImageResourceLookup,
+        metrics: TextDeviceMetrics,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
+        self.prepare_with_changes_inner(
+            device,
+            queue,
+            frame,
+            changes,
+            texts,
+            fonts,
+            geometries,
+            metrics,
+            true,
+            None,
+            Some(images),
         )
     }
 
     #[allow(clippy::too_many_arguments)]
     fn prepare_with_changes_inner<'a>(
+        &'a mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        texts: &(impl TextResourceLookup + ?Sized),
+        fonts: &(impl FontResourceLookup + ?Sized),
+        geometries: &(impl GeometryResourceLookup + ?Sized),
+        metrics: TextDeviceMetrics,
+        allow_geometry_only: bool,
+        visible_object_indices: Option<&[usize]>,
+        images: Option<&dyn RasterImageResourceLookup>,
+    ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
+        let staged = self
+            .images
+            .stage(
+                frame,
+                changes,
+                images,
+                device.limits().max_texture_dimension_2d,
+            )
+            .map_err(RetainedPrepareError::Image)?;
+        let mut prepared = self.prepare_geometry_text_inner(
+            device,
+            queue,
+            frame,
+            changes,
+            texts,
+            fonts,
+            geometries,
+            metrics,
+            allow_geometry_only,
+            visible_object_indices,
+        )?;
+        // Resource checks, geometry resolution and text preparation all succeeded.
+        // This is the single infallible publication point for image cache rows.
+        prepared.images.commit(staged);
+        prepared.stats.image_objects = prepared.images.objects.len();
+        Ok(prepared)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_geometry_text_inner<'a>(
         &'a mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -1266,6 +1375,7 @@ impl RetainedFramePreparer {
                 dirty_color_ranges: &self.dirty_color_ranges,
             };
             return Ok(PreparedRetainedGpuFrame {
+                images: &mut self.images,
                 applied_publication: &mut self.last_applied_publication,
                 geometry,
                 geometry_only: false,
@@ -1358,6 +1468,7 @@ impl RetainedFramePreparer {
             .count();
         let outline_cache = self.outlines.stats();
         let stats = RetainedPrepareStats {
+            image_objects: self.images.objects.len(),
             semantic_objects: frame.objects.len(),
             geometry_slots: self.scratch.objects.len(),
             glyph_batches,
@@ -1381,6 +1492,7 @@ impl RetainedFramePreparer {
             dirty_color_ranges: &self.dirty_color_ranges,
         };
         Ok(PreparedRetainedGpuFrame {
+            images: &mut self.images,
             applied_publication: &mut self.last_applied_publication,
             geometry,
             geometry_only: false,
@@ -1421,7 +1533,7 @@ impl RetainedFramePreparer {
         // Keep full and structural publications intact for cache invalidation; only
         // suppress the geometry-only fast path while this family baseline is built.
         let result = self
-            .prepare_with_changes_inner(
+            .prepare_geometry_text_inner(
                 device, queue, frame, changes, texts, fonts, geometries, metrics, false, None,
             )
             .map(|_| ());
@@ -1511,6 +1623,7 @@ impl RetainedFramePreparer {
         self.geometry_uses_source_indices = true;
         self.scratch_ready = false;
         let stats = RetainedPrepareStats {
+            image_objects: self.images.objects.len(),
             semantic_objects: frame.objects.len(),
             geometry_slots: frame.objects.len(),
             glyph_batches: 0,
@@ -1534,6 +1647,7 @@ impl RetainedFramePreparer {
             dirty_color_ranges: &self.dirty_color_ranges,
         };
         Ok(PreparedRetainedGpuFrame {
+            images: &mut self.images,
             applied_publication: &mut self.last_applied_publication,
             geometry,
             geometry_only: true,
@@ -1575,6 +1689,9 @@ impl RetainedFramePreparer {
             let Some(object) = frame.objects.get(index) else {
                 return false;
             };
+            if object.content.image().is_some() {
+                return frame.is_present(index) && self.images.objects.contains_key(&index);
+            }
             if object.text().is_some() {
                 return frame.is_present(index)
                     && self.fast_text_only.get(index).copied().unwrap_or(false);
@@ -1725,6 +1842,7 @@ impl RetainedFramePreparer {
             dirty_color_ranges: &self.dirty_color_ranges,
         };
         Ok(PreparedRetainedGpuFrame {
+            images: &mut self.images,
             applied_publication: &mut self.last_applied_publication,
             geometry,
             geometry_only: false,
@@ -1955,6 +2073,13 @@ impl RetainedFramePreparer {
             }
 
             match &object.content {
+                ObjectContentRef::Image(_) => {
+                    geometry_only = false;
+                    self.sources.push(SourceItem::Image {
+                        object_id: object.id,
+                        object_index,
+                    });
+                }
                 ObjectContentRef::Geometry(semantic_geometry) => {
                     let source_geometry = frame
                         .render_geometry(object_index)
@@ -2353,6 +2478,15 @@ fn rebuild_mixed_order(
 
     for source in sources {
         match source {
+            SourceItem::Image {
+                object_id,
+                object_index,
+            } => {
+                output.push(RetainedRenderItem::Image {
+                    object_id: *object_id,
+                    object_index: *object_index,
+                });
+            }
             SourceItem::FastGlyphRun {
                 object_id,
                 object_index,
@@ -2571,12 +2705,14 @@ fn expand_stroke(path: &VectorPath, stroke: &TextGlyphStroke) -> VectorPath {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RetainedUploadStats {
+    pub images: RasterImageUploadStats,
     pub geometry: UploadStats,
     pub text: TextGpuUploadStats,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RetainedDrawStats {
+    pub images: usize,
     pub geometry: DrawStats,
     pub text: TextGpuDrawStats,
 }
@@ -2743,7 +2879,18 @@ impl GpuRenderer {
         } else {
             TextGpuUploadStats::default()
         };
-        RetainedUploadStats { geometry, text }
+        let images = if prepared.images.objects.is_empty() && self.images.is_none() {
+            RasterImageUploadStats::default()
+        } else {
+            self.images
+                .get_or_insert_with(|| RasterImageGpuRenderer::new(device, self.target_format))
+                .upload(device, queue, prepared.images)
+        };
+        RetainedUploadStats {
+            geometry,
+            text,
+            images,
+        }
     }
 
     /// Encode a retained geometry-only frame with identity-free transient analytic
@@ -2796,6 +2943,7 @@ impl GpuRenderer {
             }
         };
         Ok(RetainedDrawStats {
+            images: 0,
             geometry,
             text: TextGpuDrawStats::default(),
         })
@@ -2811,9 +2959,10 @@ impl GpuRenderer {
         text_state: &RetainedTextGpuState,
         clear_color: wgpu::Color,
         query_set: Option<&wgpu::QuerySet>,
-    ) -> Result<RetainedDrawStats, TextGpuDrawError> {
+    ) -> Result<RetainedDrawStats, RetainedDrawError> {
         if prepared.geometry_only {
             return Ok(RetainedDrawStats {
+                images: 0,
                 geometry: match query_set {
                     Some(queries) => self.encode_profiled(
                         encoder,
@@ -2865,6 +3014,19 @@ impl GpuRenderer {
         let mut stats = RetainedDrawStats::default();
         for item in prepared.render_items {
             match item {
+                RetainedRenderItem::Image { object_index, .. } => {
+                    let images = self
+                        .images
+                        .as_ref()
+                        .ok_or(RasterImageDrawError::NotUploaded)?;
+                    images.draw(
+                        &mut pass,
+                        &self.camera_bind_group,
+                        *object_index,
+                        sample_count,
+                    )?;
+                    stats.images += 1;
+                }
                 RetainedRenderItem::Geometry { batch, .. } => {
                     stats.geometry += self.draw_retained_geometry_batch(
                         &mut pass,
@@ -3739,6 +3901,7 @@ mod tests {
         let text_preparer = RetainedTextQuadPreparer::default();
         let mut applied_publication = None;
         let prepared = PreparedRetainedGpuFrame {
+            images: &mut RasterImageFramePreparer::default(),
             applied_publication: &mut applied_publication,
             geometry,
             geometry_only: true,
@@ -3961,6 +4124,7 @@ mod tests {
                     metrics,
                     true,
                     Some(&[0, 1]),
+                    None,
                 )
                 .unwrap();
             assert!(!prepared.geometry_only);
@@ -3988,6 +4152,7 @@ mod tests {
                     metrics,
                     true,
                     Some(&[1]),
+                    None,
                 )
                 .unwrap();
             assert!(!prepared.render_items.is_empty());
@@ -4009,6 +4174,7 @@ mod tests {
                     metrics,
                     true,
                     Some(&[0]),
+                    None,
                 )
                 .unwrap();
             assert_eq!(prepared.render_items.len(), 1);
@@ -4044,6 +4210,7 @@ mod tests {
                 metrics,
                 true,
                 Some(&[1]),
+                None,
             )
             .unwrap();
         let projected_once = preparer.visibility_stats();
@@ -4060,6 +4227,7 @@ mod tests {
                     metrics,
                     true,
                     Some(&[1]),
+                    None,
                 )
                 .unwrap();
             assert!(prepared
@@ -4084,6 +4252,7 @@ mod tests {
                     metrics,
                     true,
                     Some(&[1]),
+                    None,
                 )
                 .unwrap();
             assert!(prepared
@@ -4197,3 +4366,37 @@ pub use family_animation_prepare::*;
 
 mod family_plan_set_prepare;
 pub use family_plan_set_prepare::*;
+
+/// Mixed-content draw failures preserve their actual content domain.
+#[derive(Debug)]
+pub enum RetainedDrawError {
+    Text(TextGpuDrawError),
+    Image(RasterImageDrawError),
+}
+impl From<TextGpuDrawError> for RetainedDrawError {
+    fn from(value: TextGpuDrawError) -> Self {
+        Self::Text(value)
+    }
+}
+impl From<RasterImageDrawError> for RetainedDrawError {
+    fn from(value: RasterImageDrawError) -> Self {
+        Self::Image(value)
+    }
+}
+impl std::fmt::Display for RetainedDrawError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Text(error) => error.fmt(f),
+            Self::Image(error) => error.fmt(f),
+        }
+    }
+}
+impl std::error::Error for RetainedDrawError {}
+impl GpuRenderer {
+    pub fn image_residency_stats(&self) -> RasterImageResidencyStats {
+        self.images.as_ref().map_or(
+            RasterImageResidencyStats::default(),
+            RasterImageGpuRenderer::stats,
+        )
+    }
+}
