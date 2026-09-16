@@ -1,4 +1,4 @@
-name: Materialize image qualification fixes (temporary)
+name: Prepare image workflow merge resolution (temporary)
 on:
   push:
     branches: [codex/b2-image-workspace-bootstrap]
@@ -6,44 +6,33 @@ on:
 permissions:
   contents: write
 jobs:
-  materialize:
+  prepare:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: 52e2237eddf8085df281bbcc852976945421433b
-      - name: Apply exact reviewed source patch
+      - name: Prepare the checked inventory blob without moving any product ref
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh api repos/yongkyuns/noon/git/blobs/01763f4d54e1053e068606564063728a8b4f2ab8 --jq .content | base64 --decode > /tmp/image-qualification.patch
-          test "$(git hash-object /tmp/image-qualification.patch)" = 01763f4d54e1053e068606564063728a8b4f2ab8
-          git apply --check /tmp/image-qualification.patch
-          git apply /tmp/image-qualification.patch
+          gh api 'repos/yongkyuns/noon/contents/web/ci-workflow-topology.test.mjs?ref=6aad6282be4a6ef5dbc557087656b55ab3f1d7c7' --jq .content | base64 --decode > /tmp/inventory.mjs
           python3 - <<'PY'
-          import subprocess
-          expected = {
-            'crates/noon/src/execution_session/publication.rs': '49e0b1967c962fbd33337a092c2b8a31fa68c5c5',
-            'crates/noon/tests/image_publication_atomicity.rs': '4cba6b00ddcdca1ab859bea464a23e86b4cfe686',
-            'web/python/_manim_image.py': 'd7744830b5c91207076b119b832595df6724d201',
-            'web/python/test_manim_image.py': '64b80df4c3122f87192e076a251919e54edcd837',
-            'crates/noon/tests/image_raster_qualification.rs': 'c924c66865141cfcae234d3786e90e7a2face081',
-          }
-          for path, wanted in expected.items():
-              actual = subprocess.check_output(['git', 'hash-object', path], text=True).strip()
-              assert actual == wanted, (path, actual, wanted)
-          subprocess.run(['git', 'add', '--', *expected], check=True)
+          import hashlib, json, pathlib
+          path = pathlib.Path('/tmp/inventory.mjs')
+          text = path.read_text()
+          anchor = '  ["noon-agent-foundation.yml", "agent-authoring"],\n'
+          assert text.count(anchor) == 1
+          text = text.replace(anchor, anchor + '  ["image-raster-qualification.yml", "renderer"],\n')
+          data = text.encode()
+          digest = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          assert digest == 'd8eb2e5b6bdcdccffb5a7cf0b6ecd02312dabd10', digest
+          pathlib.Path('/tmp/blob.json').write_text(json.dumps({'content': text, 'encoding': 'utf-8'}))
           PY
-          git diff --cached --check
-          git config user.name 'Yongkyun Shin'
-          git config user.email '4311628+yongkyuns@users.noreply.github.com'
-          git commit -m 'fix: qualify native image parity and shared admission guards'
-          git push origin HEAD:refs/heads/codex/b2-image-qualification-fixes-20260916
-          git rev-parse HEAD HEAD^{tree} > /tmp/image-qualification-head.txt
+          gh api --method POST repos/yongkyuns/noon/git/blobs --input /tmp/blob.json > /tmp/inventory-result.json
+          test "$(jq -r .sha /tmp/inventory-result.json)" = d8eb2e5b6bdcdccffb5a7cf0b6ecd02312dabd10
+          cat /tmp/inventory-result.json
       - uses: actions/upload-artifact@v4
         with:
-          name: noon-image-qualification-head
-          path: /tmp/image-qualification-head.txt
+          name: noon-image-merge-inventory
+          path: /tmp/inventory-result.json
           retention-days: 2
