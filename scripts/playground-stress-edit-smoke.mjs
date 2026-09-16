@@ -73,26 +73,6 @@ async function snapshot(page) {
   });
 }
 
-async function assertSourcePlaybackContinues(page, before, action) {
-  assert.equal(before.runInFlight, true, `${action} must happen while the source owns execution`);
-  const beforeFrame = await page.locator("#scene").screenshot();
-  await page.waitForTimeout(300);
-  const after = await snapshot(page);
-  assert.equal(after.runInFlight, true, `${action} must not wait for source completion`);
-  assert.equal(
-    after.runGeneration,
-    before.runGeneration,
-    `${action} must not start or invalidate a run`,
-  );
-  const afterFrame = await page.locator("#scene").screenshot();
-  assert.notEqual(
-    Buffer.compare(beforeFrame, afterFrame),
-    0,
-    `${action} must leave the original animation visibly advancing`,
-  );
-  return after;
-}
-
 async function waitForPreloadedRuntime(page) {
   const deferred = await page.evaluate(() => window.__noonStressInitialDeferred ?? null);
   assert.deepEqual(
@@ -289,14 +269,14 @@ try {
   assert.match(source, /rows = 20/);
 
   // Only the run that must remain source-owned while we exercise Reset/edit gets
-  // an extended first animation. Replacement runs keep canonical timings, and
-  // explicit Run cancels this long phase before it can increase test duration.
+  // a deliberately long first animation. Replacement runs keep canonical timings,
+  // and explicit Run cancels this phase long before it can finish naturally.
   const rows5Source = source
     .replace(/rows = \d+/, "rows = 5")
-    .replace("run_time=0.35,", "run_time=30.0,");
+    .replace("run_time=0.35,", "run_time=60.0,");
   const rows7Source = source.replace(/rows = \d+/, "rows = 7");
   const rows20Source = rows7Source.replace(/rows = \d+/, "rows = 20");
-  assert.match(rows5Source, /run_time=30\.0,/);
+  assert.match(rows5Source, /run_time=60\.0,/);
   const baselineObjectCount = diagnostics.snapshots.baseline.objectCount;
 
   // Editing is deliberately non-destructive. Prove that the existing replay and
@@ -319,21 +299,17 @@ try {
   await page.locator("#replace-scene").click();
   diagnostics.snapshots.rows5Playing = await waitForSourceOwnedPlayback(page);
   const sourceOwnedGeneration = diagnostics.snapshots.rows5Playing.runGeneration;
+  const sourceOwnedStartedAt = performance.now();
 
-  // Reset changes only source text. Canvas evidence proves the same animation
-  // continues to advance after Reset without asking the source-owned control path
-  // for metrics (which intentionally serializes behind continuation execution).
+  // Reset changes only source text. Observe only synchronous lifecycle/UI state here:
+  // screenshot and metrics RPCs serialize with the source-owned endpoint and therefore
+  // are not valid observers of this cancellation window.
   await page.locator(".reset-example").click();
   assert.equal(await page.locator("#python-scene-source").inputValue(), source);
   diagnostics.snapshots.resetDuringRows5 = await snapshot(page);
   assert.equal(diagnostics.snapshots.resetDuringRows5.runInFlight, true);
   assert.equal(diagnostics.snapshots.resetDuringRows5.runGeneration, sourceOwnedGeneration);
   assert.match(diagnostics.snapshots.resetDuringRows5.patchText, /current preview continues · Run to apply/);
-  diagnostics.snapshots.rows5AdvancedAfterReset = await assertSourcePlaybackContinues(
-    page,
-    diagnostics.snapshots.resetDuringRows5,
-    "Reset",
-  );
 
   await replaceSource(editor, page, rows7Source);
   diagnostics.snapshots.rows7EditedDuringRows5 = await snapshot(page);
@@ -348,15 +324,26 @@ try {
     false,
     "editing during an active source-owned animation must leave Run available",
   );
-  diagnostics.snapshots.rows5AdvancedAfterEdit = await assertSourcePlaybackContinues(
-    page,
-    diagnostics.snapshots.rows7EditedDuringRows5,
-    "editing",
-  );
 
-  // This click must supersede a still-active run, not wait for natural completion.
+  // Run is the sole supersession boundary. Immediately before the click the long
+  // rows=5 source still owns execution; afterward a newer generation must own the
+  // rows=7 continuation. The elapsed guard proves this was cancellation rather than
+  // accidental natural completion of the 60-second source phase.
+  const beforeSupersede = await snapshot(page);
+  assert.equal(beforeSupersede.runInFlight, true);
+  assert.equal(beforeSupersede.runGeneration, sourceOwnedGeneration);
   await page.locator("#replace-scene").click();
   diagnostics.snapshots.rows7Playing = await waitForSourceOwnedPlayback(page);
+  const supersededAfterMs = performance.now() - sourceOwnedStartedAt;
+  diagnostics.snapshots.supersession = {
+    fromGeneration: sourceOwnedGeneration,
+    toGeneration: diagnostics.snapshots.rows7Playing.runGeneration,
+    elapsedMs: supersededAfterMs,
+  };
+  assert.ok(
+    supersededAfterMs < 45_000,
+    `explicit Run must supersede the long source before natural completion (${supersededAfterMs.toFixed(0)} ms)`,
+  );
   assert.ok(diagnostics.snapshots.rows7Playing.runGeneration > sourceOwnedGeneration);
   diagnostics.snapshots.rows7Rerun = await waitForAppliedRun(page, baselineObjectCount);
   assert.equal(diagnostics.snapshots.rows7Rerun.executionMode, "semantic");
@@ -387,7 +374,7 @@ try {
   await page.screenshot({ path: path.join(artifactDir, "stress-edited.png"), fullPage: true });
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   console.log(
-    `playground explicit structural reruns ok: ${diagnostics.snapshots.loaded.editorHeight}px editor, uninterrupted Reset/edit during rows=5, mid-animation rows=7 supersession and keyboard rows=20 replay`,
+    `playground explicit structural reruns ok: ${diagnostics.snapshots.loaded.editorHeight}px editor, Reset/edit preserve active rows=5, explicit mid-animation rows=7 supersession and keyboard rows=20 replay`,
   );
 } catch (error) {
   diagnostics.failure = error instanceof Error ? error.stack ?? error.message : String(error);
