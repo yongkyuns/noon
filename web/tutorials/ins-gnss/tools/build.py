@@ -8,7 +8,7 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-LOCAL_MODULES = ('model', 'uncertainty', 'prediction', 'visuals')
+LOCAL_MODULES = ('model', 'uncertainty', 'prediction', 'measurement', 'visuals')
 SOURCES = [*(ROOT / 'src' / f'{name}.py' for name in LOCAL_MODULES),
            *sorted((ROOT / 'src/lessons').glob('*.py')), ROOT / 'src/entry.py']
 

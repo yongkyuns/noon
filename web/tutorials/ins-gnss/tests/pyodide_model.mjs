@@ -15,7 +15,8 @@ pyodide.FS.writeFile('/tutorial/src/uncertainty.py',
   await readFile(path.join(path.dirname(source), 'uncertainty.py'), 'utf8'));
 pyodide.FS.writeFile('/tutorial/tests/test_model.py', await readFile(testSource, 'utf8'));
 
-for (const [kind, name] of [['src', 'prediction.py'], ['tests', 'test_prediction.py']]) {
+for (const [kind, name] of [['src', 'prediction.py'], ['tests', 'test_prediction.py'],
+                            ['src', 'measurement.py'], ['tests', 'test_measurement.py']]) {
   pyodide.FS.writeFile(`/tutorial/${kind}/${name}`,
     await readFile(path.join(path.dirname(source), '..', kind, name), 'utf8'));
 }
