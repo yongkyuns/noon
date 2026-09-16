@@ -1,0 +1,40 @@
+name: B3 Qualify TransformMatchingShapes Public Restack
+on:
+  push:
+    branches: [b3-qualify-transform-matching-public-restack]
+permissions:
+  contents: read
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NOON_QUALIFICATION_SOURCE: 08cb9591196b194d0198f77e05036d83fa8025c8
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.NOON_QUALIFICATION_SOURCE }}
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify clean candidate
+        run: |
+          test "$(git rev-parse HEAD)" = "$NOON_QUALIFICATION_SOURCE"
+          test ! -e .github/workflows/b3-qualify-transform-matching-public-restack.yml
+          git diff --check
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Check workspace
+        run: cargo check --workspace --all-targets
+      - name: Strict clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Shared matching completion and binding tests
+        run: |
+          cargo test -p noon --lib matching_family -- --nocapture
+          cargo test -p noon-web completed_binding_tests -- --nocapture
+          cargo test -p noon --test matching_nested_unequal_completion -- --nocapture
+      - name: Python matching adapter tests
+        run: python -m unittest discover -s web/python -p 'test_manim_*matching*.py'
