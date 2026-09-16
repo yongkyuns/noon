@@ -61,7 +61,7 @@ test("a newer run supersedes an older run for the same example", () => {
   assert.equal(generations.isRunCurrent(second, "scene"), true);
 });
 
-test("editing can invalidate an active run without starting a replacement run", () => {
+test("explicit Run can invalidate an active run before starting its replacement", () => {
   const generations = new PlaygroundGeneration();
   generations.commitSelection(generations.beginSelectionRequest("scene"));
   const current = generations.beginRun("scene");
