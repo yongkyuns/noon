@@ -1,4 +1,4 @@
-name: Materialize image implementation (temporary)
+name: Materialize image qualification fixes (temporary)
 on:
   push:
     branches: [codex/b2-image-workspace-bootstrap]
@@ -12,40 +12,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 0e1b616550988c3b570f041f4ed15e563a9f50aa
-          path: patch-input
-          persist-credentials: false
-      - name: Verify and decode product patch
-        run: |
-          python - <<'PY'
-          import base64, hashlib, lzma, pathlib
-          parts = pathlib.Path('patch-input/.image-patch')
-          encoded = ''.join((parts / f'{i:02}.b64').read_text().strip() for i in range(6))
-          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
-          digest = hashlib.sha256(patch).hexdigest()
-          assert digest == '3e4079c762d1a97edf771f8c736fa3c0f20dfe5e1f1572d7e7dcbb5a89ce0226', digest
-          pathlib.Path('/tmp/image-product.patch').write_bytes(patch)
-          print(f'Verified {len(patch)} patch bytes: {digest}')
-          PY
-      - uses: actions/checkout@v4
-        with:
-          ref: 47c375ec085371280b5bb8e38fbc6ad8af0d8d39
-          path: product
-      - name: Apply only product source changes
-        working-directory: product
+          ref: 52e2237eddf8085df281bbcc852976945421433b
+      - name: Apply exact reviewed source patch
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git apply --check --binary --exclude=.github/workflows/image-raster-qualification.yml /tmp/image-product.patch
-          git apply --binary --exclude=.github/workflows/image-raster-qualification.yml /tmp/image-product.patch
-          git diff --check
+          gh api repos/yongkyuns/noon/git/blobs/01763f4d54e1053e068606564063728a8b4f2ab8 --jq .content | base64 --decode > /tmp/image-qualification.patch
+          test "$(git hash-object /tmp/image-qualification.patch)" = 01763f4d54e1053e068606564063728a8b4f2ab8
+          git apply --check /tmp/image-qualification.patch
+          git apply /tmp/image-qualification.patch
+          python3 - <<'PY'
+          import subprocess
+          expected = {
+            'crates/noon/src/execution_session/publication.rs': '49e0b1967c962fbd33337a092c2b8a31fa68c5c5',
+            'crates/noon/tests/image_publication_atomicity.rs': '4cba6b00ddcdca1ab859bea464a23e86b4cfe686',
+            'web/python/_manim_image.py': 'd7744830b5c91207076b119b832595df6724d201',
+            'web/python/test_manim_image.py': '64b80df4c3122f87192e076a251919e54edcd837',
+            'crates/noon/tests/image_raster_qualification.rs': 'c924c66865141cfcae234d3786e90e7a2face081',
+          }
+          for path, wanted in expected.items():
+              actual = subprocess.check_output(['git', 'hash-object', path], text=True).strip()
+              assert actual == wanted, (path, actual, wanted)
+          subprocess.run(['git', 'add', '--', *expected], check=True)
+          PY
+          git diff --cached --check
           git config user.name 'Yongkyun Shin'
           git config user.email '4311628+yongkyuns@users.noreply.github.com'
-          git add -A
-          git commit -m 'B2: implement atomic retained raster images across authoring and rendering'
-          git push origin HEAD:refs/heads/codex/b2-image-validation-20260916
-          git rev-parse HEAD | tee /tmp/image-product-head.txt
+          git commit -m 'fix: qualify native image parity and shared admission guards'
+          git push origin HEAD:refs/heads/codex/b2-image-qualification-fixes-20260916
+          git rev-parse HEAD HEAD^{tree} > /tmp/image-qualification-head.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: noon-image-product-head
-          path: /tmp/image-product-head.txt
-          retention-days: 1
+          name: noon-image-qualification-head
+          path: /tmp/image-qualification-head.txt
+          retention-days: 2
