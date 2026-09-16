@@ -15,6 +15,7 @@ READ_HOLD = 7.0
 REPLAY_SECONDS = 8.0
 EXAMPLE_BIAS_ERROR = .01  # A declared thought experiment, not the run's estimate.
 BUDGET_COLUMNS = (-3.3, 1.5, 4.8)
+UNCERTAINTY_CAP_HALF_WIDTH = .14  # Scene units; a visible endpoint, not extra elapsed time.
 
 
 async def _error_transport(stage, elapsed):
@@ -72,12 +73,20 @@ async def _outage_replay(stage, samples, start, event, config):
     await plot.move_cursor(stage.scene, cursor, middle, event.time, REPLAY_SECONDS)
     await stage.say(f'Before the {event.time:g}-second update, position σ has grown from {start.sigma:.3f} m to {sqrt(event.prior_covariance[0][0]):.3f} m.', hold=READ_HOLD)
     # A correction is a discontinuity at one timestamp, not physical motion.
-    jumps = [(event.truth-event.prior_position, -event.error),
-             (2*sqrt(event.prior_covariance[0][0]), 2*event.sigma),
-             (-2*sqrt(event.prior_covariance[0][0]), -2*event.sigma)]
-    await stage.reveal(*(Line(plot.point(event.time, a), plot.point(event.time, b),
-                              color=GNSS) for a, b in jumps),
-                       Dot(radius=.06, color=GNSS).move_to(plot.point(event.time, -event.error)), hold=4)
+    correction = Line(plot.point(event.time, event.truth-event.prior_position),
+                      plot.point(event.time, -event.error), color=GNSS)
+    bounds = []
+    for sign in (-1, 1):
+        before, after = sign*2*sqrt(event.prior_covariance[0][0]), sign*2*event.sigma
+        bounds.append(Line(plot.point(event.time, before), plot.point(event.time, after),
+                           color=UNCERTAINTY).set_stroke(width=2))
+        x, y = plot.point(event.time, after)
+        bounds.append(Line((x-UNCERTAINTY_CAP_HALF_WIDTH, y),
+                           (x+UNCERTAINTY_CAP_HALF_WIDTH, y), color=UNCERTAINTY).set_stroke(width=2))
+    await stage.reveal(correction, *bounds,
+                       Dot(radius=.06, color=GNSS).move_to(plot.point(event.time, -event.error)),
+                       text('Blue caps: updated ±2σ', (3.58, -1.9), 20, UNCERTAINTY, max_width=5.2),
+                       hold=4)
     await stage.say(f'The fix changes the estimate at the same timestamp. Position σ drops to {event.sigma:.3f} m; the vehicle does not jump.', hold=READ_HOLD)
     await stage.clear()
 
