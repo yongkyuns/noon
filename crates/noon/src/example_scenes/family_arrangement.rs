@@ -27,7 +27,7 @@ impl LiveContinuation for FamilyArrangement {
             }
             1 => {
                 self.family = live
-                    .family(&[(&self.first).into(), (&self.nested).into()])
+                    .create_family(&[(&self.first).into(), (&self.nested).into()])
                     .map_err(|e| e.to_string())?;
                 live.remove_family_members(&self.family, &[(&self.nested).into()])
                     .map_err(|e| e.to_string())?;

@@ -143,7 +143,7 @@ fn style_transform_and_query_categories_are_typed_and_atomic() -> TestResult {
 
 #[test]
 fn scalar_failures_preserve_domain_and_transaction_causes() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let before = snapshot(&scene, &[]);
     let error = scene.value_tracker(f64::NAN).unwrap_err();
     assert_eq!(
@@ -196,7 +196,7 @@ fn scalar_failures_preserve_domain_and_transaction_causes() -> TestResult {
 
 #[test]
 fn duplicate_binding_preserves_existing_signal_and_same_binding_is_a_noop() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let object = scene.circle(1.0)?;
     let tracker = scene.value_tracker(1.0)?;
     let first = scene.position_from_tracker(
@@ -234,7 +234,7 @@ fn duplicate_binding_preserves_existing_signal_and_same_binding_is_a_noop() -> T
 
 #[test]
 fn layout_and_copy_failures_leave_all_family_leaves_unchanged() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let left = scene.circle(1.0)?;
     let right = scene.square(1.0)?;
     let family = scene.family(&[MobjectTarget::Object(&left), MobjectTarget::Object(&right)])?;
@@ -469,7 +469,7 @@ fn rejection_retains_previously_queued_changes_and_local_recovery() -> TestResul
 fn callback_family_invalid_paint_retains_shared_cause_before_reads_and_recovers() -> TestResult {
     use noon::{FamilyCallbackPaintError, FamilyPaint, Style};
 
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let first = scene.circle(0.5)?;
     let second = scene.square(0.5)?;
     let nested = scene.family(&[(&first).into(), (&second).into()])?;

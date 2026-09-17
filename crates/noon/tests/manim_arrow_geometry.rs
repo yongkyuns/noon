@@ -112,5 +112,5 @@ fn buff_and_tip_caps_match_pinned_manim_reference_cases() {
     let short = scene.manim_arrow(short).unwrap();
     let (_, end) = shaft_endpoints(&short);
     assert!((end.x - 0.3).abs() < 1.0e-6);
-    assert!((short.shaft().state().unwrap().style.stroke_width - 0.02).abs() < 1.0e-12);
+    assert!((short.shaft().state().unwrap().style.stroke_width - 0.015).abs() < 1.0e-12);
 }

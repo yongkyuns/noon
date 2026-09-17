@@ -378,7 +378,7 @@ mod tests {
 
     #[test]
     fn ordinary_family_arrange_uses_shared_bounds_and_one_transaction() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let first = scene.square(0.4).unwrap();
         let second = scene.circle(0.2).unwrap();
         let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn family_arrange_moves_shared_leaves_once_and_rejects_invalid_input() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let first = scene.circle(0.2).unwrap();
         let mut second = scene.circle(0.2).unwrap();
         second.shift(2.0, 0.0).unwrap();

@@ -202,6 +202,11 @@ pub enum AuthoringError {
     Transaction(noon_core::SemanticMutationTransactionError),
     /// Scene-owned running authoring failed during execution publication.
     ExecutionPublication(crate::ExecutionSessionPublicationError),
+    /// Scene-owned running authoring failed while activating an execution operation.
+    ///
+    /// This keeps the exact runtime cause for operations such as live tracker
+    /// enrollment, whose failure set is broader than semantic publication.
+    ExecutionAnimation(crate::ExecutionSessionAnimationError),
     /// A high-precision value cannot lower to renderer coordinates.
     VectorLowering(noon_core::SemanticLoweringError),
     /// Immutable geometry resource validation failed.
@@ -321,6 +326,7 @@ impl std::fmt::Display for AuthoringError {
             Self::Semantic(error) => error.fmt(f),
             Self::Transaction(error) => error.fmt(f),
             Self::ExecutionPublication(error) => error.fmt(f),
+            Self::ExecutionAnimation(error) => error.fmt(f),
             Self::VectorLowering(error) => error.fmt(f),
             Self::GeometryResource(error) => error.fmt(f),
             Self::PathQuery(error) => error.fmt(f),
@@ -348,6 +354,7 @@ impl std::error::Error for AuthoringError {
             Self::Semantic(error) => Some(error),
             Self::Transaction(error) => Some(error),
             Self::ExecutionPublication(error) => Some(error),
+            Self::ExecutionAnimation(error) => Some(error),
             Self::VectorLowering(error) => Some(error),
             Self::GeometryResource(error) => Some(error),
             Self::PathQuery(error) => Some(error),
@@ -381,6 +388,12 @@ impl From<noon_core::SemanticMutationTransactionError> for AuthoringError {
 impl From<crate::ExecutionSessionPublicationError> for AuthoringError {
     fn from(error: crate::ExecutionSessionPublicationError) -> Self {
         Self::ExecutionPublication(error)
+    }
+}
+
+impl From<crate::ExecutionSessionAnimationError> for AuthoringError {
+    fn from(error: crate::ExecutionSessionAnimationError) -> Self {
+        Self::ExecutionAnimation(error)
     }
 }
 
