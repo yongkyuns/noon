@@ -71,7 +71,7 @@ impl ManimGeometryOptions {
 impl Scene {
     /// Construct a detached Brace in this scene's semantic store.
     pub fn brace(
-        &self,
+        &mut self,
         target: &LayoutAnchor,
         direction: (f64, f64),
         buff: f64,
@@ -87,7 +87,7 @@ impl Scene {
 
     /// Construct a detached BraceBetweenPoints in this scene's semantic store.
     pub fn brace_between_points(
-        &self,
+        &mut self,
         point_1: (f64, f64),
         point_2: (f64, f64),
         direction: (f64, f64),
@@ -426,7 +426,7 @@ mod tests {
 
     #[test]
     fn brace_matches_default_square_width_and_buffer_without_mutating_target() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(2.0).unwrap();
         let before = square.state().unwrap();
 
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn brace_observes_family_bounds_once_without_changing_members() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut left = scene.square(1.0).unwrap();
         let mut right = scene.square(1.0).unwrap();
         left.shift(-1.0, 0.0).unwrap();
@@ -477,7 +477,7 @@ mod tests {
 
     #[test]
     fn brace_between_points_auto_direction_matches_line_normal() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let brace = scene
             .brace_between_points((-1.0, 0.0), (1.0, 0.0), (0.0, 0.0), 0.2, 2.0)
             .unwrap();
@@ -488,7 +488,7 @@ mod tests {
 
     #[test]
     fn right_facing_brace_uses_projected_target_extent() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let target = scene.rectangle(2.0, 3.0).unwrap();
         let brace = scene
             .brace(
@@ -503,7 +503,7 @@ mod tests {
 
     #[test]
     fn brace_rejects_non_finite_inputs_before_object_creation() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(2.0).unwrap();
         let revision = scene.revision();
         let error = scene
@@ -515,7 +515,7 @@ mod tests {
 
     #[test]
     fn brace_rejects_foreign_target_without_observing_it() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let other = Scene::new();
         let target = other.square(1.0).unwrap();
         assert_eq!(

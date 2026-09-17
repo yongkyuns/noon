@@ -6,7 +6,7 @@ fn midpoint(start: (f64, f64), end: (f64, f64)) -> (f64, f64) {
 
 #[test]
 fn tangent_line_samples_generic_retained_paths_in_authored_world_space() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut source_options = ManimGeometryOptions::rectangle(4.0, 2.0).unwrap();
     source_options.set_scale(1.25, 0.75).unwrap();
     source_options.set_rotation(0.3).unwrap();
@@ -33,7 +33,7 @@ fn tangent_line_samples_generic_retained_paths_in_authored_world_space() {
 
 #[test]
 fn endpoint_alpha_clamps_like_manim() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let source = scene.circle(2.0).unwrap();
     let query = source.path_query().unwrap();
     let first = query.point_from_proportion(0.0).unwrap();
@@ -51,7 +51,7 @@ fn endpoint_alpha_clamps_like_manim() {
 
 #[test]
 fn signed_requested_length_preserves_manim_line_scaling_orientation() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let source = scene.circle(1.5).unwrap();
     let positive = scene
         .geometry(
@@ -78,7 +78,7 @@ fn signed_requested_length_preserves_manim_line_scaling_orientation() {
 
 #[test]
 fn tangent_line_sampling_is_read_only_until_candidate_publication() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let source = scene.circle(2.0).unwrap();
     let state = source.state().unwrap();
     let revision = scene.revision();
@@ -117,7 +117,7 @@ fn degenerate_sample_rejects_without_semantic_publication() {
 
 #[test]
 fn zero_requested_length_is_a_valid_degenerate_line() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let source = scene.circle(2.0).unwrap();
     let tangent = scene
         .geometry(source.manim_tangent_line_options(0.2, 0.0, 1.0e-5).unwrap())

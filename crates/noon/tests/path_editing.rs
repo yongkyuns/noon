@@ -90,7 +90,7 @@ fn corner_replacement_preserves_identity_paint_and_copies_with_local_publication
 
 #[test]
 fn empty_corner_inputs_and_nonfinite_rejection_follow_shared_semantics() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut object = scene
         .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
         .unwrap();

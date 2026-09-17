@@ -87,11 +87,12 @@ impl ManimGeometryOptions {
 }
 
 impl Scene {
-    /// Construct detached static geometry before initial lowering. For a live
-    /// session, prepare `ManimGeometryOptions::parametric_plot` and use the
-    /// existing `LiveSession::create_manim_geometry` publication operation.
+    /// Construct detached static geometry through the Scene-owned publication
+    /// path. This works before and after execution bootstrap; live continuations
+    /// can continue to use `LiveSession::create_manim_geometry` when they do not
+    /// own the Scene control surface.
     pub fn parametric_plot(
-        &self,
+        &mut self,
         sampling: &PlotSamplingOptions,
         function: impl FnMut(f64) -> [f64; 2],
         use_smoothing: bool,
@@ -103,9 +104,9 @@ impl Scene {
         )?)?)
     }
 
-    /// Construct a static y=f(x) path before initial lowering.
+    /// Construct a static y=f(x) path through the Scene-owned publication path.
     pub fn function_plot(
-        &self,
+        &mut self,
         sampling: &PlotSamplingOptions,
         function: impl FnMut(f64) -> f64,
         use_smoothing: bool,
@@ -117,8 +118,8 @@ impl Scene {
         )?)?)
     }
 
-    /// Construct a static data polyline before initial lowering.
-    pub fn sampled_plot(&self, points: &[[f64; 2]]) -> Result<Mobject, PlotAuthoringError> {
+    /// Construct a static data polyline through the Scene-owned publication path.
+    pub fn sampled_plot(&mut self, points: &[[f64; 2]]) -> Result<Mobject, PlotAuthoringError> {
         Ok(self.geometry(ManimGeometryOptions::sampled_plot(points)?)?)
     }
 }
@@ -154,7 +155,7 @@ mod tests {
 
     #[test]
     fn rejected_plot_preserves_scene_revision_and_resources() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let revision = scene.revision();
         let resources = scene
             .integration_store()
@@ -183,7 +184,7 @@ mod tests {
 
     #[test]
     fn affine_edits_retain_sampled_geometry_resource() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut curve = scene.sampled_plot(&[[0.0, 0.0], [1.0, 2.0]]).unwrap();
         let content = curve.state().unwrap().content;
         let resources = scene
@@ -207,7 +208,7 @@ mod tests {
 
     #[test]
     fn native_and_host_sample_ingestion_produce_the_same_path() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let sampling = PlotSamplingOptions::parametric(&[0.0, 1.0, 0.25]).unwrap();
         let plan = sampling.plan().unwrap();
         let points: Vec<_> = plan.parameters().iter().map(|&t| [t, t * t]).collect();
@@ -253,7 +254,7 @@ mod tests {
 
     #[test]
     fn under_capacity_tiny_plot_rejects_before_callback_or_scene_mutation() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let sentinel = scene.sampled_plot(&[[0.0, 0.0], [1.0, 1.0]]).unwrap();
         let before = sentinel.state().unwrap();
         let revision = scene.revision();

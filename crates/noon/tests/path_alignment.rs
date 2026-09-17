@@ -10,7 +10,7 @@ fn geometry_resource_count(scene: &Scene) -> usize {
 
 #[test]
 fn alignment_changes_only_selected_content_and_preserves_identity_style_and_bounds() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut a = scene.line((0., 0.), (3., 0.)).unwrap();
     a.shift(1., 2.).unwrap();
     a.set_stroke_color(1., 0., 0., 0.5).unwrap();
@@ -63,7 +63,7 @@ fn foreign_or_nonvector_operand_cannot_partially_publish() {
 
 #[test]
 fn empty_operand_receives_null_geometry_and_closed_contour_stays_closed() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let empty = scene
         .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
         .unwrap();
