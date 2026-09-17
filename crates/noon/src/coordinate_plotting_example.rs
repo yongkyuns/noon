@@ -1,7 +1,7 @@
 //! Paired plotting example shared unchanged by native and direct Rust/WASM.
 //! Samples are illustrative, not navigation simulation results.
 
-use crate::{ExecutionSession, ManimAxesOptions, ManimGeometryOptions, Scene, Text, BLUE, YELLOW};
+use crate::{ExecutionSession, ManimAxesOptions, Scene, Text, BLUE, YELLOW};
 
 pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
@@ -11,12 +11,8 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         10.0,
         4.0,
     ))?;
-    let frame = axes.authored_frame()?;
-    let sampling = axes.plot_sampling(Some(&[0.0, 10.0, 0.05]))?;
-    let mut curve =
-        ManimGeometryOptions::axes_function_plot(frame, &sampling, |t| (t * 0.8).sin(), true)?;
+    let mut curve = axes.plot(|t| (t * 0.8).sin(), Some(&[0.0, 10.0, 0.05]), true)?;
     curve.set_color(BLUE.red.into(), BLUE.green.into(), BLUE.blue.into(), 1.0)?;
-    let curve = scene.geometry(curve)?;
     let samples = [
         [0.0, 0.1],
         [2.0, 0.95],
@@ -25,14 +21,13 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
         [8.0, 0.2],
         [10.0, 1.0],
     ];
-    let mut data = ManimGeometryOptions::axes_sampled_plot(frame, &samples)?;
+    let mut data = axes.plot_samples(&samples)?;
     data.set_color(
         YELLOW.red.into(),
         YELLOW.green.into(),
         YELLOW.blue.into(),
         1.0,
     )?;
-    let data = scene.geometry(data)?;
     let mut title =
         scene.text(Text::new("Shared axes: function and sampled data").with_font_size(28.0))?;
     title.shift(0.0, 3.0)?;

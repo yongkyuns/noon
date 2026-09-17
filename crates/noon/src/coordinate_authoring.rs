@@ -341,6 +341,42 @@ impl ManimAxes {
             .map_err(CoordinateAuthoringError::from)
     }
 
+    /// Construct a detached static y=f(x) path in this axes' semantic store.
+    ///
+    /// The authored coordinate frame is captured once before the callback runs,
+    /// and the callback is evaluated only while preparing the ordinary retained
+    /// path. Add the returned [`Mobject`] to any family explicitly. Runtime
+    /// effective coordinates remain an explicit `effective_frame` capture rather
+    /// than an implicit live graph model.
+    pub fn plot(
+        &self,
+        function: impl FnMut(f64) -> f64,
+        range: Option<&[f64]>,
+        use_smoothing: bool,
+    ) -> Result<Mobject, CoordinateAuthoringError> {
+        let frame = self.authored_frame()?;
+        let sampling = PlotSamplingOptions::axes(frame.x().range(), range)
+            .map_err(PlotAuthoringError::from)?;
+        let options =
+            ManimGeometryOptions::axes_function_plot(frame, &sampling, function, use_smoothing)?;
+        Ok(Mobject::from_manim_geometry(
+            Rc::clone(self.family.integration_store()),
+            options,
+        )?)
+    }
+
+    /// Construct a detached static data polyline in this axes' semantic store.
+    ///
+    /// Supplied order and repeated x values are preserved. Mapping uses one
+    /// authored coordinate-frame snapshot and creates no graph-side semantics.
+    pub fn plot_samples(&self, points: &[[f64; 2]]) -> Result<Mobject, CoordinateAuthoringError> {
+        let options = ManimGeometryOptions::axes_sampled_plot(self.authored_frame()?, points)?;
+        Ok(Mobject::from_manim_geometry(
+            Rc::clone(self.family.integration_store()),
+            options,
+        )?)
+    }
+
     pub(crate) fn snapshot_with(
         &self,
         query: &mut impl FnMut(&Mobject) -> Result<PathQuery, AuthoringError>,

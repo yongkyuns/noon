@@ -155,27 +155,23 @@ fn mapped_curves_share_the_coordinate_snapshot_and_data_order() {
     let mut scene = Scene::new();
     let axes = scene.axes(&axes_options()).unwrap();
     axes.family().shift(2.0, 1.0).unwrap();
-    let frame = axes.authored_frame().unwrap();
-    let sampling = axes.plot_sampling(Some(&[-1.0, 1.0, 0.5])).unwrap();
     let calls = std::cell::Cell::new(0usize);
-    let options = ManimGeometryOptions::axes_function_plot(
-        frame,
-        &sampling,
-        |x| {
-            calls.set(calls.get() + 1);
-            x * x
-        },
-        false,
-    )
-    .unwrap();
-    let graph = scene.geometry(options).unwrap();
+    let graph = axes
+        .plot(
+            |x| {
+                calls.set(calls.get() + 1);
+                x * x
+            },
+            Some(&[-1.0, 1.0, 0.5]),
+            false,
+        )
+        .unwrap();
     assert_eq!(calls.get(), 5);
     assert_eq!(graph.path_query().unwrap().start().unwrap(), (1.0, 2.0));
     assert_eq!(graph.path_query().unwrap().end().unwrap(), (3.0, 2.0));
-    let data =
-        ManimGeometryOptions::axes_sampled_plot(frame, &[[1.0, 0.0], [1.0, 1.0], [-1.0, 0.0]])
-            .unwrap();
-    let data = scene.geometry(data).unwrap();
+    let data = axes
+        .plot_samples(&[[1.0, 0.0], [1.0, 1.0], [-1.0, 0.0]])
+        .unwrap();
     assert_eq!(data.path_query().unwrap().curve_count(), 2);
     assert_eq!(data.path_query().unwrap().start().unwrap(), (3.0, 1.0));
     assert_eq!(data.path_query().unwrap().end().unwrap(), (1.0, 1.0));
@@ -185,6 +181,82 @@ fn mapped_curves_share_the_coordinate_snapshot_and_data_order() {
     let session = scene.execution_session().unwrap();
     assert!(!session.frame().objects.is_empty());
     assert_eq!(calls.get(), 5);
+}
+
+#[test]
+fn axes_plot_creates_one_detached_object_in_the_axes_store() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let nodes_before = scene.integration_store().borrow().len();
+    let resources_before = resources(&scene);
+
+    let graph = axes.plot(|x| x, Some(&[-1.0, 1.0, 1.0]), false).unwrap();
+
+    assert!(Rc::ptr_eq(
+        graph.integration_store(),
+        axes.family().integration_store()
+    ));
+    let store = scene.integration_store().borrow();
+    assert_eq!(store.len(), nodes_before + 1);
+    assert_eq!(store.geometry_resources().len(), resources_before + 1);
+    assert!(store
+        .semantic_family_members_checked(scene.root())
+        .unwrap()
+        .is_empty());
+    assert!(store.semantic_object_state_checked(graph.node_id()).is_ok());
+}
+
+#[test]
+fn axes_plot_preparation_errors_allocate_no_identity_or_resource() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let revision = scene.revision();
+    let nodes = scene.integration_store().borrow().len();
+    let resource_count = resources(&scene);
+    let calls = std::cell::Cell::new(0usize);
+
+    assert!(axes
+        .plot(
+            |x| {
+                calls.set(calls.get() + 1);
+                x
+            },
+            Some(&[-1.0, 1.0, 0.0]),
+            false,
+        )
+        .is_err());
+    assert_eq!(calls.get(), 0);
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(scene.integration_store().borrow().len(), nodes);
+    assert_eq!(resources(&scene), resource_count);
+}
+
+#[test]
+fn axes_plot_rejects_invalid_topology_before_running_the_callback() {
+    let mut scene = Scene::new();
+    let axes = scene.axes(&axes_options()).unwrap();
+    let x = axes.x_axis().unwrap();
+    axes.family().remove_many(&[x.family().into()]).unwrap();
+    let revision = scene.revision();
+    let nodes = scene.integration_store().borrow().len();
+    let resource_count = resources(&scene);
+    let calls = std::cell::Cell::new(0usize);
+
+    assert!(matches!(
+        axes.plot(
+            |x| {
+                calls.set(calls.get() + 1);
+                x
+            },
+            None,
+            false,
+        ),
+        Err(CoordinateAuthoringError::InvalidTopology)
+    ));
+    assert_eq!(calls.get(), 0);
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(scene.integration_store().borrow().len(), nodes);
+    assert_eq!(resources(&scene), resource_count);
 }
 
 struct MovingAxes {
