@@ -1167,6 +1167,10 @@ fn pack_derived_display_object(
                     .map(|resident| resident.indices.clone());
                 if let Some(indices) = resident_indices {
                     prepared.stats.resident_path_reuses += 1;
+                    let triangle_coverage = crate::single_filled_triangle(
+                        &path_preparer.path_mesh_cache[cache_index].mesh,
+                    )
+                    .is_some();
                     pack_derived_path_instance(
                         prepared,
                         indices,
@@ -1174,6 +1178,7 @@ fn pack_derived_display_object(
                         render_transform,
                         style,
                         DerivedPathGeometrySource::Retained,
+                        triangle_coverage,
                     )
                 } else {
                     let (mesh, _) = path_preparer
@@ -1214,24 +1219,19 @@ fn pack_derived_path_mesh(
 ) -> (DerivedDisplayPrimitive, usize) {
     let vertex_start = u32::try_from(prepared.path_vertices.len())
         .expect("transient path vertex count exceeds renderer limits");
-    prepared
-        .path_vertices
-        .extend(mesh.vertices.iter().map(|vertex| crate::PathVertex {
-            position: [vertex.position.x, vertex.position.y],
-            target_position: [vertex.target_position.x, vertex.target_position.y],
-            surface: crate::pack_path_surface(vertex.surface, vertex.path_progress),
-        }));
-    prepared.stats.path_vertices_repacked += mesh.vertices.len();
+    let (packed_vertices, local_indices) = crate::pack_path_mesh(mesh);
+    prepared.path_vertices.extend_from_slice(&packed_vertices);
+    prepared.stats.path_vertices_repacked += packed_vertices.len();
     let index_start = u32::try_from(prepared.path_indices.len())
         .expect("transient path index count exceeds renderer limits");
     prepared
         .path_indices
-        .extend(mesh.indices.iter().map(|index| {
+        .extend(local_indices.iter().map(|index| {
             index
                 .checked_add(vertex_start)
                 .expect("transient path index exceeds renderer limits")
         }));
-    prepared.stats.path_indices_repacked += mesh.indices.len();
+    prepared.stats.path_indices_repacked += local_indices.len();
     let index_end = u32::try_from(prepared.path_indices.len())
         .expect("transient path index count exceeds renderer limits");
     pack_derived_path_instance(
@@ -1241,6 +1241,7 @@ fn pack_derived_path_mesh(
         render_transform,
         style,
         DerivedPathGeometrySource::Transient,
+        crate::single_filled_triangle(mesh).is_some(),
     )
 }
 
@@ -1251,6 +1252,7 @@ fn pack_derived_path_instance(
     render_transform: noon_core::Transform2D,
     style: crate::PackedStyle,
     source: DerivedPathGeometrySource,
+    triangle_coverage: bool,
 ) -> (DerivedDisplayPrimitive, usize) {
     let index = prepared.paths.len();
     prepared.paths.push(crate::PathInstance {
@@ -1264,6 +1266,7 @@ fn pack_derived_path_instance(
     prepared.path_batches.push(crate::PathBatch {
         index_range,
         instance_range: instance_start..instance_start + 1,
+        triangle_coverage,
     });
     (DerivedDisplayPrimitive::Path { batch, source }, index)
 }

@@ -444,7 +444,7 @@ fn effective_family_layout_is_scene_owned_and_requires_running_execution() {
         scene.owned_execution().publication_context()
     );
 
-    let foreign_scene = Scene::new();
+    let mut foreign_scene = Scene::new();
     let foreign_object = foreign_scene.square(1.0).unwrap();
     let foreign_family = foreign_scene
         .family(&[MobjectTarget::Object(&foreign_object)])

@@ -130,15 +130,19 @@ pub struct PathVertex {
     pub position: [f32; 2],
     pub target_position: [f32; 2],
     /// Low bit is surface (0 fill, 1 stroke); the next 24 bits are normalized
-    /// ordered path progress. Keeping this packed preserves the existing GPU
-    /// vertex stride while adding reveal metadata.
+    /// ordered path progress.
     pub surface: u32,
+    /// Local-space vertices for an exact-coverage filled triangle. Ordinary
+    /// path vertices leave this zeroed.
+    pub triangle: [[f32; 2]; 3],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PathBatch {
     pub index_range: Range<u32>,
     pub instance_range: Range<u32>,
+    /// Use the renderer-local exact triangle vertex stream for this draw.
+    pub triangle_coverage: bool,
 }
 
 /// One ordered draw slice in the packed unique-path index stream.
@@ -1106,20 +1110,7 @@ impl FramePreparer {
             } else {
                 let (packed_vertices, local_indices) = {
                     let mesh = &self.path_mesh_cache[cache_index].mesh;
-                    (
-                        mesh.vertices
-                            .iter()
-                            .map(|vertex| PathVertex {
-                                position: [vertex.position.x, vertex.position.y],
-                                target_position: [
-                                    vertex.target_position.x,
-                                    vertex.target_position.y,
-                                ],
-                                surface: pack_path_surface(vertex.surface, vertex.path_progress),
-                            })
-                            .collect::<Vec<_>>(),
-                        mesh.indices.clone(),
-                    )
+                    pack_path_mesh(mesh)
                 };
                 let vertex_start = u32::try_from(self.path_vertices.len())
                     .expect("path vertex count exceeds renderer limits");
@@ -1157,6 +1148,8 @@ impl FramePreparer {
         self.path_batches.push(PathBatch {
             index_range,
             instance_range: instance_start..instance_start + 1,
+            triangle_coverage: single_filled_triangle(&self.path_mesh_cache[cache_index].mesh)
+                .is_some(),
         });
         self.path_batch_cache_indices.push(cache_index);
         if !self.individual_path_draws {
@@ -1326,16 +1319,7 @@ impl FramePreparer {
             (0, 0)
         } else {
             let mesh = &self.path_mesh_cache[cache_index].mesh;
-            let packed_vertices = mesh
-                .vertices
-                .iter()
-                .map(|vertex| PathVertex {
-                    position: [vertex.position.x, vertex.position.y],
-                    target_position: [vertex.target_position.x, vertex.target_position.y],
-                    surface: pack_path_surface(vertex.surface, vertex.path_progress),
-                })
-                .collect::<Vec<_>>();
-            let local_indices = mesh.indices.clone();
+            let (packed_vertices, local_indices) = pack_path_mesh(mesh);
 
             let old_vertex_range = self.path_batch_vertex_ranges[batch].clone();
             let old_vertex_range = if old_vertex_range.start < self.resident_vertex_count as u32 {
@@ -1391,6 +1375,8 @@ impl FramePreparer {
             (packed_vertices.len(), local_indices.len())
         };
         self.path_batch_cache_indices[batch] = cache_index;
+        self.path_batches[batch].triangle_coverage =
+            single_filled_triangle(&self.path_mesh_cache[cache_index].mesh).is_some();
         if let PreparedSlot::Path {
             analytic_reveal,
             partial_reveal_bits,
@@ -1664,19 +1650,16 @@ impl FramePreparer {
                 u32::try_from(index_count).expect("path index count exceeds renderer limits");
             if let (Some(vertices), Some(indices)) = (next_vertices.as_mut(), next_indices.as_mut())
             {
-                vertices.extend(mesh.vertices.iter().map(|vertex| PathVertex {
-                    position: [vertex.position.x, vertex.position.y],
-                    target_position: [vertex.target_position.x, vertex.target_position.y],
-                    surface: pack_path_surface(vertex.surface, vertex.path_progress),
-                }));
-                indices.extend(mesh.indices.iter().map(|index| {
+                let (packed_vertices, local_indices) = pack_path_mesh(mesh);
+                vertices.extend_from_slice(&packed_vertices);
+                indices.extend(local_indices.iter().map(|index| {
                     index
                         .checked_add(vertex_start)
                         .expect("path index exceeds renderer limits")
                 }));
             }
-            vertex_count += mesh.vertices.len();
-            index_count += mesh.indices.len();
+            vertex_count += packed_path_vertex_count(mesh);
+            index_count += packed_path_index_count(mesh);
             let vertex_end =
                 u32::try_from(vertex_count).expect("path vertex count exceeds renderer limits");
             let index_end =
@@ -1689,6 +1672,7 @@ impl FramePreparer {
                 instance_range: u32::try_from(instance_start)
                     .expect("path instance count exceeds renderer limits")
                     ..instance_end,
+                triangle_coverage: single_filled_triangle(mesh).is_some(),
             });
             self.path_batch_cache_indices.push(group.cache_index);
         }
@@ -2560,6 +2544,12 @@ fn pack_path(
     }
 }
 
+const TRIANGLE_COVERAGE_FLAG: u32 = 1 << 25;
+#[cfg(test)]
+const PATH_PROGRESS_MASK: u32 = (PATH_PROGRESS_MAX << 1) | 1;
+const TRIANGLE_QUAD: [[f32; 2]; 4] = [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
+const TRIANGLE_QUAD_INDICES: [u32; 6] = [0, 1, 2, 0, 2, 3];
+
 pub(crate) fn pack_path_surface(surface: PathSurface, progress: f32) -> u32 {
     let progress = (progress.clamp(0.0, 1.0) * PATH_PROGRESS_MAX as f32).round() as u32;
     (progress << 1)
@@ -2569,9 +2559,87 @@ pub(crate) fn pack_path_surface(surface: PathSurface, progress: f32) -> u32 {
         }
 }
 
+pub(crate) fn packed_path_vertex_count(mesh: &TessellatedPath) -> usize {
+    if single_filled_triangle(mesh).is_some() {
+        4
+    } else {
+        mesh.vertices.len()
+    }
+}
+
+pub(crate) fn packed_path_index_count(mesh: &TessellatedPath) -> usize {
+    if single_filled_triangle(mesh).is_some() {
+        6
+    } else {
+        mesh.indices.len()
+    }
+}
+
+pub(crate) fn pack_path_mesh(mesh: &TessellatedPath) -> (Vec<PathVertex>, Vec<u32>) {
+    if let Some(triangle) = single_filled_triangle(mesh) {
+        let surface = pack_path_surface(PathSurface::Fill, 1.0) | TRIANGLE_COVERAGE_FLAG;
+        return (
+            TRIANGLE_QUAD
+                .iter()
+                .copied()
+                .map(|position| PathVertex {
+                    position,
+                    target_position: position,
+                    surface,
+                    triangle,
+                })
+                .collect(),
+            TRIANGLE_QUAD_INDICES.to_vec(),
+        );
+    }
+    (
+        mesh.vertices
+            .iter()
+            .map(|vertex| PathVertex {
+                position: [vertex.position.x, vertex.position.y],
+                target_position: [vertex.target_position.x, vertex.target_position.y],
+                surface: pack_path_surface(vertex.surface, vertex.path_progress),
+                triangle: [[0.0; 2]; 3],
+            })
+            .collect(),
+        mesh.indices.clone(),
+    )
+}
+
+pub(crate) fn single_filled_triangle(mesh: &TessellatedPath) -> Option<[[f32; 2]; 3]> {
+    if mesh.morphing
+        || mesh.vertices.len() != 3
+        || mesh.indices.len() != 3
+        || mesh.indices.iter().any(|&index| index > 2)
+        || mesh.indices[0] == mesh.indices[1]
+        || mesh.indices[1] == mesh.indices[2]
+        || mesh.indices[0] == mesh.indices[2]
+        || mesh
+            .vertices
+            .iter()
+            .any(|vertex| vertex.surface != PathSurface::Fill)
+    {
+        return None;
+    }
+    let triangle = [mesh.indices[0], mesh.indices[1], mesh.indices[2]].map(|index| {
+        let vertex = mesh.vertices[index as usize];
+        [vertex.position.x, vertex.position.y]
+    });
+    if mesh.vertices.iter().any(|vertex| {
+        vertex.position != vertex.target_position
+            || !vertex.position.x.is_finite()
+            || !vertex.position.y.is_finite()
+    }) {
+        return None;
+    }
+    let twice_area = (triangle[1][0] - triangle[0][0]) * (triangle[2][1] - triangle[0][1])
+        - (triangle[1][1] - triangle[0][1]) * (triangle[2][0] - triangle[0][0]);
+    (twice_area.is_finite() && twice_area.abs() > f32::EPSILON).then_some(triangle)
+}
+
 #[cfg(test)]
 fn unpack_path_progress(surface: u32) -> f32 {
-    (surface >> 1) as f32 / PATH_PROGRESS_MAX as f32
+    ((surface & PATH_PROGRESS_MASK) >> 1) as f32 / PATH_PROGRESS_MAX as f32
 }
 
 fn push_dirty_range(ranges: &mut Vec<Range<usize>>, index: usize) {
@@ -2843,6 +2911,152 @@ mod tests {
         assert_eq!(rebuilt.path_indices, indices);
     }
 
+    fn filled_triangle_mesh(points: [[f32; 2]; 3]) -> TessellatedPath {
+        noon_geometry::tessellate(
+            &VectorPath::new()
+                .move_to(Vec2::new(points[0][0], points[0][1]))
+                .line_to(Vec2::new(points[1][0], points[1][1]))
+                .line_to(Vec2::new(points[2][0], points[2][1]))
+                .close(),
+            0.0,
+        )
+        .unwrap()
+    }
+
+    fn triangle_pixel_coverage(triangle: [[f32; 2]; 3], pixel_minimum: [f32; 2]) -> f32 {
+        fn clip(
+            polygon: Vec<[f32; 2]>,
+            axis: usize,
+            boundary: f32,
+            keep_greater: bool,
+        ) -> Vec<[f32; 2]> {
+            if polygon.is_empty() {
+                return polygon;
+            }
+            let mut clipped = Vec::with_capacity(8);
+            for index in 0..polygon.len() {
+                let point = polygon[index];
+                let next = polygon[(index + 1) % polygon.len()];
+                let point_inside = if keep_greater {
+                    point[axis] >= boundary
+                } else {
+                    point[axis] <= boundary
+                };
+                let next_inside = if keep_greater {
+                    next[axis] >= boundary
+                } else {
+                    next[axis] <= boundary
+                };
+                if point_inside {
+                    clipped.push(point);
+                }
+                if point_inside != next_inside {
+                    let t = (boundary - point[axis]) / (next[axis] - point[axis]);
+                    clipped.push([
+                        point[0] + (next[0] - point[0]) * t,
+                        point[1] + (next[1] - point[1]) * t,
+                    ]);
+                }
+            }
+            clipped
+        }
+
+        let triangle =
+            triangle.map(|point| [point[0] - pixel_minimum[0], point[1] - pixel_minimum[1]]);
+        let polygon = clip(
+            clip(
+                clip(clip(triangle.to_vec(), 0, 0.0, true), 0, 1.0, false),
+                1,
+                0.0,
+                true,
+            ),
+            1,
+            1.0,
+            false,
+        );
+        if polygon.len() < 3 {
+            return 0.0;
+        }
+        let twice_area: f32 = polygon
+            .iter()
+            .enumerate()
+            .map(|(index, point)| {
+                let next = polygon[(index + 1) % polygon.len()];
+                point[0] * next[1] - point[1] * next[0]
+            })
+            .sum();
+        (twice_area.abs() * 0.5).clamp(0.0, 1.0)
+    }
+
+    #[test]
+    fn exact_triangle_packing_accepts_both_windings_and_rejects_degenerate_inputs() {
+        let positive = filled_triangle_mesh([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+        let negative = filled_triangle_mesh([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0]]);
+        for mesh in [&positive, &negative] {
+            let (vertices, indices) = pack_path_mesh(mesh);
+            assert_eq!(vertices.len(), 4);
+            assert_eq!(indices.as_slice(), TRIANGLE_QUAD_INDICES);
+            assert!(vertices
+                .iter()
+                .all(|vertex| vertex.surface & TRIANGLE_COVERAGE_FLAG != 0));
+            assert_eq!(
+                vertices[0].triangle,
+                [
+                    [
+                        mesh.vertices[mesh.indices[0] as usize].position.x,
+                        mesh.vertices[mesh.indices[0] as usize].position.y,
+                    ],
+                    [
+                        mesh.vertices[mesh.indices[1] as usize].position.x,
+                        mesh.vertices[mesh.indices[1] as usize].position.y,
+                    ],
+                    [
+                        mesh.vertices[mesh.indices[2] as usize].position.x,
+                        mesh.vertices[mesh.indices[2] as usize].position.y,
+                    ],
+                ]
+            );
+        }
+
+        let degenerate = filled_triangle_mesh([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]]);
+        assert!(single_filled_triangle(&degenerate).is_none());
+        let mut stroked = positive.clone();
+        stroked.vertices[0].surface = PathSurface::Stroke;
+        assert!(single_filled_triangle(&stroked).is_none());
+        let (fallback_vertices, fallback_indices) = pack_path_mesh(&stroked);
+        assert_eq!(fallback_vertices.len(), stroked.vertices.len());
+        assert_eq!(fallback_indices, stroked.indices);
+        assert!(fallback_vertices
+            .iter()
+            .all(|vertex| vertex.surface & TRIANGLE_COVERAGE_FLAG == 0));
+        let mut morphing = positive;
+        morphing.morphing = true;
+        assert!(single_filled_triangle(&morphing).is_none());
+        let mut non_finite = negative;
+        non_finite.vertices[0].position.x = f32::NAN;
+        assert!(single_filled_triangle(&non_finite).is_none());
+    }
+
+    #[test]
+    fn exact_triangle_coverage_uses_pixel_area_for_each_winding() {
+        let positive = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+        let negative = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0]];
+        assert!((triangle_pixel_coverage(positive, [0.0, 0.0]) - 0.5).abs() < 1e-6);
+        assert!((triangle_pixel_coverage(negative, [0.0, 0.0]) - 0.5).abs() < 1e-6);
+        assert_eq!(
+            triangle_pixel_coverage([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]], [0.0, 0.0]),
+            0.0
+        );
+        assert!(
+            (triangle_pixel_coverage(
+                [[4096.0, 4096.0], [4097.0, 4096.0], [4096.0, 4097.0]],
+                [4096.0, 4096.0],
+            ) - 0.5)
+                .abs()
+                < 1e-6
+        );
+    }
+
     #[test]
     fn packed_instance_layout_is_stable() {
         assert_eq!(std::mem::size_of::<PackedTransform>(), 24);
@@ -2851,7 +3065,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<RectangleInstance>(), 88);
         assert_eq!(std::mem::size_of::<LineInstance>(), 88);
         assert_eq!(std::mem::size_of::<PathInstance>(), 80);
-        assert_eq!(std::mem::size_of::<PathVertex>(), 20);
+        assert_eq!(std::mem::size_of::<PathVertex>(), 44);
     }
 
     fn curved_path() -> VectorPath {

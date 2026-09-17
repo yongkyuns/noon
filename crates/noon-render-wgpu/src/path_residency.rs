@@ -99,11 +99,11 @@ impl FramePreparer {
             }
             checked_packed_end(
                 self.path_vertices.len(),
-                self.path_mesh_cache[index].mesh.vertices.len(),
+                packed_path_vertex_count(&self.path_mesh_cache[index].mesh),
             )?;
             checked_packed_end(
                 self.path_indices.len(),
-                self.path_mesh_cache[index].mesh.indices.len(),
+                packed_path_index_count(&self.path_mesh_cache[index].mesh),
             )?;
             let ranges = append_mesh(
                 &self.path_mesh_cache[index].mesh,
@@ -174,14 +174,14 @@ impl FramePreparer {
         let mut next_index_count = self.resident_index_count;
         for &index in &cache_indices {
             let mesh = &self.path_mesh_cache[index].mesh;
-            match checked_packed_end(next_vertex_count, mesh.vertices.len()) {
+            match checked_packed_end(next_vertex_count, packed_path_vertex_count(mesh)) {
                 Ok(end) => next_vertex_count = end as usize,
                 Err(error) => {
                     self.rollback_cached_path_suffix(cache_start);
                     return Err(error);
                 }
             }
-            match checked_packed_end(next_index_count, mesh.indices.len()) {
+            match checked_packed_end(next_index_count, packed_path_index_count(mesh)) {
                 Ok(end) => next_index_count = end as usize,
                 Err(error) => {
                     self.rollback_cached_path_suffix(cache_start);
@@ -331,6 +331,7 @@ impl FramePreparer {
                 index_range: ranges.indices,
                 instance_range: u32::try_from(start).expect("path instance limit")
                     ..u32::try_from(self.paths.len()).expect("path instance limit"),
+                triangle_coverage: crate::single_filled_triangle(&entry.mesh).is_some(),
             });
             self.path_batch_cache_indices.push(group.cache_index);
         }
@@ -422,13 +423,10 @@ fn append_mesh_at(
 ) -> ResidentPathRanges {
     let vertex_start = u32::try_from(vertex_base + vertices.len()).expect("path vertex limit");
     let index_start = u32::try_from(index_base + indices.len()).expect("path index limit");
-    vertices.extend(mesh.vertices.iter().map(|vertex| PathVertex {
-        position: [vertex.position.x, vertex.position.y],
-        target_position: [vertex.target_position.x, vertex.target_position.y],
-        surface: pack_path_surface(vertex.surface, vertex.path_progress),
-    }));
+    let (packed_vertices, local_indices) = pack_path_mesh(mesh);
+    vertices.extend_from_slice(&packed_vertices);
     indices.extend(
-        mesh.indices
+        local_indices
             .iter()
             .map(|index| index.checked_add(vertex_start).expect("path index limit")),
     );

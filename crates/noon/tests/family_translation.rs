@@ -1,7 +1,7 @@
 use noon::{Mobject, MobjectFamily, Scene};
 
 fn nested_family() -> (Scene, MobjectFamily, [Mobject; 3]) {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let first = scene.square(1.0).unwrap();
     let second = scene.square(1.0).unwrap();
     let third = scene.square(1.0).unwrap();

@@ -11306,7 +11306,7 @@ mod matching_family_selector_tests {
 
     #[test]
     fn matching_family_child_is_constructible_in_shared_rust_model() {
-        let scene = noon::Scene::new();
+        let mut scene = noon::Scene::new();
         let source_leaf = scene.square(1.0).unwrap();
         let target_leaf = scene.square(1.0).unwrap();
         let source = scene.family(&[(&source_leaf).into()]).unwrap();

@@ -31,6 +31,7 @@ pub const DEFAULT_GLYPH_RASTER_CACHE_MAX_ENTRIES: usize = 8_192;
 pub const DEFAULT_GLYPH_RASTER_CACHE_MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 pub const GLYPH_RASTER_SIZE_BUCKET_RATIO: f32 = 1.125;
 pub const GLYPH_RASTER_SIZE_BUCKET_START: f32 = 256.0;
+pub const GLYPH_RASTER_ORDINARY_STEPS_PER_PIXEL: f32 = 8.0;
 
 pub const DEFAULT_GLYPH_RASTER_CACHE_LIMITS: GlyphRasterCacheLimits = GlyphRasterCacheLimits::new(
     DEFAULT_GLYPH_RASTER_CACHE_MAX_ENTRIES,
@@ -223,7 +224,7 @@ impl From<GlyphAtlasError> for TextPrepareError {
 /// Raster and atlas caches survive frame preparation. Stable object-local ranges let
 /// translation and paint/opacity changes update already-resident quads without
 /// rescanning unrelated text or probing those caches. Glyph raster identity excludes
-/// position; ordinary display sizes preserve the legacy integer-pixel identity, while
+/// position; ordinary display sizes use bounded fractional-pixel identities, while
 /// very large device scales use conservative geometric residency buckets.
 pub struct RetainedTextQuadPreparer {
     raster_cache: GlyphRasterCache,
@@ -761,25 +762,26 @@ fn raster_pixel_size(
     Ok(raster_size_bucket(requested))
 }
 
-/// Preserve the legacy integer-ceil raster identity at ordinary display sizes and
-/// switch to conservative geometric residency buckets only for very large glyphs.
+/// Preserve fractional device sizes at ordinary display scales and switch to
+/// conservative geometric residency buckets only for very large glyphs.
 ///
-/// Keeping the ordinary path exact protects raster parity. Above the threshold,
-/// rounding upward still guarantees that the selected raster never undersamples the
-/// active transform while bounding the number of identities accumulated during
-/// extreme smooth zoom.
+/// Eighth-pixel upward quantization avoids visible minification for common fractional
+/// device scales while keeping size identity independent of scene position and
+/// finite across the ordinary range. Above the threshold, rounding upward still
+/// guarantees that the selected raster never undersamples the active transform while
+/// bounding the number of identities accumulated during extreme smooth zoom.
 fn raster_size_bucket(requested: f32) -> f32 {
     let requested = requested.max(1.0);
-    let legacy = requested.ceil();
-    if legacy <= GLYPH_RASTER_SIZE_BUCKET_START {
-        return legacy;
+    if requested <= GLYPH_RASTER_SIZE_BUCKET_START {
+        return (requested * GLYPH_RASTER_ORDINARY_STEPS_PER_PIXEL).ceil()
+            / GLYPH_RASTER_ORDINARY_STEPS_PER_PIXEL;
     }
 
     let mut bucket = GLYPH_RASTER_SIZE_BUCKET_START;
     while bucket < requested {
         let next = bucket * GLYPH_RASTER_SIZE_BUCKET_RATIO;
         if !next.is_finite() || next <= bucket {
-            return legacy;
+            return requested.ceil();
         }
         bucket = next;
     }
@@ -961,10 +963,15 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_raster_sizes_preserve_legacy_integer_ceil_identity() {
-        for requested in [0.0, 1.0, 1.01, 10.0, 67.5, 100.0, 255.0, 255.1, 256.0] {
-            assert_eq!(raster_size_bucket(requested), requested.max(1.0).ceil());
-        }
+    fn ordinary_raster_sizes_preserve_eighth_pixel_device_scale() {
+        let forty_two_point_at_sixty_seven_and_a_half_pixels_per_world = 42.0 / 72.0 * 67.5;
+        assert_eq!(
+            raster_size_bucket(forty_two_point_at_sixty_seven_and_a_half_pixels_per_world),
+            39.375
+        );
+        assert_eq!(raster_size_bucket(67.5), 67.5);
+        assert_eq!(raster_size_bucket(1.01), 1.125);
+        assert_eq!(raster_size_bucket(255.91), 256.0);
     }
 
     #[test]
@@ -974,6 +981,24 @@ mod tests {
             assert!(bucket >= requested.max(1.0));
             assert!(bucket.is_finite());
         }
+    }
+
+    #[test]
+    fn ordinary_raster_size_oversampling_is_bounded_to_one_eighth_pixel() {
+        for eighths in 8..=(256 * 8) {
+            let requested = eighths as f32 / 8.0 - 0.03125;
+            let oversampling = raster_size_bucket(requested) - requested;
+            assert!(oversampling >= 0.0);
+            assert!(oversampling <= 0.125);
+        }
+    }
+
+    #[test]
+    fn ordinary_zoom_range_has_a_finite_size_identity_count() {
+        let buckets = (8..=(256 * 8))
+            .map(|eighths| raster_size_bucket(eighths as f32 / 8.0).to_bits())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(buckets.len(), 2_041);
     }
 
     #[test]

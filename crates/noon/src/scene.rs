@@ -2,7 +2,7 @@
 mod image;
 use crate::{
     AuthoringError, ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectTarget,
-    SceneMembershipRequest,
+    SceneMembershipRequest, ValueTracker,
 };
 use noon_core::{
     AnimationOptions, GeometryRef, RateFunction, SemanticMutationImpact,
@@ -11,7 +11,7 @@ use noon_core::{
 };
 use std::{cell::RefCell, rc::Rc};
 
-fn publish_geometry_options(
+pub(crate) fn publish_geometry_options(
     options: crate::ManimGeometryOptions,
     store: &mut SemanticStore,
     publish: impl FnOnce(
@@ -258,21 +258,87 @@ impl Scene {
     }
 
     /// Create one detached semantic family with authoritative ordered members.
+    ///
+    /// Construction uses this Scene's ordinary durable mutation route. Before
+    /// execution bootstrap it commits authored state directly; while running it
+    /// prepares and publishes the detached family atomically with the current
+    /// execution revision. Membership remains an explicit later operation.
     pub fn family(
-        &self,
+        &mut self,
         members: &[MobjectTarget<'_>],
     ) -> Result<MobjectFamily, crate::AuthoringError> {
         self.family_with_z_index(members, 0.0)
     }
 
-    /// Construct a detached family with priority on its root only.
+    /// Construct a detached family with priority on its root only through this
+    /// Scene's ordinary durable mutation route.
     pub fn family_with_z_index(
-        &self,
+        &mut self,
         members: &[MobjectTarget<'_>],
         z_index: f64,
     ) -> Result<MobjectFamily, crate::AuthoringError> {
-        MobjectFamily::create_with_z_index(Rc::clone(&self.store), members, z_index)
+        let (transaction, family) =
+            crate::family_authoring::family_creation_transaction(&self.store, members, z_index)?;
+        let result = self.apply_semantic_transaction(transaction)?;
+        let node = result
+            .resolve(family)
+            .expect("committed family token resolves to one semantic identity");
+        MobjectFamily::from_node(Rc::clone(&self.store), node)
     }
+    /// Create and scope a scalar input signal through this Scene's durable
+    /// authoring route.
+    ///
+    /// Before bootstrap the signal is committed to authored state. While
+    /// running, creation and reactive enrollment publish atomically through
+    /// this Scene's owned execution component.
+    pub fn value_tracker(&mut self, initial: f64) -> Result<ValueTracker, AuthoringError> {
+        if let Some(execution) = self.execution.as_mut() {
+            return crate::integration::publish_value_tracker_creation(
+                &self.store,
+                self.root,
+                execution,
+                initial,
+            );
+        }
+        let creation = SemanticNodeCreation::input_signal(initial).map_err(AuthoringError::from)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        let pending = transaction.create_node(creation);
+        transaction.scope_signal(self.root, pending);
+        let result = transaction
+            .apply(&mut self.store.borrow_mut())
+            .map_err(AuthoringError::from)?;
+        let node = result
+            .resolve(pending)
+            .expect("committed tracker creation resolves its transaction-local token");
+        Ok(ValueTracker::from_semantic_node(
+            Rc::clone(&self.store),
+            node,
+        ))
+    }
+
+    /// Associate a detached scalar input through this Scene's durable
+    /// authoring route.
+    pub fn associate_value_tracker(
+        &mut self,
+        tracker: &ValueTracker,
+    ) -> Result<(), AuthoringError> {
+        tracker.require_store(&self.store)?;
+        if let Some(execution) = self.execution.as_mut() {
+            return crate::integration::publish_value_tracker_association(
+                &self.store,
+                self.root,
+                execution,
+                tracker,
+            );
+        }
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.scope_signal(self.root, tracker.node_id());
+        transaction
+            .apply(&mut self.store.borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
     pub fn remove(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Remove(&[MobjectTarget::Object(
             object,
@@ -290,6 +356,43 @@ impl Scene {
             crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
         ))?;
         crate::path_queries::effective_path_query(&self.store, execution, object)
+    }
+
+    /// Read one persistent authored/base object declaration.
+    ///
+    /// This deliberately does not inspect the running Runtime. Use
+    /// [`Self::effective`] when the current published frame value is required.
+    pub fn authored(
+        &self,
+        object: &Mobject,
+    ) -> Result<noon_core::SemanticObjectState, AuthoringError> {
+        self.require_object(object)?;
+        object.state()
+    }
+
+    /// Read one object's current effective Runtime value from this Scene's
+    /// coherent publication.
+    ///
+    /// Cold Scenes fail explicitly instead of substituting authored/base state.
+    pub fn effective(
+        &self,
+        object: &Mobject,
+    ) -> Result<crate::EffectiveMobjectState, AuthoringError> {
+        self.require_object(object)?;
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        let store = self.store.borrow();
+        let observed = execution
+            .effective_semantic_object(&store, object.node_id())
+            .map_err(AuthoringError::from)?;
+        Ok(crate::EffectiveMobjectState {
+            z_index: observed.object.z_index,
+            transform: observed.object.transform,
+            style: observed.object.style,
+            appearance: observed.object.appearance,
+            publication: observed.publication,
+        })
     }
 
     /// Match one object's persistent geometry/transform against another object.

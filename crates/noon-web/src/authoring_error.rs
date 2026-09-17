@@ -118,6 +118,11 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::Transaction(cause) => {
                 Self::caused_by("authoring.transaction", message, cause.into())
             }
+            AuthoringError::ExecutionAnimation(cause) => Self::caused_by(
+                "authoring.execution_animation",
+                message,
+                Self::unclassified("execution.animation", &cause),
+            ),
             AuthoringError::ImageDecode(_) => {
                 Self::new("invalid_input", "authoring.image_input", message)
             }
@@ -953,7 +958,7 @@ mod tests {
     #[test]
     fn accepted_public_operations_project_real_rust_causes_and_retry() {
         use noon::{LayoutAnchor, MobjectTarget, Scene};
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut first = scene.circle(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
         let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
@@ -1020,12 +1025,8 @@ mod tests {
         family.arrange_in_grid(Some(1), Some(2), 0.1, 0.1).unwrap();
         assert_eq!(first.fill_opacity().unwrap(), 0.5);
         assert!(family.copy_family().is_ok());
-        assert_eq!(
-            scene
-                .value_tracker_value(&scene.value_tracker(2.0).unwrap())
-                .unwrap(),
-            2.0
-        );
+        let tracker = scene.value_tracker(2.0).unwrap();
+        assert_eq!(scene.value_tracker_value(&tracker).unwrap(), 2.0);
     }
 
     #[test]

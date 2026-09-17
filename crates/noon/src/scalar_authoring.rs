@@ -8,9 +8,9 @@ use crate::AuthoringError;
 use std::{cell::RefCell, rc::Rc};
 
 use noon_core::{
-    RateFunction, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
-    SemanticObjectProperty, SemanticSignalExpr, SemanticSignalSource, SemanticSignalValue,
-    SemanticStore, SemanticVec3, TrackTiming,
+    RateFunction, SemanticMutationTransaction, SemanticNodeId, SemanticObjectProperty,
+    SemanticSignalExpr, SemanticSignalSource, SemanticSignalValue, SemanticStore, SemanticVec3,
+    TrackTiming,
 };
 
 use crate::{Mobject, Scene};
@@ -191,35 +191,6 @@ impl ValueTrackerPlay<'_> {
 }
 
 impl Scene {
-    /// Create and scope a scalar input signal to this Scene in one semantic transaction.
-    pub fn value_tracker(&self, initial: f64) -> Result<ValueTracker, AuthoringError> {
-        let creation = SemanticNodeCreation::input_signal(initial).map_err(AuthoringError::from)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        let pending = transaction.create_node(creation);
-        transaction.scope_signal(self.root(), pending);
-        let result = transaction
-            .apply(&mut self.integration_store().borrow_mut())
-            .map_err(AuthoringError::from)?;
-        let node = result
-            .resolve(pending)
-            .expect("committed tracker creation resolves its transaction-local token");
-        Ok(ValueTracker {
-            store: Rc::clone(self.integration_store()),
-            node,
-        })
-    }
-
-    /// Associate an existing detached signal with this Scene's execution scope.
-    pub fn associate_value_tracker(&self, tracker: &ValueTracker) -> Result<(), AuthoringError> {
-        tracker.require_store(self.integration_store())?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.scope_signal(self.root(), tracker.node_id());
-        transaction
-            .apply(&mut self.integration_store().borrow_mut())
-            .map(|_| ())
-            .map_err(AuthoringError::from)
-    }
-
     /// Build the first supported tracker expression, `offset + tracker * direction`.
     pub fn position_from_tracker(
         &self,
@@ -377,7 +348,7 @@ mod tests {
 
     #[test]
     fn scoped_tracker_lowers_before_first_play_and_live_creation_enrolls_one_input() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let tracker = scene.value_tracker(1.5).unwrap();
         let session = scene.execution_session().unwrap();
         assert_eq!(
@@ -385,16 +356,22 @@ mod tests {
             Some(&noon_core::ReactiveValue::Scalar(1.5))
         );
 
-        let mut session = scene.execution_session().unwrap();
-        let before = session.publication_context();
-        let live_tracker = scene.live(&mut session).value_tracker(2.25).unwrap();
+        scene.install_execution(session);
+        let before = scene.owned_execution().publication_context();
+        let live_tracker = scene.value_tracker(2.25).unwrap();
         assert_eq!(
-            session.effective_signal_value(live_tracker.node_id()),
+            scene
+                .owned_execution()
+                .effective_signal_value(live_tracker.node_id()),
             Some(&noon_core::ReactiveValue::Scalar(2.25))
         );
-        assert_eq!(session.frame().objects.len(), 0);
+        assert_eq!(scene.owned_execution().frame().objects.len(), 0);
         assert_eq!(
-            session.publication_context().scene_revision().get(),
+            scene
+                .owned_execution()
+                .publication_context()
+                .scene_revision()
+                .get(),
             before.scene_revision().get() + 1
         );
         assert!(scene
@@ -407,18 +384,19 @@ mod tests {
 
     #[test]
     fn live_tracker_creation_failure_leaves_store_and_runtime_unchanged() {
-        let scene = Scene::new();
-        let mut session = scene.execution_session().unwrap();
+        let mut scene = Scene::new();
+        let session = scene.execution_session().unwrap();
+        scene.install_execution(session);
         let revision = scene.integration_store().borrow().scene_revision();
-        let publication = session.publication_context();
-        let frame = session.frame().clone();
-        assert!(scene.live(&mut session).value_tracker(f64::MAX).is_err());
+        let publication = scene.owned_execution().publication_context();
+        let frame = scene.owned_execution().frame().clone();
+        assert!(scene.value_tracker(f64::MAX).is_err());
         assert_eq!(
             scene.integration_store().borrow().scene_revision(),
             revision
         );
-        assert_eq!(session.publication_context(), publication);
-        assert_eq!(session.frame(), &frame);
+        assert_eq!(scene.owned_execution().publication_context(), publication);
+        assert_eq!(scene.owned_execution().frame(), &frame);
     }
 
     #[test]
@@ -459,7 +437,7 @@ mod tests {
 
     #[test]
     fn detached_tracker_value_stays_store_owned_before_scene_association() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let tracker = ValueTracker::detached(Rc::clone(scene.integration_store()), 1.25).unwrap();
 
         assert_eq!(tracker.detached_value().unwrap(), 1.25);
@@ -475,7 +453,7 @@ mod tests {
     #[test]
     fn foreign_scene_rejects_detached_tracker_without_scoping_it() {
         let scene = Scene::new();
-        let foreign = Scene::new();
+        let mut foreign = Scene::new();
         let tracker = ValueTracker::detached(Rc::clone(scene.integration_store()), 1.0).unwrap();
 
         assert!(foreign.associate_value_tracker(&tracker).is_err());
@@ -488,7 +466,7 @@ mod tests {
 
     #[test]
     fn invalid_detached_tracker_association_rolls_back_scope_and_runtime() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let detached = scene
             .integration_store()
             .borrow_mut()
@@ -496,15 +474,13 @@ mod tests {
             .unwrap();
         let tracker =
             ValueTracker::from_semantic_node(Rc::clone(scene.integration_store()), detached);
-        let mut session = scene.execution_session().unwrap();
+        let session = scene.execution_session().unwrap();
+        scene.install_execution(session);
         let revision = scene.integration_store().borrow().scene_revision();
-        let publication = session.publication_context();
-        let frame = session.frame().clone();
+        let publication = scene.owned_execution().publication_context();
+        let frame = scene.owned_execution().frame().clone();
 
-        assert!(scene
-            .live(&mut session)
-            .associate_value_tracker(&tracker)
-            .is_err());
+        assert!(scene.associate_value_tracker(&tracker).is_err());
 
         let store = scene.integration_store().borrow();
         assert_eq!(store.scene_revision(), revision);
@@ -512,14 +488,17 @@ mod tests {
             .semantic_scoped_signals(scene.root())
             .unwrap()
             .contains(&detached));
-        assert_eq!(session.publication_context(), publication);
-        assert_eq!(session.frame(), &frame);
-        assert!(session.effective_signal_value(detached).is_none());
+        assert_eq!(scene.owned_execution().publication_context(), publication);
+        assert_eq!(scene.owned_execution().frame(), &frame);
+        assert!(scene
+            .owned_execution()
+            .effective_signal_value(detached)
+            .is_none());
     }
 
     #[test]
     fn tracker_handles_reject_foreign_scene_stores() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let foreign = Scene::new();
         let tracker = scene.value_tracker(0.0).unwrap();
         assert!(foreign
