@@ -198,7 +198,6 @@ pub struct TextGlyphGpuRenderer {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     atlas_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
     mask_bind_groups: Vec<wgpu::BindGroup>,
     color_bind_groups: Vec<wgpu::BindGroup>,
     mask_buffer: wgpu::Buffer,
@@ -248,34 +247,16 @@ impl TextGlyphGpuRenderer {
 
         let atlas_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Noon glyph atlas bind group layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Noon glyph atlas sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
+                count: None,
+            }],
         });
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("glyph.wgsl"));
@@ -329,7 +310,6 @@ impl TextGlyphGpuRenderer {
             camera_buffer,
             camera_bind_group,
             atlas_layout,
-            sampler,
             mask_bind_groups: Vec::new(),
             color_bind_groups: Vec::new(),
             mask_buffer: empty_instance_buffer(device, "Noon text mask glyph instances"),
@@ -494,7 +474,6 @@ impl TextGlyphGpuRenderer {
         refresh_plane_bind_groups(
             device,
             &self.atlas_layout,
-            &self.sampler,
             &mut self.mask_bind_groups,
             atlas,
             GlyphAtlasPlane::Mask,
@@ -503,7 +482,6 @@ impl TextGlyphGpuRenderer {
         refresh_plane_bind_groups(
             device,
             &self.atlas_layout,
-            &self.sampler,
             &mut self.color_bind_groups,
             atlas,
             GlyphAtlasPlane::Color,
@@ -666,7 +644,6 @@ fn upload_plane_instances(
 fn refresh_plane_bind_groups(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
-    sampler: &wgpu::Sampler,
     bind_groups: &mut Vec<wgpu::BindGroup>,
     atlas: &GpuGlyphAtlas,
     plane: GlyphAtlasPlane,
@@ -681,9 +658,7 @@ fn refresh_plane_bind_groups(
         let view = atlas
             .texture_view_for_page(plane, page)
             .expect("resident glyph atlas page must expose its texture view");
-        bind_groups.push(create_atlas_bind_group(
-            device, layout, sampler, view, label,
-        ));
+        bind_groups.push(create_atlas_bind_group(device, layout, view, label));
     }
 }
 
@@ -737,23 +712,16 @@ fn create_glyph_pipeline(
 fn create_atlas_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
-    sampler: &wgpu::Sampler,
     view: &wgpu::TextureView,
     label: &'static str,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some(label),
         layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-        ],
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::TextureView(view),
+        }],
     })
 }
 

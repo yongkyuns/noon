@@ -478,7 +478,12 @@ impl RetainedTextQuadPreparer {
                 .expect("validated text resource must remain present during object-local update");
             let phase_fingerprint = object_phase_fingerprint(resource, object.transform, metrics)?;
             let phase_changed = phase_fingerprint != state.phase_fingerprint;
-            let rerastered = phase_changed
+            // Rebuild glyph quads from shaped-run coordinates whenever translation
+            // changes. Repeatedly adding frame deltas accumulates f32 rounding and
+            // makes the same final semantic frame depend on playback sample cadence.
+            // Raster and atlas lookups remain cached and this work stays object-local.
+            let translation_changed = object.transform.translation != state.transform.translation;
+            let rerastered = (phase_changed || translation_changed)
                 && self.reprepare_object_glyphs(
                     device,
                     queue,
@@ -621,7 +626,6 @@ impl RetainedTextQuadPreparer {
                     let PreparedTextItem::GlyphBatch {
                         run_index: old_run,
                         plane: old_plane,
-                        page: old_page,
                         instance_range: old_range,
                         ..
                     } = &self.items[old_index]
@@ -631,7 +635,6 @@ impl RetainedTextQuadPreparer {
                     let PreparedTextItem::GlyphBatch {
                         run_index: new_run,
                         plane: new_plane,
-                        page: new_page,
                         instance_range: new_range,
                         ..
                     } = replacement
@@ -640,7 +643,6 @@ impl RetainedTextQuadPreparer {
                     };
                     old_run == new_run
                         && old_plane == new_plane
-                        && old_page == new_page
                         && old_range.len() == new_range.len()
                 });
 
@@ -1696,6 +1698,7 @@ mod tests {
             (prepared.mask_quads[0], pages)
         };
 
+        let mut crossed_page = false;
         for step in 1..=32 {
             frame.objects[1].transform.translation =
                 Vec2::new(step as f32 / (67.5 * 8.0), (step % 7) as f32 / (67.5 * 8.0));
@@ -1723,14 +1726,171 @@ mod tests {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(pages, baseline_pages);
+            assert_eq!(pages.len(), baseline_pages.len());
+            crossed_page |= pages != baseline_pages;
         }
 
         assert_eq!(preparer.incremental_stats().rebuild_attempts, 1);
         assert_eq!(preparer.incremental_stats().fallback_rebuilds, 0);
         assert!(preparer.incremental_stats().phase_fallbacks > 0);
+        assert!(
+            crossed_page,
+            "phase churn must exercise local page rebinding"
+        );
         assert_eq!(preparer.atlas().page_count(GlyphAtlasPlane::Mask), 2);
         assert!(preparer.raster_stats().entries <= DEFAULT_GLYPH_RASTER_CACHE_MAX_ENTRIES);
+    }
+
+    #[test]
+    fn final_glyph_geometry_is_independent_of_translation_sample_cadence() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let mut texts = TextResourceArena::new();
+        let handle = texts.insert(artifact.resource).unwrap();
+        let initial = retained_frame(handle, true, scene_transform());
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut sparse = RetainedTextQuadPreparer::new(256).unwrap();
+        let mut dense = RetainedTextQuadPreparer::new(256).unwrap();
+
+        sparse
+            .prepare(
+                &device,
+                &queue,
+                &initial,
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap();
+        dense
+            .prepare(
+                &device,
+                &queue,
+                &initial,
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap();
+
+        let mut final_frame = initial.clone();
+        for step in 1..=67 {
+            final_frame.objects[0].transform.translation =
+                Vec2::new(step as f32 / (67.5 * 64.0), 0.0);
+            dense
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &final_frame,
+                    &FrameChanges::objects(vec![0]),
+                    &texts,
+                    &artifact.fonts,
+                    metrics(),
+                )
+                .unwrap();
+        }
+        let dense_quads = dense.prepared_frame(final_frame.time).mask_quads.to_vec();
+        let sparse_quads = sparse
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &final_frame,
+                &FrameChanges::objects(vec![0]),
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap()
+            .mask_quads
+            .to_vec();
+
+        assert_eq!(dense_quads.len(), sparse_quads.len());
+        for (dense, sparse) in dense_quads.iter().zip(&sparse_quads) {
+            assert_eq!(dense.origin, sparse.origin);
+            assert_eq!(dense.axis_x, sparse.axis_x);
+            assert_eq!(dense.axis_y, sparse.axis_y);
+        }
+    }
+
+    #[test]
+    fn affine_rebuilds_can_place_identical_final_glyphs_at_different_atlas_uvs() {
+        let artifact = compile_typst_resource("side label", TypstMode::Markup).unwrap();
+        let mut texts = TextResourceArena::new();
+        let handle = texts.insert(artifact.resource).unwrap();
+        let initial = retained_frame(handle, true, scene_transform());
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut sparse = RetainedTextQuadPreparer::new(2048).unwrap();
+        let mut dense = RetainedTextQuadPreparer::new(2048).unwrap();
+        sparse
+            .prepare(
+                &device,
+                &queue,
+                &initial,
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap();
+        dense
+            .prepare(
+                &device,
+                &queue,
+                &initial,
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap();
+
+        let mut final_frame = initial.clone();
+        for step in 1..=24 {
+            let progress = step as f32 / 24.0;
+            final_frame.objects[0].transform.translation =
+                Vec2::new(-0.75 + 1.5 * progress, 0.3 * progress);
+            final_frame.objects[0].transform.scale = Vec2::new(
+                0.07 * (0.9 + 0.16 * progress),
+                0.07 * (0.9 + 0.16 * progress),
+            );
+            final_frame.objects[0].transform.rotation = 0.35 * progress;
+            dense
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &final_frame,
+                    &FrameChanges::objects(vec![0]),
+                    &texts,
+                    &artifact.fonts,
+                    metrics(),
+                )
+                .unwrap();
+        }
+        let dense_quads = dense.prepared_frame(final_frame.time).mask_quads.to_vec();
+        let sparse_quads = sparse
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &final_frame,
+                &FrameChanges::objects(vec![0]),
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap()
+            .mask_quads
+            .to_vec();
+
+        assert_eq!(dense_quads.len(), sparse_quads.len());
+        assert!(dense_quads
+            .iter()
+            .zip(&sparse_quads)
+            .any(|(dense, sparse)| {
+                dense.uv_min != sparse.uv_min || dense.uv_max != sparse.uv_max
+            }));
+        for (dense, sparse) in dense_quads.iter().zip(&sparse_quads) {
+            assert_eq!(dense.origin, sparse.origin);
+            assert_eq!(dense.axis_x, sparse.axis_x);
+            assert_eq!(dense.axis_y, sparse.axis_y);
+            assert_eq!(dense.color, sparse.color);
+        }
     }
 
     #[test]

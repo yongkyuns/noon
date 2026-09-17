@@ -2063,6 +2063,7 @@ impl RetainedFramePreparer {
             copy_local_text_snapshot_updates(
                 &mut self.snapshot_mask_quads,
                 &mut self.snapshot_color_quads,
+                &mut self.snapshot_text_items,
                 &self.text_item_ranges,
                 prepared_text.items,
                 prepared_text.mask_quads,
@@ -2736,6 +2737,7 @@ fn text_item_ranges(
 fn copy_local_text_snapshot_updates(
     mask_destination: &mut [GlyphQuadInstance],
     color_destination: &mut [GlyphQuadInstance],
+    item_destination: &mut [PreparedTextItem],
     item_ranges: &[std::ops::Range<usize>],
     items: &[PreparedTextItem],
     mask_source: &[GlyphQuadInstance],
@@ -2750,7 +2752,8 @@ fn copy_local_text_snapshot_updates(
         let Some(item_range) = item_ranges.get(object_index) else {
             continue;
         };
-        for item in &items[item_range.clone()] {
+        for item_index in item_range.clone() {
+            let item = &items[item_index];
             let PreparedTextItem::GlyphBatch {
                 plane,
                 instance_range,
@@ -2759,6 +2762,7 @@ fn copy_local_text_snapshot_updates(
             else {
                 continue;
             };
+            item_destination[item_index] = item.clone();
             let start = instance_range.start as usize;
             let end = instance_range.end as usize;
             match plane {
@@ -3692,6 +3696,71 @@ mod tests {
         assert_eq!(resolved.stroke_join, StrokeJoin::Miter);
         assert_eq!(resolved.stroke_width, 0.48);
         assert_eq!(resolved.stroke, Some(Color::WHITE));
+    }
+
+    #[test]
+    fn local_text_snapshot_copies_changed_atlas_page_binding() {
+        let mut destination_items = vec![PreparedTextItem::GlyphBatch {
+            object_index: 0,
+            text: noon_core::TextResourceHandle {
+                arena: 0,
+                id: noon_core::TextResourceId::new(0),
+                version: 0,
+            },
+            run_index: 0,
+            plane: GlyphAtlasPlane::Mask,
+            page: 0,
+            instance_range: 0..1,
+        }];
+        let source_items = vec![PreparedTextItem::GlyphBatch {
+            object_index: 0,
+            text: noon_core::TextResourceHandle {
+                arena: 0,
+                id: noon_core::TextResourceId::new(0),
+                version: 0,
+            },
+            run_index: 0,
+            plane: GlyphAtlasPlane::Mask,
+            page: 1,
+            instance_range: 0..1,
+        }];
+        let source_quad = GlyphQuadInstance {
+            origin: [1.0, 2.0],
+            axis_x: [3.0, 0.0],
+            axis_y: [0.0, 4.0],
+            uv_min: [0.25, 0.5],
+            uv_max: [0.5, 0.75],
+            color: [1.0; 4],
+        };
+        let mut destination_quads = vec![GlyphQuadInstance {
+            origin: [0.0; 2],
+            axis_x: [0.0; 2],
+            axis_y: [0.0; 2],
+            uv_min: [0.0; 2],
+            uv_max: [0.0; 2],
+            color: [0.0; 4],
+        }];
+        let mut dirty_mask = Vec::new();
+        let mut dirty_color = Vec::new();
+        let item_ranges = std::iter::once(0..1).collect::<Vec<_>>();
+        copy_local_text_snapshot_updates(
+            &mut destination_quads,
+            &mut [],
+            &mut destination_items,
+            &item_ranges,
+            &source_items,
+            &[source_quad],
+            &[],
+            &FrameChanges::objects(vec![0]),
+            &mut dirty_mask,
+            &mut dirty_color,
+        );
+
+        assert_eq!(destination_items, source_items);
+        assert_eq!(destination_quads, [source_quad]);
+        assert_eq!(dirty_mask.len(), 1);
+        assert_eq!(dirty_mask[0], 0..1);
+        assert!(dirty_color.is_empty());
     }
 
     #[test]
