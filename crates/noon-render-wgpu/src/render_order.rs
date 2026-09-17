@@ -1167,7 +1167,7 @@ fn pack_derived_display_object(
                     .map(|resident| resident.indices.clone());
                 if let Some(indices) = resident_indices {
                     prepared.stats.resident_path_reuses += 1;
-                    let triangle_coverage = crate::single_filled_triangle(
+                    let polygon_coverage = crate::single_filled_convex_polygon(
                         &path_preparer.path_mesh_cache[cache_index].mesh,
                     )
                     .is_some();
@@ -1178,7 +1178,7 @@ fn pack_derived_display_object(
                         render_transform,
                         style,
                         DerivedPathGeometrySource::Retained,
-                        triangle_coverage,
+                        polygon_coverage,
                     )
                 } else {
                     let (mesh, _) = path_preparer
@@ -1241,7 +1241,7 @@ fn pack_derived_path_mesh(
         render_transform,
         style,
         DerivedPathGeometrySource::Transient,
-        crate::single_filled_triangle(mesh).is_some(),
+        crate::single_filled_convex_polygon(mesh).is_some(),
     )
 }
 
@@ -1252,7 +1252,7 @@ fn pack_derived_path_instance(
     render_transform: noon_core::Transform2D,
     style: crate::PackedStyle,
     source: DerivedPathGeometrySource,
-    triangle_coverage: bool,
+    polygon_coverage: bool,
 ) -> (DerivedDisplayPrimitive, usize) {
     let index = prepared.paths.len();
     prepared.paths.push(crate::PathInstance {
@@ -1266,7 +1266,7 @@ fn pack_derived_path_instance(
     prepared.path_batches.push(crate::PathBatch {
         index_range,
         instance_range: instance_start..instance_start + 1,
-        triangle_coverage,
+        polygon_coverage,
     });
     (DerivedDisplayPrimitive::Path { batch, source }, index)
 }
