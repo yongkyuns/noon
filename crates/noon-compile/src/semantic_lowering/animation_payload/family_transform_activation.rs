@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use noon_core::{
     resolve_uniform_composition_schedule, CompositionError, CompositionTimeMapStep, ObjectId,
-    PreparedSemanticMutationTransaction, RateFunction, SemanticNodeId, SemanticNodeKind,
-    SemanticStore, SemanticTransactionNodeRef,
+    PreparedSemanticMutationTransaction, RateFunction, SemanticFamilyTransformMode, SemanticNodeId,
+    SemanticNodeKind, SemanticStore, SemanticTransactionNodeRef,
 };
 
 use super::super::{PreparedSemanticAnimationScheduleProjection, SemanticExecutionIndex};
@@ -84,6 +84,10 @@ pub enum PreparedFamilyTransformActivationError {
         source: SemanticNodeId,
         execution_object_id: ObjectId,
     },
+    UnsupportedMode {
+        animation: SemanticTransactionNodeRef,
+        mode: SemanticFamilyTransformMode,
+    },
     TooManyOccurrences(usize),
 }
 
@@ -128,6 +132,10 @@ impl std::fmt::Display for PreparedFamilyTransformActivationError {
                 source.generation(),
                 execution_object_id.get()
             ),
+            Self::UnsupportedMode { animation, mode } => write!(
+                formatter,
+                "prepared structural family Transform {animation:?} cannot lower correspondence mode {mode:?}"
+            ),
             Self::TooManyOccurrences(count) => write!(
                 formatter,
                 "prepared family Transform has {count} occurrences, exceeding u32 occurrence indexing"
@@ -170,6 +178,12 @@ where
     let mut occurrences = Vec::new();
 
     for family in schedule.family_transforms() {
+        if family.mode != SemanticFamilyTransformMode::Structural {
+            return Err(PreparedFamilyTransformActivationError::UnsupportedMode {
+                animation: family.animation,
+                mode: family.mode,
+            });
+        }
         let source_family = existing_endpoint(family.animation, family.source)?;
         let target_family = existing_endpoint(family.animation, family.target_state)?;
         require_flat_family_endpoint(prepared.store(), family.animation, source_family)?;

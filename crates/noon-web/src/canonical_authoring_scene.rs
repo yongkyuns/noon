@@ -10,6 +10,8 @@ pub(crate) use player_ownership::PlayerReturnError;
 #[cfg(any(target_arch = "wasm32", test))]
 use player_ownership::{PlayerOwnership, RejectedPlayerReturn};
 #[cfg(test)]
+mod completed_binding_tests;
+#[cfg(test)]
 mod ownership_tests;
 #[cfg(test)]
 mod wait_bootstrap_tests;
@@ -108,6 +110,11 @@ enum OrdinaryCompositionChild {
         options: noon_core::AnimationOptions,
     },
     FamilyTransformTo {
+        source: noon::MobjectFamily,
+        target_state: noon::MobjectFamily,
+        options: noon_core::AnimationOptions,
+    },
+    MatchingFamilyTransformTo {
         source: noon::MobjectFamily,
         target_state: noon::MobjectFamily,
         options: noon_core::AnimationOptions,
@@ -1162,6 +1169,15 @@ impl CanonicalAuthoringScene {
                     target_state,
                     options: *options,
                 },
+                OrdinaryCompositionChild::MatchingFamilyTransformTo {
+                    source,
+                    target_state,
+                    options,
+                } => noon::AnimationCompositionRequest::MatchingFamilyTransformTo {
+                    source,
+                    target_state,
+                    options: *options,
+                },
                 OrdinaryCompositionChild::Indicate {
                     target,
                     indication,
@@ -1473,6 +1489,7 @@ impl CanonicalAuthoringScene {
                 | OrdinaryCompositionChild::Wait { .. } => {}
                 OrdinaryCompositionChild::ValueTracker { .. } => {}
                 OrdinaryCompositionChild::FamilyTransformTo { .. }
+                | OrdinaryCompositionChild::MatchingFamilyTransformTo { .. }
                 | OrdinaryCompositionChild::Indicate { .. }
                 | OrdinaryCompositionChild::FamilyIndicate { .. } => {}
                 OrdinaryCompositionChild::Composition { children, .. } => {
@@ -1766,6 +1783,11 @@ impl CanonicalAuthoringScene {
                     continue;
                 }
                 OrdinaryCompositionChild::FamilyTransformTo {
+                    source,
+                    target_state,
+                    options,
+                }
+                | OrdinaryCompositionChild::MatchingFamilyTransformTo {
                     source,
                     target_state,
                     options,
@@ -2179,7 +2201,10 @@ impl CanonicalAuthoringScene {
         })
     }
 
-    fn edit_membership(&mut self, batch: SceneMembershipBatch) -> Result<(), AuthoringFailure> {
+    fn validate_membership_bindings(
+        &self,
+        batch: &SceneMembershipBatch,
+    ) -> Result<Vec<(ObjectId, noon_core::SemanticNodeId)>, AuthoringFailure> {
         let mut new_bindings = Vec::new();
         let mut seen_ids = BTreeSet::new();
         let mut seen_nodes = BTreeSet::new();
@@ -2217,6 +2242,51 @@ impl CanonicalAuthoringScene {
                 }
             }
         }
+        Ok(new_bindings)
+    }
+
+    /// Associate language identities with already-published membership, without
+    /// replaying a semantic edit or changing the retained execution session.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn associate_published_mobjects(
+        &mut self,
+        batch: SceneMembershipBatch,
+    ) -> Result<(), AuthoringFailure> {
+        if batch.kind != SceneMembershipBatchKind::Add || !batch.members.is_empty() {
+            return Err("published association accepts binding reservations only".into());
+        }
+        let player = self
+            .player_ownership
+            .local()
+            .ok_or("published association requires the local completed execution player")?;
+        if player.has_pending_live_segment() {
+            return Err("published association cannot precede segment completion".into());
+        }
+        if player.scene_revision() != self.scene.revision() {
+            return Err("published association requires a coherent execution revision".into());
+        }
+        let new_bindings = self.validate_membership_bindings(&batch)?;
+        for (_, handle) in &batch.bindings {
+            if !self.contains_mobject(handle)? {
+                return Err("published association target is not in this Scene".into());
+            }
+        }
+        // Every reservation and membership observation succeeded before either
+        // direction of the derived identity registry is changed.
+        for (id, node) in new_bindings {
+            self.bindings.insert(id, node);
+            self.identities.insert(node, id);
+        }
+        Ok(())
+    }
+
+    fn edit_membership(&mut self, batch: SceneMembershipBatch) -> Result<(), AuthoringFailure> {
+        let new_bindings = self.validate_membership_bindings(&batch)?;
+        let mut seen_nodes = batch
+            .bindings
+            .iter()
+            .map(|(_, handle)| handle.node_id())
+            .collect::<BTreeSet<_>>();
         let mut borrowed = Vec::with_capacity(batch.members.len());
         for member in &batch.members {
             match member {
@@ -2702,6 +2772,20 @@ mod wasm {
     #[wasm_bindgen]
     pub struct CanonicalAuthoringSceneContext {
         inner: CanonicalAuthoringScene,
+    }
+
+    #[wasm_bindgen]
+    impl CanonicalAuthoringSceneContext {
+        /// Reconcile wrapper IDs only after Rust has published the completion.
+        #[wasm_bindgen(js_name = associatePublishedMobjects)]
+        pub fn associate_published_mobjects(
+            &mut self,
+            batch: WasmSceneMembershipBatch,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .associate_published_mobjects(batch.inner)
+                .map_err(js_error)
+        }
     }
 
     /// Inert typed language-wrapper batch. Appending handles performs no semantic
@@ -3470,6 +3554,29 @@ mod wasm {
             }
             self.children
                 .push(OrdinaryCompositionChild::FamilyTransformTo {
+                    source: source.semantic_family()?,
+                    target_state: target_state.semantic_family()?,
+                    options,
+                });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendMatchingFamilyTransformTo)]
+        pub fn append_matching_family_transform_to(
+            &mut self,
+            source: &crate::WasmAuthoringFamilyHandle,
+            target_state: &crate::WasmAuthoringFamilyHandle,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+            path_arc: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?;
+            if let Some(path_arc) = path_arc {
+                options = options.path_arc(path_arc);
+            }
+            self.children
+                .push(OrdinaryCompositionChild::MatchingFamilyTransformTo {
                     source: source.semantic_family()?,
                     target_state: target_state.semantic_family()?,
                     options,
@@ -11112,5 +11219,28 @@ mod tests {
         context.live_player(1.0).unwrap();
         assert!(context.pointer_position_signal().is_err());
         assert!(context.bind_opacity(&square, &opacity).is_err());
+    }
+}
+
+#[cfg(test)]
+mod matching_family_selector_tests {
+    use super::*;
+
+    #[test]
+    fn matching_family_child_is_constructible_in_shared_rust_model() {
+        let scene = noon::Scene::new();
+        let source_leaf = scene.square(1.0).unwrap();
+        let target_leaf = scene.square(1.0).unwrap();
+        let source = scene.family(&[(&source_leaf).into()]).unwrap();
+        let target_state = scene.family(&[(&target_leaf).into()]).unwrap();
+        let child = OrdinaryCompositionChild::MatchingFamilyTransformTo {
+            source,
+            target_state,
+            options: noon_core::AnimationOptions::new(),
+        };
+        assert!(matches!(
+            child,
+            OrdinaryCompositionChild::MatchingFamilyTransformTo { .. }
+        ));
     }
 }
