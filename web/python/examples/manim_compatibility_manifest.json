@@ -235,6 +235,22 @@
       "order": 1150
     },
     {
+      "id": "noon-transform-matching-shapes",
+      "title": "TransformMatchingShapes",
+      "summary": "Shape-keyed family replacement that swaps a triangle and kite by geometry signature, then indicates the authored target.",
+      "status": "ready",
+      "path": "python/examples/ordinary_transform_matching_shapes.py",
+      "category": "manim-compatible/animation",
+      "features": ["TransformMatchingShapes", "shape-keyed pairing", "family replacement", "Indicate", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "parity_fixture": "matching-shapes-reordered",
+      "thumbnail": "thumbnails/manim/transform-matching-shapes.svg",
+      "thumbnail_alt": "Pink triangle and blue kite swap positions while retaining shape-keyed identity",
+      "thumbnail_time": 1.0,
+      "order": 1160
+    },
+    {
       "id": "noon-coordinate-plotting",
       "title": "CoordinatePlotting",
       "summary": "Shared coordinate frame with a sampled function, illustrative data points, and axis labels.",
@@ -247,7 +263,7 @@
       "thumbnail": "thumbnails/manim/coordinate-plotting.svg",
       "thumbnail_alt": "Blue sine curve and yellow sampled data over labeled coordinate axes",
       "thumbnail_time": 0,
-      "order": 1160
+      "order": 1170
     }
   ]
 }

@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 16);
+assert.equal(gallery.examples.length, 17);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -32,6 +32,7 @@ assert.deepEqual(
     "compatible-arrow-vector-field-static",
     "compatible-svg-tiger-morph",
     "noon-trigonometry-tutorial",
+    "noon-transform-matching-shapes",
     "noon-coordinate-plotting",
   ],
 );
@@ -83,6 +84,13 @@ for (const entry of readyEntries) {
       /\b(?:VGroup|Group|Typst|MathTypst)\b/,
       "plain Text Write gallery coverage must not claim Text-family or Typst scheduling",
     );
+  }
+
+  if (entry.id === "noon-transform-matching-shapes") {
+    assert.match(source, /TransformMatchingShapes\(/, "matching-shapes gallery example must exercise TransformMatchingShapes");
+    assert.match(source, /Indicate\(/, "matching-shapes gallery example must exercise the replacement target");
+    assert.match(source, /readded=True/, "matching-shapes gallery example must document source re-add semantics");
+    assert.match(entry.summary, /shape-keyed/i, "matching-shapes gallery must state its pairing contract");
   }
 
   if (entry.id === "compatible-text-family-fade") {

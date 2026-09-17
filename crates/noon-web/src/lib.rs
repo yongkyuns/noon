@@ -45,6 +45,12 @@ mod gpu_timestamps;
 mod manim_scale_bridge;
 #[cfg(target_arch = "wasm32")]
 mod manim_shape_matcher_handle_bridge;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+mod matching_shapes_smoke;
 #[cfg(test)]
 mod morph_preload_cases;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -98,6 +104,12 @@ pub use direct_execution_smoke::*;
 pub use execution_canvas::*;
 pub use execution_transport::*;
 pub use execution_wake::*;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+pub use matching_shapes_smoke::*;
 pub use renderer_observation::*;
 #[cfg(all(
     feature = "renderer",

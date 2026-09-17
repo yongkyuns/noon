@@ -1,5 +1,7 @@
 //! Unequal family transform followed by a restoring family Indicate.
 
+pub mod matching_shapes;
+
 use std::rc::Rc;
 
 use crate::{
