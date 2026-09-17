@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+from pathlib import Path
 import textwrap
 from unittest.mock import patch
 import unittest
@@ -196,6 +197,16 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
             compile_authoring_source("class Example:\n    def construct(self):\n        self.play(\n", "user-scene.py")
         self.assertEqual(caught.exception.filename, "user-scene.py")
         self.assertEqual(caught.exception.lineno, 3)
+
+    def test_transform_matching_shapes_gallery_uses_portable_continuations(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "ordinary_transform_matching_shapes.py"
+        ).read_text()
+        _, pairs = compile_authoring_source(source, filename="ordinary_transform_matching_shapes.py")
+        self.assertEqual(len(pairs), 1)
+        original, portable = next(iter(pairs.items()))
+        self.assertEqual(original.co_qualname, "OrdinaryTransformMatchingShapes.construct")
+        self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
 
 
     def test_static_async_and_export_source_never_allocates_an_ast(self):

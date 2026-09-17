@@ -13,6 +13,10 @@ const uncreateSource = await readFile(
   path.join(repoRoot, "web/python/examples/ordinary_uncreate_options.py"),
   "utf8",
 );
+const matchingShapesSource = await readFile(
+  path.join(repoRoot, "web/python/examples/ordinary_transform_matching_shapes.py"),
+  "utf8",
+);
 const port = 4175;
 const baseUrl = `http://127.0.0.1:${port}`;
 
@@ -545,6 +549,19 @@ try {
   assert.equal(uncreate.duration, 4, "Uncreate options must preserve sequential authored timing");
   assert.equal(uncreate.metrics.objectCount, 1, "only remover=False target should remain live");
   assert.ok(uncreate.metrics.presentedFrames > 0, "shared Uncreate options must present");
+
+  const matchingShapes = await page.evaluate(
+    (pythonSource) => window.noonManimCompat.runLive(pythonSource),
+    matchingShapesSource,
+  );
+  assert.ok(
+    Math.abs(matchingShapes.duration - 2.1) < 1e-9,
+    "public matching-shapes lifecycle must preserve TransformMatchingShapes, Indicate, and hold timing",
+  );
+  assert.ok(
+    matchingShapes.metrics.presentedFrames > 0,
+    "public matching-shapes lifecycle must present through Pyodide/WASM",
+  );
 
   const phaseB = await page.evaluate(
     (pythonSource) => window.noonManimCompat.runLive(pythonSource),
