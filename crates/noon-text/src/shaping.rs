@@ -11,11 +11,15 @@ use noon_core::{
     TextLayoutArtifact, TextLayoutBackend, TextLayoutBackendKind, TextPart, TextRenderItem,
     TextResource, TextResourceValidationError, TextSourceKind, TextSourceSpan, Vec2,
 };
-use swash::{shape::ShapeContext, text::Script, FontRef};
+use swash::{scale::ScaleContext, shape::ShapeContext, text::Script, FontRef, GlyphId};
 
 pub const NATIVE_TEXT_BACKEND_VERSION: &str = "swash-0.2.10";
-const NATIVE_TEXT_TEMPLATE_VERSION: &str = "noon-native-styled-multiline-v2";
+const NATIVE_TEXT_TEMPLATE_VERSION: &str = "noon-native-styled-multiline-v3";
 const MANIM_DEFAULT_LINE_SPACING: f32 = 0.3;
+// Manim sends MarkupText's point size through ManimPango after dividing by
+// TEXT2SVG_ADJUSTMENT_FACTOR (4.8). Pango/Cairo then converts points at 96 DPI,
+// so one Cairo layout pixel is 3.6 units in Noon's point-sized shaping space.
+const MANIM_PANGO_LAYOUT_PIXEL: f32 = 3.6;
 
 /// Exact immutable OpenType face input. `face_key` derives from the bytes and
 /// collection index, so a glyph identity never resolves to a different file.
@@ -166,12 +170,14 @@ struct SourceLine<'a> {
 /// caches without retaining frontend-specific text state.
 pub struct NativeTextCompiler {
     shape_context: ShapeContext,
+    scale_context: ScaleContext,
 }
 
 impl NativeTextCompiler {
     pub fn new() -> Self {
         Self {
             shape_context: ShapeContext::new(),
+            scale_context: ScaleContext::new(),
         }
     }
 
@@ -253,8 +259,6 @@ impl NativeTextCompiler {
             let baseline_y = -(line_index as f32) * line_advance;
             if line.text.is_empty() {
                 let identity = font_identity(base_font, options);
-                let metrics =
-                    font_metrics(&mut self.shape_context, base_font, options, &variations)?;
                 push_run(
                     &mut runs,
                     &mut render_items,
@@ -265,16 +269,23 @@ impl NativeTextCompiler {
                     Vec::new(),
                 );
                 remember_font(&mut used_fonts, identity, base_font.data.clone());
-                let bounds = if source.is_empty() {
-                    Rect::new(Vec2::ZERO, Vec2::ZERO)
-                } else {
-                    Rect::new(
-                        Vec2::new(0.0, -metrics.descent + baseline_y),
-                        Vec2::new(0.0, metrics.ascent + baseline_y),
-                    )
-                };
-                layout_bounds =
-                    Some(layout_bounds.map_or(bounds, |existing| existing.union(bounds)));
+                // Preserve Text's logical-line bounds. MarkupText is centered on
+                // the visible SVG paths that Pango emits, so a blank line has no
+                // bounds of its own there.
+                if kind == TextSourceKind::Plain {
+                    let metrics =
+                        font_metrics(&mut self.shape_context, base_font, options, &variations)?;
+                    let bounds = if source.is_empty() {
+                        Rect::new(Vec2::ZERO, Vec2::ZERO)
+                    } else {
+                        Rect::new(
+                            Vec2::new(0.0, -metrics.descent + baseline_y),
+                            Vec2::new(0.0, metrics.ascent + baseline_y),
+                        )
+                    };
+                    layout_bounds =
+                        Some(layout_bounds.map_or(bounds, |existing| existing.union(bounds)));
+                }
                 continue;
             }
 
@@ -309,6 +320,7 @@ impl NativeTextCompiler {
                     line_cursor_x,
                     options,
                     &variations,
+                    kind == TextSourceKind::Markup,
                     &mut cluster_ordinal,
                 )?;
                 let ShapedGroup {
@@ -318,17 +330,23 @@ impl NativeTextCompiler {
                 for ShapedRun {
                     fill,
                     glyphs,
-                    start_x,
-                    end_x,
-                    metrics,
+                    logical_bounds,
+                    visual_bounds,
                 } in shaped_runs
                 {
-                    let bounds = Rect::new(
-                        Vec2::new(start_x.min(end_x), -metrics.descent + baseline_y),
-                        Vec2::new(start_x.max(end_x), metrics.ascent + baseline_y),
-                    );
-                    layout_bounds =
-                        Some(layout_bounds.map_or(bounds, |existing| existing.union(bounds)));
+                    let bounds = if kind == TextSourceKind::Markup {
+                        visual_bounds
+                    } else {
+                        Some(logical_bounds)
+                    };
+                    if let Some(bounds) = bounds {
+                        let bounds = Rect::new(
+                            Vec2::new(bounds.min.x, bounds.min.y + baseline_y),
+                            Vec2::new(bounds.max.x, bounds.max.y + baseline_y),
+                        );
+                        layout_bounds =
+                            Some(layout_bounds.map_or(bounds, |existing| existing.union(bounds)));
+                    }
                     push_run(
                         &mut runs,
                         &mut render_items,
@@ -392,6 +410,7 @@ impl NativeTextCompiler {
         initial_x: f32,
         options: &NativeTextOptions,
         variations: &[([u8; 4], f32)],
+        pango_positioning: bool,
         cluster_ordinal: &mut u32,
     ) -> Result<ShapedGroup, NativeTextError> {
         let font_ref = FontRef::from_index(font.data.as_ref(), font.face_index as usize).ok_or(
@@ -442,6 +461,7 @@ impl NativeTextCompiler {
                 });
                 projected.last_mut().expect("new run exists")
             };
+            let first_cluster_glyph = run.glyphs.len();
             for glyph in cluster.glyphs {
                 let origin = Vec2::new(cursor_x + glyph.x, glyph.y);
                 let advance = Vec2::new(glyph.advance, 0.0);
@@ -462,20 +482,59 @@ impl NativeTextCompiler {
                 });
             }
             *cluster_ordinal = cluster_ordinal.saturating_add(1);
-            cursor_x += cluster.advance();
+            let raw_advance = cluster.advance();
+            let positioned_advance = if pango_positioning {
+                (raw_advance / MANIM_PANGO_LAYOUT_PIXEL).round() * MANIM_PANGO_LAYOUT_PIXEL
+            } else {
+                raw_advance
+            };
+            if let Some(glyph) = run.glyphs[first_cluster_glyph..].last_mut() {
+                glyph.advance.x += positioned_advance - raw_advance;
+                let right = glyph.origin.x + glyph.advance.x;
+                glyph.bounds.min.x = glyph.origin.x.min(right);
+                glyph.bounds.max.x = glyph.origin.x.max(right);
+            }
+            cursor_x += positioned_advance;
             run.end_x = cursor_x;
         });
         if let Some(error) = boundary_error {
             return Err(error);
         }
+        let mut scaler = pango_positioning.then(|| {
+            self.scale_context
+                .builder(font_ref)
+                .size(options.font_size)
+                .hint(false)
+                .variations(variations)
+                .build()
+        });
         let runs = projected
             .into_iter()
-            .map(|run| ShapedRun {
-                fill: run.fill,
-                glyphs: run.glyphs,
-                start_x: run.start_x,
-                end_x: run.end_x,
-                metrics,
+            .map(|run| {
+                let visual_bounds = run
+                    .glyphs
+                    .iter()
+                    .filter_map(|glyph| {
+                        let glyph_id = GlyphId::try_from(glyph.glyph_id).ok()?;
+                        let outline = scaler.as_mut()?.scale_outline(glyph_id)?;
+                        let bounds = outline.bounds();
+                        (!bounds.is_empty()).then(|| {
+                            Rect::new(
+                                glyph.origin + Vec2::new(bounds.min.x, bounds.min.y),
+                                glyph.origin + Vec2::new(bounds.max.x, bounds.max.y),
+                            )
+                        })
+                    })
+                    .reduce(|existing, bounds| existing.union(bounds));
+                ShapedRun {
+                    fill: run.fill,
+                    glyphs: run.glyphs,
+                    logical_bounds: Rect::new(
+                        Vec2::new(run.start_x.min(run.end_x), -metrics.descent),
+                        Vec2::new(run.start_x.max(run.end_x), metrics.ascent),
+                    ),
+                    visual_bounds,
+                }
             })
             .collect();
         Ok(ShapedGroup {
@@ -505,9 +564,8 @@ struct ShapedGroup {
 struct ShapedRun {
     fill: Option<Color>,
     glyphs: Vec<PositionedGlyph>,
-    start_x: f32,
-    end_x: f32,
-    metrics: swash::Metrics,
+    logical_bounds: Rect,
+    visual_bounds: Option<Rect>,
 }
 
 fn push_run(
@@ -1013,10 +1071,17 @@ mod tests {
         let styled = compiler
             .compile_styled(source, &font, &options, &equal_fill)
             .unwrap();
-        assert_eq!(styled.resource.runs, plain.resource.runs);
-        assert_eq!(styled.resource.bounds, plain.resource.bounds);
-        assert_eq!(styled.resource.baseline, plain.resource.baseline);
-        assert_eq!(styled.resource.render_items, plain.resource.render_items);
+        let unpartitioned_fill = spans(source, &font, &[(source.len(), None)]);
+        let unpartitioned = compiler
+            .compile_styled(source, &font, &options, &unpartitioned_fill)
+            .unwrap();
+        assert_eq!(styled.resource.runs, unpartitioned.resource.runs);
+        assert_eq!(styled.resource.bounds, unpartitioned.resource.bounds);
+        assert_eq!(styled.resource.baseline, unpartitioned.resource.baseline);
+        assert_eq!(
+            styled.resource.render_items,
+            unpartitioned.resource.render_items
+        );
 
         let different_fill = spans(
             source,
@@ -1076,6 +1141,39 @@ mod tests {
         assert!((default_delta - natural_advance).abs() < 1e-4);
         assert!((explicit_delta - natural_advance).abs() < 1e-4);
         assert_eq!(default.resource.bounds, explicit.resource.bounds);
+    }
+    #[test]
+    fn markup_positions_clusters_on_pango_cairo_layout_pixels() {
+        let font = bundled_font();
+        let source = "AB";
+        let style_spans = spans(source, &font, &[(source.len(), None)]);
+        let mut compiler = NativeTextCompiler::new();
+        let artifact = compiler
+            .compile_styled(source, &font, &NativeTextOptions::new(42.0), &style_spans)
+            .unwrap();
+        let origins = artifact.resource.runs[0]
+            .glyphs
+            .iter()
+            .map(|glyph| glyph.origin.x)
+            .collect::<Vec<_>>();
+
+        assert!(origins.len() >= 2);
+        let advance = origins[1] - origins[0];
+        assert!((advance / MANIM_PANGO_LAYOUT_PIXEL).fract().abs() < 1e-5);
+        assert!((artifact.resource.runs[0].glyphs[0].advance.x - advance).abs() < 1e-5);
+    }
+    #[test]
+    fn whitespace_only_markup_has_no_visible_svg_bounds() {
+        let font = bundled_font();
+        let source = " \n ";
+        let style_spans = spans(source, &font, &[(source.len(), None)]);
+        let mut compiler = NativeTextCompiler::new();
+        let artifact = compiler
+            .compile_styled(source, &font, &NativeTextOptions::new(42.0), &style_spans)
+            .unwrap();
+
+        assert_eq!(artifact.resource.bounds, Rect::new(Vec2::ZERO, Vec2::ZERO));
+        assert_eq!(artifact.resource.glyph_count(), 2);
     }
     #[test]
     fn invalid_style_ranges_and_gaps_are_rejected() {

@@ -242,15 +242,77 @@ mod tests {
     }
 
     #[test]
-    fn unstyled_markup_preserves_plain_layout() {
+    fn unstyled_markup_preserves_plain_glyph_identity() {
         let plain = Text::new("Noon\né & x")
             .compile_artifact_with_fill(None)
             .unwrap();
         let markup: Text = MarkupText::new("Noon\né &amp; x").into();
         let markup = markup.compile_artifact_with_fill(None).unwrap();
-        assert_eq!(plain.resource.runs, markup.resource.runs);
+        let glyph_identity = |artifact: &NativeTextResourceArtifact| {
+            artifact
+                .resource
+                .runs
+                .iter()
+                .flat_map(|run| run.glyphs.iter())
+                .map(|glyph| (glyph.glyph_id, glyph.cluster.clone()))
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(plain.resource.source, markup.resource.source);
         assert_eq!(plain.resource.parts, markup.resource.parts);
-        assert_eq!(plain.resource.bounds, markup.resource.bounds);
+        assert_eq!(glyph_identity(&plain), glyph_identity(&markup));
+        assert_ne!(plain.resource.bounds, markup.resource.bounds);
+    }
+
+    #[test]
+    fn core_fixture_matches_manim_pango_svg_metrics() {
+        let text: Text = MarkupText::new(
+            "<b>Noon</b> <i>markup</i> <tt>&lt;Rust&gt;</tt>\n<span foreground=\"#58c4dd\">bold</span> and <span fgcolor=\"#ff862f\">color</span>",
+        )
+        .with_font("DejaVu Sans Mono")
+        .with_font_size(42.0)
+        .into();
+        let artifact = text.compile_artifact_with_fill(None).unwrap();
+
+        // ManimPango's generated SVG places this fixture on integer Cairo
+        // coordinates: every mono cell is 7 SVG px and the two baselines are
+        // 13.581054 px apart. One SVG px is 3.6 native point-layout units.
+        let mut baselines = artifact
+            .resource
+            .runs
+            .iter()
+            .map(|run| run.transform.ty)
+            .collect::<Vec<_>>();
+        baselines.sort_by(f32::total_cmp);
+        baselines.dedup_by(|left, right| (*left - *right).abs() < 1e-4);
+        assert_eq!(baselines.len(), 2);
+        assert!((baselines[1] - baselines[0] - 13.581054 * 3.6).abs() < 0.01);
+
+        for baseline in baselines {
+            let mut glyph_metrics = artifact
+                .resource
+                .runs
+                .iter()
+                .filter(|run| (run.transform.ty - baseline).abs() < 1e-4)
+                .flat_map(|run| {
+                    run.glyphs
+                        .iter()
+                        .map(|glyph| (glyph.origin.x, glyph.advance.x))
+                })
+                .collect::<Vec<_>>();
+            glyph_metrics.sort_by(|left, right| left.0.total_cmp(&right.0));
+            for pair in glyph_metrics.windows(2) {
+                assert!((pair[1].0 - pair[0].0 - 7.0 * 3.6).abs() < 1e-4);
+            }
+            assert!(glyph_metrics
+                .iter()
+                .all(|(_, advance)| (*advance - 7.0 * 3.6).abs() < 1e-4));
+        }
+
+        // Manim's semantic reference reports 6.24296875 x 1.13139645 scene
+        // units. Its SVG-to-scene scale is 0.05; Noon's point scale is 1/72.
+        assert!((artifact.resource.bounds.width() - 6.24296875 * 72.0).abs() < 0.05);
+        assert!((artifact.resource.bounds.height() - 1.13139645 * 72.0).abs() < 0.1);
     }
 
     #[test]
