@@ -473,7 +473,10 @@ impl GpuRenderer {
                         (&self.path_vertex_buffer, &self.path_index_buffer)
                     }
                 };
-                pass.set_pipeline(&self.path_pipeline);
+                // Derived paths retain the full `PathVertex` format. The compact
+                // pipeline is reserved for the stable ordinary/mega streams, so
+                // binding it here would decode this buffer at the wrong stride.
+                pass.set_pipeline(&self.full_path_pipeline);
                 pass.set_vertex_buffer(0, vertex_buffer.slice(..));
                 pass.set_vertex_buffer(1, self.derived_display.path_instance_buffer.slice(..));
                 pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);

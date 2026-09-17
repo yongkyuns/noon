@@ -1,0 +1,108 @@
+name: Arrow tip Manim regression
+
+on:
+  pull_request:
+    paths:
+      - "crates/noon/src/arrow_*.rs"
+      - "crates/noon/tests/arrow_tip_regression.rs"
+      - "crates/noon-render-wgpu/**"
+      - "crates/noon-geometry/src/tessellation.rs"
+      - "web/python/_manim_arrow.py"
+      - "web/*canvas*"
+      - "web/manim-raster-host*"
+      - "web/semantic-preview-session*"
+      - "scripts/arrow-tip-*"
+      - "scripts/manim-arrow-tip-*"
+      - "scripts/manim-raster-support.mjs"
+      - "scripts/manim-raster-semantic-reference.py"
+      - "parity/manim-v0.21/core-examples/arrow_tip_regression.py"
+      - ".github/workflows/manim-arrow-tip-regression.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arrow-tip-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  arrows:
+    name: Arrow tips versus ManimCE 0.21.0 Cairo
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      NOON_WASM_SKIP_OPT: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      BASE_SHA: ${{ github.event.pull_request.base.sha || 'origin/master' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Record exact checkout and source identity
+        run: |
+          mkdir -p ci-artifacts/arrow-tip
+          git rev-parse HEAD > ci-artifacts/arrow-tip/checkout.txt
+          git status --short >> ci-artifacts/arrow-tip/checkout.txt
+          sha256sum parity/manim-v0.21/core-examples/arrow_tip_regression.py >> ci-artifacts/arrow-tip/checkout.txt
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Prove the pixel checker detects bad tips
+        run: node --test scripts/arrow-tip-raster-metrics.test.mjs
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install pinned Cairo reference
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg libcairo2-dev libpango1.0-dev pkg-config
+          python -m pip install --disable-pip-version-check "manim[typst]==0.21.0" "typst==0.15.0"
+      - name: Render actual Manim frames and observe tip geometry
+        run: python scripts/manim-arrow-tip-reference.py
+      - name: Use repository-pinned Rust and WASM target
+        run: |
+          rustup install
+          rustup show active-toolchain
+          rustc --version --verbose
+          rustup target add wasm32-unknown-unknown
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+      - name: Validate ordinary architecture, format, lint and library gate
+        run: bash scripts/check.sh fast "$BASE_SHA"
+      - name: Test native Rust arrow geometry without Python or browser features
+        run: cargo test -p noon --no-default-features --test arrow_tip_regression
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build ordinary browser package
+        run: bash scripts/build-web-demo.sh
+      - name: Install pinned browser harness
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Compare tip-local pixels on WebGPU and WebGL at DPR 1 and 2
+        run: node scripts/manim-arrow-tip-raster.mjs
+      - name: Retain Manim, Noon, and unfiltered close-up differences
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: arrow-tip-manim-comparison
+          path: ci-artifacts/arrow-tip
+          if-no-files-found: error
+          retention-days: 14
