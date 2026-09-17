@@ -2629,7 +2629,7 @@ pub(crate) fn single_filled_convex_polygon(mesh: &TessellatedPath) -> Option<[[[
     if (!mesh.morphing && vertex_count > 4)
         || (mesh.morphing && vertex_count > MAX_CONVEX_MORPH_VERTICES)
         || mesh.indices.len() < 3
-        || mesh.indices.len() % 3 != 0
+        || !mesh.indices.len().is_multiple_of(3)
         || mesh
             .indices
             .iter()
@@ -2646,7 +2646,7 @@ pub(crate) fn single_filled_convex_polygon(mesh: &TessellatedPath) -> Option<[[[
     }
 
     let mut edges = BTreeMap::<(usize, usize), u8>::new();
-    for triangle in mesh.indices.chunks_exact(3) {
+    for triangle in mesh.indices.as_chunks::<3>().0 {
         for [left, right] in [
             [triangle[0], triangle[1]],
             [triangle[1], triangle[2]],
