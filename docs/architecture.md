@@ -775,6 +775,8 @@ Examples:
 
 Transform/style/visibility-only changes must not regenerate immutable content.
 
+Renderer-local fill coverage may specialize a convex triangle or quadrilateral as one polygon, computing its pixel-box intersection once to avoid internal tessellation seams and multisample edge loss. Morph eligibility must prove convexity throughout the interpolated interval, including any removed collinear subdivisions; endpoint checks alone are insufficient. Eligible paths retain immutable endpoint vertices and GPU interpolation. Other paths keep ordinary tessellation or the sampled-mesh specialization below. This coverage choice does not create semantic geometry or a second source of animation state.
+
 ### Immutable versioned resource rule
 
 Expensive geometry/text/image/mesh realization should be represented as immutable/versioned resources wherever practical. Mutable object state references those resources rather than embedding repeatedly rewritten heavy geometry in ordinary frame state.
