@@ -127,7 +127,9 @@ const LINE_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 10] = [
     },
 ];
 
-const PATH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+const PATH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+    wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32];
+const TRIANGLE_PATH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
     0 => Float32x2,
     1 => Float32x2,
     2 => Uint32,
@@ -135,6 +137,39 @@ const PATH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_arr
     12 => Float32x2,
     13 => Float32x2
 ];
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct CompactPathVertex {
+    position: [f32; 2],
+    target_position: [f32; 2],
+    surface: u32,
+}
+
+impl From<PathVertex> for CompactPathVertex {
+    fn from(vertex: PathVertex) -> Self {
+        Self {
+            position: vertex.position,
+            target_position: vertex.target_position,
+            surface: vertex.surface,
+        }
+    }
+}
+
+fn update_compact_path_vertices(
+    compact: &mut Vec<CompactPathVertex>,
+    source: &[PathVertex],
+    dirty_ranges: &[std::ops::Range<usize>],
+) {
+    compact.resize(source.len(), CompactPathVertex::zeroed());
+    for range in dirty_ranges {
+        let end = range.end.min(source.len());
+        let start = range.start.min(end);
+        for (target, source) in compact[start..end].iter_mut().zip(&source[start..end]) {
+            *target = (*source).into();
+        }
+    }
+}
 const PATH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 8] = [
     wgpu::VertexAttribute {
         format: wgpu::VertexFormat::Float32x2,
@@ -343,6 +378,7 @@ pub struct GpuRenderer {
     rectangle_pipeline_single_sample: wgpu::RenderPipeline,
     line_pipeline_single_sample: wgpu::RenderPipeline,
     path_pipeline: wgpu::RenderPipeline,
+    triangle_path_pipeline: wgpu::RenderPipeline,
     mega_path_pipeline: wgpu::RenderPipeline,
     quad_buffer: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
@@ -357,6 +393,8 @@ pub struct GpuRenderer {
     rectangle_buffer: wgpu::Buffer,
     line_buffer: wgpu::Buffer,
     path_vertex_buffer: wgpu::Buffer,
+    compact_path_vertex_buffer: wgpu::Buffer,
+    compact_path_vertices: Vec<CompactPathVertex>,
     path_index_buffer: wgpu::Buffer,
     path_instance_buffer: wgpu::Buffer,
     mega_path_index_buffer: wgpu::Buffer,
@@ -370,6 +408,7 @@ pub struct GpuRenderer {
     rectangle_capacity_bytes: usize,
     line_capacity_bytes: usize,
     path_vertex_capacity_bytes: usize,
+    compact_path_vertex_capacity_bytes: usize,
     path_index_capacity_bytes: usize,
     path_instance_capacity_bytes: usize,
     mega_path_index_capacity_bytes: usize,
@@ -517,6 +556,8 @@ impl GpuRenderer {
         let path_shader = device.create_shader_module(wgpu::include_wgsl!("../path.wgsl"));
         let path_pipeline =
             create_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
+        let triangle_path_pipeline =
+            create_triangle_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
         let mega_path_pipeline =
             create_mega_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
         let quad_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -530,6 +571,11 @@ impl GpuRenderer {
         let path_vertex_buffer = empty_buffer(
             device,
             "Noon path vertices",
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        );
+        let compact_path_vertex_buffer = empty_buffer(
+            device,
+            "Noon compact path vertices",
             wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         );
         let path_index_buffer = empty_buffer(
@@ -557,6 +603,7 @@ impl GpuRenderer {
             rectangle_pipeline_single_sample,
             line_pipeline_single_sample,
             path_pipeline,
+            triangle_path_pipeline,
             mega_path_pipeline,
             quad_buffer,
             camera_buffer,
@@ -571,6 +618,8 @@ impl GpuRenderer {
             rectangle_buffer,
             line_buffer,
             path_vertex_buffer,
+            compact_path_vertex_buffer,
+            compact_path_vertices: Vec::new(),
             path_index_buffer,
             path_instance_buffer,
             mega_path_index_buffer,
@@ -584,6 +633,7 @@ impl GpuRenderer {
             rectangle_capacity_bytes: 0,
             line_capacity_bytes: 0,
             path_vertex_capacity_bytes: 0,
+            compact_path_vertex_capacity_bytes: 0,
             path_index_capacity_bytes: 0,
             path_instance_capacity_bytes: 0,
             mega_path_index_capacity_bytes: 0,
@@ -755,7 +805,21 @@ impl GpuRenderer {
             "Noon path vertices",
             wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         );
-        buffer_reallocations += usize::from(path_vertex_reallocated);
+        update_compact_path_vertices(
+            &mut self.compact_path_vertices,
+            prepared.path_vertices,
+            prepared.path_vertex_dirty_ranges,
+        );
+        let compact_path_vertex_reallocated = ensure_capacity_with_usage(
+            device,
+            &mut self.compact_path_vertex_buffer,
+            &mut self.compact_path_vertex_capacity_bytes,
+            self.compact_path_vertices.len() * size_of::<CompactPathVertex>(),
+            "Noon compact path vertices",
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        );
+        buffer_reallocations +=
+            usize::from(path_vertex_reallocated) + usize::from(compact_path_vertex_reallocated);
         let path_index_reallocated = ensure_capacity_with_usage(
             device,
             &mut self.path_index_buffer,
@@ -794,7 +858,10 @@ impl GpuRenderer {
         self.prepare_path_render_bundle(
             device,
             prepared,
-            path_vertex_reallocated || path_index_reallocated || path_instance_reallocated,
+            path_vertex_reallocated
+                || compact_path_vertex_reallocated
+                || path_index_reallocated
+                || path_instance_reallocated,
         );
 
         let bytes_uploaded = upload_dirty(
@@ -804,6 +871,14 @@ impl GpuRenderer {
             prepared.circle_dirty_ranges,
             circle_reallocated,
             "circle",
+            &mut trace,
+        ) + upload_dirty(
+            queue,
+            &self.compact_path_vertex_buffer,
+            &self.compact_path_vertices,
+            prepared.path_vertex_dirty_ranges,
+            compact_path_vertex_reallocated,
+            "compact_path_vertex",
             &mut trace,
         ) + upload_dirty(
             queue,
@@ -882,7 +957,18 @@ impl GpuRenderer {
         }
 
         let layout_changed = self.path_render_bundle_batches != prepared.path_batches;
-        if self.path_render_bundle.is_some() && !path_buffer_reallocated && !layout_changed {
+        if !path_buffer_reallocated && !layout_changed {
+            return;
+        }
+        if prepared
+            .path_batches
+            .iter()
+            .any(|batch| path_batch_uses_triangle_coverage(prepared, batch))
+        {
+            self.path_render_bundle = None;
+            self.path_render_bundle_batches.clear();
+            self.path_render_bundle_batches
+                .extend_from_slice(prepared.path_batches);
             return;
         }
 
@@ -897,7 +983,7 @@ impl GpuRenderer {
             });
         bundle.set_bind_group(0, &self.camera_bind_group, &[]);
         bundle.set_pipeline(&self.path_pipeline);
-        bundle.set_vertex_buffer(0, self.path_vertex_buffer.slice(..));
+        bundle.set_vertex_buffer(0, self.compact_path_vertex_buffer.slice(..));
         bundle.set_vertex_buffer(1, self.path_instance_buffer.slice(..));
         bundle.set_index_buffer(self.path_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         for batch in prepared
@@ -1111,7 +1197,7 @@ impl GpuRenderer {
                     return DrawStats::default();
                 }
                 pass.set_pipeline(&self.mega_path_pipeline);
-                pass.set_vertex_buffer(0, self.path_vertex_buffer.slice(..));
+                pass.set_vertex_buffer(0, self.compact_path_vertex_buffer.slice(..));
                 pass.set_vertex_buffer(1, self.mega_path_vertex_instance_buffer.slice(..));
                 pass.set_index_buffer(
                     self.mega_path_index_buffer.slice(..),
@@ -1128,8 +1214,20 @@ impl GpuRenderer {
                 if path.index_range.is_empty() {
                     return DrawStats::default();
                 }
-                pass.set_pipeline(&self.path_pipeline);
-                pass.set_vertex_buffer(0, self.path_vertex_buffer.slice(..));
+                let exact_triangle = path_batch_uses_triangle_coverage(prepared, path);
+                pass.set_pipeline(if exact_triangle {
+                    &self.triangle_path_pipeline
+                } else {
+                    &self.path_pipeline
+                });
+                pass.set_vertex_buffer(
+                    0,
+                    if exact_triangle {
+                        self.path_vertex_buffer.slice(..)
+                    } else {
+                        self.compact_path_vertex_buffer.slice(..)
+                    },
+                );
                 pass.set_vertex_buffer(1, self.path_instance_buffer.slice(..));
                 pass.set_index_buffer(self.path_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(path.index_range.clone(), 0, batch.instance_range.clone());
@@ -1246,9 +1344,17 @@ pub fn line_instance_layout() -> wgpu::VertexBufferLayout<'static> {
 
 pub fn path_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
     wgpu::VertexBufferLayout {
-        array_stride: size_of::<PathVertex>() as wgpu::BufferAddress,
+        array_stride: size_of::<CompactPathVertex>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &PATH_VERTEX_ATTRIBUTES,
+    }
+}
+
+pub fn triangle_path_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+    wgpu::VertexBufferLayout {
+        array_stride: size_of::<PathVertex>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &TRIANGLE_PATH_VERTEX_ATTRIBUTES,
     }
 }
 
@@ -1317,6 +1423,11 @@ fn ordered_render_sample_count(path_batches: &[PathBatch]) -> u32 {
     }
 }
 
+fn path_batch_uses_triangle_coverage(prepared: &PreparedFrame<'_>, batch: &PathBatch) -> bool {
+    let _ = prepared;
+    batch.triangle_coverage
+}
+
 fn create_path_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
@@ -1330,6 +1441,8 @@ fn create_path_pipeline(
         target_format,
         path_instance_layout(),
         "Noon vector path pipeline",
+        path_vertex_layout(),
+        "vs_path_compact",
     )
 }
 
@@ -1346,6 +1459,26 @@ fn create_mega_path_pipeline(
         target_format,
         mega_path_instance_layout(),
         "Noon packed mega-path pipeline",
+        path_vertex_layout(),
+        "vs_path_compact",
+    )
+}
+
+fn create_triangle_path_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    target_format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    create_path_pipeline_with_instance_layout(
+        device,
+        layout,
+        shader,
+        target_format,
+        path_instance_layout(),
+        "Noon exact triangle path pipeline",
+        triangle_path_vertex_layout(),
+        "vs_path",
     )
 }
 
@@ -1356,15 +1489,17 @@ fn create_path_pipeline_with_instance_layout(
     target_format: wgpu::TextureFormat,
     instance_layout: wgpu::VertexBufferLayout<'static>,
     label: &'static str,
+    vertex_layout: wgpu::VertexBufferLayout<'static>,
+    vertex_entry: &'static str,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some("vs_path"),
+            entry_point: Some(vertex_entry),
             compilation_options: Default::default(),
-            buffers: &[Some(path_vertex_layout()), Some(instance_layout)],
+            buffers: &[Some(vertex_layout), Some(instance_layout)],
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
@@ -1577,6 +1712,44 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn compact_path_uploads_follow_only_dirty_vertex_ranges() {
+        let mut compact = vec![
+            CompactPathVertex {
+                position: [9.0, 9.0],
+                target_position: [9.0, 9.0],
+                surface: 9,
+            };
+            3
+        ];
+        let source = (0..3)
+            .map(|value| PathVertex {
+                position: [value as f32, 0.0],
+                target_position: [value as f32, 1.0],
+                surface: value,
+                triangle: [[0.0; 2]; 3],
+            })
+            .collect::<Vec<_>>();
+        update_compact_path_vertices(&mut compact, &source, &[1..2]);
+        assert_eq!(compact[0].surface, 9);
+        assert_eq!(compact[1].surface, 1);
+        assert_eq!(compact[2].surface, 9);
+    }
+
+    #[test]
+    fn exact_triangle_eligibility_invalidates_path_bundle_layout() {
+        let ordinary = PathBatch {
+            index_range: 0..6,
+            instance_range: 0..1,
+            triangle_coverage: false,
+        };
+        let exact_triangle = PathBatch {
+            triangle_coverage: true,
+            ..ordinary.clone()
+        };
+        assert_ne!(ordinary, exact_triangle);
+    }
+
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
     fn test_frame() -> FrameState {
@@ -1677,6 +1850,7 @@ mod tests {
             ordered_render_sample_count(&[PathBatch {
                 index_range: 0..0,
                 instance_range: 0..1,
+                triangle_coverage: false,
             }]),
             1
         );
@@ -1684,6 +1858,7 @@ mod tests {
             ordered_render_sample_count(&[PathBatch {
                 index_range: 0..3,
                 instance_range: 0..1,
+                triangle_coverage: false,
             }]),
             PATH_SAMPLE_COUNT
         );
@@ -1733,9 +1908,9 @@ mod tests {
         assert_eq!(line_layout.attributes[9].shader_location, 10);
 
         let path_vertex_layout = path_vertex_layout();
-        assert_eq!(path_vertex_layout.array_stride, 44);
+        assert_eq!(path_vertex_layout.array_stride, 20);
         assert_eq!(path_vertex_layout.step_mode, wgpu::VertexStepMode::Vertex);
-        assert_eq!(path_vertex_layout.attributes.len(), 6);
+        assert_eq!(path_vertex_layout.attributes.len(), 3);
         assert_eq!(
             path_vertex_layout.attributes[1].format,
             wgpu::VertexFormat::Float32x2
@@ -1744,10 +1919,13 @@ mod tests {
             path_vertex_layout.attributes[2].format,
             wgpu::VertexFormat::Uint32
         );
-        assert_eq!(path_vertex_layout.attributes[3].offset, 20);
-        assert_eq!(path_vertex_layout.attributes[5].offset, 36);
-        assert_eq!(path_vertex_layout.attributes[3].shader_location, 11);
-        assert_eq!(path_vertex_layout.attributes[5].shader_location, 13);
+        let triangle_layout = triangle_path_vertex_layout();
+        assert_eq!(triangle_layout.array_stride, 44);
+        assert_eq!(triangle_layout.attributes.len(), 6);
+        assert_eq!(triangle_layout.attributes[3].offset, 20);
+        assert_eq!(triangle_layout.attributes[5].offset, 36);
+        assert_eq!(triangle_layout.attributes[3].shader_location, 11);
+        assert_eq!(triangle_layout.attributes[5].shader_location, 13);
 
         let path_instance_layout = path_instance_layout();
         assert_eq!(path_instance_layout.array_stride, 80);
@@ -1951,7 +2129,8 @@ mod tests {
         let prepared = preparer.prepare(&frame);
 
         let upload = renderer.upload(&device, &queue, &prepared);
-        assert_eq!(upload.buffer_reallocations, 6);
+        // The compact ordinary-path stream is a distinct retained GPU buffer.
+        assert_eq!(upload.buffer_reallocations, 7);
         assert!(upload.bytes_uploaded > size_of::<CircleInstance>());
         assert_eq!(renderer.path_render_bundle_rebuilds(), 1);
 

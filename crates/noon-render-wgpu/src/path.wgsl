@@ -40,6 +40,20 @@ struct PathVertexOutput {
     @location(7) @interpolate(flat) exact_triangle: u32,
 };
 
+struct CompactPathVertexInput {
+    @location(0) local: vec2<f32>,
+    @location(1) target_local: vec2<f32>,
+    @location(2) surface_and_progress: u32,
+    @location(3) translation: vec2<f32>,
+    @location(4) scale: vec2<f32>,
+    @location(5) rotation: f32,
+    @location(6) fill: vec4<f32>,
+    @location(7) stroke: vec4<f32>,
+    @location(8) metrics: vec2<f32>,
+    @location(9) flags: vec2<u32>,
+    @location(10) path_params: vec2<f32>,
+};
+
 struct ClippedPolygon {
     points: array<vec2<f32>, 8>,
     count: u32,
@@ -126,6 +140,41 @@ fn vs_path(input: PathVertexInput) -> PathVertexOutput {
     output.path_progress = path_progress;
     output.reveal = reveal;
     output.is_stroke = select(0.0, 1.0, is_stroke);
+    return output;
+}
+
+@vertex
+fn vs_path_compact(input: CompactPathVertexInput) -> PathVertexOutput {
+    let is_stroke = (input.surface_and_progress & 1u) == 1u;
+    let encoded_progress = (input.surface_and_progress & PATH_PROGRESS_MASK) >> 1u;
+    let path_progress = f32(encoded_progress) / 16777215.0;
+    let reveal = clamp(input.path_params.x, 0.0, 1.0);
+    let local = mix(input.local, input.target_local, clamp(input.path_params.y, 0.0, 1.0));
+    let c = cos(input.rotation);
+    let s = sin(input.rotation);
+    let scaled = local * input.scale;
+    let world = vec2<f32>(c * scaled.x - s * scaled.y, s * scaled.x + c * scaled.y) + input.translation;
+    let fill_enabled = (input.flags.x & 1u) != 0u;
+    let stroke_enabled = (input.flags.y & 1u) != 0u;
+    let derive_creation_stroke = reveal < 1.0 && fill_enabled && !stroke_enabled;
+    let authored_enabled = select(fill_enabled, stroke_enabled, is_stroke);
+    let enabled = authored_enabled || (is_stroke && derive_creation_stroke);
+    let authored_color = select(input.fill, input.stroke, is_stroke);
+    let color = select(authored_color, input.fill, is_stroke && derive_creation_stroke);
+    var creation_outline_alpha = 1.0;
+    if is_stroke && derive_creation_stroke {
+        creation_outline_alpha = 1.0 - smoothstep(0.75, 1.0, reveal);
+    }
+    var output: PathVertexOutput;
+    output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
+    output.color = select(vec4<f32>(0.0), premultiplied(color) * (input.metrics.y * creation_outline_alpha), enabled);
+    output.path_progress = path_progress;
+    output.reveal = reveal;
+    output.is_stroke = select(0.0, 1.0, is_stroke);
+    output.triangle_a = vec2<f32>(0.0);
+    output.triangle_b = vec2<f32>(0.0);
+    output.triangle_c = vec2<f32>(0.0);
+    output.exact_triangle = 0u;
     return output;
 }
 

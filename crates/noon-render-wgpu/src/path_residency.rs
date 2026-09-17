@@ -331,6 +331,7 @@ impl FramePreparer {
                 index_range: ranges.indices,
                 instance_range: u32::try_from(start).expect("path instance limit")
                     ..u32::try_from(self.paths.len()).expect("path instance limit"),
+                triangle_coverage: crate::single_filled_triangle(&entry.mesh).is_some(),
             });
             self.path_batch_cache_indices.push(group.cache_index);
         }

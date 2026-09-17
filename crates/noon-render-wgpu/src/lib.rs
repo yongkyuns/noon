@@ -130,8 +130,7 @@ pub struct PathVertex {
     pub position: [f32; 2],
     pub target_position: [f32; 2],
     /// Low bit is surface (0 fill, 1 stroke); the next 24 bits are normalized
-    /// ordered path progress. Bit 25 marks a single filled triangle that uses
-    /// exact pixel-box coverage in the path shader.
+    /// ordered path progress.
     pub surface: u32,
     /// Local-space vertices for an exact-coverage filled triangle. Ordinary
     /// path vertices leave this zeroed.
@@ -142,6 +141,8 @@ pub struct PathVertex {
 pub struct PathBatch {
     pub index_range: Range<u32>,
     pub instance_range: Range<u32>,
+    /// Use the renderer-local exact triangle vertex stream for this draw.
+    pub triangle_coverage: bool,
 }
 
 /// One ordered draw slice in the packed unique-path index stream.
@@ -1147,6 +1148,8 @@ impl FramePreparer {
         self.path_batches.push(PathBatch {
             index_range,
             instance_range: instance_start..instance_start + 1,
+            triangle_coverage: single_filled_triangle(&self.path_mesh_cache[cache_index].mesh)
+                .is_some(),
         });
         self.path_batch_cache_indices.push(cache_index);
         if !self.individual_path_draws {
@@ -1372,6 +1375,8 @@ impl FramePreparer {
             (packed_vertices.len(), local_indices.len())
         };
         self.path_batch_cache_indices[batch] = cache_index;
+        self.path_batches[batch].triangle_coverage =
+            single_filled_triangle(&self.path_mesh_cache[cache_index].mesh).is_some();
         if let PreparedSlot::Path {
             analytic_reveal,
             partial_reveal_bits,
@@ -1667,6 +1672,7 @@ impl FramePreparer {
                 instance_range: u32::try_from(instance_start)
                     .expect("path instance count exceeds renderer limits")
                     ..instance_end,
+                triangle_coverage: single_filled_triangle(mesh).is_some(),
             });
             self.path_batch_cache_indices.push(group.cache_index);
         }
@@ -2586,7 +2592,6 @@ pub(crate) fn pack_path_mesh(mesh: &TessellatedPath) -> (Vec<PathVertex>, Vec<u3
             TRIANGLE_QUAD_INDICES.to_vec(),
         );
     }
-
     (
         mesh.vertices
             .iter()
@@ -2601,7 +2606,7 @@ pub(crate) fn pack_path_mesh(mesh: &TessellatedPath) -> (Vec<PathVertex>, Vec<u3
     )
 }
 
-fn single_filled_triangle(mesh: &TessellatedPath) -> Option<[[f32; 2]; 3]> {
+pub(crate) fn single_filled_triangle(mesh: &TessellatedPath) -> Option<[[f32; 2]; 3]> {
     if mesh.morphing
         || mesh.vertices.len() != 3
         || mesh.indices.len() != 3

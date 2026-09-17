@@ -31,6 +31,7 @@ impl FramePreparer {
                 self.path_mesh_cache[self.path_batch_cache_indices[index]]
                     .sampled
                     .is_none()
+                    && !batch.triangle_coverage
                     && batch.instance_range.end == batch.instance_range.start + 1
                     && !batch.index_range.is_empty()
             })
@@ -108,6 +109,7 @@ impl FramePreparer {
         if self.path_mesh_cache[self.path_batch_cache_indices[path_batch_index]]
             .sampled
             .is_some()
+            || path_batch.triangle_coverage
         {
             return false;
         }
