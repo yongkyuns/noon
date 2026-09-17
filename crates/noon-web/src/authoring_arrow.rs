@@ -433,6 +433,39 @@ pub struct WasmAuthoringArrowHandle {
 }
 
 impl WasmAuthoringArrowHandle {
+    pub(crate) fn rebind_from_family_copy(
+        &self,
+        copied: &noon::FamilyCopy,
+        vector_index: Option<u32>,
+    ) -> Result<Self, JsValue> {
+        let published = match (&self.published, vector_index) {
+            (PublishedArrowRequest::Arrow(arrow), None) => {
+                PublishedArrowRequest::Arrow(copied.rebind_manim_arrow(arrow).map_err(js_error)?)
+            }
+            (PublishedArrowRequest::Arrow(_), Some(_)) => {
+                return Err(invalid_input(
+                    "arrow.copy_index",
+                    "a single Arrow aggregate cannot be rebound with a vector-field index",
+                ));
+            }
+            (PublishedArrowRequest::VectorField(field), None) => {
+                PublishedArrowRequest::VectorField(
+                    copied
+                        .rebind_manim_arrow_vector_field(field)
+                        .map_err(js_error)?,
+                )
+            }
+            (PublishedArrowRequest::VectorField(field), Some(index)) => {
+                PublishedArrowRequest::Arrow(
+                    copied
+                        .rebind_manim_arrow_vector(field, index as usize)
+                        .map_err(js_error)?,
+                )
+            }
+        };
+        Ok(Self { published })
+    }
+
     fn arrow(&self) -> Result<&noon::ManimArrow, JsValue> {
         match &self.published {
             PublishedArrowRequest::Arrow(arrow) => Ok(arrow),

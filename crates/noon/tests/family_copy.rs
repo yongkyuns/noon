@@ -1,5 +1,93 @@
-use noon::{AnimationOptions, RateFunction, Scene};
+use noon::{
+    AnimationOptions, ManimArrow, ManimArrowOptions, ManimArrowVectorField, RateFunction, Scene,
+    VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D,
+};
 use noon_core::{SemanticObjectProperty, SemanticVec3};
+use std::rc::Rc;
+
+#[test]
+fn arrow_aggregate_rebind_uses_only_copied_components_for_queries_and_scale() {
+    let scene = Scene::new();
+    let mut options = ManimArrowOptions::double_arrow(-2.0, 0.0, 2.0, 0.0).unwrap();
+    options.set_buff(0.0).unwrap();
+    let source = ManimArrow::create(Rc::clone(scene.integration_store()), options).unwrap();
+    let copied = source.family().copy_family().unwrap();
+    let target = copied.rebind_manim_arrow(&source).unwrap();
+
+    assert_ne!(target.family().node_id(), source.family().node_id());
+    assert_ne!(target.shaft().node_id(), source.shaft().node_id());
+    assert_ne!(target.end_tip().node_id(), source.end_tip().node_id());
+    assert_eq!(
+        target.start_tip().unwrap().node_id(),
+        copied
+            .mobject(source.start_tip().unwrap())
+            .unwrap()
+            .node_id()
+    );
+    assert_eq!(
+        target.manim_endpoints().unwrap(),
+        source.manim_endpoints().unwrap()
+    );
+    assert_eq!(
+        target.manim_length().unwrap(),
+        source.manim_length().unwrap()
+    );
+
+    let source_endpoints = source.manim_endpoints().unwrap();
+    let source_length = source.manim_length().unwrap();
+    target.scale(0.5, true).unwrap();
+    assert_eq!(source.manim_endpoints().unwrap(), source_endpoints);
+    assert_eq!(source.manim_length().unwrap(), source_length);
+    assert!((target.manim_length().unwrap() - source_length * 0.5).abs() < 1.0e-6);
+
+    let unrelated = scene.family(&[]).unwrap().copy_family().unwrap();
+    assert!(unrelated.rebind_manim_arrow(&source).is_err());
+}
+
+#[test]
+fn vector_field_aggregate_rebind_keeps_each_vector_on_the_copied_family_graph() {
+    let scene = Scene::new();
+    let source = ManimArrowVectorField::create(
+        Rc::clone(scene.integration_store()),
+        |point| VectorFieldPoint::new(point.x + 1.0, point.y + 1.0),
+        VectorFieldRanges2D::new(
+            VectorFieldAxisRange::new(0.0, 0.0, 1.0),
+            VectorFieldAxisRange::new(0.0, 0.0, 1.0),
+        ),
+    )
+    .unwrap();
+    let copied = source.family().copy_family().unwrap();
+    let target = copied.rebind_manim_arrow_vector_field(&source).unwrap();
+
+    assert_ne!(target.family().node_id(), source.family().node_id());
+    assert_eq!(target.vectors().len(), 1);
+    let source_vector = &source.vectors()[0];
+    let target_vector = &target.vectors()[0];
+    assert_eq!(
+        target_vector.family().node_id(),
+        copied.family(source_vector.family()).unwrap().node_id()
+    );
+    assert_eq!(
+        target_vector.manim_length().unwrap(),
+        source_vector.manim_length().unwrap()
+    );
+
+    let source_length = source_vector.manim_length().unwrap();
+    target_vector.scale(0.5, false).unwrap();
+    assert_eq!(source_vector.manim_length().unwrap(), source_length);
+    assert!((target_vector.manim_length().unwrap() - source_length * 0.5).abs() < 1.0e-6);
+
+    let selected_copy = source_vector.family().copy_family().unwrap();
+    let selected = selected_copy.rebind_manim_arrow_vector(&source, 0).unwrap();
+    assert_eq!(
+        selected.manim_endpoints().unwrap(),
+        source_vector.manim_endpoints().unwrap()
+    );
+    selected.scale(0.5, true).unwrap();
+    assert_eq!(source_vector.manim_length().unwrap(), source_length);
+    assert!((selected.manim_length().unwrap() - source_length * 0.5).abs() < 1.0e-6);
+    assert!(selected_copy.rebind_manim_arrow_vector(&source, 1).is_err());
+}
 
 #[test]
 fn authored_copy_preserves_dag_aliases_order_resources_and_source_state_in_one_commit() {
