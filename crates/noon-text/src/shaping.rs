@@ -14,7 +14,7 @@ use noon_core::{
 use swash::{shape::ShapeContext, text::Script, FontRef};
 
 pub const NATIVE_TEXT_BACKEND_VERSION: &str = "swash-0.2.10";
-const NATIVE_TEXT_TEMPLATE_VERSION: &str = "noon-native-styled-multiline-v1";
+const NATIVE_TEXT_TEMPLATE_VERSION: &str = "noon-native-styled-multiline-v2";
 const MANIM_DEFAULT_LINE_SPACING: f32 = 0.3;
 
 /// Exact immutable OpenType face input. `face_key` derives from the bytes and
@@ -220,7 +220,7 @@ impl NativeTextCompiler {
         if !options.font_size.is_finite() || options.font_size <= 0.0 {
             return Err(NativeTextError::InvalidFontSize);
         }
-        let line_advance = line_advance(options)?;
+        validate_line_spacing(options)?;
         let source_len =
             u32::try_from(source.len()).map_err(|_| NativeTextError::SourceTooLarge)?;
         validate_style_spans(source, spans, source_len)?;
@@ -230,6 +230,18 @@ impl NativeTextCompiler {
             .iter()
             .map(|setting| (setting.tag, setting.value))
             .collect::<Vec<_>>();
+        let line_advance = match kind {
+            TextSourceKind::Markup => {
+                // ManimCE 0.21 passes this value to ManimPango's legacy ignored
+                // positional parameter. Its MarkupText SVG therefore uses Pango's
+                // natural baseline advance, including for an explicit option.
+                let metrics =
+                    font_metrics(&mut self.shape_context, base_font, options, &variations)?;
+                metrics.ascent + metrics.descent + metrics.leading
+            }
+            TextSourceKind::Plain => configured_line_advance(options),
+            _ => unreachable!("native compiler only accepts plain or markup source"),
+        };
 
         let mut runs = Vec::new();
         let mut render_items = Vec::new();
@@ -658,20 +670,24 @@ fn cluster_fill(
     Ok(fill)
 }
 
-fn line_advance(options: &NativeTextOptions) -> Result<f32, NativeTextError> {
+fn validate_line_spacing(options: &NativeTextOptions) -> Result<(), NativeTextError> {
     if !options.line_spacing.is_finite() {
         return Err(NativeTextError::InvalidLineSpacing);
     }
+    let advance = configured_line_advance(options);
+    if !advance.is_finite() || advance <= 0.0 {
+        return Err(NativeTextError::InvalidLineSpacing);
+    }
+    Ok(())
+}
+
+fn configured_line_advance(options: &NativeTextOptions) -> f32 {
     let extra = if options.line_spacing == -1.0 {
         MANIM_DEFAULT_LINE_SPACING
     } else {
         options.line_spacing
     };
-    let advance = options.font_size * (1.0 + extra);
-    if !advance.is_finite() || advance <= 0.0 {
-        return Err(NativeTextError::InvalidLineSpacing);
-    }
-    Ok(advance)
+    options.font_size * (1.0 + extra)
 }
 
 fn split_source_lines(source: &str) -> Result<Vec<SourceLine<'_>>, NativeTextError> {
@@ -1033,6 +1049,33 @@ mod tests {
             .flat_map(|run| run.glyphs.iter())
             .any(|glyph| glyph.cluster.source_span.start >= 2));
         artifact.resource.validate().unwrap();
+    }
+    #[test]
+    fn markup_uses_pango_natural_leading_and_ignores_legacy_spacing_argument() {
+        let font = bundled_font();
+        let source = "A\nB";
+        let style_spans = spans(source, &font, &[(source.len(), None)]);
+        let mut compiler = NativeTextCompiler::new();
+        let default = compiler
+            .compile_styled(source, &font, &NativeTextOptions::new(42.0), &style_spans)
+            .unwrap();
+        let mut explicit_options = NativeTextOptions::new(42.0);
+        explicit_options.line_spacing = 0.8;
+        let explicit = compiler
+            .compile_styled(source, &font, &explicit_options, &style_spans)
+            .unwrap();
+
+        let default_delta =
+            default.resource.runs[0].transform.ty - default.resource.runs[1].transform.ty;
+        let explicit_delta =
+            explicit.resource.runs[0].transform.ty - explicit.resource.runs[1].transform.ty;
+        let metrics =
+            font_metrics(&mut compiler.shape_context, &font, &explicit_options, &[]).unwrap();
+        let natural_advance = metrics.ascent + metrics.descent + metrics.leading;
+
+        assert!((default_delta - natural_advance).abs() < 1e-4);
+        assert!((explicit_delta - natural_advance).abs() < 1e-4);
+        assert_eq!(default.resource.bounds, explicit.resource.bounds);
     }
     #[test]
     fn invalid_style_ranges_and_gaps_are_rejected() {
