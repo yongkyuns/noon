@@ -5,6 +5,7 @@ import initNoonWeb, {
   WasmPlotSamplingPlan,
   WasmManimArrowOptions,
   WasmManimGeometryOptions,
+  WasmImageMobjectOptions,
   WasmSceneMembershipBatch,
   resolveAnimationOptions,
   resolveTransformAnimationOptions,
@@ -123,6 +124,37 @@ async function initializePyodide() {
         (continuation.context !== context || continuation.terminal)) {
       throw new Error("semantic continuation is not active for this Python source run");
     }
+  };
+  self.noonAuthoringImageOptions = WasmImageMobjectOptions;
+  self.noonCreateAuthoringImageHandle = (options) => authoringStore.createImage(options);
+  self.noonLoadImageUrl = async (url) => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`image request failed: HTTP ${response.status}`);
+    const limit = 32 * 1024 * 1024;
+    if (Number(response.headers.get("Content-Length")) > limit) {
+      await response.body?.cancel();
+      throw new Error("encoded image exceeds 32 MiB");
+    }
+    if (!response.body) throw new Error("image response has no body");
+    const reader = response.body.getReader();
+    const chunks = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > limit) {
+          await reader.cancel();
+          throw new Error("encoded image exceeds 32 MiB");
+        }
+        chunks.push(value);
+      }
+    } finally { reader.releaseLock(); }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    return bytes;
   };
   self.noonAuthoringGeometryOptions = WasmManimGeometryOptions;
   self.noonAuthoringArrowOptions = WasmManimArrowOptions;

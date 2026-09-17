@@ -59,6 +59,8 @@ fn failed_geometry_rebuild_cannot_be_reused_by_empty_changes() {
             scratch_reuses: 0,
             text_snapshot_copies: 0,
             mixed_order_rebuilds: 0,
+            image_draw_eligibility_updates: 0,
+            image_painter_order_rekeys: 0,
         }
     );
 
@@ -100,6 +102,8 @@ fn failed_geometry_rebuild_cannot_be_reused_by_empty_changes() {
             scratch_reuses: 0,
             text_snapshot_copies: 0,
             mixed_order_rebuilds: 0,
+            image_draw_eligibility_updates: 0,
+            image_painter_order_rekeys: 0,
         }
     );
 }

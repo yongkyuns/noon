@@ -13,6 +13,8 @@ mod authoring_coordinates;
 mod authoring_error;
 #[cfg(target_arch = "wasm32")]
 mod authoring_geometry;
+#[cfg(target_arch = "wasm32")]
+mod authoring_image;
 mod authoring_mobject;
 #[cfg(target_arch = "wasm32")]
 mod authoring_number_labels;
@@ -55,6 +57,12 @@ mod matching_shapes_smoke;
 mod morph_preload_cases;
 #[cfg(any(target_arch = "wasm32", test))]
 mod plot_error;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+mod raster_image_smoke;
 mod renderer_observation;
 #[cfg(all(
     feature = "renderer",
@@ -69,6 +77,7 @@ mod retained_execution_transport;
 mod retained_family_execution_encoder;
 mod retained_family_execution_transport;
 mod retained_family_transport;
+mod retained_image_transport;
 mod retained_resource_mutation_encoder;
 mod retained_resource_mutation_transport;
 mod retained_resource_transport;
@@ -85,6 +94,8 @@ pub use authoring_coordinates::*;
 pub use authoring_error::AuthoringFailure;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_geometry::*;
+#[cfg(target_arch = "wasm32")]
+pub use authoring_image::*;
 pub use authoring_mobject::*;
 #[cfg(target_arch = "wasm32")]
 pub use authoring_number_labels::*;
@@ -110,6 +121,12 @@ pub use execution_wake::*;
     any(debug_assertions, feature = "renderer-smoke")
 ))]
 pub use matching_shapes_smoke::*;
+#[cfg(all(
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+pub use raster_image_smoke::*;
 pub use renderer_observation::*;
 #[cfg(all(
     feature = "renderer",
@@ -124,6 +141,7 @@ pub use retained_execution_transport::*;
 pub use retained_family_execution_encoder::*;
 pub use retained_family_execution_transport::*;
 pub use retained_family_transport::*;
+pub use retained_image_transport::{TransportImageResourceHandle, TransportImageSampling};
 pub use retained_resource_mutation_encoder::*;
 pub use retained_resource_mutation_transport::*;
 pub use retained_resource_transport::*;

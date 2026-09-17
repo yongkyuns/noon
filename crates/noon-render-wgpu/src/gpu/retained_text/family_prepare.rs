@@ -161,6 +161,7 @@ impl RetainedFramePreparer {
             .count();
         let outline_cache = self.outlines.stats();
         let stats = RetainedPrepareStats {
+            image_objects: self.images.objects.len(),
             semantic_objects: frame.retained.objects.len(),
             geometry_slots: self.scratch.objects.len(),
             glyph_batches,
@@ -190,12 +191,22 @@ impl RetainedFramePreparer {
             dirty_color_ranges: &self.dirty_color_ranges,
         };
         Ok(PreparedRetainedGpuFrame {
+            images: &mut self.images,
             applied_publication: &mut self.last_applied_publication,
             geometry_only: false,
             geometry,
             text_generation: self.text_generation,
             text,
             render_items: &self.render_items,
+            image_draw: PreparedImageDrawState {
+                items: &mut self.image_render_items,
+                visible_items: &mut self.visible_image_render_items,
+                keys: &mut self.image_draw_keys,
+                incremental_stats: &mut self.incremental_stats,
+                visible: false,
+            },
+            object_indices: &self.object_indices,
+            painter_ranks: &self.painter_ranks,
             stats,
             source_geometry_slots: None,
             render_item_ranges: None,

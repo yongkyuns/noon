@@ -387,7 +387,7 @@ mod wasm {
                     js_message("retained execution renderer has no frame snapshot")
                 })?;
                 self.preparer
-                    .prepare_with_changes(
+                    .prepare_with_image_resources(
                         &self.device,
                         &self.queue,
                         frame,
@@ -395,6 +395,7 @@ mod wasm {
                         resources.texts(),
                         resources.fonts(),
                         resources.geometries(),
+                        resources.images(),
                         metrics,
                     )
                     .map_err(js_error)?
@@ -415,6 +416,7 @@ mod wasm {
                         resources.texts(),
                         resources.fonts(),
                         resources.geometries(),
+                        resources.images(),
                         metrics,
                     )
                     .map_err(js_error)?
@@ -451,9 +453,7 @@ mod wasm {
                 self.renderer
                     .upload_transient_presentations(&self.device, &self.queue, &transient);
             self.last_bytes_uploaded = upload
-                .geometry
-                .bytes_uploaded
-                .saturating_add(upload.text.bytes_uploaded)
+                .bytes_uploaded()
                 .saturating_add(transient_upload.bytes_uploaded);
 
             let view = surface_texture
@@ -490,14 +490,8 @@ mod wasm {
             self.queue.submit(Some(encoder.finish()));
             self.queue.present(surface_texture);
             self.presentation_sequence = self.presentation_sequence.saturating_add(1);
-            self.last_draw_calls = draw
-                .geometry
-                .draw_calls
-                .saturating_add(draw.text.draw_calls);
-            self.last_instances_drawn = draw
-                .geometry
-                .instances_drawn
-                .saturating_add(draw.text.instances_drawn);
+            self.last_draw_calls = draw.draw_calls();
+            self.last_instances_drawn = draw.instances_drawn();
             if let Some(observation_target) = observation_target {
                 self.pending_renderer_observation = None;
                 self.last_renderer_observation = Some(match observation_target {

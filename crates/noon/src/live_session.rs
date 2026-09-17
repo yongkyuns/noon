@@ -8,6 +8,7 @@
 
 mod coordinates;
 mod family_layout;
+mod image;
 mod path_editing;
 pub use family_layout::LiveLayoutTarget;
 
@@ -876,6 +877,7 @@ impl<'a> LiveSession<'a> {
         self.create_detached_mobject(state)
     }
 
+    #[cfg(any(feature = "native-text", feature = "typst"))]
     fn create_detached_mobject(
         &mut self,
         state: SemanticObjectState,

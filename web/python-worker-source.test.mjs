@@ -31,6 +31,15 @@ test("generic geometry inputs cross the optional wrapper as typed values", () =>
   assert.doesNotMatch(source, /noonCreateAuthoringMobjectHandle|\.createMobject\(/);
 });
 
+test("image inputs cross the worker as typed retained resources with bounded URL bytes", () => {
+  assert.match(source, /WasmImageMobjectOptions/);
+  assert.match(source, /noonAuthoringImageOptions\s*=\s*WasmImageMobjectOptions/);
+  assert.match(source, /noonCreateAuthoringImageHandle\s*=\s*\(options\)\s*=>\s*authoringStore\.createImage\(options\)/);
+  assert.match(source, /const limit = 32 \* 1024 \* 1024/);
+  assert.match(source, /response\.body\.getReader\(\)/);
+  assert.match(source, /size > limit/);
+});
+
 test("detached ValueTracker construction stays in the shared authoring store", async () => {
   assert.match(
     source,

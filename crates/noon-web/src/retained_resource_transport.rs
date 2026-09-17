@@ -1,3 +1,6 @@
+mod images;
+use crate::TransportImageResourceHandle;
+use images::{install_images, ImageHandles, TransportImageEntry};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt,
@@ -25,7 +28,7 @@ pub(crate) mod incremental_render;
 /// shaped text, vector-decoration geometry, and exact OpenType buffers once when a
 /// retained scene is installed. Python never owns or serializes these payloads.
 pub const RETAINED_RESOURCE_TRANSPORT_CHANNEL: &str = "noon.execution.retained.resources";
-pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 4;
+pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 5;
 
 /// Immutable compiled render geometry at the genuine cross-worker boundary.
 /// Indices are scoped to the player session and this installed resource bundle.
@@ -163,6 +166,7 @@ impl From<GeometryResourceHandle> for TransportGeometryResourceHandle {
 pub struct RetainedResourceBundle {
     pub channel: String,
     pub protocol_version: u32,
+    images: Vec<TransportImageEntry>,
     texts: Vec<TransportTextEntry>,
     geometries: Vec<TransportGeometryEntry>,
     fonts: Vec<TransportFontEntry>,
@@ -171,12 +175,16 @@ pub struct RetainedResourceBundle {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RetainedResourceInventory {
+    images: HashSet<TransportImageResourceHandle>,
     texts: HashSet<TransportTextResourceHandle>,
     geometries: BTreeSet<TransportGeometryResourceHandle>,
     fonts: BTreeSet<(String, u32)>,
 }
 
 impl RetainedResourceInventory {
+    pub(crate) fn contains_image(&self, handle: TransportImageResourceHandle) -> bool {
+        self.images.contains(&handle)
+    }
     pub(crate) fn contains_text(&self, handle: TransportTextResourceHandle) -> bool {
         self.texts.contains(&handle)
     }
@@ -185,6 +193,7 @@ impl RetainedResourceInventory {
 impl RetainedResourceBundle {
     pub(crate) fn inventory(&self) -> RetainedResourceInventory {
         RetainedResourceInventory {
+            images: self.images.iter().map(|entry| entry.handle).collect(),
             texts: self.texts.iter().map(|entry| entry.handle).collect(),
             geometries: self.geometries.iter().map(|entry| entry.handle).collect(),
             fonts: self
@@ -196,6 +205,8 @@ impl RetainedResourceBundle {
     }
 
     pub(crate) fn retain_additions(&mut self, installed: &mut RetainedResourceInventory) {
+        self.images
+            .retain(|entry| installed.images.insert(entry.handle));
         self.texts
             .retain(|entry| installed.texts.insert(entry.handle));
         self.geometries
@@ -208,7 +219,8 @@ impl RetainedResourceBundle {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.texts.is_empty()
+        self.images.is_empty()
+            && self.texts.is_empty()
             && self.geometries.is_empty()
             && self.fonts.is_empty()
             && self.render_geometry_resources.is_none()
@@ -306,6 +318,7 @@ impl RetainedResourceBundle {
         Ok(Self {
             channel: RETAINED_RESOURCE_TRANSPORT_CHANNEL.to_owned(),
             protocol_version: RETAINED_RESOURCE_TRANSPORT_VERSION,
+            images: Vec::new(),
             texts: text_entries,
             geometries: geometry_entries,
             fonts: font_entries.into_values().collect(),
@@ -378,6 +391,7 @@ impl RetainedResourceBundle {
             }
         }
 
+        let (images, image_handles) = install_images(self.images)?;
         let mut geometries = GeometryResourceArena::new();
         let mut geometry_handles = HashMap::with_capacity(self.geometries.len());
         for entry in self.geometries {
@@ -430,11 +444,15 @@ impl RetainedResourceBundle {
         }
 
         let inventory = RetainedResourceInventory {
+            images: image_handles.keys().copied().collect(),
             texts: text_handles.keys().copied().collect(),
             geometries: geometry_handles.keys().copied().collect(),
             fonts: font_bytes.keys().cloned().collect(),
         };
         Ok(InstalledRetainedResources {
+            images,
+            image_handles,
+            image_layers: HashMap::new(),
             texts,
             geometries,
             fonts,
@@ -487,6 +505,9 @@ impl RetainedResourceBundle {
 
 #[derive(Clone, Debug)]
 pub struct InstalledRetainedResources {
+    images: Arc<noon_core::RasterImageResourceArena>,
+    image_handles: ImageHandles,
+    image_layers: HashMap<u64, usize>,
     texts: TextResourceArena,
     geometries: GeometryResourceArena,
     fonts: FontResourceArena,
@@ -563,6 +584,9 @@ impl InstalledRetainedResources {
             return Err(RetainedResourceTransportError::IncrementalRenderGeometryResources);
         }
         let inventory = bundle.inventory();
+        if let Some(handle) = inventory.images.intersection(&self.inventory.images).next() {
+            return Err(RetainedResourceTransportError::DuplicateImage(*handle));
+        }
         if let Some(handle) = inventory.texts.intersection(&self.inventory.texts).next() {
             return Err(RetainedResourceTransportError::DuplicateText(*handle));
         }
@@ -582,6 +606,7 @@ impl InstalledRetainedResources {
             });
         }
         bundle.validate_protocol()?;
+        let (images, image_handles) = install_images(bundle.images)?;
         let mut geometries = GeometryResourceArena::new();
         let mut geometry_handles = HashMap::with_capacity(bundle.geometries.len());
         for entry in bundle.geometries {
@@ -649,6 +674,9 @@ impl InstalledRetainedResources {
             text_handles.insert(entry.handle, local);
         }
         let installed = InstalledRetainedResources {
+            images,
+            image_handles,
+            image_layers: HashMap::new(),
             texts,
             geometries,
             fonts,
@@ -673,6 +701,19 @@ impl InstalledRetainedResources {
 
     pub(crate) fn commit_additions(&mut self, additions: PreparedRetainedResourceAdditions) {
         let layer = self.additions.len();
+        for content in additions.installed.image_handles.values() {
+            self.image_layers.insert(content.resource().arena, layer);
+        }
+        self.inventory
+            .images
+            .extend(additions.installed.inventory.images.iter().copied());
+        self.image_handles.extend(
+            additions
+                .installed
+                .image_handles
+                .iter()
+                .map(|(&key, &value)| (key, value)),
+        );
         for handle in additions.installed.text_handles.values() {
             self.text_layers.insert(handle.arena, layer);
         }
@@ -801,6 +842,9 @@ impl FontResourceLookup for InstalledRetainedResources {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RetainedResourceTransportError {
+    UnknownImage(TransportImageResourceHandle),
+    DuplicateImage(TransportImageResourceHandle),
+    InvalidImage(String),
     InvalidChannel(String),
     UnsupportedVersion(u32),
     UnknownText(TransportTextResourceHandle),
@@ -822,6 +866,15 @@ pub enum RetainedResourceTransportError {
 impl fmt::Display for RetainedResourceTransportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::UnknownImage(handle) => {
+                write!(formatter, "unknown raster image resource {handle:?}")
+            }
+            Self::DuplicateImage(handle) => {
+                write!(formatter, "duplicate raster image resource {handle:?}")
+            }
+            Self::InvalidImage(reason) => {
+                write!(formatter, "invalid raster image resource: {reason}")
+            }
             Self::InvalidRenderPreparation(index) => {
                 write!(formatter, "invalid render geometry preparation {index}")
             }
@@ -1661,6 +1714,7 @@ mod tests {
         let bundle = RetainedResourceBundle {
             channel: "noon.execution".to_owned(),
             protocol_version: RETAINED_RESOURCE_TRANSPORT_VERSION,
+            images: Vec::new(),
             texts: Vec::new(),
             geometries: Vec::new(),
             fonts: Vec::new(),

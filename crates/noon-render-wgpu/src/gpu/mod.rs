@@ -6,9 +6,12 @@ use wgpu::util::DeviceExt;
 
 mod derived_display;
 mod presentation;
+mod raster_image_gpu;
+mod raster_image_prepare;
 use derived_display::DerivedDisplayGpu;
 pub use presentation::OutputTransfer;
 use presentation::PresentationBridge;
+pub use raster_image_prepare::RasterImagePrepareError;
 
 use crate::{
     CircleInstance, LineInstance, PathBatch, PathInstance, PathVertex, PreparedDerivedDisplay,
@@ -353,6 +356,7 @@ pub struct GpuRenderer {
     mega_path_index_buffer: wgpu::Buffer,
     mega_path_vertex_instance_buffer: wgpu::Buffer,
     derived_display: DerivedDisplayGpu,
+    images: Option<raster_image_gpu::RasterImageGpuRenderer>,
     path_render_bundle: Option<wgpu::RenderBundle>,
     path_render_bundle_batches: Vec<PathBatch>,
     path_render_bundle_rebuilds: usize,
@@ -566,6 +570,7 @@ impl GpuRenderer {
             mega_path_index_buffer,
             mega_path_vertex_instance_buffer,
             derived_display,
+            images: None,
             path_render_bundle: None,
             path_render_bundle_batches: Vec::new(),
             path_render_bundle_rebuilds: 0,

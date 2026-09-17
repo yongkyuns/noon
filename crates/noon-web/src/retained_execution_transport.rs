@@ -10,7 +10,7 @@ use noon_core::{
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use serde::{Deserialize, Serialize};
 
-use crate::TransportSlotId;
+use crate::{TransportImageResourceHandle, TransportImageSampling, TransportSlotId};
 
 pub(crate) mod incremental_render_resources;
 
@@ -19,7 +19,7 @@ pub(crate) mod incremental_render_resources;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 4;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransportTextResourceHandle {
@@ -39,13 +39,25 @@ impl TransportTextResourceHandle {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TransportObjectContent {
-    Geometry { geometry: GeometryRef },
-    Text { text: TransportTextResourceHandle },
+    Image {
+        image: TransportImageResourceHandle,
+        sampling: TransportImageSampling,
+    },
+    Geometry {
+        geometry: GeometryRef,
+    },
+    Text {
+        text: TransportTextResourceHandle,
+    },
 }
 
 impl From<&ObjectContentRef> for TransportObjectContent {
     fn from(value: &ObjectContentRef) -> Self {
         match value {
+            ObjectContentRef::Image(image) => Self::Image {
+                image: image.resource().into(),
+                sampling: image.sampling().into(),
+            },
             ObjectContentRef::Geometry(geometry) => Self::Geometry {
                 geometry: geometry.clone(),
             },
@@ -110,6 +122,8 @@ pub enum RetainedTransportApplyOutcome {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RetainedExecutionTransportError {
+    UnknownImageResource(TransportImageResourceHandle),
+    ImageRenderGeometry(TransportSlotId),
     InvalidChannel(String),
     UnsupportedVersion(u32),
     InvalidTime(f64),
@@ -137,6 +151,8 @@ pub enum RetainedExecutionTransportError {
 impl std::fmt::Display for RetainedExecutionTransportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnknownImageResource(handle) => write!(formatter, "unknown raster image resource {handle:?}"),
+            Self::ImageRenderGeometry(slot) => write!(formatter, "image slot {slot:?} cannot carry vector reveal, morph, or render geometry"),
             Self::InvalidChannel(channel) => {
                 write!(
                     formatter,
@@ -587,6 +603,7 @@ pub struct RetainedExecutionFrameMirror {
     object_indices: HashMap<ObjectId, usize>,
     render_geometries: Arc<[Arc<GeometryRef>]>,
     resource_session: Option<u32>,
+    image_handles: HashMap<TransportImageResourceHandle, noon_core::RasterImageContentRef>,
     text_handles: HashMap<TransportTextResourceHandle, TextResourceHandle>,
     camera: Camera2DState,
     frame: Option<FrameState>,
@@ -601,6 +618,21 @@ struct PreparedPainterOrder {
 }
 
 impl RetainedExecutionFrameMirror {
+    pub(crate) fn extend_installed_image_handles(
+        &mut self,
+        additions: &HashMap<TransportImageResourceHandle, noon_core::RasterImageContentRef>,
+    ) {
+        self.image_handles
+            .extend(additions.iter().map(|(&key, &value)| (key, value)));
+    }
+    pub(crate) fn remove_installed_image_handles<'a>(
+        &mut self,
+        handles: impl IntoIterator<Item = &'a TransportImageResourceHandle>,
+    ) {
+        for handle in handles {
+            self.image_handles.remove(handle);
+        }
+    }
     pub(crate) fn with_installed_resources(
         session: Option<u32>,
         geometries: Arc<[Arc<GeometryRef>]>,
@@ -639,6 +671,13 @@ impl RetainedExecutionFrameMirror {
         content: &TransportObjectContent,
     ) -> Result<ObjectContentRef, RetainedExecutionTransportError> {
         match content {
+            TransportObjectContent::Image { image, sampling } => self
+                .image_handles
+                .get(image)
+                .map(|content| ObjectContentRef::Image(content.with_sampling((*sampling).into())))
+                .ok_or(RetainedExecutionTransportError::UnknownImageResource(
+                    *image,
+                )),
             TransportObjectContent::Geometry { geometry } => {
                 Ok(ObjectContentRef::Geometry(geometry.clone()))
             }
@@ -1082,6 +1121,9 @@ fn incremental_content_identity_matches(
 ) -> bool {
     match (current, next) {
         (ObjectContentRef::Geometry(_), ObjectContentRef::Geometry(_)) => true,
+        (ObjectContentRef::Image(current), ObjectContentRef::Image(next)) => {
+            current.resource() == next.resource()
+        }
         (ObjectContentRef::Text(current), ObjectContentRef::Text(next)) => current == next,
         _ => false,
     }
@@ -1185,6 +1227,18 @@ fn validate_object_state(
     }
     if object.render_geometry.is_some() && object.render_geometry_resource.is_some() {
         return Err(RetainedExecutionTransportError::AmbiguousRenderGeometry(
+            object.slot,
+        ));
+    }
+    if matches!(&object.content, TransportObjectContent::Image { .. })
+        && (object.render_geometry.is_some()
+            || object.render_geometry_resource.is_some()
+            || object.render_transform.is_some()
+            || object.reveal != 1.0
+            || object.morph != 0.0
+            || object.text_bounds.is_some())
+    {
+        return Err(RetainedExecutionTransportError::ImageRenderGeometry(
             object.slot,
         ));
     }

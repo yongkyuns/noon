@@ -1,4 +1,4 @@
-use crate::{GeometryRef, TextResourceHandle};
+use crate::{GeometryRef, SemanticImageContent, TextResourceHandle};
 use crate::{
     SemanticNodeId, SemanticPresentation, SemanticSignalValueKind, SemanticStyle,
     SemanticTransform2_5D, StoredGeometry,
@@ -18,21 +18,35 @@ pub use coordinate_role::SemanticNumberLineRole;
 pub enum SemanticObjectContent {
     Geometry(StoredGeometry),
     Text(TextResourceHandle),
+    Image(SemanticImageContent),
 }
 
 impl SemanticObjectContent {
     pub const fn geometry(self) -> Option<StoredGeometry> {
         match self {
             Self::Geometry(content) => Some(content),
-            Self::Text(_) => None,
+            Self::Text(_) | Self::Image(_) => None,
+        }
+    }
+
+    pub const fn image(self) -> Option<SemanticImageContent> {
+        match self {
+            Self::Image(content) => Some(content),
+            Self::Geometry(_) | Self::Text(_) => None,
         }
     }
 
     pub const fn text(self) -> Option<TextResourceHandle> {
         match self {
-            Self::Geometry(_) => None,
+            Self::Geometry(_) | Self::Image(_) => None,
             Self::Text(handle) => Some(handle),
         }
+    }
+}
+
+impl From<SemanticImageContent> for SemanticObjectContent {
+    fn from(value: SemanticImageContent) -> Self {
+        Self::Image(value)
     }
 }
 
@@ -297,21 +311,35 @@ impl SemanticObjectState {
 pub enum ObjectContentRef {
     Geometry(GeometryRef),
     Text(TextResourceHandle),
+    Image(crate::RasterImageContentRef),
 }
 
 impl ObjectContentRef {
+    pub const fn image(&self) -> Option<crate::RasterImageContentRef> {
+        match self {
+            Self::Image(image) => Some(*image),
+            Self::Geometry(_) | Self::Text(_) => None,
+        }
+    }
+
     pub fn geometry(&self) -> Option<&GeometryRef> {
         match self {
             Self::Geometry(geometry) => Some(geometry),
-            Self::Text(_) => None,
+            Self::Text(_) | Self::Image(_) => None,
         }
     }
 
     pub const fn text(&self) -> Option<TextResourceHandle> {
         match self {
-            Self::Geometry(_) => None,
+            Self::Geometry(_) | Self::Image(_) => None,
             Self::Text(handle) => Some(*handle),
         }
+    }
+}
+
+impl From<crate::RasterImageContentRef> for ObjectContentRef {
+    fn from(value: crate::RasterImageContentRef) -> Self {
+        Self::Image(value)
     }
 }
 

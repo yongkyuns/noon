@@ -74,7 +74,21 @@ impl RetainedFamilyExecutionDeltaEncoder {
         texts: &(impl TextResourceLookup + ?Sized),
         geometries: &(impl GeometryResourceLookup + ?Sized),
         fonts: &(impl FontResourceLookup + ?Sized),
+        images: &(impl noon_core::RasterImageResourceLookup + ?Sized),
     ) -> Result<(), RetainedResourceTransportError> {
+        let new_images = envelope
+            .retained
+            .objects
+            .iter()
+            .filter_map(|object| match object.content {
+                crate::TransportObjectContent::Image { image, .. }
+                    if !self.resources.contains_image(image) =>
+                {
+                    Some(noon_core::RasterImageResourceHandle::from(image))
+                }
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
         let new_texts = text_handles
             .into_iter()
             .filter(|handle| {
@@ -133,7 +147,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
             staged_slot_resources.remove(slot);
         }
 
-        if new_texts.is_empty() && new_render_geometries.is_empty() {
+        if new_texts.is_empty() && new_images.is_empty() && new_render_geometries.is_empty() {
             self.render_geometry_resources = staged_slot_resources;
             self.next_render_geometry_resource = next_render_geometry_resource;
             return Ok(());
@@ -146,6 +160,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
             fonts,
             &self.resources,
         )?;
+        additions.capture_images(new_images, images)?;
         additions.retain_additions(&mut self.resources);
         if !new_render_geometries.is_empty() {
             additions.set_render_geometries(

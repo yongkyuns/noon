@@ -94,7 +94,13 @@ impl RetainedFramePreparer {
             self.set_painter_order_range(publication.painter_order(), range);
         }
 
-        let prepared = self.prepare_family_plan_set_with_changes_inner(
+        let images = self.stage_image_publication(
+            device,
+            publication.frame(),
+            publication.changes(),
+            Some(publication.raster_image_resources()),
+        )?;
+        let mut prepared = self.prepare_family_plan_set_with_changes_inner(
             device,
             queue,
             &frame,
@@ -107,6 +113,7 @@ impl RetainedFramePreparer {
             Some(visible_object_indices),
             Some(publication.active_family_animation_indices()),
         )?;
+        prepared.commit_images(images, Some(visible_object_indices));
         *prepared.applied_publication = Some(received);
         Ok(prepared)
     }
@@ -143,9 +150,12 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
-        self.prepare_family_plan_set_with_changes_inner(
+        let images = self.stage_image_publication(device, frame.retained, changes, None)?;
+        let mut prepared = self.prepare_family_plan_set_with_changes_inner(
             device, queue, frame, plans, changes, texts, fonts, geometries, metrics, None, None,
-        )
+        )?;
+        prepared.commit_images(images, None);
+        Ok(prepared)
     }
 
     /// Worker-boundary equivalent of the typed publication path. The installed
@@ -163,9 +173,11 @@ impl RetainedFramePreparer {
         texts: &(impl TextResourceLookup + ?Sized),
         fonts: &(impl FontResourceLookup + ?Sized),
         geometries: &(impl GeometryResourceLookup + ?Sized),
+        images: &dyn RasterImageResourceLookup,
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedFamilyPlanSetPrepareError> {
-        self.prepare_family_plan_set_with_changes_inner(
+        let images = self.stage_image_publication(device, frame.retained, changes, Some(images))?;
+        let mut prepared = self.prepare_family_plan_set_with_changes_inner(
             device,
             queue,
             frame,
@@ -177,7 +189,9 @@ impl RetainedFramePreparer {
             metrics,
             None,
             Some(active_indices),
-        )
+        )?;
+        prepared.commit_images(images, None);
+        Ok(prepared)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -295,6 +309,7 @@ impl RetainedFramePreparer {
             .count();
         let outline_cache = self.outlines.stats();
         let stats = RetainedPrepareStats {
+            image_objects: self.images.objects.len(),
             semantic_objects: frame.retained.objects.len(),
             geometry_slots: self.scratch.objects.len(),
             glyph_batches,
@@ -322,6 +337,7 @@ impl RetainedFramePreparer {
             dirty_color_ranges: &self.dirty_color_ranges,
         };
         Ok(PreparedRetainedGpuFrame {
+            images: &mut self.images,
             applied_publication: &mut self.last_applied_publication,
             geometry_only: false,
             geometry,
@@ -332,6 +348,15 @@ impl RetainedFramePreparer {
             } else {
                 &self.render_items
             },
+            image_draw: PreparedImageDrawState {
+                items: &mut self.image_render_items,
+                visible_items: &mut self.visible_image_render_items,
+                keys: &mut self.image_draw_keys,
+                incremental_stats: &mut self.incremental_stats,
+                visible: visible_object_indices.is_some(),
+            },
+            object_indices: &self.object_indices,
+            painter_ranks: &self.painter_ranks,
             stats,
             source_geometry_slots: None,
             render_item_ranges: None,
@@ -643,6 +668,7 @@ impl RetainedFramePreparer {
             .prepare_incremental(&self.scratch, &scratch_changes);
         let outline_cache = self.outlines.stats();
         let stats = RetainedPrepareStats {
+            image_objects: self.images.objects.len(),
             outline_cache_hits: outline_cache.hits,
             outline_cache_misses: outline_cache.misses,
             ..self.snapshot_prepare_stats
@@ -662,6 +688,7 @@ impl RetainedFramePreparer {
             dirty_color_ranges: &self.dirty_color_ranges,
         };
         Ok(PreparedRetainedGpuFrame {
+            images: &mut self.images,
             applied_publication: &mut self.last_applied_publication,
             geometry_only: false,
             geometry,
@@ -672,6 +699,15 @@ impl RetainedFramePreparer {
             } else {
                 &self.render_items
             },
+            image_draw: PreparedImageDrawState {
+                items: &mut self.image_render_items,
+                visible_items: &mut self.visible_image_render_items,
+                keys: &mut self.image_draw_keys,
+                incremental_stats: &mut self.incremental_stats,
+                visible: visible_object_indices.is_some(),
+            },
+            object_indices: &self.object_indices,
+            painter_ranks: &self.painter_ranks,
             stats,
             source_geometry_slots: None,
             render_item_ranges: None,

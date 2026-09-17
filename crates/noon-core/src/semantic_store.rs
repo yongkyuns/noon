@@ -57,6 +57,10 @@ pub use semantic_family::*;
 mod semantic_model;
 pub use semantic_model::*;
 
+mod image_content;
+pub use image_content::*;
+mod semantic_image_resources;
+
 mod object_content;
 pub use object_content::*;
 
@@ -545,6 +549,7 @@ pub struct SemanticStore {
     identity: SemanticStoreIdentity,
     geometry_resources: crate::GeometryResourceArena,
     text_resources: crate::TextResourceArena,
+    raster_image_resources: crate::RasterImageResourceArena,
     font_resources: crate::FontResourceArena,
     slots: Vec<SemanticSlot>,
     free_head: Option<u32>,
@@ -574,6 +579,8 @@ impl Clone for SemanticStore {
         });
         let mut font_resources = self.font_resources.clone();
         font_resources.fork_namespace();
+        let raster_image_resources = self.raster_image_resources.clone();
+        let image_namespace = raster_image_resources.namespace();
         let mut slots = self.slots.clone();
         for slot in &mut slots {
             if let Some(node) = slot.node.as_mut() {
@@ -589,6 +596,16 @@ impl Clone for SemanticStore {
                         {
                             handle.arena = text_namespace;
                         }
+                        crate::SemanticObjectContent::Image(content)
+                            if self
+                                .raster_image_resources
+                                .get(content.resource())
+                                .is_some() =>
+                        {
+                            let mut handle = content.resource();
+                            handle.arena = image_namespace;
+                            content.remap_resource(handle);
+                        }
                         _ => {}
                     }
                 }
@@ -598,6 +615,7 @@ impl Clone for SemanticStore {
             identity: SemanticStoreIdentity::default(),
             geometry_resources,
             text_resources,
+            raster_image_resources,
             font_resources,
             slots,
             free_head: self.free_head,

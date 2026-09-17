@@ -264,6 +264,21 @@
       "thumbnail_alt": "Blue sine curve and yellow sampled data over labeled coordinate axes",
       "thumbnail_time": 0,
       "order": 1170
+    },
+    {
+      "id": "noon-raster-image",
+      "title": "RasterImage",
+      "summary": "Immutable ImageMobject resources with endpoint-qualified transforms and retained texture reuse.",
+      "status": "ready",
+      "path": "python/examples/raster_image.py",
+      "category": "manim-compatible/images",
+      "features": ["ImageMobject", "FadeIn", "Transform", "FadeOut", "retained-image", "endpoint-parity", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "thumbnail": "thumbnails/manim/raster-image.svg",
+      "thumbnail_alt": "Two retained raster image cards on the Noon scene background",
+      "thumbnail_time": 2,
+      "order": 1180
     }
   ]
 }

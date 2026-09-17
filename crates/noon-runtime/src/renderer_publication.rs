@@ -171,6 +171,7 @@ pub struct RendererPublication<'a> {
     text_resources: &'a dyn TextResourceLookup,
     font_resources: &'a dyn FontResourceLookup,
     geometry_resources: &'a dyn GeometryResourceLookup,
+    raster_image_resources: &'a dyn noon_core::RasterImageResourceLookup,
     family_animation_plans: &'a [RetainedFamilyAnimationPlan],
     active_family_animation_indices: &'a BTreeSet<usize>,
     painter_order: &'a [u32],
@@ -196,6 +197,10 @@ impl RendererPublication<'_> {
 
     pub fn font_resources(&self) -> &dyn FontResourceLookup {
         self.font_resources
+    }
+
+    pub fn raster_image_resources(&self) -> &dyn noon_core::RasterImageResourceLookup {
+        self.raster_image_resources
     }
 
     pub fn geometry_resources(&self) -> &dyn GeometryResourceLookup {
@@ -273,6 +278,7 @@ impl<'a> RendererPublication<'a> {
         text_resources: &'a dyn TextResourceLookup,
         font_resources: &'a dyn FontResourceLookup,
         geometry_resources: &'a dyn GeometryResourceLookup,
+        raster_image_resources: &'a dyn noon_core::RasterImageResourceLookup,
         family_animation_plans: &'a [RetainedFamilyAnimationPlan],
         active_family_animation_indices: &'a BTreeSet<usize>,
         painter_order: &'a [u32],
@@ -284,6 +290,7 @@ impl<'a> RendererPublication<'a> {
             text_resources,
             font_resources,
             geometry_resources,
+            raster_image_resources,
             family_animation_plans,
             active_family_animation_indices,
             painter_order,

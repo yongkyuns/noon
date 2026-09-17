@@ -208,6 +208,16 @@ pub(super) fn lower_content(
                     SemanticCompiledSceneError::UnsupportedGeometryResource { node, resource }
                 }
             }),
+        SemanticObjectContent::Image(image) => {
+            let store = store.ok_or(SemanticCompiledSceneError::Resource {
+                node,
+                error: CompiledResourceError::MissingImage(image.resource()),
+            })?;
+            let content = resources
+                .capture_image(store, image)
+                .map_err(|error| SemanticCompiledSceneError::Resource { node, error })?;
+            Ok((ObjectContentRef::Image(content), None))
+        }
         SemanticObjectContent::Text(text) => {
             let store = store.ok_or(SemanticCompiledSceneError::Resource {
                 node,
