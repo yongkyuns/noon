@@ -1845,6 +1845,11 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
         excluded = {
             "_raw", "_scene", "_object", "_semantic_handle", "_semantic_handle_fresh",
             "_semantic_family_handle", "_semantic_member_wrappers", "_canonical_live_target_context",
+            # Arrow and ArrowVectorField keep this aggregate JS capability only for
+            # convenience queries and dependent edits. Family copying already maps
+            # the authoritative family and every leaf below; there is no valid
+            # Python deepcopy or aggregate-handle alias for the target family.
+            "_semantic_arrow_handle",
             "_noon_updater_registrations", "_noon_updater_registration_history",
         }
         if not isinstance(value, _compat.Group) and _is_bound(value) and hasattr(value, "_noon_updaters"):
@@ -1876,6 +1881,15 @@ def _group_copy_operation(self: _compat.Group, *, cyclic_replace: bool) -> _comp
                 target._canonical_live_target_context = context
     for target, members in family_members:
         target._semantic_member_wrappers = {_family_wrapper_key(member): member for member in members}
+    for source, target in pairs:
+        aggregate = getattr(source, "_semantic_arrow_handle", None)
+        if aggregate is not None:
+            index = getattr(source, "_semantic_arrow_index", None)
+            if index is None:
+                target._semantic_arrow_handle = engine_call(copied.arrowFor, aggregate)
+            else:
+                target._semantic_arrow_handle = engine_call(copied.arrowFor, aggregate, index)
+                target.__dict__.pop("_semantic_arrow_index", None)
     return clone
 
 

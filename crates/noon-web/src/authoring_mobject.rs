@@ -781,6 +781,15 @@ mod wasm {
                 .map(WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(js_error)
         }
+
+        #[wasm_bindgen(js_name = arrowFor)]
+        pub fn arrow_for(
+            &self,
+            source: &crate::WasmAuthoringArrowHandle,
+            vector_index: Option<u32>,
+        ) -> Result<crate::WasmAuthoringArrowHandle, JsValue> {
+            source.rebind_from_family_copy(&self.copied, vector_index)
+        }
     }
 
     impl WasmAuthoringFamilyHandle {

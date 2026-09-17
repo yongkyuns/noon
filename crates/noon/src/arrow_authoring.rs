@@ -249,6 +249,24 @@ impl ManimArrow {
         self.start_tip.as_ref()
     }
 
+    /// Rebuild this typed view from components already mapped by a family copy.
+    ///
+    /// This is crate-private so the semantic-copy authority remains the sole
+    /// source of copied identities and topology.
+    pub(crate) fn from_copied_components(
+        family: MobjectFamily,
+        shaft: Mobject,
+        end_tip: Mobject,
+        start_tip: Option<Mobject>,
+    ) -> Self {
+        Self {
+            family,
+            shaft,
+            end_tip,
+            start_tip,
+        }
+    }
+
     fn from_committed(
         store: Rc<RefCell<SemanticStore>>,
         committed: CommittedArrow,

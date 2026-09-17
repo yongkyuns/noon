@@ -1,6 +1,6 @@
 //! Atomic copies of the authoritative semantic family graph.
 use crate::AuthoringError;
-use crate::{Mobject, MobjectFamily, MobjectTarget};
+use crate::{ManimArrow, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget};
 use noon_core::{
     SemanticLocalNodeToken, SemanticMutationTransaction, SemanticMutationTransactionResult,
     SemanticNodeCreation, SemanticNodeId, SemanticNodeKind, SemanticObjectState, SemanticStore,
@@ -36,6 +36,56 @@ impl FamilyCopy {
             Rc::clone(self.root.integration_store()),
             self.copied_id(source.node_id())?,
         )
+    }
+
+    /// Rebind an Arrow aggregate to the semantic components created by this
+    /// copy. This never recreates geometry: every component must already be in
+    /// the authoritative copied-family map.
+    pub fn rebind_manim_arrow(&self, source: &ManimArrow) -> Result<ManimArrow, AuthoringError> {
+        Ok(ManimArrow::from_copied_components(
+            self.family(source.family())?,
+            self.mobject(source.shaft())?,
+            self.mobject(source.end_tip())?,
+            source
+                .start_tip()
+                .map(|tip| self.mobject(tip))
+                .transpose()?,
+        ))
+    }
+
+    /// Rebind a static ArrowVectorField aggregate using only its copied outer
+    /// family and copied Arrow component identities.
+    pub fn rebind_manim_arrow_vector_field(
+        &self,
+        source: &ManimArrowVectorField,
+    ) -> Result<ManimArrowVectorField, AuthoringError> {
+        let vectors = source
+            .vectors()
+            .iter()
+            .map(|arrow| self.rebind_manim_arrow(arrow))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ManimArrowVectorField::from_copied_components(
+            self.family(source.family())?,
+            vectors,
+        ))
+    }
+
+    /// Rebind one ArrowVectorField member as an independent Arrow aggregate.
+    /// The selected vector family must be present in this copy; callers use
+    /// this when copying one field member without its outer field family.
+    pub fn rebind_manim_arrow_vector(
+        &self,
+        source: &ManimArrowVectorField,
+        index: usize,
+    ) -> Result<ManimArrow, AuthoringError> {
+        let arrow = source
+            .vectors()
+            .get(index)
+            .ok_or(AuthoringError::InvalidSubmobjectIndex {
+                family: source.family().node_id(),
+                index: index as isize,
+            })?;
+        self.rebind_manim_arrow(arrow)
     }
 
     fn require_store(&self, store: &Rc<RefCell<SemanticStore>>) -> Result<(), AuthoringError> {
