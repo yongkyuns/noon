@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises";
 
 const bootstrap = await readFile(new URL("./live-authoring-bootstrap.js", import.meta.url), "utf8");
 const editorBootstrap = await readFile(new URL("./python-editor-bootstrap.js", import.meta.url), "utf8");
-const runner = await readFile(new URL("./latest-source-runner.js", import.meta.url), "utf8");
 
 assert.match(
   editorBootstrap,
@@ -17,28 +16,18 @@ assert.match(
 );
 assert.match(
   bootstrap,
-  /run: \(\) => gallery\.run\(\)/,
-  "live edits must use the existing full-source Run path",
+  /await afterInitialPaint\(\);[\s\S]*await gallery\.run\(\);/,
+  "initial preload must use the initialized playground Run path after paint",
+);
+assert.doesNotMatch(
+  bootstrap,
+  /LatestSourceRunner|addEventListener\("input"|requestLatestSource/,
+  "editing must remain execution-inert after the warmup Run",
 );
 assert.match(
   bootstrap,
-  /runInFlight: \(\) => gallery\.runInFlight/,
-  "live edits must observe the existing in-flight Run boundary",
-);
-assert.match(
-  bootstrap,
-  /currentExampleId: \(\) => gallery\.selectedExampleId/,
-  "live edits must stay pinned to the currently selected example",
-);
-assert.match(
-  bootstrap,
-  /editor\.addEventListener\("input", onInput\)/,
-  "editor input must schedule a debounced full-source rerun",
-);
-assert.match(
-  bootstrap,
-  /await afterInitialPaint\(\);[\s\S]*requestLatestSource\(\{ immediate: true \}\)/,
-  "initial preload must cross the explicit paint boundary before warming Python/runtime",
+  /Editing after this point is deliberately[\s\S]*explicit Run/,
+  "the bootstrap must document the explicit authoring boundary",
 );
 assert.match(
   bootstrap,
@@ -56,20 +45,4 @@ assert.doesNotMatch(
   "live authoring must not introduce another Python client, execution owner, or worker topology",
 );
 
-assert.match(
-  runner,
-  /const joinedExistingRun = Boolean\(this\.#runInFlight\(\)\);[\s\S]*await this\.#run\(\);[\s\S]*if \(joinedExistingRun\) \{\s*continue;/,
-  "an edit that arrives during an older Run must issue a fresh rerun after that Run completes",
-);
-assert.match(
-  runner,
-  /targetExampleId !== this\.#currentExampleId\(\)/,
-  "queued edits must not leak across example selection changes",
-);
-assert.doesNotMatch(
-  runner,
-  /PythonAuthoringClient|AuthoringExecutionClient|ExecutionWorkerClient|SemanticMutation|SceneRevision|ExecutionRevision|FrameEpoch/,
-  "editor request coalescing must remain outside engine semantic/publication authority",
-);
-
-console.log("✓ live authoring preloads one existing session after paint and coalesces edits onto full-source Run");
+console.log("✓ authoring preloads after paint while Python edits remain execution-inert until Run");

@@ -70,6 +70,96 @@ test("semantic continuation control bypasses the blocked interpreter request que
     source.indexOf("async function handleRequest"),
   );
   assert.doesNotMatch(lane, /runPythonAsync/);
+  const queuedLane = source.slice(
+    source.indexOf("async function handleRequest"),
+    source.indexOf("async function attachSemanticExecutionRequest"),
+  );
+  assert.doesNotMatch(queuedLane, /release_semantic_execution/);
+});
+
+test("releasing a prior context bypasses a fresh continuation without retiring its owner", async () => {
+  const start = source.indexOf("function isContinuationControl");
+  const end = source.indexOf("async function handleRequest", start);
+  assert.ok(start >= 0 && end > start, "continuation control boundaries must exist");
+  const controlsSource = source.slice(start, end);
+  const prior = { released: false, endpoints: new Set() };
+  const fresh = { released: false, endpoints: new Set() };
+  const contexts = new Map([["prior", prior], ["fresh", fresh]]);
+  const freshContinuation = {
+    contextId: "fresh",
+    generation: 7,
+    runRequestId: 41,
+    terminal: false,
+  };
+  const posts = [];
+  const errors = [];
+  const retired = [];
+  const controls = new Function(
+    "AUTHORING_CHANNEL", "isRecord", "validateRequest", "pyodidePromise",
+    "attachSemanticExecutionRequest", "semanticContexts", "activeAuthoringRun",
+    "retireSemanticContext", "post", "postError", "failContinuation", `
+      ${controlsSource}
+      return { isContinuationControl, handleContinuationControl };
+    `,
+  )(
+    "noon.authoring",
+    (value) => typeof value === "object" && value !== null && !Array.isArray(value),
+    (request) => assert.equal(request.channel, "noon.authoring"),
+    Promise.resolve({}),
+    async () => assert.fail("release must not attach a fresh endpoint"),
+    contexts,
+    { continuation: freshContinuation },
+    (contextId, entry) => {
+      retired.push({ contextId, entry });
+      if (entry.released && entry.endpoints.size === 0) contexts.delete(contextId);
+    },
+    (type, payload) => posts.push({ type, ...payload }),
+    (requestId, error) => errors.push({ requestId, message: String(error.message ?? error) }),
+    () => assert.fail("release must not cancel a fresh continuation"),
+  );
+
+  let finishQueuedRun;
+  const queuedRun = new Promise((resolve) => { finishQueuedRun = resolve; });
+  let queuedRunFinished = false;
+  void queuedRun.then(() => { queuedRunFinished = true; });
+  let requestQueue = queuedRun;
+  const dispatch = (request) => {
+    if (controls.isContinuationControl(request)) return controls.handleContinuationControl(request);
+    requestQueue = requestQueue.then(() => assert.fail("unrelated release must not enter interpreter queue"));
+    return requestQueue;
+  };
+
+  const release = dispatch({
+    channel: "noon.authoring",
+    type: "release_semantic_execution",
+    requestId: 9,
+    contextId: "prior",
+  });
+  await release;
+  assert.equal(queuedRunFinished, false, "prior-context release must not wait for the fresh source");
+  assert.equal(prior.released, true);
+  assert.deepEqual(retired, [{ contextId: "prior", entry: prior }]);
+  assert.equal(contexts.has("prior"), false, "the released prior token must be retired");
+  assert.deepEqual(posts, [{ type: "semantic_execution_released", requestId: 9 }]);
+  assert.deepEqual(errors, []);
+  assert.equal(contexts.get("fresh"), fresh);
+  assert.equal(fresh.released, false);
+  assert.equal(freshContinuation.terminal, false);
+
+  await controls.handleContinuationControl({
+    channel: "noon.authoring",
+    type: "release_semantic_execution",
+    requestId: 10,
+    contextId: "fresh",
+  });
+  assert.deepEqual(errors, [{
+    requestId: 10,
+    message: "cannot release an active semantic continuation context",
+  }]);
+  assert.equal(fresh.released, false);
+  assert.equal(freshContinuation.terminal, false);
+  finishQueuedRun();
+  await queuedRun;
 });
 
 test("semantic continuation delivers required callback work to its suspended source", () => {

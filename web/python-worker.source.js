@@ -501,7 +501,8 @@ function failContinuation(continuation, error) {
 
 function isContinuationControl(request) {
   return isRecord(request) && request.channel === AUTHORING_CHANNEL &&
-    (request.type === "cancel_semantic_continuation" ||
+    (request.type === "release_semantic_execution" ||
+      request.type === "cancel_semantic_continuation" ||
       (request.type === "attach_semantic_execution" &&
        request.continuationGeneration !== undefined));
 }
@@ -515,6 +516,20 @@ async function handleContinuationControl(request) {
     if (request.type === "attach_semantic_execution") {
       await attachSemanticExecutionRequest(request, true, pyodide);
       post("semantic_execution_attached", { requestId });
+      return;
+    }
+    if (request.type === "release_semantic_execution") {
+      const entry = semanticContexts.get(request.contextId);
+      const continuation = activeAuthoringRun?.continuation;
+      if (continuation !== null && continuation !== undefined &&
+          continuation.contextId === request.contextId && !continuation.terminal) {
+        throw new Error("cannot release an active semantic continuation context");
+      }
+      if (entry) {
+        entry.released = true;
+        retireSemanticContext(request.contextId, entry);
+      }
+      post("semantic_execution_released", { requestId });
       return;
     }
     const entry = semanticContexts.get(request.contextId);
@@ -574,15 +589,6 @@ async function handleRequest(request) {
     if (request.type === "attach_semantic_execution") {
       await attachSemanticExecutionRequest(request, false, pyodide);
       post("semantic_execution_attached", { requestId });
-      return;
-    }
-    if (request.type === "release_semantic_execution") {
-      const entry = semanticContexts.get(request.contextId);
-      if (entry) {
-        entry.released = true;
-        retireSemanticContext(request.contextId, entry);
-      }
-      post("semantic_execution_released", { requestId });
       return;
     }
     throw new Error(`Unsupported Python authoring request: ${request.type}`);

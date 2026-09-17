@@ -3,6 +3,8 @@ import json
 import unittest
 from pathlib import Path
 
+from _manim_source_execution import compile_authoring_source
+
 WEB_ROOT = Path(__file__).parents[1]
 REPO_ROOT = WEB_ROOT.parent
 STRESS_MANIFEST_PATH = WEB_ROOT / "python" / "examples" / "manim_stress_manifest.json"
@@ -82,6 +84,21 @@ class ManimStressExampleTests(unittest.TestCase):
         self.assertEqual(fixture["scene"], "MixedObjectParityStress")
         self.assertEqual(fixture["source"], entry["parity_source"])
         self.assertEqual(fixture["expected_duration"], 5.0)
+
+    def test_source_owned_stress_fixture_keeps_its_first_play_portable(self) -> None:
+        source_path = WEB_ROOT / "python" / "examples" / "manim_parity_stress_grid.py"
+        source = source_path.read_text(encoding="utf-8")
+        first_play_boundary = "            run_time=0.35,\n        )\n"
+        self.assertEqual(source.count(first_play_boundary), 1)
+        source_owned = source.replace(
+            first_play_boundary,
+            f"{first_play_boundary}        self.wait(600.0)\n",
+            1,
+        ).replace("rows = 20", "rows = 5", 1)
+
+        _, portable_constructs = compile_authoring_source(source_owned)
+
+        self.assertEqual(len(portable_constructs), 1)
 
 
 if __name__ == "__main__":

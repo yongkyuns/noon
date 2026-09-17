@@ -7,7 +7,7 @@ const runStart = main.indexOf("async function runScene()");
 const runEnd = main.indexOf("async function selectExample(", runStart);
 const runScene = main.slice(runStart, runEnd);
 
-test("playground attaches an early Python continuation and adopts it only once", () => {
+test("playground attaches an early Python continuation then promotes the same semantic context to replay", () => {
   assert.ok(runStart >= 0 && runEnd > runStart);
   assert.match(runScene, /onSemanticContinuation\(registration\)/);
   assert.match(
@@ -23,26 +23,29 @@ test("playground attaches an early Python continuation and adopts it only once",
   const ordinaryStart = runScene.indexOf("else if (player === null)", adoptionStart);
   const adoption = runScene.slice(adoptionStart, ordinaryStart);
   assert.match(adoption, /sameSemanticContinuation/);
-  assert.match(adoption, /await player\.state\(\)/);
-  assert.doesNotMatch(adoption, /startSemanticExecution|reconcileSemanticExecution/);
+  assert.match(adoption, /contextId: semanticExecution\.contextId/);
+  assert.match(adoption, /callbackSessionId: semanticExecution\.callbackSessionId \?\? null/);
+  assert.match(adoption, /continuationGeneration: null/);
+  assert.match(adoption, /await player\.reconcileSemanticExecution\(replayExecution,[\s\S]*?loopDurationSeconds,/);
+  assert.doesNotMatch(adoption, /await player\.state\(\)/);
 });
 
-test("playground tears down an early continuation when its run becomes stale", () => {
+test("playground retains one cancellable source-continuation owner for explicit rerun", () => {
   assert.match(
     runScene,
     /discardEarlyContinuationRuntime\(earlyContinuation\?\.attachedPlayer\)/,
   );
   assert.match(
     runScene,
-    /Python semantic continuation was superseded during startup/,
+    /earlyContinuation = \{ registration, attachedPlayer, result, client, runToken \};\s*activeSourceContinuation = earlyContinuation;/,
   );
   assert.match(
     runScene,
-    /catch \(error\) \{\s*discardEarlyContinuationRuntime\(earlyContinuation\?\.attachedPlayer\)/,
+    /if \(activeSourceContinuation\?\.runToken === runToken\) \{\s*activeSourceContinuation = null;/,
   );
 
   const discardStart = main.indexOf("function discardEarlyContinuationRuntime(");
-  const discardEnd = main.indexOf("function sameSemanticContinuation(", discardStart);
+  const discardEnd = main.indexOf("async function supersedeActiveSourceContinuation()", discardStart);
   const discard = main.slice(discardStart, discardEnd);
   assert.match(
     discard,
@@ -51,15 +54,24 @@ test("playground tears down an early continuation when its run becomes stale", (
   );
 });
 
-test("source-owned semantic runs do not expose unsupported playback controls", () => {
+test("source-owned first pass keeps playback controls unavailable until replay is ready", () => {
   const runtimeStart = main.indexOf("async function ensureRuntimeReady(");
   const runtimeEnd = main.indexOf("async function ensureExecutionReady(", runtimeStart);
   const runtime = main.slice(runtimeStart, runtimeEnd);
   assert.match(runtime, /semanticExecution\.continuationGeneration != null/);
-  assert.match(runtime, /if \(!sourceOwnsExecution\) \{[\s\S]*new PlaygroundPlaybackControls/);
+  assert.match(runtime, /updatePlaybackControls\(\{\s*supported: !sourceOwnsExecution,/);
   assert.match(
     runScene,
-    /updatePlaybackControls\(\{\s*supported: semanticExecution\.continuationGeneration == null,/,
+    /updatePlaybackControls\(\{\s*supported: false,[\s\S]*?Python source continuing/,
   );
-  assert.match(runtime, /playbackControls\?\.destroy\(\);\s*playbackControls = null;/);
+  assert.match(runScene, /continuationGeneration: null,[\s\S]*?updatePlaybackControls\(\{\s*supported: true,/);
+  assert.match(runScene, /patchStatus\.dataset\.runGeneration = String\(runToken\.runGeneration\)/);
+});
+
+test("source-owned playback reports Playing even when the attached runtime is paused", () => {
+  const presentationStart = main.indexOf("function setPlaybackRuntimeStatus(");
+  const presentationEnd = main.indexOf("function setBusy(", presentationStart);
+  const presentation = main.slice(presentationStart, presentationEnd);
+  assert.match(presentation, /sceneRunPromise !== null && activeSourceContinuation !== null/);
+  assert.match(presentation, /sourceOwnsPlayback[\s\S]*\{ label: "Playing", state: "running" \}[\s\S]*playbackPresentation\(playbackState\)/);
 });
