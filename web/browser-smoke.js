@@ -370,6 +370,20 @@ async function qualifyTransformMatchingShapesBreadth(expectedBackend) {
       );
     }
 
+    qualificationRenderer.advanceDirectRealtime(750);
+    await settleQualification(qualificationRenderer, 750);
+    // An interior, unoccluded point on the directional source FadeOut. Cairo's
+    // premultiplied solid source at RED alpha .9 * .25 is exactly (56, 22, 19).
+    // Nearest-UNORM conversion of unquantized path paint incorrectly gives 57 red.
+    const quantizedSourceFade = await sampleQualificationColor(qualificationCanvas, 1.625, 0.75);
+    if (
+      quantizedSourceFade.red !== 56 ||
+      quantizedSourceFade.green !== 22 ||
+      quantizedSourceFade.blue !== 19
+    ) {
+      throw new Error(`matching source fade differs from Cairo solid-source quantization: ${JSON.stringify(quantizedSourceFade)}`);
+    }
+
     qualificationRenderer.advanceDirectRealtime(1000);
     await settleQualification(qualificationRenderer, 1000);
     const completedTargetLeftover = await sampleQualificationColor(qualificationCanvas, 4, 1.5);
@@ -389,6 +403,7 @@ async function qualifyTransformMatchingShapesBreadth(expectedBackend) {
       sourceFade,
       targetFade,
       paddedDuplicate,
+      quantizedSourceFade,
       completedTargetLeftover,
     };
     if (
