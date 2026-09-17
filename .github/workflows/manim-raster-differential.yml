@@ -136,6 +136,9 @@ jobs:
           NOON_MANIM_TYPST_RASTER_ARTIFACTS: manim-raster-artifacts/retained-typst
         run: node scripts/manim-typst-raster-differential.mjs
       - name: Enforce retained Typst raster ratchets
+        id: typst_ratchet
+        # Collect the canonical fixtures too; the final step preserves this gate.
+        continue-on-error: true
         env:
           NOON_MANIM_TYPST_RASTER_BACKENDS: webgpu,webgl
           NOON_MANIM_TYPST_RASTER_ARTIFACTS: manim-raster-artifacts/retained-typst
@@ -186,3 +189,8 @@ jobs:
           path: manim-raster-artifacts
           if-no-files-found: error
           retention-days: 14
+      - name: Report retained Typst raster failure
+        if: ${{ always() && steps.typst_ratchet.outcome == 'failure' }}
+        run: |
+          echo "Retained Typst raster ratchets failed; see the earlier enforcement output."
+          exit 1
