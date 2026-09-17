@@ -8,6 +8,9 @@ struct Camera {
 @group(0) @binding(0)
 var<uniform> camera: Camera;
 
+const TRIANGLE_COVERAGE_FLAG: u32 = 33554432u;
+const PATH_PROGRESS_MASK: u32 = 33554431u;
+
 struct PathVertexInput {
     @location(0) local: vec2<f32>,
     @location(1) target_local: vec2<f32>,
@@ -20,6 +23,9 @@ struct PathVertexInput {
     @location(8) metrics: vec2<f32>,
     @location(9) flags: vec2<u32>,
     @location(10) path_params: vec2<f32>,
+    @location(11) triangle_a: vec2<f32>,
+    @location(12) triangle_b: vec2<f32>,
+    @location(13) triangle_c: vec2<f32>,
 };
 
 struct PathVertexOutput {
@@ -28,31 +34,78 @@ struct PathVertexOutput {
     @location(1) path_progress: f32,
     @location(2) reveal: f32,
     @location(3) is_stroke: f32,
+    @location(4) @interpolate(flat) triangle_a: vec2<f32>,
+    @location(5) @interpolate(flat) triangle_b: vec2<f32>,
+    @location(6) @interpolate(flat) triangle_c: vec2<f32>,
+    @location(7) @interpolate(flat) exact_triangle: u32,
+};
+
+struct ClippedPolygon {
+    points: array<vec2<f32>, 8>,
+    count: u32,
 };
 
 fn premultiplied(color: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(color.rgb * color.a, color.a);
 }
 
+fn transform_path_point(local: vec2<f32>, input: PathVertexInput) -> vec2<f32> {
+    let c = cos(input.rotation);
+    let s = sin(input.rotation);
+    let scaled = local * input.scale;
+    return vec2<f32>(
+        c * scaled.x - s * scaled.y,
+        s * scaled.x + c * scaled.y,
+    ) + input.translation;
+}
+
+fn world_to_pixel(world: vec2<f32>) -> vec2<f32> {
+    let clip = (world - camera.center) * camera.clip_scale;
+    return vec2<f32>(
+        (clip.x + 1.0) * camera.viewport_size.x * 0.5,
+        (1.0 - clip.y) * camera.viewport_size.y * 0.5,
+    );
+}
+
+fn pixel_to_clip(pixel: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(
+        pixel.x * 2.0 / camera.viewport_size.x - 1.0,
+        1.0 - pixel.y * 2.0 / camera.viewport_size.y,
+    );
+}
+
 @vertex
 fn vs_path(input: PathVertexInput) -> PathVertexOutput {
     let is_stroke = (input.surface_and_progress & 1u) == 1u;
-    let encoded_progress = input.surface_and_progress >> 1u;
+    let encoded_progress = (input.surface_and_progress & PATH_PROGRESS_MASK) >> 1u;
     let path_progress = f32(encoded_progress) / 16777215.0;
     let morph = clamp(input.path_params.y, 0.0, 1.0);
     let reveal = clamp(input.path_params.x, 0.0, 1.0);
     let local = mix(input.local, input.target_local, morph);
-
-    let c = cos(input.rotation);
-    let s = sin(input.rotation);
-    let scaled = local * input.scale;
-    let world = vec2<f32>(
-        c * scaled.x - s * scaled.y,
-        s * scaled.x + c * scaled.y,
-    ) + input.translation;
+    let exact_triangle = (input.surface_and_progress & TRIANGLE_COVERAGE_FLAG) != 0u;
 
     var output: PathVertexOutput;
-    output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
+    if exact_triangle {
+        let a = world_to_pixel(transform_path_point(input.triangle_a, input));
+        let b = world_to_pixel(transform_path_point(input.triangle_b, input));
+        let c = world_to_pixel(transform_path_point(input.triangle_c, input));
+        let minimum = min(a, min(b, c)) - vec2<f32>(1.0);
+        let maximum = max(a, max(b, c)) + vec2<f32>(1.0);
+        let quad_position = (local + vec2<f32>(1.0)) * 0.5;
+        let pixel = mix(minimum, maximum, quad_position);
+        output.position = vec4<f32>(pixel_to_clip(pixel), 0.0, 1.0);
+        output.triangle_a = a;
+        output.triangle_b = b;
+        output.triangle_c = c;
+        output.exact_triangle = 1u;
+    } else {
+        let world = transform_path_point(local, input);
+        output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
+        output.triangle_a = vec2<f32>(0.0);
+        output.triangle_b = vec2<f32>(0.0);
+        output.triangle_c = vec2<f32>(0.0);
+        output.exact_triangle = 0u;
+    }
 
     let fill_enabled = (input.flags.x & 1u) != 0u;
     let stroke_enabled = (input.flags.y & 1u) != 0u;
@@ -76,6 +129,80 @@ fn vs_path(input: PathVertexInput) -> PathVertexOutput {
     return output;
 }
 
+fn clip_polygon_axis(
+    polygon: ClippedPolygon,
+    axis: u32,
+    boundary: f32,
+    keep_greater: bool,
+) -> ClippedPolygon {
+    var output: ClippedPolygon;
+    output.count = 0u;
+    if polygon.count == 0u {
+        return output;
+    }
+
+    var index = 0u;
+    loop {
+        if index >= polygon.count {
+            break;
+        }
+        let next = select(index + 1u, 0u, index + 1u == polygon.count);
+        let p = polygon.points[index];
+        let q = polygon.points[next];
+        let p_coordinate = select(p.y, p.x, axis == 0u);
+        let q_coordinate = select(q.y, q.x, axis == 0u);
+        let p_inside = select(p_coordinate <= boundary, p_coordinate >= boundary, keep_greater);
+        let q_inside = select(q_coordinate <= boundary, q_coordinate >= boundary, keep_greater);
+
+        // A triangle clipped by four half-planes has at most seven vertices:
+        // each clip adds at most one, so the fixed eight-entry array is ample.
+        if p_inside {
+            output.points[output.count] = p;
+            output.count += 1u;
+        }
+        if p_inside != q_inside {
+            let t = (boundary - p_coordinate) / (q_coordinate - p_coordinate);
+            output.points[output.count] = mix(p, q, t);
+            output.count += 1u;
+        }
+        index += 1u;
+    }
+    return output;
+}
+
+fn triangle_pixel_coverage(
+    a: vec2<f32>,
+    b: vec2<f32>,
+    c: vec2<f32>,
+) -> f32 {
+    var polygon: ClippedPolygon;
+    polygon.count = 3u;
+    polygon.points[0] = a;
+    polygon.points[1] = b;
+    polygon.points[2] = c;
+    polygon = clip_polygon_axis(polygon, 0u, 0.0, true);
+    polygon = clip_polygon_axis(polygon, 0u, 1.0, false);
+    polygon = clip_polygon_axis(polygon, 1u, 0.0, true);
+    polygon = clip_polygon_axis(polygon, 1u, 1.0, false);
+    if polygon.count < 3u {
+        return 0.0;
+    }
+
+    var twice_area = 0.0;
+    var index = 0u;
+    loop {
+        if index >= polygon.count {
+            break;
+        }
+        let next = select(index + 1u, 0u, index + 1u == polygon.count);
+        let p = polygon.points[index];
+        let q = polygon.points[next];
+        twice_area += p.x * q.y - p.y * q.x;
+        index += 1u;
+    }
+    return clamp(abs(twice_area) * 0.5, 0.0, 1.0);
+}
+
 @fragment
 fn fs_path(input: PathVertexOutput) -> @location(0) vec4<f32> {
     // Fragment derivatives must execute in uniform control flow. `reveal` is an
@@ -84,6 +211,19 @@ fn fs_path(input: PathVertexOutput) -> @location(0) vec4<f32> {
 
     if input.reveal <= 0.0 {
         return vec4<f32>(0.0);
+    }
+    if input.exact_triangle != 0u {
+        // The conservative quad covers every MSAA sample of candidate pixels.
+        // Coverage is applied once from the exact pixel-box intersection rather
+        // than multiplied by the hardware triangle sample mask.
+        let pixel_minimum = floor(input.position.xy);
+        let coverage = triangle_pixel_coverage(
+            input.triangle_a - pixel_minimum,
+            input.triangle_b - pixel_minimum,
+            input.triangle_c - pixel_minimum,
+        );
+        let fill_alpha = smoothstep(0.0, 1.0, input.reveal);
+        return input.color * coverage * fill_alpha;
     }
     if input.reveal >= 1.0 {
         return input.color;

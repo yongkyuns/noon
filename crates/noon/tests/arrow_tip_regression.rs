@@ -2,7 +2,7 @@
 //! Raster coverage is tested separately: correct triangles do not prove smooth pixels.
 use std::rc::Rc;
 
-use noon::{ManimArrow, ManimArrowOptions, Mobject, Scene};
+use noon::{ManimArrow, ManimArrowOptions, Mobject, Scene, StrokeCap};
 use noon_core::{SemanticObjectContent, StoredGeometry};
 
 fn close(actual: f64, expected: f64) {
@@ -51,7 +51,10 @@ fn assert_tip(tip: &Mobject, apex: (f64, f64), direction: (f64, f64), length: f6
     );
     let a = (points[1].0 - apex.0, points[1].1 - apex.1);
     let b = (points[2].0 - apex.0, points[2].1 - apex.1);
-    close((a.0 * b.1 - a.1 * b.0).abs() / 2.0, length * length / 2.0);
+    // Manim's end and start triangle paths are both counter-clockwise. Preserve
+    // that observable order: a reversed path has the same coordinates but can
+    // produce different edge coverage in a retained renderer.
+    close(a.0 * b.1 - a.1 * b.0, length * length);
 }
 
 fn shaft_endpoints(arrow: &ManimArrow) -> ((f64, f64), (f64, f64)) {
@@ -132,6 +135,66 @@ fn short_double_arrow_has_two_outward_tips_and_no_shaft_protrusion() {
     let (start, end) = shaft_endpoints(&arrow);
     point_close(start, (-0.1, 0.0));
     point_close(end, (0.1, 0.0));
+}
+
+#[test]
+fn double_arrow_reuses_the_same_outward_triangle_construction_in_both_directions() {
+    // Manim constructs the end tip, shortens the Line to its base, then constructs
+    // the start tip from that shortened line. Exercise both tangent directions and
+    // a translated family so a start-tip coverage issue cannot be mistaken for a
+    // different Rust-owned tip length, winding, or shaft-trimming rule.
+    for (start, end, translation) in [
+        ((-0.2, 0.0), (0.2, 0.0), (1.25, -0.75)),
+        ((0.2, 0.0), (-0.2, 0.0), (-1.25, 0.75)),
+        ((-0.2, 0.1), (0.2, -0.1), (0.5, -1.0)),
+    ] {
+        let scene = Scene::new();
+        let mut options = ManimArrowOptions::double_arrow(start.0, start.1, end.0, end.1).unwrap();
+        options.set_buff(0.0).unwrap();
+        options
+            .set_translation(translation.0, translation.1)
+            .unwrap();
+        let arrow = ManimArrow::create(Rc::clone(scene.integration_store()), options).unwrap();
+
+        let dx = end.0 - start.0;
+        let dy = end.1 - start.1;
+        let length = dx.hypot(dy);
+        let direction = (dx / length, dy / length);
+        let tip_length = 0.25 * length;
+        let world_start = (start.0 + translation.0, start.1 + translation.1);
+        let world_end = (end.0 + translation.0, end.1 + translation.1);
+
+        assert_tip(arrow.end_tip(), world_end, direction, tip_length);
+        assert_tip(
+            arrow.start_tip().unwrap(),
+            world_start,
+            (-direction.0, -direction.1),
+            tip_length,
+        );
+
+        let shaft = arrow.shaft().manim_line_endpoints().unwrap();
+        point_close(
+            shaft.start,
+            (
+                world_start.0 + direction.0 * tip_length,
+                world_start.1 + direction.1 * tip_length,
+            ),
+        );
+        point_close(
+            shaft.end,
+            (
+                world_end.0 - direction.0 * tip_length,
+                world_end.1 - direction.1 * tip_length,
+            ),
+        );
+        assert_eq!(
+            arrow.shaft().state().unwrap().style.stroke_cap,
+            StrokeCap::Butt
+        );
+        let endpoints = arrow.manim_endpoints().unwrap();
+        point_close(endpoints.start, world_start);
+        point_close(endpoints.end, world_end);
+    }
 }
 
 #[test]
