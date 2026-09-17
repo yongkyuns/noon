@@ -34,8 +34,8 @@ use super::raster_image_gpu::{
 };
 use super::raster_image_prepare::{ImagePreparation, RasterImageFramePreparer};
 use super::{
-    push_upload_write, Camera2D, DrawStats, GpuRenderer, RasterImagePrepareError, UploadStats,
-    PATH_SAMPLE_COUNT,
+    path_batch_uses_triangle_coverage, push_upload_write, Camera2D, DrawStats, GpuRenderer,
+    RasterImagePrepareError, UploadStats, PATH_SAMPLE_COUNT,
 };
 use crate::{
     FramePreparer, OrderedRenderBatch, PreparedFrame, RenderPrimitive, VisibleRenderError,
@@ -3534,8 +3534,20 @@ impl GpuRenderer {
                 if path_batch.index_range.is_empty() {
                     return stats;
                 }
-                pass.set_pipeline(&self.path_pipeline);
-                pass.set_vertex_buffer(0, self.path_vertex_buffer.slice(..));
+                let exact_triangle = path_batch_uses_triangle_coverage(prepared, path_batch);
+                pass.set_pipeline(if exact_triangle {
+                    &self.full_path_pipeline
+                } else {
+                    &self.path_pipeline
+                });
+                pass.set_vertex_buffer(
+                    0,
+                    if exact_triangle {
+                        self.path_vertex_buffer.slice(..)
+                    } else {
+                        self.compact_path_vertex_buffer.slice(..)
+                    },
+                );
                 pass.set_vertex_buffer(1, self.path_instance_buffer.slice(..));
                 pass.set_index_buffer(self.path_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(
@@ -3552,7 +3564,7 @@ impl GpuRenderer {
                     return stats;
                 }
                 pass.set_pipeline(&self.mega_path_pipeline);
-                pass.set_vertex_buffer(0, self.path_vertex_buffer.slice(..));
+                pass.set_vertex_buffer(0, self.compact_path_vertex_buffer.slice(..));
                 pass.set_vertex_buffer(1, self.mega_path_vertex_instance_buffer.slice(..));
                 pass.set_index_buffer(
                     self.mega_path_index_buffer.slice(..),
