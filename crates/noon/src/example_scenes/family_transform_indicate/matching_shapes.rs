@@ -319,6 +319,34 @@ mod tests {
             .expect("target leftover must fade in at its authored position");
         assert!((target_leftover.state().appearance - 0.5).abs() < 1e-5);
 
+        // Manim's 2 -> 3 alignment repeats the first source, not the last.
+        // Its copy travels from (-4, 1.5) to (-1, -1.5), and fades from
+        // transparent while interpolating the first source's blue to pink.
+        let padded = publication
+            .transient_presentations()
+            .iter()
+            .find(|occurrence| {
+                // Transform geometry is baked into world-space render endpoints;
+                // the semantic transform records the occurrence's interpolated position.
+                let transform = occurrence.state().transform;
+                (transform.translation.x + 2.5).abs() < 1e-5 && transform.translation.y.abs() < 1e-5
+            })
+            .expect("the padded first source must have its own midpoint presentation");
+        let state = padded.state();
+        assert!((state.appearance - 0.5).abs() < 1e-5);
+        let fill = state
+            .style
+            .fill
+            .expect("the padded triangle remains filled");
+        for (actual, expected) in [
+            (fill.red, (Color::BLUE.red + Color::PINK.red) * 0.5),
+            (fill.green, (Color::BLUE.green + Color::PINK.green) * 0.5),
+            (fill.blue, (Color::BLUE.blue + Color::PINK.blue) * 0.5),
+            (fill.alpha, 0.9),
+        ] {
+            assert!((actual - expected).abs() < 1e-5);
+        }
+
         admit_completion(&mut program, &mut callbacks, 1.0);
         assert!(matches!(
             program.resume().unwrap(),
@@ -329,5 +357,9 @@ mod tests {
         for expected in [-4.0, -1.0, 2.0, 4.0] {
             assert!(contains_x(&completed, expected));
         }
+        assert!(program
+            .take_renderer_publication()
+            .transient_presentations()
+            .is_empty());
     }
 }

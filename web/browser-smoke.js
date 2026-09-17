@@ -241,8 +241,11 @@ function isBlue(pixel) {
   return pixel.blue > pixel.red + 70 && pixel.green > pixel.red + 50;
 }
 
-function isRed(pixel) {
-  return pixel.red > pixel.green + 70 && pixel.red > pixel.blue + 70;
+function matchesRgb(pixel, expected) {
+  // Interior samples allow only byte quantization, not shape/opacity differences.
+  return [pixel.red, pixel.green, pixel.blue].every(
+    (channel, index) => Math.abs(channel - expected[index]) <= 2,
+  );
 }
 
 function isWhite(pixel) {
@@ -345,8 +348,23 @@ async function qualifyTransformMatchingShapesBreadth(expectedBackend) {
     await settleQualification(qualificationRenderer, 500);
     const sourceFade = await sampleQualificationColor(qualificationCanvas, -0.25, 0);
     const targetFade = await sampleQualificationColor(qualificationCanvas, 4, 1.5);
-    const paddedDuplicate = await sampleQualificationColor(qualificationCanvas, 0.5, 0);
-    if (!isRed(sourceFade) || !isWhite(targetFade) || !isBlue(paddedDuplicate)) {
+    // Manim repeats source indices [0, 0, 1] for a 2 -> 3 group. The
+    // identity-free copy moves from (-4, 1.5) to (-1, -1.5), so its midpoint
+    // is (-2.5, 0). (0.5, 0) belongs to the other stable triangle and is
+    // overlapped by the fading kite; it cannot qualify the padded occurrence.
+    const paddedDuplicate = await sampleQualificationColor(qualificationCanvas, -2.5, 0);
+    // Half-time paints over black: RED * .9 * .5; WHITE * .9 * .5;
+    // and midpoint(BLUE, PINK) * .9 * .5 for the initially transparent copy.
+    const sourceFadeRgb = [252, 98, 85].map((channel) => channel * 0.45);
+    const targetFadeRgb = [255, 255, 255].map((channel) => channel * 0.45);
+    const paddedRgb = [88 + 209, 196 + 71, 221 + 189].map(
+      (channel) => channel * 0.5 * 0.45,
+    );
+    if (
+      !matchesRgb(sourceFade, sourceFadeRgb) ||
+      !matchesRgb(targetFade, targetFadeRgb) ||
+      !matchesRgb(paddedDuplicate, paddedRgb)
+    ) {
       throw new Error(
         `matching-shapes breadth did not preserve duplicate expansion and default leftovers: ${JSON.stringify({ sourceFade, targetFade, paddedDuplicate })}`,
       );
