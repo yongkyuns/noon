@@ -13,66 +13,27 @@ def kite():
     )
 
 
+def rotated_triangle():
+    return VMobject().set_points_as_corners(
+        [(1, -1, 0), (0.5, 1, 0), (-1, -0.25, 0), (1, -1, 0)]
+    )
+
+
 class OrdinaryTransformMatchingShapes(Scene):
-    """Show reordered matching; duplicate keys and unmatched fades use the paired qualification fixture."""
+    """Match duplicate triangle keys while fading one unmatched kite and triangle."""
+
     def construct(self):
-        source_triangle = (
-            triangle().set_fill(PINK, opacity=0.9).set_stroke(opacity=0).shift(LEFT * 2)
-        )
-        source_kite = (
-            kite().set_fill(BLUE, opacity=0.9).set_stroke(opacity=0).shift(RIGHT * 2)
-        )
-        source = VGroup(source_triangle, source_kite)
+        source_first = triangle().set_fill(BLUE, opacity=0.9).set_stroke(opacity=0).shift(LEFT * 4 + UP * 1.5)
+        source_second = triangle().set_fill(GREEN, opacity=0.9).set_stroke(opacity=0).shift(LEFT + UP * 1.5)
+        source_leftover = kite().set_fill(RED, opacity=0.9).set_stroke(opacity=0).shift(LEFT * 4 + DOWN * 1.5)
+        source = VGroup(source_first, source_second, source_leftover)
         self.add(source)
 
-        target_kite = (
-            kite().set_fill(BLUE, opacity=0.9).set_stroke(opacity=0).shift(LEFT * 4)
-        )
-        target_triangle = (
-            triangle().set_fill(PINK, opacity=0.9).set_stroke(opacity=0).shift(RIGHT * 4)
-        )
-        target = VGroup(target_kite, target_triangle)
+        target_first = triangle().set_fill(YELLOW, opacity=0.9).set_stroke(opacity=0).shift(LEFT * 4 + DOWN * 1.5)
+        target_second = triangle().set_fill(PINK, opacity=0.9).set_stroke(opacity=0).shift(LEFT + DOWN * 1.5)
+        target_padded = triangle().set_fill(BLUE, opacity=0.9).set_stroke(opacity=0).shift(RIGHT * 2 + DOWN * 1.5)
+        target_leftover = rotated_triangle().set_fill(WHITE, opacity=0.9).set_stroke(opacity=0).shift(RIGHT * 4 + UP * 1.5)
+        target = VGroup(target_first, target_second, target_padded, target_leftover)
 
-        self.play(
-            TransformMatchingShapes(source, target, run_time=1.0, rate_func=linear)
-        )
-        roots = self.mobjects
-        assert len(roots) == 1
-        assert roots[0] is target
-        assert tuple(source.submobjects) == (source_triangle, source_kite)
-        assert tuple(target.submobjects) == (target_kite, target_triangle)
-        assert abs(target_kite.get_center().x + 3.5) < 1e-6
-        assert abs(target_triangle.get_center().x - 4) < 1e-6
-        assert abs(source_triangle.get_center().x + 2) < 1e-6
-        assert abs(source_kite.get_center().x - 2.5) < 1e-6
+        self.play(TransformMatchingShapes(source, target, run_time=1.0, rate_func=linear))
         self.play(Indicate(target, run_time=1.0))
-        roots = self.mobjects
-        assert len(roots) == 1
-        assert roots[0] is target
-        assert tuple(source.submobjects) == (source_triangle, source_kite)
-        assert tuple(target.submobjects) == (target_kite, target_triangle)
-        assert abs(target_kite.get_center().x + 3.5) < 1e-6
-        assert abs(target_triangle.get_center().x - 4) < 1e-6
-        assert abs(source_triangle.get_center().x + 2) < 1e-6
-        assert abs(source_kite.get_center().x - 2.5) < 1e-6
-        # Re-add the original source after replacement (readded=True).
-        self.add(source)
-        roots = self.mobjects
-        assert len(roots) == 2
-        assert roots == [target, source]
-        assert tuple(source.submobjects) == (source_triangle, source_kite)
-        assert tuple(target.submobjects) == (target_kite, target_triangle)
-        assert abs(target_kite.get_center().x + 3.5) < 1e-6
-        assert abs(target_triangle.get_center().x - 4) < 1e-6
-        assert abs(source_triangle.get_center().x + 2) < 1e-6
-        assert abs(source_kite.get_center().x - 2.5) < 1e-6
-        self.wait(0.1)
-        roots = self.mobjects
-        assert len(roots) == 2
-        assert roots == [target, source]
-        assert tuple(source.submobjects) == (source_triangle, source_kite)
-        assert tuple(target.submobjects) == (target_kite, target_triangle)
-        assert abs(target_kite.get_center().x + 3.5) < 1e-6
-        assert abs(target_triangle.get_center().x - 4) < 1e-6
-        assert abs(source_triangle.get_center().x + 2) < 1e-6
-        assert abs(source_kite.get_center().x - 2.5) < 1e-6

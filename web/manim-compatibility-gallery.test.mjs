@@ -90,8 +90,10 @@ for (const entry of readyEntries) {
   if (entry.id === "noon-transform-matching-shapes") {
     assert.match(source, /TransformMatchingShapes\(/, "matching-shapes gallery example must exercise TransformMatchingShapes");
     assert.match(source, /Indicate\(/, "matching-shapes gallery example must exercise the replacement target");
-    assert.match(source, /readded=True/, "matching-shapes gallery example must document source re-add semantics");
-    assert.match(entry.summary, /shape-keyed/i, "matching-shapes gallery must state its pairing contract");
+    assert.match(source, /source_first|source_second|target_padded/, "matching-shapes gallery must cover duplicate-key growth");
+    assert.match(source, /rotated_triangle|target_leftover/, "matching-shapes gallery must cover an unmatched target");
+    assert.match(source, /run_time=1\.0/, "matching-shapes gallery must use the shared one-second transform/indicate timings");
+    assert.match(entry.summary, /duplicate triangle/i, "matching-shapes gallery must describe duplicate-key breadth");
   }
 
   if (entry.id === "compatible-text-family-fade") {
