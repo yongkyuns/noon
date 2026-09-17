@@ -311,8 +311,8 @@ mod tests {
 
         // Manim's semantic reference reports 6.24296875 x 1.13139645 scene
         // units. Its SVG-to-scene scale is 0.05; Noon's point scale is 1/72.
-        assert!((artifact.resource.bounds.width() - 6.24296875 * 72.0).abs() < 0.05);
-        assert!((artifact.resource.bounds.height() - 1.13139645 * 72.0).abs() < 0.1);
+        assert!((f64::from(artifact.resource.bounds.width()) - 6.24296875 * 72.0).abs() < 0.05);
+        assert!((f64::from(artifact.resource.bounds.height()) - 1.13139645 * 72.0).abs() < 0.1);
     }
 
     #[test]
