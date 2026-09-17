@@ -30,7 +30,7 @@ test("explicit Run invalidates before cancelling a source continuation", () => {
   assert.match(lifecycle, /generations\.invalidateRun\(\)[\s\S]*cancelSemanticContinuation\(/);
   assert.match(lifecycle, /Superseded by an explicit playground Run/);
   assert.match(lifecycle, /discardEarlyContinuationRuntime\(continuation\.attachedPlayer\)/);
-  assert.match(lifecycle, /const priorRun = sceneRunPromise[\s\S]*await supersedeActiveSourceContinuation\(\)[\s\S]*await priorRun[\s\S]*return runScene\(\)/);
+  assert.match(main, /createRunRequestRouter\([\s\S]*run: runScene,[\s\S]*supersede: supersedeActiveSourceContinuation,/);
 });
 
 test("metric polling ignores a runtime replaced during its requests", () => {
