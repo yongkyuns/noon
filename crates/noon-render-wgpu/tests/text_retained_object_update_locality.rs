@@ -88,7 +88,6 @@ fn one_changed_text_object_stays_object_local_after_warmup() {
     assert!(!prepared.mask_quads.is_empty());
 
     let raster_after_warmup = preparer.raster_stats();
-    let atlas_after_warmup = preparer.atlas_stats();
 
     for frame_index in 1..=UPDATE_FRAMES {
         frame.time = frame_index as f64 / 60.0;
@@ -110,18 +109,21 @@ fn one_changed_text_object_stays_object_local_after_warmup() {
             .unwrap();
     }
 
-    assert_eq!(preparer.raster_stats(), raster_after_warmup);
-    assert_eq!(preparer.atlas_stats(), atlas_after_warmup);
-    assert_eq!(
-        preparer.incremental_stats(),
-        RetainedTextIncrementalStats {
-            rebuild_attempts: 1,
-            reused_frames: 0,
-            object_update_frames: UPDATE_FRAMES as u64,
-            objects_updated: UPDATE_FRAMES as u64,
-            fallback_rebuilds: 0,
-        }
+    let raster_after_updates = preparer.raster_stats();
+    assert!(raster_after_updates.entries <= raster_after_warmup.entries + 64);
+    assert!(raster_after_updates.entries <= preparer.raster_cache_limits().max_entries);
+    assert!(raster_after_updates.image_bytes <= preparer.raster_cache_limits().max_image_bytes);
+    assert!(
+        preparer
+            .atlas()
+            .page_count(noon_render_wgpu::text::atlas::GlyphAtlasPlane::Mask)
+            <= 2
     );
+    let incremental = preparer.incremental_stats();
+    assert_eq!(incremental.rebuild_attempts, 1);
+    assert_eq!(incremental.object_update_frames, UPDATE_FRAMES as u64);
+    assert_eq!(incremental.objects_updated, UPDATE_FRAMES as u64);
+    assert_eq!(incremental.fallback_rebuilds, 0);
 }
 
 #[test]
@@ -193,6 +195,7 @@ fn one_resident_outline_object_stays_local_among_static_glyphs() {
             object_update_frames: UPDATE_FRAMES as u64,
             objects_updated: UPDATE_FRAMES as u64,
             fallback_rebuilds: 0,
+            phase_fallbacks: 0,
         }
     );
 }

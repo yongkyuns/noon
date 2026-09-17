@@ -775,6 +775,8 @@ Examples:
 
 Transform/style/visibility-only changes must not regenerate immutable content.
 
+Glyph masks are disposable renderer resources derived from shared shaped runs. Device density and camera origin may select a bounded raster-size and subpixel-phase cache key without reshaping text or rewriting semantic resources. An eligible translated text object may replace its glyph masks within its existing instance ranges; unrelated objects and uploads remain unchanged. If a new phase changes the batch layout or exceeds available atlas residency, translation keeps the existing filtered masks. Rotated, reflected, skewed or nonuniform bitmap transforms also retain the filtered path. Cache limits remain independent of animation duration, and camera changes invalidate device-dependent preparation coherently.
+
 ### Immutable versioned resource rule
 
 Expensive geometry/text/image/mesh realization should be represented as immutable/versioned resources wherever practical. Mutable object state references those resources rather than embedding repeatedly rewritten heavy geometry in ordinary frame state.

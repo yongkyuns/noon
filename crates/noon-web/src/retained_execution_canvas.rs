@@ -361,6 +361,12 @@ mod wasm {
                 self.config.width as f32 / camera.world_size.x,
                 self.config.height as f32 / camera.world_size.y,
             ))
+            .and_then(|metrics| {
+                metrics.with_world_origin_pixels(Vec2::new(
+                    self.config.width as f32 * 0.5 - camera.center.x * metrics.pixels_per_world.x,
+                    self.config.height as f32 * 0.5 + camera.center.y * metrics.pixels_per_world.y,
+                ))
+            })
             .map_err(js_error)?;
             let plans = self.mirror.family_plans();
             let family_frame = self.mirror.planned_family_frame().map_err(js_error)?;

@@ -22,6 +22,7 @@ fn raster_key(glyph_id: u16) -> GlyphRasterKey {
         glyph_id,
         pixel_size_bits: 32.0f32.to_bits(),
         variation_fingerprint: 0,
+        phase: noon_text::raster::GlyphRasterPhase::ZERO,
     }
 }
 
