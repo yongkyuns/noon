@@ -10,7 +10,7 @@ fn close(actual: f64, expected: f64) {
 
 #[test]
 fn replacement_preserves_nested_alias_identity_content_and_unrelated_state() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut first = scene.rectangle(2.0, 1.0).unwrap();
     let mut second = scene.square(1.0).unwrap();
     first.shift(-2.0, 0.0).unwrap();
@@ -57,7 +57,7 @@ fn replacement_preserves_nested_alias_identity_content_and_unrelated_state() {
 
 #[test]
 fn shared_target_leaf_observes_staged_scaling_before_the_center_shift() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut first = scene.square(1.0).unwrap();
     let mut second = scene.square(1.0).unwrap();
     first.shift(-1.0, 0.0).unwrap();
@@ -74,7 +74,7 @@ fn shared_target_leaf_observes_staged_scaling_before_the_center_shift() {
 
 #[test]
 fn object_can_replace_a_family_and_zero_source_extent_does_not_divide_by_zero() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut target = scene.rectangle(4.0, 6.0).unwrap();
     target.shift(3.0, 2.0).unwrap();
     let family = scene.family(&[(&target).into()]).unwrap();
@@ -92,7 +92,7 @@ fn object_can_replace_a_family_and_zero_source_extent_does_not_divide_by_zero() 
 
 #[test]
 fn invalid_targets_fail_atomically_and_rotated_family_replacement_succeeds() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let first = scene.square(1.0).unwrap();
     let mut second = scene.square(1.0).unwrap();
     second.rotate(0.3).unwrap();

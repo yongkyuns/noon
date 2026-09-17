@@ -33,7 +33,7 @@ fn object_fit_and_dimension_match_use_shared_bounds() {
 
 #[test]
 fn family_aliases_fit_once_and_invalid_values_do_not_publish() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut a = scene.square(1.0).unwrap();
     let mut b = scene.square(1.0).unwrap();
     a.shift(-1.0, 0.0).unwrap();
@@ -62,7 +62,7 @@ fn family_aliases_fit_once_and_invalid_values_do_not_publish() {
 
 #[test]
 fn zero_extent_is_a_noop_without_a_revision() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let line = scene.line((0.0, 0.0), (0.0, 2.0)).unwrap();
     let empty = scene.family(&[]).unwrap();
     let revision = scene.revision();
@@ -141,7 +141,7 @@ fn live_family_fitting_preserves_unrelated_state() {
 
 #[test]
 fn rotated_uniform_and_world_axis_fit_preserve_dimensions() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut a = scene.square(1.0).unwrap();
     a.rotate(0.3).unwrap();
     let b = scene.square(1.0).unwrap();

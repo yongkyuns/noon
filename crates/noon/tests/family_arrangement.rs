@@ -9,7 +9,7 @@ fn close(actual: (f64, f64), expected: (f64, f64)) {
 
 #[test]
 fn arrangement_forwards_edge_direction_and_partial_coordinate_mask() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut first = scene.square(2.0).unwrap();
     first.shift(0.0, 2.0).unwrap();
     let mut second = scene.square(1.0).unwrap();
@@ -27,7 +27,7 @@ fn arrangement_forwards_edge_direction_and_partial_coordinate_mask() {
 fn aliased_members_observe_preceding_moves_and_center_unique_leaves_once() {
     // Same semantic object belongs to two direct members. Manim's arrange
     // observes each preceding move, then centers its deduplicated family.
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let first = scene.square(0.4).unwrap();
     let mut second = scene.square(0.4).unwrap();
     second.shift(2.0, 0.0).unwrap();

@@ -65,6 +65,67 @@ pub use noon_runtime::{
     RuntimeIdentity, RuntimeWakeState, TimelineWakeState,
 };
 
+/// Construct one detached family through an explicitly supplied live execution
+/// authority. This is for platform integrations that intentionally own the
+/// store/root/session pairing outside [`Scene`](crate::Scene); ordinary Rust
+/// authoring uses [`Scene::family_with_z_index`](crate::Scene::family_with_z_index).
+pub fn publish_family_creation(
+    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+    root: crate::SemanticNodeId,
+    execution: &mut crate::ExecutionSession,
+    members: &[crate::MobjectTarget<'_>],
+    z_index: f64,
+) -> Result<crate::MobjectFamily, crate::AuthoringError> {
+    let (transaction, family) =
+        crate::family_authoring::family_creation_transaction(store, members, z_index)?;
+    let result = crate::Scene::publish_running_transaction(store, root, execution, transaction)?;
+    let node = result
+        .resolve(family)
+        .expect("committed family token resolves to one semantic identity");
+    crate::MobjectFamily::from_node(std::rc::Rc::clone(store), node)
+}
+
+/// Create and enroll a scalar tracker through an explicitly supplied live
+/// execution authority.
+///
+/// This is for integrations that own a store/root/session pairing outside a
+/// [`Scene`](crate::Scene). Ordinary authoring uses
+/// [`Scene::value_tracker`](crate::Scene::value_tracker).
+pub fn publish_value_tracker_creation(
+    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+    root: crate::SemanticNodeId,
+    execution: &mut crate::ExecutionSession,
+    initial: f64,
+) -> Result<crate::ValueTracker, crate::AuthoringError> {
+    let mut semantic_store = store.borrow_mut();
+    let node = execution
+        .create_scoped_value_tracker(&mut semantic_store, root, initial)
+        .map_err(crate::AuthoringError::from)?;
+    Ok(crate::ValueTracker::from_semantic_node(
+        std::rc::Rc::clone(store),
+        node,
+    ))
+}
+
+/// Associate an existing detached scalar tracker through an explicitly
+/// supplied live execution authority.
+///
+/// This is for integrations that own a store/root/session pairing outside a
+/// [`Scene`](crate::Scene). Ordinary authoring uses
+/// [`Scene::associate_value_tracker`](crate::Scene::associate_value_tracker).
+pub fn publish_value_tracker_association(
+    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+    root: crate::SemanticNodeId,
+    execution: &mut crate::ExecutionSession,
+    tracker: &crate::ValueTracker,
+) -> Result<(), crate::AuthoringError> {
+    tracker.require_store(store)?;
+    let mut store = store.borrow_mut();
+    execution
+        .associate_value_tracker(&mut store, root, tracker.node_id())
+        .map_err(crate::AuthoringError::from)
+}
+
 /// Publish a family translation through the existing coherent execution authority.
 pub fn publish_family_shift(
     store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,

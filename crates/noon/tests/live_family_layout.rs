@@ -1,5 +1,5 @@
 use noon::ManimNextToArgs;
-use noon::{AnimationOptions, LiveLayoutTarget as Target, RateFunction, Scene};
+use noon::{AnimationOptions, LiveLayoutTarget as Target, MobjectFamily, RateFunction, Scene};
 
 fn close(actual: f64, expected: f64) {
     assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");
@@ -108,10 +108,10 @@ fn relative_placement_uses_shared_masks_targets_and_one_local_publication() {
 }
 
 #[test]
-fn empty_foreign_stale_and_unpublished_families_obey_query_and_mutation_validation() {
-    let scene = Scene::new();
+fn empty_foreign_stale_and_direct_families_obey_query_and_mutation_validation() {
+    let mut scene = Scene::new();
     let empty = scene.family(&[]).unwrap();
-    let other = Scene::new();
+    let mut other = Scene::new();
     let foreign = other.family(&[]).unwrap();
     let stale = scene.family(&[]).unwrap();
     scene
@@ -119,6 +119,7 @@ fn empty_foreign_stale_and_unpublished_families_obey_query_and_mutation_validati
         .borrow_mut()
         .remove_node(stale.node_id())
         .unwrap();
+    let store = std::rc::Rc::clone(scene.integration_store());
     let mut execution = scene.execution_session().unwrap();
     let mut live = scene.live(&mut execution);
     let before = live.effective_family_layout(&empty).unwrap();
@@ -131,8 +132,9 @@ fn empty_foreign_stale_and_unpublished_families_obey_query_and_mutation_validati
     live.move_family_to(&empty, Target::Point(2.0, 3.0), (0.0, 0.0), (1.0, 1.0))
         .unwrap();
     assert_eq!(live.effective_family_layout(&empty).unwrap(), before);
-    let _unpublished = scene.family(&[]).unwrap();
-    assert!(live.effective_family_layout(&empty).is_err());
+    let direct_id = store.borrow_mut().insert_family();
+    let direct = MobjectFamily::from_node(std::rc::Rc::clone(&store), direct_id).unwrap();
+    assert_eq!(live.effective_family_layout(&direct).unwrap(), before);
 }
 
 #[test]

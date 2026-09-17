@@ -39,7 +39,7 @@ impl LiveContinuation for MixedFade {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut circle = scene.circle(0.4)?;
     circle.set_translation(-2.0, 0.0)?;
     let mut square = scene.rectangle(0.8, 0.8)?;

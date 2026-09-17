@@ -121,7 +121,7 @@ fn paired_affine_example_reaches_the_normal_retained_session() {
 
 #[test]
 fn late_reflection_overflow_rejects_the_whole_family_before_commit() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut a = scene.square(1.).unwrap();
     a.shift(-3.0e38, 0.).unwrap();
     let b = scene.square(1.).unwrap();

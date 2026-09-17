@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 #[test]
 fn arrow_aggregate_rebind_uses_only_copied_components_for_queries_and_scale() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut options = ManimArrowOptions::double_arrow(-2.0, 0.0, 2.0, 0.0).unwrap();
     options.set_buff(0.0).unwrap();
     let source = ManimArrow::create(Rc::clone(scene.integration_store()), options).unwrap();
@@ -91,7 +91,7 @@ fn vector_field_aggregate_rebind_keeps_each_vector_on_the_copied_family_graph() 
 
 #[test]
 fn authored_copy_preserves_dag_aliases_order_resources_and_source_state_in_one_commit() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let leaf = scene.square(0.5).unwrap();
     let nested = scene.family(&[(&leaf).into()]).unwrap();
     let source = scene.family(&[(&leaf).into(), (&nested).into()]).unwrap();
@@ -197,7 +197,7 @@ fn live_copy_obeys_completion_and_captures_completed_state_without_changing_sour
 
 #[test]
 fn a_late_uncapturable_member_rejects_the_entire_live_copy() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let first = scene.square(0.5).unwrap();
     let reactive = scene.square(0.5).unwrap();
     let signal = scene
@@ -230,7 +230,7 @@ fn a_late_uncapturable_member_rejects_the_entire_live_copy() {
 
 #[test]
 fn detached_references_copy_atomically_without_changing_family_membership() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let leaf = scene.square(0.5).unwrap();
     let saved = leaf.target_editor().unwrap();
     let source = scene.family(&[(&leaf).into()]).unwrap();
