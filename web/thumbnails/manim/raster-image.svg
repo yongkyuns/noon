@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-labelledby="title desc">
+  <title id="title">Raster image</title>
+  <desc id="desc">Two retained raster image cards, with the foreground card rotated and faded.</desc>
+  <rect width="640" height="360" fill="#14283c"/>
+  <g transform="translate(200 82)">
+    <rect width="140" height="196" rx="3" fill="#0b111b" stroke="#dbe2ef" stroke-width="4"/>
+    <g shape-rendering="crispEdges">
+      <rect x="12" y="12" width="58" height="82" fill="#f00"/>
+      <rect x="70" y="12" width="58" height="82" fill="#0f0" opacity=".502"/>
+      <rect x="12" y="94" width="58" height="82" fill="#00f" opacity="0"/>
+      <rect x="70" y="94" width="58" height="82" fill="#fff"/>
+    </g>
+  </g>
+  <g transform="translate(350 86) rotate(22.5 70 98)" opacity=".6">
+    <rect width="140" height="196" rx="3" fill="#0b111b" stroke="#f7d96f" stroke-width="4"/>
+    <g shape-rendering="crispEdges">
+      <rect x="12" y="12" width="58" height="82" fill="#f00"/>
+      <rect x="70" y="12" width="58" height="82" fill="#0f0" opacity=".502"/>
+      <rect x="12" y="94" width="58" height="82" fill="#00f" opacity="0"/>
+      <rect x="70" y="94" width="58" height="82" fill="#fff"/>
+    </g>
+  </g>
+  <text x="24" y="332" fill="#dbe2ef" font-family="ui-monospace,monospace" font-size="16">Immutable pixels · shared texture · endpoint-qualified transform</text>
+</svg>

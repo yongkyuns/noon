@@ -44,6 +44,7 @@ pub struct RetainedFamilyDrawBorderThenFillMember {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RetainedFamilyDrawBorderThenFillError {
+    UnsupportedImage(ObjectId),
     UnsupportedMode(FamilyAnimationMode),
     UnsupportedGeometry(ObjectId),
     MissingPreparedMember { object: ObjectId, local_member: u32 },
@@ -54,6 +55,9 @@ pub enum RetainedFamilyDrawBorderThenFillError {
 impl std::fmt::Display for RetainedFamilyDrawBorderThenFillError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnsupportedImage(object) => {
+                write!(formatter, "image {object:?} cannot use DrawBorderThenFill")
+            }
             Self::UnsupportedMode(mode) => write!(
                 formatter,
                 "family DrawBorderThenFill realization does not support {mode:?}"
@@ -157,6 +161,9 @@ impl Iterator for RetainedFamilyDrawBorderThenFillMembers<'_> {
         };
 
         Some(match member {
+            RetainedAnimationMember::Image => Err(
+                RetainedFamilyDrawBorderThenFillError::UnsupportedImage(object),
+            ),
             RetainedAnimationMember::Geometry => Err(
                 RetainedFamilyDrawBorderThenFillError::UnsupportedGeometry(object),
             ),

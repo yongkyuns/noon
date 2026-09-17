@@ -87,6 +87,8 @@ fn unchanged_large_geometry_scene_skips_mixed_scratch_after_warmup() {
             scratch_reuses: 0,
             text_snapshot_copies: 0,
             mixed_order_rebuilds: 0,
+            image_draw_eligibility_updates: 0,
+            image_painter_order_rekeys: 0,
         }
     );
 }
@@ -212,6 +214,8 @@ fn one_fast_text_update_reuses_parent_scratch_snapshot_and_order() {
             scratch_reuses: STATIC_FRAMES + 2,
             text_snapshot_copies: 1,
             mixed_order_rebuilds: 1,
+            image_draw_eligibility_updates: 0,
+            image_painter_order_rekeys: 0,
         }
     );
 }
@@ -261,6 +265,8 @@ fn one_geometry_update_uses_incremental_preparation_without_mixed_scratch_rebuil
             scratch_reuses: 0,
             text_snapshot_copies: 0,
             mixed_order_rebuilds: 0,
+            image_draw_eligibility_updates: 0,
+            image_painter_order_rekeys: 0,
         }
     );
 }
@@ -326,6 +332,8 @@ fn one_geometry_update_in_mixed_scene_reuses_text_snapshot_and_painter_order() {
             scratch_reuses: 1,
             text_snapshot_copies: 1,
             mixed_order_rebuilds: 1,
+            image_draw_eligibility_updates: 0,
+            image_painter_order_rekeys: 0,
         }
     );
 
@@ -352,6 +360,8 @@ fn one_geometry_update_in_mixed_scene_reuses_text_snapshot_and_painter_order() {
             scratch_reuses: 1,
             text_snapshot_copies: 2,
             mixed_order_rebuilds: 2,
+            image_draw_eligibility_updates: 0,
+            image_painter_order_rekeys: 0,
         }
     );
 }

@@ -145,10 +145,7 @@ mod wasm {
                 &prepared,
                 &mut self.text_gpu,
             );
-            self.last_bytes_uploaded = upload
-                .geometry
-                .bytes_uploaded
-                .saturating_add(upload.text.bytes_uploaded);
+            self.last_bytes_uploaded = upload.bytes_uploaded();
 
             let view = surface_texture
                 .texture
@@ -171,14 +168,8 @@ mod wasm {
                 .map_err(js_error)?;
             self.queue.submit(Some(encoder.finish()));
             self.queue.present(surface_texture);
-            self.last_draw_calls = draw
-                .geometry
-                .draw_calls
-                .saturating_add(draw.text.draw_calls);
-            self.last_instances_drawn = draw
-                .geometry
-                .instances_drawn
-                .saturating_add(draw.text.instances_drawn);
+            self.last_draw_calls = draw.draw_calls();
+            self.last_instances_drawn = draw.instances_drawn();
             Ok(())
         }
 

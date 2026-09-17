@@ -9,6 +9,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_manim_plotting.py", runtimePath: "/tmp/_manim_plotting.py", label: "Noon shared coordinate and plotting wrappers" },
   { sourcePath: "python/_manim_number_labels.py", runtimePath: "/tmp/_manim_number_labels.py", label: "Noon shared numeric Text label wrappers" },
   { sourcePath: "python/_manim_typst.py", runtimePath: "/tmp/_manim_typst.py", label: "Noon retained Typst compatibility layer" },
+  { sourcePath: "python/_manim_image.py", runtimePath: "/tmp/_manim_image.py", label: "Noon retained image compatibility layer" },
   { sourcePath: "python/_manim_svg.py", runtimePath: "/tmp/_manim_svg.py", label: "Noon retained SVG compatibility layer" },
   { sourcePath: "python/_manim_family_creation.py", runtimePath: "/tmp/_manim_family_creation.py", label: "Noon Write/Unwrite syntax layer" },
   { sourcePath: "python/_manim_rate_functions.py", runtimePath: "/tmp/_manim_rate_functions.py", label: "Noon Manim rate functions" },

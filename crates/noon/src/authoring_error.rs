@@ -9,6 +9,8 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum UnsupportedAuthoringOperation {
+    /// This operation requires immutable raster-image content.
+    ImageContent,
     /// Point matching requires vector geometry on both operands.
     PointMatchContent,
     /// Persistent point editing requires retained vector geometry.
@@ -60,6 +62,7 @@ pub enum UnsupportedAuthoringOperation {
 impl std::fmt::Display for UnsupportedAuthoringOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            Self::ImageContent => "this operation requires raster-image content",
             Self::EffectiveFamilyLayoutRenderOverride => "effective family layout cannot use render-content overrides",
             Self::PlacementEffectiveAffineDriver => "move_to cannot compose with an active effective affine driver",
             Self::PlacementRenderOverride => "move_to cannot use an effective layout with render-content overrides",
@@ -97,6 +100,12 @@ impl std::error::Error for UnsupportedAuthoringOperation {}
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum AuthoringError {
+    #[cfg(feature = "image-decode")]
+    ImageDecode(crate::ImageDecodeError),
+    /// Immutable raster resource validation failed.
+    ImageResource(noon_core::RasterImageResourceError),
+    /// An object references a missing or stale raster image resource.
+    MissingImageResource(noon_core::RasterImageResourceHandle),
     /// The camera must be initialized before ordinary root content is added.
     CameraRequiresEmptyScene(noon_core::SemanticNodeId),
     /// A committed creation did not resolve its prepared local token.
@@ -222,6 +231,12 @@ pub enum AuthoringError {
 impl std::fmt::Display for AuthoringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            #[cfg(feature = "image-decode")]
+            Self::ImageDecode(error) => error.fmt(f),
+            Self::ImageResource(error) => error.fmt(f),
+            Self::MissingImageResource(handle) => {
+                write!(f, "unknown or stale raster image resource {handle:?}")
+            }
             Self::CameraRequiresEmptyScene(_) => {
                 f.write_str("2D camera frame must be created before scene content")
             }
@@ -326,6 +341,9 @@ impl std::fmt::Display for AuthoringError {
 impl std::error::Error for AuthoringError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            #[cfg(feature = "image-decode")]
+            Self::ImageDecode(error) => Some(error),
+            Self::ImageResource(error) => Some(error),
             Self::FamilyPairing(error) => Some(error),
             Self::Semantic(error) => Some(error),
             Self::Transaction(error) => Some(error),
@@ -375,6 +393,19 @@ impl From<noon_core::SemanticLoweringError> for AuthoringError {
 impl From<noon_core::GeometryResourceError> for AuthoringError {
     fn from(error: noon_core::GeometryResourceError) -> Self {
         Self::GeometryResource(error)
+    }
+}
+
+impl From<noon_core::RasterImageResourceError> for AuthoringError {
+    fn from(error: noon_core::RasterImageResourceError) -> Self {
+        Self::ImageResource(error)
+    }
+}
+
+#[cfg(feature = "image-decode")]
+impl From<crate::ImageDecodeError> for AuthoringError {
+    fn from(error: crate::ImageDecodeError) -> Self {
+        Self::ImageDecode(error)
     }
 }
 

@@ -523,6 +523,7 @@ pub enum SemanticAnimationError {
     NotScalarInputSignal(SemanticNodeId),
     NativeOwnedSignal(SemanticNodeId),
     InvalidScalarTarget(f64),
+    UnsupportedImageAnimation,
     InvalidObjectPropertyTrack,
 }
 
@@ -591,6 +592,9 @@ impl std::fmt::Display for SemanticAnimationError {
                     formatter,
                     "scalar animation target must be finite, got {value}"
                 )
+            }
+            Self::UnsupportedImageAnimation => {
+                formatter.write_str("vector/color animation is not supported for immutable images")
             }
             Self::InvalidObjectPropertyTrack => formatter.write_str(
                 "object property track requires matching finite endpoints and valid exact timing",
@@ -747,7 +751,14 @@ impl SemanticStore {
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
-        self.semantic_object_state_checked(target)?;
+        if self
+            .semantic_object_state_checked(target)?
+            .content
+            .image()
+            .is_some()
+        {
+            return Err(SemanticAnimationError::UnsupportedImageAnimation);
+        }
         let color_is_finite = color.red.is_finite()
             && color.green.is_finite()
             && color.blue.is_finite()
@@ -806,8 +817,16 @@ impl SemanticStore {
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
-        self.semantic_object_state_checked(target)?;
-        self.semantic_object_state_checked(target_state)?;
+        let source = self.semantic_object_state_checked(target)?;
+        let target_object = self.semantic_object_state_checked(target_state)?;
+        // Same immutable image content lowers through the ordinary affine/style
+        // channels. Pixel/resource replacement and image-to-vector morphs have
+        // no TransformTo payload and must fail before declaration publication.
+        if (source.content.image().is_some() || target_object.content.image().is_some())
+            && source.content != target_object.content
+        {
+            return Err(SemanticAnimationError::UnsupportedImageAnimation);
+        }
         if target == target_state {
             return Err(SemanticAnimationError::SameTargetAndTargetState(target));
         }
@@ -897,7 +916,14 @@ impl SemanticStore {
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
-        self.semantic_object_state_checked(target)?;
+        if self
+            .semantic_object_state_checked(target)?
+            .content
+            .image()
+            .is_some()
+        {
+            return Err(SemanticAnimationError::UnsupportedImageAnimation);
+        }
         let color_is_finite = stroke_color.is_none_or(|color| {
             color.red.is_finite()
                 && color.green.is_finite()
@@ -1155,7 +1181,14 @@ impl SemanticStore {
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
-        self.semantic_object_state_checked(target)?;
+        if self
+            .semantic_object_state_checked(target)?
+            .content
+            .image()
+            .is_some()
+        {
+            return Err(SemanticAnimationError::UnsupportedImageAnimation);
+        }
         validate_authored_animation_options(options)?;
         Ok(
             self.insert_semantic_animation_state(SemanticAnimationState::new(

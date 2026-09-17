@@ -928,6 +928,11 @@ impl ExecutionSession {
         self.runtime.last_patch_stats()
     }
 
+    /// Read-only raster-image resources projected with this execution session.
+    pub fn raster_image_resources(&self) -> &dyn noon_core::RasterImageResourceLookup {
+        self.runtime.raster_image_resources()
+    }
+
     /// Read-only text resources projected with this execution session.
     pub fn text_resources(&self) -> &impl noon_core::TextResourceLookup {
         self.runtime.text_resources()

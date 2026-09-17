@@ -24,6 +24,7 @@ pub enum RetainedFamilyRevealMember {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RetainedFamilyRevealError {
+    UnsupportedImage(ObjectId),
     UnsupportedMode(FamilyAnimationMode),
     MissingPreparedMember { object: ObjectId, local_member: u32 },
     FramePlan(RetainedFamilyFramePlanError),
@@ -33,6 +34,9 @@ pub enum RetainedFamilyRevealError {
 impl std::fmt::Display for RetainedFamilyRevealError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnsupportedImage(object) => {
+                write!(formatter, "image {object:?} cannot use vector/glyph reveal")
+            }
             Self::UnsupportedMode(mode) => {
                 write!(
                     formatter,
@@ -135,7 +139,11 @@ impl Iterator for RetainedFamilyRevealMembers<'_> {
             Err(error) => return Some(Err(error.into())),
         };
 
+        if member == RetainedAnimationMember::Image {
+            return Some(Err(RetainedFamilyRevealError::UnsupportedImage(object)));
+        }
         Some(Ok(match member {
+            RetainedAnimationMember::Image => unreachable!("image member rejected above"),
             RetainedAnimationMember::Geometry => {
                 RetainedFamilyRevealMember::Geometry { object, reveal }
             }

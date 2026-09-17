@@ -372,7 +372,9 @@ pub fn frame_object_conservative_bounds(frame: &FrameState, object_index: usize)
     let object = frame.objects.get(object_index)?;
     effective_object_conservative_bounds(
         frame.render_geometry(object_index),
-        object.text_bounds,
+        object
+            .text_bounds
+            .or_else(|| object.content.image().map(|image| image.local_bounds())),
         frame.render_transform(object_index),
         object.style,
     )

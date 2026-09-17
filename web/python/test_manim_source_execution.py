@@ -2,6 +2,7 @@ import asyncio
 import inspect
 from pathlib import Path
 import textwrap
+from pathlib import Path
 from unittest.mock import patch
 import unittest
 
@@ -180,6 +181,14 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(pairs, {})
         _, pairs = compile_authoring_source("class Example:\n    async def construct(self):\n        await self.wait(1)\n")
         self.assertEqual(pairs, {})
+
+    def test_raster_image_gallery_uses_portable_continuation(self):
+        source = Path(__file__).with_name("examples").joinpath("raster_image.py").read_text()
+        _, pairs = compile_authoring_source(source, filename="raster_image.py")
+        self.assertEqual(len(pairs), 1)
+        original, portable = next(iter(pairs.items()))
+        self.assertEqual(original.co_qualname, "RasterImage.construct")
+        self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
 
     def test_decorators_are_not_replayed_or_unwrapped(self):
         effects = []

@@ -546,7 +546,21 @@ pub(super) fn preflight_transaction_animation(
                 return Err(SemanticMutationTransactionError::InvalidObjectPropertyTrack { index });
             }
             catalog.ensure_animation_target(*target, index)?;
-            catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            let state =
+                catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            if state.content.image().is_some()
+                && !matches!(
+                    property,
+                    SemanticObjectTrackProperty::Presence
+                        | SemanticObjectTrackProperty::Position
+                        | SemanticObjectTrackProperty::Rotation
+                        | SemanticObjectTrackProperty::Scale
+                        | SemanticObjectTrackProperty::Opacity
+                        | SemanticObjectTrackProperty::Appearance
+                )
+            {
+                return Err(SemanticMutationTransactionError::UnsupportedImageAnimation { index });
+            }
             if let SemanticObjectTrackValues::Object { from, to } = values {
                 for endpoint in [*from, *to] {
                     catalog.ensure_animation_target(endpoint, index)?;
@@ -571,13 +585,20 @@ pub(super) fn preflight_transaction_animation(
         } => {
             catalog.ensure_animation_target(*target, index)?;
             catalog.ensure_animation_target(*target_state, index)?;
-            catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
-            catalog.staged_object_state(
+            let source_content = catalog
+                .staged_object_state(staged_objects, staged_object_order, *target, index)?
+                .content;
+            let target_object = catalog.staged_object_state(
                 staged_objects,
                 staged_object_order,
                 *target_state,
                 index,
             )?;
+            if (source_content.image().is_some() || target_object.content.image().is_some())
+                && source_content != target_object.content
+            {
+                return Err(SemanticMutationTransactionError::UnsupportedImageAnimation { index });
+            }
             if target == target_state {
                 return Err(match target {
                     SemanticTransactionNodeRef::Existing(node) => {
@@ -633,7 +654,11 @@ pub(super) fn preflight_transaction_animation(
             scale_center,
         } => {
             catalog.ensure_animation_target(*target, index)?;
-            catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            let state =
+                catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            if state.content.image().is_some() {
+                return Err(SemanticMutationTransactionError::UnsupportedImageAnimation { index });
+            }
             let color_is_finite = color.red.is_finite()
                 && color.green.is_finite()
                 && color.blue.is_finite()
@@ -655,7 +680,11 @@ pub(super) fn preflight_transaction_animation(
             ..
         } => {
             catalog.ensure_animation_target(*target, index)?;
-            catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            let state =
+                catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            if state.content.image().is_some() {
+                return Err(SemanticMutationTransactionError::UnsupportedImageAnimation { index });
+            }
             let color_is_finite = stroke_color.is_none_or(|color| {
                 color.red.is_finite()
                     && color.green.is_finite()
@@ -731,7 +760,11 @@ pub(super) fn preflight_transaction_animation(
         }
         SemanticTransactionAnimationIntent::Create { target } => {
             catalog.ensure_animation_target(*target, index)?;
-            catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            let state =
+                catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            if state.content.image().is_some() {
+                return Err(SemanticMutationTransactionError::UnsupportedImageAnimation { index });
+            }
         }
         SemanticTransactionAnimationIntent::Add { target } => {
             catalog.ensure_animation_target(*target, index)?;

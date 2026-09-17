@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use noon_core::{Camera2DState, ObjectContentRef, RetainedFamilyAnimationPlan};
+use noon_core::{Camera2DState, RetainedFamilyAnimationPlan};
 use noon_runtime::{FrameChanges, FrameState, RetainedFamilyFrame, RetainedPlannedFamilyFrame};
 
 use crate::{
@@ -23,12 +23,14 @@ pub struct InstalledRetainedExecutionMirror {
 impl InstalledRetainedExecutionMirror {
     pub fn from_bundle_bytes(bytes: &[u8]) -> Result<Self, InstalledExecutionError> {
         let resources = RetainedResourceBundle::decode_binary(bytes)?.install()?;
+        let mut wire = RetainedExecutionFrameMirror::with_installed_resources(
+            resources.render_geometry_session(),
+            resources.render_geometries(),
+            resources.text_handle_remap(),
+        );
+        wire.extend_installed_image_handles(&resources.image_handle_remap());
         Ok(Self {
-            wire: RetainedExecutionFrameMirror::with_installed_resources(
-                resources.render_geometry_session(),
-                resources.render_geometries(),
-                resources.text_handle_remap(),
-            ),
+            wire,
             resources,
             resolved: None,
             family: InstalledRetainedFamilyExecutionState::default(),
@@ -178,6 +180,8 @@ impl InstalledRetainedExecutionMirror {
         bundle: RetainedResourceBundle,
     ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
         let additions = self.resources.prepare_additions_with_render(bundle)?;
+        let image_handles = additions.image_handle_remap();
+        self.wire.extend_installed_image_handles(&image_handles);
         let text_handles = additions.text_handle_remap();
         self.wire.extend_installed_text_handles(&text_handles);
 
@@ -192,6 +196,8 @@ impl InstalledRetainedExecutionMirror {
                 {
                     Ok(rollback) => Some(rollback),
                     Err(error) => {
+                        self.wire
+                            .remove_installed_image_handles(image_handles.keys());
                         self.wire.remove_installed_text_handles(text_handles.keys());
                         return Err(error.into());
                     }
@@ -205,6 +211,8 @@ impl InstalledRetainedExecutionMirror {
         let prepared_family = match self.prepare_family_update(&delta, &text_lookup) {
             Ok(prepared) => prepared,
             Err(error) => {
+                self.wire
+                    .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
                 if let Some(rollback) = render_rollback {
                     self.wire.rollback_installed_render_geometries(rollback);
@@ -215,7 +223,12 @@ impl InstalledRetainedExecutionMirror {
         let prepared_transient = match self.prepare_transient_presentations(&delta) {
             Ok(prepared) => prepared,
             Err(error) => {
+                self.wire
+                    .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
+                if let Some(rollback) = render_rollback {
+                    self.wire.rollback_installed_render_geometries(rollback);
+                }
                 return Err(error);
             }
         };
@@ -223,6 +236,8 @@ impl InstalledRetainedExecutionMirror {
         let (outcome, changes) = match applied {
             Ok(applied) => applied,
             Err(error) => {
+                self.wire
+                    .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
                 if let Some(rollback) = render_rollback {
                     self.wire.rollback_installed_render_geometries(rollback);
@@ -231,6 +246,8 @@ impl InstalledRetainedExecutionMirror {
             }
         };
         if outcome == RetainedTransportApplyOutcome::DroppedStale {
+            self.wire
+                .remove_installed_image_handles(image_handles.keys());
             self.wire.remove_installed_text_handles(text_handles.keys());
             if let Some(rollback) = render_rollback {
                 self.wire.rollback_installed_render_geometries(rollback);
@@ -380,6 +397,15 @@ impl InstalledRetainedExecutionMirror {
         delta: &RetainedExecutionDeltaEnvelope,
     ) -> Result<(), InstalledExecutionError> {
         for object in &delta.objects {
+            if let TransportObjectContent::Image { image, sampling } = object.content {
+                if self
+                    .resources
+                    .resolve_image_handle(image, sampling)
+                    .is_none()
+                {
+                    return Err(RetainedExecutionTransportError::UnknownImageResource(image).into());
+                }
+            }
             if let TransportObjectContent::Text { text } = object.content {
                 if self.resources.resolve_text_handle(text).is_none() {
                     return Err(InstalledExecutionError::UnknownTextResource {
@@ -445,13 +471,7 @@ impl InstalledRetainedExecutionMirror {
                 .get_mut(index)
                 .ok_or(InstalledExecutionError::InvalidObjectIndex(index))?;
 
-            if let ObjectContentRef::Geometry(geometry) = &source.content {
-                target.content = ObjectContentRef::Geometry(geometry.clone());
-            }
-            target.id = source.id;
-            target.transform = source.transform;
-            target.style = source.style;
-            target.appearance = source.appearance;
+            *target = source.clone();
             resolved.presences[index] = wire.presences[index];
             resolved.reveals[index] = wire.reveals[index];
             resolved.morphs[index] = wire.morphs[index];
@@ -599,7 +619,9 @@ mod tests {
             .collect::<Vec<_>>();
         let wire_text = match wire.objects[0].content {
             TransportObjectContent::Text { text } => text,
-            TransportObjectContent::Geometry { .. } => panic!("expected text"),
+            TransportObjectContent::Image { .. } | TransportObjectContent::Geometry { .. } => {
+                panic!("expected text")
+            }
         };
 
         let (outcome, changes) = mirror.apply_json(&initial).unwrap();
@@ -851,3 +873,6 @@ mod tests {
 
 #[cfg(test)]
 mod morph_tests;
+
+#[cfg(test)]
+mod image_tests;

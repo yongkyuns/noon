@@ -1228,9 +1228,7 @@ mod wasm {
                 });
                 self.last_geometry_cache_misses = prepared.geometry_stats().geometry_cache_misses;
                 self.last_bytes_uploaded = upload
-                    .geometry
-                    .bytes_uploaded
-                    .saturating_add(upload.text.bytes_uploaded)
+                    .bytes_uploaded()
                     .saturating_add(derived_upload.map_or(0, |stats| stats.bytes_uploaded));
 
                 let view = surface_texture
@@ -1292,15 +1290,9 @@ mod wasm {
                 draw
             };
             self.queue.present(surface_texture);
-            self.last_draw_calls = draw
-                .geometry
-                .draw_calls
-                .saturating_add(draw.text.draw_calls);
+            self.last_draw_calls = draw.draw_calls();
             self.last_text_draw_calls = draw.text.draw_calls;
-            self.last_instances_drawn = draw
-                .geometry
-                .instances_drawn
-                .saturating_add(draw.text.instances_drawn);
+            self.last_instances_drawn = draw.instances_drawn();
             if reconfigure_after_present {
                 self.surface.configure(&self.device, &self.config);
             }

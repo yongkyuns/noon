@@ -138,6 +138,9 @@ impl InstalledRetainedResources {
 }
 
 impl PreparedRetainedResourceAdditionsWithRender {
+    pub(crate) fn image_handle_remap(&self) -> super::images::ImageHandles {
+        self.ordinary.image_handle_remap()
+    }
     pub(crate) fn text_handle_remap(
         &self,
     ) -> std::collections::HashMap<crate::TransportTextResourceHandle, noon_core::TextResourceHandle>
