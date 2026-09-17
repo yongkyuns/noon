@@ -14,6 +14,7 @@ def kite():
 
 
 class OrdinaryTransformMatchingShapes(Scene):
+    """Show reordered matching; duplicate keys and unmatched fades use the paired qualification fixture."""
     def construct(self):
         source_triangle = (
             triangle().set_fill(PINK, opacity=0.9).set_stroke(opacity=0).shift(LEFT * 2)

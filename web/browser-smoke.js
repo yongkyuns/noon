@@ -1,5 +1,6 @@
 import init, {
   createDirectRecoverySmokeRenderer,
+  createDirectTransformMatchingShapesBreadthSmokeRenderer,
   createDirectTransformMatchingShapesSmokeRenderer,
 } from "./pkg/noon_web.js";
 import {
@@ -23,6 +24,7 @@ let backingHeight = canvas.height;
 let rendererCanvas = null;
 let webglContextRecovery = null;
 let matchingShapesQualification = null;
+let matchingShapesBreadthQualification = null;
 
 window.noonSmoke = {
   state,
@@ -64,6 +66,7 @@ function metrics() {
     cssWidth: canvas.clientWidth,
     cssHeight: canvas.clientHeight,
     matchingShapesQualification,
+    matchingShapesBreadthQualification,
   };
 }
 
@@ -238,6 +241,16 @@ function isBlue(pixel) {
   return pixel.blue > pixel.red + 70 && pixel.green > pixel.red + 50;
 }
 
+function isRed(pixel) {
+  return pixel.red > pixel.green + 70 && pixel.red > pixel.blue + 70;
+}
+
+function isWhite(pixel) {
+  return pixel.red > 80 && pixel.green > 80 && pixel.blue > 80
+    && Math.max(pixel.red, pixel.green, pixel.blue)
+      - Math.min(pixel.red, pixel.green, pixel.blue) < 24;
+}
+
 async function qualifyTransformMatchingShapes(expectedBackend) {
   const qualificationCanvas = new OffscreenCanvas(960, 540);
   const qualificationRenderer =
@@ -320,6 +333,68 @@ async function qualifyTransformMatchingShapes(expectedBackend) {
   }
 }
 
+async function qualifyTransformMatchingShapesBreadth(expectedBackend) {
+  const qualificationCanvas = new OffscreenCanvas(960, 540);
+  const qualificationRenderer =
+    await createDirectTransformMatchingShapesBreadthSmokeRenderer(qualificationCanvas);
+  try {
+    qualificationRenderer.resize(qualificationCanvas.width, qualificationCanvas.height);
+    await settleQualification(qualificationRenderer, 0);
+
+    qualificationRenderer.advanceDirectRealtime(500);
+    await settleQualification(qualificationRenderer, 500);
+    const sourceFade = await sampleQualificationColor(qualificationCanvas, -0.25, 0);
+    const targetFade = await sampleQualificationColor(qualificationCanvas, 4, 1.5);
+    const paddedDuplicate = await sampleQualificationColor(qualificationCanvas, 0.5, 0);
+    if (!isRed(sourceFade) || !isWhite(targetFade) || !isBlue(paddedDuplicate)) {
+      throw new Error(
+        `matching-shapes breadth did not preserve duplicate expansion and default leftovers: ${JSON.stringify({ sourceFade, targetFade, paddedDuplicate })}`,
+      );
+    }
+
+    qualificationRenderer.advanceDirectRealtime(1000);
+    await settleQualification(qualificationRenderer, 1000);
+    const completedTargetLeftover = await sampleQualificationColor(qualificationCanvas, 4, 1.5);
+    if (!isWhite(completedTargetLeftover)) {
+      throw new Error(
+        `matching-shapes breadth did not publish the authored unmatched target: ${JSON.stringify({ completedTargetLeftover })}`,
+      );
+    }
+
+    qualificationRenderer.advanceDirectRealtime(2000);
+    const finalWake = await settleQualification(qualificationRenderer, 2000);
+    const result = {
+      backend: qualificationRenderer.rendererBackend(),
+      time: qualificationRenderer.time(),
+      objectCount: qualificationRenderer.objectCount(),
+      cadence: finalWake.cadence,
+      sourceFade,
+      targetFade,
+      paddedDuplicate,
+      completedTargetLeftover,
+    };
+    if (
+      result.backend !== expectedBackend ||
+      result.time !== 2 ||
+      result.objectCount !== 4 ||
+      result.cadence !== "idle"
+    ) {
+      throw new Error(
+        `matching-shapes breadth qualification did not settle coherently: ${JSON.stringify(result)}`,
+      );
+    }
+    return result;
+  } finally {
+    qualificationRenderer.free();
+    if (expectedBackend === "WebGL2") {
+      qualificationCanvas
+        .getContext("webgl2")
+        ?.getExtension("WEBGL_lose_context")
+        ?.loseContext();
+    }
+  }
+}
+
 async function start() {
   await init();
 
@@ -329,6 +404,9 @@ async function start() {
   renderer.resize(backingWidth, backingHeight);
   presentPending();
   matchingShapesQualification = await qualifyTransformMatchingShapes(
+    renderer.rendererBackend(),
+  );
+  matchingShapesBreadthQualification = await qualifyTransformMatchingShapesBreadth(
     renderer.rendererBackend(),
   );
 

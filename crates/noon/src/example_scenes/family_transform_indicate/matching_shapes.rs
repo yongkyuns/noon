@@ -73,14 +73,22 @@ fn kite() -> VectorPath {
         .close()
 }
 
-fn shape(scene: &Scene, path: VectorPath, x: f64, color: Color) -> Result<Mobject, String> {
+fn rotated_triangle() -> VectorPath {
+    VectorPath::new()
+        .move_to(Vec2::new(1.0, -1.0))
+        .line_to(Vec2::new(0.5, 1.0))
+        .line_to(Vec2::new(-1.0, -0.25))
+        .close()
+}
+
+fn shape(scene: &Scene, path: VectorPath, position: Vec2, color: Color) -> Result<Mobject, String> {
     let mut object = Mobject::from_manim_geometry(
         Rc::clone(scene.integration_store()),
         ManimGeometryOptions::path(path).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
     object
-        .set_translation(x, 0.0)
+        .set_translation(f64::from(position.x), f64::from(position.y))
         .map_err(|error| error.to_string())?;
     object
         .set_fill(
@@ -103,8 +111,8 @@ fn shape(scene: &Scene, path: VectorPath, x: f64, color: Color) -> Result<Mobjec
 /// which is then used by the following `Indicate`.
 pub fn program() -> Result<LiveProgram<MatchingShapesLifecycle>, String> {
     let mut scene = Scene::new();
-    let source_triangle = shape(&scene, triangle(), -2.0, Color::PINK)?;
-    let source_kite = shape(&scene, kite(), 2.0, Color::BLUE)?;
+    let source_triangle = shape(&scene, triangle(), Vec2::new(-2.0, 0.0), Color::PINK)?;
+    let source_kite = shape(&scene, kite(), Vec2::new(2.0, 0.0), Color::BLUE)?;
     let source = scene
         .family(&[(&source_triangle).into(), (&source_kite).into()])
         .map_err(|error| error.to_string())?;
@@ -112,10 +120,59 @@ pub fn program() -> Result<LiveProgram<MatchingShapesLifecycle>, String> {
         .add_many(&[(&source).into()])
         .map_err(|error| error.to_string())?;
 
-    let target_kite = shape(&scene, kite(), -4.0, Color::BLUE)?;
-    let target_triangle = shape(&scene, triangle(), 4.0, Color::PINK)?;
+    let target_kite = shape(&scene, kite(), Vec2::new(-4.0, 0.0), Color::BLUE)?;
+    let target_triangle = shape(&scene, triangle(), Vec2::new(4.0, 0.0), Color::PINK)?;
     let target = scene
         .family(&[(&target_kite).into(), (&target_triangle).into()])
+        .map_err(|error| error.to_string())?;
+
+    scene
+        .into_live_program(MatchingShapesLifecycle {
+            source,
+            target,
+            stage: 0,
+        })
+        .map_err(|error| error.to_string())
+}
+
+/// Duplicate-key growth plus one unmatched member in each family.
+///
+/// The three triangles share one matching key. The extra target triangle is a
+/// compiler-owned padded occurrence, while the kite and rotated triangle use the
+/// default directional FadeOut/FadeIn path. The target-only rotated triangle must
+/// remain at its authored `(4, 1.5)` position throughout its fade-in.
+pub fn breadth_program() -> Result<LiveProgram<MatchingShapesLifecycle>, String> {
+    let mut scene = Scene::new();
+    let source_first = shape(&scene, triangle(), Vec2::new(-4.0, 1.5), Color::BLUE)?;
+    let source_second = shape(&scene, triangle(), Vec2::new(-1.0, 1.5), Color::GREEN)?;
+    let source_leftover = shape(&scene, kite(), Vec2::new(-4.0, -1.5), Color::RED)?;
+    let source = scene
+        .family(&[
+            (&source_first).into(),
+            (&source_second).into(),
+            (&source_leftover).into(),
+        ])
+        .map_err(|error| error.to_string())?;
+    scene
+        .add_many(&[(&source).into()])
+        .map_err(|error| error.to_string())?;
+
+    let target_first = shape(&scene, triangle(), Vec2::new(-4.0, -1.5), Color::YELLOW)?;
+    let target_second = shape(&scene, triangle(), Vec2::new(-1.0, -1.5), Color::PINK)?;
+    let target_padded = shape(&scene, triangle(), Vec2::new(2.0, -1.5), Color::BLUE)?;
+    let target_leftover = shape(
+        &scene,
+        rotated_triangle(),
+        Vec2::new(4.0, 1.5),
+        Color::WHITE,
+    )?;
+    let target = scene
+        .family(&[
+            (&target_first).into(),
+            (&target_second).into(),
+            (&target_padded).into(),
+            (&target_leftover).into(),
+        ])
         .map_err(|error| error.to_string())?;
 
     scene
@@ -220,5 +277,57 @@ mod tests {
         assert_eq!(restored.len(), 2);
         assert!(contains_x(&restored, -4.0));
         assert!(contains_x(&restored, 4.0));
+    }
+
+    #[test]
+    fn native_duplicate_growth_and_default_leftovers_keep_authored_target_position() {
+        let mut program = breadth_program().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        assert!(matches!(
+            program.drive_to(&mut callbacks, 0.5).unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+
+        // The unmatched source kite fades toward the unmatched target group's center.
+        let source_leftover = program
+            .session()
+            .frame()
+            .objects
+            .iter()
+            .find(|row| {
+                (row.transform.translation.x + 0.25).abs() < 1e-5
+                    && (row.transform.translation.y - 0.0).abs() < 1e-5
+                    && row.appearance > 0.0
+                    && row.appearance < 1.0
+            })
+            .expect("source leftover must be halfway through its directional FadeOut");
+        assert!((source_leftover.appearance - 0.5).abs() < 1e-5);
+
+        let publication = program.take_renderer_publication();
+        let target_leftover = publication
+            .transient_presentations()
+            .iter()
+            .find(|occurrence| {
+                let transform = occurrence.state().transform;
+                (transform.translation.x - 4.0).abs() < 1e-5
+                    && (transform.translation.y - 1.5).abs() < 1e-5
+            })
+            .expect("target leftover must fade in at its authored position");
+        assert!((target_leftover.state().appearance - 0.5).abs() < 1e-5);
+
+        admit_completion(&mut program, &mut callbacks, 1.0);
+        assert!(matches!(
+            program.resume().unwrap(),
+            LiveProgramStatus::Awaiting(_)
+        ));
+        let completed = painter_xs(&program);
+        assert_eq!(completed.len(), 4);
+        for expected in [-4.0, -1.0, 2.0, 4.0] {
+            assert!(contains_x(&completed, expected));
+        }
     }
 }

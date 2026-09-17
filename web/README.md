@@ -28,7 +28,7 @@ Then open <http://localhost:8080> in a WebGPU-capable browser. The JavaScript `r
 | Ordinary style play | `noon::example_scenes::ordinary_style_play()` | None; the typed Rust session owns fill/object-opacity interpolation, completion, and the following authored style edit |
 | Ordinary paint play | `noon::example_scenes::ordinary_paint_play()` | None; the typed Rust session owns fill/stroke color and paint-opacity interpolation, completion, and the following authored paint edit |
 | Scene membership | `noon::example_scenes::ordinary_membership::program()` | None; shared Rust owns batch validation, ordered roots, family promotion, replacement and clear |
-| TransformMatchingShapes | `noon::example_scenes::family_transform_indicate::matching_shapes::program()` | None; shape-keyed pairing, authored target replacement, and following Indicate share the typed Rust lifecycle |
+| TransformMatchingShapes | `noon::example_scenes::family_transform_indicate::matching_shapes::{program, breadth_program}()` | None; shape-keyed pairing, duplicate-key padding, default unmatched fades, authored target replacement, and following Indicate share the typed Rust lifecycle |
 | Ordered subset display | `noon::example_scenes::ordinary_subset_display::program()` | None; shared Rust owns family preparation, detached admission, exact increasing/one-by-one thresholds, and paint endpoints |
 | Mixed Text Write | `noon::example_scenes::text_write::program()` | None; shared Rust composes typed Text movement with ordered glyph Write and atomic admission |
 | Native signals | `noon::example_scenes::live_native_signals()` | Typed pointer, Space-key, opacity-control, and ordered pointer-down occurrences; no scene JSON or semantic IDs |
@@ -48,11 +48,11 @@ The **Example** picker is intentionally a teaching sequence rather than a featur
 9. **Instanced field · 180** — analytic batching and dirty instance uploads on a semantic grid.
 10. **Morph stress · 1,000** — one deliberately dense profiling scene with twelve reusable morph targets.
 
-The matching-shapes example is intentionally bounded qualification coverage: it uses explicit 2D
-vector paths with unique shape signatures and equal source/target family sizes. Duplicate signatures,
-unmatched members, and broader unequal-family behavior are not established by this example; paired
-qualification remains pending. `key_map`, `transform_mismatches`, and `fade_transform_mismatches`
-remain explicitly unsupported in the public wrapper.
+The pending paired matching-shapes fixtures cover explicit 2D vector paths with duplicate-key growth
+and shrink plus default source/target unmatched fades. The direct Rust/WASM `breadth_program()` checks
+duplicate padding and the stationary authored target FadeIn. The pinned Manim differential still owns
+the qualification decision. `key_map`, `transform_mismatches`, and `fade_transform_mismatches` remain
+explicitly unsupported in the public wrapper.
 
 Gallery scenes execute through shared Rust semantic sessions. Source-owned `play()`/`wait()` continuations determine their duration; they are not constrained to a fixed four-second loop. Browser qualification exercises this path in CI.
 

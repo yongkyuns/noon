@@ -536,7 +536,9 @@ impl ExecutionSession {
         self.signal_timeline.commit_append(timeline);
         self.pending_segment_completion = None;
         self.completed_segment_sequence = Some(token.sequence());
-        if family_transform.is_some() && self.derived_display_plan.is_some() {
+        if (family_transform.is_some() || segment.family_replacement().is_some())
+            && self.derived_display_plan.is_some()
+        {
             // Stable source topology is now authoritative in the same completion
             // publication, so the identity-free interpolation occurrence must not
             // survive for one extra frame and double-render its endpoint.

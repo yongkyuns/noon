@@ -237,11 +237,11 @@
     {
       "id": "noon-transform-matching-shapes",
       "title": "TransformMatchingShapes",
-      "summary": "Shape-keyed family replacement that swaps a triangle and kite by geometry signature, then indicates the authored target.",
+      "summary": "Shape-keyed family replacement that swaps a triangle and kite by geometry signature, with paired pending coverage for duplicate signatures and default unmatched fades, then indicates the authored target.",
       "status": "ready",
       "path": "python/examples/ordinary_transform_matching_shapes.py",
       "category": "manim-compatible/animation",
-      "features": ["TransformMatchingShapes", "shape-keyed pairing", "family replacement", "Indicate", "Manim-compatible"],
+      "features": ["TransformMatchingShapes", "shape-keyed pairing", "duplicate signatures", "default unmatched fades", "family replacement", "Indicate", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "parity_fixture": "matching-shapes-reordered",
