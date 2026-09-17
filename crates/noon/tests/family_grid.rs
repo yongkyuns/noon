@@ -31,7 +31,7 @@ fn grid_sizes_each_row_and_column_and_preserves_center_in_one_revision() {
 
 #[test]
 fn insufficient_capacity_zero_and_nonfinite_gaps_do_not_mutate() {
-    let (scene, family, members, _) = fixture();
+    let (mut scene, family, members, _) = fixture();
     let before = scene.revision();
     let states: Vec<_> = members.iter().map(|m| m.state().unwrap()).collect();
     assert!(family.arrange_in_grid(Some(1), Some(2), 0.2, 0.2).is_err());
@@ -179,7 +179,7 @@ fn all_fill_orders_place_members_in_their_cells() {
             ],
         ),
     ] {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let members: Vec<_> = (0..6).map(|_| scene.square(0.5).unwrap()).collect();
         let family = scene
             .family(&members.iter().map(Into::into).collect::<Vec<_>>())

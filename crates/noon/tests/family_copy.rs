@@ -197,7 +197,7 @@ fn live_copy_obeys_completion_and_captures_completed_state_without_changing_sour
 
 #[test]
 fn a_late_uncapturable_member_rejects_the_entire_live_copy() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let first = scene.square(0.5).unwrap();
     let reactive = scene.square(0.5).unwrap();
     let signal = scene

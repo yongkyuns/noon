@@ -10,7 +10,7 @@ fn members(family: &MobjectFamily) -> Vec<SemanticNodeId> {
 
 #[test]
 fn incoming_duplicates_keep_the_last_occurrence_and_readds_move_to_the_tail() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let a = scene.square(1.0).unwrap();
     let b = scene.square(1.0).unwrap();
     let c = scene.square(1.0).unwrap();

@@ -1657,13 +1657,13 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(
+        noon::integration::publish_value_tracker_creation(
             &semantics,
             self.semantic_root
                 .expect("live semantic store has one scene root"),
             &mut self.session,
+            initial,
         )
-        .value_tracker(initial)
         .map_err(AuthoringFailure::from)
     }
 
@@ -1678,13 +1678,13 @@ impl SemanticExecutionPlayer {
             .semantics
             .clone()
             .ok_or("execution player has no live semantic store")?;
-        noon::LiveSession::new(
+        noon::integration::publish_value_tracker_association(
             &semantics,
             self.semantic_root
                 .expect("live semantic store has one scene root"),
             &mut self.session,
+            tracker,
         )
-        .associate_value_tracker(tracker)
         .map_err(AuthoringFailure::from)
     }
 

@@ -42,7 +42,7 @@ fn family_paint_matches_leaf_semantics_in_one_revision_and_leaves_other_objects_
 
 #[test]
 fn invalid_combined_edit_changes_nothing_and_empty_families_still_validate() {
-    let (scene, family, [a, b], _) = family();
+    let (mut scene, family, [a, b], _) = family();
     let before = scene.revision();
     let states = [a.state().unwrap(), b.state().unwrap()];
     assert!(family
@@ -138,7 +138,7 @@ fn combined_style_is_atomic_and_omission_is_a_noop() {
 #[test]
 fn style_matching_preserves_source_identity_geometry_and_nonpaint_fields() {
     use noon::StyleUpdate;
-    let (scene, source, [a, b], _) = family();
+    let (mut scene, source, [a, b], _) = family();
     let target = source.copy_family().unwrap().root().clone();
     target
         .set_style(StyleUpdate {

@@ -67,7 +67,7 @@ fn caught_missing_leaf_and_foreign_family_leave_ordered_overlay_intact_then_retr
     let family = scene.family(&[(&nested).into(), (&a).into()]).unwrap();
     let invalid = scene.family(&[(&a).into(), (&missing).into()]).unwrap();
     scene.add_many(&[(&family).into()]).unwrap();
-    let foreign_scene = Scene::new();
+    let mut foreign_scene = Scene::new();
     let foreign_a = foreign_scene.circle(0.5).unwrap();
     let foreign = foreign_scene.family(&[(&foreign_a).into()]).unwrap();
     let ids = [a.node_id(), b.node_id()];

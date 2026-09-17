@@ -471,20 +471,11 @@ pub struct LiveSession<'a> {
 }
 
 impl<'a> LiveSession<'a> {
-    /// Create and sparsely enroll one scalar tracker in this already-live Scene.
-    pub fn value_tracker(&mut self, initial: f64) -> Result<ValueTracker, LiveSessionError> {
-        let mut store = self.store.borrow_mut();
-        let node = self
-            .session
-            .create_scoped_value_tracker(&mut store, self.root, initial)?;
-        Ok(ValueTracker::from_semantic_node(
-            Rc::clone(self.store),
-            node,
-        ))
-    }
-
-    /// Associate one existing detached tracker with this live Scene root.
-    pub fn associate_value_tracker(
+    /// Associate an existing detached tracker while a continuation holds the
+    /// only borrowed execution capability.
+    ///
+    /// Ordinary authoring uses [`crate::Scene::associate_value_tracker`].
+    pub(crate) fn associate_value_tracker(
         &mut self,
         tracker: &ValueTracker,
     ) -> Result<(), LiveSessionError> {
@@ -4319,7 +4310,7 @@ mod tests {
             .create_manim_geometry(crate::ManimGeometryOptions::square(0.7).unwrap())
             .unwrap();
         let _family = live
-            .family(&[
+            .create_family(&[
                 MobjectTarget::Object(&first),
                 MobjectTarget::Object(&second),
             ])
@@ -4363,6 +4354,8 @@ mod tests {
             let execution = scene.execution_session().unwrap();
             scene.install_execution(execution);
             let outer = scene.family(&[MobjectTarget::Family(&family)]).unwrap();
+            let root = scene.root();
+            let store = Rc::clone(scene.integration_store());
             let mut live = scene.owned_live();
             let segment = if nested_family {
                 live.declare_and_activate_family_fade(
@@ -4387,10 +4380,9 @@ mod tests {
                 .unwrap();
             live.complete_segment(segment).unwrap();
             assert_eq!(live.effective(&shape).unwrap().appearance, 1.0);
-            assert!(!scene
-                .integration_store()
+            assert!(!store
                 .borrow()
-                .semantic_family_members_checked(scene.root())
+                .semantic_family_members_checked(root)
                 .unwrap()
                 .contains(&outer.node_id()));
             let before = live.session.publication_context();
@@ -5069,7 +5061,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn live_family_arrange_uses_detached_authored_bounds_in_one_publication() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let first = scene.square(0.4).unwrap();
         let second = scene.circle(0.2).unwrap();
         let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
@@ -5148,7 +5140,7 @@ mod recursive_composition_tests {
     #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn family_fade_preserves_family_membership_and_ordered_lifecycle() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let label = scene.text(crate::Text::new("Fade")).unwrap();
         let shape = scene.circle(0.25).unwrap();
         let family = scene.family(&[(&label).into(), (&shape).into()]).unwrap();
@@ -5600,7 +5592,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn increasing_subsets_uses_absolute_floor_thresholds_and_retains_members() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
         first.set_fill_opacity(0.35).unwrap();
@@ -5655,7 +5647,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn one_by_one_default_smooth_keeps_the_prior_member_at_the_exact_boundary() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
         let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
@@ -5699,7 +5691,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn one_by_one_preserves_the_strict_boundary_through_nested_smooth_maps() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
         let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
@@ -5745,7 +5737,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn three_member_one_by_one_keeps_prior_member_at_fractional_boundaries() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
         let third = scene.square(1.0).unwrap();
@@ -5849,7 +5841,7 @@ mod recursive_composition_tests {
             .create_manim_geometry(crate::ManimGeometryOptions::circle(0.25).unwrap())
             .unwrap();
         let family = live
-            .family(&[
+            .create_family(&[
                 MobjectTarget::Object(&first),
                 MobjectTarget::Object(&second),
             ])
@@ -5886,7 +5878,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn subset_preparation_rejects_nested_families_without_partial_style_changes() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut first = scene.square(1.0).unwrap();
         first.set_fill_opacity(1.0).unwrap();
         let nested_member = scene.square(1.0).unwrap();
@@ -5929,7 +5921,7 @@ mod recursive_composition_tests {
     #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     #[test]
     fn family_text_write_admits_and_unwrite_removes_one_family_root_atomically() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let left = scene.text(crate::Text::new("A")).unwrap();
         let right = scene.text(crate::Text::new("BCDE")).unwrap();
         let family = scene.family(&[(&left).into(), (&right).into()]).unwrap();

@@ -119,7 +119,7 @@ fn native_callback_preserves_prior_overlay_and_late_failures_then_retries_once_p
     let nested = scene.family(&[(&a).into(), (&b).into()]).unwrap();
     let family = scene.family(&[(&a).into(), (&nested).into()]).unwrap();
     let invalid = scene.family(&[(&a).into(), (&missing).into()]).unwrap();
-    let foreign_scene = Scene::new();
+    let mut foreign_scene = Scene::new();
     let foreign = foreign_scene.family(&[]).unwrap();
     scene
         .add_many(&[(&a).into(), (&b).into(), (&untouched).into()])

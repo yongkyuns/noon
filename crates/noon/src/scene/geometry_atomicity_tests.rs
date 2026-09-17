@@ -1,6 +1,6 @@
 use super::*;
 use crate::{geometry_authoring::manim_triangle_path, ManimGeometryOptions};
-use noon_core::{FrameEpoch, Vec2, VectorPath};
+use noon_core::{FrameEpoch, SemanticVec3, Vec2, VectorPath};
 
 #[test]
 fn geometry_is_detached_and_scene_owned_before_and_after_bootstrap() {
@@ -18,7 +18,7 @@ fn geometry_is_detached_and_scene_owned_before_and_after_bootstrap() {
         .members()
         .is_empty());
 
-    scene.add(&cold).unwrap();
+    scene.add_many(&[(&cold).into()]).unwrap();
     let execution = scene.execution_session().unwrap();
     scene.install_execution(execution);
     let frame_len = scene.owned_execution().frame().objects.len();
@@ -33,7 +33,7 @@ fn geometry_is_detached_and_scene_owned_before_and_after_bootstrap() {
         .owned_execution()
         .execution_object_id(running.node_id())
         .is_none());
-    scene.add(&running).unwrap();
+    scene.add_many(&[(&running).into()]).unwrap();
     assert_eq!(scene.owned_execution().frame().objects.len(), frame_len + 1);
     assert!(scene
         .owned_execution()
@@ -65,7 +65,7 @@ fn family_is_detached_and_scene_owned_before_and_after_bootstrap() {
         .members()
         .is_empty());
 
-    scene.add(&cold).unwrap();
+    scene.add_many(&[(&cold).into()]).unwrap();
     let execution = scene.execution_session().unwrap();
     scene.install_execution(execution);
     let frame_len = scene.owned_execution().frame().objects.len();
@@ -78,7 +78,7 @@ fn family_is_detached_and_scene_owned_before_and_after_bootstrap() {
         .owned_execution()
         .execution_object_id(running.node_id())
         .is_none());
-    scene.add(&running).unwrap();
+    scene.add_many(&[(&running).into()]).unwrap();
     assert_eq!(scene.owned_execution().frame().objects.len(), frame_len + 1);
     assert_eq!(
         scene
@@ -93,7 +93,17 @@ fn family_is_detached_and_scene_owned_before_and_after_bootstrap() {
 fn authored_and_effective_queries_are_explicit_about_the_execution_boundary() {
     let mut scene = Scene::new();
     let object = scene.circle(0.5).unwrap();
+    let tracker = scene.value_tracker(2.0).unwrap();
+    let position = scene
+        .position_from_tracker(
+            &tracker,
+            SemanticVec3::new(1.0, 0.0, 0.0),
+            SemanticVec3::ZERO,
+        )
+        .unwrap();
+    scene.bind_position(&object, &position).unwrap();
     let authored = scene.authored(&object).unwrap();
+    assert_eq!(authored.transform.translation, SemanticVec3::ZERO);
     assert!(matches!(
         scene.effective(&object),
         Err(AuthoringError::Unsupported(
@@ -106,6 +116,11 @@ fn authored_and_effective_queries_are_explicit_about_the_execution_boundary() {
     scene.install_execution(execution);
     let effective = scene.effective(&object).unwrap();
     assert_eq!(scene.authored(&object).unwrap(), authored);
+    assert_eq!(effective.transform.translation.x, 2.0);
+    assert_ne!(
+        effective.transform.translation.x,
+        authored.transform.translation.x as f32
+    );
     assert_eq!(effective.appearance, 1.0);
     assert_eq!(effective.publication.scene_revision(), scene.revision());
 }

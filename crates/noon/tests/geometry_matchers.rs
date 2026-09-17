@@ -56,7 +56,7 @@ fn family_background_rectangle_preserves_union_style() {
 
 #[test]
 fn one_leaf_family_matcher_matches_the_object_bounds_route() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let target = shifted_rectangle(&scene, 4.0, 2.0, 1.0, -2.0);
     let object_bounds = target.layout_bounds().unwrap().unwrap();
     let family_bounds = scene

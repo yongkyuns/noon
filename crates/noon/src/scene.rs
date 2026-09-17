@@ -2,7 +2,7 @@
 mod image;
 use crate::{
     AuthoringError, ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectTarget,
-    SceneMembershipRequest,
+    SceneMembershipRequest, ValueTracker,
 };
 use noon_core::{
     AnimationOptions, GeometryRef, RateFunction, SemanticMutationImpact,
@@ -285,6 +285,60 @@ impl Scene {
             .expect("committed family token resolves to one semantic identity");
         MobjectFamily::from_node(Rc::clone(&self.store), node)
     }
+    /// Create and scope a scalar input signal through this Scene's durable
+    /// authoring route.
+    ///
+    /// Before bootstrap the signal is committed to authored state. While
+    /// running, creation and reactive enrollment publish atomically through
+    /// this Scene's owned execution component.
+    pub fn value_tracker(&mut self, initial: f64) -> Result<ValueTracker, AuthoringError> {
+        if let Some(execution) = self.execution.as_mut() {
+            return crate::integration::publish_value_tracker_creation(
+                &self.store,
+                self.root,
+                execution,
+                initial,
+            );
+        }
+        let creation = SemanticNodeCreation::input_signal(initial).map_err(AuthoringError::from)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        let pending = transaction.create_node(creation);
+        transaction.scope_signal(self.root, pending);
+        let result = transaction
+            .apply(&mut self.store.borrow_mut())
+            .map_err(AuthoringError::from)?;
+        let node = result
+            .resolve(pending)
+            .expect("committed tracker creation resolves its transaction-local token");
+        Ok(ValueTracker::from_semantic_node(
+            Rc::clone(&self.store),
+            node,
+        ))
+    }
+
+    /// Associate a detached scalar input through this Scene's durable
+    /// authoring route.
+    pub fn associate_value_tracker(
+        &mut self,
+        tracker: &ValueTracker,
+    ) -> Result<(), AuthoringError> {
+        tracker.require_store(&self.store)?;
+        if let Some(execution) = self.execution.as_mut() {
+            return crate::integration::publish_value_tracker_association(
+                &self.store,
+                self.root,
+                execution,
+                tracker,
+            );
+        }
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.scope_signal(self.root, tracker.node_id());
+        transaction
+            .apply(&mut self.store.borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
     pub fn remove(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Remove(&[MobjectTarget::Object(
             object,

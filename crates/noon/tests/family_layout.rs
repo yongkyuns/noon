@@ -52,7 +52,7 @@ fn invalid_or_foreign_placement_targets_do_not_publish() {
     let mut scene = Scene::new();
     let object = scene.square(1.0).unwrap();
     let family = scene.family(&[(&object).into()]).unwrap();
-    let other_scene = Scene::new();
+    let mut other_scene = Scene::new();
     let foreign = other_scene.square(1.0).unwrap();
     let foreign_family = other_scene
         .family(&[(&foreign).into()])
@@ -135,7 +135,7 @@ fn object_placement_to_family_anchor_is_shared_and_rejects_foreign_targets() {
         .align_to(Target::Anchor(&target), (0.0, -1.0))
         .unwrap();
     assert_eq!(object.center().unwrap(), (2.5, 2.5));
-    let other = Scene::new();
+    let mut other = Scene::new();
     let foreign = noon::LayoutAnchor::from(&other.family(&[]).unwrap());
     let revision = scene.integration_store().borrow().scene_revision();
     assert!(source
