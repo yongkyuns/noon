@@ -220,6 +220,13 @@ struct AnalyticPipelineDescriptor {
     instance_layout: wgpu::VertexBufferLayout<'static>,
 }
 
+struct PathPipelineDescriptor {
+    instance_layout: wgpu::VertexBufferLayout<'static>,
+    vertex_layout: wgpu::VertexBufferLayout<'static>,
+    vertex_entry: &'static str,
+    label: &'static str,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 struct CameraUniform {
@@ -378,7 +385,9 @@ pub struct GpuRenderer {
     rectangle_pipeline_single_sample: wgpu::RenderPipeline,
     line_pipeline_single_sample: wgpu::RenderPipeline,
     path_pipeline: wgpu::RenderPipeline,
-    triangle_path_pipeline: wgpu::RenderPipeline,
+    /// Full path vertices carry the renderer-local exact-triangle coordinates.
+    /// Transient presentation paths also retain this full format.
+    full_path_pipeline: wgpu::RenderPipeline,
     mega_path_pipeline: wgpu::RenderPipeline,
     quad_buffer: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
@@ -556,8 +565,8 @@ impl GpuRenderer {
         let path_shader = device.create_shader_module(wgpu::include_wgsl!("../path.wgsl"));
         let path_pipeline =
             create_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
-        let triangle_path_pipeline =
-            create_triangle_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
+        let full_path_pipeline =
+            create_full_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
         let mega_path_pipeline =
             create_mega_path_pipeline(device, &pipeline_layout, &path_shader, target_format);
         let quad_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -603,7 +612,7 @@ impl GpuRenderer {
             rectangle_pipeline_single_sample,
             line_pipeline_single_sample,
             path_pipeline,
-            triangle_path_pipeline,
+            full_path_pipeline,
             mega_path_pipeline,
             quad_buffer,
             camera_buffer,
@@ -1216,7 +1225,7 @@ impl GpuRenderer {
                 }
                 let exact_triangle = path_batch_uses_triangle_coverage(prepared, path);
                 pass.set_pipeline(if exact_triangle {
-                    &self.triangle_path_pipeline
+                    &self.full_path_pipeline
                 } else {
                     &self.path_pipeline
                 });
@@ -1439,10 +1448,12 @@ fn create_path_pipeline(
         layout,
         shader,
         target_format,
-        path_instance_layout(),
-        "Noon vector path pipeline",
-        path_vertex_layout(),
-        "vs_path_compact",
+        PathPipelineDescriptor {
+            instance_layout: path_instance_layout(),
+            label: "Noon vector path pipeline",
+            vertex_layout: path_vertex_layout(),
+            vertex_entry: "vs_path_compact",
+        },
     )
 }
 
@@ -1457,14 +1468,16 @@ fn create_mega_path_pipeline(
         layout,
         shader,
         target_format,
-        mega_path_instance_layout(),
-        "Noon packed mega-path pipeline",
-        path_vertex_layout(),
-        "vs_path_compact",
+        PathPipelineDescriptor {
+            instance_layout: mega_path_instance_layout(),
+            label: "Noon packed mega-path pipeline",
+            vertex_layout: path_vertex_layout(),
+            vertex_entry: "vs_path_compact",
+        },
     )
 }
 
-fn create_triangle_path_pipeline(
+fn create_full_path_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
@@ -1475,10 +1488,12 @@ fn create_triangle_path_pipeline(
         layout,
         shader,
         target_format,
-        path_instance_layout(),
-        "Noon exact triangle path pipeline",
-        triangle_path_vertex_layout(),
-        "vs_path",
+        PathPipelineDescriptor {
+            instance_layout: path_instance_layout(),
+            label: "Noon full path pipeline",
+            vertex_layout: triangle_path_vertex_layout(),
+            vertex_entry: "vs_path",
+        },
     )
 }
 
@@ -1487,19 +1502,19 @@ fn create_path_pipeline_with_instance_layout(
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     target_format: wgpu::TextureFormat,
-    instance_layout: wgpu::VertexBufferLayout<'static>,
-    label: &'static str,
-    vertex_layout: wgpu::VertexBufferLayout<'static>,
-    vertex_entry: &'static str,
+    descriptor: PathPipelineDescriptor,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
+        label: Some(descriptor.label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some(vertex_entry),
+            entry_point: Some(descriptor.vertex_entry),
             compilation_options: Default::default(),
-            buffers: &[Some(vertex_layout), Some(instance_layout)],
+            buffers: &[
+                Some(descriptor.vertex_layout),
+                Some(descriptor.instance_layout),
+            ],
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
@@ -1730,7 +1745,8 @@ mod tests {
                 triangle: [[0.0; 2]; 3],
             })
             .collect::<Vec<_>>();
-        update_compact_path_vertices(&mut compact, &source, &[1..2]);
+        let dirty_range = 1..2;
+        update_compact_path_vertices(&mut compact, &source, std::slice::from_ref(&dirty_range));
         assert_eq!(compact[0].surface, 9);
         assert_eq!(compact[1].surface, 1);
         assert_eq!(compact[2].surface, 9);
