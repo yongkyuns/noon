@@ -3168,6 +3168,106 @@ mod tests {
         (twice_area.abs() * 0.5).clamp(0.0, 1.0)
     }
 
+    fn conservative_convex_pixel_classification(
+        points: &[[f32; 2]],
+        pixel_minimum: [f32; 2],
+    ) -> Option<f32> {
+        const EPSILON: f32 = 1.907_348_6e-6;
+        let points = points
+            .iter()
+            .map(|point| [point[0] - pixel_minimum[0], point[1] - pixel_minimum[1]])
+            .collect::<Vec<_>>();
+        let mut twice_area = 0.0_f32;
+        let mut area_scale = 0.0_f32;
+        for (index, point) in points.iter().enumerate() {
+            let next = points[(index + 1) % points.len()];
+            let positive = point[0] * next[1];
+            let negative = point[1] * next[0];
+            twice_area += positive - negative;
+            area_scale += positive.abs() + negative.abs();
+        }
+        let area_guard = EPSILON * area_scale.max(1.0e-12);
+        if !twice_area.is_finite() || !area_scale.is_finite() || twice_area.abs() <= area_guard {
+            return None;
+        }
+        let winding = twice_area.signum();
+        let mut inside = true;
+        for (index, point) in points.iter().enumerate() {
+            let next = points[(index + 1) % points.len()];
+            let edge = [next[0] - point[0], next[1] - point[1]];
+            let delta = [0.5 - point[0], 0.5 - point[1]];
+            let positive = edge[0] * delta[1];
+            let negative = edge[1] * delta[0];
+            let signed = winding * (positive - negative);
+            let support = 0.5 * (edge[0].abs() + edge[1].abs());
+            let guard = EPSILON * (positive.abs() + negative.abs() + support).max(1.0e-12);
+            if !signed.is_finite() || !support.is_finite() || !guard.is_finite() {
+                return None;
+            }
+            if signed < -support - guard {
+                return Some(0.0);
+            }
+            if signed <= support + guard {
+                inside = false;
+            }
+        }
+        inside.then_some(1.0)
+    }
+
+    fn polygon_pixel_coverage_f64(points: &[[f32; 2]], pixel: [f32; 2]) -> f64 {
+        fn clip(input: Vec<[f64; 2]>, axis: usize, bound: f64, greater: bool) -> Vec<[f64; 2]> {
+            let mut output = Vec::new();
+            for index in 0..input.len() {
+                let p = input[index];
+                let q = input[(index + 1) % input.len()];
+                let pin = if greater {
+                    p[axis] >= bound
+                } else {
+                    p[axis] <= bound
+                };
+                let qin = if greater {
+                    q[axis] >= bound
+                } else {
+                    q[axis] <= bound
+                };
+                if pin {
+                    output.push(p);
+                }
+                if pin != qin {
+                    let t = (bound - p[axis]) / (q[axis] - p[axis]);
+                    output.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
+                }
+            }
+            output
+        }
+        let mut polygon = points
+            .iter()
+            .map(|p| [f64::from(p[0] - pixel[0]), f64::from(p[1] - pixel[1])])
+            .collect();
+        for (axis, bound, greater) in [
+            (0, 0.0, true),
+            (0, 1.0, false),
+            (1, 0.0, true),
+            (1, 1.0, false),
+        ] {
+            polygon = clip(polygon, axis, bound, greater);
+        }
+        if polygon.len() < 3 {
+            return 0.0;
+        }
+        polygon
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let q = polygon[(i + 1) % polygon.len()];
+                p[0] * q[1] - p[1] * q[0]
+            })
+            .sum::<f64>()
+            .abs()
+            .mul_add(0.5, 0.0)
+            .clamp(0.0, 1.0)
+    }
+
     #[test]
     fn exact_polygon_packing_accepts_both_windings_and_rejects_degenerate_inputs() {
         let positive = filled_triangle_mesh([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
@@ -3300,6 +3400,92 @@ mod tests {
             ) - 1.0)
                 .abs()
                 < 1e-6
+        );
+    }
+
+    #[test]
+    fn conservative_polygon_classification_matches_f64_clipping_across_scales() {
+        let mut seed = 0x9e37_79b9_u32;
+        let mut inside = 0;
+        let mut outside = 0;
+        for scale in [1.0e-4_f32, 0.02, 1.0, 64.0, 4096.0] {
+            for offset in [[0.0, 0.0], [1.0e7, -1.0e7]] {
+                for _ in 0..1024 {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let angle =
+                        f32::from((seed >> 8) as u16) / f32::from(u16::MAX) * std::f32::consts::TAU;
+                    let radius = scale * (0.2 + f32::from((seed >> 24) as u8) / 255.0 * 3.0);
+                    let center = [
+                        offset[0] + (f32::from((seed & 0xff) as u8) / 255.0 * 4.0 - 2.0) * scale,
+                        offset[1]
+                            + (f32::from(((seed >> 16) & 0xff) as u8) / 255.0 * 4.0 - 2.0) * scale,
+                    ];
+                    let quad = [
+                        0.0,
+                        std::f32::consts::FRAC_PI_2,
+                        std::f32::consts::PI,
+                        std::f32::consts::FRAC_PI_2 * 3.0,
+                    ]
+                    .map(|corner| {
+                        let corner = corner + angle;
+                        [
+                            center[0] + radius * corner.cos(),
+                            center[1] + radius * corner.sin(),
+                        ]
+                    });
+                    for points in [&quad[..], &quad[..3]] {
+                        for winding in [false, true] {
+                            let mut points = points.to_vec();
+                            if winding {
+                                points.reverse();
+                            }
+                            for pixel in [
+                                [center[0] - scale, center[1] - scale],
+                                center,
+                                [center[0] + scale, center[1] + scale],
+                            ] {
+                                let Some(classified) =
+                                    conservative_convex_pixel_classification(&points, pixel)
+                                else {
+                                    continue;
+                                };
+                                let exact = polygon_pixel_coverage_f64(&points, pixel);
+                                assert!(
+                                    (exact - f64::from(classified)).abs() < 1.0e-8,
+                                    "{points:?} at {pixel:?}"
+                                );
+                                if classified == 1.0 {
+                                    inside += 1;
+                                } else {
+                                    outside += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(conservative_convex_pixel_classification(
+            &[[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]],
+            [0.0, 0.0]
+        )
+        .is_none());
+        // Pixel-edge uncertainty must retain partial-area clipping, including
+        // almost-flat polygons whose winding is vulnerable to cancellation.
+        for top in [1.0 - 1.0e-6, 1.0, 1.0 + 1.0e-6] {
+            let points = [[-1.0, -1.0], [2.0, -1.0], [2.0, top], [-1.0, top]];
+            assert!(conservative_convex_pixel_classification(&points, [0.0, 0.0]).is_none());
+        }
+        for points in [
+            [[-4096.0, -4096.0], [4096.0, 4096.0], [4096.0, 4096.001]],
+            [[0.0, 0.0], [f32::INFINITY, 0.0], [0.0, 1.0]],
+            [[0.0, 0.0], [f32::NAN, 0.0], [0.0, 1.0]],
+        ] {
+            assert!(conservative_convex_pixel_classification(&points, [0.0, 0.0]).is_none());
+        }
+        assert!(
+            inside > 100 && outside > 100,
+            "both fast outcomes need coverage"
         );
     }
 
