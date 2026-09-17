@@ -285,6 +285,7 @@ impl FramePreparer {
             path_geometry_dirty: self.path_geometry_dirty,
             stats,
             slots: &[],
+            slot_presences: &[],
             complete_submission: false,
         }
     }

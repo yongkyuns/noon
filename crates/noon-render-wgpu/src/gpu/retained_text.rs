@@ -1461,8 +1461,7 @@ impl RetainedFramePreparer {
 
     fn frame_is_geometry_only(&self, frame: &FrameState) -> bool {
         frame.objects.iter().enumerate().all(|(index, object)| {
-            frame.is_present(index)
-                && !matches!(object.geometry(), Some(GeometryRef::External(_)))
+            !matches!(object.geometry(), Some(GeometryRef::External(_)))
                 && object.geometry().is_some()
                 && !matches!(frame.render_geometry(index), Some(GeometryRef::External(_)))
         })
@@ -3773,8 +3772,9 @@ mod tests {
     }
 
     #[test]
-    fn geometry_reentry_resets_compact_painter_order_before_partial_updates() {
+    fn absent_geometry_stays_on_source_index_fast_path_during_presence_churn() {
         let mut frame = geometry_only_mega_path_frame();
+        frame.objects[1].content = ObjectContentRef::Geometry(GeometryRef::circle(0.25));
         frame.presences[1] = false;
         let texts = TextResourceArena::new();
         let fonts = FontResourceArena::new();
@@ -3782,9 +3782,9 @@ mod tests {
         let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedFramePreparer::new();
-        preparer.set_painter_order(&[0]);
-        assert!(
-            !preparer
+        preparer.set_painter_order(&[0, 1]);
+        {
+            let prepared = preparer
                 .prepare_with_changes(
                     &device,
                     &queue,
@@ -3795,78 +3795,60 @@ mod tests {
                     &geometries,
                     metrics,
                 )
-                .unwrap()
-                .geometry_only
-        );
+                .unwrap();
+            assert!(prepared.geometry_only);
+            assert_eq!(prepared.geometry.stats.instance_count, 1);
+        }
+        assert_eq!(preparer.incremental_stats().scratch_rebuilds, 0);
 
         frame.presences[1] = true;
-        preparer.set_painter_order_range(&[0, 1], 1..2);
-        let changes = FrameChanges::objects(vec![1]).with_painter_order(1..2);
-        assert!(
-            !preparer
+        {
+            let prepared = preparer
                 .prepare_with_changes(
                     &device,
                     &queue,
                     &frame,
-                    &changes,
+                    &FrameChanges::objects(vec![1]),
                     &texts,
                     &fonts,
                     &geometries,
                     metrics,
                 )
-                .unwrap()
-                .geometry_only
-        );
-        assert_eq!(preparer.geometry_only_classification, Some(true));
-        preparer.set_painter_order_range(&[0, 1], 0..1);
-        assert!(
-            preparer
-                .prepare_with_changes(
-                    &device,
-                    &queue,
-                    &frame,
-                    &FrameChanges::painter_order(0..1),
-                    &texts,
-                    &fonts,
-                    &geometries,
-                    metrics,
-                )
-                .unwrap()
-                .geometry_only
-        );
-        assert_eq!(preparer.geometry.painter_order_indices, [0, 1]);
-
-        preparer.set_painter_order_range(&[1, 0], 0..2);
-        preparer
-            .prepare_with_changes(
-                &device,
-                &queue,
-                &frame,
-                &FrameChanges::painter_order(0..2),
-                &texts,
-                &fonts,
-                &geometries,
-                metrics,
-            )
-            .unwrap();
-        assert_eq!(preparer.geometry.painter_order_indices, [1, 0]);
+                .unwrap();
+            assert!(prepared.geometry_only);
+            assert_eq!(prepared.geometry.stats.full_rebuilds, 0);
+            assert_eq!(prepared.geometry.stats.structural_slots_added, 1);
+            assert_eq!(prepared.geometry.stats.instance_count, 2);
+            assert_eq!(prepared.geometry.stats.geometry_cache_misses, 0);
+            assert_eq!(prepared.geometry.ordered_render_batches().count(), 2);
+        }
+        assert_eq!(preparer.incremental_stats().scratch_rebuilds, 0);
 
         frame.presences[1] = false;
-        preparer.set_painter_order_range(&[0], 0..2);
-        let prepared = preparer
-            .prepare_with_changes(
-                &device,
-                &queue,
-                &frame,
-                &FrameChanges::structural(vec![], vec![1]).with_painter_order(0..2),
-                &texts,
-                &fonts,
-                &geometries,
-                metrics,
-            )
-            .unwrap();
-        assert!(!prepared.geometry_only);
-        assert_eq!(prepared.geometry.ordered_render_batches().count(), 1);
+        {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::objects(vec![1]),
+                    &texts,
+                    &fonts,
+                    &geometries,
+                    metrics,
+                )
+                .unwrap();
+            assert!(prepared.geometry_only);
+            assert_eq!(prepared.geometry.stats.full_rebuilds, 0);
+            assert_eq!(prepared.geometry.stats.structural_slots_retired, 1);
+            assert_eq!(prepared.geometry.stats.instance_count, 1);
+            assert_eq!(prepared.geometry.ordered_render_batches().count(), 1);
+            assert!(matches!(
+                prepared.observe_object(1, ObjectId::new(2)),
+                Err(RetainedPreparedObjectOutcome::Absent)
+            ));
+        }
+        assert_eq!(preparer.incremental_stats().scratch_rebuilds, 0);
     }
 
     #[test]

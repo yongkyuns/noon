@@ -159,6 +159,7 @@ impl FramePreparer {
             self.visible_projection_key.clear();
             for &object_index in visible_object_indices {
                 let slot = self.slots[object_index];
+                let present = self.slot_presences[object_index];
                 let (mega_path_segment, mega_path_detached) = match slot {
                     PreparedSlot::Path { batch, .. } => (
                         self.mega_path_segments.get(batch).cloned().flatten(),
@@ -168,6 +169,7 @@ impl FramePreparer {
                 };
                 self.visible_projection_key.push(VisibleProjectionKey {
                     object_index,
+                    present,
                     slot,
                     mega_path_segment,
                     mega_path_detached,
@@ -177,7 +179,9 @@ impl FramePreparer {
             let mut raw_render_batches = std::mem::take(&mut self.visible_raw_render_batches);
             raw_render_batches.clear();
             for &object_index in visible_object_indices {
-                push_slot_batches(&mut raw_render_batches, self.slots[object_index]);
+                if self.slot_presences[object_index] {
+                    push_slot_batches(&mut raw_render_batches, self.slots[object_index]);
+                }
             }
             let mut render_batches = std::mem::take(&mut self.visible_render_batches);
             let mut mega_path_batches = std::mem::take(&mut self.visible_mega_path_batches);
@@ -229,6 +233,7 @@ impl FramePreparer {
                 .zip(visible_object_indices)
                 .all(|(cached, &object_index)| {
                     if cached.object_index != object_index
+                        || cached.present != self.slot_presences[object_index]
                         || cached.slot != self.slots[object_index]
                     {
                         return false;
@@ -260,16 +265,25 @@ impl FramePreparer {
 
         if self.painter_order_installed {
             for &object_index in &self.painter_order_indices {
-                if let Some(slot) = self.slots.get(object_index as usize).copied() {
-                    push_slot_batches(&mut self.render_batches, slot);
+                if self
+                    .slot_presences
+                    .get(object_index as usize)
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    if let Some(slot) = self.slots.get(object_index as usize).copied() {
+                        push_slot_batches(&mut self.render_batches, slot);
+                    }
                 }
             }
             return;
         }
 
         // Low-level scratch frames without a runtime permutation use storage order.
-        for slot in self.slots.iter().copied() {
-            push_slot_batches(&mut self.render_batches, slot);
+        for (object_index, slot) in self.slots.iter().copied().enumerate() {
+            if self.slot_presences[object_index] {
+                push_slot_batches(&mut self.render_batches, slot);
+            }
         }
     }
 
@@ -340,8 +354,15 @@ impl FramePreparer {
                     .painter_order_indices
                     .get(position)
                     .map_or(position, |&index| index as usize);
-                if let Some(slot) = self.slots.get(object_index).copied() {
-                    push_slot_batches(&mut raw, slot);
+                if self
+                    .slot_presences
+                    .get(object_index)
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    if let Some(slot) = self.slots.get(object_index).copied() {
+                        push_slot_batches(&mut raw, slot);
+                    }
                 }
             }
             let mut render_batches = Vec::new();
@@ -526,6 +547,7 @@ fn projected_frame<'a>(
         path_geometry_dirty: preparer.path_geometry_dirty,
         stats,
         slots: &preparer.slots,
+        slot_presences: &preparer.slot_presences,
         complete_submission: false,
     }
 }
