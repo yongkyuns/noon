@@ -2573,22 +2573,7 @@ impl RetainedFramePreparer {
             .get(vector.geometry)
             .ok_or(RetainedPrepareError::MissingGeometryResource)?;
         let path = transform_path(path, vector.transform, Vec2::ZERO);
-        let has_stroke = vector.style.stroke_width > 0.0;
-        let style = Style {
-            fill: if vector.style.fill.is_some() || !has_stroke {
-                vector.style.fill.or(object_style.fill)
-            } else {
-                None
-            },
-            stroke: has_stroke
-                .then(|| vector.style.stroke.or(object_style.fill))
-                .flatten(),
-            stroke_width: vector.style.stroke_width,
-            stroke_width_mode: StrokeWidthMode::ScaleWithObject,
-            stroke_join: object_style.stroke_join,
-            stroke_cap: object_style.stroke_cap,
-            opacity: object_style.opacity,
-        };
+        let style = resolved_text_vector_style(object_style, vector);
         self.push_geometry(
             object_id,
             GeometryRef::VectorPath(path),
@@ -2674,6 +2659,25 @@ impl RetainedFramePreparer {
             }
         }
         Ok(())
+    }
+}
+
+fn resolved_text_vector_style(object_style: Style, vector: &TextVectorItem) -> Style {
+    let has_stroke = vector.style.stroke_width > 0.0;
+    Style {
+        fill: if vector.style.fill.is_some() || !has_stroke {
+            vector.style.fill.or(object_style.fill)
+        } else {
+            None
+        },
+        stroke: has_stroke
+            .then(|| vector.style.stroke.or(object_style.fill))
+            .flatten(),
+        stroke_width: vector.style.stroke_width,
+        stroke_width_mode: StrokeWidthMode::ScaleWithObject,
+        stroke_join: vector.style.stroke_join,
+        stroke_cap: vector.style.stroke_cap,
+        opacity: object_style.opacity,
     }
 }
 
@@ -3654,6 +3658,41 @@ mod tests {
     use noon_runtime::{FrameObjectState, SceneInstance};
 
     use super::*;
+
+    #[test]
+    fn retained_text_vector_uses_backend_cap_and_join() {
+        let mut geometries = GeometryResourceArena::new();
+        let geometry = geometries.insert_path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1.0, 0.0)),
+        );
+        let vector = TextVectorItem {
+            geometry,
+            transform: TextAffineTransform::IDENTITY,
+            style: TextVectorStyle {
+                fill: None,
+                stroke: None,
+                stroke_width: 0.48,
+                stroke_cap: StrokeCap::Butt,
+                stroke_join: StrokeJoin::Miter,
+            },
+            source_span: None,
+            semantic_key: None,
+        };
+        let inherited = Style {
+            fill: Some(Color::WHITE),
+            stroke_cap: StrokeCap::Round,
+            stroke_join: StrokeJoin::Bevel,
+            ..Style::default()
+        };
+
+        let resolved = resolved_text_vector_style(inherited, &vector);
+        assert_eq!(resolved.stroke_cap, StrokeCap::Butt);
+        assert_eq!(resolved.stroke_join, StrokeJoin::Miter);
+        assert_eq!(resolved.stroke_width, 0.48);
+        assert_eq!(resolved.stroke, Some(Color::WHITE));
+    }
 
     #[test]
     fn retained_upload_totals_include_pixels_and_instances_from_every_domain() {

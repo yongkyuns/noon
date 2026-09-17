@@ -62,6 +62,8 @@ struct ClippedPolygon {
     count: u32,
 };
 
+const POLYGON_CLASSIFY_EPSILON: f32 = 0.0000019073486328125;
+
 fn cairo_source_color(color: vec4<f32>, opacity: f32) -> vec4<f32> {
     // Cairo stores solid-pattern channels through a rounded 16-bit intermediate,
     // then takes the high byte of the premultiplied result. Quantize the source
@@ -260,6 +262,13 @@ fn polygon_pixel_coverage(
     polygon.points[1] = b;
     polygon.points[2] = c;
     polygon.points[3] = d;
+    let classification = classify_convex_pixel(polygon);
+    if classification == 0i {
+        return 0.0;
+    }
+    if classification == 1i {
+        return 1.0;
+    }
     polygon = clip_polygon_axis(polygon, 0u, 0.0, true);
     polygon = clip_polygon_axis(polygon, 0u, 1.0, false);
     polygon = clip_polygon_axis(polygon, 1u, 0.0, true);
@@ -281,6 +290,69 @@ fn polygon_pixel_coverage(
         index += 1u;
     }
     return clamp(abs(twice_area) * 0.5, 0.0, 1.0);
+}
+
+// Returns 1 for a pixel box wholly inside the convex polygon, 0 for one wholly
+// outside, and -1 when an edge can touch the box. The signed cross product at
+// the pixel centre has a maximum box variation of 0.5 * (|edge.x| + |edge.y|),
+// which makes both decisions conservative. Boundary cases retain the exact
+// Sutherland-Hodgman clipper below.
+fn classify_convex_pixel(polygon: ClippedPolygon) -> i32 {
+    var twice_area = 0.0;
+    var area_scale = 0.0;
+    var index = 0u;
+    loop {
+        if index >= polygon.count {
+            break;
+        }
+        let next = select(index + 1u, 0u, index + 1u == polygon.count);
+        let p = polygon.points[index];
+        let q = polygon.points[next];
+        let positive = p.x * q.y;
+        let negative = p.y * q.x;
+        twice_area += positive - negative;
+        area_scale += abs(positive) + abs(negative);
+        index += 1u;
+    }
+    // Cancellation and nonfinite values retain the exact clipper. The guard is
+    // proportional to the products that formed the signed area, rather than a
+    // geometry-size threshold.
+    let area_guard = POLYGON_CLASSIFY_EPSILON * max(area_scale, 0.000000000001);
+    if twice_area != twice_area || area_scale != area_scale || abs(twice_area) <= area_guard {
+        return -1i;
+    }
+    let winding = select(-1.0, 1.0, twice_area > 0.0);
+    let centre = vec2<f32>(0.5);
+    var fully_inside = true;
+    index = 0u;
+    loop {
+        if index >= polygon.count {
+            break;
+        }
+        let next = select(index + 1u, 0u, index + 1u == polygon.count);
+        let p = polygon.points[index];
+        let edge = polygon.points[next] - p;
+        let delta = centre - p;
+        let positive = edge.x * delta.y;
+        let negative = edge.y * delta.x;
+        let signed_centre = winding * (positive - negative);
+        let support = 0.5 * (abs(edge.x) + abs(edge.y));
+        let guard = POLYGON_CLASSIFY_EPSILON * max(
+            abs(positive) + abs(negative) + support,
+            0.000000000001,
+        );
+        if signed_centre != signed_centre || support != support || guard != guard {
+            return -1i;
+        }
+        if signed_centre < -support - guard {
+            return 0i;
+        }
+        if signed_centre <= support + guard {
+            fully_inside = false;
+        }
+        index += 1u;
+    }
+    return select(-1i, 1i, fully_inside);
 }
 
 @fragment

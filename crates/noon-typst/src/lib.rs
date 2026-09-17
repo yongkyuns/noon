@@ -539,12 +539,14 @@ impl FrameNormalizer {
             .map(inherited_color)
             .transpose()?
             .flatten();
-        let (stroke, stroke_width) = match &shape.stroke {
+        let (stroke, stroke_width, stroke_cap, stroke_join) = match &shape.stroke {
             Some(stroke) => (
                 inherited_color(&stroke.paint)?,
                 stroke.thickness.to_pt() as f32,
+                typst_line_cap(stroke.cap),
+                typst_line_join(stroke.join),
             ),
-            None => (None, 0.0),
+            None => (None, 0.0, StrokeCap::Butt, StrokeJoin::Miter),
         };
         let transform = state.then(self.page_to_noon);
         // Manim's mobject bounds come from vector points and do not expand for stroke.
@@ -559,12 +561,30 @@ impl FrameNormalizer {
                 fill,
                 stroke,
                 stroke_width,
+                stroke_cap,
+                stroke_join,
             },
             source_span: None,
             semantic_key,
         });
         self.render_items.push(TextRenderItem::Vector(vector_index));
         Ok(())
+    }
+}
+
+fn typst_line_cap(cap: TypstLineCap) -> StrokeCap {
+    match cap {
+        TypstLineCap::Butt => StrokeCap::Butt,
+        TypstLineCap::Round => StrokeCap::Round,
+        TypstLineCap::Square => StrokeCap::Square,
+    }
+}
+
+fn typst_line_join(join: TypstLineJoin) -> StrokeJoin {
+    match join {
+        TypstLineJoin::Miter => StrokeJoin::Miter,
+        TypstLineJoin::Round => StrokeJoin::Round,
+        TypstLineJoin::Bevel => StrokeJoin::Bevel,
     }
 }
 
@@ -655,16 +675,8 @@ fn text_glyph_stroke(stroke: &FixedStroke) -> Result<TextGlyphStroke, TypstBacke
     Ok(TextGlyphStroke {
         paint: inherited_color(&stroke.paint)?,
         width: stroke.thickness.to_pt() as f32,
-        cap: match stroke.cap {
-            TypstLineCap::Butt => StrokeCap::Butt,
-            TypstLineCap::Round => StrokeCap::Round,
-            TypstLineCap::Square => StrokeCap::Square,
-        },
-        join: match stroke.join {
-            TypstLineJoin::Miter => StrokeJoin::Miter,
-            TypstLineJoin::Round => StrokeJoin::Round,
-            TypstLineJoin::Bevel => StrokeJoin::Bevel,
-        },
+        cap: typst_line_cap(stroke.cap),
+        join: typst_line_join(stroke.join),
         dash_array,
         dash_phase,
         miter_limit: stroke.miter_limit.get() as f32,
@@ -825,7 +837,28 @@ mod tests {
                 artifact.geometry.get(item.geometry),
                 Some(GeometryResource::VectorPath(_))
             ));
+            assert_eq!(item.style.stroke_cap, StrokeCap::Butt);
+            assert_eq!(item.style.stroke_join, StrokeJoin::Miter);
         }
+    }
+
+    #[test]
+    fn authored_shape_cap_and_join_survive_normalization() {
+        let artifact = compile_typst_resource(
+            "#line(length: 20pt, stroke: (paint: red, thickness: 2pt, cap: \"round\", join: \"bevel\"))",
+            TypstMode::Markup,
+        )
+        .unwrap();
+        let style = artifact
+            .resource
+            .vector_items
+            .iter()
+            .find(|item| item.style.stroke_width > 0.0)
+            .expect("authored line should normalize to a stroked vector")
+            .style;
+        assert_eq!(style.stroke_cap, StrokeCap::Round);
+        assert_eq!(style.stroke_join, StrokeJoin::Bevel);
+        assert_eq!(style.stroke_width, 2.0);
     }
 
     #[test]

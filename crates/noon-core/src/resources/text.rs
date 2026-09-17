@@ -256,6 +256,10 @@ pub struct TextVectorStyle {
     pub fill: Option<Color>,
     pub stroke: Option<Color>,
     pub stroke_width: f32,
+    /// Exact cap requested by the layout backend for stroked decorations.
+    pub stroke_cap: StrokeCap,
+    /// Exact join requested by the layout backend for stroked decorations.
+    pub stroke_join: StrokeJoin,
 }
 
 impl Default for TextVectorStyle {
@@ -264,6 +268,8 @@ impl Default for TextVectorStyle {
             fill: None,
             stroke: None,
             stroke_width: 0.0,
+            stroke_cap: StrokeCap::Butt,
+            stroke_join: StrokeJoin::Miter,
         }
     }
 }
