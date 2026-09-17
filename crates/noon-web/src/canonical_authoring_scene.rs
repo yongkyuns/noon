@@ -6311,6 +6311,39 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = liveCreateManimMarkupText)]
+        pub fn live_create_manim_markup_text(
+            &mut self,
+            source: &str,
+            font_family: &str,
+            font_size: f64,
+            line_spacing: f64,
+            red: f64,
+            green: f64,
+            blue: f64,
+            alpha: f64,
+            opacity: f64,
+        ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
+            let text = crate::authoring_mobject::manim_markup_text(
+                source,
+                font_family,
+                font_size,
+                line_spacing,
+            )
+            .map_err(typed_js_error)?
+            .color(Color::rgba(
+                checked_f32("text red", red)?,
+                checked_f32("text green", green)?,
+                checked_f32("text blue", blue)?,
+                checked_f32("text alpha", alpha)?,
+            ))
+            .set_opacity(checked_f32("text opacity", opacity)?);
+            self.inner
+                .live_create_text(text)
+                .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(typed_js_error)
+        }
+
         /// Compile and publish one detached Typst or MathTypst object through
         /// the current retained session.
         #[wasm_bindgen(js_name = liveCreateManimTypst)]

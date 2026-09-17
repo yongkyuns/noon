@@ -279,6 +279,22 @@
       "thumbnail_alt": "Two retained raster image cards on the Noon scene background",
       "thumbnail_time": 2,
       "order": 1180
+    },
+    {
+      "id": "noon-markup-text",
+      "title": "MarkupText",
+      "summary": "Inline bold, italic, monospace, entities, and span colors through the shared retained text path.",
+      "status": "ready",
+      "path": "python/examples/markup_text.py",
+      "category": "manim-compatible/text",
+      "features": ["MarkupText", "b", "i", "tt", "span", "entities", "newlines", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "parity_fixture": "markup-text",
+      "thumbnail": "thumbnails/manim/markup-text.svg",
+      "thumbnail_alt": "Inline styled MarkupText with colored spans",
+      "thumbnail_time": 0,
+      "order": 1190
     }
   ]
 }

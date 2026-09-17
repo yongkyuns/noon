@@ -7,6 +7,79 @@ from pathlib import Path
 
 
 class ManimLiveTextConstructorTests(unittest.TestCase):
+    def test_markup_text_selects_raw_source_cold_and_live_routes(self) -> None:
+        python_dir = Path(__file__).resolve().parent
+        env = os.environ.copy()
+        existing = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = (
+            str(python_dir)
+            if not existing
+            else os.pathsep.join((str(python_dir), existing))
+        )
+        source = textwrap.dedent(
+            r"""
+            import _manim_compat
+            import _manim_semantic_handles as handles
+            import _typed_geometry_test_support as _geometry_test
+            _geometry_test.install_module_bridge(handles, lambda *args: object())
+            import _manim_typst as typst
+            import noon
+
+            assert noon.MarkupText is typst.MarkupText
+            cold_calls = []
+            class Handle:
+                def setColor(self, *args): pass
+                def setOpacity(self, *args): pass
+                def setObjectOpacity(self, *args): pass
+            typst._create_authoring_markup_text_handle = lambda *args: cold_calls.append(args) or Handle()
+            typst._create_authoring_text_handle = lambda *args: (_ for _ in ()).throw(
+                AssertionError("MarkupText used the plain Text constructor")
+            )
+            handles._live_constructor_context = lambda kind="primitive": None
+            cold = typst.MarkupText("<b>é</b>", font="DejaVu Sans Mono", font_size=31, line_spacing=0.2)
+            assert cold.source == "<b>é</b>"
+            assert cold_calls == [("<b>é</b>", "DejaVu Sans Mono", 31.0, 0.2)]
+            for kwargs in ({"font_size": 0}, {"line_spacing": -2}):
+                try:
+                    typst.MarkupText("<i>x</i>", **kwargs)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("invalid MarkupText options were accepted")
+            assert len(cold_calls) == 1
+
+            class LiveContext:
+                def __init__(self): self.calls = []
+                def liveExecutionOwnership(self): return "returned"
+                def liveCreateManimMarkupText(self, *args):
+                    self.calls.append(args)
+                    return object()
+                def liveCreateManimText(self, *args):
+                    raise AssertionError("MarkupText used the plain live Text constructor")
+
+            context = LiveContext()
+            handles._live_constructor_context = lambda kind="primitive": context
+            live = typst.MarkupText("<span>raw & source</span>", color=noon.BLUE, opacity=0.4)
+            assert live.source == "<span>raw & source</span>"
+            assert len(context.calls) == 1
+            assert context.calls[0][:4] == ("<span>raw & source</span>", "DejaVu Sans Mono", 48.0, -1.0)
+            assert context.calls[0][-1] == 0.4
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", source],
+            cwd=python_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
+        )
+
     def test_live_text_routes_through_current_context_and_rejects_unsupported_kinds(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()

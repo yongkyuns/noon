@@ -18,6 +18,8 @@ pub mod family_transform_indicate;
 pub mod line_passing_flash;
 pub mod live_geometry_construction;
 pub mod live_updater_lifecycle;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod markup_text;
 pub mod mixed_scalar_composition;
 pub mod moving_around;
 pub mod ordinary_become_semantics;

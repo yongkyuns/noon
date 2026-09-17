@@ -39,6 +39,7 @@ const examples = [
   { name: "Path subcurves", factory: "createDirectPathSubcurvesSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Path smoothing", factory: "createDirectPathSmoothingSmokeRenderer", objectCount: 4, duration: 0.2 },
   { name: "Text source parts", factory: "createDirectTextSourcePartsSmokeRenderer", objectCount: 2, duration: 0.2 },
+  { name: "MarkupText", factory: "createDirectMarkupTextSmokeRenderer", objectCount: 1, duration: 0.2 },
   { name: "Path editing", factory: "createDirectPathEditingSmokeRenderer", objectCount: 3, duration: 0.2 },
   { name: "Paint queries and gradients", factory: "createDirectPaintQueriesGradientsSmokeRenderer", objectCount: 5, duration: 0.2 },
   { name: "Filled path Transform", factory: "createDirectFilledPathTransformRenderer", objectCount: 1, duration: 3.2 },
@@ -160,6 +161,27 @@ function visiblePixelStats(buffer, name) {
     }
   }
   return { changedPixels, bounds: { minX, minY, maxX, maxY } };
+}
+
+function markupTextColorStats(buffer) {
+  const png = PNG.sync.read(buffer);
+  let cyan = 0;
+  let orange = 0;
+  let upperInk = 0;
+  let lowerInk = 0;
+  for (let offset = 0; offset < png.data.length; offset += 4) {
+    const r = png.data[offset];
+    const g = png.data[offset + 1];
+    const b = png.data[offset + 2];
+    const y = Math.floor(offset / 4 / png.width);
+    if (b > r + 20 && g > r + 20) cyan += 1;
+    if (r > g + 30 && g > b + 20) orange += 1;
+    if (r + g + b > 180) {
+      if (y < png.height / 2) upperInk += 1;
+      else lowerInk += 1;
+    }
+  }
+  return { cyan, orange, upperInk, lowerInk };
 }
 
 function differingPixelCount(beforeBuffer, afterBuffer, region) {
@@ -691,6 +713,14 @@ try {
       assert.ok(metrics.instances > 0, `${example.name}: renderer emitted no instances at t=${time}`);
 
       const { changedPixels: visiblePixels } = visiblePixelStats(screenshot, example.name);
+
+      if (example.name === "MarkupText") {
+        const colors = markupTextColorStats(screenshot);
+        assert.ok(colors.cyan > 10, `MarkupText: expected visible cyan foreground span, got ${colors.cyan}`);
+        assert.ok(colors.orange > 10, `MarkupText: expected visible orange foreground span, got ${colors.orange}`);
+        assert.ok(colors.upperInk > 20 && colors.lowerInk > 20,
+          `MarkupText: expected ink on both multiline rows, got ${JSON.stringify(colors)}`);
+      }
 
       if (visiblePixels < 100) {
         visualFailures.push(

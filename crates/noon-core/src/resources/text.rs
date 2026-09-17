@@ -42,7 +42,9 @@ pub struct TextResourceHandle {
     pub version: u64,
 }
 
-/// UTF-8 byte range in the original authoring source.
+/// UTF-8 byte range in [`TextResource::source`].
+/// Native markup uses decoded text without tags; backends that retain their
+/// source language (such as Typst) use that backend's original source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TextSourceSpan {
     pub start: u32,
@@ -305,6 +307,8 @@ pub struct TextPart {
 /// Immutable renderer-independent shaped text/math payload.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextResource {
+    /// Canonical source used by every cluster and part range. For native markup
+    /// this is decoded UTF-8 text, not the wrapper's original markup string.
     pub source: Arc<str>,
     pub kind: TextSourceKind,
     pub runs: Arc<[GlyphRun]>,

@@ -23,6 +23,11 @@ except ImportError:  # Import remains possible for source-only CPython tests.
     _create_authoring_text_handle = None
 
 try:
+    from js import noonCreateAuthoringMarkupTextHandle as _create_authoring_markup_text_handle
+except ImportError:  # Import remains possible for source-only CPython tests.
+    _create_authoring_markup_text_handle = None
+
+try:
     from js import noonCreateAuthoringTypstHandle as _create_authoring_typst_handle
 except ImportError:  # Import remains possible for source-only CPython tests.
     _create_authoring_typst_handle = None
@@ -102,13 +107,19 @@ def _new_native_text_handle(
     font_family: str,
     font_size: float,
     line_spacing: float,
+    *,
+    markup: bool = False,
 ):
     source, font_family, font_size, line_spacing = _validated_native_text_options(
         source, font_family, font_size, line_spacing
     )
-    if _create_authoring_text_handle is None:
-        raise RuntimeError("Text requires Noon's shared Rust authoring runtime")
-    return engine_call(_create_authoring_text_handle, source, font_family, font_size, line_spacing)
+    constructor = (
+        _create_authoring_markup_text_handle if markup else _create_authoring_text_handle
+    )
+    label = "MarkupText" if markup else "Text"
+    if constructor is None:
+        raise RuntimeError(f"{label} requires Noon's shared Rust authoring runtime")
+    return engine_call(constructor, source, font_family, font_size, line_spacing)
 
 
 def _as_color(value: object) -> _base.Color:
@@ -341,6 +352,8 @@ class MathTypst(_RetainedTypstMobject):
 class Text(_RetainedTextMobject):
     """Deterministic native plain text compiled and rendered entirely by Rust."""
 
+    _markup = False
+
     def __init__(
         self,
         text: str,
@@ -361,10 +374,17 @@ class Text(_RetainedTextMobject):
         color = _as_color(color)
         live_context = _live_text_context()
         if live_context is None:
-            handle = _new_native_text_handle(text, font, font_size, line_spacing)
+            handle = _new_native_text_handle(
+                text, font, font_size, line_spacing, markup=self._markup
+            )
         else:
+            live_constructor = (
+                live_context.liveCreateManimMarkupText
+                if self._markup
+                else live_context.liveCreateManimText
+            )
             handle = engine_call(
-                live_context.liveCreateManimText,
+                live_constructor,
                 text,
                 font,
                 font_size,
@@ -446,3 +466,9 @@ class Text(_RetainedTextMobject):
             float(engine_call(handle.criticalX, float(axis.x), float(axis.y))),
             float(engine_call(handle.criticalY, float(axis.x), float(axis.y))),
         )
+
+
+class MarkupText(Text):
+    """Native text whose authored source is decoded as markup by Rust."""
+
+    _markup = True

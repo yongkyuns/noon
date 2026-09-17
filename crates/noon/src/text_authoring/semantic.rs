@@ -7,7 +7,7 @@ use super::{Text, NATIVE_POINT_TO_SCENE_SCALE};
 
 mod objects;
 #[cfg(feature = "native-text")]
-pub(crate) use objects::native_text_state;
+pub(crate) use objects::prepare_native_text;
 #[cfg(feature = "typst")]
 pub(crate) use objects::{math_typst_state, typst_state};
 #[cfg(feature = "native-text")]

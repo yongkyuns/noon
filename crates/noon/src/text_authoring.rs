@@ -5,9 +5,13 @@
 //! keep shaped glyph/vector resources in explicit arenas; no placeholder geometry,
 //! SVG payload, or frontend-owned glyph state is introduced at the authoring boundary.
 
+#[cfg(feature = "native-text")]
+mod markup;
 mod semantic;
 #[cfg(feature = "native-text")]
-pub(crate) use semantic::native_text_state;
+pub use markup::MarkupText;
+#[cfg(feature = "native-text")]
+pub(crate) use semantic::prepare_native_text;
 #[cfg(feature = "typst")]
 pub(crate) use semantic::{math_typst_state, typst_state};
 
@@ -261,12 +265,13 @@ typst_object!(MathTypst, TypstMode::Math, TextSourceKind::MathTypst);
 /// Native plain text authored through the same retained resource contract as Typst.
 ///
 /// This first public slice intentionally exposes deterministic plain/multiline text.
-/// Styled spans, fallback chains, bidi/script itemization, and MarkupText remain
-/// backend follow-ups rather than being approximated in frontend wrappers.
+/// [`MarkupText`] uses the same retained pipeline with explicit styled spans.
+/// Fallback chains and bidi/script itemization remain backend follow-ups.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg(feature = "native-text")]
 pub struct Text {
     source: Arc<str>,
+    markup: bool,
     font_family: Arc<str>,
     font_face: Option<NativeFontFace>,
     font_size: f32,
@@ -279,6 +284,7 @@ impl Text {
     pub fn new(source: impl Into<Arc<str>>) -> Self {
         Self {
             source: source.into(),
+            markup: false,
             font_family: Arc::from(DEFAULT_NATIVE_TEXT_FONT_FAMILY),
             font_face: None,
             font_size: DEFAULT_NATIVE_TEXT_FONT_SIZE,
@@ -389,6 +395,9 @@ impl Text {
         options.line_spacing = self.line_spacing;
         options.fill = fill;
         let mut compiler = NativeTextCompiler::new();
+        if self.markup {
+            return markup::compile(self, &font, &options, &mut compiler);
+        }
         let artifact = compiler.compile_plain(self.source.as_ref(), &font, &options)?;
         debug_assert_eq!(artifact.resource.kind, TextSourceKind::Plain);
         Ok(artifact)
@@ -472,6 +481,16 @@ pub enum TextAuthoringError {
     ObjectIdSpaceExhausted,
     #[cfg(feature = "native-text")]
     NativeText(NativeTextError),
+    #[cfg(feature = "native-text")]
+    Markup(noon_text::markup::MarkupTextError),
+    #[cfg(feature = "native-text")]
+    UnsupportedMarkupColor(Arc<str>),
+    #[cfg(feature = "native-text")]
+    FontStyleUnavailable {
+        family: Arc<str>,
+        bold: bool,
+        italic: bool,
+    },
     #[cfg(feature = "typst")]
     Typst(TypstBackendError),
     Font(FontResourceError),
@@ -479,6 +498,7 @@ pub enum TextAuthoringError {
     Compile(CompileError),
     Semantic(crate::AuthoringError),
     Import(noon_core::SemanticTextImportError),
+    Allocation(std::collections::TryReserveError),
 }
 
 impl std::fmt::Display for TextAuthoringError {
@@ -506,6 +526,21 @@ impl std::fmt::Display for TextAuthoringError {
             }
             #[cfg(feature = "native-text")]
             Self::NativeText(error) => error.fmt(formatter),
+            #[cfg(feature = "native-text")]
+            Self::Markup(error) => error.fmt(formatter),
+            #[cfg(feature = "native-text")]
+            Self::UnsupportedMarkupColor(color) => {
+                write!(formatter, "unsupported markup foreground {color:?}")
+            }
+            #[cfg(feature = "native-text")]
+            Self::FontStyleUnavailable {
+                family,
+                bold,
+                italic,
+            } => write!(
+                formatter,
+                "native font {family:?} has no selected face for bold={bold}, italic={italic}"
+            ),
             #[cfg(feature = "typst")]
             Self::Typst(error) => error.fmt(formatter),
             Self::Font(error) => error.fmt(formatter),
@@ -513,6 +548,7 @@ impl std::fmt::Display for TextAuthoringError {
             Self::Compile(error) => error.fmt(formatter),
             Self::Semantic(error) => error.fmt(formatter),
             Self::Import(error) => error.fmt(formatter),
+            Self::Allocation(error) => error.fmt(formatter),
         }
     }
 }
@@ -522,6 +558,8 @@ impl std::error::Error for TextAuthoringError {
         match self {
             #[cfg(feature = "native-text")]
             Self::NativeText(error) => Some(error),
+            #[cfg(feature = "native-text")]
+            Self::Markup(error) => Some(error),
             #[cfg(feature = "typst")]
             Self::Typst(error) => Some(error),
             Self::Font(error) => Some(error),
@@ -529,6 +567,7 @@ impl std::error::Error for TextAuthoringError {
             Self::Compile(error) => Some(error),
             Self::Semantic(error) => Some(error),
             Self::Import(error) => Some(error),
+            Self::Allocation(error) => Some(error),
             _ => None,
         }
     }
@@ -557,6 +596,18 @@ impl From<FontResourceError> for TextAuthoringError {
 impl From<TextResourceValidationError> for TextAuthoringError {
     fn from(value: TextResourceValidationError) -> Self {
         Self::Text(value)
+    }
+}
+
+impl From<noon_core::SemanticTextImportError> for TextAuthoringError {
+    fn from(value: noon_core::SemanticTextImportError) -> Self {
+        Self::Import(value)
+    }
+}
+
+impl From<std::collections::TryReserveError> for TextAuthoringError {
+    fn from(value: std::collections::TryReserveError) -> Self {
+        Self::Allocation(value)
     }
 }
 

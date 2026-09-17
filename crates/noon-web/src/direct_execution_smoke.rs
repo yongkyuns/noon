@@ -127,6 +127,15 @@ pub async fn create_direct_specialized_geometry_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
 }
 
+/// Browser proof that MarkupText uses the same direct retained text path as native Rust.
+#[wasm_bindgen(js_name = createDirectMarkupTextSmokeRenderer)]
+pub async fn create_direct_markup_text_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::markup_text::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Browser proof that static Typst uses the same direct semantic text-resource path.
 #[wasm_bindgen(js_name = createDirectTypstTextSmokeRenderer)]
 pub async fn create_direct_typst_text_smoke_renderer(

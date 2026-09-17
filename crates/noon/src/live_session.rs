@@ -849,9 +849,28 @@ impl<'a> LiveSession<'a> {
     pub fn create_text(&mut self, text: crate::Text) -> Result<Mobject, LiveSessionError> {
         self.session
             .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let state = crate::text_authoring::native_text_state(self.store, text)
-            .map_err(LiveSessionError::Text)?;
-        self.create_detached_mobject(state)
+        let admission =
+            crate::text_authoring::prepare_native_text(text).map_err(LiveSessionError::Text)?;
+        let result = {
+            let mut store = self.store.borrow_mut();
+            admission.publish(&mut store, |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(|error| {
+                        crate::TextAuthoringError::Semantic(crate::AuthoringError::from(error))
+                    })
+            })
+        }
+        .map_err(|error| match error {
+            crate::TextAuthoringError::Semantic(crate::AuthoringError::ExecutionPublication(
+                error,
+            )) => LiveSessionError::Publication(error),
+            error => LiveSessionError::Text(error),
+        })?;
+        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one detached native text admission creates one semantic node")
+        };
+        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
     }
 
     /// Compile and publish one detached Typst object through this live session.
@@ -877,7 +896,7 @@ impl<'a> LiveSession<'a> {
         self.create_detached_mobject(state)
     }
 
-    #[cfg(any(feature = "native-text", feature = "typst"))]
+    #[cfg(feature = "typst")]
     fn create_detached_mobject(
         &mut self,
         state: SemanticObjectState,
