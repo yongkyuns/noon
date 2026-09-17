@@ -143,7 +143,7 @@ fn style_transform_and_query_categories_are_typed_and_atomic() -> TestResult {
 
 #[test]
 fn scalar_failures_preserve_domain_and_transaction_causes() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let before = snapshot(&scene, &[]);
     let error = scene.value_tracker(f64::NAN).unwrap_err();
     assert_eq!(
@@ -196,7 +196,7 @@ fn scalar_failures_preserve_domain_and_transaction_causes() -> TestResult {
 
 #[test]
 fn duplicate_binding_preserves_existing_signal_and_same_binding_is_a_noop() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let object = scene.circle(1.0)?;
     let tracker = scene.value_tracker(1.0)?;
     let first = scene.position_from_tracker(
