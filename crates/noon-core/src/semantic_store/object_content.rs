@@ -4,6 +4,9 @@ use crate::{
     SemanticTransform2_5D, StoredGeometry,
 };
 
+mod coordinate_role;
+pub use coordinate_role::SemanticNumberLineRole;
+
 /// Target authored content carried by one semantic object.
 ///
 /// Cheap analytic geometry stays inline through [`StoredGeometry`]. Heavy geometry
@@ -123,12 +126,15 @@ pub enum SemanticObjectRole {
     ArrowShaft(SemanticArrowShaftRole),
     ArrowEndTip,
     ArrowStartTip,
+    /// Scalar range of an ordinary coordinate shaft; no renderer specialization.
+    NumberLine(SemanticNumberLineRole),
 }
 
 impl SemanticObjectRole {
     pub fn is_valid(self) -> bool {
         match self {
             Self::ArrowShaft(policy) => policy.is_valid(),
+            Self::NumberLine(range) => range.is_valid(),
             Self::Ordinary | Self::Camera2D | Self::ArrowEndTip | Self::ArrowStartTip => true,
         }
     }

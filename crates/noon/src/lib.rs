@@ -60,6 +60,10 @@ mod authoring_error;
 mod boolean_authoring;
 mod camera_authoring;
 mod compact_value_authoring;
+mod coordinate_authoring;
+/// Paired plotting scene shared by native and direct WASM qualification.
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod coordinate_plotting_example;
 mod cyclic_replace;
 mod dashed_line_authoring;
 #[cfg(feature = "diagnostics")]
@@ -88,6 +92,8 @@ mod focus_on_authoring;
 mod geometry_authoring;
 mod host_callbacks;
 pub mod integration;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod live_coordinate_plotting_example;
 mod live_program;
 mod live_session;
 mod matrix_authoring;
@@ -96,6 +102,8 @@ mod path_alignment;
 mod path_editing;
 mod path_queries;
 mod path_smoothing;
+mod plot_authoring;
+pub mod plot_presentation;
 mod point_matching;
 mod rotation_authoring;
 mod rounded_rectangle_authoring;
@@ -107,11 +115,16 @@ mod sector_authoring;
 mod semantic_mobject;
 mod state_replacement;
 mod svg_authoring;
+pub mod synchronized_plot_presentation;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod synchronized_plotting_example;
 mod tangent_line_authoring;
 #[cfg(any(feature = "native-text", feature = "typst"))]
 mod text_authoring;
 #[cfg(any(feature = "native-text", feature = "typst"))]
 mod text_part_authoring;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod time_series_plotting_example;
 mod vector_field_authoring;
 mod z_index;
 
@@ -128,6 +141,10 @@ pub use arrow_endpoints::{
 pub use arrow_scale::ArrowScaleError;
 pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
 pub use boolean_authoring::{BooleanOperation, BooleanPathError};
+pub use coordinate_authoring::{
+    CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
+    ManimNumberLineOptions,
+};
 pub use dashed_line_authoring::DashedLineAuthoringError;
 pub use dimension_fit::LayoutDimension;
 pub use elbow_authoring::ElbowAuthoringError;
@@ -175,12 +192,15 @@ pub use noon_core::{
     RED_E, RIGHT, SMALL_BUFF, TAU, TEAL, TEAL_A, TEAL_B, TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE,
     YELLOW, YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D, YELLOW_E,
 };
+pub use noon_geometry::{AxesFrame, CoordinateError, NumberLineFrame};
 pub use noon_geometry::{
-    StaticVectorFieldError, VectorFieldAxis, VectorFieldAxisRange, VectorFieldPoint,
-    VectorFieldRanges2D, DEFAULT_VECTOR_FIELD_STEP,
+    PlotPreparationError, PlotSamplingOptions, PlotSamplingPlan, StaticVectorFieldError,
+    VectorFieldAxis, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D,
+    DEFAULT_VECTOR_FIELD_STEP,
 };
 pub use noon_runtime::EvaluationError;
 pub use path_queries::PathQuery;
+pub use plot_authoring::PlotAuthoringError;
 pub use rotation_authoring::ManimRotationPivot;
 pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
@@ -210,10 +230,14 @@ pub mod prelude {
         EffectiveMobjectState, ExecutionSession, FadeEndpoint, FadeTranslation, LiveContinuation,
         LiveProgram, LiveSession, LiveSessionError, ManimArrow, ManimArrowOptions,
         ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget, NativeBoolSignal,
-        NativeVectorSignal, RateFunction, Scene, SemanticObjectState, SemanticStyle,
-        StoredGeometry, StyleUpdate, SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature,
-        TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange, VectorFieldPoint,
-        VectorFieldRanges2D, VectorPath,
+        NativeVectorSignal, PlotAuthoringError, PlotSamplingOptions, RateFunction, Scene,
+        SemanticObjectState, SemanticStyle, StoredGeometry, StyleUpdate, SvgAuthoringError,
+        SvgImportOptions, SvgUnsupportedFeature, TrackerPosition, ValueTracker, Vec2,
+        VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, VectorPath,
+    };
+    pub use crate::{
+        CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
+        ManimNumberLineOptions,
     };
 }
 

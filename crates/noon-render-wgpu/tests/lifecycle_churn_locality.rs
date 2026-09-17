@@ -3,7 +3,7 @@ use noon_core::{
     Color, GeometryRef, ObjectId, Property, Style, TrackDefinition, TrackId, TrackTiming,
     TrackValues, Transform2D, Vec2, VectorPath,
 };
-use noon_render_wgpu::FramePreparer;
+use noon_render_wgpu::{FramePreparer, PreparedFrame, RenderPrimitive};
 use noon_runtime::SceneInstance;
 
 const SHAPE_COUNT: usize = 600;
@@ -77,6 +77,27 @@ fn expected_pulse_count(sample_index: usize) -> usize {
         211..=267 => PULSE_COUNT,
         _ => unreachable!("sample is outside lifecycle-churn"),
     }
+}
+
+fn submitted_primitive_counts(prepared: &PreparedFrame<'_>) -> (usize, usize) {
+    let mut paths = 0usize;
+    let mut circles = 0usize;
+    for ordered in prepared.ordered_render_batches() {
+        let count =
+            (ordered.batch.instance_range.end - ordered.batch.instance_range.start) as usize;
+        match ordered.batch.primitive {
+            RenderPrimitive::Circle => circles += count,
+            RenderPrimitive::Path { .. } => paths += count,
+            RenderPrimitive::MegaPath { .. } => {
+                paths += ordered
+                    .mega_path_batch
+                    .expect("mega-path draw metadata must resolve")
+                    .path_count;
+            }
+            RenderPrimitive::Rectangle | RenderPrimitive::Line => {}
+        }
+    }
+    (paths, circles)
 }
 
 #[test]
@@ -155,18 +176,16 @@ fn lifecycle_churn_presence_transitions_keep_morphed_paths_resident_on_the_exact
 
         let expected_paths = expected_path_count(sample_index);
         let expected_pulses = expected_pulse_count(sample_index);
+        let (submitted_paths, submitted_pulses) = submitted_primitive_counts(&prepared);
+        assert_eq!(submitted_paths, expected_paths, "sample {sample_index}");
+        assert_eq!(submitted_pulses, expected_pulses, "sample {sample_index}");
         assert_eq!(
-            prepared.path_ids.len(),
-            expected_paths,
+            submitted_paths + submitted_pulses,
+            expected_paths + expected_pulses,
             "sample {sample_index}"
         );
         assert_eq!(
-            prepared.circle_ids.len(),
-            expected_pulses,
-            "sample {sample_index}"
-        );
-        assert_eq!(
-            prepared.path_ids.len() + prepared.circle_ids.len(),
+            prepared.stats.instance_count,
             expected_paths + expected_pulses,
             "sample {sample_index}"
         );

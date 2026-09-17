@@ -1,4 +1,6 @@
 use crate::authoring_error::AuthoringFailure;
+#[cfg(any(target_arch = "wasm32", test))]
+mod coordinates;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -6103,6 +6105,28 @@ mod wasm {
                         stretch,
                     },
                 )
+                .map_err(typed_js_error)
+        }
+
+        /// Publish a detached coordinate family through the same retained owner.
+        #[wasm_bindgen(js_name = liveCreateCoordinates)]
+        pub fn live_create_coordinates(
+            &mut self,
+            candidate: crate::WasmCoordinateOptions,
+        ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
+            use crate::authoring_coordinates::CoordinateRequest;
+            let family = match candidate.request {
+                CoordinateRequest::NumberLine(options) => self
+                    .inner
+                    .live_create_number_line(&options)
+                    .map(|line| line.family().clone()),
+                CoordinateRequest::Axes(options) => self
+                    .inner
+                    .live_create_axes(&options)
+                    .map(|axes| axes.family().clone()),
+            };
+            family
+                .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(typed_js_error)
         }
 

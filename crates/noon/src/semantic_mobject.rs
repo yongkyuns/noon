@@ -307,10 +307,14 @@ impl ManimGeometryOptions {
         edit_object_opacity(&mut self.style, opacity)
     }
 
-    pub(crate) fn into_state(
+    /// Build one semantic object state while scoping any newly interned path to
+    /// the publication that consumes it. If the publication rejects, the store
+    /// removes the unpublished path before returning the same error.
+    pub(crate) fn with_state<T>(
         self,
         store: &mut SemanticStore,
-    ) -> Result<SemanticObjectState, AuthoringError> {
+        publish: impl FnOnce(&mut SemanticStore, SemanticObjectState) -> Result<T, AuthoringError>,
+    ) -> Result<T, AuthoringError> {
         if !self.geometry.is_finite()
             || !self.transform.translation.is_finite()
             || !self.transform.scale.is_finite()
@@ -320,13 +324,74 @@ impl ManimGeometryOptions {
         {
             return Err(AuthoringError::NonFiniteObjectState);
         }
-        let geometry = import_geometry(store, self.geometry)?;
-        let mut state = SemanticObjectState::new(geometry);
-        state.transform = self.transform;
-        state.style = self.style;
-        state.set_z_index(self.z_index);
-        Ok(state)
+        let Self {
+            geometry,
+            transform,
+            style,
+            z_index,
+        } = self;
+        match geometry {
+            GeometryRef::Circle { radius } => publish(
+                store,
+                manim_geometry_state(StoredGeometry::Circle { radius }, transform, style, z_index),
+            ),
+            GeometryRef::Rectangle { size } => publish(
+                store,
+                manim_geometry_state(
+                    StoredGeometry::Rectangle { size },
+                    transform,
+                    style,
+                    z_index,
+                ),
+            ),
+            GeometryRef::Line { start, end } => publish(
+                store,
+                manim_geometry_state(
+                    StoredGeometry::Line { start, end },
+                    transform,
+                    style,
+                    z_index,
+                ),
+            ),
+            GeometryRef::VectorPath(path) => store.with_geometry_path(path, |store, handle| {
+                publish(
+                    store,
+                    manim_geometry_state(
+                        StoredGeometry::Resource(handle),
+                        transform,
+                        style,
+                        z_index,
+                    ),
+                )
+            }),
+            GeometryRef::External(_) => Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::ExternalGeometry,
+            )),
+        }
     }
+
+    /// State-only materialization for remaining callers tracked by #1603.
+    /// Geometry constructors must use `with_state` so path admission stays
+    /// inside their fallible publication boundary.
+    pub(crate) fn into_state(
+        self,
+        store: &mut SemanticStore,
+    ) -> Result<SemanticObjectState, AuthoringError> {
+        self.with_state(store, |_store, state| Ok(state))
+    }
+}
+
+fn manim_geometry_state(
+    geometry: StoredGeometry,
+    transform: SemanticTransform2_5D,
+    style: SemanticStyle,
+    z_index: f64,
+) -> SemanticObjectState {
+    let mut state = SemanticObjectState::new(geometry);
+    state.transform = transform;
+    state.style = style;
+    state.set_z_index(z_index);
+    state
 }
 
 /// An aliasing handle to one node. Use `copy_handle` for an independent object.
@@ -434,8 +499,20 @@ impl Mobject {
         store: Rc<RefCell<SemanticStore>>,
         options: ManimGeometryOptions,
     ) -> Result<Self, AuthoringError> {
-        let state = options.into_state(&mut store.borrow_mut())?;
-        Self::new(store, state)
+        let id = {
+            let mut store_ref = store.borrow_mut();
+            options.with_state(&mut store_ref, |store, state| {
+                validate_content(store, state.content)?;
+                let mut transaction = SemanticMutationTransaction::new();
+                transaction.add_node(SemanticNodeCreation::object(state));
+                let result = transaction.apply(store).map_err(AuthoringError::from)?;
+                let [SemanticMutationImpact::NodeAdded { node: id }] = result.impacts() else {
+                    unreachable!("one object creation produces one identity")
+                };
+                Ok(*id)
+            })?
+        };
+        Ok(Self { store, id })
     }
 
     fn from_geometry_state(
@@ -1076,6 +1153,8 @@ pub(crate) fn import_geometry(
     }
 }
 
+#[cfg(test)]
+mod publication_atomicity_tests;
 #[cfg(test)]
 mod tests;
 

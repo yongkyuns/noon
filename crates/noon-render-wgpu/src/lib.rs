@@ -174,6 +174,8 @@ pub struct PreparedOrderedRenderBatchRef<'a> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RenderStats {
     pub batch_count: usize,
+    /// Live primitive instances referenced by the current submission projection.
+    /// Retained packed arrays may be larger while absent rows remain resident.
     pub instance_count: usize,
     pub unsupported_count: usize,
     pub capacity_growths: usize,
@@ -217,6 +219,8 @@ pub struct RenderStats {
 #[derive(Debug)]
 pub struct PreparedFrame<'a> {
     pub time: f64,
+    /// Resident identities aligned one-to-one with the corresponding packed
+    /// instance arrays. Presence affects ordered submission, not this mapping.
     pub circle_ids: &'a [ObjectId],
     pub circles: &'a [CircleInstance],
     pub rectangle_ids: &'a [ObjectId],
@@ -259,6 +263,7 @@ pub struct PreparedFrame<'a> {
     pub path_geometry_dirty: bool,
     pub stats: RenderStats,
     slots: &'a [PreparedSlot],
+    slot_presences: &'a [bool],
     complete_submission: bool,
 }
 
@@ -337,6 +342,14 @@ impl PreparedFrame<'_> {
         &self,
         object_index: usize,
     ) -> Result<PreparedGeometryObjectObservation, PreparedGeometryObjectOutcome> {
+        if !self
+            .slot_presences
+            .get(object_index)
+            .copied()
+            .unwrap_or(false)
+        {
+            return Err(PreparedGeometryObjectOutcome::Absent);
+        }
         let slot = self
             .slots
             .get(object_index)
@@ -457,6 +470,14 @@ enum PreparedSlot {
     Unsupported(usize),
 }
 
+const fn prepared_slot_instance_count(slot: PreparedSlot) -> usize {
+    match slot {
+        PreparedSlot::Absent | PreparedSlot::Unsupported(_) => 0,
+        PreparedSlot::Circle(_) | PreparedSlot::Rectangle(_) | PreparedSlot::Line(_) => 1,
+        PreparedSlot::Path { reveal_head, .. } => 1 + reveal_head.is_some() as usize,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 struct PathStrokeTransformKey {
     scale_x_bits: u32,
@@ -506,6 +527,7 @@ struct StructuralAppendStats {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct VisibleProjectionKey {
     object_index: usize,
+    present: bool,
     slot: PreparedSlot,
     mega_path_segment: Option<Range<u32>>,
     mega_path_detached: bool,
@@ -577,6 +599,8 @@ pub struct FramePreparer {
     packed_path_mesh_cache_generation: u64,
     unsupported: Vec<ObjectId>,
     slots: Vec<PreparedSlot>,
+    slot_presences: Vec<bool>,
+    active_instance_count: usize,
     circle_dirty_ranges: Vec<Range<usize>>,
     rectangle_dirty_ranges: Vec<Range<usize>>,
     line_dirty_ranges: Vec<Range<usize>>,
@@ -652,6 +676,29 @@ impl FramePreparer {
             return self.rebuild(frame);
         }
 
+        let retirement_indices = changes
+            .object_indices()
+            .iter()
+            .copied()
+            .filter(|&index| {
+                index < old_slot_len
+                    && !frame.is_present(index)
+                    && self.slot_presences[index]
+                    && !matches!(self.slots[index], PreparedSlot::Absent)
+            })
+            .collect::<Vec<_>>();
+        let reactivation_indices = changes
+            .object_indices()
+            .iter()
+            .copied()
+            .filter(|&index| {
+                index < old_slot_len
+                    && frame.is_present(index)
+                    && !self.slot_presences[index]
+                    && !matches!(self.slots[index], PreparedSlot::Absent)
+            })
+            .collect::<Vec<_>>();
+
         let replacement_indices = changes
             .object_indices()
             .iter()
@@ -661,7 +708,9 @@ impl FramePreparer {
                 changes.removed_indices().binary_search(index).is_err()
                     || changes.added_indices().binary_search(index).is_ok()
             })
+            .filter(|&index| frame.is_present(index))
             .filter(|&index| !self.slot_matches(frame, index))
+            .filter(|&index| !self.can_materialize_absent_slot(frame, index))
             .collect::<Vec<_>>();
         if !replacement_indices
             .iter()
@@ -676,12 +725,66 @@ impl FramePreparer {
         let mut path_indices_repacked = 0;
         let mut replacement_chunks = std::collections::BTreeSet::new();
         for object_index in replacement_indices {
+            let previous_instance_count = prepared_slot_instance_count(self.slots[object_index]);
             let replacement = self
                 .replace_unique_path_geometry(frame, object_index)
                 .expect("preflighted unique path replacement must tessellate");
+            let next_instance_count = prepared_slot_instance_count(self.slots[object_index]);
+            self.active_instance_count = self
+                .active_instance_count
+                .saturating_sub(previous_instance_count)
+                .saturating_add(next_instance_count);
             geometry_cache_misses += usize::from(replacement.cache_miss);
             path_vertices_repacked += replacement.vertices_repacked;
             path_indices_repacked += replacement.indices_repacked;
+            let position = if self.painter_order_installed {
+                self.painter_order_positions
+                    .get(object_index)
+                    .copied()
+                    .flatten()
+            } else {
+                Some(object_index)
+            };
+            if let Some(position) = position {
+                replacement_chunks.insert(position / Self::RENDER_ORDER_CHUNK_SIZE);
+            }
+        }
+
+        let mut instances_repacked = 0;
+        for &object_index in &retirement_indices {
+            self.slot_presences[object_index] = false;
+            let retired = self.retire_structural_slot(object_index);
+            self.active_instance_count = self.active_instance_count.saturating_sub(retired);
+            instances_repacked += retired;
+            self.record_render_order_chunk(object_index, &mut replacement_chunks);
+        }
+        for &object_index in &reactivation_indices {
+            self.slot_presences[object_index] = true;
+            self.active_instance_count += prepared_slot_instance_count(self.slots[object_index]);
+            self.record_render_order_chunk(object_index, &mut replacement_chunks);
+        }
+        for &object_index in &appended_indices {
+            let appended = self.append_structural_slot(frame, object_index);
+            instances_repacked += appended.instances_repacked;
+            geometry_cache_misses += appended.geometry_cache_misses;
+            path_vertices_repacked += appended.path_vertices_repacked;
+            path_indices_repacked += appended.path_indices_repacked;
+            self.active_instance_count += appended.instances_repacked;
+        }
+
+        let materialized_indices = changes
+            .object_indices()
+            .iter()
+            .copied()
+            .filter(|&index| self.can_materialize_absent_slot(frame, index))
+            .collect::<Vec<_>>();
+        for &object_index in &materialized_indices {
+            let materialized = self.append_structural_slot(frame, object_index);
+            instances_repacked += materialized.instances_repacked;
+            geometry_cache_misses += materialized.geometry_cache_misses;
+            path_vertices_repacked += materialized.path_vertices_repacked;
+            path_indices_repacked += materialized.path_indices_repacked;
+            self.active_instance_count += materialized.instances_repacked;
             let position = if self.painter_order_installed {
                 self.painter_order_positions
                     .get(object_index)
@@ -699,25 +802,17 @@ impl FramePreparer {
             self.rebuild_render_order_chunks(Some(start..start + Self::RENDER_ORDER_CHUNK_SIZE));
         }
 
-        let mut instances_repacked = 0;
-        for &object_index in changes.removed_indices() {
-            instances_repacked += self.retire_structural_slot(object_index);
-        }
-        for &object_index in &appended_indices {
-            let appended = self.append_structural_slot(frame, object_index);
-            instances_repacked += appended.instances_repacked;
-            geometry_cache_misses += appended.geometry_cache_misses;
-            path_vertices_repacked += appended.path_vertices_repacked;
-            path_indices_repacked += appended.path_indices_repacked;
-        }
-
         for &object_index in changes.object_indices() {
             let added = changes.added_indices().binary_search(&object_index).is_ok();
             let removed = changes
                 .removed_indices()
                 .binary_search(&object_index)
                 .is_ok();
-            if object_index >= old_slot_len || (removed && !added) {
+            if object_index >= old_slot_len
+                || (removed && !added)
+                || retirement_indices.binary_search(&object_index).is_ok()
+                || materialized_indices.binary_search(&object_index).is_ok()
+            {
                 continue;
             }
             let object = &frame.objects[object_index];
@@ -812,10 +907,37 @@ impl FramePreparer {
             geometry_cache_misses,
             path_vertices_repacked,
             path_indices_repacked,
-            changes.added_indices().len(),
-            changes.removed_indices().len(),
+            appended_indices.len() + materialized_indices.len() + reactivation_indices.len(),
+            retirement_indices.len(),
             0,
         )
+    }
+
+    fn can_materialize_absent_slot(&self, frame: &FrameState, object_index: usize) -> bool {
+        if !matches!(self.slots.get(object_index), Some(PreparedSlot::Absent))
+            || !frame.is_present(object_index)
+        {
+            return false;
+        }
+        self.can_append_structural_slot(frame, object_index)
+    }
+
+    fn record_render_order_chunk(
+        &self,
+        object_index: usize,
+        chunks: &mut std::collections::BTreeSet<usize>,
+    ) {
+        let position = if self.painter_order_installed {
+            self.painter_order_positions
+                .get(object_index)
+                .copied()
+                .flatten()
+        } else {
+            Some(object_index)
+        };
+        if let Some(position) = position {
+            chunks.insert(position / Self::RENDER_ORDER_CHUNK_SIZE);
+        }
     }
 
     fn can_append_structural_slot(&self, frame: &FrameState, object_index: usize) -> bool {
@@ -839,10 +961,13 @@ impl FramePreparer {
         frame: &FrameState,
         object_index: usize,
     ) -> StructuralAppendStats {
-        debug_assert_eq!(object_index, self.slots.len());
+        debug_assert!(
+            object_index == self.slots.len()
+                || matches!(self.slots.get(object_index), Some(PreparedSlot::Absent))
+        );
         let object = &frame.objects[object_index];
         let Some(render_geometry) = frame.render_geometry(object_index) else {
-            self.slots.push(PreparedSlot::Absent);
+            self.install_structural_slot(object_index, PreparedSlot::Absent);
             return StructuralAppendStats::default();
         };
         let reveal = frame.reveal(object_index);
@@ -892,8 +1017,9 @@ impl FramePreparer {
             }
             GeometryRef::VectorPath(_) => unreachable!("vector path must enter append path branch"),
         };
-        self.slots.push(slot);
-        self.append_ordered_render_slot(slot);
+        if self.install_structural_slot(object_index, slot) {
+            self.append_ordered_render_slot(slot);
+        }
         StructuralAppendStats {
             instances_repacked: usize::from(!matches!(slot, PreparedSlot::Unsupported(_))),
             ..StructuralAppendStats::default()
@@ -921,8 +1047,9 @@ impl FramePreparer {
             Err(_) => {
                 let slot = PreparedSlot::Unsupported(self.unsupported.len());
                 self.unsupported.push(object.id);
-                self.slots.push(slot);
-                self.append_ordered_render_slot(slot);
+                if self.install_structural_slot(object_index, slot) {
+                    self.append_ordered_render_slot(slot);
+                }
                 return StructuralAppendStats::default();
             }
         };
@@ -1043,14 +1170,16 @@ impl FramePreparer {
             partial_reveal_bits,
             reveal_head,
         };
-        self.slots.push(slot);
+        let appended_at_tail = self.install_structural_slot(object_index, slot);
 
         let appended_to_mega = mega_eligible && self.append_mega_path_draw(batch, packed);
         if appended_to_mega {
-            if let Some(line_index) = reveal_head {
-                self.append_ordered_reveal_head(line_index);
+            if appended_at_tail {
+                if let Some(line_index) = reveal_head {
+                    self.append_ordered_reveal_head(line_index);
+                }
             }
-        } else {
+        } else if appended_at_tail {
             self.append_ordered_render_slot(slot);
         }
 
@@ -1059,6 +1188,22 @@ impl FramePreparer {
             geometry_cache_misses: usize::from(cache_miss),
             path_vertices_repacked: vertices_repacked,
             path_indices_repacked: indices_repacked,
+        }
+    }
+
+    /// Install one renderer-derived slot. Existing absent source rows keep their
+    /// semantic index while their packed primitive record is appended locally.
+    /// Returns whether the source row itself was appended at the tail.
+    fn install_structural_slot(&mut self, object_index: usize, slot: PreparedSlot) -> bool {
+        if object_index == self.slots.len() {
+            self.slots.push(slot);
+            self.slot_presences.push(true);
+            true
+        } else {
+            debug_assert!(matches!(self.slots[object_index], PreparedSlot::Absent));
+            self.slots[object_index] = slot;
+            self.slot_presences[object_index] = true;
+            false
         }
     }
 
@@ -1295,6 +1440,8 @@ impl FramePreparer {
         let previous_path_batch_cache_indices = std::mem::take(&mut self.path_batch_cache_indices);
         self.unsupported.clear();
         self.slots.clear();
+        self.slot_presences.clear();
+        self.active_instance_count = 0;
         self.clear_dirty_ranges();
 
         let mut path_groups = Vec::<PathGroup>::new();
@@ -1303,10 +1450,12 @@ impl FramePreparer {
         for (object_index, object) in frame.objects.iter().enumerate() {
             if !frame.is_present(object_index) {
                 self.slots.push(PreparedSlot::Absent);
+                self.slot_presences.push(false);
                 continue;
             }
             let Some(render_geometry) = frame.render_geometry(object_index) else {
                 self.slots.push(PreparedSlot::Absent);
+                self.slot_presences.push(true);
                 continue;
             };
             let temporary_reveal =
@@ -1333,6 +1482,7 @@ impl FramePreparer {
                     Err(_) => {
                         self.slots
                             .push(PreparedSlot::Unsupported(self.unsupported.len()));
+                        self.slot_presences.push(true);
                         self.unsupported.push(object.id);
                         continue;
                     }
@@ -1390,12 +1540,14 @@ impl FramePreparer {
                     partial_reveal_bits,
                     reveal_head,
                 });
+                self.slot_presences.push(true);
                 continue;
             }
 
             match render_geometry {
                 GeometryRef::Circle { .. } => {
                     self.slots.push(PreparedSlot::Circle(self.circles.len()));
+                    self.slot_presences.push(true);
                     self.circle_ids.push(object.id);
                     self.circles
                         .push(pack_circle(object, frame.reveal(object_index)));
@@ -1403,11 +1555,13 @@ impl FramePreparer {
                 GeometryRef::Rectangle { .. } => {
                     self.slots
                         .push(PreparedSlot::Rectangle(self.rectangles.len()));
+                    self.slot_presences.push(true);
                     self.rectangle_ids.push(object.id);
                     self.rectangles.push(pack_rectangle(object));
                 }
                 GeometryRef::Line { .. } => {
                     self.slots.push(PreparedSlot::Line(self.lines.len()));
+                    self.slot_presences.push(true);
                     self.line_ids.push(object.id);
                     self.lines
                         .push(pack_line(object, frame.reveal(object_index)));
@@ -1418,6 +1572,7 @@ impl FramePreparer {
                 GeometryRef::External(_) => {
                     self.slots
                         .push(PreparedSlot::Unsupported(self.unsupported.len()));
+                    self.slot_presences.push(true);
                     self.unsupported.push(object.id);
                 }
             }
@@ -1434,6 +1589,13 @@ impl FramePreparer {
                 *index += group_offsets[*batch];
             }
         }
+        self.active_instance_count = self
+            .slots
+            .iter()
+            .copied()
+            .zip(self.slot_presences.iter().copied())
+            .filter_map(|(slot, present)| present.then_some(prepared_slot_instance_count(slot)))
+            .sum();
         self.rebuild_ordered_render_batches();
         self.rebuild_mega_path_draws();
         self.rebuild_render_order_chunks(None);
@@ -1613,10 +1775,7 @@ impl FramePreparer {
             path_geometry_dirty: self.path_geometry_dirty,
             stats: RenderStats {
                 batch_count,
-                instance_count: self.circles.len()
-                    + self.rectangles.len()
-                    + self.lines.len()
-                    + self.paths.len(),
+                instance_count: self.active_instance_count,
                 unsupported_count: self.unsupported.len(),
                 capacity_growths,
                 instances_repacked,
@@ -1666,6 +1825,7 @@ impl FramePreparer {
                 render_order_chunks_rebuilt: self.render_order_chunks_rebuilt,
             },
             slots: &self.slots,
+            slot_presences: &self.slot_presences,
             complete_submission: true,
         }
     }
@@ -1769,7 +1929,7 @@ impl FramePreparer {
         }
     }
 
-    fn capacities(&self) -> [usize; 32] {
+    fn capacities(&self) -> [usize; 33] {
         [
             self.circle_ids.capacity(),
             self.circles.capacity(),
@@ -1795,6 +1955,7 @@ impl FramePreparer {
             self.path_mesh_lookup.capacity(),
             self.unsupported.capacity(),
             self.slots.capacity(),
+            self.slot_presences.capacity(),
             self.circle_dirty_ranges.capacity(),
             self.rectangle_dirty_ranges.capacity(),
             self.line_dirty_ranges.capacity(),
@@ -3268,13 +3429,113 @@ mod tests {
         frame.presences[0] = false;
         let hidden = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
         assert_eq!(hidden.stats.instance_count, 1);
-        assert_eq!(hidden.circle_ids, &[ObjectId::new(2)]);
+        assert_eq!(
+            hidden.circle_ids,
+            &[ObjectId::new(1), ObjectId::new(2)],
+            "resident IDs stay aligned with retained packed instances"
+        );
+        assert!(matches!(
+            hidden.observe_object(0),
+            Err(PreparedGeometryObjectOutcome::Absent)
+        ));
         assert_eq!(hidden.stats.unsupported_count, 0);
 
         frame.presences[0] = true;
         let restored = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
         assert_eq!(restored.stats.instance_count, 2);
-        assert_eq!(restored.circle_ids, &[ObjectId::new(1), ObjectId::new(2)]);
+        assert_eq!(
+            restored.circle_ids,
+            &[ObjectId::new(1), ObjectId::new(2)],
+            "reactivation preserves the existing resident index mapping"
+        );
+        assert_eq!(restored.observe_object(0).unwrap().object, ObjectId::new(1));
+    }
+
+    #[test]
+    fn initially_absent_analytic_object_materializes_locally_in_painter_order() {
+        let mut frame = frame(vec![
+            object(1, GeometryRef::circle(1.0)),
+            object(2, GeometryRef::rectangle(2.0, 3.0)),
+            object(3, GeometryRef::circle(0.5)),
+        ]);
+        frame.presences[1] = false;
+        let mut preparer = FramePreparer::new();
+        preparer.set_painter_order(&frame, &[2, 1, 0]);
+        let initial = preparer.prepare(&frame);
+        assert_eq!(initial.stats.instance_count, 2);
+
+        frame.presences[1] = true;
+        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+        let ordered = prepared
+            .ordered_render_batches()
+            .map(|prepared| prepared.batch.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(prepared.stats.full_rebuilds, 0);
+        assert_eq!(prepared.stats.structural_slots_added, 1);
+        assert_eq!(prepared.stats.instances_repacked, 1);
+        assert_eq!(prepared.stats.dirty_instance_count, 1);
+        assert_eq!(prepared.stats.render_order_positions_visited, 3);
+        assert_eq!(prepared.stats.render_order_chunks_rebuilt, 1);
+        assert_eq!(prepared.rectangle_ids, &[ObjectId::new(2)]);
+        assert_eq!(prepared.rectangle_dirty_ranges.len(), 1);
+        assert_eq!(prepared.rectangle_dirty_ranges[0], 0..1);
+        assert_eq!(
+            ordered,
+            vec![
+                OrderedRenderBatch {
+                    primitive: RenderPrimitive::Circle,
+                    instance_range: 1..2,
+                },
+                OrderedRenderBatch {
+                    primitive: RenderPrimitive::Rectangle,
+                    instance_range: 0..1,
+                },
+                OrderedRenderBatch {
+                    primitive: RenderPrimitive::Circle,
+                    instance_range: 0..1,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn ordinary_presence_churn_keeps_path_geometry_resident() {
+        let retained_path = VectorPath::new()
+            .move_to(Vec2::new(-1.0, -1.0))
+            .line_to(Vec2::new(1.0, -1.0))
+            .line_to(Vec2::new(0.0, 1.0))
+            .close();
+        let mut frame = frame(vec![
+            object(1, GeometryRef::circle(1.0)),
+            object(2, GeometryRef::path(retained_path)),
+            object(3, GeometryRef::circle(0.5)),
+        ]);
+        let mut preparer = FramePreparer::new();
+        let initial = preparer.prepare(&frame);
+        assert_eq!(initial.stats.geometry_cache_misses, 1);
+        assert!(initial.path_geometry_dirty);
+
+        frame.presences[1] = false;
+        let hidden = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+        assert_eq!(hidden.stats.full_rebuilds, 0);
+        assert_eq!(hidden.stats.structural_slots_retired, 1);
+        assert_eq!(hidden.stats.geometry_cache_misses, 0);
+        assert_eq!(hidden.stats.path_vertices_repacked, 0);
+        assert_eq!(hidden.stats.path_indices_repacked, 0);
+        assert_eq!(hidden.stats.mega_path_indices_repacked, 0);
+        assert!(!hidden.path_geometry_dirty);
+        assert_eq!(hidden.paths[0].style.opacity, 0.0);
+
+        frame.presences[1] = true;
+        let restored = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+        assert_eq!(restored.stats.full_rebuilds, 0);
+        assert_eq!(restored.stats.geometry_cache_misses, 0);
+        assert_eq!(restored.stats.path_vertices_repacked, 0);
+        assert_eq!(restored.stats.path_indices_repacked, 0);
+        assert_eq!(restored.stats.mega_path_indices_repacked, 0);
+        assert!(!restored.path_geometry_dirty);
+        assert_ne!(restored.paths[0].style.opacity, 0.0);
     }
 
     #[test]

@@ -1,4 +1,6 @@
 //! Transport adapter for an already-lowered semantic session; never parses authoring JSON.
+#[cfg(any(target_arch = "wasm32", test))]
+mod coordinates;
 use crate::authoring_error::AuthoringFailure;
 use noon::integration::{
     CallbackAdvance, CallbackPhaseToken, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
