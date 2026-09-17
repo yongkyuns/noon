@@ -775,6 +775,8 @@ Examples:
 
 Transform/style/visibility-only changes must not regenerate immutable content.
 
+Renderer-local fill coverage may specialize a convex triangle or quadrilateral as one polygon, computing its pixel-box intersection once to avoid internal tessellation seams and multisample edge loss. Morph eligibility must prove convexity throughout the interpolated interval, including any removed collinear subdivisions; endpoint checks alone are insufficient. Eligible paths retain immutable endpoint vertices and GPU interpolation. Other paths keep ordinary tessellation or the sampled-mesh specialization below. This coverage choice does not create semantic geometry or a second source of animation state.
+
 Glyph masks are disposable renderer resources derived from shared shaped runs. Device density and camera origin may select a bounded raster-size and subpixel-phase cache key without reshaping text or rewriting semantic resources. An eligible translated text object may replace its glyph masks within its existing instance ranges; unrelated objects and uploads remain unchanged. If a new phase changes the batch layout or exceeds available atlas residency, translation keeps the existing filtered masks. Rotated, reflected, skewed or nonuniform bitmap transforms also retain the filtered path. Cache limits remain independent of animation duration, and camera changes invalidate device-dependent preparation coherently.
 
 ### Immutable versioned resource rule

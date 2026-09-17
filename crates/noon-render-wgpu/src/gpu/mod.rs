@@ -129,13 +129,13 @@ const LINE_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 10] = [
 
 const PATH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
     wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32];
-const TRIANGLE_PATH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+const POLYGON_PATH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
     0 => Float32x2,
     1 => Float32x2,
     2 => Uint32,
-    11 => Float32x2,
-    12 => Float32x2,
-    13 => Float32x2
+    11 => Float32x4,
+    12 => Float32x4,
+    13 => Float32x4
 ];
 
 #[repr(C)]
@@ -972,7 +972,7 @@ impl GpuRenderer {
         if prepared
             .path_batches
             .iter()
-            .any(|batch| path_batch_uses_triangle_coverage(prepared, batch))
+            .any(|batch| path_batch_uses_polygon_coverage(prepared, batch))
         {
             self.path_render_bundle = None;
             self.path_render_bundle_batches.clear();
@@ -1223,15 +1223,15 @@ impl GpuRenderer {
                 if path.index_range.is_empty() {
                     return DrawStats::default();
                 }
-                let exact_triangle = path_batch_uses_triangle_coverage(prepared, path);
-                pass.set_pipeline(if exact_triangle {
+                let exact_polygon = path_batch_uses_polygon_coverage(prepared, path);
+                pass.set_pipeline(if exact_polygon {
                     &self.full_path_pipeline
                 } else {
                     &self.path_pipeline
                 });
                 pass.set_vertex_buffer(
                     0,
-                    if exact_triangle {
+                    if exact_polygon {
                         self.path_vertex_buffer.slice(..)
                     } else {
                         self.compact_path_vertex_buffer.slice(..)
@@ -1359,11 +1359,11 @@ pub fn path_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
     }
 }
 
-pub fn triangle_path_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+pub fn polygon_path_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
     wgpu::VertexBufferLayout {
         array_stride: size_of::<PathVertex>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &TRIANGLE_PATH_VERTEX_ATTRIBUTES,
+        attributes: &POLYGON_PATH_VERTEX_ATTRIBUTES,
     }
 }
 
@@ -1432,9 +1432,9 @@ fn ordered_render_sample_count(path_batches: &[PathBatch]) -> u32 {
     }
 }
 
-fn path_batch_uses_triangle_coverage(prepared: &PreparedFrame<'_>, batch: &PathBatch) -> bool {
+fn path_batch_uses_polygon_coverage(prepared: &PreparedFrame<'_>, batch: &PathBatch) -> bool {
     let _ = prepared;
-    batch.triangle_coverage
+    batch.polygon_coverage
 }
 
 fn create_path_pipeline(
@@ -1491,7 +1491,7 @@ fn create_full_path_pipeline(
         PathPipelineDescriptor {
             instance_layout: path_instance_layout(),
             label: "Noon full path pipeline",
-            vertex_layout: triangle_path_vertex_layout(),
+            vertex_layout: polygon_path_vertex_layout(),
             vertex_entry: "vs_path",
         },
     )
@@ -1742,7 +1742,7 @@ mod tests {
                 position: [value as f32, 0.0],
                 target_position: [value as f32, 1.0],
                 surface: value,
-                triangle: [[0.0; 2]; 3],
+                polygon: [[[0.0; 2]; 2]; 3],
             })
             .collect::<Vec<_>>();
         let dirty_range = 1..2;
@@ -1753,17 +1753,17 @@ mod tests {
     }
 
     #[test]
-    fn exact_triangle_eligibility_invalidates_path_bundle_layout() {
+    fn exact_polygon_eligibility_invalidates_path_bundle_layout() {
         let ordinary = PathBatch {
             index_range: 0..6,
             instance_range: 0..1,
-            triangle_coverage: false,
+            polygon_coverage: false,
         };
-        let exact_triangle = PathBatch {
-            triangle_coverage: true,
+        let exact_polygon = PathBatch {
+            polygon_coverage: true,
             ..ordinary.clone()
         };
-        assert_ne!(ordinary, exact_triangle);
+        assert_ne!(ordinary, exact_polygon);
     }
 
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -1866,7 +1866,7 @@ mod tests {
             ordered_render_sample_count(&[PathBatch {
                 index_range: 0..0,
                 instance_range: 0..1,
-                triangle_coverage: false,
+                polygon_coverage: false,
             }]),
             1
         );
@@ -1874,7 +1874,7 @@ mod tests {
             ordered_render_sample_count(&[PathBatch {
                 index_range: 0..3,
                 instance_range: 0..1,
-                triangle_coverage: false,
+                polygon_coverage: false,
             }]),
             PATH_SAMPLE_COUNT
         );
@@ -1935,11 +1935,11 @@ mod tests {
             path_vertex_layout.attributes[2].format,
             wgpu::VertexFormat::Uint32
         );
-        let triangle_layout = triangle_path_vertex_layout();
-        assert_eq!(triangle_layout.array_stride, 44);
+        let triangle_layout = polygon_path_vertex_layout();
+        assert_eq!(triangle_layout.array_stride, 68);
         assert_eq!(triangle_layout.attributes.len(), 6);
         assert_eq!(triangle_layout.attributes[3].offset, 20);
-        assert_eq!(triangle_layout.attributes[5].offset, 36);
+        assert_eq!(triangle_layout.attributes[5].offset, 52);
         assert_eq!(triangle_layout.attributes[3].shader_location, 11);
         assert_eq!(triangle_layout.attributes[5].shader_location, 13);
 

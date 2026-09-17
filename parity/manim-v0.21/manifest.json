@@ -30,6 +30,44 @@
       }
     },
     {
+      "id": "matching-shapes-duplicate-growth",
+      "scene": "MatchingShapesDuplicateGrowth",
+      "source": "parity/manim-v0.21/core-examples/matching_shapes_duplicates.py",
+      "expected_duration": 2.2,
+      "sample_times": [
+        0,
+        0.5,
+        1,
+        1.5,
+        2,
+        2.1
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
+      "id": "matching-shapes-duplicate-shrink",
+      "scene": "MatchingShapesDuplicateShrink",
+      "source": "parity/manim-v0.21/core-examples/matching_shapes_duplicates.py",
+      "expected_duration": 2.2,
+      "sample_times": [
+        0,
+        0.5,
+        1,
+        1.5,
+        2,
+        2.1
+      ],
+      "raster_tolerance": {
+        "max_bounds_delta_px": 1,
+        "max_differing_ratio": 0.003,
+        "max_mean_absolute_channel_error": 0.1
+      }
+    },
+    {
       "id": "animated-priority",
       "scene": "OrdinaryAnimatedPriority",
       "source": "parity/manim-v0.21/core-examples/animated_priority.py",

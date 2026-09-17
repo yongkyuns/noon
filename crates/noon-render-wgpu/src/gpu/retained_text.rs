@@ -34,7 +34,7 @@ use super::raster_image_gpu::{
 };
 use super::raster_image_prepare::{ImagePreparation, RasterImageFramePreparer};
 use super::{
-    path_batch_uses_triangle_coverage, push_upload_write, Camera2D, DrawStats, GpuRenderer,
+    path_batch_uses_polygon_coverage, push_upload_write, Camera2D, DrawStats, GpuRenderer,
     RasterImagePrepareError, UploadStats, PATH_SAMPLE_COUNT,
 };
 use crate::{
@@ -3534,15 +3534,15 @@ impl GpuRenderer {
                 if path_batch.index_range.is_empty() {
                     return stats;
                 }
-                let exact_triangle = path_batch_uses_triangle_coverage(prepared, path_batch);
-                pass.set_pipeline(if exact_triangle {
+                let exact_polygon = path_batch_uses_polygon_coverage(prepared, path_batch);
+                pass.set_pipeline(if exact_polygon {
                     &self.full_path_pipeline
                 } else {
                     &self.path_pipeline
                 });
                 pass.set_vertex_buffer(
                     0,
-                    if exact_triangle {
+                    if exact_polygon {
                         self.path_vertex_buffer.slice(..)
                     } else {
                         self.compact_path_vertex_buffer.slice(..)

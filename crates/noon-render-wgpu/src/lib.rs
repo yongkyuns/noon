@@ -27,7 +27,7 @@ use noon_geometry::{PathSurface, TessellatedPath};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
 use reveal::{analytic_reveal_key, temporary_reveal_path, AnalyticRevealKey};
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap},
+    collections::{hash_map::DefaultHasher, BTreeMap, HashMap},
     hash::{Hash, Hasher},
     ops::Range,
 };
@@ -132,17 +132,18 @@ pub struct PathVertex {
     /// Low bit is surface (0 fill, 1 stroke); the next 24 bits are normalized
     /// ordered path progress.
     pub surface: u32,
-    /// Local-space vertices for an exact-coverage filled triangle. Ordinary
-    /// path vertices leave this zeroed.
-    pub triangle: [[f32; 2]; 3],
+    /// Source/target pairs for polygon vertices B, C, and D. Vertex A is held
+    /// in `position` and `target_position`; ordinary path vertices leave this
+    /// zeroed.
+    pub polygon: [[[f32; 2]; 2]; 3],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PathBatch {
     pub index_range: Range<u32>,
     pub instance_range: Range<u32>,
-    /// Use the renderer-local exact triangle vertex stream for this draw.
-    pub triangle_coverage: bool,
+    /// Use the renderer-local exact convex-polygon vertex stream for this draw.
+    pub polygon_coverage: bool,
 }
 
 /// One ordered draw slice in the packed unique-path index stream.
@@ -1148,7 +1149,7 @@ impl FramePreparer {
         self.path_batches.push(PathBatch {
             index_range,
             instance_range: instance_start..instance_start + 1,
-            triangle_coverage: single_filled_triangle(&self.path_mesh_cache[cache_index].mesh)
+            polygon_coverage: single_filled_convex_polygon(&self.path_mesh_cache[cache_index].mesh)
                 .is_some(),
         });
         self.path_batch_cache_indices.push(cache_index);
@@ -1375,8 +1376,8 @@ impl FramePreparer {
             (packed_vertices.len(), local_indices.len())
         };
         self.path_batch_cache_indices[batch] = cache_index;
-        self.path_batches[batch].triangle_coverage =
-            single_filled_triangle(&self.path_mesh_cache[cache_index].mesh).is_some();
+        self.path_batches[batch].polygon_coverage =
+            single_filled_convex_polygon(&self.path_mesh_cache[cache_index].mesh).is_some();
         if let PreparedSlot::Path {
             analytic_reveal,
             partial_reveal_bits,
@@ -1672,7 +1673,7 @@ impl FramePreparer {
                 instance_range: u32::try_from(instance_start)
                     .expect("path instance count exceeds renderer limits")
                     ..instance_end,
-                triangle_coverage: single_filled_triangle(mesh).is_some(),
+                polygon_coverage: single_filled_convex_polygon(mesh).is_some(),
             });
             self.path_batch_cache_indices.push(group.cache_index);
         }
@@ -2544,7 +2545,15 @@ fn pack_path(
     }
 }
 
-const TRIANGLE_COVERAGE_FLAG: u32 = 1 << 25;
+const POLYGON_COVERAGE_FLAG: u32 = 1 << 25;
+const POLYGON_QUAD_FLAG: u32 = 1 << 26;
+const POLYGON_CORNER_SHIFT: u32 = 27;
+/// Eligibility only examines bounded planner output so morph preparation stays
+/// local even when an authored contour contains many segments.
+const MAX_CONVEX_MORPH_VERTICES: usize = 129;
+/// Dimensionless angular tolerance for f32 planner subdivision roundoff; it is
+/// relative to adjacent edge lengths and therefore preserves geometry scale.
+const MORPH_COLLINEAR_ANGLE_TOLERANCE: f64 = 1.0e-5;
 #[cfg(test)]
 const PATH_PROGRESS_MASK: u32 = (PATH_PROGRESS_MAX << 1) | 1;
 const TRIANGLE_QUAD: [[f32; 2]; 4] = [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
@@ -2560,7 +2569,7 @@ pub(crate) fn pack_path_surface(surface: PathSurface, progress: f32) -> u32 {
 }
 
 pub(crate) fn packed_path_vertex_count(mesh: &TessellatedPath) -> usize {
-    if single_filled_triangle(mesh).is_some() {
+    if single_filled_convex_polygon(mesh).is_some() {
         4
     } else {
         mesh.vertices.len()
@@ -2568,7 +2577,7 @@ pub(crate) fn packed_path_vertex_count(mesh: &TessellatedPath) -> usize {
 }
 
 pub(crate) fn packed_path_index_count(mesh: &TessellatedPath) -> usize {
-    if single_filled_triangle(mesh).is_some() {
+    if single_filled_convex_polygon(mesh).is_some() {
         6
     } else {
         mesh.indices.len()
@@ -2576,17 +2585,23 @@ pub(crate) fn packed_path_index_count(mesh: &TessellatedPath) -> usize {
 }
 
 pub(crate) fn pack_path_mesh(mesh: &TessellatedPath) -> (Vec<PathVertex>, Vec<u32>) {
-    if let Some(triangle) = single_filled_triangle(mesh) {
-        let surface = pack_path_surface(PathSurface::Fill, 1.0) | TRIANGLE_COVERAGE_FLAG;
+    if let Some(polygon) = single_filled_convex_polygon(mesh) {
         return (
             TRIANGLE_QUAD
                 .iter()
-                .copied()
-                .map(|position| PathVertex {
-                    position,
-                    target_position: position,
-                    surface,
-                    triangle,
+                .enumerate()
+                .map(|(corner, _)| PathVertex {
+                    position: polygon[0][0],
+                    target_position: polygon[0][1],
+                    surface: pack_path_surface(PathSurface::Fill, 1.0)
+                        | POLYGON_COVERAGE_FLAG
+                        | if polygon[3] != polygon[2] {
+                            POLYGON_QUAD_FLAG
+                        } else {
+                            0
+                        }
+                        | (u32::try_from(corner).expect("quad corner") << POLYGON_CORNER_SHIFT),
+                    polygon: [polygon[1], polygon[2], polygon[3]],
                 })
                 .collect(),
             TRIANGLE_QUAD_INDICES.to_vec(),
@@ -2599,42 +2614,192 @@ pub(crate) fn pack_path_mesh(mesh: &TessellatedPath) -> (Vec<PathVertex>, Vec<u3
                 position: [vertex.position.x, vertex.position.y],
                 target_position: [vertex.target_position.x, vertex.target_position.y],
                 surface: pack_path_surface(vertex.surface, vertex.path_progress),
-                triangle: [[0.0; 2]; 3],
+                polygon: [[[0.0; 2]; 2]; 3],
             })
             .collect(),
         mesh.indices.clone(),
     )
 }
 
-pub(crate) fn single_filled_triangle(mesh: &TessellatedPath) -> Option<[[f32; 2]; 3]> {
-    if mesh.morphing
-        || mesh.vertices.len() != 3
-        || mesh.indices.len() != 3
-        || mesh.indices.iter().any(|&index| index > 2)
-        || mesh.indices[0] == mesh.indices[1]
-        || mesh.indices[1] == mesh.indices[2]
-        || mesh.indices[0] == mesh.indices[2]
+pub(crate) fn single_filled_convex_polygon(mesh: &TessellatedPath) -> Option<[[[f32; 2]; 2]; 4]> {
+    let vertex_count = mesh.vertices.len();
+    // Ordinary paths are never scanned beyond the small direct meshes. Morph
+    // planning may linearly subdivide a straight contour, so only that bounded
+    // case needs boundary recovery below.
+    if (!mesh.morphing && vertex_count > 4)
+        || (mesh.morphing && vertex_count > MAX_CONVEX_MORPH_VERTICES)
+        || mesh.indices.len() < 3
+        || !mesh.indices.len().is_multiple_of(3)
         || mesh
-            .vertices
+            .indices
             .iter()
-            .any(|vertex| vertex.surface != PathSurface::Fill)
+            .any(|&index| index as usize >= vertex_count)
+        || mesh.vertices.iter().any(|vertex| {
+            vertex.surface != PathSurface::Fill
+                || !vertex.position.x.is_finite()
+                || !vertex.position.y.is_finite()
+                || !vertex.target_position.x.is_finite()
+                || !vertex.target_position.y.is_finite()
+        })
     {
         return None;
     }
-    let triangle = [mesh.indices[0], mesh.indices[1], mesh.indices[2]].map(|index| {
-        let vertex = mesh.vertices[index as usize];
-        [vertex.position.x, vertex.position.y]
-    });
-    if mesh.vertices.iter().any(|vertex| {
-        vertex.position != vertex.target_position
-            || !vertex.position.x.is_finite()
-            || !vertex.position.y.is_finite()
-    }) {
+
+    let mut edges = BTreeMap::<(usize, usize), u8>::new();
+    for triangle in mesh.indices.as_chunks::<3>().0 {
+        for [left, right] in [
+            [triangle[0], triangle[1]],
+            [triangle[1], triangle[2]],
+            [triangle[2], triangle[0]],
+        ] {
+            let edge = (left.min(right) as usize, left.max(right) as usize);
+            let count = edges.entry(edge).or_default();
+            *count = count.saturating_add(1);
+        }
+    }
+    let mut adjacency = vec![[usize::MAX; 2]; vertex_count];
+    for ((left, right), count) in edges {
+        if count != 1 {
+            continue;
+        }
+        let left_slot = adjacency[left]
+            .iter()
+            .position(|&value| value == usize::MAX)?;
+        let right_slot = adjacency[right]
+            .iter()
+            .position(|&value| value == usize::MAX)?;
+        adjacency[left][left_slot] = right;
+        adjacency[right][right_slot] = left;
+    }
+    let start = adjacency
+        .iter()
+        .position(|neighbors| !neighbors.contains(&usize::MAX))?;
+    let mut order = vec![start, adjacency[start][0]];
+    while order.len() <= vertex_count {
+        let previous = order[order.len() - 2];
+        let current = *order.last()?;
+        let next = adjacency[current]
+            .into_iter()
+            .find(|&candidate| candidate != previous)?;
+        if next == start {
+            break;
+        }
+        order.push(next);
+    }
+    if order.len() > vertex_count
+        || !adjacency[*order.last()?].contains(&start)
+        || adjacency
+            .iter()
+            .enumerate()
+            .any(|(index, neighbors)| !neighbors.contains(&usize::MAX) && !order.contains(&index))
+    {
         return None;
     }
-    let twice_area = (triangle[1][0] - triangle[0][0]) * (triangle[2][1] - triangle[0][1])
-        - (triangle[1][1] - triangle[0][1]) * (triangle[2][0] - triangle[0][0]);
-    (twice_area.is_finite() && twice_area.abs() > f32::EPSILON).then_some(triangle)
+    let mut boundary = order
+        .into_iter()
+        .map(|index| {
+            let vertex = mesh.vertices[index];
+            [
+                [vertex.position.x, vertex.position.y],
+                [vertex.target_position.x, vertex.target_position.y],
+            ]
+        })
+        .collect::<Vec<_>>();
+    while mesh.morphing && boundary.len() > 3 {
+        let Some(index) = (0..boundary.len()).find(|&index| {
+            collinear_morph_vertex(
+                boundary[(index + boundary.len() - 1) % boundary.len()],
+                boundary[index],
+                boundary[(index + 1) % boundary.len()],
+            )
+        }) else {
+            break;
+        };
+        boundary.remove(index);
+    }
+    if !(3..=4).contains(&boundary.len()) {
+        return None;
+    }
+    let mut polygon = [[[0.0; 2]; 2]; 4];
+    for (output, point) in polygon.iter_mut().zip(boundary.iter()) {
+        *output = *point;
+    }
+    if boundary.len() == 3 {
+        polygon[3] = polygon[2];
+    }
+    convex_polygon(&polygon[..boundary.len()]).then_some(polygon)
+}
+
+fn collinear_morph_vertex(a: [[f32; 2]; 2], b: [[f32; 2]; 2], c: [[f32; 2]; 2]) -> bool {
+    [0.0_f64, 0.5, 1.0].into_iter().all(|time| {
+        let point = |pair: [[f32; 2]; 2]| {
+            [
+                f64::from(pair[0][0]) + (f64::from(pair[1][0]) - f64::from(pair[0][0])) * time,
+                f64::from(pair[0][1]) + (f64::from(pair[1][1]) - f64::from(pair[0][1])) * time,
+            ]
+        };
+        let a = point(a);
+        let b = point(b);
+        let c = point(c);
+        let ab = [b[0] - a[0], b[1] - a[1]];
+        let bc = [c[0] - b[0], c[1] - b[1]];
+        let ab_length = (ab[0] * ab[0] + ab[1] * ab[1]).sqrt();
+        let bc_length = (bc[0] * bc[0] + bc[1] * bc[1]).sqrt();
+        ab_length.is_finite()
+            && bc_length.is_finite()
+            && ab_length > f64::EPSILON
+            && bc_length > f64::EPSILON
+            && (ab[0] * bc[1] - ab[1] * bc[0]).abs()
+                <= MORPH_COLLINEAR_ANGLE_TOLERANCE * ab_length * bc_length
+            && ab[0] * bc[0] + ab[1] * bc[1] >= 0.0
+    })
+}
+
+fn convex_polygon(points: &[[[f32; 2]; 2]]) -> bool {
+    let mut winding = 0.0_f64;
+    for index in 0..points.len() {
+        let a = points[index];
+        let b = points[(index + 1) % points.len()];
+        let c = points[(index + 2) % points.len()];
+        // Each turn is quadratic over the linear morph. Check its endpoints and
+        // its interior extremum, if present, so an apparently convex pair of
+        // endpoints cannot fold or reverse between frames.
+        let cross = |time: f64| {
+            let point = |pair: [[f32; 2]; 2]| {
+                [
+                    f64::from(pair[0][0]) + (f64::from(pair[1][0]) - f64::from(pair[0][0])) * time,
+                    f64::from(pair[0][1]) + (f64::from(pair[1][1]) - f64::from(pair[0][1])) * time,
+                ]
+            };
+            let a = point(a);
+            let b = point(b);
+            let c = point(c);
+            (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
+        };
+        let at_zero = cross(0.0);
+        let at_half = cross(0.5);
+        let at_one = cross(1.0);
+        let quadratic = 2.0_f64 * (at_one + at_zero - 2.0 * at_half);
+        let linear = at_one - at_zero - quadratic;
+        let mut checks = [0.0_f64, 1.0, f64::NAN];
+        if quadratic.abs() > f64::EPSILON {
+            let extremum = -linear / (2.0 * quadratic);
+            if extremum > 0.0 && extremum < 1.0 {
+                checks[2] = extremum;
+            }
+        }
+        for time in checks.into_iter().filter(|time| time.is_finite()) {
+            let turn = cross(time);
+            if !turn.is_finite()
+                || turn.abs() <= f64::EPSILON
+                || (winding != 0.0 && turn.signum() != winding.signum())
+            {
+                return false;
+            }
+            winding = turn;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -2923,7 +3088,20 @@ mod tests {
         .unwrap()
     }
 
-    fn triangle_pixel_coverage(triangle: [[f32; 2]; 3], pixel_minimum: [f32; 2]) -> f32 {
+    fn filled_quad_mesh(points: [[f32; 2]; 4]) -> TessellatedPath {
+        noon_geometry::tessellate(
+            &VectorPath::new()
+                .move_to(Vec2::new(points[0][0], points[0][1]))
+                .line_to(Vec2::new(points[1][0], points[1][1]))
+                .line_to(Vec2::new(points[2][0], points[2][1]))
+                .line_to(Vec2::new(points[3][0], points[3][1]))
+                .close(),
+            0.0,
+        )
+        .unwrap()
+    }
+
+    fn polygon_pixel_coverage(points: &[[f32; 2]], pixel_minimum: [f32; 2]) -> f32 {
         fn clip(
             polygon: Vec<[f32; 2]>,
             axis: usize,
@@ -2961,11 +3139,13 @@ mod tests {
             clipped
         }
 
-        let triangle =
-            triangle.map(|point| [point[0] - pixel_minimum[0], point[1] - pixel_minimum[1]]);
+        let polygon = points
+            .iter()
+            .map(|point| [point[0] - pixel_minimum[0], point[1] - pixel_minimum[1]])
+            .collect::<Vec<_>>();
         let polygon = clip(
             clip(
-                clip(clip(triangle.to_vec(), 0, 0.0, true), 0, 1.0, false),
+                clip(clip(polygon, 0, 0.0, true), 0, 1.0, false),
                 1,
                 0.0,
                 true,
@@ -2989,7 +3169,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_triangle_packing_accepts_both_windings_and_rejects_degenerate_inputs() {
+    fn exact_polygon_packing_accepts_both_windings_and_rejects_degenerate_inputs() {
         let positive = filled_triangle_mesh([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
         let negative = filled_triangle_mesh([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0]]);
         for mesh in [&positive, &negative] {
@@ -2998,60 +3178,126 @@ mod tests {
             assert_eq!(indices.as_slice(), TRIANGLE_QUAD_INDICES);
             assert!(vertices
                 .iter()
-                .all(|vertex| vertex.surface & TRIANGLE_COVERAGE_FLAG != 0));
-            assert_eq!(
-                vertices[0].triangle,
-                [
-                    [
-                        mesh.vertices[mesh.indices[0] as usize].position.x,
-                        mesh.vertices[mesh.indices[0] as usize].position.y,
-                    ],
-                    [
-                        mesh.vertices[mesh.indices[1] as usize].position.x,
-                        mesh.vertices[mesh.indices[1] as usize].position.y,
-                    ],
-                    [
-                        mesh.vertices[mesh.indices[2] as usize].position.x,
-                        mesh.vertices[mesh.indices[2] as usize].position.y,
-                    ],
-                ]
-            );
+                .all(|vertex| vertex.surface & POLYGON_COVERAGE_FLAG != 0));
+            let polygon = single_filled_convex_polygon(mesh).expect("filled triangle");
+            let payload = [
+                vertices[0].position,
+                vertices[0].polygon[0][0],
+                vertices[0].polygon[1][0],
+            ];
+            assert!(payload
+                .iter()
+                .all(|point| polygon.iter().any(|pair| pair[0] == *point)));
         }
 
         let degenerate = filled_triangle_mesh([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]]);
-        assert!(single_filled_triangle(&degenerate).is_none());
+        assert!(single_filled_convex_polygon(&degenerate).is_none());
         let mut stroked = positive.clone();
         stroked.vertices[0].surface = PathSurface::Stroke;
-        assert!(single_filled_triangle(&stroked).is_none());
+        assert!(single_filled_convex_polygon(&stroked).is_none());
         let (fallback_vertices, fallback_indices) = pack_path_mesh(&stroked);
         assert_eq!(fallback_vertices.len(), stroked.vertices.len());
         assert_eq!(fallback_indices, stroked.indices);
         assert!(fallback_vertices
             .iter()
-            .all(|vertex| vertex.surface & TRIANGLE_COVERAGE_FLAG == 0));
-        let mut morphing = positive;
-        morphing.morphing = true;
-        assert!(single_filled_triangle(&morphing).is_none());
+            .all(|vertex| vertex.surface & POLYGON_COVERAGE_FLAG == 0));
         let mut non_finite = negative;
         non_finite.vertices[0].position.x = f32::NAN;
-        assert!(single_filled_triangle(&non_finite).is_none());
+        assert!(single_filled_convex_polygon(&non_finite).is_none());
     }
 
     #[test]
-    fn exact_triangle_coverage_uses_pixel_area_for_each_winding() {
+    fn exact_polygon_packing_covers_convex_morphing_kites_without_triangle_seams() {
+        let source = [[-1.0, 0.0], [0.0, -1.0], [1.0, 0.0], [0.0, 1.0]];
+        let target = [[-1.2, -0.1], [0.1, -0.8], [1.1, 0.2], [-0.1, 1.2]];
+        let path = VectorPath::new()
+            .move_to(Vec2::new(source[0][0], source[0][1]))
+            .line_to(Vec2::new(source[1][0], source[1][1]))
+            .line_to(Vec2::new(source[2][0], source[2][1]))
+            .line_to(Vec2::new(source[3][0], source[3][1]))
+            .close()
+            .with_morph_target(
+                VectorPath::new()
+                    .move_to(Vec2::new(target[0][0], target[0][1]))
+                    .line_to(Vec2::new(target[1][0], target[1][1]))
+                    .line_to(Vec2::new(target[2][0], target[2][1]))
+                    .line_to(Vec2::new(target[3][0], target[3][1]))
+                    .close(),
+            );
+        let mesh = tessellate_path_mesh(
+            &path,
+            Style {
+                fill: Some(Color::WHITE),
+                stroke: None,
+                stroke_width: 0.0,
+                ..Style::default()
+            },
+            Transform2D::IDENTITY,
+        )
+        .expect("stable filled morph");
+        let (vertices, indices) = pack_path_mesh(&mesh);
+        assert_eq!(vertices.len(), 4, "mesh: {mesh:#?}");
+        assert_eq!(indices.as_slice(), TRIANGLE_QUAD_INDICES);
+        assert!(vertices.iter().all(|vertex| {
+            vertex.surface & POLYGON_COVERAGE_FLAG != 0 && vertex.surface & POLYGON_QUAD_FLAG != 0
+        }));
+
+        // Convex endpoints alone are insufficient: a 180-degree rotation has
+        // matching winding at both endpoints but collapses at t=0.5.
+        let pinching = [
+            [[-1.0, -1.0], [1.0, 1.0]],
+            [[1.0, -1.0], [-1.0, 1.0]],
+            [[1.0, 1.0], [-1.0, -1.0]],
+            [[-1.0, 1.0], [1.0, -1.0]],
+        ];
+        assert!(!convex_polygon(&pinching));
+        // Endpoint collinearity alone is unsafe: the different interpolation
+        // fractions make this sampled point bow away from its rotating edge.
+        assert!(!collinear_morph_vertex(
+            [[0.0, 0.0], [0.0, 0.0]],
+            [[0.25, 0.0], [0.0, 0.75]],
+            [[1.0, 0.0], [0.0, 1.0]],
+        ));
+
+        let static_quad = filled_quad_mesh([[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]]);
+        assert!(single_filled_convex_polygon(&static_quad).is_some());
+        let tiny_quad =
+            filled_quad_mesh([[0.0, 0.0], [1.0e-4, 0.0], [1.0e-4, 1.0e-4], [0.0, 1.0e-4]]);
+        let (tiny_vertices, _) = pack_path_mesh(&tiny_quad);
+        assert!(tiny_vertices
+            .iter()
+            .all(|vertex| vertex.surface & POLYGON_QUAD_FLAG != 0));
+        // The rotating-edge counterexample remains unsafe at a tiny scale.
+        assert!(!collinear_morph_vertex(
+            [[0.0, 0.0], [0.0, 0.0]],
+            [[2.5e-5, 0.0], [0.0, 7.5e-5]],
+            [[1.0e-4, 0.0], [0.0, 1.0e-4]],
+        ));
+    }
+
+    #[test]
+    fn exact_polygon_coverage_uses_pixel_area_for_each_winding() {
         let positive = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
         let negative = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0]];
-        assert!((triangle_pixel_coverage(positive, [0.0, 0.0]) - 0.5).abs() < 1e-6);
-        assert!((triangle_pixel_coverage(negative, [0.0, 0.0]) - 0.5).abs() < 1e-6);
+        assert!((polygon_pixel_coverage(&positive, [0.0, 0.0]) - 0.5).abs() < 1e-6);
+        assert!((polygon_pixel_coverage(&negative, [0.0, 0.0]) - 0.5).abs() < 1e-6);
         assert_eq!(
-            triangle_pixel_coverage([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]], [0.0, 0.0]),
+            polygon_pixel_coverage(&[[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]], [0.0, 0.0]),
             0.0
         );
         assert!(
-            (triangle_pixel_coverage(
-                [[4096.0, 4096.0], [4097.0, 4096.0], [4096.0, 4097.0]],
+            (polygon_pixel_coverage(
+                &[[4096.0, 4096.0], [4097.0, 4096.0], [4096.0, 4097.0]],
                 [4096.0, 4096.0],
             ) - 0.5)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (polygon_pixel_coverage(
+                &[[-0.5, -0.5], [1.5, -0.5], [1.5, 1.5], [-0.5, 1.5]],
+                [0.0, 0.0],
+            ) - 1.0)
                 .abs()
                 < 1e-6
         );
@@ -3065,7 +3311,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<RectangleInstance>(), 88);
         assert_eq!(std::mem::size_of::<LineInstance>(), 88);
         assert_eq!(std::mem::size_of::<PathInstance>(), 80);
-        assert_eq!(std::mem::size_of::<PathVertex>(), 44);
+        assert_eq!(std::mem::size_of::<PathVertex>(), 68);
     }
 
     fn curved_path() -> VectorPath {

@@ -8,7 +8,9 @@ struct Camera {
 @group(0) @binding(0)
 var<uniform> camera: Camera;
 
-const TRIANGLE_COVERAGE_FLAG: u32 = 33554432u;
+const POLYGON_COVERAGE_FLAG: u32 = 33554432u;
+const POLYGON_QUAD_FLAG: u32 = 67108864u;
+const POLYGON_CORNER_SHIFT: u32 = 27u;
 const PATH_PROGRESS_MASK: u32 = 33554431u;
 
 struct PathVertexInput {
@@ -23,9 +25,9 @@ struct PathVertexInput {
     @location(8) metrics: vec2<f32>,
     @location(9) flags: vec2<u32>,
     @location(10) path_params: vec2<f32>,
-    @location(11) triangle_a: vec2<f32>,
-    @location(12) triangle_b: vec2<f32>,
-    @location(13) triangle_c: vec2<f32>,
+    @location(11) polygon_b: vec4<f32>,
+    @location(12) polygon_c: vec4<f32>,
+    @location(13) polygon_d: vec4<f32>,
 };
 
 struct PathVertexOutput {
@@ -34,10 +36,11 @@ struct PathVertexOutput {
     @location(1) path_progress: f32,
     @location(2) reveal: f32,
     @location(3) is_stroke: f32,
-    @location(4) @interpolate(flat) triangle_a: vec2<f32>,
-    @location(5) @interpolate(flat) triangle_b: vec2<f32>,
-    @location(6) @interpolate(flat) triangle_c: vec2<f32>,
-    @location(7) @interpolate(flat) exact_triangle: u32,
+    @location(4) @interpolate(flat) polygon_a: vec2<f32>,
+    @location(5) @interpolate(flat) polygon_b: vec2<f32>,
+    @location(6) @interpolate(flat) polygon_c: vec2<f32>,
+    @location(7) @interpolate(flat) polygon_d: vec2<f32>,
+    @location(8) @interpolate(flat) polygon_count: u32,
 };
 
 struct CompactPathVertexInput {
@@ -59,8 +62,18 @@ struct ClippedPolygon {
     count: u32,
 };
 
-fn premultiplied(color: vec4<f32>) -> vec4<f32> {
-    return vec4<f32>(color.rgb * color.a, color.a);
+fn cairo_source_color(color: vec4<f32>, opacity: f32) -> vec4<f32> {
+    // Cairo stores solid-pattern channels through a rounded 16-bit intermediate,
+    // then takes the high byte of the premultiplied result. Quantize the source
+    // before fixed-function source-over so WebGPU/WebGL match Cairo's ARGB32
+    // compositing instead of applying the render target's nearest-UNORM rounding
+    // directly to full-precision float colors.
+    let alpha = clamp(color.a * opacity, 0.0, 1.0);
+    let rgb16 = floor(clamp(color.rgb * alpha, vec3<f32>(0.0), vec3<f32>(1.0)) * 65535.0 + vec3<f32>(0.5));
+    let alpha16 = floor(alpha * 65535.0 + 0.5);
+    let rgb8 = floor(rgb16 / 256.0);
+    let alpha8 = floor(alpha16 / 256.0);
+    return vec4<f32>(rgb8 / 255.0, alpha8 / 255.0);
 }
 
 fn transform_path_point(local: vec2<f32>, input: PathVertexInput) -> vec2<f32> {
@@ -96,29 +109,39 @@ fn vs_path(input: PathVertexInput) -> PathVertexOutput {
     let morph = clamp(input.path_params.y, 0.0, 1.0);
     let reveal = clamp(input.path_params.x, 0.0, 1.0);
     let local = mix(input.local, input.target_local, morph);
-    let exact_triangle = (input.surface_and_progress & TRIANGLE_COVERAGE_FLAG) != 0u;
+    let exact_polygon = (input.surface_and_progress & POLYGON_COVERAGE_FLAG) != 0u;
 
     var output: PathVertexOutput;
-    if exact_triangle {
-        let a = world_to_pixel(transform_path_point(input.triangle_a, input));
-        let b = world_to_pixel(transform_path_point(input.triangle_b, input));
-        let c = world_to_pixel(transform_path_point(input.triangle_c, input));
-        let minimum = min(a, min(b, c)) - vec2<f32>(1.0);
-        let maximum = max(a, max(b, c)) + vec2<f32>(1.0);
-        let quad_position = (local + vec2<f32>(1.0)) * 0.5;
+    if exact_polygon {
+        let a = world_to_pixel(transform_path_point(local, input));
+        let b = world_to_pixel(transform_path_point(mix(input.polygon_b.xy, input.polygon_b.zw, morph), input));
+        let c = world_to_pixel(transform_path_point(mix(input.polygon_c.xy, input.polygon_c.zw, morph), input));
+        let d = world_to_pixel(transform_path_point(mix(input.polygon_d.xy, input.polygon_d.zw, morph), input));
+        let is_quad = (input.surface_and_progress & POLYGON_QUAD_FLAG) != 0u;
+        let minimum = min(a, min(b, min(c, d))) - vec2<f32>(1.0);
+        let maximum = max(a, max(b, max(c, d))) + vec2<f32>(1.0);
+        let corner = (input.surface_and_progress >> POLYGON_CORNER_SHIFT) & 3u;
+        // Matches TRIANGLE_QUAD and TRIANGLE_QUAD_INDICES: lower-left,
+        // lower-right, upper-right, upper-left.
+        let quad_position = vec2<f32>(
+            select(0.0, 1.0, corner == 1u || corner == 2u),
+            select(0.0, 1.0, corner >= 2u),
+        );
         let pixel = mix(minimum, maximum, quad_position);
         output.position = vec4<f32>(pixel_to_clip(pixel), 0.0, 1.0);
-        output.triangle_a = a;
-        output.triangle_b = b;
-        output.triangle_c = c;
-        output.exact_triangle = 1u;
+        output.polygon_a = a;
+        output.polygon_b = b;
+        output.polygon_c = c;
+        output.polygon_d = d;
+        output.polygon_count = select(3u, 4u, is_quad);
     } else {
         let world = transform_path_point(local, input);
         output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
-        output.triangle_a = vec2<f32>(0.0);
-        output.triangle_b = vec2<f32>(0.0);
-        output.triangle_c = vec2<f32>(0.0);
-        output.exact_triangle = 0u;
+        output.polygon_a = vec2<f32>(0.0);
+        output.polygon_b = vec2<f32>(0.0);
+        output.polygon_c = vec2<f32>(0.0);
+        output.polygon_d = vec2<f32>(0.0);
+        output.polygon_count = 0u;
     }
 
     let fill_enabled = (input.flags.x & 1u) != 0u;
@@ -134,7 +157,7 @@ fn vs_path(input: PathVertexInput) -> PathVertexOutput {
     }
     output.color = select(
         vec4<f32>(0.0),
-        premultiplied(color) * (input.metrics.y * creation_outline_alpha),
+        cairo_source_color(color, input.metrics.y * creation_outline_alpha),
         enabled,
     );
     output.path_progress = path_progress;
@@ -167,14 +190,19 @@ fn vs_path_compact(input: CompactPathVertexInput) -> PathVertexOutput {
     }
     var output: PathVertexOutput;
     output.position = vec4<f32>((world - camera.center) * camera.clip_scale, 0.0, 1.0);
-    output.color = select(vec4<f32>(0.0), premultiplied(color) * (input.metrics.y * creation_outline_alpha), enabled);
+    output.color = select(
+        vec4<f32>(0.0),
+        cairo_source_color(color, input.metrics.y * creation_outline_alpha),
+        enabled,
+    );
     output.path_progress = path_progress;
     output.reveal = reveal;
     output.is_stroke = select(0.0, 1.0, is_stroke);
-    output.triangle_a = vec2<f32>(0.0);
-    output.triangle_b = vec2<f32>(0.0);
-    output.triangle_c = vec2<f32>(0.0);
-    output.exact_triangle = 0u;
+    output.polygon_a = vec2<f32>(0.0);
+    output.polygon_b = vec2<f32>(0.0);
+    output.polygon_c = vec2<f32>(0.0);
+    output.polygon_d = vec2<f32>(0.0);
+    output.polygon_count = 0u;
     return output;
 }
 
@@ -219,16 +247,19 @@ fn clip_polygon_axis(
     return output;
 }
 
-fn triangle_pixel_coverage(
+fn polygon_pixel_coverage(
     a: vec2<f32>,
     b: vec2<f32>,
     c: vec2<f32>,
+    d: vec2<f32>,
+    count: u32,
 ) -> f32 {
     var polygon: ClippedPolygon;
-    polygon.count = 3u;
+    polygon.count = count;
     polygon.points[0] = a;
     polygon.points[1] = b;
     polygon.points[2] = c;
+    polygon.points[3] = d;
     polygon = clip_polygon_axis(polygon, 0u, 0.0, true);
     polygon = clip_polygon_axis(polygon, 0u, 1.0, false);
     polygon = clip_polygon_axis(polygon, 1u, 0.0, true);
@@ -261,15 +292,17 @@ fn fs_path(input: PathVertexOutput) -> @location(0) vec4<f32> {
     if input.reveal <= 0.0 {
         return vec4<f32>(0.0);
     }
-    if input.exact_triangle != 0u {
+    if input.polygon_count != 0u {
         // The conservative quad covers every MSAA sample of candidate pixels.
         // Coverage is applied once from the exact pixel-box intersection rather
         // than multiplied by the hardware triangle sample mask.
         let pixel_minimum = floor(input.position.xy);
-        let coverage = triangle_pixel_coverage(
-            input.triangle_a - pixel_minimum,
-            input.triangle_b - pixel_minimum,
-            input.triangle_c - pixel_minimum,
+        let coverage = polygon_pixel_coverage(
+            input.polygon_a - pixel_minimum,
+            input.polygon_b - pixel_minimum,
+            input.polygon_c - pixel_minimum,
+            input.polygon_d - pixel_minimum,
+            input.polygon_count,
         );
         let fill_alpha = smoothstep(0.0, 1.0, input.reveal);
         return input.color * coverage * fill_alpha;

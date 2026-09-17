@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 19);
+assert.equal(gallery.examples.length, 20);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -33,6 +33,7 @@ assert.deepEqual(
     "compatible-svg-tiger-morph",
     "noon-trigonometry-tutorial",
     "noon-transform-matching-shapes",
+    "noon-transform-matching-shapes-breadth",
     "noon-coordinate-plotting",
     "noon-raster-image",
     "noon-markup-text",
@@ -103,6 +104,16 @@ for (const entry of readyEntries) {
     assert.match(source, /Indicate\(/, "matching-shapes gallery example must exercise the replacement target");
     assert.match(source, /readded=True/, "matching-shapes gallery example must document source re-add semantics");
     assert.match(entry.summary, /shape-keyed/i, "matching-shapes gallery must state its pairing contract");
+  }
+
+  if (entry.id === "noon-transform-matching-shapes-breadth") {
+    assert.match(source, /source_first|source_second|target_padded/, "matching-shapes breadth must cover duplicate-key growth");
+    assert.match(source, /rotated_triangle|target_leftover/, "matching-shapes breadth must cover an unmatched target");
+    assert.match(source, /run_time=1\.0/, "matching-shapes breadth must use one-second transform/indicate timings");
+    assert.match(source, /roots = self\.mobjects/, "matching-shapes breadth must assert target roots after Indicate");
+    assert.match(source, /tuple\(target\.submobjects\)/, "matching-shapes breadth must assert target family members");
+    assert.match(source, /Indicate\(/, "matching-shapes breadth must retain the following Indicate");
+    assert.match(entry.summary, /duplicate-key/i, "matching-shapes breadth must be marked as duplicate-key coverage");
   }
 
   if (entry.id === "compatible-text-family-fade") {

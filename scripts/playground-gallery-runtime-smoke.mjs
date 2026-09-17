@@ -132,11 +132,12 @@ try {
           return { selected: gallery.selectedExampleId, inFlight: gallery.runInFlight,
             patch: { ...document.querySelector('#patch-status')?.dataset },
             text: document.querySelector('#patch-status')?.value,
+            runtimeStatus: document.querySelector('#status-text')?.textContent,
             metrics: window.__galleryMetrics ?? null, metricsError: window.__galleryMetricsError };
         });
         result.state = state;
         assert.equal(state.selected, entry.id);
-        assert.notEqual(state.patch.state, 'error', state.text);
+        assert.notEqual(state.patch.state, 'error', `${state.text}: ${state.runtimeStatus}`);
         assert.equal(state.metricsError, undefined);
         const metric = state.metrics?.metrics;
         if (metric && result.samples.at(-1)?.time !== metric.time) result.samples.push({ time: metric.time, objects: metric.objectCount, frames: metric.presentedFrames });
@@ -176,6 +177,7 @@ try {
       results.push(result);
       await writeFile(path.join(artifacts, `${name}.json`), stringify(result));
       console.log(`${result.outcome}: ${name}${result.failure ? `: ${result.failure}` : ''}`);
+      if (result.outcome === 'fail') console.error(stringify({ state: result.state, errors: result.errors }));
     }
   }
   await Promise.all(Array.from({ length: 2 }, async () => { while (next < queue.length) await check(queue[next++]); }));

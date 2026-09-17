@@ -251,6 +251,21 @@
       "order": 1160
     },
     {
+      "id": "noon-transform-matching-shapes-breadth",
+      "title": "TransformMatchingShapes Breadth",
+      "summary": "Candidate duplicate-key matching with unmatched source and target shapes, followed by an Indicate pulse.",
+      "status": "ready",
+      "path": "python/examples/matching_shapes_breadth.py",
+      "category": "manim-compatible/animation",
+      "features": ["TransformMatchingShapes", "duplicate signatures", "unmatched fades", "Indicate", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "thumbnail": "thumbnails/manim/transform-matching-shapes.svg",
+      "thumbnail_alt": "Candidate duplicate-key matching with unmatched source and target shapes",
+      "thumbnail_time": 1.0,
+      "order": 1161
+    },
+    {
       "id": "noon-coordinate-plotting",
       "title": "CoordinatePlotting",
       "summary": "Shared coordinate frame with a sampled function, illustrative data points, and axis labels.",
