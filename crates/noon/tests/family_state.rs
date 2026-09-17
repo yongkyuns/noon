@@ -20,7 +20,7 @@ fn direct_members(family: &MobjectFamily) -> Vec<noon::SemanticNodeId> {
         .unwrap()
 }
 
-fn family(scene: &Scene) -> MobjectFamily {
+fn family(scene: &mut Scene) -> MobjectFamily {
     let a = scene.square(1.0).unwrap();
     let mut b = scene.rectangle(1.0, 2.0).unwrap();
     b.shift(2.0, 0.0).unwrap();
@@ -48,8 +48,8 @@ fn assert_become_visual_state(
 
 #[test]
 fn family_become_and_restore_preserve_alias_identity_and_share_content() {
-    let scene = Scene::new();
-    let source = family(&scene);
+    let mut scene = Scene::new();
+    let source = family(&mut scene);
     let saved = source.copy_family().unwrap();
     let target = source.copy_family().unwrap();
     target.root().shift(4.0, -2.0).unwrap();
@@ -85,7 +85,7 @@ fn family_become_and_restore_preserve_alias_identity_and_share_content() {
 
 #[test]
 fn unequal_family_become_reuses_receiver_identity_and_never_imports_target_ids() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let source_leaf = scene.square(1.0).unwrap();
     source_leaf.set_z_index(7.0).unwrap();
     let source_state = object_state(&scene, source_leaf.node_id());
@@ -220,9 +220,9 @@ fn live_unequal_family_become_preserves_same_z_receiver_painter_order() {
 
 #[test]
 fn dimension_matching_uses_aggregate_bounds_and_center_not_individual_leaf_sizes() {
-    let scene = Scene::new();
-    let source = family(&scene);
-    let target = family(&scene);
+    let mut scene = Scene::new();
+    let source = family(&mut scene);
+    let target = family(&mut scene);
     target.scale(2.0, 3.0).unwrap();
     target.shift(5.0, 3.0).unwrap();
     let before = source.layout().unwrap();
@@ -258,15 +258,16 @@ fn dimension_matching_uses_aggregate_bounds_and_center_not_individual_leaf_sizes
 
 #[test]
 fn invalid_family_become_is_atomic_and_rotated_stretch_preserves_dimensions() {
-    let scene = Scene::new();
-    let source = family(&scene);
-    let foreign = family(&Scene::new());
+    let mut scene = Scene::new();
+    let source = family(&mut scene);
+    let mut foreign_scene = Scene::new();
+    let foreign = family(&mut foreign_scene);
     let saved = source.layout_bounds().unwrap();
     let revision = scene.revision();
     assert!(source.become_family(&foreign, Default::default()).is_err());
     assert_eq!(source.layout_bounds().unwrap(), saved);
     assert_eq!(scene.revision(), revision);
-    let target = family(&scene);
+    let target = family(&mut scene);
     target
         .rotate(0.3, noon::ManimRotationPivot::Center)
         .unwrap();
@@ -293,7 +294,7 @@ fn invalid_family_become_is_atomic_and_rotated_stretch_preserves_dimensions() {
 #[test]
 fn live_capture_restores_current_completed_state_in_one_publication() {
     let mut scene = Scene::new();
-    let source = family(&scene);
+    let source = family(&mut scene);
     let target = source.copy_family().unwrap();
     target.root().shift(3.0, 0.0).unwrap();
     scene.add_many(&[(&source).into()]).unwrap();
@@ -361,7 +362,7 @@ fn paired_program_animates_and_restores_through_coherent_completion() {
 
 #[test]
 fn pairing_memoizes_shared_family_dags_and_persistent_become_reconciles_alias_shape() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let a = scene.square(1.0).unwrap();
     let mut root = scene.family(&[(&a).into()]).unwrap();
     for _ in 0..20 {
@@ -406,7 +407,7 @@ fn pairing_memoizes_shared_family_dags_and_persistent_become_reconciles_alias_sh
 #[test]
 fn cross_alias_targets_observe_staged_writes_unless_matching_captures_a_copy() {
     for match_center in [false, true] {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut a = scene.square(1.0).unwrap();
         let mut b = scene.square(1.0).unwrap();
         a.shift(-1.0, 0.0).unwrap();

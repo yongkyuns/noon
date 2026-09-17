@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 #[test]
 fn unique_local_family_preparation_and_late_read_failure_are_atomic() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let a = scene.circle(0.5).unwrap();
     let b = scene.circle(0.5).unwrap();
     let nested = scene.family(&[(&a).into(), (&b).into()]).unwrap();

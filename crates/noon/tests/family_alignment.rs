@@ -14,7 +14,7 @@ fn args() -> ManimNextToArgs {
 
 #[test]
 fn indexed_alignment_resolves_current_direct_members_and_moves_entire_family() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let first = scene.square(1.0).unwrap();
     let mut second = scene.square(1.0).unwrap();
     second.shift(2.0, 3.0).unwrap();
@@ -44,7 +44,7 @@ fn indexed_alignment_resolves_current_direct_members_and_moves_entire_family() {
 
 #[test]
 fn invalid_alignment_does_not_publish_or_partially_move_members() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let object = scene.square(1.0).unwrap();
     let family = scene.family(&[(&object).into()]).unwrap();
     let source = LayoutAnchor::from(&family);

@@ -90,7 +90,7 @@ fn rejected_explicit_scale_pivot_is_atomic() {
 #[test]
 fn aliased_family_scale_keeps_its_edge_and_applies_world_stretch_once() {
     use noon::{LayoutAnchor, ManimRotationPivot};
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut a = scene.square(1.).unwrap();
     let mut b = scene.square(1.).unwrap();
     a.shift(-1., 0.).unwrap();

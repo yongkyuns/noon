@@ -109,7 +109,7 @@ fn relative_placement_uses_shared_masks_targets_and_one_local_publication() {
 
 #[test]
 fn empty_foreign_stale_and_unpublished_families_obey_query_and_mutation_validation() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let empty = scene.family(&[]).unwrap();
     let other = Scene::new();
     let foreign = other.family(&[]).unwrap();

@@ -2,7 +2,7 @@ use noon::{FamilyLayoutTarget as Target, ManimNextToArgs, Scene};
 
 #[test]
 fn placement_shares_object_family_and_point_targets_with_masks_and_nonunit_directions() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let first = scene.square(1.0).unwrap();
     let mut second = scene.square(1.0).unwrap();
     second.shift(2.0, 0.0).unwrap();
@@ -49,7 +49,7 @@ fn placement_shares_object_family_and_point_targets_with_masks_and_nonunit_direc
 
 #[test]
 fn invalid_or_foreign_placement_targets_do_not_publish() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let object = scene.square(1.0).unwrap();
     let family = scene.family(&[(&object).into()]).unwrap();
     let other_scene = Scene::new();
@@ -85,7 +85,7 @@ fn invalid_or_foreign_placement_targets_do_not_publish() {
 
 #[test]
 fn empty_family_observation_has_origin_bounds_without_scene_changes() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let family = scene.family(&[]).unwrap();
     let before = scene.integration_store().borrow().scene_revision();
     let observation = family.layout().unwrap();
@@ -116,7 +116,7 @@ fn object_next_to_and_frame_corner_use_shared_bounds_and_buffers() {
 
 #[test]
 fn object_placement_to_family_anchor_is_shared_and_rejects_foreign_targets() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let object = scene.square(1.0).unwrap();
     let mut reference = scene.square(2.0).unwrap();
     reference.shift(5.0, 3.0).unwrap();
@@ -157,7 +157,7 @@ fn object_placement_to_family_anchor_is_shared_and_rejects_foreign_targets() {
 
 #[test]
 fn frame_alignment_deduplicates_nested_aliases_and_rejects_invalid_input_atomically() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let first = scene.square(1.0).unwrap();
     let mut second = scene.square(1.0).unwrap();
     second.shift(2.0, 0.0).unwrap();

@@ -953,7 +953,7 @@ mod tests {
     #[test]
     fn accepted_public_operations_project_real_rust_causes_and_retry() {
         use noon::{LayoutAnchor, MobjectTarget, Scene};
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut first = scene.circle(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
         let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();

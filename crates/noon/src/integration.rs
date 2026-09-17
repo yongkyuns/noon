@@ -65,6 +65,26 @@ pub use noon_runtime::{
     RuntimeIdentity, RuntimeWakeState, TimelineWakeState,
 };
 
+/// Construct one detached family through an explicitly supplied live execution
+/// authority. This is for platform integrations that intentionally own the
+/// store/root/session pairing outside [`Scene`](crate::Scene); ordinary Rust
+/// authoring uses [`Scene::family_with_z_index`](crate::Scene::family_with_z_index).
+pub fn publish_family_creation(
+    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
+    root: crate::SemanticNodeId,
+    execution: &mut crate::ExecutionSession,
+    members: &[crate::MobjectTarget<'_>],
+    z_index: f64,
+) -> Result<crate::MobjectFamily, crate::AuthoringError> {
+    let (transaction, family) =
+        crate::family_authoring::family_creation_transaction(store, members, z_index)?;
+    let result = crate::Scene::publish_running_transaction(store, root, execution, transaction)?;
+    let node = result
+        .resolve(family)
+        .expect("committed family token resolves to one semantic identity");
+    crate::MobjectFamily::from_node(std::rc::Rc::clone(store), node)
+}
+
 /// Publish a family translation through the existing coherent execution authority.
 pub fn publish_family_shift(
     store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,

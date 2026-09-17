@@ -85,7 +85,7 @@ fn aliased_family_stretch_is_one_atomic_publication_and_keeps_shared_pivot() {
 
 #[test]
 fn invalid_late_family_member_rolls_back_resources_and_affine_edits() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut a = scene.square(1.).unwrap();
     a.rotate(0.4).unwrap();
     let mut b = scene

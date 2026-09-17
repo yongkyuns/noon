@@ -1,7 +1,7 @@
 use noon::{Mobject, MobjectFamily, Scene};
 
 fn fixture() -> (Scene, MobjectFamily, Vec<Mobject>, Mobject) {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut members = Vec::new();
     for (w, h) in [(2.0, 1.0), (1.0, 0.5), (0.5, 2.0), (1.0, 1.0)] {
         let mut object = scene.rectangle(w, h).unwrap();
@@ -78,7 +78,8 @@ fn nested_aliases_use_one_live_transaction_and_foreign_grids_are_rejected() {
     assert_eq!(live.effective_layout(&a).unwrap().center, (0.375, 0.0));
     assert_eq!(live.effective_layout(&b).unwrap().center, (-0.375, 0.0));
     let before = live.effective(&a).unwrap();
-    let foreign = Scene::new().family(&[]).unwrap();
+    let mut foreign_scene = Scene::new();
+    let foreign = foreign_scene.family(&[]).unwrap();
     assert!(live
         .arrange_family_in_grid(&foreign, None, None, 0.2, 0.2)
         .is_err());

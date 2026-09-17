@@ -11,7 +11,7 @@ use noon_core::{
 };
 use std::{cell::RefCell, rc::Rc};
 
-fn publish_geometry_options(
+pub(crate) fn publish_geometry_options(
     options: crate::ManimGeometryOptions,
     store: &mut SemanticStore,
     publish: impl FnOnce(
@@ -258,20 +258,32 @@ impl Scene {
     }
 
     /// Create one detached semantic family with authoritative ordered members.
+    ///
+    /// Construction uses this Scene's ordinary durable mutation route. Before
+    /// execution bootstrap it commits authored state directly; while running it
+    /// prepares and publishes the detached family atomically with the current
+    /// execution revision. Membership remains an explicit later operation.
     pub fn family(
-        &self,
+        &mut self,
         members: &[MobjectTarget<'_>],
     ) -> Result<MobjectFamily, crate::AuthoringError> {
         self.family_with_z_index(members, 0.0)
     }
 
-    /// Construct a detached family with priority on its root only.
+    /// Construct a detached family with priority on its root only through this
+    /// Scene's ordinary durable mutation route.
     pub fn family_with_z_index(
-        &self,
+        &mut self,
         members: &[MobjectTarget<'_>],
         z_index: f64,
     ) -> Result<MobjectFamily, crate::AuthoringError> {
-        MobjectFamily::create_with_z_index(Rc::clone(&self.store), members, z_index)
+        let (transaction, family) =
+            crate::family_authoring::family_creation_transaction(&self.store, members, z_index)?;
+        let result = self.apply_semantic_transaction(transaction)?;
+        let node = result
+            .resolve(family)
+            .expect("committed family token resolves to one semantic identity");
+        MobjectFamily::from_node(Rc::clone(&self.store), node)
     }
     pub fn remove(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Remove(&[MobjectTarget::Object(
@@ -290,6 +302,43 @@ impl Scene {
             crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
         ))?;
         crate::path_queries::effective_path_query(&self.store, execution, object)
+    }
+
+    /// Read one persistent authored/base object declaration.
+    ///
+    /// This deliberately does not inspect the running Runtime. Use
+    /// [`Self::effective`] when the current published frame value is required.
+    pub fn authored(
+        &self,
+        object: &Mobject,
+    ) -> Result<noon_core::SemanticObjectState, AuthoringError> {
+        self.require_object(object)?;
+        object.state()
+    }
+
+    /// Read one object's current effective Runtime value from this Scene's
+    /// coherent publication.
+    ///
+    /// Cold Scenes fail explicitly instead of substituting authored/base state.
+    pub fn effective(
+        &self,
+        object: &Mobject,
+    ) -> Result<crate::EffectiveMobjectState, AuthoringError> {
+        self.require_object(object)?;
+        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        let store = self.store.borrow();
+        let observed = execution
+            .effective_semantic_object(&store, object.node_id())
+            .map_err(AuthoringError::from)?;
+        Ok(crate::EffectiveMobjectState {
+            z_index: observed.object.z_index,
+            transform: observed.object.transform,
+            style: observed.object.style,
+            appearance: observed.object.appearance,
+            publication: observed.publication,
+        })
     }
 
     /// Match one object's persistent geometry/transform against another object.

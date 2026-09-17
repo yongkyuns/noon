@@ -3,7 +3,7 @@ use noon::{MobjectTarget, Scene};
 #[test]
 fn nested_creation_and_membership_edits_preserve_identity_order_and_atomicity() {
     // Duplicate inputs retain their last occurrence, as in the shared Manim family contract.
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let first = scene.square(1.0).unwrap();
     let second = scene.circle(0.2).unwrap();
     let empty = scene.family(&[]).unwrap();
@@ -60,7 +60,7 @@ fn nested_creation_and_membership_edits_preserve_identity_order_and_atomicity() 
 
 #[test]
 fn foreign_and_stale_members_cannot_create_or_edit_a_family() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let local = scene.square(1.0).unwrap();
     let root = scene.family(&[(&local).into()]).unwrap();
     let other = Scene::new();
@@ -92,16 +92,16 @@ fn foreign_and_stale_members_cannot_create_or_edit_a_family() {
 }
 
 #[test]
-fn live_creation_publishes_empty_and_nested_families_through_the_same_transaction() {
-    let scene = Scene::new();
+fn scene_owned_creation_admits_empty_and_nested_families_after_lowering() {
+    let mut scene = Scene::new();
     let first = scene.square(1.0).unwrap();
     let second = scene.circle(0.2).unwrap();
+    let empty = scene.family(&[]).unwrap();
+    let nested = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+    let root = scene.family(&[(&empty).into(), (&nested).into()]).unwrap();
     let mut execution = scene.execution_session().unwrap();
     {
         let mut live = scene.live(&mut execution);
-        let empty = live.family(&[]).unwrap();
-        let nested = live.family(&[(&first).into(), (&second).into()]).unwrap();
-        let root = live.family(&[(&empty).into(), (&nested).into()]).unwrap();
         live.add_many(&[(&root).into()]).unwrap();
     }
     assert_eq!(execution.frame().objects.len(), 2);
@@ -159,7 +159,7 @@ fn live_member_batch_rejects_a_late_cycle_without_partial_publication() {
 
 #[test]
 fn authored_member_batches_roll_back_cycles_and_late_invalid_handles() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let first = scene.circle(0.2).unwrap();
     let second = scene.square(0.4).unwrap();
     let nested = scene.family(&[(&first).into()]).unwrap();

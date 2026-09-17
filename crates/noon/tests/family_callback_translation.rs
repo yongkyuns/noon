@@ -7,7 +7,7 @@ use std::{cell::RefCell, error::Error, rc::Rc};
 
 #[test]
 fn selection_is_unique_local_and_all_inputs_are_prepared_before_returning_changes() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let a = scene.circle(0.5).unwrap();
     let b = scene.circle(0.5).unwrap();
     let nested = scene.family(&[(&a).into(), (&b).into()]).unwrap();

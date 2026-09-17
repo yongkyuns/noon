@@ -39,7 +39,7 @@ fn incoming_duplicates_keep_the_last_occurrence_and_readds_move_to_the_tail() {
 
 #[test]
 fn invalid_late_member_does_not_publish_an_earlier_reorder() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let a = scene.square(1.0).unwrap();
     let b = scene.square(1.0).unwrap();
     let family = scene.family(&[(&a).into(), (&b).into()]).unwrap();
@@ -88,7 +88,7 @@ fn live_reorder_keeps_alias_identity_and_updates_painter_order() {
 
 #[test]
 fn one_readd_stages_one_local_edit_even_in_a_large_family() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let objects: Vec<_> = (0..1000).map(|_| scene.square(1.0).unwrap()).collect();
     let inputs: Vec<_> = objects.iter().map(Into::into).collect();
     let family = scene.family(&inputs).unwrap();
