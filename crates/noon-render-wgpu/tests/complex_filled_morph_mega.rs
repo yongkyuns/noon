@@ -24,6 +24,18 @@ fn static_target() -> VectorPath {
         .close()
 }
 
+// Keep the independent path on the ordinary mega-mesh route. Rectangles now
+// use exact convex-polygon coverage, so this fifth corner is intentional.
+fn static_mega_path() -> VectorPath {
+    VectorPath::new()
+        .move_to(Vec2::new(0.0, 0.0))
+        .line_to(Vec2::new(8.0, 0.0))
+        .line_to(Vec2::new(8.0, 8.0))
+        .line_to(Vec2::new(4.0, 10.0))
+        .line_to(Vec2::new(0.0, 8.0))
+        .close()
+}
+
 fn rounded_target() -> VectorPath {
     VectorPath::new()
         .move_to(Vec2::new(0.0, 0.0))
@@ -79,7 +91,7 @@ fn mixed_frame(progress: f32, curved: bool) -> FrameState {
             FrameObjectState {
                 id: ObjectId::new(1),
                 z_index: 0.0,
-                content: ObjectContentRef::Geometry(GeometryRef::path(static_target())),
+                content: ObjectContentRef::Geometry(GeometryRef::path(static_mega_path())),
                 text_bounds: None,
                 transform: static_transform,
                 style: Style {

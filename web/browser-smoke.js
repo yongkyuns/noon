@@ -1,5 +1,6 @@
 import init, {
   createDirectRecoverySmokeRenderer,
+  createDirectTransformMatchingShapesBreadthSmokeRenderer,
   createDirectTransformMatchingShapesSmokeRenderer,
 } from "./pkg/noon_web.js";
 import {
@@ -23,6 +24,7 @@ let backingHeight = canvas.height;
 let rendererCanvas = null;
 let webglContextRecovery = null;
 let matchingShapesQualification = null;
+let matchingShapesBreadthQualification = null;
 
 window.noonSmoke = {
   state,
@@ -64,6 +66,7 @@ function metrics() {
     cssWidth: canvas.clientWidth,
     cssHeight: canvas.clientHeight,
     matchingShapesQualification,
+    matchingShapesBreadthQualification,
   };
 }
 
@@ -238,6 +241,19 @@ function isBlue(pixel) {
   return pixel.blue > pixel.red + 70 && pixel.green > pixel.red + 50;
 }
 
+function matchesRgb(pixel, expected) {
+  // Interior samples allow only byte quantization, not shape/opacity differences.
+  return [pixel.red, pixel.green, pixel.blue].every(
+    (channel, index) => Math.abs(channel - expected[index]) <= 2,
+  );
+}
+
+function isWhite(pixel) {
+  return pixel.red > 80 && pixel.green > 80 && pixel.blue > 80
+    && Math.max(pixel.red, pixel.green, pixel.blue)
+      - Math.min(pixel.red, pixel.green, pixel.blue) < 24;
+}
+
 async function qualifyTransformMatchingShapes(expectedBackend) {
   const qualificationCanvas = new OffscreenCanvas(960, 540);
   const qualificationRenderer =
@@ -320,6 +336,98 @@ async function qualifyTransformMatchingShapes(expectedBackend) {
   }
 }
 
+async function qualifyTransformMatchingShapesBreadth(expectedBackend) {
+  const qualificationCanvas = new OffscreenCanvas(960, 540);
+  const qualificationRenderer =
+    await createDirectTransformMatchingShapesBreadthSmokeRenderer(qualificationCanvas);
+  try {
+    qualificationRenderer.resize(qualificationCanvas.width, qualificationCanvas.height);
+    await settleQualification(qualificationRenderer, 0);
+
+    qualificationRenderer.advanceDirectRealtime(500);
+    await settleQualification(qualificationRenderer, 500);
+    const sourceFade = await sampleQualificationColor(qualificationCanvas, -0.25, 0);
+    const targetFade = await sampleQualificationColor(qualificationCanvas, 4, 1.5);
+    // Manim repeats source indices [0, 0, 1] for a 2 -> 3 group. The
+    // identity-free copy moves from (-4, 1.5) to (-1, -1.5), so its midpoint
+    // is (-2.5, 0). (0.5, 0) belongs to the other stable triangle and is
+    // overlapped by the fading kite; it cannot qualify the padded occurrence.
+    const paddedDuplicate = await sampleQualificationColor(qualificationCanvas, -2.5, 0);
+    // Half-time paints over black: RED * .9 * .5; WHITE * .9 * .5;
+    // and midpoint(BLUE, PINK) * .9 * .5 for the initially transparent copy.
+    const sourceFadeRgb = [252, 98, 85].map((channel) => channel * 0.45);
+    const targetFadeRgb = [255, 255, 255].map((channel) => channel * 0.45);
+    const paddedRgb = [88 + 209, 196 + 71, 221 + 189].map(
+      (channel) => channel * 0.5 * 0.45,
+    );
+    if (
+      !matchesRgb(sourceFade, sourceFadeRgb) ||
+      !matchesRgb(targetFade, targetFadeRgb) ||
+      !matchesRgb(paddedDuplicate, paddedRgb)
+    ) {
+      throw new Error(
+        `matching-shapes breadth did not preserve duplicate expansion and default leftovers: ${JSON.stringify({ sourceFade, targetFade, paddedDuplicate })}`,
+      );
+    }
+
+    qualificationRenderer.advanceDirectRealtime(750);
+    await settleQualification(qualificationRenderer, 750);
+    // An interior, unoccluded point on the directional source FadeOut. Cairo's
+    // premultiplied solid source at RED alpha .9 * .25 is exactly (56, 22, 19).
+    // Nearest-UNORM conversion of unquantized path paint incorrectly gives 57 red.
+    const quantizedSourceFade = await sampleQualificationColor(qualificationCanvas, 1.625, 0.75);
+    if (
+      quantizedSourceFade.red !== 56 ||
+      quantizedSourceFade.green !== 22 ||
+      quantizedSourceFade.blue !== 19
+    ) {
+      throw new Error(`matching source fade differs from Cairo solid-source quantization: ${JSON.stringify(quantizedSourceFade)}`);
+    }
+
+    qualificationRenderer.advanceDirectRealtime(1000);
+    await settleQualification(qualificationRenderer, 1000);
+    const completedTargetLeftover = await sampleQualificationColor(qualificationCanvas, 4, 1.5);
+    if (!isWhite(completedTargetLeftover)) {
+      throw new Error(
+        `matching-shapes breadth did not publish the authored unmatched target: ${JSON.stringify({ completedTargetLeftover })}`,
+      );
+    }
+
+    qualificationRenderer.advanceDirectRealtime(2000);
+    const finalWake = await settleQualification(qualificationRenderer, 2000);
+    const result = {
+      backend: qualificationRenderer.rendererBackend(),
+      time: qualificationRenderer.time(),
+      objectCount: qualificationRenderer.objectCount(),
+      cadence: finalWake.cadence,
+      sourceFade,
+      targetFade,
+      paddedDuplicate,
+      quantizedSourceFade,
+      completedTargetLeftover,
+    };
+    if (
+      result.backend !== expectedBackend ||
+      result.time !== 2 ||
+      result.objectCount !== 4 ||
+      result.cadence !== "idle"
+    ) {
+      throw new Error(
+        `matching-shapes breadth qualification did not settle coherently: ${JSON.stringify(result)}`,
+      );
+    }
+    return result;
+  } finally {
+    qualificationRenderer.free();
+    if (expectedBackend === "WebGL2") {
+      qualificationCanvas
+        .getContext("webgl2")
+        ?.getExtension("WEBGL_lose_context")
+        ?.loseContext();
+    }
+  }
+}
+
 async function start() {
   await init();
 
@@ -329,6 +437,9 @@ async function start() {
   renderer.resize(backingWidth, backingHeight);
   presentPending();
   matchingShapesQualification = await qualifyTransformMatchingShapes(
+    renderer.rendererBackend(),
+  );
+  matchingShapesBreadthQualification = await qualifyTransformMatchingShapesBreadth(
     renderer.rendererBackend(),
   );
 
