@@ -205,6 +205,15 @@ try {
     `desktop preview should remain horizontally centered; ${JSON.stringify(layout)}`,
   );
 
+  const editorBaseline = await page.evaluate(() => {
+    const canvas = document.querySelector("#scene");
+    canvas.dataset.pythonEditorSmokeIdentity = "original";
+    return {
+      patchSequence: document.querySelector("#patch-status")?.dataset.sequence ?? "",
+      runGeneration: window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? null,
+    };
+  });
+
   await page.locator("#scene-editor-panel .cm-content").fill(
     "import os\nfrom noon import Circle, Scene, Square\n\ndef broken():\n    return missing_name\n\nclass LintScene(Scene):\n    def construct(self):\n        self.add(Circle(), Square())\n",
   );
@@ -215,7 +224,33 @@ try {
   assert.ok(lintRanges >= 1, "Ruff should report inline Python diagnostics after real editor input");
   assert.ok(ruffRequests.length >= 1, "the first real editor input should load Ruff on demand");
 
-  await waitForAppliedScene(page, errors, "live edit with lint diagnostics", "2 objects");
+  const inertEdit = await page.evaluate(() => ({
+    patchState: document.querySelector("#patch-status")?.dataset.state ?? "",
+    patchText: document.querySelector("#patch-status")?.value ?? "",
+    patchSequence: document.querySelector("#patch-status")?.dataset.sequence ?? "",
+    runGeneration: window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? null,
+    canvasIdentity: document.querySelector("#scene")?.dataset.pythonEditorSmokeIdentity ?? null,
+    canvasCount: document.querySelectorAll("canvas").length,
+  }));
+  assert.equal(inertEdit.patchState, "ready", "editing source must wait for explicit Run");
+  assert.match(inertEdit.patchText, /current preview continues · Run to apply/);
+  assert.equal(inertEdit.patchSequence, editorBaseline.patchSequence, "editing must not apply stale source");
+  assert.equal(inertEdit.runGeneration, editorBaseline.runGeneration, "editing must not start a new run");
+  assert.equal(inertEdit.canvasIdentity, "original", "editing must preserve the current canvas");
+  assert.equal(inertEdit.canvasCount, 1, "editing must not allocate another canvas");
+
+  await page.locator("#replace-scene").click();
+  await waitForAppliedScene(page, errors, "explicit Run after lint edit", "2 objects");
+  const appliedEdit = await page.evaluate(() => ({
+    runGeneration: window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? null,
+    patchRunGeneration: document.querySelector("#patch-status")?.dataset.runGeneration ?? "",
+    canvasIdentity: document.querySelector("#scene")?.dataset.pythonEditorSmokeIdentity ?? null,
+    canvasCount: document.querySelectorAll("canvas").length,
+  }));
+  assert.ok(appliedEdit.runGeneration > editorBaseline.runGeneration, "Run must apply the newest editor source");
+  assert.equal(appliedEdit.patchRunGeneration, String(appliedEdit.runGeneration));
+  assert.equal(appliedEdit.canvasIdentity, "original", "explicit Run must reuse the canvas");
+  assert.equal(appliedEdit.canvasCount, 1, "explicit Run must not allocate another canvas");
 
   assert.deepEqual(errors, [], `browser errors while loading Python editor:\n${errors.join("\n")}`);
   await page.close();
@@ -296,7 +331,7 @@ try {
   await fallbackContext.close();
 
   console.log(
-    `Python editor smoke passed: automatic startup + one visible CodeMirror + live edits with deferred Ruff (${lintRanges} diagnostic(s)) + CDN-blocked textarea fallback with a fresh two-object render.`,
+    `Python editor smoke passed: automatic startup + one visible CodeMirror + explicit Run after deferred Ruff (${lintRanges} diagnostic(s)) + CDN-blocked textarea fallback with a fresh two-object render.`,
   );
 } finally {
   await browser?.close();

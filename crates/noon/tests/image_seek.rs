@@ -15,6 +15,25 @@ fn options() -> ImageMobjectOptions {
 }
 
 #[test]
+fn image_center_preserves_translation_under_affine_bounds() -> TestResult {
+    let mut scene = Scene::new();
+    for angle in [0.1, 0.37, std::f64::consts::FRAC_PI_4, 1.2] {
+        for translation in [(3.0, -1.0), (0.1, -0.1), (1.0e-10, -1.0e-10)] {
+            let mut image = scene.image(options())?;
+            image.scale(0.75, -1.25)?;
+            image.rotate(angle)?;
+            image.set_translation(translation.0, translation.1)?;
+            assert_eq!(
+                image.center()?,
+                translation,
+                "a centered image's affine bounds must preserve its translation at angle {angle}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn image_seek_matches_forward_for_fades_and_affine_transform() -> TestResult {
     // All three animation kinds use the same public session evaluator. Seeking
     // must preserve the immutable pixel handle and reproduce each effective row.

@@ -20,6 +20,9 @@ on:
       - '.github/workflows/platform-release.yml'
   pull_request:
     paths:
+      - 'crates/noon/src/semantic_mobject.rs'
+      - 'crates/noon/src/semantic_mobject/bounds.rs'
+      - 'crates/noon/tests/image_seek.rs'
       - 'crates/noon-web/Cargo.toml'
       - 'crates/noon-web/src/determinism.rs'
       - 'scripts/build-web-demo.sh'
@@ -43,7 +46,6 @@ concurrency:
 
 jobs:
   native-platform:
-    if: github.event_name != 'pull_request'
     name: Native ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
