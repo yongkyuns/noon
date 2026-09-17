@@ -543,6 +543,7 @@ impl RetainedFramePreparer {
             copy_local_text_snapshot_updates(
                 &mut self.snapshot_mask_quads,
                 &mut self.snapshot_color_quads,
+                &mut self.snapshot_text_items,
                 &self.text_item_ranges,
                 prepared_text.items,
                 prepared_text.mask_quads,

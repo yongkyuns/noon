@@ -171,6 +171,8 @@ async function initializePyodide() {
     authoringStore.createSvgFromString(source, shouldCenter, height, width);
   self.noonCreateAuthoringTextHandle = (source, fontFamily, fontSize, lineSpacing) =>
     authoringStore.createManimText(source, fontFamily, fontSize, lineSpacing);
+  self.noonCreateAuthoringMarkupTextHandle = (source, fontFamily, fontSize, lineSpacing) =>
+    authoringStore.createManimMarkupText(source, fontFamily, fontSize, lineSpacing);
   self.noonCreateAuthoringTypstHandle = (source, math, fontSize) =>
     authoringStore.createManimTypst(source, math, fontSize);
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);

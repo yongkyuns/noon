@@ -22,8 +22,8 @@ use noon_core::{
 };
 use noon_runtime::{FrameChanges, FrameState};
 use noon_text::raster::{
-    GlyphRaster, GlyphRasterCache, GlyphRasterCacheLimits, GlyphRasterError, GlyphRasterKey,
-    GlyphRasterStats,
+    GlyphRaster, GlyphRasterCache, GlyphRasterCacheLimits, GlyphRasterError, GlyphRasterFormat,
+    GlyphRasterKey, GlyphRasterPhase, GlyphRasterStats, GLYPH_RASTER_PHASE_BINS,
 };
 
 pub const DEFAULT_GLYPH_ATLAS_MAX_PAGES_PER_PLANE: usize = 2;
@@ -31,6 +31,7 @@ pub const DEFAULT_GLYPH_RASTER_CACHE_MAX_ENTRIES: usize = 8_192;
 pub const DEFAULT_GLYPH_RASTER_CACHE_MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 pub const GLYPH_RASTER_SIZE_BUCKET_RATIO: f32 = 1.125;
 pub const GLYPH_RASTER_SIZE_BUCKET_START: f32 = 256.0;
+pub const GLYPH_RASTER_ORDINARY_STEPS_PER_PIXEL: f32 = 8.0;
 
 pub const DEFAULT_GLYPH_RASTER_CACHE_LIMITS: GlyphRasterCacheLimits = GlyphRasterCacheLimits::new(
     DEFAULT_GLYPH_RASTER_CACHE_MAX_ENTRIES,
@@ -45,11 +46,16 @@ pub const DEFAULT_GLYPH_RASTER_CACHE_LIMITS: GlyphRasterCacheLimits = GlyphRaste
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextDeviceMetrics {
     pub pixels_per_world: Vec2,
+    /// Device-pixel coordinate of Noon world origin. Device Y increases downward.
+    pub world_origin_pixels: Vec2,
 }
 
 impl TextDeviceMetrics {
     pub fn new(pixels_per_world: Vec2) -> Result<Self, TextPrepareError> {
-        let metrics = Self { pixels_per_world };
+        let metrics = Self {
+            pixels_per_world,
+            world_origin_pixels: Vec2::ZERO,
+        };
         metrics.validate()?;
         Ok(metrics)
     }
@@ -58,11 +64,22 @@ impl TextDeviceMetrics {
         Self::new(Vec2::new(pixels_per_world, pixels_per_world))
     }
 
+    pub fn with_world_origin_pixels(
+        mut self,
+        world_origin_pixels: Vec2,
+    ) -> Result<Self, TextPrepareError> {
+        self.world_origin_pixels = world_origin_pixels;
+        self.validate()?;
+        Ok(self)
+    }
+
     fn validate(self) -> Result<(), TextPrepareError> {
         if !self.pixels_per_world.x.is_finite()
             || !self.pixels_per_world.y.is_finite()
             || self.pixels_per_world.x <= 0.0
             || self.pixels_per_world.y <= 0.0
+            || !self.world_origin_pixels.x.is_finite()
+            || !self.world_origin_pixels.y.is_finite()
         {
             return Err(TextPrepareError::InvalidDeviceMetrics);
         }
@@ -153,6 +170,9 @@ pub struct RetainedTextIncrementalStats {
     pub object_update_frames: u64,
     pub objects_updated: u64,
     pub fallback_rebuilds: u64,
+    /// Phase changes that retained the previous filtered mask because replacing it
+    /// would change batch/page layout or exceed atlas residency.
+    pub phase_fallbacks: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -163,6 +183,7 @@ struct PreparedTextObjectState {
     reveal: f32,
     morph: f32,
     item_range: Range<usize>,
+    phase_fingerprint: u64,
 }
 
 #[derive(Debug)]
@@ -187,7 +208,7 @@ impl std::fmt::Display for TextPrepareError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidDeviceMetrics => formatter.write_str(
-                "text device metrics must contain finite positive pixels-per-world values",
+                "text device metrics require finite positive density and a finite device origin",
             ),
             Self::InvalidTextTransform => {
                 formatter.write_str("retained text transform produced a non-finite device scale")
@@ -223,7 +244,7 @@ impl From<GlyphAtlasError> for TextPrepareError {
 /// Raster and atlas caches survive frame preparation. Stable object-local ranges let
 /// translation and paint/opacity changes update already-resident quads without
 /// rescanning unrelated text or probing those caches. Glyph raster identity excludes
-/// position; ordinary display sizes preserve the legacy integer-pixel identity, while
+/// position; ordinary display sizes use bounded fractional-pixel identities, while
 /// very large device scales use conservative geometric residency buckets.
 pub struct RetainedTextQuadPreparer {
     raster_cache: GlyphRasterCache,
@@ -341,7 +362,8 @@ impl RetainedTextQuadPreparer {
         }
 
         if self.can_update_objects(frame, changes, texts, metrics)? {
-            let updated = self.update_objects(frame, changes, texts);
+            let updated =
+                self.update_objects(device, queue, frame, changes, texts, fonts, metrics)?;
             self.incremental_stats.object_update_frames = self
                 .incremental_stats
                 .object_update_frames
@@ -434,12 +456,17 @@ impl RetainedTextQuadPreparer {
         self.can_update_objects(frame, changes, texts, metrics)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn update_objects(
         &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
         frame: &FrameState,
         changes: &FrameChanges,
         texts: &(impl TextResourceLookup + ?Sized),
-    ) -> usize {
+        fonts: &(impl FontResourceLookup + ?Sized),
+        metrics: TextDeviceMetrics,
+    ) -> Result<usize, TextPrepareError> {
         let mut updated = 0_usize;
         for &index in changes.object_indices() {
             let Some(state) = self.object_states[index].clone() else {
@@ -449,7 +476,33 @@ impl RetainedTextQuadPreparer {
             let resource = texts
                 .get(state.text)
                 .expect("validated text resource must remain present during object-local update");
-            let delta = object.transform.translation - state.transform.translation;
+            let phase_fingerprint = object_phase_fingerprint(resource, object.transform, metrics)?;
+            let phase_changed = phase_fingerprint != state.phase_fingerprint;
+            // Rebuild glyph quads from shaped-run coordinates whenever translation
+            // changes. Repeatedly adding frame deltas accumulates f32 rounding and
+            // makes the same final semantic frame depend on playback sample cadence.
+            // Raster and atlas lookups remain cached and this work stays object-local.
+            let translation_changed = object.transform.translation != state.transform.translation;
+            let rerastered = (phase_changed || translation_changed)
+                && self.reprepare_object_glyphs(
+                    device,
+                    queue,
+                    index as u32,
+                    &state,
+                    object,
+                    resource,
+                    fonts,
+                    metrics,
+                )?;
+            if phase_changed && !rerastered {
+                self.incremental_stats.phase_fallbacks =
+                    self.incremental_stats.phase_fallbacks.saturating_add(1);
+            }
+            let delta = if rerastered {
+                Vec2::ZERO
+            } else {
+                object.transform.translation - state.transform.translation
+            };
             let object_opacity = object.style.opacity * object.appearance;
 
             for item in &self.items[state.item_range.clone()] {
@@ -489,9 +542,155 @@ impl RetainedTextQuadPreparer {
             stored.transform = object.transform;
             stored.reveal = frame.reveal(index);
             stored.morph = frame.morph(index);
+            if !phase_changed || rerastered {
+                stored.phase_fingerprint = phase_fingerprint;
+            }
             updated = updated.saturating_add(1);
         }
-        updated
+        Ok(updated)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reprepare_object_glyphs(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        object_index: u32,
+        state: &PreparedTextObjectState,
+        object: &noon_runtime::FrameObjectState,
+        resource: &noon_core::TextResource,
+        fonts: &(impl FontResourceLookup + ?Sized),
+        metrics: TextDeviceMetrics,
+    ) -> Result<bool, TextPrepareError> {
+        let original_item_len = self.items.len();
+        // Prevent the first replacement batch from coalescing into the object's
+        // existing final batch while it is staged at the vector tail.
+        self.items.push(PreparedTextItem::Vector {
+            object_index: u32::MAX,
+            text: state.text,
+            vector_index: u32::MAX,
+            reveal: 0.0,
+            morph: 0.0,
+        });
+        let item_start = self.items.len();
+        let mask_start = self.mask_quads.len();
+        let color_start = self.color_quads.len();
+        let saved_stats = self.stats;
+
+        let stage_result = (|| {
+            for render_item in resource.render_items.iter().copied() {
+                let TextRenderItem::GlyphRun(run_index) = render_item else {
+                    continue;
+                };
+                let run = &resource.runs[run_index as usize];
+                if run.stroke.is_some() || state.reveal < 1.0 || state.morph != 0.0 {
+                    continue;
+                }
+                self.prepare_run(
+                    device,
+                    queue,
+                    object_index,
+                    state.text,
+                    run_index,
+                    object.transform,
+                    object.style.fill,
+                    object.style.opacity * object.appearance,
+                    run,
+                    fonts,
+                    metrics,
+                )?;
+            }
+            Ok::<(), TextPrepareError>(())
+        })();
+
+        if let Err(error) = stage_result {
+            self.items.truncate(original_item_len);
+            self.mask_quads.truncate(mask_start);
+            self.color_quads.truncate(color_start);
+            self.stats = saved_stats;
+            return match error {
+                TextPrepareError::Atlas(GlyphAtlasError::Full { .. }) => Ok(false),
+                other => Err(other),
+            };
+        }
+
+        let replacement_items = self.items[item_start..].to_vec();
+        let old_indices = (state.item_range.start..state.item_range.end)
+            .filter(|&index| matches!(self.items[index], PreparedTextItem::GlyphBatch { .. }))
+            .collect::<Vec<_>>();
+        let compatible = old_indices.len() == replacement_items.len()
+            && old_indices
+                .iter()
+                .zip(replacement_items.iter())
+                .all(|(&old_index, replacement)| {
+                    let PreparedTextItem::GlyphBatch {
+                        run_index: old_run,
+                        plane: old_plane,
+                        instance_range: old_range,
+                        ..
+                    } = &self.items[old_index]
+                    else {
+                        return false;
+                    };
+                    let PreparedTextItem::GlyphBatch {
+                        run_index: new_run,
+                        plane: new_plane,
+                        instance_range: new_range,
+                        ..
+                    } = replacement
+                    else {
+                        return false;
+                    };
+                    old_run == new_run
+                        && old_plane == new_plane
+                        && old_range.len() == new_range.len()
+                });
+
+        if compatible {
+            for (&old_index, replacement) in old_indices.iter().zip(replacement_items.iter()) {
+                let PreparedTextItem::GlyphBatch {
+                    plane,
+                    page,
+                    instance_range: new_range,
+                    ..
+                } = replacement
+                else {
+                    unreachable!()
+                };
+                let PreparedTextItem::GlyphBatch {
+                    page: old_page,
+                    instance_range: old_range,
+                    ..
+                } = &mut self.items[old_index]
+                else {
+                    unreachable!()
+                };
+                let source = match plane {
+                    GlyphAtlasPlane::Mask => {
+                        self.mask_quads[new_range.start as usize..new_range.end as usize].to_vec()
+                    }
+                    GlyphAtlasPlane::Color => {
+                        self.color_quads[new_range.start as usize..new_range.end as usize].to_vec()
+                    }
+                };
+                let target = match plane {
+                    GlyphAtlasPlane::Mask => {
+                        &mut self.mask_quads[old_range.start as usize..old_range.end as usize]
+                    }
+                    GlyphAtlasPlane::Color => {
+                        &mut self.color_quads[old_range.start as usize..old_range.end as usize]
+                    }
+                };
+                target.copy_from_slice(&source);
+                *old_page = *page;
+            }
+        }
+
+        self.items.truncate(original_item_len);
+        self.mask_quads.truncate(mask_start);
+        self.color_quads.truncate(color_start);
+        self.stats = saved_stats;
+        Ok(compatible)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -586,6 +785,7 @@ impl RetainedTextQuadPreparer {
                 reveal,
                 morph,
                 item_range: item_start..self.items.len(),
+                phase_fingerprint: object_phase_fingerprint(resource, object.transform, metrics)?,
             });
         }
 
@@ -609,15 +809,34 @@ impl RetainedTextQuadPreparer {
         fonts: &(impl FontResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<(), TextPrepareError> {
-        let pixel_size = raster_pixel_size(run, object_transform, metrics)?;
+        let requested_size = requested_raster_pixel_size(run, object_transform, metrics)?;
+        let pixel_size = raster_size_bucket(requested_size);
         let pixels_to_local = run.font_size / pixel_size;
         let mask_color = run.fill.or(object_fill).unwrap_or(Color::WHITE);
 
         for glyph in run.glyphs.iter() {
-            let raster =
-                self.raster_cache
-                    .get_or_rasterize(fonts, run, glyph.glyph_id, pixel_size)?;
-            let key = raster_key(fonts, run, glyph.glyph_id, pixel_size)?;
+            // Very large glyphs already use coarse geometric size buckets. Keep one
+            // phase there: a subpixel is negligible at this scale, while duplicating
+            // page-sized masks could exhaust the fixed atlas working set.
+            let phase = if requested_size <= GLYPH_RASTER_SIZE_BUCKET_START {
+                glyph_raster_phase(
+                    run,
+                    glyph.origin,
+                    object_transform,
+                    metrics,
+                    pixel_size / requested_size,
+                )
+            } else {
+                GlyphRasterPhase::ZERO
+            };
+            let raster = self.raster_cache.get_or_rasterize_at_phase(
+                fonts,
+                run,
+                glyph.glyph_id,
+                pixel_size,
+                phase,
+            )?;
+            let key = raster_key(fonts, run, glyph.glyph_id, pixel_size, phase)?;
             let entry = self.atlas.insert(device, queue, key, raster.as_ref())?;
             let GlyphAtlasEntry::Image(atlas_image) = entry else {
                 self.stats.empty_glyphs += 1;
@@ -627,10 +846,14 @@ impl RetainedTextQuadPreparer {
                 unreachable!("atlas image entry must originate from a raster image");
             };
 
+            // Bitmap strikes do not honor outline offsets. Compensate only masks;
+            // color glyphs retain their existing placement and filtering behavior.
+            let (phase_x, phase_y) = raster_phase_offset_for_format(image.format, phase);
             let local_origin = glyph.origin
                 + Vec2::new(
-                    image.placement.left as f32 * pixels_to_local,
-                    (image.placement.top as f32 - image.placement.height as f32) * pixels_to_local,
+                    (image.placement.left as f32 - phase_x) * pixels_to_local,
+                    (image.placement.top as f32 - image.placement.height as f32 - phase_y)
+                        * pixels_to_local,
                 );
             let local_axis_x = Vec2::new(image.placement.width as f32 * pixels_to_local, 0.0);
             let local_axis_y = Vec2::new(0.0, image.placement.height as f32 * pixels_to_local);
@@ -738,7 +961,7 @@ fn atlas_texture_bytes(extent: u32, mask_pages: usize, color_pages: usize) -> u6
     page_texels.saturating_mul(weighted_pages)
 }
 
-fn raster_pixel_size(
+fn requested_raster_pixel_size(
     run: &GlyphRun,
     object_transform: Transform2D,
     metrics: TextDeviceMetrics,
@@ -758,28 +981,29 @@ fn raster_pixel_size(
     if !requested.is_finite() {
         return Err(TextPrepareError::InvalidTextTransform);
     }
-    Ok(raster_size_bucket(requested))
+    Ok(requested)
 }
 
-/// Preserve the legacy integer-ceil raster identity at ordinary display sizes and
-/// switch to conservative geometric residency buckets only for very large glyphs.
+/// Preserve fractional device sizes at ordinary display scales and switch to
+/// conservative geometric residency buckets only for very large glyphs.
 ///
-/// Keeping the ordinary path exact protects raster parity. Above the threshold,
-/// rounding upward still guarantees that the selected raster never undersamples the
-/// active transform while bounding the number of identities accumulated during
-/// extreme smooth zoom.
+/// Eighth-pixel upward quantization avoids visible minification for common fractional
+/// device scales while keeping size identity independent of scene position and
+/// finite across the ordinary range. Above the threshold, rounding upward still
+/// guarantees that the selected raster never undersamples the active transform while
+/// bounding the number of identities accumulated during extreme smooth zoom.
 fn raster_size_bucket(requested: f32) -> f32 {
     let requested = requested.max(1.0);
-    let legacy = requested.ceil();
-    if legacy <= GLYPH_RASTER_SIZE_BUCKET_START {
-        return legacy;
+    if requested <= GLYPH_RASTER_SIZE_BUCKET_START {
+        return (requested * GLYPH_RASTER_ORDINARY_STEPS_PER_PIXEL).ceil()
+            / GLYPH_RASTER_ORDINARY_STEPS_PER_PIXEL;
     }
 
     let mut bucket = GLYPH_RASTER_SIZE_BUCKET_START;
     while bucket < requested {
         let next = bucket * GLYPH_RASTER_SIZE_BUCKET_RATIO;
         if !next.is_finite() || next <= bucket {
-            return legacy;
+            return requested.ceil();
         }
         bucket = next;
     }
@@ -812,11 +1036,104 @@ fn color_with_opacity(color: Color, opacity: f32) -> [f32; 4] {
     [color.red, color.green, color.blue, color.alpha * opacity]
 }
 
+/// Select a bounded outline-raster phase when the glyph-to-device transform is a
+/// translation plus uniform axis-aligned scale. Rotated, skewed, or non-uniform
+/// bitmap quads keep phase zero and the established filtered affine path.
+fn glyph_raster_phase(
+    run: &GlyphRun,
+    glyph_origin: Vec2,
+    object_transform: Transform2D,
+    metrics: TextDeviceMetrics,
+    raster_pixels_per_device_pixel: f32,
+) -> GlyphRasterPhase {
+    let resource_x = run.transform.transform_vector(Vec2::new(1.0, 0.0));
+    let resource_y = run.transform.transform_vector(Vec2::new(0.0, 1.0));
+    let world_x = transform_vector(object_transform, resource_x);
+    let world_y = transform_vector(object_transform, resource_y);
+    let device_x = Vec2::new(
+        world_x.x * metrics.pixels_per_world.x,
+        -world_x.y * metrics.pixels_per_world.y,
+    );
+    let device_y = Vec2::new(
+        world_y.x * metrics.pixels_per_world.x,
+        -world_y.y * metrics.pixels_per_world.y,
+    );
+    let tolerance = 1.0e-5 * device_x.length().max(device_y.length()).max(1.0);
+    if device_x.y.abs() > tolerance
+        || device_y.x.abs() > tolerance
+        || (device_x.x.abs() - device_y.y.abs()).abs() > tolerance
+        || device_x.x <= 0.0
+        || device_y.y >= 0.0
+    {
+        return GlyphRasterPhase::ZERO;
+    }
+
+    let resource_origin = run.transform.transform_point(glyph_origin);
+    let world_origin = object_transform.transform_point(resource_origin);
+    let device_origin = Vec2::new(
+        metrics.world_origin_pixels.x + world_origin.x * metrics.pixels_per_world.x,
+        metrics.world_origin_pixels.y - world_origin.y * metrics.pixels_per_world.y,
+    );
+    let raster_x = device_origin.x.rem_euclid(1.0) * raster_pixels_per_device_pixel;
+    let raster_y = (-device_origin.y).rem_euclid(1.0) * raster_pixels_per_device_pixel;
+    GlyphRasterPhase::new(quantize_phase(raster_x), quantize_phase(raster_y))
+        .expect("quantized glyph phase must remain within the fixed bin count")
+}
+
+fn quantize_phase(phase: f32) -> u8 {
+    let bins = u32::from(GLYPH_RASTER_PHASE_BINS);
+    ((phase.rem_euclid(1.0) * bins as f32).round() as u32 % bins) as u8
+}
+
+fn raster_phase_offset_for_format(
+    format: GlyphRasterFormat,
+    phase: GlyphRasterPhase,
+) -> (f32, f32) {
+    match format {
+        GlyphRasterFormat::Alpha8 => phase.offset(),
+        GlyphRasterFormat::Rgba8 => (0.0, 0.0),
+    }
+}
+
+fn object_phase_fingerprint(
+    resource: &noon_core::TextResource,
+    object_transform: Transform2D,
+    metrics: TextDeviceMetrics,
+) -> Result<u64, TextPrepareError> {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for run in resource.runs.iter() {
+        if run.stroke.is_some() {
+            continue;
+        }
+        let requested = requested_raster_pixel_size(run, object_transform, metrics)?;
+        let raster = raster_size_bucket(requested);
+        for glyph in run.glyphs.iter() {
+            let phase = if requested <= GLYPH_RASTER_SIZE_BUCKET_START {
+                glyph_raster_phase(
+                    run,
+                    glyph.origin,
+                    object_transform,
+                    metrics,
+                    raster / requested,
+                )
+            } else {
+                GlyphRasterPhase::ZERO
+            };
+            hash ^= u64::from(phase.x());
+            hash = hash.wrapping_mul(0x100000001b3);
+            hash ^= u64::from(phase.y());
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    Ok(hash)
+}
+
 fn raster_key(
     fonts: &(impl FontResourceLookup + ?Sized),
     run: &GlyphRun,
     glyph_id: u32,
     pixel_size: f32,
+    phase: GlyphRasterPhase,
 ) -> Result<GlyphRasterKey, TextPrepareError> {
     let font = fonts
         .handle_for_face(&run.font)
@@ -830,6 +1147,7 @@ fn raster_key(
         glyph_id,
         pixel_size_bits: pixel_size.to_bits(),
         variation_fingerprint: variation_fingerprint(run.variations.as_ref()),
+        phase,
     })
 }
 
@@ -961,10 +1279,15 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_raster_sizes_preserve_legacy_integer_ceil_identity() {
-        for requested in [0.0, 1.0, 1.01, 10.0, 67.5, 100.0, 255.0, 255.1, 256.0] {
-            assert_eq!(raster_size_bucket(requested), requested.max(1.0).ceil());
-        }
+    fn ordinary_raster_sizes_preserve_eighth_pixel_device_scale() {
+        let forty_two_point_at_sixty_seven_and_a_half_pixels_per_world = 42.0 / 72.0 * 67.5;
+        assert_eq!(
+            raster_size_bucket(forty_two_point_at_sixty_seven_and_a_half_pixels_per_world),
+            39.375
+        );
+        assert_eq!(raster_size_bucket(67.5), 67.5);
+        assert_eq!(raster_size_bucket(1.01), 1.125);
+        assert_eq!(raster_size_bucket(255.91), 256.0);
     }
 
     #[test]
@@ -974,6 +1297,24 @@ mod tests {
             assert!(bucket >= requested.max(1.0));
             assert!(bucket.is_finite());
         }
+    }
+
+    #[test]
+    fn ordinary_raster_size_oversampling_is_bounded_to_one_eighth_pixel() {
+        for eighths in 8..=(256 * 8) {
+            let requested = eighths as f32 / 8.0 - 0.03125;
+            let oversampling = raster_size_bucket(requested) - requested;
+            assert!(oversampling >= 0.0);
+            assert!(oversampling <= 0.125);
+        }
+    }
+
+    #[test]
+    fn ordinary_zoom_range_has_a_finite_size_identity_count() {
+        let buckets = (8..=(256 * 8))
+            .map(|eighths| raster_size_bucket(eighths as f32 / 8.0).to_bits())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(buckets.len(), 2_041);
     }
 
     #[test]
@@ -1134,7 +1475,7 @@ mod tests {
         let handle = texts.insert(artifact.resource).unwrap();
         let first_frame = retained_frame(handle, true, scene_transform());
         let mut translated = scene_transform();
-        translated.translation = Vec2::new(2.0, -3.0);
+        translated.translation = Vec2::new(2.0, -2.0);
         let second_frame = retained_frame(handle, true, translated);
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut preparer = RetainedTextQuadPreparer::new(128).unwrap();
@@ -1171,7 +1512,7 @@ mod tests {
             prepared.mask_quads[0]
         };
         assert!((second_quad.origin[0] - first_quad.origin[0] - 2.0).abs() < 1e-5);
-        assert!((second_quad.origin[1] - first_quad.origin[1] + 3.0).abs() < 1e-5);
+        assert!((second_quad.origin[1] - first_quad.origin[1] + 2.0).abs() < 1e-5);
         assert_eq!(second_quad.axis_x, first_quad.axis_x);
         assert_eq!(second_quad.axis_y, first_quad.axis_y);
         assert_eq!(preparer.atlas_stats().entries, atlas_entries);
@@ -1234,7 +1575,7 @@ mod tests {
     }
 
     #[test]
-    fn changed_text_translation_and_opacity_update_only_its_quads() {
+    fn phase_crossing_translation_reprepares_only_changed_text_quads() {
         let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
         let mut texts = TextResourceArena::new();
         let handle = texts.insert(artifact.resource).unwrap();
@@ -1269,9 +1610,7 @@ mod tests {
                 .collect::<Vec<_>>();
             (prepared.mask_quads.to_vec(), batches)
         };
-        let raster = preparer.raster_stats();
-        let atlas = preparer.atlas_stats();
-
+        let misses_before = preparer.raster_stats().misses;
         frame.objects[1].transform.translation = Vec2::new(2.0, -3.0);
         frame.objects[1].style.opacity = 0.5;
         frame.objects[1].appearance = 0.5;
@@ -1289,30 +1628,269 @@ mod tests {
                 .unwrap();
             prepared.mask_quads.to_vec()
         };
+        let fresh = {
+            let mut fresh_preparer = RetainedTextQuadPreparer::new(256).unwrap();
+            fresh_preparer
+                .prepare(&device, &queue, &frame, &texts, &artifact.fonts, metrics())
+                .unwrap()
+                .mask_quads
+                .to_vec()
+        };
 
-        assert_eq!(preparer.raster_stats(), raster);
-        assert_eq!(preparer.atlas_stats(), atlas);
-        for (object_index, range) in batches {
+        for (object_index, range) in &batches {
             let start = range.start as usize;
             let end = range.end as usize;
-            if object_index == 0 {
+            if *object_index == 0 {
                 assert_eq!(&after[start..end], &before[start..end]);
             } else {
                 for (after_quad, before_quad) in after[start..end].iter().zip(&before[start..end]) {
-                    assert!((after_quad.origin[0] - before_quad.origin[0] - 2.0).abs() < 1e-5);
-                    assert!((after_quad.origin[1] - before_quad.origin[1] + 3.0).abs() < 1e-5);
-                    assert_eq!(after_quad.axis_x, before_quad.axis_x);
-                    assert_eq!(after_quad.axis_y, before_quad.axis_y);
-                    assert_eq!(after_quad.uv_min, before_quad.uv_min);
-                    assert_eq!(after_quad.uv_max, before_quad.uv_max);
+                    assert_ne!(after_quad, before_quad);
                     assert!((after_quad.color[3] - before_quad.color[3] * 0.25).abs() < 1e-6);
+                }
+                for (after_quad, fresh_quad) in after[start..end].iter().zip(&fresh[start..end]) {
+                    assert_eq!(after_quad.origin, fresh_quad.origin);
+                    assert_eq!(after_quad.axis_x, fresh_quad.axis_x);
+                    assert_eq!(after_quad.axis_y, fresh_quad.axis_y);
+                    assert_eq!(after_quad.color, fresh_quad.color);
                 }
             }
         }
+        assert!(preparer.raster_stats().misses > misses_before);
         assert_eq!(preparer.incremental_stats().rebuild_attempts, 1);
         assert_eq!(preparer.incremental_stats().object_update_frames, 1);
         assert_eq!(preparer.incremental_stats().objects_updated, 1);
         assert_eq!(preparer.incremental_stats().fallback_rebuilds, 0);
+        assert_eq!(preparer.incremental_stats().phase_fallbacks, 0);
+    }
+
+    #[test]
+    fn phase_churn_at_atlas_limit_keeps_live_unrelated_quads_valid() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let mut texts = TextResourceArena::new();
+        let handle = texts.insert(artifact.resource).unwrap();
+        let mut frame = two_text_frame(handle);
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedTextQuadPreparer::new(48).unwrap();
+        let (baseline, baseline_pages) = {
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::all(),
+                    &texts,
+                    &artifact.fonts,
+                    metrics(),
+                )
+                .unwrap();
+            let pages = prepared
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    PreparedTextItem::GlyphBatch {
+                        object_index: 1,
+                        page,
+                        ..
+                    } => Some(*page),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            (prepared.mask_quads[0], pages)
+        };
+
+        let mut crossed_page = false;
+        for step in 1..=32 {
+            frame.objects[1].transform.translation =
+                Vec2::new(step as f32 / (67.5 * 8.0), (step % 7) as f32 / (67.5 * 8.0));
+            let prepared = preparer
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &frame,
+                    &FrameChanges::objects(vec![1]),
+                    &texts,
+                    &artifact.fonts,
+                    metrics(),
+                )
+                .unwrap();
+            assert_eq!(prepared.mask_quads[0], baseline);
+            let pages = prepared
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    PreparedTextItem::GlyphBatch {
+                        object_index: 1,
+                        page,
+                        ..
+                    } => Some(*page),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(pages.len(), baseline_pages.len());
+            crossed_page |= pages != baseline_pages;
+        }
+
+        assert_eq!(preparer.incremental_stats().rebuild_attempts, 1);
+        assert_eq!(preparer.incremental_stats().fallback_rebuilds, 0);
+        assert!(preparer.incremental_stats().phase_fallbacks > 0);
+        assert!(
+            crossed_page,
+            "phase churn must exercise local page rebinding"
+        );
+        assert_eq!(preparer.atlas().page_count(GlyphAtlasPlane::Mask), 2);
+        assert!(preparer.raster_stats().entries <= DEFAULT_GLYPH_RASTER_CACHE_MAX_ENTRIES);
+    }
+
+    #[test]
+    fn final_glyph_geometry_is_independent_of_translation_sample_cadence() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let mut texts = TextResourceArena::new();
+        let handle = texts.insert(artifact.resource).unwrap();
+        let initial = retained_frame(handle, true, scene_transform());
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut sparse = RetainedTextQuadPreparer::new(256).unwrap();
+        let mut dense = RetainedTextQuadPreparer::new(256).unwrap();
+
+        sparse
+            .prepare(
+                &device,
+                &queue,
+                &initial,
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap();
+        dense
+            .prepare(
+                &device,
+                &queue,
+                &initial,
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap();
+
+        let mut final_frame = initial.clone();
+        for step in 1..=67 {
+            final_frame.objects[0].transform.translation =
+                Vec2::new(step as f32 / (67.5 * 64.0), 0.0);
+            dense
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &final_frame,
+                    &FrameChanges::objects(vec![0]),
+                    &texts,
+                    &artifact.fonts,
+                    metrics(),
+                )
+                .unwrap();
+        }
+        let dense_quads = dense.prepared_frame(final_frame.time).mask_quads.to_vec();
+        let sparse_quads = sparse
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &final_frame,
+                &FrameChanges::objects(vec![0]),
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap()
+            .mask_quads
+            .to_vec();
+
+        assert_eq!(dense_quads.len(), sparse_quads.len());
+        for (dense, sparse) in dense_quads.iter().zip(&sparse_quads) {
+            assert_eq!(dense.origin, sparse.origin);
+            assert_eq!(dense.axis_x, sparse.axis_x);
+            assert_eq!(dense.axis_y, sparse.axis_y);
+        }
+    }
+
+    #[test]
+    fn affine_rebuilds_can_place_identical_final_glyphs_at_different_atlas_uvs() {
+        let artifact = compile_typst_resource("side label", TypstMode::Markup).unwrap();
+        let mut texts = TextResourceArena::new();
+        let handle = texts.insert(artifact.resource).unwrap();
+        let initial = retained_frame(handle, true, scene_transform());
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut sparse = RetainedTextQuadPreparer::new(2048).unwrap();
+        let mut dense = RetainedTextQuadPreparer::new(2048).unwrap();
+        sparse
+            .prepare(
+                &device,
+                &queue,
+                &initial,
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap();
+        dense
+            .prepare(
+                &device,
+                &queue,
+                &initial,
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap();
+
+        let mut final_frame = initial.clone();
+        for step in 1..=24 {
+            let progress = step as f32 / 24.0;
+            final_frame.objects[0].transform.translation =
+                Vec2::new(-0.75 + 1.5 * progress, 0.3 * progress);
+            final_frame.objects[0].transform.scale = Vec2::new(
+                0.07 * (0.9 + 0.16 * progress),
+                0.07 * (0.9 + 0.16 * progress),
+            );
+            final_frame.objects[0].transform.rotation = 0.35 * progress;
+            dense
+                .prepare_with_changes(
+                    &device,
+                    &queue,
+                    &final_frame,
+                    &FrameChanges::objects(vec![0]),
+                    &texts,
+                    &artifact.fonts,
+                    metrics(),
+                )
+                .unwrap();
+        }
+        let dense_quads = dense.prepared_frame(final_frame.time).mask_quads.to_vec();
+        let sparse_quads = sparse
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &final_frame,
+                &FrameChanges::objects(vec![0]),
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap()
+            .mask_quads
+            .to_vec();
+
+        assert_eq!(dense_quads.len(), sparse_quads.len());
+        assert!(dense_quads
+            .iter()
+            .zip(&sparse_quads)
+            .any(|(dense, sparse)| {
+                dense.uv_min != sparse.uv_min || dense.uv_max != sparse.uv_max
+            }));
+        for (dense, sparse) in dense_quads.iter().zip(&sparse_quads) {
+            assert_eq!(dense.origin, sparse.origin);
+            assert_eq!(dense.axis_x, sparse.axis_x);
+            assert_eq!(dense.axis_y, sparse.axis_y);
+            assert_eq!(dense.color, sparse.color);
+        }
     }
 
     #[test]
@@ -1476,6 +2054,74 @@ mod tests {
 
         assert_eq!(preparer.incremental_stats().rebuild_attempts, 2);
         assert_eq!(preparer.incremental_stats().reused_frames, 0);
+    }
+
+    #[test]
+    fn camera_device_origin_change_invalidates_unchanged_frame_reuse() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let mut texts = TextResourceArena::new();
+        let handle = texts.insert(artifact.resource).unwrap();
+        let frame = retained_frame(handle, true, scene_transform());
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
+        preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::all(),
+                &texts,
+                &artifact.fonts,
+                metrics(),
+            )
+            .unwrap();
+        let shifted = metrics()
+            .with_world_origin_pixels(Vec2::new(0.25, 0.5))
+            .unwrap();
+        preparer
+            .prepare_with_changes(
+                &device,
+                &queue,
+                &frame,
+                &FrameChanges::default(),
+                &texts,
+                &artifact.fonts,
+                shifted,
+            )
+            .unwrap();
+        assert_eq!(preparer.incremental_stats().rebuild_attempts, 2);
+        assert_eq!(preparer.incremental_stats().reused_frames, 0);
+    }
+
+    #[test]
+    fn reflected_glyph_transform_conservatively_uses_zero_phase() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let run = artifact.resource.runs.first().unwrap();
+        let glyph = run.glyphs.first().unwrap();
+        let metrics = metrics()
+            .with_world_origin_pixels(Vec2::new(0.375, 0.625))
+            .unwrap();
+        let reflected = Transform2D {
+            scale: Vec2::new(-0.05, 0.05),
+            ..Transform2D::IDENTITY
+        };
+        assert_eq!(
+            glyph_raster_phase(run, glyph.origin, reflected, metrics, 1.0),
+            GlyphRasterPhase::ZERO
+        );
+    }
+
+    #[test]
+    fn phase_compensation_applies_only_to_outline_masks() {
+        let phase = GlyphRasterPhase::new(3, 5).unwrap();
+        assert_eq!(
+            raster_phase_offset_for_format(GlyphRasterFormat::Alpha8, phase),
+            (3.0 / 8.0, 5.0 / 8.0)
+        );
+        assert_eq!(
+            raster_phase_offset_for_format(GlyphRasterFormat::Rgba8, phase),
+            (0.0, 0.0)
+        );
     }
 
     #[test]

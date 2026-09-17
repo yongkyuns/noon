@@ -812,6 +812,7 @@ _PUBLIC_EXPORTS = {
     "DEFAULT_DOT_RADIUS": "_manim_geometry",
     "PURE_YELLOW": "_manim_geometry",
     "Text": "_manim_typst",
+    "MarkupText": "_manim_typst",
     "Typst": "_manim_typst",
     "MathTypst": "_manim_typst",
 }

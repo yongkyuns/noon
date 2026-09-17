@@ -2063,6 +2063,7 @@ impl RetainedFramePreparer {
             copy_local_text_snapshot_updates(
                 &mut self.snapshot_mask_quads,
                 &mut self.snapshot_color_quads,
+                &mut self.snapshot_text_items,
                 &self.text_item_ranges,
                 prepared_text.items,
                 prepared_text.mask_quads,
@@ -2573,22 +2574,7 @@ impl RetainedFramePreparer {
             .get(vector.geometry)
             .ok_or(RetainedPrepareError::MissingGeometryResource)?;
         let path = transform_path(path, vector.transform, Vec2::ZERO);
-        let has_stroke = vector.style.stroke_width > 0.0;
-        let style = Style {
-            fill: if vector.style.fill.is_some() || !has_stroke {
-                vector.style.fill.or(object_style.fill)
-            } else {
-                None
-            },
-            stroke: has_stroke
-                .then(|| vector.style.stroke.or(object_style.fill))
-                .flatten(),
-            stroke_width: vector.style.stroke_width,
-            stroke_width_mode: StrokeWidthMode::ScaleWithObject,
-            stroke_join: object_style.stroke_join,
-            stroke_cap: object_style.stroke_cap,
-            opacity: object_style.opacity,
-        };
+        let style = resolved_text_vector_style(object_style, vector);
         self.push_geometry(
             object_id,
             GeometryRef::VectorPath(path),
@@ -2677,6 +2663,25 @@ impl RetainedFramePreparer {
     }
 }
 
+fn resolved_text_vector_style(object_style: Style, vector: &TextVectorItem) -> Style {
+    let has_stroke = vector.style.stroke_width > 0.0;
+    Style {
+        fill: if vector.style.fill.is_some() || !has_stroke {
+            vector.style.fill.or(object_style.fill)
+        } else {
+            None
+        },
+        stroke: has_stroke
+            .then(|| vector.style.stroke.or(object_style.fill))
+            .flatten(),
+        stroke_width: vector.style.stroke_width,
+        stroke_width_mode: StrokeWidthMode::ScaleWithObject,
+        stroke_join: vector.style.stroke_join,
+        stroke_cap: vector.style.stroke_cap,
+        opacity: object_style.opacity,
+    }
+}
+
 fn publication_is_stale(received: PublicationContext, applied: PublicationContext) -> bool {
     received.frame_epoch().get() < applied.frame_epoch().get()
         || (received.frame_epoch() == applied.frame_epoch() && received != applied)
@@ -2732,6 +2737,7 @@ fn text_item_ranges(
 fn copy_local_text_snapshot_updates(
     mask_destination: &mut [GlyphQuadInstance],
     color_destination: &mut [GlyphQuadInstance],
+    item_destination: &mut [PreparedTextItem],
     item_ranges: &[std::ops::Range<usize>],
     items: &[PreparedTextItem],
     mask_source: &[GlyphQuadInstance],
@@ -2746,7 +2752,8 @@ fn copy_local_text_snapshot_updates(
         let Some(item_range) = item_ranges.get(object_index) else {
             continue;
         };
-        for item in &items[item_range.clone()] {
+        for item_index in item_range.clone() {
+            let item = &items[item_index];
             let PreparedTextItem::GlyphBatch {
                 plane,
                 instance_range,
@@ -2755,6 +2762,7 @@ fn copy_local_text_snapshot_updates(
             else {
                 continue;
             };
+            item_destination[item_index] = item.clone();
             let start = instance_range.start as usize;
             let end = instance_range.end as usize;
             match plane {
@@ -3654,6 +3662,106 @@ mod tests {
     use noon_runtime::{FrameObjectState, SceneInstance};
 
     use super::*;
+
+    #[test]
+    fn retained_text_vector_uses_backend_cap_and_join() {
+        let mut geometries = GeometryResourceArena::new();
+        let geometry = geometries.insert_path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1.0, 0.0)),
+        );
+        let vector = TextVectorItem {
+            geometry,
+            transform: TextAffineTransform::IDENTITY,
+            style: TextVectorStyle {
+                fill: None,
+                stroke: None,
+                stroke_width: 0.48,
+                stroke_cap: StrokeCap::Butt,
+                stroke_join: StrokeJoin::Miter,
+            },
+            source_span: None,
+            semantic_key: None,
+        };
+        let inherited = Style {
+            fill: Some(Color::WHITE),
+            stroke_cap: StrokeCap::Round,
+            stroke_join: StrokeJoin::Bevel,
+            ..Style::default()
+        };
+
+        let resolved = resolved_text_vector_style(inherited, &vector);
+        assert_eq!(resolved.stroke_cap, StrokeCap::Butt);
+        assert_eq!(resolved.stroke_join, StrokeJoin::Miter);
+        assert_eq!(resolved.stroke_width, 0.48);
+        assert_eq!(resolved.stroke, Some(Color::WHITE));
+    }
+
+    #[test]
+    fn local_text_snapshot_copies_changed_atlas_page_binding() {
+        let mut destination_items = vec![PreparedTextItem::GlyphBatch {
+            object_index: 0,
+            text: noon_core::TextResourceHandle {
+                arena: 0,
+                id: noon_core::TextResourceId::new(0),
+                version: 0,
+            },
+            run_index: 0,
+            plane: GlyphAtlasPlane::Mask,
+            page: 0,
+            instance_range: 0..1,
+        }];
+        let source_items = vec![PreparedTextItem::GlyphBatch {
+            object_index: 0,
+            text: noon_core::TextResourceHandle {
+                arena: 0,
+                id: noon_core::TextResourceId::new(0),
+                version: 0,
+            },
+            run_index: 0,
+            plane: GlyphAtlasPlane::Mask,
+            page: 1,
+            instance_range: 0..1,
+        }];
+        let source_quad = GlyphQuadInstance {
+            origin: [1.0, 2.0],
+            axis_x: [3.0, 0.0],
+            axis_y: [0.0, 4.0],
+            uv_min: [0.25, 0.5],
+            uv_max: [0.5, 0.75],
+            color: [1.0; 4],
+        };
+        let mut destination_quads = vec![GlyphQuadInstance {
+            origin: [0.0; 2],
+            axis_x: [0.0; 2],
+            axis_y: [0.0; 2],
+            uv_min: [0.0; 2],
+            uv_max: [0.0; 2],
+            color: [0.0; 4],
+        }];
+        let mut dirty_mask = Vec::new();
+        let mut dirty_color = Vec::new();
+        let item_ranges = std::iter::once(0..1).collect::<Vec<_>>();
+        copy_local_text_snapshot_updates(
+            &mut destination_quads,
+            &mut [],
+            &mut destination_items,
+            &item_ranges,
+            &source_items,
+            &[source_quad],
+            &[],
+            &FrameChanges::objects(vec![0]),
+            &mut dirty_mask,
+            &mut dirty_color,
+        );
+
+        assert_eq!(destination_items, source_items);
+        assert_eq!(destination_quads, [source_quad]);
+        assert_eq!(dirty_mask.len(), 1);
+        assert_eq!(dirty_mask[0], 0..1);
+        assert!(dirty_color.is_empty());
+    }
 
     #[test]
     fn retained_upload_totals_include_pixels_and_instances_from_every_domain() {

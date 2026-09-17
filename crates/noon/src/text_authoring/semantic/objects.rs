@@ -4,6 +4,7 @@ use super::TextAuthoringError;
 use super::{MathTypst, Typst};
 #[cfg(feature = "native-text")]
 use super::{Text, NATIVE_POINT_TO_SCENE_SCALE};
+#[cfg(feature = "typst")]
 use noon_core::GeometryResourceArena;
 #[cfg(feature = "native-text")]
 use noon_core::Vec2;
@@ -11,25 +12,57 @@ use noon_core::Vec2;
 use noon_typst::TypstMode;
 
 #[cfg(feature = "native-text")]
-pub(crate) fn native_text_state(
-    store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
-    text: Text,
-) -> Result<noon_core::SemanticObjectState, TextAuthoringError> {
+pub(crate) struct NativeTextAdmission {
+    resource: noon_core::TextResource,
+    fonts: noon_core::FontResourceArena,
+    transform: noon_core::SemanticTransform2_5D,
+    style: noon_core::SemanticStyle,
+}
+
+#[cfg(feature = "native-text")]
+impl NativeTextAdmission {
+    pub(crate) fn publish<T>(
+        self,
+        store: &mut noon_core::SemanticStore,
+        publish: impl FnOnce(
+            &mut noon_core::SemanticStore,
+            noon_core::SemanticMutationTransaction,
+        ) -> Result<T, TextAuthoringError>,
+    ) -> Result<T, TextAuthoringError> {
+        let Self {
+            resource,
+            fonts,
+            transform,
+            style,
+        } = self;
+        store.publish_glyph_detached_text(
+            resource,
+            fonts,
+            move |handle| semantic_text_state(handle, transform, style),
+            publish,
+        )
+    }
+}
+
+#[cfg(feature = "native-text")]
+pub(crate) fn prepare_native_text(text: Text) -> Result<NativeTextAdmission, TextAuthoringError> {
     let mut transform = text.presentation.transform;
     transform.scale = transform.scale.component_mul(Vec2::new(
         NATIVE_POINT_TO_SCENE_SCALE,
         NATIVE_POINT_TO_SCENE_SCALE,
     ));
     let artifact = text.compile_artifact_with_fill(None)?;
-    text_artifact_state(
-        store,
+    let (transform, style) = text_artifact_presentation(
         transform,
         text.presentation.color,
         text.presentation.opacity,
-        artifact.resource,
-        artifact.fonts,
-        GeometryResourceArena::new(),
-    )
+    )?;
+    Ok(NativeTextAdmission {
+        resource: artifact.resource,
+        fonts: artifact.fonts,
+        transform,
+        style,
+    })
 }
 
 #[cfg(feature = "typst")]
@@ -76,8 +109,19 @@ impl crate::Mobject {
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
         text: impl Into<Text>,
     ) -> Result<crate::Mobject, TextAuthoringError> {
-        let state = native_text_state(&store, text.into())?;
-        crate::Mobject::new(store, state).map_err(TextAuthoringError::Semantic)
+        let admission = prepare_native_text(text.into())?;
+        let result = {
+            let mut store_ref = store.borrow_mut();
+            admission.publish(&mut store_ref, |store, transaction| {
+                transaction
+                    .apply(store)
+                    .map_err(|error| TextAuthoringError::Semantic(error.into()))
+            })
+        }?;
+        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one detached native text admission creates one semantic node")
+        };
+        crate::Mobject::from_node(store, *node).map_err(TextAuthoringError::Semantic)
     }
 
     /// Compile Typst into the shared retained text resource and return its ordinary semantic handle.
@@ -123,6 +167,7 @@ fn typst_spec_state(
     )
 }
 
+#[cfg(feature = "typst")]
 fn text_artifact_state(
     store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     transform: noon_core::Transform2D,
@@ -132,6 +177,19 @@ fn text_artifact_state(
     fonts: noon_core::FontResourceArena,
     geometries: GeometryResourceArena,
 ) -> Result<noon_core::SemanticObjectState, TextAuthoringError> {
+    let (transform, style) = text_artifact_presentation(transform, color, opacity)?;
+    let handle = store
+        .borrow_mut()
+        .import_text_resource(resource, &fonts, &geometries)
+        .map_err(TextAuthoringError::Import)?;
+    Ok(semantic_text_state(handle, transform, style))
+}
+
+fn text_artifact_presentation(
+    transform: noon_core::Transform2D,
+    color: noon_core::Color,
+    opacity: f32,
+) -> Result<(noon_core::SemanticTransform2_5D, noon_core::SemanticStyle), TextAuthoringError> {
     let semantic_transform = noon_core::SemanticTransform2_5D {
         translation: noon_core::SemanticVec3::new(
             transform.translation.x as f64,
@@ -166,14 +224,18 @@ fn text_artifact_state(
             crate::AuthoringError::NonFiniteStyle,
         ));
     }
-    let handle = store
-        .borrow_mut()
-        .import_text_resource(resource, &fonts, &geometries)
-        .map_err(TextAuthoringError::Import)?;
+    Ok((semantic_transform, style))
+}
+
+fn semantic_text_state(
+    handle: noon_core::TextResourceHandle,
+    transform: noon_core::SemanticTransform2_5D,
+    style: noon_core::SemanticStyle,
+) -> noon_core::SemanticObjectState {
     let mut state = noon_core::SemanticObjectState::new(handle);
-    state.transform = semantic_transform;
+    state.transform = transform;
     state.style = style;
-    Ok(state)
+    state
 }
 
 #[cfg(all(

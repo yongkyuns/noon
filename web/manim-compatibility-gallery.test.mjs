@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 19);
+assert.equal(gallery.examples.length, 20);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -36,6 +36,7 @@ assert.deepEqual(
     "noon-transform-matching-shapes-breadth",
     "noon-coordinate-plotting",
     "noon-raster-image",
+    "noon-markup-text",
   ],
 );
 
@@ -75,6 +76,16 @@ for (const entry of readyEntries) {
       pattern,
       `${entry.id}: Manim-compatible source must not depend on Noon-only helper ${pattern}`,
     );
+  }
+
+  if (entry.id === "noon-markup-text") {
+    assert.match(source, /MarkupText\(/, "MarkupText gallery example must construct MarkupText");
+    assert.match(source, /<b>/, "MarkupText gallery example must exercise bold markup");
+    assert.match(source, /<i>/, "MarkupText gallery example must exercise italic markup");
+    assert.match(source, /<tt>/, "MarkupText gallery example must exercise monospace markup");
+    assert.match(source, /<span foreground=/, "MarkupText gallery example must exercise foreground spans");
+    assert.match(source, /\\n/, "MarkupText gallery example must exercise multiline text");
+    assert.match(source, /DejaVu Sans Mono/, "MarkupText gallery example must pin its font");
   }
 
   if (entry.id === "compatible-text-write") {

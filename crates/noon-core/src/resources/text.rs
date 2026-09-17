@@ -42,7 +42,9 @@ pub struct TextResourceHandle {
     pub version: u64,
 }
 
-/// UTF-8 byte range in the original authoring source.
+/// UTF-8 byte range in [`TextResource::source`].
+/// Native markup uses decoded text without tags; backends that retain their
+/// source language (such as Typst) use that backend's original source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TextSourceSpan {
     pub start: u32,
@@ -254,6 +256,10 @@ pub struct TextVectorStyle {
     pub fill: Option<Color>,
     pub stroke: Option<Color>,
     pub stroke_width: f32,
+    /// Exact cap requested by the layout backend for stroked decorations.
+    pub stroke_cap: StrokeCap,
+    /// Exact join requested by the layout backend for stroked decorations.
+    pub stroke_join: StrokeJoin,
 }
 
 impl Default for TextVectorStyle {
@@ -262,6 +268,8 @@ impl Default for TextVectorStyle {
             fill: None,
             stroke: None,
             stroke_width: 0.0,
+            stroke_cap: StrokeCap::Butt,
+            stroke_join: StrokeJoin::Miter,
         }
     }
 }
@@ -305,6 +313,8 @@ pub struct TextPart {
 /// Immutable renderer-independent shaped text/math payload.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextResource {
+    /// Canonical source used by every cluster and part range. For native markup
+    /// this is decoded UTF-8 text, not the wrapper's original markup string.
     pub source: Arc<str>,
     pub kind: TextSourceKind,
     pub runs: Arc<[GlyphRun]>,

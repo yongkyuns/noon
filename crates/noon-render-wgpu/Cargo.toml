@@ -32,5 +32,6 @@ swash = "=0.2.10"
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl"] }
 
 [dev-dependencies]
+pollster = "=1.0.1"
 noon-compile = { path = "../noon-compile" }
 noon-typst = { path = "../noon-typst" }

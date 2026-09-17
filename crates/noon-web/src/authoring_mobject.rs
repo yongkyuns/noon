@@ -109,12 +109,42 @@ pub(crate) fn manim_text(
     font_size: f64,
     line_spacing: f64,
 ) -> Result<noon::Text, crate::authoring_error::AuthoringFailure> {
+    configure_native_text(
+        noon::Text::new(source),
+        font_family,
+        font_size,
+        line_spacing,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn manim_markup_text(
+    source: &str,
+    font_family: &str,
+    font_size: f64,
+    line_spacing: f64,
+) -> Result<noon::Text, crate::authoring_error::AuthoringFailure> {
+    configure_native_text(
+        noon::MarkupText::new(source).into(),
+        font_family,
+        font_size,
+        line_spacing,
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn configure_native_text(
+    text: noon::Text,
+    font_family: &str,
+    font_size: f64,
+    line_spacing: f64,
+) -> Result<noon::Text, crate::authoring_error::AuthoringFailure> {
     let font_size = text_authoring_f32("font size", font_size)?;
     let line_spacing = text_authoring_f32("line spacing", line_spacing)?;
     if line_spacing != -1.0 && line_spacing <= -1.0 {
         return Err("line spacing must be -1 or greater than -1".into());
     }
-    Ok(noon::Text::new(source)
+    Ok(text
         .with_font(font_family)
         .with_font_size(font_size)
         .with_line_spacing(line_spacing))
@@ -231,6 +261,21 @@ mod wasm {
             line_spacing: f64,
         ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
             let text = super::manim_text(source, font_family, font_size, line_spacing)
+                .map_err(js_error)?;
+            Mobject::from_text(Rc::clone(&self.semantics), text)
+                .map(|handle| WasmAuthoringMobjectHandle { handle })
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = createManimMarkupText)]
+        pub fn create_manim_markup_text(
+            &self,
+            source: &str,
+            font_family: &str,
+            font_size: f64,
+            line_spacing: f64,
+        ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
+            let text = super::manim_markup_text(source, font_family, font_size, line_spacing)
                 .map_err(js_error)?;
             Mobject::from_text(Rc::clone(&self.semantics), text)
                 .map(|handle| WasmAuthoringMobjectHandle { handle })

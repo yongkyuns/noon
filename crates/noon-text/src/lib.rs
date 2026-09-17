@@ -6,5 +6,6 @@
 //! retained renderer. Both use the same Swash dependency boundary. This provider
 //! owns no semantic scene, runtime, platform lifecycle or GPU state.
 
+pub mod markup;
 pub mod raster;
 pub mod shaping;

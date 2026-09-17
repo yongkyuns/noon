@@ -28,7 +28,7 @@ pub(crate) mod incremental_render;
 /// shaped text, vector-decoration geometry, and exact OpenType buffers once when a
 /// retained scene is installed. Python never owns or serializes these payloads.
 pub const RETAINED_RESOURCE_TRANSPORT_CHANNEL: &str = "noon.execution.retained.resources";
-pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 5;
+pub const RETAINED_RESOURCE_TRANSPORT_VERSION: u32 = 6;
 
 /// Immutable compiled render geometry at the genuine cross-worker boundary.
 /// Indices are scoped to the player session and this installed resource bundle.
@@ -1410,6 +1410,8 @@ struct TransportTextVectorStyle {
     fill: Option<Color>,
     stroke: Option<Color>,
     stroke_width: f32,
+    stroke_cap: StrokeCap,
+    stroke_join: StrokeJoin,
 }
 
 impl From<TextVectorStyle> for TransportTextVectorStyle {
@@ -1418,6 +1420,8 @@ impl From<TextVectorStyle> for TransportTextVectorStyle {
             fill: value.fill,
             stroke: value.stroke,
             stroke_width: value.stroke_width,
+            stroke_cap: value.stroke_cap,
+            stroke_join: value.stroke_join,
         }
     }
 }
@@ -1428,6 +1432,8 @@ impl From<TransportTextVectorStyle> for TextVectorStyle {
             fill: value.fill,
             stroke: value.stroke,
             stroke_width: value.stroke_width,
+            stroke_cap: value.stroke_cap,
+            stroke_join: value.stroke_join,
         }
     }
 }
@@ -1594,6 +1600,11 @@ mod tests {
         scene
             .add_math_typst(MathTypst::new("frac(x, 2)").with_font_size(72.0))
             .unwrap();
+        scene
+            .add_typst(Typst::new(
+                "#line(length: 20pt, stroke: (paint: red, thickness: 2pt, cap: \"round\", join: \"bevel\"))",
+            ))
+            .unwrap();
 
         let original_handles = text_handles(&scene);
         let bundle = RetainedResourceBundle::capture(
@@ -1603,7 +1614,7 @@ mod tests {
             scene.fonts(),
         )
         .unwrap();
-        assert_eq!(bundle.text_count(), 2);
+        assert_eq!(bundle.text_count(), 3);
         assert!(bundle.geometry_count() >= 1);
         assert!(bundle.font_count() >= 1);
         assert!(bundle.font_bytes() > 0);
@@ -1618,6 +1629,11 @@ mod tests {
             assert_ne!(original.arena, local.arena);
             assert!(installed.texts().get(original).is_none());
             let resource = installed.texts().get(local).unwrap();
+            let original_resource = scene.texts().get(original).unwrap();
+            assert_eq!(
+                resource.vector_items.len(),
+                original_resource.vector_items.len()
+            );
             assert!(matches!(
                 resource.kind,
                 TextSourceKind::Typst | TextSourceKind::MathTypst
@@ -1625,8 +1641,13 @@ mod tests {
             for run in resource.runs.iter() {
                 assert!(installed.fonts().get_for_face(&run.font).is_some());
             }
-            for vector in resource.vector_items.iter() {
+            for (vector, original_vector) in resource
+                .vector_items
+                .iter()
+                .zip(original_resource.vector_items.iter())
+            {
                 assert!(installed.geometries().get(vector.geometry).is_some());
+                assert_eq!(vector.style, original_vector.style);
             }
         }
     }

@@ -879,7 +879,14 @@ impl NativeGpu {
     }
 
     fn text_metrics(&self, camera: Camera2DState) -> Result<TextDeviceMetrics, NativeHostError> {
-        TextDeviceMetrics::uniform(self.config.height as f32 / camera.height)
+        let pixels_per_world = self.config.height as f32 / camera.height;
+        TextDeviceMetrics::uniform(pixels_per_world)
+            .and_then(|metrics| {
+                metrics.with_world_origin_pixels(Vec2::new(
+                    self.config.width as f32 * 0.5 - camera.center.x * pixels_per_world,
+                    self.config.height as f32 * 0.5 + camera.center.y * pixels_per_world,
+                ))
+            })
             .map_err(|error| NativeHostError::Gpu(error.to_string()))
     }
 
