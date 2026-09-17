@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 15);
+assert.equal(gallery.examples.length, 16);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -32,6 +32,7 @@ assert.deepEqual(
     "compatible-arrow-vector-field-static",
     "compatible-svg-tiger-morph",
     "noon-trigonometry-tutorial",
+    "noon-coordinate-plotting",
   ],
 );
 
@@ -169,5 +170,15 @@ assert.doesNotMatch(tigerSource, /for index, leaf in enumerate/, "tiger demo mus
 assert.doesNotMatch(tigerSource, /<(?:rect|circle|ellipse|polygon|polyline)\b/, "unrelated target must stay within qualified plain SVG path topology");
 assert.match(tigerSource, /1e63b4a40ccb484f82e1d85b83df97ab95bcfbe7\/assets\/Ghostscript_Tiger\.svg/);
 assert.doesNotMatch(tigerSource, /SVGMobject\.from_string/, "demo should exercise ordinary file-backed SVGMobject authoring");
+
+const plottingEntry = readyEntries.find((entry) => entry.id === "noon-coordinate-plotting");
+assert.ok(plottingEntry, "coordinate plotting must be a ready compatibility example");
+assert.equal(plottingEntry.parity_status, "candidate");
+assert.equal(plottingEntry.category, "manim-compatible/plotting");
+const plottingSource = await readFile(new URL(`./${plottingEntry.path}`, import.meta.url), "utf8");
+assert.match(plottingSource, /Axes\(/, "coordinate plotting gallery example must construct Axes");
+assert.match(plottingSource, /\.plot\(/, "coordinate plotting gallery example must plot a function");
+assert.match(plottingSource, /\.plot_samples\(/, "coordinate plotting gallery example must plot samples");
+assert.match(plottingSource, /Time \(s\)/, "coordinate plotting gallery example must include its label");
 
 console.log("✓ Noon-authored Manim-compatible gallery examples");
