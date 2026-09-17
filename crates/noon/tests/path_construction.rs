@@ -3,7 +3,7 @@ use noon_core::{PathCommand, Vec2, VectorPath};
 
 #[test]
 fn unfinished_anchors_and_discontinuous_curves_have_distinct_endpoints_and_length() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut object = scene
         .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
         .unwrap();
@@ -121,7 +121,7 @@ fn extending_a_closed_contour_keeps_its_closing_edge_and_earlier_subpaths() {
         })
     );
     assert_eq!(open.endpoints(), Some((Vec2::ZERO, Vec2::new(2., 0.))));
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut object = scene
         .geometry(ManimGeometryOptions::path(open.close()).unwrap())
         .unwrap();

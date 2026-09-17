@@ -74,7 +74,7 @@ fn partial_uses_curve_count_and_preserves_destination_identity_and_style() {
 
 #[test]
 fn partial_alias_empty_source_and_invalid_interval_are_atomic() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut object = scene.line((0., 0.), (4., 0.)).unwrap();
     let alias = object.clone();
     object.pointwise_become_partial(&alias, 0.25, 0.75).unwrap();
@@ -119,7 +119,7 @@ fn partial_alias_empty_source_and_invalid_interval_are_atomic() {
 
 #[test]
 fn authored_boundary_curves_survive_subsequent_selection() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let source = scene
         .geometry(
             ManimGeometryOptions::path(

@@ -2,7 +2,7 @@ use noon::{BooleanOperation as Op, ManimGeometryOptions, Scene};
 
 #[test]
 fn constructor_is_inert_uses_world_geometry_and_leaves_operands_unchanged() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut a = scene.square(2.).unwrap();
     let mut b = scene.square(2.).unwrap();
     a.shift(-1., 2.).unwrap();

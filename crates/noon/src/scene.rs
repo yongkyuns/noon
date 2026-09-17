@@ -10,6 +10,25 @@ use noon_core::{
 };
 use std::{cell::RefCell, rc::Rc};
 
+fn publish_geometry_options(
+    options: crate::ManimGeometryOptions,
+    store: &mut SemanticStore,
+    publish: impl FnOnce(
+        &mut SemanticStore,
+        SemanticMutationTransaction,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
+) -> Result<SemanticNodeId, AuthoringError> {
+    options.with_state(store, |store, state| {
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_node(SemanticNodeCreation::object(state));
+        let result = publish(store, transaction)?;
+        let [SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one detached geometry creation has one exact semantic impact")
+        };
+        Ok(*node)
+    })
+}
+
 /// A scene owns its shared semantic store/root and, after bootstrap, the one
 /// execution component lowered from them. The optional execution slot is control
 /// ownership only; Runtime state remains owned by the contained [`ExecutionSession`].
@@ -64,13 +83,38 @@ impl Scene {
         self.store.borrow().scene_revision()
     }
 
-    /// Construct detached geometry through the shared authoring implementation.
-    /// Use `LiveSession::create_manim_geometry` after initial lowering instead.
+    /// Construct one detached Manim geometry object through the Scene-owned
+    /// semantic publication path. The operation is valid before and after
+    /// execution bootstrap; membership remains an explicit later operation.
     pub fn geometry(
-        &self,
+        &mut self,
         options: crate::ManimGeometryOptions,
     ) -> Result<Mobject, crate::AuthoringError> {
-        Mobject::from_manim_geometry(Rc::clone(&self.store), options)
+        let root = self.root;
+        let store_rc = Rc::clone(&self.store);
+        let node = match self.execution.as_mut() {
+            Some(execution) => {
+                {
+                    let store = store_rc.borrow();
+                    execution
+                        .require_resource_creation_at_root(&store, root)
+                        .map_err(AuthoringError::from)?;
+                }
+                let mut store = store_rc.borrow_mut();
+                publish_geometry_options(options, &mut store, |store, transaction| {
+                    execution
+                        .apply_semantic_transaction_at_root(store, root, transaction)
+                        .map_err(AuthoringError::from)
+                })?
+            }
+            None => {
+                let mut store = store_rc.borrow_mut();
+                publish_geometry_options(options, &mut store, |store, transaction| {
+                    transaction.apply(store).map_err(AuthoringError::from)
+                })?
+            }
+        };
+        Mobject::from_node(store_rc, node)
     }
 
     /// Construct one detached Arrow-family object through the shared Rust
@@ -563,5 +607,7 @@ impl Scene {
         LiveSession::new(&self.store, self.root, session)
     }
 }
+#[cfg(test)]
+mod geometry_atomicity_tests;
 #[cfg(test)]
 mod tests;

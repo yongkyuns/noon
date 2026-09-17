@@ -57,7 +57,7 @@ mod tests {
 
     #[test]
     fn tangent_line_uses_clamped_path_samples_and_requested_length() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let circle = scene.circle(2.0).unwrap();
         let query = circle.path_query().unwrap();
         let sample_a = query.point_from_proportion(0.0).unwrap();
@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn tangent_line_does_not_mutate_its_source() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let circle = scene.circle(2.0).unwrap();
         let before = circle.state().unwrap();
         let revision = scene.revision();
