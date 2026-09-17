@@ -19,6 +19,8 @@ const artifactDir = path.resolve(
 );
 const label = process.env.NOON_PRODUCT_LABEL ?? "candidate";
 const exampleId = process.env.NOON_PRODUCT_EXAMPLE ?? "parity-square-and-circle";
+const PRODUCT_FIRST_PASS_SECONDS = 3;
+const MIN_PRODUCT_MEASUREMENT_MS = 1_000;
 
 await mkdir(artifactDir, { recursive: true });
 
@@ -80,10 +82,27 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
   const sampleFrames = (async () => {
     while (sampling) {
       const sample = await page.evaluate(async () => {
-        const report = await window.__noonExampleGallery?.executionMetrics?.();
+        const gallery = window.__noonExampleGallery;
+        const probe = window.__noonProductRenderProbe;
+        // Issue the existing aggregate metrics request without awaiting its
+        // source-continuation half. The passive Worker observer records the
+        // matching render reply, which is the real presentation counter.
+        if (
+          !probe.pending &&
+          gallery?.executionMode !== null &&
+          typeof gallery?.executionMetrics === "function"
+        ) {
+          probe.pending = true;
+          void gallery.executionMetrics().catch(() => {
+            probe.pending = false;
+          });
+        }
         return {
-          frames: Number(report?.metrics?.presentedFrames ?? 0),
+          frames: Number(probe.latest?.frames ?? 0),
+          metricAt: Number(probe.latest?.at ?? Number.NaN),
           now: performance.now(),
+          runInFlight: gallery?.runInFlight ?? false,
+          playbackControls: document.querySelector("#status")?.dataset.playbackControls ?? "",
         };
       });
       frameSamples.push(sample);
@@ -116,23 +135,87 @@ function changedPixelStats(buffer) {
 }
 
 function sampleRendererFps(frameSamples) {
-  // The frame counter is sampled while the animation is running. Sampling after
-  // waitForApplied measures the finished scene's idle policy instead of render work.
-  const changes = frameSamples.filter((sample, index) => index > 0 &&
-    sample.frames > frameSamples[index - 1].frames);
-  assert.ok(changes.length >= 2, "active product run did not expose enough presentation samples");
+  // Measure render-worker presentation only while the Python continuation owns
+  // the deliberately long, identical first pass used by both baseline and candidate.
+  // The renderer metric is derived telemetry and does not wait on the suspended
+  // authoring continuation or model scene/runtime state in the frontend.
+  const sourceOwned = frameSamples.filter(
+    (sample) =>
+      sample.runInFlight &&
+      sample.playbackControls === "unavailable" &&
+      Number.isFinite(sample.metricAt),
+  );
+  assert.ok(sourceOwned.length >= 10, "source-owned product run did not expose enough presentation samples");
+  const measurementMs = sourceOwned.at(-1).now - sourceOwned[0].now;
+  assert.ok(
+    measurementMs >= MIN_PRODUCT_MEASUREMENT_MS,
+    `source-owned presentation window was too short (${measurementMs.toFixed(0)} ms)`,
+  );
+  const changes = sourceOwned.filter((sample, index) => index > 0 &&
+    sample.frames > sourceOwned[index - 1].frames);
+  assert.ok(changes.length >= 2, "first authored pass did not expose enough presentation samples");
   const start = changes[0];
   const end = changes.at(-1);
   const elapsedSeconds = Math.max((end.now - start.now) / 1000, 0.001);
   return {
     startFrames: start.frames,
     endFrames: end.frames,
+    sampleCount: sourceOwned.length,
+    measurementMs,
     elapsedMs: end.now - start.now,
     effectiveFps: Math.max(0, end.frames - start.frames) / elapsedSeconds,
   };
 }
 
-async function pauseAndSeek(page, seconds) {
+async function waitForRenderedEndpoint(page, seconds) {
+  const deadline = performance.now() + 10_000;
+  let observedReplies = await page.evaluate(
+    () => window.__noonProductRenderProbe?.metricsReplies ?? 0,
+  );
+  while (performance.now() < deadline) {
+    await page.evaluate(() => {
+      const gallery = window.__noonExampleGallery;
+      if (typeof gallery?.executionMetrics !== "function") {
+        throw new Error("product E2E could not request renderer metrics");
+      }
+      const probe = window.__noonProductRenderProbe;
+      if (probe?.pending) return;
+      probe.pending = true;
+      // The renderer reply is observed passively below. Do not await the
+      // aggregate request: its source side may remain owned by an active
+      // authoring continuation.
+      void gallery.executionMetrics().catch(() => {
+        probe.pending = false;
+      });
+    });
+    await page.waitForTimeout(50);
+    const sample = await page.evaluate(() => {
+      const probe = window.__noonProductRenderProbe;
+      return {
+        metricsReplies: Number(probe?.metricsReplies ?? 0),
+        latest: probe?.latest ?? null,
+      };
+    });
+    const rendered = sample.latest;
+    if (
+      sample.metricsReplies > observedReplies &&
+      rendered?.ready === true &&
+      Number.isFinite(rendered?.frames) &&
+      rendered.frames > 0 &&
+      Number.isFinite(rendered?.time) &&
+      rendered.needsPresent === false &&
+      rendered.bufferedDeltas === 0 &&
+      Math.abs(rendered.time - seconds) <= 0.001
+    ) {
+      return rendered;
+    }
+    observedReplies = sample.metricsReplies;
+    await page.waitForTimeout(50);
+  }
+  throw new Error(`render worker did not present authored endpoint ${seconds.toFixed(3)} s`);
+}
+
+async function synchronizeFinalFrame(page, seconds) {
   const capability = await page.locator("#status").getAttribute("data-playback-controls");
   assert.ok(
     capability === "available" || capability === "unavailable",
@@ -145,20 +228,22 @@ async function pauseAndSeek(page, seconds) {
     capability === "available",
     "playback control DOM must match the execution ownership capability",
   );
-  if (!hasControls) return false;
-  await toggle.waitFor({ state: "visible", timeout: 10_000 });
-  if ((await toggle.getAttribute("aria-label")) === "Pause animation") {
-    await toggle.click();
-    await page.waitForFunction(
-      () => document.querySelector(".playback-toggle")?.getAttribute("aria-label") === "Play animation",
-    );
+  if (hasControls) {
+    await toggle.waitFor({ state: "visible", timeout: 10_000 });
+    if ((await toggle.getAttribute("aria-label")) === "Pause animation") {
+      await toggle.click();
+      await page.waitForFunction(
+        () => document.querySelector(".playback-toggle")?.getAttribute("aria-label") === "Play animation",
+      );
+    }
+    await page.locator(".playback-scrubber").evaluate((input, target) => {
+      input.value = String(target);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }, seconds);
   }
-  await page.locator(".playback-scrubber").evaluate((input, target) => {
-    input.value = String(target);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  }, seconds);
-  await page.waitForTimeout(150);
-  return true;
+  const rendered = await waitForRenderedEndpoint(page, seconds);
+  assert.ok(rendered.frames > 0, "authored endpoint was not presented by the render worker");
+  return { capability, rendered };
 }
 
 let browser = null;
@@ -184,6 +269,41 @@ try {
     deviceScaleFactor: 1,
   });
   const page = await context.newPage();
+  await page.addInitScript(() => {
+    const NativeWorker = window.Worker;
+    const probe = { pending: false, latest: null, metricsReplies: 0 };
+    window.__noonProductRenderProbe = probe;
+
+    // This test-only observer sees actual render-worker metrics replies without
+    // changing their request IDs, contents, scheduling, or ownership.
+    class ObservedWorker extends NativeWorker {
+      constructor(url, options) {
+        super(url, options);
+        if (!String(url).includes("execution-render-worker.js")) return;
+        this.addEventListener("message", (event) => {
+          const message = event.data;
+          const presentedFrames = Number(message?.metrics?.presentedFrames);
+          if (message?.channel !== "noon.render" || message?.type !== "metrics" ||
+              !Number.isFinite(presentedFrames)) return;
+          probe.latest = {
+            frames: presentedFrames,
+            time: Number(message.metrics.time),
+            ready: message.metrics.ready === true,
+            needsPresent: message.metrics.needsPresent === true,
+            bufferedDeltas: Number(message.metrics.bufferedDeltas),
+            at: performance.now(),
+          };
+          probe.metricsReplies += 1;
+          probe.pending = false;
+        });
+      }
+    }
+    Object.defineProperty(window, "Worker", {
+      configurable: true,
+      writable: true,
+      value: ObservedWorker,
+    });
+  });
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
@@ -208,6 +328,20 @@ try {
   assert.equal(shell.executionMode, null, "page shell entered an execution mode before Run");
   assert.equal(shell.controls, false, "page shell allocated playback controls before Run");
 
+  // Baseline and candidate run this exact authored source. It extends only the
+  // visible first-pass duration, giving the real renderer enough time to report
+  // multiple presented frames without changing final scene semantics.
+  await page.evaluate((durationSeconds) => {
+    const editor = document.querySelector("#python-scene-source");
+    if (!(editor instanceof HTMLTextAreaElement)) throw new Error("scene editor is unavailable");
+    const updated = editor.value.replace(
+      "self.play(Create(circle), Create(square))",
+      `self.play(Create(circle), Create(square), run_time=${durationSeconds})`,
+    );
+    if (updated === editor.value) throw new Error("product first-pass fixture was not found");
+    editor.value = updated;
+  }, PRODUCT_FIRST_PASS_SECONDS);
+
   const cold = await runAndMeasure(page, { captureFrames: true });
   assert.equal(cold.state.backend, "WebGL2", `expected WebGL2 product path, got ${cold.state.backend}`);
   const fps = sampleRendererFps(cold.frameSamples);
@@ -219,12 +353,11 @@ try {
     const editor = document.querySelector("#python-scene-source");
     if (!(editor instanceof HTMLTextAreaElement)) throw new Error("scene editor is unavailable");
     editor.value = `${editor.value.trimEnd()}\n\n${text}\n`;
-    editor.dispatchEvent(new Event("input", { bubbles: true }));
   }, marker);
   const edited = await runAndMeasure(page);
 
-  const sought = await pauseAndSeek(page, 0.5);
-  const screenshotName = sought ? "frame-0.5.png" : "frame-final.png";
+  const endpoint = await synchronizeFinalFrame(page, PRODUCT_FIRST_PASS_SECONDS);
+  const screenshotName = "frame-final.png";
   const screenshotPath = path.join(artifactDir, screenshotName);
   const screenshot = await page.locator("#scene").screenshot({ path: screenshotPath });
   const visual = changedPixelStats(screenshot);
@@ -245,7 +378,10 @@ try {
     editRunMs: edited.milliseconds,
     fps,
     visual,
-    sought,
+    fixedFrame: {
+      authoredEndpointSeconds: PRODUCT_FIRST_PASS_SECONDS,
+      presentation: endpoint,
+    },
     screenshot: screenshotName,
     runtime: {
       backend: cold.state.backend,

@@ -166,7 +166,7 @@ test("transport disconnect rejects open ownership immediately but awaits cleanup
   await entered.promise;
   const closingScope = registry.closeScope(scope, "transport disconnected");
   assert.deepEqual(registry.counts, { scopes: 0, sessions: 0 });
-  assert.throws(() => registry.open(scope, "again"), /stale preview scope/);
+  await assert.rejects(registry.open(scope, "again"), /stale preview scope/);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(created[0].closeCalls, ["transport disconnected"]);
   let scopeSettled = false;
