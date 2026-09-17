@@ -173,6 +173,10 @@ impl ManimArrowOptions {
             visible_start
         };
         let shaft_end = end_base;
+        // Manim attaches the end tip before it caps the stroke. A DoubleArrow
+        // then attaches its start tip without recalculating that cap, so use
+        // the post-end-tip shaft length rather than the final visible shaft.
+        let stroke_cap_length = (end_base.0 - visible_start.0).hypot(end_base.1 - visible_start.1);
 
         let mut shaft = self.prototype.into_state(store)?;
         shaft.content = StoredGeometry::Line {
@@ -186,7 +190,7 @@ impl ManimArrowOptions {
             self.max_stroke_width_to_length_ratio,
         )));
         shaft.style.stroke_width =
-            initial_stroke_width.min(self.max_stroke_width_to_length_ratio * length);
+            initial_stroke_width.min(self.max_stroke_width_to_length_ratio * stroke_cap_length);
 
         let tip_color = manim_visible_color(&shaft.style);
         let end_tip = triangle_tip_path(visible_end, direction, effective_tip_length)?;
@@ -610,7 +614,7 @@ mod tests {
         let (start, end) = line_endpoints(&arrow.shaft().state().unwrap());
         assert!((start.x + 0.75).abs() < 1e-6);
         assert!((end.x - 0.40).abs() < 1e-6);
-        assert!((arrow.shaft().state().unwrap().style.stroke_width - 0.06).abs() < 1e-12);
+        assert!((arrow.shaft().state().unwrap().style.stroke_width - 0.0575).abs() < 1e-12);
         assert_eq!(
             arrow.shaft().state().unwrap().role(),
             SemanticObjectRole::ArrowShaft(SemanticArrowShaftRole::new(0.06, 0.05))
@@ -632,14 +636,26 @@ mod tests {
     }
 
     #[test]
-    fn short_arrow_caps_tip_and_stroke_from_post_buff_length() {
+    fn short_arrow_caps_stroke_after_attaching_its_end_tip() {
         let scene = Scene::new();
         let mut options = ManimArrowOptions::arrow(0.0, 0.0, 0.4, 0.0).unwrap();
         options.set_buff(0.0).unwrap();
         let arrow = ManimArrow::create(Rc::clone(scene.integration_store()), options).unwrap();
         let (_, end) = line_endpoints(&arrow.shaft().state().unwrap());
         assert!((end.x - 0.3).abs() < 1e-6);
-        assert!((arrow.shaft().state().unwrap().style.stroke_width - 0.02).abs() < 1e-12);
+        assert!((arrow.shaft().state().unwrap().style.stroke_width - 0.015).abs() < 1e-12);
+    }
+
+    #[test]
+    fn short_double_arrow_keeps_the_end_tip_stroke_cap_after_adding_start_tip() {
+        let scene = Scene::new();
+        let mut options = ManimArrowOptions::double_arrow(0.0, 0.0, 0.4, 0.0).unwrap();
+        options.set_buff(0.0).unwrap();
+        let arrow = ManimArrow::create(Rc::clone(scene.integration_store()), options).unwrap();
+        let (start, end) = line_endpoints(&arrow.shaft().state().unwrap());
+        assert!((start.x - 0.1).abs() < 1e-6);
+        assert!((end.x - 0.3).abs() < 1e-6);
+        assert!((arrow.shaft().state().unwrap().style.stroke_width - 0.015).abs() < 1e-12);
     }
 
     #[test]

@@ -97,10 +97,11 @@ fn post_buff_length_caps_both_tip_dimensions_and_shaft_width() {
     options.set_buff(0.25).unwrap();
     options.set_tip_length(0.35).unwrap();
     let arrow = ManimArrow::create(Rc::clone(scene.integration_store()), options).unwrap();
-    // Visible length = 0.3, so Manim's 1/4 cap gives length AND width 0.075.
+    // Visible length = 0.3, so Manim's 1/4 cap gives a 0.075 tip. It attaches
+    // that end tip before capping the stroke against the remaining 0.225 shaft.
     assert_tip(arrow.end_tip(), (0.55, 0.0), (1.0, 0.0), 0.075);
     point_close(shaft_endpoints(&arrow).1, (0.475, 0.0));
-    close(arrow.shaft().state().unwrap().style.stroke_width, 0.015);
+    close(arrow.shaft().state().unwrap().style.stroke_width, 0.01125);
 }
 
 #[test]
@@ -119,7 +120,7 @@ fn shaft_thickness_does_not_change_tip_shape_or_add_tip_stroke() {
         previous = Some(points);
         close(
             arrow.shaft().state().unwrap().style.stroke_width,
-            stroke_width,
+            stroke_width.min(0.05 * (2.0 - 0.35)),
         );
     }
 }
@@ -135,6 +136,9 @@ fn short_double_arrow_has_two_outward_tips_and_no_shaft_protrusion() {
     let (start, end) = shaft_endpoints(&arrow);
     point_close(start, (-0.1, 0.0));
     point_close(end, (0.1, 0.0));
+    // Manim caps the shaft after attaching only its end tip, then leaves that
+    // width unchanged while it adds the start tip for DoubleArrow.
+    close(arrow.shaft().state().unwrap().style.stroke_width, 0.015);
 }
 
 #[test]
