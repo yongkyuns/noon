@@ -1,6 +1,7 @@
 use noon_compile::{
-    PreparedFamilyTransformChannelProjection, PreparedMatchingShapeTargetLeftoverFade,
-    PreparedTransientPainterPlacement,
+    PreparedDerivedFamilyTransformOccurrence, PreparedFamilyTransformChannelProjection,
+    PreparedMatchingFamilyTransformPayload, PreparedMatchingShapeSourceMember,
+    PreparedMatchingShapeTargetLeftoverFade, PreparedTransientPainterPlacement,
 };
 use noon_core::{SemanticMutationTransaction, SemanticNodeId, SemanticStore};
 use noon_runtime::{
@@ -18,13 +19,18 @@ pub(super) fn build_derived_family_transform_plan(
     runtime: &SceneInstance,
     projection: &PreparedFamilyTransformChannelProjection,
 ) -> Result<Option<DerivedDisplayAnimationPlan>, String> {
-    if projection.derived_occurrences().is_empty() {
-        return Ok(None);
-    }
+    let occurrences =
+        materialize_derived_family_occurrences(runtime, projection.derived_occurrences())?;
+    build_transient_plan(occurrences)
+}
 
+fn materialize_derived_family_occurrences(
+    runtime: &SceneInstance,
+    prepared_occurrences: &[PreparedDerivedFamilyTransformOccurrence],
+) -> Result<Vec<DerivedDisplayAnimationOccurrence>, String> {
     let frame = runtime.frame();
-    let mut occurrences = Vec::with_capacity(projection.derived_occurrences().len());
-    for occurrence in projection.derived_occurrences() {
+    let mut occurrences = Vec::with_capacity(prepared_occurrences.len());
+    for occurrence in prepared_occurrences {
         let anchor_object_index = runtime
             .frame_index_for_object(occurrence.anchor_execution_object_id)
             .ok_or_else(|| {
@@ -110,10 +116,7 @@ pub(super) fn build_derived_family_transform_plan(
             tracks,
         });
     }
-
-    DerivedDisplayAnimationPlan::new(occurrences)
-        .map(Some)
-        .map_err(|error| error.to_string())
+    Ok(occurrences)
 }
 
 /// Materialize detached matching-shape target leftovers into the existing
@@ -124,16 +127,91 @@ pub(super) fn build_derived_family_transform_plan(
 /// only; it does not become semantic or execution identity for the detached target.
 /// A layer with no stable row fails closed rather than fabricating an anchor or
 /// silently changing z ordering.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(super) fn build_matching_shape_target_leftover_plan(
     runtime: &SceneInstance,
     target_fades: &[PreparedMatchingShapeTargetLeftoverFade],
     occurrence_index_start: u32,
 ) -> Result<Option<DerivedDisplayAnimationPlan>, String> {
-    if target_fades.is_empty() {
-        return Ok(None);
-    }
+    let occurrences =
+        materialize_matching_shape_target_leftovers(target_fades, occurrence_index_start, |z| {
+            stable_layer_tail(runtime, z)
+        })?;
+    build_transient_plan(occurrences)
+}
 
+/// Materialize every identity-free occurrence required by one complete matching-family
+/// payload into the session's single existing transient animation plan.
+///
+/// Matched duplicate padding copies keep their real source painter anchors. Detached
+/// target leftovers resolve `LayerEnd` independently. The compiler reserves the target
+/// occurrence range after all matched derived occurrences, so concatenation cannot
+/// invent or arbitrate another occurrence identity space.
+pub(super) fn build_matching_family_transform_plan(
+    runtime: &SceneInstance,
+    payload: &PreparedMatchingFamilyTransformPayload,
+    moved_sources: &[PreparedMatchingShapeSourceMember],
+) -> Result<Option<DerivedDisplayAnimationPlan>, String> {
+    // The declaration moves the source family behind surviving roots. Resolve
+    // LayerEnd against that proposed order before committing, not the old frame's
+    // tail. Only affected source members are visited; stable row IDs do not change.
+    let mut moved_layer_tails = std::collections::HashMap::new();
+    for source in moved_sources {
+        let index = runtime
+            .frame_index_for_object(source.execution_object_id)
+            .ok_or_else(|| "matching source has no stable painter row".to_owned())?;
+        if runtime.frame().is_present(index) {
+            moved_layer_tails.insert(
+                layer_key(source.effective.z_index),
+                u32::try_from(index)
+                    .map_err(|_| "matching source row exceeds u32 painter indexing".to_owned())?,
+            );
+        }
+    }
+    build_matching_family_transform_plan_from_parts(
+        runtime,
+        payload.derived_occurrences(),
+        payload.target_leftovers(),
+        payload.target_occurrence_index_start(),
+        |z| {
+            moved_layer_tails
+                .get(&layer_key(z))
+                .copied()
+                .or_else(|| stable_layer_tail(runtime, z))
+        },
+    )
+}
+
+fn layer_key(z: f64) -> u64 {
+    // Painter layers compare signed zero as equal.
+    if z == 0.0 {
+        0
+    } else {
+        z.to_bits()
+    }
+}
+
+fn build_matching_family_transform_plan_from_parts(
+    runtime: &SceneInstance,
+    derived: &[PreparedDerivedFamilyTransformOccurrence],
+    target_fades: &[PreparedMatchingShapeTargetLeftoverFade],
+    target_occurrence_index_start: u32,
+    layer_tail: impl FnMut(f64) -> Option<u32>,
+) -> Result<Option<DerivedDisplayAnimationPlan>, String> {
+    let mut occurrences = materialize_derived_family_occurrences(runtime, derived)?;
+    occurrences.extend(materialize_matching_shape_target_leftovers(
+        target_fades,
+        target_occurrence_index_start,
+        layer_tail,
+    )?);
+    build_transient_plan(occurrences)
+}
+
+fn materialize_matching_shape_target_leftovers(
+    target_fades: &[PreparedMatchingShapeTargetLeftoverFade],
+    occurrence_index_start: u32,
+    mut layer_tail: impl FnMut(f64) -> Option<u32>,
+) -> Result<Vec<DerivedDisplayAnimationOccurrence>, String> {
     let mut occurrences = Vec::with_capacity(target_fades.len());
     for (ordinal, fade) in target_fades.iter().enumerate() {
         if fade.base.painter_placement() != PreparedTransientPainterPlacement::LayerEnd {
@@ -142,13 +220,12 @@ pub(super) fn build_matching_shape_target_leftover_plan(
                 fade.target_index
             ));
         }
-        let anchor_object_index =
-            stable_layer_tail(runtime, fade.base.z_index).ok_or_else(|| {
-                format!(
-                    "matching-shape target leftover {} has no stable painter row in z layer {}",
-                    fade.target_index, fade.base.z_index
-                )
-            })?;
+        let anchor_object_index = layer_tail(fade.base.z_index).ok_or_else(|| {
+            format!(
+                "matching-shape target leftover {} has no stable painter row in z layer {}",
+                fade.target_index, fade.base.z_index
+            )
+        })?;
         let ordinal = u32::try_from(ordinal).map_err(|_| {
             format!(
                 "matching-shape target leftover count exceeds u32 occurrence indexing at {}",
@@ -193,13 +270,20 @@ pub(super) fn build_matching_shape_target_leftover_plan(
             tracks,
         });
     }
+    Ok(occurrences)
+}
 
+fn build_transient_plan(
+    occurrences: Vec<DerivedDisplayAnimationOccurrence>,
+) -> Result<Option<DerivedDisplayAnimationPlan>, String> {
+    if occurrences.is_empty() {
+        return Ok(None);
+    }
     DerivedDisplayAnimationPlan::new(occurrences)
         .map(Some)
         .map_err(|error| error.to_string())
 }
 
-#[allow(dead_code)]
 fn stable_layer_tail(runtime: &SceneInstance, z_index: f64) -> Option<u32> {
     let frame = runtime.frame();
     runtime
@@ -218,7 +302,6 @@ fn stable_layer_tail(runtime: &SceneInstance, z_index: f64) -> Option<u32> {
 }
 
 /// Unsupported topology for exact-end matching-family replacement.
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum MatchingFamilyCompletionSwapError {
     InvalidExecutionRoot(SemanticNodeId),
@@ -230,6 +313,8 @@ pub(super) enum MatchingFamilyCompletionSwapError {
         source: SemanticNodeId,
     },
     TargetNotDetached(SemanticNodeId),
+    AliasedSourceDescendant(SemanticNodeId),
+    AliasedTargetDescendant(SemanticNodeId),
 }
 
 impl std::fmt::Display for MatchingFamilyCompletionSwapError {
@@ -245,11 +330,13 @@ impl std::error::Error for MatchingFamilyCompletionSwapError {}
 
 /// Stage the exact-end source-family -> target-family replacement without publishing it.
 ///
-/// The source must be one unaliased direct member of `execution_root`; the authored
-/// target must be detached. Only outer membership changes, so both families retain
+/// The source must be one direct member of `execution_root` with no shared
+/// descendants; the authored target must be detached. Shared descendants require
+/// membership restructuring before their active presentation can move to the tail,
+/// so this bounded path rejects them before staging any edit. Both families retain
 /// their internal authored topology and no execution identity is manufactured. The
-/// target occupies the source family's exact sibling slot rather than being appended.
-#[allow(dead_code)]
+/// target is appended after the surviving root members, matching Manim's cleanup-time
+/// remove-source / add-target scene ordering.
 pub(super) fn stage_matching_family_completion_swap(
     store: &SemanticStore,
     execution_root: SemanticNodeId,
@@ -257,7 +344,7 @@ pub(super) fn stage_matching_family_completion_swap(
     target_root: SemanticNodeId,
     semantic: &mut SemanticMutationTransaction,
 ) -> Result<(), MatchingFamilyCompletionSwapError> {
-    let execution = store
+    store
         .node(execution_root)
         .filter(|node| matches!(node.kind(), noon_core::SemanticNodeKind::Family(_)))
         .ok_or(MatchingFamilyCompletionSwapError::InvalidExecutionRoot(
@@ -293,12 +380,45 @@ pub(super) fn stage_matching_family_completion_swap(
         ));
     }
 
-    let next_sibling = execution.next_member(source_root);
+    // Root-only admission is insufficient: an earlier surviving family may own
+    // the first occurrence of a source leaf or nested family. Moving just the
+    // source root would leave that row behind and invalidate LayerEnd anchors.
+    // Inspect only this source subtree and its maintained parent links.
+    for descendant in store
+        .ordered_authoring_nodes(source_root)
+        .map_err(|_| MatchingFamilyCompletionSwapError::InvalidSourceFamily(source_root))?
+    {
+        if descendant != source_root
+            && store
+                .node(descendant)
+                .is_none_or(|node| node.parents().len() != 1)
+        {
+            return Err(MatchingFamilyCompletionSwapError::AliasedSourceDescendant(
+                descendant,
+            ));
+        }
+    }
+
+    // A detached target root can still alias a live leaf through another family.
+    // Such a target is not a detached replacement and would change existing
+    // presentation ownership when admitted.
+    for descendant in store
+        .ordered_authoring_nodes(target_root)
+        .map_err(|_| MatchingFamilyCompletionSwapError::InvalidTargetFamily(target_root))?
+    {
+        if descendant != target_root
+            && store
+                .node(descendant)
+                .is_none_or(|node| node.parents().len() != 1)
+        {
+            return Err(MatchingFamilyCompletionSwapError::AliasedTargetDescendant(
+                descendant,
+            ));
+        }
+    }
+
     semantic.remove_member(execution_root, source_root);
     semantic.add_member(execution_root, target_root);
-    if let Some(next_sibling) = next_sibling {
-        semantic.reorder_member(execution_root, target_root, Some(next_sibling));
-    }
     Ok(())
 }
 
@@ -323,7 +443,7 @@ mod matching_completion_tests {
     }
 
     #[test]
-    fn completion_swap_preserves_source_sibling_slot_and_family_internals() {
+    fn completion_swap_appends_authored_target_and_preserves_family_internals() {
         let mut store = SemanticStore::new();
         let before = object(&mut store);
         let after = object(&mut store);
@@ -357,7 +477,7 @@ mod matching_completion_tests {
             committed
                 .semantic_family_members_checked(execution_root)
                 .unwrap(),
-            &[before, target, after]
+            &[before, after, target]
         );
         assert_eq!(
             committed.semantic_family_members_checked(source).unwrap(),
@@ -420,7 +540,8 @@ mod matching_completion_tests {
 #[cfg(test)]
 mod matching_target_tests {
     use noon_compile::{
-        CompiledObject, CompiledScene, PreparedMatchingShapeLeftoverFadeTrack,
+        CompiledObject, CompiledScene, EffectiveAnimationProperties,
+        PreparedDerivedFamilyTransformTrack, PreparedMatchingShapeLeftoverFadeTrack,
         PreparedMatchingShapeTargetTransientBase,
     };
     use noon_core::{
@@ -475,6 +596,31 @@ mod matching_target_tests {
         }
     }
 
+    fn derived_occurrence() -> PreparedDerivedFamilyTransformOccurrence {
+        PreparedDerivedFamilyTransformOccurrence {
+            occurrence_index: 0,
+            anchor_execution_object_id: ObjectId::new(1),
+            source: SemanticNodeId::new(1, 0),
+            target_state: SemanticNodeId::new(2, 0),
+            effective_source: EffectiveAnimationProperties {
+                z_index: 0.0,
+                transform: Transform2D::IDENTITY,
+                style: Style::default(),
+                appearance: 1.0,
+                reveal: 1.0,
+            },
+            tracks: vec![PreparedDerivedFamilyTransformTrack {
+                occurrence_index: 0,
+                anchor_execution_object_id: ObjectId::new(1),
+                property: Property::Appearance,
+                values: TrackValues::Scalar { from: 0.0, to: 1.0 },
+                transform_geometry_plan: None,
+                timing: TrackTiming::new(2.0, 1.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }],
+        }
+    }
+
     #[test]
     fn target_leftover_resolves_layer_end_to_last_real_stable_row() {
         let runtime = runtime();
@@ -492,6 +638,37 @@ mod matching_target_tests {
         );
         assert_eq!(plan.evaluate(2.0).unwrap()[0].state().appearance, 0.0);
         assert_eq!(plan.evaluate(3.0).unwrap()[0].state().appearance, 1.0);
+    }
+
+    #[test]
+    fn matching_plan_combines_derived_and_target_occurrences_without_index_collision() {
+        let runtime = runtime();
+        let plan = build_matching_family_transform_plan_from_parts(
+            &runtime,
+            &[derived_occurrence()],
+            &[target_fade(0.0)],
+            1,
+            |z| stable_layer_tail(&runtime, z),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(plan.occurrences().len(), 2);
+        assert_eq!(plan.occurrences()[0].occurrence_index, 0);
+        assert_eq!(plan.occurrences()[1].occurrence_index, 1);
+        assert_eq!(
+            plan.occurrences()[0].painter_placement,
+            TransientPresentationPainterPlacement::AfterStable {
+                anchor_object_index: 0,
+            }
+        );
+        assert_eq!(
+            plan.occurrences()[1].painter_placement,
+            TransientPresentationPainterPlacement::AfterStable {
+                anchor_object_index: 1,
+            }
+        );
+        assert_eq!(plan.evaluate(2.5).unwrap().len(), 2);
     }
 
     #[test]

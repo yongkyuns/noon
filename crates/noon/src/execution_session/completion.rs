@@ -47,6 +47,7 @@ pub enum ExecutionSegmentCompletionError {
     },
     PreparedScalarTimeline(PreparedScalarSignalTimelineError),
     ScalarTimeline(super::SignalTimelineAppendError),
+    InvalidFamilyReplacement,
     Publication(ExecutionSessionPublicationError),
 }
 
@@ -107,6 +108,9 @@ impl std::fmt::Display for ExecutionSegmentCompletionError {
             ),
             Self::PreparedScalarTimeline(error) => error.fmt(formatter),
             Self::ScalarTimeline(error) => error.fmt(formatter),
+            Self::InvalidFamilyReplacement => formatter.write_str(
+                "segment family replacement is not valid for the current authored topology",
+            ),
             Self::Publication(error) => error.fmt(formatter),
         }
     }
@@ -239,9 +243,24 @@ impl ExecutionSession {
         for &(root, target) in lifecycle_removals {
             semantic.remove_member(root, target);
         }
+        if let Some(replacement) = segment.family_replacement() {
+            super::family_transform::stage_matching_family_completion_swap(
+                store,
+                replacement.root,
+                replacement.source,
+                replacement.target,
+                &mut semantic,
+            )
+            .map_err(|_| ExecutionSegmentCompletionError::InvalidFamilyReplacement)?;
+        }
         let family_removals = lifecycle_removals
             .iter()
             .map(|(_, target)| *target)
+            .chain(
+                segment
+                    .family_replacement()
+                    .map(|replacement| replacement.source),
+            )
             .collect::<BTreeSet<_>>();
         let mut release = Vec::with_capacity(entries.len());
         for entry in entries {
@@ -350,6 +369,17 @@ impl ExecutionSession {
                 .then_some((entry.semantic_object, index))
             })
             .collect::<HashMap<_, _>>();
+        let final_content_entries = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                matches!(
+                    entry.completion,
+                    SemanticAnimationCompletion::ContentMorph { .. }
+                )
+                .then_some((entry.semantic_object, index))
+            })
+            .collect::<HashMap<_, _>>();
         for (index, entry) in entries.iter().enumerate() {
             match &entry.completion {
                 SemanticAnimationCompletion::Priority { value } => {
@@ -368,7 +398,9 @@ impl ExecutionSession {
                     }
                 }
                 SemanticAnimationCompletion::ContentMorph { content } => {
-                    semantic.replace_content(entry.semantic_object, *content);
+                    if final_content_entries.get(&entry.semantic_object) == Some(&index) {
+                        semantic.replace_content(entry.semantic_object, *content);
+                    }
                 }
                 SemanticAnimationCompletion::Fill { .. }
                 | SemanticAnimationCompletion::Stroke { .. }
@@ -1565,5 +1597,115 @@ mod tests {
         assert_eq!(session.publication_context(), publication);
         assert_eq!(session.frame(), &frame);
         assert!(!session.segment_state(segment).is_complete());
+    }
+
+    #[test]
+    fn family_replacement_is_atomic_at_exact_segment_completion() {
+        let mut store = SemanticStore::new();
+        let source_leaf =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 1.0,
+            }));
+        let source_family = store.insert_family();
+        store.add_member(source_family, source_leaf).unwrap();
+
+        let mut target_state = SemanticObjectState::new(StoredGeometry::Circle { radius: 1.0 });
+        target_state.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
+        let target_leaf = store.insert_semantic_object(target_state);
+        let target_family = store.insert_family();
+        store.add_member(target_family, target_leaf).unwrap();
+
+        let root = store.insert_family();
+        store.add_member(root, source_family).unwrap();
+        let animation = store
+            .insert_semantic_transform_animation(source_leaf, target_leaf, AnimationOptions::new())
+            .unwrap();
+        let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+        let segment = session
+            .activate_animation_segment(
+                &store,
+                animation,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap()
+            .with_family_replacement(root, source_family, target_family);
+
+        let source_execution = session
+            .execution_index
+            .execution_object_id(source_leaf)
+            .unwrap();
+        assert!(session
+            .execution_index
+            .execution_object_id(target_leaf)
+            .is_none());
+        assert_eq!(
+            store.semantic_family_members_checked(root).unwrap(),
+            &[source_family]
+        );
+
+        session.advance_segment_to(segment, 0.5).unwrap();
+        let before = session.publication_context();
+        assert!(matches!(
+            session.complete_segment(&mut store, segment),
+            Err(ExecutionSegmentCompletionError::NotAtBoundary {
+                expected: 1.0,
+                actual: 0.5,
+            })
+        ));
+        assert_eq!(session.publication_context(), before);
+        assert_eq!(
+            store.semantic_family_members_checked(root).unwrap(),
+            &[source_family]
+        );
+
+        session.advance_segment_to(segment, 1.0).unwrap();
+        session.complete_segment(&mut store, segment).unwrap();
+        assert_eq!(
+            store.semantic_family_members_checked(root).unwrap(),
+            &[target_family]
+        );
+        assert_eq!(
+            session.execution_index.execution_object_id(source_leaf),
+            Some(source_execution)
+        );
+        assert!(session
+            .runtime
+            .frame_index_for_object(source_execution)
+            .is_none());
+        assert!(session
+            .execution_index
+            .execution_object_id(target_leaf)
+            .is_some());
+        let target_execution = session
+            .execution_index
+            .execution_object_id(target_leaf)
+            .unwrap();
+        let target_index = session
+            .runtime
+            .frame_index_for_object(target_execution)
+            .expect("replacement target must be live");
+        assert_eq!(
+            (0..session.frame().objects.len())
+                .filter(|&index| session.runtime.object_slot_is_live(index))
+                .count(),
+            1
+        );
+        assert_eq!(
+            session.frame().objects[target_index]
+                .transform
+                .translation
+                .x,
+            4.0
+        );
+
+        let completed = session.publication_context();
+        session.complete_segment(&mut store, segment).unwrap();
+        assert_eq!(session.publication_context(), completed);
+        assert_eq!(
+            store.semantic_family_members_checked(root).unwrap(),
+            &[target_family]
+        );
     }
 }

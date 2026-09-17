@@ -7,10 +7,10 @@ use noon_core::{
     CompositionTimeMap, CompositionTimeMapStep, ObjectId, PreparedSemanticMutationTransaction,
     RateFunction, ResolvedAnimationOptions, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticAnimationError,
-    SemanticAnimationIntent, SemanticFadeDirection, SemanticNodeId, SemanticScalarSignalQueryError,
-    SemanticScalarSignalTrack, SemanticStore, SemanticTransactionAnimationIntent,
-    SemanticTransactionNodeRef, SemanticTransactionReadError, SemanticTransformInterpolation,
-    TrackTiming,
+    SemanticAnimationIntent, SemanticFadeDirection, SemanticFamilyTransformMode, SemanticNodeId,
+    SemanticScalarSignalQueryError, SemanticScalarSignalTrack, SemanticStore,
+    SemanticTransactionAnimationIntent, SemanticTransactionNodeRef, SemanticTransactionReadError,
+    SemanticTransformInterpolation, TrackTiming,
 };
 
 use super::SemanticExecutionIndex;
@@ -149,6 +149,7 @@ pub struct SemanticScheduledFamilyTransform {
     pub animation: SemanticNodeId,
     pub source: SemanticNodeId,
     pub target_state: SemanticNodeId,
+    pub mode: SemanticFamilyTransformMode,
     pub timing: TrackTiming,
     pub time_map: CompositionTimeMap,
     pub options: ResolvedAnimationOptions,
@@ -282,6 +283,7 @@ pub struct PreparedSemanticScheduledFamilyTransform {
     pub animation: SemanticTransactionNodeRef,
     pub source: SemanticTransactionNodeRef,
     pub target_state: SemanticTransactionNodeRef,
+    pub mode: SemanticFamilyTransformMode,
     pub timing: TrackTiming,
     pub time_map: CompositionTimeMap,
     pub options: ResolvedAnimationOptions,
@@ -621,6 +623,7 @@ pub fn lower_semantic_animation_schedule(
                 animation,
                 source,
                 target_state,
+                mode,
                 timing,
                 time_map,
                 options,
@@ -629,6 +632,7 @@ pub fn lower_semantic_animation_schedule(
                 animation,
                 source,
                 target_state,
+                mode,
                 timing,
                 time_map,
                 options,
@@ -708,6 +712,7 @@ pub fn lower_prepared_semantic_animation_schedule(
                 animation,
                 source,
                 target_state,
+                mode,
                 timing,
                 time_map,
                 options,
@@ -716,6 +721,7 @@ pub fn lower_prepared_semantic_animation_schedule(
                 animation,
                 source,
                 target_state,
+                mode,
                 timing,
                 time_map,
                 options,
@@ -883,6 +889,7 @@ enum AnimationDeclarationIntent<R> {
     FamilyTransformTo {
         source: R,
         target_state: R,
+        mode: SemanticFamilyTransformMode,
     },
     TransformTo {
         target: R,
@@ -1038,6 +1045,7 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
             SemanticAnimationIntent::FamilyTransformTo {
                 source,
                 target_state,
+                mode,
             } => {
                 self.store
                     .semantic_family_members_checked(*source)
@@ -1048,6 +1056,7 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                 AnimationDeclarationIntent::FamilyTransformTo {
                     source: *source,
                     target_state: *target_state,
+                    mode: *mode,
                 }
             }
             SemanticAnimationIntent::TransformTo {
@@ -1293,9 +1302,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     SemanticAnimationIntent::FamilyTransformTo {
                         source,
                         target_state,
+                        mode,
                     } => AnimationDeclarationIntent::FamilyTransformTo {
                         source: (*source).into(),
                         target_state: (*target_state).into(),
+                        mode: *mode,
                     },
                     SemanticAnimationIntent::TransformTo {
                         target,
@@ -1425,9 +1436,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     SemanticTransactionAnimationIntent::FamilyTransformTo {
                         source,
                         target_state,
+                        mode,
                     } => AnimationDeclarationIntent::FamilyTransformTo {
                         source: *source,
                         target_state: *target_state,
+                        mode: *mode,
                     },
                     SemanticTransactionAnimationIntent::TransformTo {
                         target,
@@ -1646,6 +1659,7 @@ enum ScheduledAnimationLeaf<R> {
         animation: R,
         source: R,
         target_state: R,
+        mode: SemanticFamilyTransformMode,
         timing: TrackTiming,
         time_map: CompositionTimeMap,
         options: ResolvedAnimationOptions,
@@ -1801,6 +1815,7 @@ enum PlannedAnimationKind<R> {
     FamilyTransform {
         source: R,
         target_state: R,
+        mode: SemanticFamilyTransformMode,
         options: ResolvedAnimationOptions,
     },
     Leaf {
@@ -1843,6 +1858,7 @@ where
         AnimationDeclarationIntent::FamilyTransformTo {
             source,
             target_state,
+            mode,
         } => {
             let options =
                 resolve_animation_options(AnimationDefaults::MANIM, state.options, play_options)
@@ -1853,6 +1869,7 @@ where
                 kind: PlannedAnimationKind::FamilyTransform {
                     source,
                     target_state,
+                    mode,
                     options,
                 },
             })
@@ -2473,12 +2490,14 @@ fn collect_leaves<R: Copy>(
         PlannedAnimationKind::FamilyTransform {
             source,
             target_state,
+            mode,
             options,
         } => leaves.push(ScheduledAnimationLeaf::FamilyTransform {
             finish_time_map: finish_time_map.clone(),
             animation: plan.animation,
             source: *source,
             target_state: *target_state,
+            mode: *mode,
             timing: TrackTiming::new(root_start_time, root_run_time, options.rate_func),
             time_map: CompositionTimeMap::from_steps(steps.clone()),
             options: *options,

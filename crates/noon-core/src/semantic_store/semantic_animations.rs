@@ -249,6 +249,16 @@ pub enum SemanticTransformInterpolation {
     PointCorrespondence,
 }
 
+/// Correspondence policy for one authored family Transform.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SemanticFamilyTransformMode {
+    /// Preserve authored family order/topology and derive positional correspondence.
+    #[default]
+    Structural,
+    /// Match normalized vector-path shape keys at the activation boundary.
+    MatchingShapes,
+}
+
 /// One authored animation operation before execution scheduling/lowering.
 ///
 /// Targets and composition children are semantic identities. Execution tracks,
@@ -285,6 +295,7 @@ pub enum SemanticAnimationIntent {
     FamilyTransformTo {
         source: SemanticNodeId,
         target_state: SemanticNodeId,
+        mode: SemanticFamilyTransformMode,
     },
     /// Temporarily scale and recolor one object around a shared activation center.
     /// The compiler captures the effective source and lowers a restoring track.
@@ -410,7 +421,16 @@ impl SemanticAnimationIntent {
             Self::FamilyTransformTo {
                 source,
                 target_state,
+                ..
             } => Some((*source, *target_state)),
+            _ => None,
+        }
+    }
+
+    /// Return the authored correspondence policy for one family Transform.
+    pub const fn family_transform_mode(&self) -> Option<SemanticFamilyTransformMode> {
+        match self {
+            Self::FamilyTransformTo { mode, .. } => Some(*mode),
             _ => None,
         }
     }
@@ -817,6 +837,37 @@ impl SemanticStore {
         target_state: SemanticNodeId,
         options: AnimationOptions,
     ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_family_transform_animation_with_mode(
+            source,
+            target_state,
+            SemanticFamilyTransformMode::Structural,
+            options,
+        )
+    }
+
+    /// Insert one activation-time matching-shape family Transform declaration.
+    pub fn insert_semantic_matching_family_transform_animation(
+        &mut self,
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.insert_semantic_family_transform_animation_with_mode(
+            source,
+            target_state,
+            SemanticFamilyTransformMode::MatchingShapes,
+            options,
+        )
+    }
+
+    /// Insert one family Transform with an explicit correspondence policy.
+    pub fn insert_semantic_family_transform_animation_with_mode(
+        &mut self,
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+        mode: SemanticFamilyTransformMode,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
         self.set_last_mutation_writes(0);
         self.semantic_family_members_checked(source)?;
         self.semantic_family_members_checked(target_state)?;
@@ -829,6 +880,7 @@ impl SemanticStore {
                 SemanticAnimationIntent::FamilyTransformTo {
                     source,
                     target_state,
+                    mode,
                 },
                 options,
             )),
@@ -1601,5 +1653,44 @@ mod tests {
         assert_eq!(reveal.reverse_rate_function, Some(false));
         assert_eq!(reveal.introducer, Some(true));
         assert_eq!(reveal.remover, Some(false));
+    }
+}
+
+#[cfg(test)]
+mod family_transform_mode_tests {
+    use super::*;
+
+    #[test]
+    fn family_transform_correspondence_mode_is_authored_state() {
+        let mut store = SemanticStore::new();
+        let source = store.insert_family();
+        let target = store.insert_family();
+        let structural = store
+            .insert_semantic_family_transform_animation(source, target, AnimationOptions::new())
+            .unwrap();
+        let matching = store
+            .insert_semantic_matching_family_transform_animation(
+                source,
+                target,
+                AnimationOptions::new(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            store
+                .semantic_animation_state(structural)
+                .unwrap()
+                .intent()
+                .family_transform_mode(),
+            Some(SemanticFamilyTransformMode::Structural)
+        );
+        assert_eq!(
+            store
+                .semantic_animation_state(matching)
+                .unwrap()
+                .intent()
+                .family_transform_mode(),
+            Some(SemanticFamilyTransformMode::MatchingShapes)
+        );
     }
 }

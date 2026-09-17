@@ -31,25 +31,26 @@ use crate::execution_segment::{
 use crate::live_session::{DrawBorderThenFillOptions, IndicateOptions, SubsetDisplayMode};
 use noon_compile::{
     derive_prepared_scalar_animation_tracks, lower_prepared_family_transform_channels,
+    lower_prepared_matching_family_transform_payload,
     lower_prepared_scalar_signal_timeline_entries_with_resolver,
     lower_prepared_scalar_signal_timeline_entry, lower_prepared_semantic_animation_composition,
     lower_prepared_semantic_animation_schedule, lower_semantic_affine_animation_tracks,
     lower_semantic_animation_schedule, lower_semantic_execution, lower_semantic_execution_root,
     lower_semantic_execution_root_with_animation_root_at, prepare_family_transform_activations,
-    CompilePatchError, EffectiveAnimationProperties, ExecutionMutationTransaction, ExecutionPatch,
-    PreparedScalarAnimationTrackError, PreparedScalarSignalTimelineError,
-    PreparedSemanticAnimationLoweringError, PreparedSemanticAnimationScheduleError,
-    SemanticAffineAnimationTrackError, SemanticAnimationScheduleError, SemanticExecutionIndex,
-    SemanticExecutionLoweringError, SemanticExecutionLoweringOutput, SemanticExecutionReachability,
-    SemanticReactiveProjection,
+    prepare_matching_family_transform_activation, CompilePatchError, EffectiveAnimationProperties,
+    ExecutionMutationTransaction, ExecutionPatch, PreparedScalarAnimationTrackError,
+    PreparedScalarSignalTimelineError, PreparedSemanticAnimationLoweringError,
+    PreparedSemanticAnimationScheduleError, SemanticAffineAnimationTrackError,
+    SemanticAnimationScheduleError, SemanticExecutionIndex, SemanticExecutionLoweringError,
+    SemanticExecutionLoweringOutput, SemanticExecutionReachability, SemanticReactiveProjection,
 };
 use noon_core::{
     AnimationOptions, Camera2DState, NativeEventOccurrence, NativeInputRuntimeError,
     NativeInputValue, NativeStateSource, NativeStateUpdate, ObjectId, RateFunction, ReactiveError,
     ReactiveValue, Rect, SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
-    SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
-    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId,
-    SemanticScalarSignalQueryError, SemanticSceneOperationError, SemanticStore,
+    SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticFamilyTransformMode,
+    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
+    SemanticNodeId, SemanticScalarSignalQueryError, SemanticSceneOperationError, SemanticStore,
     SemanticTransactionNodeRef, TimelineError, TrackDefinition, TrackId, TrackTiming,
 };
 use noon_runtime::{
@@ -107,6 +108,11 @@ pub(crate) enum SemanticCompositionRequest {
         options: AnimationOptions,
     },
     FamilyTransformTo {
+        source: SemanticNodeId,
+        target_state: SemanticNodeId,
+        options: AnimationOptions,
+    },
+    MatchingFamilyTransformTo {
         source: SemanticNodeId,
         target_state: SemanticNodeId,
         options: AnimationOptions,
@@ -1795,6 +1801,41 @@ impl ExecutionSession {
                 );
                 Ok(animation)
             }
+            SemanticCompositionRequest::MatchingFamilyTransformTo {
+                source,
+                target_state,
+                options,
+            } => {
+                if !self.callback_schedule.is_empty() {
+                    return Err(ExecutionSessionAnimationError::InvalidComposition(
+                        "matching family Transform does not yet support required host callbacks"
+                            .into(),
+                    ));
+                }
+                // Reuse the exact-completion topology contract as activation preflight.
+                // The scratch transaction is discarded; this validates only.
+                let mut completion = SemanticMutationTransaction::new();
+                family_transform::stage_matching_family_completion_swap(
+                    store,
+                    root,
+                    *source,
+                    *target_state,
+                    &mut completion,
+                )
+                .map_err(|error| {
+                    ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                })?;
+                // Manim admits the matching presentation after surviving roots
+                // during play setup. Preserve source identity and internal topology:
+                // its existing family-order mutation is part of this same atomic
+                // declaration, never a renderer-only z-index or draw-order override.
+                declaration.reorder_member(root, *source, None);
+                Ok(declaration.create_matching_family_transform_animation(
+                    *source,
+                    *target_state,
+                    *options,
+                ))
+            }
             SemanticCompositionRequest::FamilyTransformTo {
                 source,
                 target_state,
@@ -3150,18 +3191,12 @@ impl ExecutionSession {
                 )
             })?;
 
-        if schedule.family_transforms().len() > 1
-            || (!schedule.family_transforms().is_empty()
-                && (!schedule.leaves().is_empty() || !schedule.scalar_leaves().is_empty()))
-        {
-            return Err(ExecutionSessionAnimationError::InvalidComposition(
-                "this bounded unequal-family Transform slice supports one family Transform plus timing-only composition nodes per activation".into(),
-            ));
-        }
-        let family_transform_activation = prepare_family_transform_activations(
+        let projection = lower_prepared_semantic_animation_composition(
             &prepared,
             &self.execution_index,
-            &schedule,
+            root,
+            self.runtime.frame().time,
+            play_options,
             |object| {
                 let index = self.runtime.frame_index_for_object(object)?;
                 let frame = self.runtime.frame();
@@ -3174,18 +3209,120 @@ impl ExecutionSession {
                     reveal: *frame.reveals.get(index)?,
                 })
             },
-        )
-        .map_err(|error| ExecutionSessionAnimationError::InvalidComposition(error.to_string()))?;
-        let family_transform_channels =
-            lower_prepared_family_transform_channels(&prepared, &family_transform_activation)
-                .map_err(|error| {
-                    ExecutionSessionAnimationError::InvalidComposition(error.to_string())
-                })?;
-        let derived_display_plan = family_transform::build_derived_family_transform_plan(
-            &self.runtime,
-            &family_transform_channels,
-        )
-        .map_err(ExecutionSessionAnimationError::InvalidComposition)?;
+        )?;
+
+        if schedule.family_transforms().len() > 1 {
+            return Err(ExecutionSessionAnimationError::InvalidComposition(
+                "one activation supports at most one family Transform".into(),
+            ));
+        }
+        let (family_transform_tracks, derived_display_plan, family_replacement) = if let Some(
+            family,
+        ) =
+            schedule.family_transforms().first()
+        {
+            match family.mode {
+                SemanticFamilyTransformMode::Structural => {
+                    if !schedule.leaves().is_empty() || !schedule.scalar_leaves().is_empty() {
+                        return Err(ExecutionSessionAnimationError::InvalidComposition(
+                                "structural unequal-family Transform supports one family Transform plus timing-only composition nodes per activation".into(),
+                            ));
+                    }
+                    let activation = prepare_family_transform_activations(
+                        &prepared,
+                        &self.execution_index,
+                        &schedule,
+                        |object| {
+                            let index = self.runtime.frame_index_for_object(object)?;
+                            let frame = self.runtime.frame();
+                            let row = frame.objects.get(index)?;
+                            Some(EffectiveAnimationProperties {
+                                z_index: row.z_index,
+                                transform: row.transform,
+                                style: row.style,
+                                appearance: row.appearance,
+                                reveal: *frame.reveals.get(index)?,
+                            })
+                        },
+                    )
+                    .map_err(|error| {
+                        ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                    })?;
+                    let channels = lower_prepared_family_transform_channels(&prepared, &activation)
+                        .map_err(|error| {
+                            ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                        })?;
+                    let plan = family_transform::build_derived_family_transform_plan(
+                        &self.runtime,
+                        &channels,
+                    )
+                    .map_err(ExecutionSessionAnimationError::InvalidComposition)?;
+                    (channels.stable_tracks().to_vec(), plan, None)
+                }
+                SemanticFamilyTransformMode::MatchingShapes => {
+                    if !schedule.scalar_leaves().is_empty() {
+                        return Err(ExecutionSessionAnimationError::InvalidComposition(
+                            "matching family Transform does not yet compose with scalar leaves"
+                                .into(),
+                        ));
+                    }
+                    let activation = prepare_matching_family_transform_activation(
+                        &prepared,
+                        &self.execution_index,
+                        family,
+                        projection.tracks(),
+                        |object| {
+                            let index = self.runtime.frame_index_for_object(object)?;
+                            let frame = self.runtime.frame();
+                            let row = frame.objects.get(index)?;
+                            Some(EffectiveAnimationProperties {
+                                z_index: row.z_index,
+                                transform: row.transform,
+                                style: row.style,
+                                appearance: row.appearance,
+                                reveal: *frame.reveals.get(index)?,
+                            })
+                        },
+                    )
+                    .map_err(|error| {
+                        ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                    })?;
+                    let payload =
+                        lower_prepared_matching_family_transform_payload(&prepared, &activation)
+                            .map_err(|error| {
+                                ExecutionSessionAnimationError::InvalidComposition(
+                                    error.to_string(),
+                                )
+                            })?;
+                    let plan = family_transform::build_matching_family_transform_plan(
+                        &self.runtime,
+                        &payload,
+                        activation.matching().source_members(),
+                    )
+                    .map_err(ExecutionSessionAnimationError::InvalidComposition)?;
+                    let replacement_root = lifecycle
+                            .as_ref()
+                            .map(PreparedAnimationLifecycle::root)
+                            .ok_or_else(|| {
+                                ExecutionSessionAnimationError::InvalidComposition(
+                                    "matching family Transform requires a root-aware completion boundary"
+                                        .into(),
+                                )
+                            })?;
+                    (
+                        payload.stable_tracks().to_vec(),
+                        plan,
+                        Some((
+                            replacement_root,
+                            payload.source_root(),
+                            payload.target_root(),
+                        )),
+                    )
+                }
+            }
+        } else {
+            (Vec::new(), None, None)
+        };
 
         let mut projection_enrollments = Vec::new();
         let mut runtime_enrollment_inputs = Vec::new();
@@ -3284,32 +3421,13 @@ impl ExecutionSession {
         let scalar_timeline = self
             .signal_timeline
             .prepare_append_batch(scalar_timeline_entries, schedule.start_time())?;
-        let projection = lower_prepared_semantic_animation_composition(
-            &prepared,
-            &self.execution_index,
-            root,
-            self.runtime.frame().time,
-            play_options,
-            |object| {
-                let index = self.runtime.frame_index_for_object(object)?;
-                let frame = self.runtime.frame();
-                let row = frame.objects.get(index)?;
-                Some(EffectiveAnimationProperties {
-                    z_index: row.z_index,
-                    transform: row.transform,
-                    style: row.style,
-                    appearance: row.appearance,
-                    reveal: *frame.reveals.get(index)?,
-                })
-            },
-        )?;
         let mut segment =
             ExecutionSegment::from_duration(projection.start_time(), projection.run_time())?;
         let mut next_track_id = self.next_activation_track_id;
         let track_capacity = projection
             .tracks()
             .len()
-            .saturating_add(family_transform_channels.stable_tracks().len());
+            .saturating_add(family_transform_tracks.len());
         let mut definitions = Vec::with_capacity(track_capacity);
         let mut completions = Vec::with_capacity(track_capacity);
         for track in projection.tracks() {
@@ -3332,7 +3450,7 @@ impl ExecutionSession {
             definitions.push(definition);
             next_track_id = raw_id.checked_add(1);
         }
-        for family_track in family_transform_channels.stable_tracks() {
+        for family_track in &family_transform_tracks {
             let track = &family_track.track;
             let raw_id = next_track_id.ok_or(ExecutionSessionAnimationError::TrackIdExhausted)?;
             let track_id = TrackId::new(raw_id);
@@ -3376,6 +3494,7 @@ impl ExecutionSession {
             && projection.family_animations().is_empty()
             && scalar_completions.is_empty()
             && derived_display_plan.is_none()
+            && family_replacement.is_none()
         {
             (None, self.next_segment_sequence)
         } else {
@@ -3415,7 +3534,7 @@ impl ExecutionSession {
             .apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
                 prepared,
                 execution_prefix,
-                None,
+                family_replacement.map(|(root, _, _)| root),
                 publication::SemanticPublicationPurpose::AuthoredMutation,
                 reactive_enrollment,
                 handled_scalar_signals,
@@ -3426,6 +3545,9 @@ impl ExecutionSession {
         let activation_scene_revision = self.publication_context().scene_revision();
         let family_transform_completion =
             schedule.family_transforms().first().and_then(|transform| {
+                if transform.mode != SemanticFamilyTransformMode::Structural {
+                    return None;
+                }
                 let source = resolve_committed_node(transform.source, &result);
                 let target_state = resolve_committed_node(transform.target_state, &result);
                 let source_count = store
@@ -3472,6 +3594,9 @@ impl ExecutionSession {
                 )
                 .collect();
             segment = segment.with_completion_token(token);
+            if let Some((root, source, target)) = family_replacement {
+                segment = segment.with_family_replacement(root, source, target);
+            }
             self.next_segment_sequence = next_segment_sequence;
             self.pending_segment_completion = Some(PendingSegmentCompletion {
                 token,

@@ -286,7 +286,7 @@ impl ExecutionSession {
         &mut self,
         prepared: PreparedSemanticMutationTransaction<'_>,
         execution_prefix: Vec<ExecutionPatch>,
-        effective: Option<PreparedEffectivePropertyBatch>,
+        order_root: Option<SemanticNodeId>,
         purpose: SemanticPublicationPurpose,
         reactive_enrollment: Option<PreparedReactiveEnrollmentBatch>,
         handled_scalar_signals: std::collections::HashSet<SemanticNodeId>,
@@ -294,13 +294,13 @@ impl ExecutionSession {
         self.apply_prepared_semantic_transaction_with_execution_contract(
             prepared,
             execution_prefix,
-            effective,
+            None,
             purpose,
             Some(PreparedScalarPublicationContract {
                 handled_signals: handled_scalar_signals,
                 reactive_enrollment,
             }),
-            None,
+            order_root,
         )
     }
 

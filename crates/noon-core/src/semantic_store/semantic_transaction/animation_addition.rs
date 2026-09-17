@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     AnimationOptions, Color, SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
     SemanticAnimationCompositionKind, SemanticAnimationIntent, SemanticAnimationState,
-    SemanticFadeDirection, SemanticFadeEndpoint, SemanticObjectState, SemanticObjectTrackProperty,
-    SemanticObjectTrackValues, SemanticTransformInterpolation,
+    SemanticFadeDirection, SemanticFadeEndpoint, SemanticFamilyTransformMode, SemanticObjectState,
+    SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticTransformInterpolation,
 };
 
 use super::family_edges::FamilyEdgePreflight;
@@ -39,6 +39,7 @@ pub enum SemanticTransactionAnimationIntent {
     FamilyTransformTo {
         source: SemanticTransactionNodeRef,
         target_state: SemanticTransactionNodeRef,
+        mode: SemanticFamilyTransformMode,
     },
     Indicate {
         target: SemanticTransactionNodeRef,
@@ -117,6 +118,7 @@ impl SemanticTransactionAnimationIntent {
             Self::FamilyTransformTo {
                 source,
                 target_state,
+                ..
             } => Some([Some(*source), Some(*target_state), None]),
             Self::Rotate { target, .. }
             | Self::Indicate { target, .. }
@@ -219,9 +221,11 @@ impl SemanticTransactionAnimation {
             SemanticAnimationIntent::FamilyTransformTo {
                 source,
                 target_state,
+                mode,
             } => SemanticTransactionAnimationIntent::FamilyTransformTo {
                 source: (*source).into(),
                 target_state: (*target_state).into(),
+                mode: *mode,
             },
             SemanticAnimationIntent::Rotate {
                 target,
@@ -359,9 +363,11 @@ impl SemanticTransactionAnimation {
             SemanticTransactionAnimationIntent::FamilyTransformTo {
                 source,
                 target_state,
+                mode,
             } => SemanticAnimationIntent::FamilyTransformTo {
                 source: resolve_node_ref(*source, committed),
                 target_state: resolve_node_ref(*target_state, committed),
+                mode: *mode,
             },
             SemanticTransactionAnimationIntent::Rotate {
                 target,
@@ -592,6 +598,7 @@ pub(super) fn preflight_transaction_animation(
         SemanticTransactionAnimationIntent::FamilyTransformTo {
             source,
             target_state,
+            ..
         } => {
             catalog.ensure_family(*source, index)?;
             catalog.ensure_family(*target_state, index)?;
@@ -840,8 +847,14 @@ pub(super) fn commit_add_animation(
         SemanticAnimationIntent::FamilyTransformTo {
             source,
             target_state,
+            mode,
         } => store
-            .insert_semantic_family_transform_animation(*source, *target_state, options)
+            .insert_semantic_family_transform_animation_with_mode(
+                *source,
+                *target_state,
+                *mode,
+                options,
+            )
             .expect("preflighted semantic family Transform insertion must remain valid while transaction owns the store"),
         SemanticAnimationIntent::Rotate { target, angle, hold_origin } => store
             .insert_semantic_rotate_animation_with_origin_constraint(*target, *angle, *hold_origin, options)
