@@ -3,6 +3,8 @@ name: Manim raster differential
 on:
   pull_request:
     paths:
+      - "crates/noon/src/semantic_mobject.rs"
+      - "crates/noon/src/semantic_mobject/bounds.rs"
       - "parity/manim-v0.21/manifest.json"
       - "parity/manim-v0.21/core-examples/**"
       - "web/semantic-preview-session*"
