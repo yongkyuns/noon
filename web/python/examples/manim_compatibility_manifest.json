@@ -268,15 +268,15 @@
     {
       "id": "noon-coordinate-plotting",
       "title": "CoordinatePlotting",
-      "summary": "Shared coordinate frame with a sampled function, illustrative data points, and axis labels.",
+      "summary": "Shared axes compare a sampled function and data; a UnitInterval shows endpoint and interior ticks.",
       "status": "ready",
       "path": "python/examples/coordinate_plotting.py",
       "category": "manim-compatible/plotting",
       "features": ["Axes", "plot", "plot_samples", "UnitInterval", "axis labels", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
-      "thumbnail": "thumbnails/manim/coordinate-plotting.svg",
-      "thumbnail_alt": "Blue sine curve and yellow sampled data over labeled coordinate axes",
+      "thumbnail": "thumbnails/manim/generated/coordinate-plotting.png",
+      "thumbnail_alt": "Blue sine curve and yellow sampled data over labeled axes, with a green unit interval below",
       "thumbnail_time": 0,
       "order": 1170
     },
