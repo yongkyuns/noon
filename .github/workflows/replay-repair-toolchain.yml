@@ -1,0 +1,38 @@
+name: Replay repair offline tools
+on:
+  push:
+    branches: [prep/demo-editor-source-snapshot]
+    paths: [.github/workflows/replay-repair-toolchain.yml]
+permissions:
+  contents: read
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: e09709ca2ae36d7591f816d52e84c7dd0540c82d
+          persist-credentials: false
+      - name: Export pinned checkout and minimal offline toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/replay-offline"
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy
+          cargo fetch
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/replay-offline/source.tar.gz"
+          git rev-parse HEAD > "$RUNNER_TEMP/replay-offline/source-sha.txt"
+          cp Cargo.lock "$RUNNER_TEMP/replay-offline/Cargo.lock"
+          toolchain="$(dirname "$(dirname "$(rustup which rustc)")")"
+          tar -czf "$RUNNER_TEMP/replay-offline/toolchain.tar.gz" -C "$toolchain" --exclude=share/doc .
+          tar -czf "$RUNNER_TEMP/replay-offline/cargo-registry.tar.gz" -C "$HOME/.cargo" registry
+          cd "$RUNNER_TEMP/replay-offline"
+          sha256sum *.tar.gz Cargo.lock source-sha.txt > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: replay-repair-offline-tools
+          path: ${{ runner.temp }}/replay-offline
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
