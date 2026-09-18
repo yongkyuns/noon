@@ -1,0 +1,29 @@
+name: C2 session preparation
+on:
+  push:
+    branches: [work/c2-session-input-preparation]
+    paths: [.github/workflows/c2-session-preparation.yml, .c2-session.patch]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Archive tracked source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > "$RUNNER_TEMP/source-commit.txt"
+          git archive --format=tar HEAD | gzip > "$RUNNER_TEMP/noon-source.tar.gz"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: c2-source-snapshot
+          path: |
+            ${{ runner.temp }}/noon-source.tar.gz
+            ${{ runner.temp }}/source-commit.txt
+          retention-days: 1
+          if-no-files-found: error
