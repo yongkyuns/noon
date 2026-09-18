@@ -62,8 +62,9 @@ impl NativeFontFace {
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeTextOptions {
     pub font_size: f32,
-    /// `-1` selects Manim's 30% extra spacing; any other value produces
-    /// `font_size * (1 + line_spacing)`.
+    /// Plain Text's extra line spacing: `-1` selects Manim's 30% default.
+    /// The resulting `font_size * (1 + line_spacing)` step is converted from
+    /// Manim's SVG units to shaping coordinates. Markup uses natural font spacing.
     pub line_spacing: f32,
     pub fill: Option<Color>,
     pub variations: Arc<[FontVariationSetting]>,
