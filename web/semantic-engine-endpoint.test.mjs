@@ -72,6 +72,9 @@ function fixture(
     seekDeltaJson: (value) => { if (!Number.isFinite(value)) throw new Error("invalid time"); time = value; return json(); },
     setNativeStateInputJson: (value) => { nativeInputs.push({ type: "state", value: JSON.parse(value) }); },
     emitNativeEventJson: (value) => { nativeInputs.push({ type: "event", value: JSON.parse(value) }); },
+    submitBrowserPointerInputJson: (value) => {
+      nativeInputs.push({ type: "pointer", value: JSON.parse(value) });
+    },
     liveSegmentWake: () => ({
       presentNow: true,
       cadence: "animation_frame",
@@ -941,6 +944,27 @@ test("native state and event controls reach the leased player in accepted order"
     });
     assert.equal(event.type, "native_event");
     assert.equal(f.stats().executionWakeTimes.length, initialWakeObservations + 2);
+    const pointerInput = {
+      kind: "move",
+      surface_x: 10,
+      surface_y: 20,
+      viewport_width: 800,
+      viewport_height: 400,
+      button: null,
+      view_revision: 3,
+      shift: false,
+      control: false,
+      alt: false,
+      meta: false,
+    };
+    const pointer = await request(
+      f.control.port2,
+      "browser_pointer_input",
+      22,
+      pointerInput,
+    );
+    assert.equal(pointer.type, "browser_pointer_input");
+    assert.equal(f.stats().executionWakeTimes.length, initialWakeObservations + 3);
     assert.deepEqual(f.stats().nativeInputs, [
       {
         type: "state",
@@ -950,19 +974,20 @@ test("native state and event controls reach the leased player in accepted order"
         },
       },
       { type: "event", value: { source: { kind: "pointer_down", button: 0 } } },
+      { type: "pointer", value: pointerInput },
     ]);
 
     f.player.setNativeStateInputJson = () => { throw new Error("native value rejected"); };
-    const rejected = await request(f.control.port2, "native_state_input", 22, {
+    const rejected = await request(f.control.port2, "native_state_input", 23, {
       source: { kind: "control", name: "opacity" },
       value: { kind: "bool", value: true },
     });
     assert.equal(rejected.type, "error");
     assert.match(rejected.message, /native value rejected/);
-    assert.equal(f.stats().nativeInputs.length, 2);
+    assert.equal(f.stats().nativeInputs.length, 3);
     assert.equal(
       f.stats().executionWakeTimes.length,
-      initialWakeObservations + 2,
+      initialWakeObservations + 3,
       "failed input does not publish or replace the current Rust wake",
     );
   } finally { endpoint?.stop(); f.close(); }
