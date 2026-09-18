@@ -22,8 +22,6 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git fetch --no-tags --depth=32 origin a7eb3713a262b07fff8569e9eb3cc1f08bc311bd
-          # The clock branch predates the text-color master update. Preserve that
-          # update from the replay branch instead of mistaking PR base for ancestry.
           test "$(git merge-base HEAD FETCH_HEAD)" = 295abd185a4ef396c73c450aa404c4cfdce8a599
           git merge-base --is-ancestor e09709ca2ae36d7591f816d52e84c7dd0540c82d FETCH_HEAD
           git merge --no-commit --no-ff a7eb3713a262b07fff8569e9eb3cc1f08bc311bd || true
@@ -34,20 +32,34 @@ jobs:
           allowed={'.github/workflows/playground-playback-controls.yml','web/semantic-engine-endpoint.test.mjs'}
           assert set(conflicts)<=allowed,conflicts
           for name in conflicts:
-              parts=[]
-              for stage in (2,1,3):
-                  p=Path('/tmp')/('merge-'+str(stage)+'-'+Path(name).name)
-                  p.write_bytes(subprocess.check_output(['git','show',f':{stage}:{name}']))
-                  parts.append(str(p))
-              result=subprocess.run(['git','merge-file','--union','-p',*parts],capture_output=True,check=True)
-              Path(name).write_bytes(result.stdout)
+              if name=='web/semantic-engine-endpoint.test.mjs':
+                  # Both PRs append independent complete test blocks at EOF. A
+                  # line-wise union can merge their identical closing braces.
+                  replay=subprocess.check_output(['git','show',f':3:{name}'],text=True)
+                  clock=subprocess.check_output(['git','show',f':2:{name}'],text=True)
+                  marker='test("real-time state observes the Rust wait clock without driving or publishing",'
+                  assert clock.count(marker)==1 and marker not in replay
+                  fixture='time: () => time, isPlaying: () => playing,'
+                  assert replay.count(fixture)==1
+                  replay=replay.replace(fixture,'time: () => time, playbackTimeAt: () => time, isPlaying: () => playing,')
+                  Path(name).write_text(replay+'\n'+clock[clock.index(marker):])
+              else:
+                  parts=[]
+                  for stage in (2,1,3):
+                      p=Path('/tmp')/('merge-'+str(stage)+'-'+Path(name).name)
+                      p.write_bytes(subprocess.check_output(['git','show',f':{stage}:{name}']))
+                      parts.append(str(p))
+                  result=subprocess.run(['git','merge-file','--union','-p',*parts],capture_output=True,check=True)
+                  Path(name).write_bytes(result.stdout)
               subprocess.run(['git','add',name],check=True)
+          assert not subprocess.check_output(['git','diff','--name-only','--diff-filter=U'],text=True).strip()
           workflow=Path('.github/workflows/playground-playback-controls.yml').read_text()
           for required in ['Verify wait clock against real time','Verify dynamic load membership and content history','Test native replay history and locality']:
               assert required in workflow,required
           assert 'REPLAY_DEPENDENT_CONTROLS' in Path('web/semantic-engine-endpoint.js').read_text()
           assert 'player.playbackTimeAt(performance.now())' in Path('web/semantic-engine-endpoint.js').read_text()
           PY
+          node --check web/semantic-engine-endpoint.test.mjs
           git diff --check
           git diff --cached --check
           node --test web/*.test.mjs > "$RUNNER_TEMP/combined-web-tests.log" 2>&1
