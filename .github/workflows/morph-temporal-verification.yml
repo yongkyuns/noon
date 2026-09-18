@@ -1,0 +1,89 @@
+name: Morph temporal before-after verification
+on:
+  push:
+    branches: [prep/demo-editor-source-snapshot]
+    paths: [.github/workflows/morph-temporal-verification.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - state: before
+            revision: 83ac18f7b0974356bbb47e6cadcd4d1aceb5a1eb
+            runtime_run: 35349143222
+          - state: after
+            revision: 215c346129b6d496e4423fc4529ede6f0234dd52
+            runtime_run: 35352997922
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.revision }}
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: 933a9543a4723d064ce1b98357d6b28e7e48928d
+          path: test-source
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: playground-cross-browser-web-runtime
+          run-id: ${{ matrix.runtime_run }}
+          github-token: ${{ github.token }}
+          path: web
+      - name: Verify runtime provenance and exact final harness
+        env:
+          EXPECTED_REVISION: ${{ matrix.revision }}
+        run: |
+          node --input-type=module -e "import fs from 'node:fs'; import assert from 'node:assert/strict'; assert.equal(JSON.parse(fs.readFileSync('web/runtime-build-identity.json')).sourceRevision,process.env.EXPECTED_REVISION);"
+          cp test-source/scripts/playground-playback-morph-regression.mjs scripts/playground-playback-morph-regression.mjs
+          test "$(git hash-object scripts/playground-playback-morph-regression.mjs)" = 4e0e2558e7e6d194bf1b8a5e93071c049d45fb66
+          rm -rf test-source
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Require both backends to demonstrate the before-after contract
+        env:
+          EXPECTED_STATE: ${{ matrix.state }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p temporal-proof
+          for backend in webgl webgpu; do
+            set +e
+            NOON_MORPH_BACKEND="$backend" NOON_MORPH_REGRESSION_ARTIFACTS="temporal-proof/$backend" node scripts/playground-playback-morph-regression.mjs > "temporal-proof/$backend.log" 2>&1
+            code=$?
+            set -e
+            cat "temporal-proof/$backend.log"
+            if [ "$EXPECTED_STATE" = after ]; then test "$code" -eq 0; else test "$code" -ne 0; fi
+            BACKEND="$backend" python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          r=json.loads(Path('temporal-proof',os.environ['BACKEND'],'morph-regression.json').read_text())
+          assert r['errors']==[],r['errors']
+          assert len(r['comparisons'])==34,r
+          assert r['initialRenderer']['metrics']['backend']==('WebGPU' if os.environ['BACKEND']=='webgpu' else 'WebGL2'),r
+          bad=[s for s in r['comparisons'] if s['mismatch']>=.002]
+          if os.environ['EXPECTED_STATE']=='after':
+              assert r['outcome']=='pass' and bad==[],bad
+          else:
+              expected={(mode,t) for mode in ['seek','forward'] for t in [2.3,2.301,2.7,3.049]}
+              assert r['outcome']=='fail',r
+              assert {(s['mode'],s['time']) for s in bad}==expected,bad
+              assert all(s['mismatch']>.02 for s in bad),bad
+          print(os.environ['EXPECTED_STATE'],os.environ['BACKEND'],'verified',len(r['comparisons']),'samples;',len(bad),'expected mismatches')
+          PY
+          done
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: morph-temporal-${{ matrix.state }}
+          path: |
+            temporal-proof
+            web/runtime-build-identity.json
+          if-no-files-found: error
+          retention-days: 3
