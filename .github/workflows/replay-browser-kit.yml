@@ -1,0 +1,38 @@
+name: Replay browser offline kit
+on:
+  push:
+    branches: [prep/replay-history-repair]
+    paths: [.github/workflows/replay-browser-kit.yml]
+permissions:
+  contents: read
+jobs:
+  kit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
+        with:
+          tool: wasm-bindgen@0.2.128
+          fallback: none
+      - name: Export public test tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/kit/bin"
+          cd "$RUNNER_TEMP/kit"
+          cp "$(command -v wasm-bindgen)" bin/
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/browsers" npx playwright install chromium
+          tar --zstd -cf tools.tar.zst bin node_modules
+          tar -C "$RUNNER_TEMP/browsers" --zstd -cf browser.tar.zst .
+          sha256sum tools.tar.zst browser.tar.zst > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: replay-browser-offline-kit
+          path: |
+            ${{ runner.temp }}/kit/tools.tar.zst
+            ${{ runner.temp }}/kit/browser.tar.zst
+            ${{ runner.temp }}/kit/SHA256SUMS
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
