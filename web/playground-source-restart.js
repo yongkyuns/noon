@@ -47,9 +47,12 @@ export function createSourceRestart({
   async function start(requestVersion, selection, retirement, onStarted = () => {}) {
     try {
       await retirement;
-      if (disposed || version !== requestVersion || currentSelection() !== selection) return;
+      const isCurrent = () => !disposed && version === requestVersion && currentSelection() === selection;
+      if (!isCurrent()) return;
       onStarted();
-      return await run();
+      // Run may itself await cancellation. Keep the same freshness check alive
+      // through that boundary so a later edit, selection or disposal wins.
+      return await run(isCurrent);
     } catch (error) {
       report(error, requestVersion);
     }

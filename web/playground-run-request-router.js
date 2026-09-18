@@ -8,11 +8,15 @@ export function createRunRequestRouter({
   supersede,
   onQueued,
 }) {
-  let transitionPromise = null;
+  let pendingTransition = null;
 
-  async function request() {
-    if (transitionPromise !== null) {
-      const { replacement } = await transitionPromise;
+  async function request(isCurrent = () => true) {
+    if (!isCurrent()) return;
+    if (pendingTransition !== null) {
+      // A newer admitted Run can join cancellation, but an edit that has not
+      // reached its debounce deadline must invalidate the earlier request.
+      pendingTransition.isCurrent = isCurrent;
+      const { replacement } = await pendingTransition.promise;
       return replacement;
     }
     const priorRun = currentRun();
@@ -27,21 +31,22 @@ export function createRunRequestRouter({
     }
     if (priorRun === null) return run();
 
-    const transition = (async () => {
+    const transition = { isCurrent, promise: null };
+    transition.promise = (async () => {
       const superseded = await supersede();
-      if (!superseded) onQueued();
+      if (!superseded && transition.isCurrent()) onQueued();
       await priorRun;
       // Publish the replacement without awaiting it here. The transition gate
       // protects only cancellation/retirement and replacement startup; once
       // the new source owns playback, a later explicit Run may supersede it.
-      return { replacement: run() };
+      return { replacement: transition.isCurrent() ? run() : undefined };
     })();
-    transitionPromise = transition;
+    pendingTransition = transition;
     try {
-      const { replacement } = await transition;
+      const { replacement } = await transition.promise;
       return replacement;
     } finally {
-      if (transitionPromise === transition) transitionPromise = null;
+      if (pendingTransition === transition) pendingTransition = null;
     }
   }
 

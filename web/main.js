@@ -1130,7 +1130,7 @@ const runRequestRouter = createRunRequestRouter({
 
 const sourceRestart = createSourceRestart({
   stop: stopForSourceEdit,
-  run: () => runRequestRouter.request(),
+  run: (isCurrent) => runRequestRouter.request(isCurrent),
   currentSelection: () => selectedExampleId,
   onError: showSceneError,
 });
