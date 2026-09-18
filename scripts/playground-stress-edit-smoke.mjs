@@ -122,7 +122,7 @@ async function waitForSourceOwnedPlayback(page) {
       return (
         window.__noonExampleGallery?.runInFlight === true &&
         patch?.dataset.state === "running" &&
-        (patch?.value ?? patch?.textContent ?? "").includes("edit freely or Run again") &&
+        (patch?.value ?? patch?.textContent ?? "").includes("edits restart automatically") &&
         run?.disabled === false
       );
     },
@@ -283,7 +283,7 @@ try {
   assert.match(source, /rows = 20/);
   // Construct the real stress scene and complete its first short source-owned
   // play before inserting the long ownership interval. The injected wait is
-  // longer than every test wait bound, so only an explicit Run can end it.
+  // longer than every test wait bound, so an edit must cancel it rather than wait for completion.
   const firstStressPlayBoundary = "            run_time=0.35,\n        )\n";
   assert.ok(
     source.includes(firstStressPlayBoundary),
@@ -293,7 +293,7 @@ try {
     .replace(/rows = \d+/, "rows = 5")
     .replace(
       firstStressPlayBoundary,
-      `${firstStressPlayBoundary}        self.wait(${SOURCE_OWNED_DURATION_SECONDS}.0)\n`,
+      `${firstStressPlayBoundary.replace("0.35", "2.0")}        self.wait(${SOURCE_OWNED_DURATION_SECONDS}.0)\n`,
     );
   assert.match(rows5Source, /self\.wait\(600\.0\)/);
   const rows7Source = source.replace(/rows = \d+/, "rows = 7");
@@ -302,39 +302,37 @@ try {
 
   await replaceSource(editor, page, rows5Source);
   diagnostics.snapshots.rows5Edited = await snapshot(page);
-  assert.match(diagnostics.snapshots.rows5Edited.patchText, /current preview continues · Run to apply/);
+  assert.match(diagnostics.snapshots.rows5Edited.patchText, /restarting/i);
   assert.equal(diagnostics.snapshots.rows5Edited.objectCount, baselineObjectCount);
   assert.equal(diagnostics.snapshots.rows5Edited.runInFlight, false);
-  assert.equal(diagnostics.snapshots.rows5Edited.runGeneration, diagnostics.snapshots.baseline.runGeneration);
+  assert.ok(diagnostics.snapshots.rows5Edited.runGeneration > diagnostics.snapshots.baseline.runGeneration);
 
-  await page.locator("#replace-scene").click();
   diagnostics.snapshots.rows5Playing = await waitForSourceOwnedPlayback(page);
   const sourceOwnedGeneration = diagnostics.snapshots.rows5Playing.runGeneration;
 
-  // Reset and edits must not disturb the source continuation. This checks the
-  // observable ownership generation, with no duration or throughput assumption.
+  await page.waitForFunction(() => Number(document.querySelector(".playback-scrubber")?.value) > 0.1);
+  assert.equal(await page.locator(".playback-controls").getAttribute("data-controllable"), "false");
+
+  // Reset stops the long continuation immediately. A subsequent edit replaces
+  // its pending restart; only the newest source may become the preview.
   await page.locator(".reset-example").click();
   assert.equal(await page.locator("#python-scene-source").inputValue(), source);
   diagnostics.snapshots.resetDuringRows5 = await snapshot(page);
-  assert.equal(diagnostics.snapshots.resetDuringRows5.runInFlight, true);
-  assert.equal(diagnostics.snapshots.resetDuringRows5.runGeneration, sourceOwnedGeneration);
-  assert.match(diagnostics.snapshots.resetDuringRows5.patchText, /current preview continues · Run to apply/);
+  assert.ok(diagnostics.snapshots.resetDuringRows5.runGeneration > sourceOwnedGeneration);
+  assert.match(diagnostics.snapshots.resetDuringRows5.patchText, /restarting/i);
 
   await replaceSource(editor, page, rows7Source);
   diagnostics.snapshots.rows7EditedDuringRows5 = await snapshot(page);
-  assert.equal(diagnostics.snapshots.rows7EditedDuringRows5.runInFlight, true);
-  assert.equal(diagnostics.snapshots.rows7EditedDuringRows5.runGeneration, sourceOwnedGeneration);
-  assert.equal(diagnostics.snapshots.rows7EditedDuringRows5.runDisabled, false);
-  assert.match(diagnostics.snapshots.rows7EditedDuringRows5.patchText, /current preview continues · Run to apply/);
+  assert.ok(diagnostics.snapshots.rows7EditedDuringRows5.runGeneration > sourceOwnedGeneration);
+  assert.match(diagnostics.snapshots.rows7EditedDuringRows5.patchText, /restarting/i);
 
-  await page.locator("#replace-scene").click();
   diagnostics.snapshots.rows5Superseded = await waitForSupersedingRun(page, sourceOwnedGeneration);
   diagnostics.snapshots.rows7Rerun = await waitForAppliedRun(page, baselineObjectCount);
   assert.equal(diagnostics.snapshots.rows7Rerun.executionMode, "semantic");
   assert.equal(diagnostics.snapshots.rows7Rerun.patchOperation, "Scene rebuilt atomically");
   assert.ok(
     diagnostics.snapshots.rows7Rerun.runGeneration >= diagnostics.snapshots.rows5Superseded.runGeneration,
-    "the applied replacement must follow explicit source invalidation",
+    "the applied replacement must follow edit-triggered source invalidation",
   );
   assert.equal(
     diagnostics.snapshots.rows7Rerun.patchRunGeneration,
@@ -346,7 +344,7 @@ try {
   await replaceSource(editor, page, rows20Source);
   diagnostics.snapshots.rows20Edited = await snapshot(page);
   assert.equal(diagnostics.snapshots.rows20Edited.objectCount, rows7ObjectCount);
-  assert.match(diagnostics.snapshots.rows20Edited.patchText, /current preview continues · Run to apply/);
+  assert.match(diagnostics.snapshots.rows20Edited.patchText, /restarting/i);
   await page.keyboard.press(runShortcut);
   diagnostics.snapshots.rows20Rerun = await waitForAppliedRun(page, rows7ObjectCount);
   assert.equal(diagnostics.snapshots.rows20Rerun.executionMode, "semantic");
@@ -356,14 +354,14 @@ try {
   assert.deepEqual(
     diagnostics.consoleErrors,
     [],
-    `valid explicit structural reruns emitted console errors: ${diagnostics.consoleErrors.join("\n")}`,
+    `valid automatic structural reruns emitted console errors: ${diagnostics.consoleErrors.join("\n")}`,
   );
 
   diagnostics.serverOutput = serverOutput;
   await page.screenshot({ path: path.join(artifactDir, "stress-edited.png"), fullPage: true });
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   console.log(
-    `playground explicit structural reruns ok: ${diagnostics.snapshots.loaded.editorHeight}px editor, source-owned rows=5 superseded by rows=7 then rows=20`,
+    `playground automatic structural reruns ok: ${diagnostics.snapshots.loaded.editorHeight}px editor, source-owned rows=5 superseded by rows=7 then rows=20`,
   );
 } catch (error) {
   diagnostics.failure = error instanceof Error ? error.stack ?? error.message : String(error);

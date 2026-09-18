@@ -1,3 +1,5 @@
+import { installPythonEditorTools } from "./python-editor-tools.js";
+
 const CODEMIRROR_URL = "https://esm.sh/codemirror@6.0.2";
 const PYTHON_URL = "https://esm.sh/@codemirror/lang-python@6.2.1";
 const LINT_URL = "https://esm.sh/@codemirror/lint@6.9.7";
@@ -40,6 +42,11 @@ async function enhancePythonEditors() {
   if (textareas.length === 0) {
     return;
   }
+
+  const tools = new Map(textareas.map((textarea) => [
+    textarea,
+    installPythonEditorTools(textarea, async (source) => (await getRuffWorkspace()).format(source)),
+  ]));
 
   const [{ EditorView, basicSetup }, { python }, { linter, lintGutter }, { oneDark }] =
     await Promise.all([
@@ -96,7 +103,6 @@ async function enhancePythonEditors() {
         editorTheme,
         lintGutter(),
         linter(runRuff, { delay: 300 }),
-        EditorView.lineWrapping,
         EditorView.updateListener.of((update) => {
           if (!update.docChanged || projectingSource) return;
           // DOM input fires before CodeMirror commits its document. Publish
@@ -145,6 +151,15 @@ async function enhancePythonEditors() {
     });
 
     textarea.editorView = view;
+    // Composition belongs to the visible CodeMirror content, not its hidden
+    // textarea integration surface. Forward its lifecycle for IME-safe reruns.
+    view.contentDOM.addEventListener("compositionstart", () => {
+      textarea.dispatchEvent(new Event("compositionstart"));
+    });
+    view.contentDOM.addEventListener("compositionend", () => {
+      textarea.dispatchEvent(new Event("compositionend"));
+    });
+    tools.get(textarea).attach(host);
     host.dataset.editorReady = "true";
   }
 
@@ -152,16 +167,19 @@ async function enhancePythonEditors() {
   style.textContent = `
     .python-code-editor {
       width: 100%;
+      min-width: 0;
       min-height: 0;
       flex: 1;
       overflow: hidden;
       background: #080b12;
     }
     .python-code-editor .cm-editor { height: 100%; }
+    .python-code-editor .cm-content { white-space: pre; }
+    .python-code-editor[data-wrap="true"] .cm-content { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; flex-shrink: 1; }
     .python-code-editor .cm-focused { outline: 2px solid #aa9cff; outline-offset: -2px; }
     .python-code-editor + textarea[hidden] { display: none !important; }
     @media (max-width: 44rem) {
-      .python-code-editor { min-height: 25rem; }
+      .python-code-editor { min-height: 0; }
       .python-code-editor .cm-editor { font-size: 0.76rem; }
     }
   `;
@@ -186,6 +204,9 @@ async function getRuffWorkspace() {
   ruffWorkspacePromise ??= import(RUFF_URL).then(async (ruff) => {
     await ruff.default();
     return new ruff.Workspace(PYTHON_RUFF_SETTINGS, ruff.PositionEncoding.Utf16);
+  }).catch((error) => {
+    ruffWorkspacePromise = null;
+    throw error;
   });
   return ruffWorkspacePromise;
 }

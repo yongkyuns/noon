@@ -247,17 +247,30 @@
         font: 0.82rem/1.58 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
           monospace;
         tab-size: 4;
+        white-space: pre;
+        overflow: auto;
         caret-color: #d6d0ff;
       }
 
       .editor-footer {
         display: flex;
+        flex-direction: column;
         min-height: 2.35rem;
-        align-items: center;
+        align-items: stretch;
         padding: 0.48rem 0.8rem;
         border-top: 1px solid var(--border);
         color: var(--muted-2);
         font-size: 0.7rem;
+      }
+
+      #python-diagnostics { margin-top: 0.35rem; }
+      #python-diagnostics summary { cursor: pointer; color: var(--danger); }
+      #python-traceback {
+        max-height: 10rem;
+        overflow: auto;
+        white-space: pre;
+        font-size: 0.7rem;
+        user-select: text;
       }
 
       #patch-status {
@@ -284,6 +297,46 @@
         background:
           radial-gradient(circle at 50% 42%, rgb(62 70 100 / 16%), transparent 22rem),
           #090c13;
+      }
+
+      .preview-pane:fullscreen {
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        border: 0;
+      }
+      .preview-pane:fullscreen .canvas-wrap { container-type: size; }
+      .preview-pane:fullscreen .canvas-frame::before { padding-top: 56.25%; }
+      .preview-pane:fullscreen .canvas-frame {
+        max-width: none;
+        width: min(100cqw, calc(100cqh * 16 / 9));
+      }
+
+      .python-editor-tools {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.35rem 0.55rem;
+        border-bottom: 1px solid var(--border);
+        flex: none;
+        font-size: 0.68rem;
+      }
+      .python-editor-tools .secondary-button { padding: 0.3rem 0.45rem; font-size: 0.68rem; }
+      .python-editor-tool-status { color: var(--muted); overflow-wrap: anywhere; }
+      .python-editor-help { position: relative; }
+      .python-editor-help summary { cursor: pointer; }
+      .python-editor-help[open] > div {
+        position: absolute;
+        z-index: 10;
+        top: 1.5rem;
+        right: 0;
+        width: min(20rem, 70vw);
+        padding: 0.8rem;
+        line-height: 1.6;
+        background: #171d2a;
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
       }
 
       .canvas-wrap {
@@ -388,7 +441,7 @@
         }
 
         textarea {
-          min-height: 25rem;
+          min-height: 0;
           padding-left: 0.85rem;
           background: var(--code);
           font-size: 0.76rem;
@@ -437,6 +490,7 @@
             <div id="scene-editor-panel" class="editor-panel">
               <textarea
                 id="python-scene-source"
+                wrap="off"
                 aria-label="Python scene source"
                 autocomplete="off"
                 autocorrect="off"
@@ -447,6 +501,10 @@
 
           <footer class="editor-footer">
             <output id="patch-status" aria-live="polite">Loading Python examples…</output>
+            <details id="python-diagnostics" hidden>
+              <summary>Python error details</summary>
+              <pre id="python-traceback"></pre>
+            </details>
           </footer>
 
           <!--
@@ -466,6 +524,7 @@
         <section class="preview-pane" aria-label="Animation preview">
           <div class="preview-head">
             <span class="preview-title">Preview</span>
+            <button id="preview-fullscreen" class="secondary-button" type="button" aria-pressed="false">Fullscreen</button>
           </div>
           <div class="canvas-wrap">
             <div class="canvas-frame">

@@ -198,6 +198,10 @@ try {
       const sample = {
         controls: currentStatus.dataset.playbackControls ?? null,
         hasControls: document.querySelector(".playback-controls") !== null,
+        controllable: document.querySelector(".playback-controls")?.dataset.controllable,
+        scrubberDisabled: document.querySelector(".playback-scrubber")?.disabled,
+        time: Number(document.querySelector(".playback-scrubber")?.value ?? 0),
+        phase: currentStatus.dataset.playbackPhase,
         runInFlight: window.__noonExampleGallery?.runInFlight ?? false,
       };
       window.__noonPlaybackLifecycle.samples.push(sample);
@@ -209,7 +213,7 @@ try {
     playbackObserver.observe(document, {
       attributes: true,
       subtree: true,
-      attributeFilter: ["data-playback-controls"],
+      attributeFilter: ["data-playback-controls", "data-playback-phase"],
     });
     observePlaybackOwnership();
   });
@@ -232,10 +236,15 @@ try {
   );
   assert.ok(
     diagnostics.lifecycle.samples
-      .filter((sample) => sample.controls === "unavailable")
-      .every((sample) => !sample.hasControls),
-    "unavailable source-owned playback must not expose host controls",
+      .filter((sample) => sample.controls === "unavailable" && sample.phase === "playing")
+      .every((sample) => sample.hasControls && sample.controllable === "false" && sample.scrubberDisabled),
+    "source-owned playback must expose live progress but reject host commands",
   );
+  const liveTimes = diagnostics.lifecycle.samples
+    .filter((sample) => sample.controls === "unavailable" && sample.phase === "playing")
+    .map((sample) => sample.time);
+  assert.ok(liveTimes.length >= 2 && Math.max(...liveTimes) > Math.min(...liveTimes),
+    "the visible playhead must advance during the first Python-owned pass");
   assert.equal(initial.hasControls, true, "completed source playback must expose its replay lease");
   assert.equal(initial.playbackAvailability, "available");
   assert.equal(initial.runText, "Run");
@@ -272,6 +281,24 @@ try {
     `completed replay seek missed target: ${sought.metricTime} vs ${seekTarget}`,
   );
 
+  // Real browser fullscreen includes the same canvas and its transport controls.
+  const beforeFullscreen = await page.locator("#scene").boundingBox();
+  await page.locator("#preview-fullscreen").click();
+  await page.waitForFunction(() => document.fullscreenElement === document.querySelector(".preview-pane"));
+  const fullscreen = await page.evaluate(() => {
+    const canvas = document.querySelector("#scene").getBoundingClientRect();
+    const timeline = document.querySelector(".playback-controls").getBoundingClientRect();
+    return { width: canvas.width, bottom: canvas.bottom, timelineTop: timeline.top, timelineBottom: timeline.bottom, height: innerHeight };
+  });
+  assert.ok(fullscreen.width > beforeFullscreen.width);
+  assert.ok(fullscreen.bottom <= fullscreen.timelineTop + 1, "fullscreen canvas must not overlap the timeline");
+  assert.ok(fullscreen.timelineBottom <= fullscreen.height + 1, "fullscreen timeline must remain visible");
+  await page.screenshot({ path: path.join(artifactDir, "fullscreen.png") });
+  await page.locator("#preview-fullscreen").click();
+  await page.waitForFunction(() => document.fullscreenElement === null);
+  assert.equal(await page.locator("#preview-fullscreen").getAttribute("aria-pressed"), "false");
+  assert.equal((await playbackSnapshot(page)).canvasIdentity, "original", "fullscreen must not recreate execution");
+
   const initialGeneration = initial.runGeneration;
   await page.evaluate(() => {
     const source = document.querySelector("#python-scene-source");
@@ -280,13 +307,9 @@ try {
   });
   const edited = await playbackSnapshot(page);
   diagnostics.edited = edited;
-  assert.equal(edited.patchState, "ready", "editing must leave the completed preview intact until Run");
-  assert.equal(edited.runGeneration, initialGeneration, "editing must not start a replacement run");
-  assert.equal(edited.hasControls, true, "editing must retain the completed replay lease");
-  assert.equal(edited.canvasIdentity, "original", "editing must not replace the canvas");
-
-  const runButton = page.locator("#replace-scene");
-  await runButton.click();
+  assert.equal(edited.patchState, "ready", "editing must stop before its debounced restart");
+  assert.ok(edited.runGeneration > initialGeneration, "editing must immediately invalidate the old run");
+  assert.equal(edited.hasControls, false, "editing must retire the old replay lease");
   await page.waitForFunction(() => window.__noonExampleGallery?.runInFlight === true);
   await page.waitForFunction(
     () =>
@@ -298,17 +321,17 @@ try {
   );
   const rerun = await playbackSnapshot(page);
   diagnostics.rerun = rerun;
-  assert.equal(rerun.hasControls, true, "explicit Run must restore a completed replay lease");
+  assert.equal(rerun.hasControls, true, "automatic source restart must restore a completed replay lease");
   assert.equal(rerun.playbackAvailability, "available");
   assert.equal(rerun.runDisabled, false);
   assert.equal(rerun.patchRunGeneration, String(rerun.runGeneration));
-  assert.ok(rerun.runGeneration > initialGeneration, "explicit Run must apply the newest source generation");
+  assert.ok(rerun.runGeneration > initialGeneration, "automatic restart must apply the newest source generation");
   assert.equal(
     Number(rerun.scrubberMax),
     Number(initial.scrubberMax) + 0.25,
     "Run must execute the edited source's added wait",
   );
-  assert.equal(rerun.canvasIdentity, "original", "source rerun must preserve the canvas");
+  assert.equal(rerun.canvasCount, 1, "source replacement must leave exactly one canvas");
   assert.equal(rerun.rendererBackend, initial.rendererBackend, "source rerun changed renderer backend");
   assert.equal(rerun.canvasCount, 1);
 
@@ -320,7 +343,7 @@ try {
     mobile.documentWidth <= mobile.viewportWidth + 1,
     `source controls overflow mobile viewport (${mobile.documentWidth}px > ${mobile.viewportWidth}px)`,
   );
-  await runButton.screenshot({ path: path.join(artifactDir, "controls-mobile.png") });
+  await page.locator(".playback-controls").screenshot({ path: path.join(artifactDir, "controls-mobile.png") });
   await page.screenshot({ path: path.join(artifactDir, "playground.png"), fullPage: true });
 
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);
@@ -328,7 +351,7 @@ try {
   diagnostics.pageErrors = pageErrors;
   diagnostics.consoleErrors = consoleErrors;
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
-  console.log("✓ first-pass source ownership transitions to a seekable completed replay without replacing the canvas");
+  console.log("✓ live progress, completed replay controls, fullscreen, and automatic source restart");
 } catch (error) {
   if (page !== null) {
     try {

@@ -161,3 +161,24 @@ test("every request joining cancellation awaits the replacement result", async (
   assert.deepEqual(await Promise.all([replacement, joined]), ["replacement result", "replacement result"]);
   await initial;
 });
+
+
+test("a fresh Run joining an invalidated cancellation still starts exactly one replacement", async () => {
+  const cancellation = deferred();
+  const state = harness({ activeContinuation: true, cancellation });
+  const initial = state.router.request();
+  let current = true;
+  const superseded = state.router.request(() => current);
+  current = false;
+  state.setSource("newest explicitly requested source");
+  const latest = state.router.request(() => true);
+  cancellation.resolve();
+  state.resolveActive();
+  await flush();
+  assert.equal(state.starts.length, 2);
+  assert.equal(state.supersedes, 1);
+  assert.equal(state.starts[1].source, "newest explicitly requested source");
+  state.starts[1].gate.resolve("latest result");
+  assert.deepEqual(await Promise.all([superseded, latest]), ["latest result", "latest result"]);
+  await initial;
+});

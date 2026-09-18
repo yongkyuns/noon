@@ -5,7 +5,7 @@ void import("./python-editor.js").catch((error) => {
 });
 
 // Warm one persistent full-source authoring/execution session after the initial source/gallery
-// paint. Subsequent editor changes are intentionally execution-inert until explicit Run; this
+// paint. Subsequent editor changes stop the old run and restart after a typing pause; this
 // is browser UX plumbing, while semantic identity, scheduling and reconciliation remain owned
 // by the existing engine path.
 void import("./live-authoring-bootstrap.js").catch((error) => {

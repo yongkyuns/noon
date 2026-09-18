@@ -86,6 +86,8 @@ async function snapshot(page) {
       objectCount: document.querySelector("#metric-objects")?.value ?? "",
       playhead: document.querySelector("#metric-time")?.value ?? "",
       runDisabled: document.querySelector("#replace-scene")?.disabled ?? true,
+      hasExecution: window.__noonExampleGallery?.executionMode != null,
+      traceback: document.querySelector("#python-traceback")?.textContent ?? "",
     };
   });
 }
@@ -163,7 +165,6 @@ async function waitForRunResult(page, { expectedState, expectedObjectCount = nul
 }
 
 async function runEditedSource(page, options) {
-  await page.locator("#replace-scene").click();
   return waitForRunResult(page, options);
 }
 
@@ -235,7 +236,7 @@ try {
   phase = "syntax-error";
   await setEditorSource(page, SOURCES.syntaxError);
   let edited = await snapshot(page);
-  assert.match(edited.patchText, /current preview continues · Run to apply/);
+  assert.match(edited.patchText, /restarting/);
   assert.equal(edited.objectCount, diagnostics.snapshots.baseline.objectCount);
   diagnostics.snapshots.syntaxError = await runEditedSource(page, { expectedState: "error" });
   assert.match(diagnostics.snapshots.syntaxError.patchText, /Python failed:/);
@@ -249,14 +250,16 @@ try {
   assert.equal(
     diagnostics.snapshots.syntaxError.objectCount,
     diagnostics.snapshots.baseline.objectCount,
-    "syntax failure must leave the last good scene visible",
+    "syntax failure must retain the last successful object-count diagnostic",
   );
+  assert.equal(diagnostics.snapshots.syntaxError.hasExecution, false, "invalid edits must not keep the old animation running");
+  assert.match(diagnostics.snapshots.syntaxError.traceback, /SyntaxError/);
   await page.screenshot({ path: path.join(artifactDir, "syntax-error.png"), fullPage: true });
 
   phase = "syntax-recovery";
   await setEditorSource(page, SOURCES.twoObjects);
   edited = await snapshot(page);
-  assert.match(edited.patchText, /current preview continues · Run to apply/);
+  assert.match(edited.patchText, /restarting/);
   diagnostics.snapshots.syntaxRecovered = await runEditedSource(page, {
     expectedState: "applied",
     expectedObjectCount: 2,
@@ -268,7 +271,7 @@ try {
   phase = "runtime-error";
   await setEditorSource(page, SOURCES.runtimeError);
   edited = await snapshot(page);
-  assert.match(edited.patchText, /current preview continues · Run to apply/);
+  assert.match(edited.patchText, /restarting/);
   assert.equal(edited.objectCount, "2");
   diagnostics.snapshots.runtimeError = await runEditedSource(page, { expectedState: "error" });
   assert.match(diagnostics.snapshots.runtimeError.patchText, /Python failed:/);
@@ -282,14 +285,16 @@ try {
   assert.equal(
     diagnostics.snapshots.runtimeError.objectCount,
     "2",
-    "execution-time authoring failure must preserve the last successful two-object scene",
+    "authoring failure must retain the last successful object-count diagnostic",
   );
+  assert.equal(diagnostics.snapshots.runtimeError.hasExecution, false);
+  assert.match(diagnostics.snapshots.runtimeError.traceback, /MissingShape/);
   await page.screenshot({ path: path.join(artifactDir, "runtime-error.png"), fullPage: true });
 
   phase = "runtime-recovery";
   await setEditorSource(page, SOURCES.oneObject);
   edited = await snapshot(page);
-  assert.match(edited.patchText, /current preview continues · Run to apply/);
+  assert.match(edited.patchText, /restarting/);
   diagnostics.snapshots.runtimeRecovered = await runEditedSource(page, {
     expectedState: "applied",
     expectedObjectCount: 1,

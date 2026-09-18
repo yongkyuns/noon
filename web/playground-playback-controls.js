@@ -16,6 +16,7 @@ export class PlaygroundPlaybackControls {
   #timeSeconds = 0;
   #playing = true;
   #externalBusy = false;
+  #controllable = true;
   #commandPending = false;
   #seekActive = false;
   #desiredSeek = null;
@@ -96,6 +97,22 @@ export class PlaygroundPlaybackControls {
     this.#render();
   }
 
+  setControllable(controllable) {
+    this.#controllable = Boolean(controllable);
+    this.#root.dataset.controllable = String(this.#controllable);
+    this.#root.title = this.#controllable ? "" : "Live progress · seeking is available after Python finishes";
+    this.#render();
+  }
+
+  // A read-only observation must not fight a user's in-flight scrub or command.
+  observe(state) {
+    if (this.#destroyed || this.#seekActive || this.#commandPending) return;
+    const durationSeconds = this.#controllable
+      ? this.#durationSeconds
+      : Math.max(this.#durationSeconds, state.durationSeconds ?? 0, state.time);
+    this.sync({ ...state, durationSeconds });
+  }
+
   setBusy(busy) {
     this.#externalBusy = Boolean(busy);
     this.#renderDisabled();
@@ -142,19 +159,19 @@ export class PlaygroundPlaybackControls {
   #handleToggle = () => {
     void this.#runCommand(async () => {
       const result = this.#playing ? await this.#player.pause() : await this.#player.resume();
-      this.sync(result);
+      if (!this.#destroyed) this.sync(result);
     });
   };
 
   #handleRestart = () => {
     void this.#runCommand(async () => {
       const result = await this.#player.restartPlayback();
-      this.sync(result);
+      if (!this.#destroyed) this.sync(result);
     });
   };
 
   #handleSeekInput = () => {
-    if (this.#destroyed || this.#externalBusy || this.#commandPending) return;
+    if (this.#destroyed || !this.#controllable || this.#externalBusy || this.#commandPending) return;
     const target = Number(this.#scrubber.value);
     if (!Number.isFinite(target)) return;
     this.#timeSeconds = Math.min(Math.max(target, 0), this.#durationSeconds);
@@ -164,7 +181,7 @@ export class PlaygroundPlaybackControls {
   };
 
   async #runCommand(operation) {
-    if (this.#destroyed || this.#externalBusy || this.#commandPending || this.#seekActive) return;
+    if (this.#destroyed || !this.#controllable || this.#externalBusy || this.#commandPending || this.#seekActive) return;
     this.#commandPending = true;
     this.#renderDisabled();
     try {
@@ -187,7 +204,7 @@ export class PlaygroundPlaybackControls {
         this.#desiredSeek = null;
         const result = await this.#player.seek(target);
         if (this.#desiredSeek === null) {
-          this.sync(result);
+          if (!this.#destroyed) this.sync(result);
         } else if (typeof result.playing === "boolean") {
           // Keep the latest user-selected playhead visible while an older seek
           // completion is superseded by another queued direct seek.
@@ -205,6 +222,7 @@ export class PlaygroundPlaybackControls {
   }
 
   #reportError(error) {
+    if (this.#destroyed) return;
     if (this.#onError !== null) {
       this.#onError(error);
       return;
@@ -213,10 +231,11 @@ export class PlaygroundPlaybackControls {
   }
 
   #render() {
-    this.#playButton.textContent = this.#playing ? "Pause" : "Play";
+    if (this.#destroyed) return;
+    this.#playButton.textContent = !this.#controllable ? "Live" : this.#playing ? "Pause" : "Play";
     this.#playButton.setAttribute(
       "aria-label",
-      this.#playing ? "Pause animation" : "Play animation",
+      !this.#controllable ? "Python owns live playback" : this.#playing ? "Pause animation" : "Play animation",
     );
     this.#scrubber.max = String(this.#durationSeconds);
     this.#renderTime();
@@ -224,20 +243,27 @@ export class PlaygroundPlaybackControls {
   }
 
   #renderTime() {
+    if (this.#destroyed) return;
     const clampedTime = Math.min(this.#timeSeconds, this.#durationSeconds);
     this.#scrubber.value = String(clampedTime);
     this.#scrubber.setAttribute(
       "aria-valuetext",
       `${formatTime(clampedTime)} seconds of ${formatTime(this.#durationSeconds)} seconds`,
     );
-    this.#timeOutput.value = `${formatTime(clampedTime)} / ${formatTime(this.#durationSeconds)} s`;
+    this.#timeOutput.value = this.#controllable
+      ? `${formatTime(clampedTime)} / ${formatTime(this.#durationSeconds)} s`
+      : `${formatTime(clampedTime)} s · live`;
+    if (!this.#controllable) {
+      this.#scrubber.setAttribute("aria-valuetext", `${formatTime(clampedTime)} seconds elapsed · Python still authoring`);
+    }
   }
 
   #renderDisabled() {
-    const blockCommands = this.#externalBusy || this.#commandPending || this.#seekActive;
+    if (this.#destroyed) return;
+    const blockCommands = !this.#controllable || this.#externalBusy || this.#commandPending || this.#seekActive;
     this.#playButton.disabled = blockCommands;
     this.#restartButton.disabled = blockCommands;
-    this.#scrubber.disabled = this.#externalBusy || this.#commandPending;
+    this.#scrubber.disabled = !this.#controllable || this.#externalBusy || this.#commandPending;
     this.#root.dataset.busy = String(blockCommands);
     this.#root.dataset.playing = String(this.#playing);
     this.#root.setAttribute("aria-busy", String(blockCommands));
@@ -261,6 +287,8 @@ function renderPlaybackPlaceholder(root) {
   root.removeAttribute("aria-busy");
   root.removeAttribute("data-busy");
   root.removeAttribute("data-playing");
+  root.removeAttribute("data-controllable");
+  root.removeAttribute("title");
   root.setAttribute("aria-label", "Animation playback controls");
 
   const playButton = document.createElement("button");
@@ -358,6 +386,7 @@ function installStyles() {
       cursor: default;
       opacity: 0.42;
     }
+    .playback-controls[data-controllable="false"] .playback-scrubber { opacity: 1; }
     .playback-controls[data-busy="true"] button:disabled,
     .playback-controls[data-busy="true"] input:disabled {
       cursor: wait;
