@@ -65,7 +65,7 @@
     "Tex": {"status": "missing", "category": "text-math", "dependency": "#83/#365", "reason": "Shared LaTeX text resources are not implemented. Rectangle placeholder rendering and its public facade have been deleted."},
     "MathTex": {"status": "missing", "category": "text-math", "dependency": "#83/#365", "reason": "Shared LaTeX text resources are not implemented. Rectangle placeholder rendering and its public facade have been deleted."},
 
-    "Axes": {"status": "missing", "category": "plotting", "dependency": "#85", "reason": "No Axes facade is exported on current master; plotting implementation work remains outside this ref."},
+    "Axes": {"status": "partial", "category": "plotting", "dependency": "#85", "reason": "Shared linear axes include retained-path area and Riemann preparation; current-source integration qualification is pending."},
     "NumberLine": {"status": "missing", "category": "plotting", "dependency": "#85", "reason": "No NumberLine facade is exported on current master; plotting implementation work remains outside this ref."},
     "NumberPlane": {"status": "missing", "category": "plotting", "dependency": "#85", "reason": "No NumberPlane facade is exported on current master; plotting implementation work remains outside this ref."},
     "ComplexPlane": {"status": "missing", "category": "plotting", "dependency": "#85", "reason": "No ComplexPlane facade is exported on current master; plotting implementation work remains outside this ref."},

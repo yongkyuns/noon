@@ -53,10 +53,16 @@ impl WasmPlotSamplingPlan {
                     .map_err(js_error)?;
             }
         }
-        ManimGeometryOptions::plot_samples(&self.plan, &points, smooth)
-            .map(WasmManimGeometryOptions::from_options)
+        let mut options = ManimGeometryOptions::plot_samples(&self.plan, &points, smooth)
             .map_err(plot_failure)
-            .map_err(js_error)
+            .map_err(js_error)?;
+        if self.frame.is_some() {
+            let range = self.plan.range();
+            options.set_semantic_role(noon_core::SemanticObjectRole::FunctionPlot(
+                noon_core::SemanticFunctionPlotRole::new([range[0], range[1]]),
+            ));
+        }
+        Ok(WasmManimGeometryOptions::from_options(options))
     }
 
     fn require_count(&self, actual: usize) -> Result<(), JsValue> {

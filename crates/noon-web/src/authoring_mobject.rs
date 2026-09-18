@@ -1187,7 +1187,7 @@ mod wasm {
 
     #[wasm_bindgen]
     pub struct WasmPathQuery {
-        value: noon::PathQuery,
+        pub(crate) value: noon::PathQuery,
     }
 
     impl WasmPathQuery {
