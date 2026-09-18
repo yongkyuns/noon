@@ -272,7 +272,7 @@
       "status": "ready",
       "path": "python/examples/coordinate_plotting.py",
       "category": "manim-compatible/plotting",
-      "features": ["Axes", "plot", "plot_samples", "axis labels", "Manim-compatible"],
+      "features": ["Axes", "plot", "plot_samples", "UnitInterval", "axis labels", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/coordinate-plotting.svg",

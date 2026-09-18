@@ -13,8 +13,8 @@ use crate::{
 use noon_core::{
     SemanticLocalNodeToken, SemanticMutationTransaction, SemanticMutationTransactionResult,
     SemanticNodeCreation, SemanticNodeId, SemanticNumberLineRole, SemanticObjectRole,
-    SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle, StoredGeometry,
-    StrokeWidthMode, Vec2, WHITE,
+    SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle, StoredGeometry, StrokeCap,
+    StrokeJoin, StrokeWidthMode, Vec2, WHITE,
 };
 use noon_geometry::{number_line_tick_values, AxesFrame, CoordinateError, NumberLineFrame};
 
@@ -109,6 +109,8 @@ fn default_axis_style() -> SemanticStyle {
         stroke: Some(SemanticPaint::Solid(WHITE)),
         stroke_width: 0.02,
         stroke_width_mode: StrokeWidthMode::ScreenSpace,
+        stroke_cap: StrokeCap::Butt,
+        stroke_join: StrokeJoin::Miter,
         ..SemanticStyle::default()
     }
 }
@@ -120,6 +122,8 @@ pub struct ManimNumberLineOptions {
     pub length: Option<f64>,
     pub unit_size: f64,
     pub rotation: f64,
+    pub numbers_with_elongated_ticks: Vec<f64>,
+    pub longer_tick_multiple: f64,
     pub ticks: CoordinateTicks,
     pub style: SemanticStyle,
 }
@@ -131,8 +135,19 @@ impl ManimNumberLineOptions {
             length: None,
             unit_size: 1.0,
             rotation: 0.0,
+            numbers_with_elongated_ticks: Vec::new(),
+            longer_tick_multiple: 2.0,
             ticks: CoordinateTicks::default(),
             style: default_axis_style(),
+        }
+    }
+
+    /// Manim UnitInterval defaults, including the elongated endpoint ticks.
+    pub fn unit_interval() -> Self {
+        Self {
+            unit_size: 10.0,
+            numbers_with_elongated_ticks: vec![0.0, 1.0],
+            ..Self::new([0.0, 1.0, 0.1])
         }
     }
 
@@ -503,7 +518,13 @@ pub(crate) fn resolve_family(
 pub(crate) fn prepare_number_line(
     options: &ManimNumberLineOptions,
 ) -> Result<(SemanticMutationTransaction, SemanticLocalNodeToken), CoordinateAuthoringError> {
-    let states = prepare_line(options.frame()?, options.ticks, &options.style)?;
+    let states = prepare_line_with_elongated_ticks(
+        options.frame()?,
+        options.ticks,
+        &options.style,
+        &options.numbers_with_elongated_ticks,
+        options.longer_tick_multiple,
+    )?;
     let mut transaction = SemanticMutationTransaction::new();
     let root = stage_line(&mut transaction, states);
     Ok((transaction, root))
@@ -534,6 +555,32 @@ fn prepare_line(
     ticks: CoordinateTicks,
     style: &SemanticStyle,
 ) -> Result<Vec<SemanticObjectState>, CoordinateAuthoringError> {
+    prepare_line_with_elongated_ticks(frame, ticks, style, &[], 2.0)
+}
+
+fn prepare_line_with_elongated_ticks(
+    frame: NumberLineFrame,
+    ticks: CoordinateTicks,
+    style: &SemanticStyle,
+    elongated: &[f64],
+    multiple: f64,
+) -> Result<Vec<SemanticObjectState>, CoordinateAuthoringError> {
+    if elongated.len() > ticks.limit {
+        return Err(CoordinateError::TickLimitExceeded.into());
+    }
+    if !multiple.is_finite() || multiple < 0.0 || elongated.iter().any(|n| !n.is_finite()) {
+        return Err(CoordinateAuthoringError::InvalidOptions(
+            "invalid elongated ticks",
+        ));
+    }
+    let mut offsets = elongated
+        .iter()
+        .map(|n| n - frame.range()[0])
+        .collect::<Vec<_>>();
+    if offsets.iter().any(|n| !n.is_finite()) {
+        return Err(CoordinateError::InvalidPoint.into());
+    }
+    offsets.sort_unstable_by(f64::total_cmp);
     if !ticks.half_length.is_finite() || ticks.half_length < 0.0 {
         return Err(CoordinateAuthoringError::InvalidOptions(
             "invalid tick size",
@@ -565,7 +612,19 @@ fn prepare_line(
     let ny = (end[0] - start[0]) / length * ticks.half_length;
     for value in values {
         let [x, y] = frame.number_to_point(value)?;
-        states.push(line_state([x - nx, y - ny], [x + nx, y + ny], style)?);
+        // Match pinned np.isclose(x - x_min, elongated - x_min), without
+        // scanning the complete special-tick list for every ordinary tick.
+        let offset = value - frame.range()[0];
+        let index = offsets.partition_point(|candidate| *candidate < offset);
+        let is_long = offsets[index.saturating_sub(1)..(index + 1).min(offsets.len())]
+            .iter()
+            .any(|candidate| (offset - candidate).abs() <= 1e-8 + 1e-5 * candidate.abs());
+        let factor = if is_long { multiple } else { 1.0 };
+        states.push(line_state(
+            [x - nx * factor, y - ny * factor],
+            [x + nx * factor, y + ny * factor],
+            style,
+        )?);
     }
     Ok(states)
 }

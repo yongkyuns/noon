@@ -60,21 +60,13 @@ impl Default for ManimNumberPlaneOptions {
             y_range: [-4.0, 4.0, 1.0],
             x_length: None,
             y_length: None,
-            axis_style: number_plane_axis_style(),
+            axis_style: default_axis_style(),
             background_line_style,
             faded_line_style: None,
             faded_line_ratio: 1,
             line_limit: 20_000,
         }
     }
-}
-
-fn number_plane_axis_style() -> SemanticStyle {
-    let mut style = default_axis_style();
-    // Manim's NumberPlane leaves Line's cap/join at Cairo's AUTO defaults.
-    style.stroke_join = StrokeJoin::Miter;
-    style.stroke_cap = StrokeCap::Butt;
-    style
 }
 
 /// Handle to one ordinary grid/axes family; all topology remains semantic-owned.
