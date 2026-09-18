@@ -28,7 +28,7 @@ jobs:
           def blob(data):
               return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
           parts=sorted(Path('.prep-source/.prep').glob('1672-part-*.json'))
-          assert len(parts)==5
+          assert len(parts)==6
           seen=set()
           for part in parts:
               for item in json.loads(part.read_text()):
@@ -94,11 +94,12 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$(cat "$RUNNER_TEMP/compiled-source-sha.txt")"
-          # The normal reusable Actions helper requires its event checkout.
-          # This is intentionally an isolated generated candidate, not that event.
-          # Build via the same repository entrypoint; retain its actual SHA/tree.
+          # This generated candidate is not the workflow event checkout.
+          # The normal event-provenance gate remains unchanged in the actual PR.
           bash scripts/build-web-demo.sh
           test "$(git rev-parse HEAD^{tree})" = "$(cat "$RUNNER_TEMP/intended-tree.txt")"
+          git diff --exit-code HEAD
+          tar -czf "$RUNNER_TEMP/compiled-browser.tar.gz" web/pkg web/python-worker.js web/runtime-build-identity.json web/python/compat-bundle.*.json
       - name: Install browser dependencies
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
@@ -128,6 +129,7 @@ jobs:
             ${{ runner.temp }}/compiled-source-sha.txt
             ${{ runner.temp }}/formatted-source.diff
             ${{ runner.temp }}/formatted-source.tar.gz
+            ${{ runner.temp }}/compiled-browser.tar.gz
             ${{ runner.temp }}/intended-workflow.yml
             ${{ runner.temp }}/changed-paths.json
             ${{ runner.temp }}/web-tests.log
