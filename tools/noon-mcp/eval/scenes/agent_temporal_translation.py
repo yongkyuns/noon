@@ -10,5 +10,6 @@ class AgentTemporalTranslation(Scene):
         marker.set_stroke(BLUE, width=0)
         marker.shift(LEFT * 3)
         self.add(marker)
-        self.play(marker.animate.shift(RIGHT * 6), run_time=3)
+        # Equal-time samples require linear motion, not the default smooth easing.
+        self.play(marker.animate.shift(RIGHT * 6), run_time=3, rate_func=linear)
         self.wait(0.5)
