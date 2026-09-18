@@ -18,6 +18,12 @@ const SOURCE_CONTINUATION_PLAYBACK_CONTROLS = new Set([
   "set_loop_duration",
   "advance_to",
 ]);
+// A denied replay capability is not a denial of forward execution. Pause and
+// advance_to keep the existing callback-aware, non-rewinding Rust path; only
+// controls that can restart/loop the historical plan require replay admission.
+const REPLAY_DEPENDENT_CONTROLS = new Set([
+  "resume", "seek", "restart_playback", "set_loop_duration",
+]);
 
 export async function attachSemanticEngine(
   context,
@@ -827,7 +833,7 @@ export async function attachSemanticEngine(
         ].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
         }
-        if (replayUnavailable !== null && SOURCE_CONTINUATION_PLAYBACK_CONTROLS.has(message.type)) {
+        if (replayUnavailable !== null && REPLAY_DEPENDENT_CONTROLS.has(message.type)) {
           throw new Error(`Replay unavailable: ${replayUnavailable}`);
         }
         if (continuation !== null && SOURCE_CONTINUATION_PLAYBACK_CONTROLS.has(message.type)) {

@@ -637,6 +637,13 @@ controls only after the Rust execution owner validates the advertised capability
 A non-replayable completed execution may retain its final presentation and explain
 the limitation, but may not fall back to seeking a destructively updated plan.
 
+Replay capability and forward execution admission are distinct. Denying backward
+replay must not reject a paused, explicit forward authored-time observation through
+the existing callback-aware Runtime path. Rust validates its monotonic target and
+orders required callbacks; the host still waits for the matching publication and
+renderer observation. This does not authorize rewind, looping, callback
+re-execution or takeover of an active source continuation.
+
 A related observation distinction applies to static waits: the timestamp of the
 last evaluated/rendered frame is not necessarily current elapsed playback time.
 An authored wait advances playback time at the selected rate while unchanged
