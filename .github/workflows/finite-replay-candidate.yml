@@ -1,0 +1,148 @@
+name: Finite replay candidate
+on:
+  push:
+    branches: [prep/demo-editor-source-snapshot]
+    paths: [.github/workflows/finite-replay-candidate.yml]
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.publish.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: e09709ca2ae36d7591f816d52e84c7dd0540c82d
+      - uses: actions/checkout@v7
+        with:
+          path: staging
+          persist-credentials: false
+      - name: Apply and verify exactly the locally tested files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          parts = sorted(Path('staging/.replay-repair').glob('part-*.json'))
+          assert len(parts) == 5
+          seen = {}
+          for part in parts:
+              for item in json.loads(part.read_text()):
+                  path = Path(item['path'])
+                  assert not path.is_absolute() and '..' not in path.parts
+                  assert path.parts[0] in {'crates','web','docs','scripts'}
+                  assert str(path) not in seen
+                  original = path.read_bytes() if path.exists() else b''
+                  assert hashlib.sha256(original).hexdigest() == item['before'], f'base mismatch: {path}'
+                  lines = original.decode().splitlines(keepends=True)
+                  upper = len(lines)
+                  for start,end,text in reversed(item['edits']):
+                      assert 0 <= start <= end <= upper, path
+                      lines[start:end] = text.splitlines(keepends=True)
+                      upper = start
+                  updated = ''.join(lines).encode()
+                  assert hashlib.sha256(updated).hexdigest() == item['after'], f'candidate mismatch: {path}'
+                  path.parent.mkdir(parents=True, exist_ok=True)
+                  path.write_bytes(updated)
+                  seen[str(path)] = item['after']
+          assert len(seen) == 26, len(seen)
+          Path(os.environ['RUNNER_TEMP'],'replay-source-hashes.json').write_text(json.dumps(seen,indent=2))
+          PY
+          rm -rf staging
+          git diff --check
+          node --test web/*.test.mjs > "$RUNNER_TEMP/replay-web-tests.log" 2>&1
+          tail -12 "$RUNNER_TEMP/replay-web-tests.log"
+      - name: Publish code and documentation only
+        id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          paths = sorted(json.loads(Path(os.environ['RUNNER_TEMP'],'replay-source-hashes.json').read_text()))
+          subprocess.run(['git','add','--',*paths],check=True)
+          actual = subprocess.check_output(['git','diff','--cached','--name-only'],text=True).splitlines()
+          assert sorted(actual) == paths
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Retain finite Rust execution history for lifecycle-correct replay'
+          git push origin HEAD:refs/heads/fix/dynamic-replay-history
+          sha="$(git rev-parse HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$sha" > "$RUNNER_TEMP/replay-candidate-sha.txt"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/replay-candidate-source.tar.gz"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: finite-replay-candidate-proof
+          path: |
+            ${{ runner.temp }}/replay-source-hashes.json
+            ${{ runner.temp }}/replay-web-tests.log
+            ${{ runner.temp }}/replay-candidate-sha.txt
+            ${{ runner.temp }}/replay-candidate-source.tar.gz
+          retention-days: 3
+  browser:
+    needs: candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'false'
+      SCCACHE_DIR: /home/runner/.cache/noon-sccache-wasm
+      SCCACHE_CACHE_SIZE: '1G'
+      SCCACHE_LOCAL_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.candidate.outputs.sha }}
+          persist-credentials: false
+      - name: Record exact candidate checkout
+        env:
+          EXPECTED: ${{ needs.candidate.outputs.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          printf '%s\n' "$EXPECTED" > candidate-source-sha.txt
+      - uses: ./.github/actions/dev-wasm-build
+        env:
+          GITHUB_SHA: ${{ needs.candidate.outputs.sha }}
+      - name: Install browser dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Verify all four exact demo and backend combinations
+        shell: bash
+        run: |
+          set -uo pipefail
+          failed=0
+          for scene in tiger dynamic; do
+            for backend in webgl webgpu; do
+              mkdir -p "replay-raster/$scene-$backend"
+              NOON_REPLAY_CASE="$scene" NOON_MORPH_BACKEND="$backend" \
+                NOON_MORPH_ARTIFACT_DIR="replay-raster/$scene-$backend" \
+                node scripts/playground-playback-morph-regression.mjs \
+                > "replay-raster/$scene-$backend/run.log" 2>&1 || failed=1
+              cat "replay-raster/$scene-$backend/run.log"
+            done
+          done
+          exit "$failed"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: finite-replay-raster-evidence
+          path: |
+            replay-raster
+            browser-smoke-artifacts
+            web/ci-artifact.json
+            web/runtime-build-identity.json
+            candidate-source-sha.txt
+          retention-days: 3
+          if-no-files-found: error
