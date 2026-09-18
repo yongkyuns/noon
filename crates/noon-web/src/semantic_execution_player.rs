@@ -3119,9 +3119,160 @@ mod tests {
     use crate::{RetainedExecutionFrameMirror, TransportObjectContent};
     use noon_core::{
         AnimationOptions, HostCallbackId, RateFunction, SemanticMutationTransaction,
-        SemanticMutationTransactionError, SemanticObjectProperty, SemanticObjectState,
-        SemanticStore, StoredGeometry,
+        SemanticMutationTransactionError, SemanticNativeInputSource, SemanticNodeCreation,
+        SemanticObjectProperty, SemanticObjectState, SemanticSignalValue, SemanticStore,
+        SemanticVec3, StoredGeometry,
     };
+
+    struct PointerFixture {
+        player: SemanticExecutionPlayer,
+        position: SemanticNodeId,
+        button: SemanticNodeId,
+        down: SemanticNodeId,
+        up: SemanticNodeId,
+    }
+
+    fn pointer_fixture() -> PointerFixture {
+        let mut store = SemanticStore::new();
+        let root = store.insert_family();
+        let target = store.insert_semantic_object(SemanticObjectState::new(
+            StoredGeometry::Circle { radius: 0.5 },
+        ));
+        store.add_semantic_family_member(root, target).unwrap();
+        let mut add_signal = |source, initial| {
+            let mut tx = SemanticMutationTransaction::new();
+            let pending = tx.create_node(
+                SemanticNodeCreation::native_input_signal(initial, source).unwrap(),
+            );
+            tx.scope_signal(root, pending);
+            tx.apply(&mut store).unwrap().resolve(pending).unwrap()
+        };
+        let position = add_signal(
+            SemanticNativeInputSource::State(NativeStateSource::PointerPosition),
+            SemanticSignalValue::Vec3(SemanticVec3::ZERO),
+        );
+        let button = add_signal(
+            SemanticNativeInputSource::State(NativeStateSource::PointerButton { button: 0 }),
+            SemanticSignalValue::Bool(false),
+        );
+        let down = add_signal(
+            SemanticNativeInputSource::Event(NativeEventSource::PointerDown { button: 0 }),
+            SemanticSignalValue::Scalar(0.0),
+        );
+        let up = add_signal(
+            SemanticNativeInputSource::Event(NativeEventSource::PointerUp { button: 0 }),
+            SemanticSignalValue::Scalar(0.0),
+        );
+        let session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+        PointerFixture {
+            player: SemanticExecutionPlayer::from_session(session, 1.0, 1).unwrap(),
+            position,
+            button,
+            down,
+            up,
+        }
+    }
+
+    fn browser_pointer_json(kind: &str, x: Option<f32>, y: Option<f32>, button: Option<u8>, view: u64) -> String {
+        serde_json::json!({
+            "kind": kind,
+            "surface_x": x,
+            "surface_y": y,
+            "viewport_width": x.map(|_| 800.0),
+            "viewport_height": y.map(|_| 400.0),
+            "button": button,
+            "view_revision": view,
+            "shift": true,
+            "control": false,
+            "alt": true,
+            "meta": false
+        }).to_string()
+    }
+
+    #[test]
+    fn browser_pointer_trace_matches_native_scene_mapping_and_edge_semantics() {
+        let mut f = pointer_fixture();
+        for json in [
+            browser_pointer_json("move", Some(200.0), Some(100.0), None, 0),
+            browser_pointer_json("press", Some(200.0), Some(100.0), Some(0), 0),
+            browser_pointer_json("move", Some(600.0), Some(300.0), None, 0),
+            browser_pointer_json("release", Some(600.0), Some(300.0), Some(0), 0),
+        ] {
+            f.player.browser_pointer_input_for_test(&json).unwrap();
+        }
+        assert_eq!(
+            f.player.session.effective_signal_value(f.position),
+            Some(&ReactiveValue::Vec2(Vec2::new(4.0, -2.0)))
+        );
+        assert_eq!(
+            f.player.session.effective_signal_value(f.button),
+            Some(&ReactiveValue::Bool(false))
+        );
+        assert_eq!(
+            f.player.session.effective_signal_value(f.down),
+            Some(&ReactiveValue::Scalar(1.0))
+        );
+        assert_eq!(
+            f.player.session.effective_signal_value(f.up),
+            Some(&ReactiveValue::Scalar(1.0))
+        );
+        assert_eq!(f.player.next_native_event_sequence, 4);
+        assert_eq!(f.player.session.frame().time, 0.0);
+    }
+
+    #[test]
+    fn browser_cancel_and_view_rebind_clear_buttons_without_release() {
+        let mut f = pointer_fixture();
+        f.player.browser_pointer_input_for_test(
+            &browser_pointer_json("press", Some(200.0), Some(100.0), Some(0), 3),
+        ).unwrap();
+        f.player.browser_pointer_input_for_test(
+            &browser_pointer_json("focus_lost", None, None, None, 3),
+        ).unwrap();
+        assert_eq!(
+            f.player.session.effective_signal_value(f.button),
+            Some(&ReactiveValue::Bool(false))
+        );
+        assert_eq!(
+            f.player.session.effective_signal_value(f.up),
+            Some(&ReactiveValue::Scalar(0.0))
+        );
+        f.player.browser_pointer_input_for_test(
+            &browser_pointer_json("press", Some(600.0), Some(300.0), Some(0), 4),
+        ).unwrap();
+        assert_eq!(
+            f.player.session.effective_signal_value(f.down),
+            Some(&ReactiveValue::Scalar(2.0))
+        );
+        assert_eq!(
+            f.player.session.native_pointer_input_token().unwrap().context().view_revision,
+            4
+        );
+    }
+
+    #[test]
+    fn rejected_browser_pointer_input_does_not_acknowledge_sequence() {
+        let mut f = pointer_fixture();
+        let before = f.player.session.publication_context();
+        let invalid = serde_json::json!({
+            "kind": "move",
+            "surface_x": 10.0,
+            "surface_y": 20.0,
+            "viewport_width": 0.0,
+            "viewport_height": 400.0,
+            "button": null,
+            "view_revision": 0
+        }).to_string();
+        assert!(f.player.browser_pointer_input_for_test(&invalid).is_err());
+        assert_eq!(f.player.next_native_event_sequence, 0);
+        // Binding itself is configuration, but malformed positional data cannot
+        // publish a sampled position or event.
+        assert_eq!(f.player.session.publication_context(), before);
+        f.player.browser_pointer_input_for_test(
+            &browser_pointer_json("move", Some(200.0), Some(100.0), None, 0),
+        ).unwrap();
+        assert_eq!(f.player.next_native_event_sequence, 1);
+    }
 
     fn callback_batch_with_y_and_opacity(phase: &serde_json::Value) -> String {
         let row = &phase["objects"][0];
