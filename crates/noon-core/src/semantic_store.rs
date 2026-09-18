@@ -556,6 +556,7 @@ pub struct SemanticStore {
     // semantic nodes still retain independent identity and presentation state.
     compiled_text_resources: HashMap<crate::TextCompilationIdentity, crate::TextResourceHandle>,
     compiled_text_resource_order: VecDeque<crate::TextCompilationIdentity>,
+    compiled_text_resource_retained_bytes: usize,
     slots: Vec<SemanticSlot>,
     free_head: Option<u32>,
     live_nodes: usize,
@@ -638,6 +639,7 @@ impl Clone for SemanticStore {
                 .filter(|key| self.compiled_text_resources.contains_key(*key))
                 .cloned()
                 .collect(),
+            compiled_text_resource_retained_bytes: self.compiled_text_resource_retained_bytes,
             slots,
             free_head: self.free_head,
             live_nodes: self.live_nodes,

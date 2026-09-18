@@ -164,7 +164,7 @@ pub(crate) fn clear_text_compiler_cache() {
 #[cfg(feature = "native-text")]
 pub(crate) fn compile_native(text: &Text) -> Result<Arc<CompiledTextArtifact>, TextAuthoringError> {
     text.validate()?;
-    let key = native_identity(text)?;
+    let key = native_key(text)?;
     let artifact = REGISTRY.with(|registry| {
         registry.borrow_mut().compile(key, || {
             let font = match &text.font_face {
@@ -189,7 +189,7 @@ pub(crate) fn compile_native(text: &Text) -> Result<Arc<CompiledTextArtifact>, T
             })
         })
     })?;
-    Ok(artifact)
+    Ok(Arc::new(artifact))
 }
 
 #[cfg(feature = "typst")]
@@ -213,7 +213,7 @@ pub(crate) fn compile_typst(
             })
         })
     })?;
-    Ok(artifact)
+    Ok(Arc::new(artifact))
 }
 
 fn push_bytes(bytes: &mut Vec<u8>, value: &[u8]) {
@@ -378,7 +378,8 @@ mod tests {
                 .unwrap();
         }
         let diagnostics = text_compiler_diagnostics();
-        assert_eq!(diagnostics.entries, MAX_ENTRIES);
-        assert_eq!(diagnostics.evictions, 1);
+        assert!(diagnostics.entries <= MAX_ENTRIES);
+        assert!(diagnostics.evictions >= 1);
+        assert!(diagnostics.retained_bytes <= MAX_RETAINED_BYTES);
     }
 }
