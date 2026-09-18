@@ -207,7 +207,12 @@ export async function attachSemanticEngine(
       return { type, time, playing: false, nextPatchSequence: "0", durationSeconds: null };
     }
     return {
-      type, time: player.time(), playing: player.isPlaying(), nextPatchSequence: "0",
+      type,
+      // Observe the Rust clock during idle waits. Command acknowledgements and
+      // external samples retain exact evaluated-frame time, independent of wall time.
+      time: type === "state" && pacing === SEMANTIC_PACING_REALTIME
+        ? player.playbackTimeAt(performance.now()) : player.time(),
+      playing: player.isPlaying(), nextPatchSequence: "0",
       // A Python continuation has not authored its complete future timeline.
       ...(continuation === null ? {} : { durationSeconds: null }),
     };
@@ -625,10 +630,18 @@ export async function attachSemanticEngine(
       let sourceCompleted;
       try {
         switch (message.type) {
-          case "pause":
+          case "pause": {
+            latestTick = null;
+            if (pacing === SEMANTIC_PACING_REALTIME) {
+              const time = player.playbackTimeAt(performance.now());
+              // Commit elapsed static time before freezing, so pause/resume does
+              // not jump back to the previous rendered frame's timestamp.
+              if (time > player.time()) await advanceToAuthoredTime(time);
+            }
             player.pause();
             observeExecutionWake(performance.now(), true);
             break;
+          }
           case "resume":
             player.resume();
             observeExecutionWake(performance.now(), true);
