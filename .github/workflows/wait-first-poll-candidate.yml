@@ -49,22 +49,36 @@ jobs:
           set -e
           test "$red" -ne 0
           grep -q '^# fail 3$' "$RUNNER_TEMP/wait-poll-red.log"
-      - name: Apply one-line host correction and run complete web suite
+      - name: Apply host correction and check first and steady-state polling
         working-directory: candidate
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import hashlib
+          import hashlib, json
           from pathlib import Path
+          def blob(data):
+              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
           p = Path('web/main.js')
           data = p.read_bytes()
           before = b'  metricsTimer = setTimeout(poll, METRICS_POLL_MS);'
           after = b'  metricsTimer = setTimeout(poll, PLAYBACK_POLL_MS);'
           assert data.count(before) == 1
           data = data.replace(before, after)
-          digest = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
-          assert digest == '5753883527e1a233b55a807210de644ebabb2f67'
+          assert blob(data) == '5753883527e1a233b55a807210de644ebabb2f67'
+          p.write_bytes(data)
+          p = Path('web/playground-startup.test.mjs')
+          item = json.loads(Path('../staging/.replay-forward-staging/startup-cadence-edit.json').read_text())
+          data = p.read_bytes()
+          assert blob(data) == item['before']
+          lines = data.decode().splitlines(keepends=True)
+          upper = len(lines)
+          for start, end, text in reversed(item['edits']):
+              assert 0 <= start <= end <= upper
+              lines[start:end] = text.splitlines(keepends=True)
+              upper = start
+          data = ''.join(lines).encode()
+          assert blob(data) == item['after']
           p.write_bytes(data)
           PY
           node --check web/main.js
@@ -78,7 +92,7 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add web/main.js web/playground-metrics-poll.test.mjs
+          git add web/main.js web/playground-metrics-poll.test.mjs web/playground-startup.test.mjs
           git commit -m 'Observe playback promptly on startup and visibility restoration'
           branch="prep/wait-first-poll-candidate-${GITHUB_RUN_ID}"
           git push origin "HEAD:refs/heads/$branch"
