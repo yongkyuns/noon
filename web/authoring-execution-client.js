@@ -29,6 +29,8 @@ export class AuthoringExecutionClient {
   #onError;
   #onRecoverableError;
   #resizeObserver = null;
+  #pointerAbortController = null;
+  #pointerViewRevision = 0;
   #transition = null;
   #lifecycleGeneration = 0;
 
@@ -159,6 +161,7 @@ export class AuthoringExecutionClient {
       this.#rendererBackend = ready.render.backend;
       this.#transportMode = ready.transportMode;
       this.#resizeCurrentCanvas();
+      this.#attachPointerInput();
       return ready;
     } catch (error) {
       if (this.#preparedPlayer === player) {
@@ -198,6 +201,7 @@ export class AuthoringExecutionClient {
       this.#mode = AUTHORING_EXECUTION_SEMANTIC;
       this.#rendererBackend = ready.render.backend;
       this.#resizeCurrentCanvas();
+      this.#attachPointerInput();
       const state = await this.#player.state();
       return {
         type: "result",
@@ -298,6 +302,7 @@ export class AuthoringExecutionClient {
         this.#transportMode = ready.transportMode;
         this.#observeCanvas();
         this.#resizeCurrentCanvas();
+        this.#attachPointerInput();
         return { ...ready, mode };
       } catch (error) {
         if (generation !== this.#lifecycleGeneration) {
@@ -319,6 +324,8 @@ export class AuthoringExecutionClient {
     this.#lifecycleGeneration += 1;
     this.#resizeObserver?.disconnect();
     this.#resizeObserver = null;
+    this.#pointerAbortController?.abort();
+    this.#pointerAbortController = null;
     const preparedPlayer = this.#preparedPlayer;
     const activePlayer = this.#player;
     preparedPlayer?.terminate();
@@ -424,6 +431,39 @@ export class AuthoringExecutionClient {
     }
     const scale = window.devicePixelRatio || 1;
     this.#player.resize(this.#canvas.clientWidth, this.#canvas.clientHeight, scale);
+    this.#pointerViewRevision += 1;
+  }
+
+  #attachPointerInput() {
+    this.#pointerAbortController?.abort();
+    this.#pointerAbortController = new AbortController();
+    const { signal } = this.#pointerAbortController;
+    const submit = (kind, event = null) => {
+      if (this.#player === null || this.#transition !== null) return;
+      const rect = this.#canvas.getBoundingClientRect();
+      const positioned = event !== null;
+      const input = {
+        kind,
+        surface_x: positioned ? event.clientX - rect.left : null,
+        surface_y: positioned ? event.clientY - rect.top : null,
+        viewport_width: positioned ? rect.width : null,
+        viewport_height: positioned ? rect.height : null,
+        button: positioned && (kind === "press" || kind === "release") ? event.button : null,
+        view_revision: this.#pointerViewRevision,
+        shift: event?.shiftKey === true,
+        control: event?.ctrlKey === true,
+        alt: event?.altKey === true,
+        meta: event?.metaKey === true,
+      };
+      void this.#withStablePlayer((player) => player.submitBrowserPointerInput(input))
+        .catch((error) => this.#onRecoverableError?.(error));
+    };
+    this.#canvas.addEventListener("pointermove", (event) => submit("move", event), { signal });
+    this.#canvas.addEventListener("pointerdown", (event) => submit("press", event), { signal });
+    this.#canvas.addEventListener("pointerup", (event) => submit("release", event), { signal });
+    this.#canvas.addEventListener("pointercancel", () => submit("cancel"), { signal });
+    this.#canvas.addEventListener("pointerleave", () => submit("cancel"), { signal });
+    window.addEventListener("blur", () => submit("focus_lost"), { signal });
   }
 
   #assertLifecycleCurrent(generation, terminateCandidate = null) {
