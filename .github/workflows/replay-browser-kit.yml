@@ -10,17 +10,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
-        with:
-          tool: wasm-bindgen@0.2.128
-          fallback: none
       - name: Export public test tools
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/kit/bin"
           cd "$RUNNER_TEMP/kit"
-          cp "$(command -v wasm-bindgen)" bin/
+          curl --fail --location --silent --show-error https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.128/wasm-bindgen-0.2.128-x86_64-unknown-linux-musl.tar.gz -o wasm-bindgen.tar.gz
+          echo 'b51f0208fdff83515a787bd8ab9ac5865ed84dabb66d0c709957bb59793c645f  wasm-bindgen.tar.gz' | sha256sum --check
+          tar -xzf wasm-bindgen.tar.gz
+          cp wasm-bindgen-0.2.128-x86_64-unknown-linux-musl/wasm-bindgen bin/
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/browsers" npx playwright install chromium
           tar --zstd -cf tools.tar.zst bin node_modules
