@@ -5,6 +5,7 @@ def rep(s,a,b):
     return s.replace(a,b,1)
 
 p=Path("crates/noon/src/live_program.rs"); s=p.read_text()
+s=rep(s, "use crate::execution_session::ExecutionViewportQuery;", "use crate::execution_session::{ExecutionViewportQuery, NativePointerInputPublication, NativePointerInputToken};")
 s=rep(s,"""use noon_core::{
     NativeEventOccurrence, NativeInputValue, NativeStateSource, PublicationContext, Rect,
 };""","""use noon_core::{
