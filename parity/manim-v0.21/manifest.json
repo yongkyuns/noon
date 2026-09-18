@@ -11,6 +11,14 @@
   },
   "fixtures": [
     {
+      "id": "implicit-curves",
+      "scene": "RetainedImplicitCurves",
+      "source": "parity/manim-v0.21/core-examples/implicit_curves.py",
+      "expected_duration": 0.2,
+      "qualification_status": "candidate",
+      "notes": "Shared adaptive contours, smooth closed circle and disconnected unsmoothed hyperbola, mapped through shifted nonuniform Axes."
+    },
+    {
       "id": "matching-shapes-reordered",
       "scene": "MatchingShapesReordered",
       "source": "parity/manim-v0.21/core-examples/matching_shapes_reordered.py",

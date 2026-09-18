@@ -313,6 +313,10 @@ class Axes(_compat.Group):
             options = engine_call(frame.sampledPlot, _points(points))
         return _curve(object.__new__(_compat.VMobject), options, color, kwargs)
 
+    def plot_implicit_curve(self, func, min_depth=5, max_quads=1500, **kwargs):
+        from _manim_implicit import plot_implicit_curve
+        return plot_implicit_curve(self, func, min_depth, max_quads, **kwargs)
+
     def add_coordinates(self, x_values=None, y_values=None, *, x_config=None, y_config=None, **kwargs):
         """Atomically append both axes' native Text label families before playback.
 

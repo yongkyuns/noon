@@ -281,6 +281,21 @@
       "order": 1170
     },
     {
+      "id": "noon-implicit-plotting",
+      "title": "Implicit curves",
+      "summary": "A closed circle and disconnected hyperbola, adaptively sampled once into ordinary retained paths on shared Axes.",
+      "status": "ready",
+      "path": "python/examples/implicit_plotting.py",
+      "category": "manim-compatible/plotting",
+      "features": ["ImplicitFunction", "plot_implicit_curve", "adaptive contours", "shared smoothing", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "thumbnail": "thumbnails/manim/generated/implicit-plotting.png",
+      "thumbnail_alt": "Blue circle and yellow hyperbola on coordinate axes",
+      "thumbnail_time": 0,
+      "order": 1172
+    },
+    {
       "id": "noon-raster-image",
       "title": "RasterImage",
       "summary": "Immutable ImageMobject resources with endpoint-qualified transforms and retained texture reuse.",

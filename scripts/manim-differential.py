@@ -1071,7 +1071,36 @@ def _text_range_color_observation(api):
     }
 
 
+def _implicit_curve_probe(api, case, smooth):
+    fields = {
+        "circle": lambda x, y: x * x + y * y - 1.0,
+        "hyperbola": lambda x, y: x * y - 0.35,
+        "empty": lambda x, y: 1.0,
+        "nan_boundary": lambda x, y: y if x >= 0 else float("nan"),
+        "asymptote": lambda x, y: 1.0 / (x - 0.123),
+        "disconnected": lambda x, y: ((x + 1) ** 2 + y * y - 0.4) * ((x - 1) ** 2 + y * y - 0.4),
+    }
+    if case == "axes":
+        axes = api.Axes([-2, 2, 1], [-1.5, 1.5, 0.5], x_length=7, y_length=3, tips=False)
+        axes.shift(0.3 * api.RIGHT + 0.25 * api.DOWN)
+        curve = axes.plot_implicit_curve(fields["circle"], min_depth=3, max_quads=100, use_smoothing=smooth)
+    elif case == "default_domain":
+        curve = api.ImplicitFunction(fields["circle"], min_depth=3, max_quads=100, use_smoothing=smooth)
+    else:
+        curve = api.ImplicitFunction(fields[case], [-2, 2], [-1.5, 1.5],
+                                     min_depth=3, max_quads=100, use_smoothing=smooth)
+    return {"curves": curve.get_num_curves(),
+            "subpaths": [[_point_observation(p) for p in subpath] for subpath in curve.get_subpaths()]}
+
+
 FIXTURES = [
+    *[Fixture(f"implicit_{case}_{smooth}",
+              lambda c=case, s=smooth: _implicit_curve_probe(noon, c, s),
+              lambda c=case, s=smooth: _implicit_curve_probe(manim, c, s), tolerance=2e-5)
+      for case, smooth in (("circle", False), ("circle", True),
+                           ("hyperbola", False), ("hyperbola", True),
+                           ("axes", True), ("empty", True), ("nan_boundary", False),
+                           ("asymptote", False), ("disconnected", True), ("default_domain", False))],
     Fixture("native_text_range_colors", lambda: _text_range_color_observation(noon),
             lambda: _text_range_color_observation(manim)),
     Fixture("effective_reveal_path", _noon_effective_reveal_path, _manim_effective_reveal_path, 1e-5),

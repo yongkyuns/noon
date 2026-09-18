@@ -15,7 +15,9 @@ mod plotting;
 mod reverse;
 mod smoothing;
 pub use reverse::reverse_path;
-pub use smoothing::change_path_anchor_mode;
+pub use smoothing::{
+    change_path_anchor_mode, change_path_anchor_mode_with_boundary, SplineBoundary,
+};
 mod tessellation;
 mod vector_field;
 

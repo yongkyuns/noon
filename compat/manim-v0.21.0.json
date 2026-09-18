@@ -72,7 +72,7 @@
     "PolarPlane": {"status": "missing", "category": "plotting", "dependency": "#85", "reason": "No PolarPlane facade is exported on current master; plotting implementation work remains outside this ref."},
     "ParametricFunction": {"status": "missing", "category": "plotting", "dependency": "#85", "reason": "No ParametricFunction facade is exported on current master; plotting implementation work remains outside this ref."},
     "FunctionGraph": {"status": "missing", "category": "plotting", "dependency": "#85", "reason": "No FunctionGraph facade is exported on current master; plotting implementation work remains outside this ref."},
-    "ImplicitFunction": {"status": "missing", "category": "plotting", "dependency": "#85", "reason": "No ImplicitFunction facade is exported on current master; plotting implementation work remains outside this ref."},
+    "ImplicitFunction": {"status": "partial", "category": "plotting", "dependency": "#856/#85", "evidence": "scripts/manim-differential.py; scripts/plotting-qualification.mjs; web/python/examples/implicit_plotting.py", "reason": "Bounded static adaptive contours use shared Rust topology, smoothing and retained paths, with standalone and Axes-based authoring. Dynamic resampling, nonlinear scaling and retained callable metadata are unsupported."},
 
     "Brace": {"status": "blocked", "category": "composite", "dependency": "#84"},
     "BraceBetweenPoints": {"status": "blocked", "category": "composite", "dependency": "#84"},

@@ -7,6 +7,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_manim_path_queries.py", runtimePath: "/tmp/_manim_path_queries.py", label: "Noon shared path query wrappers" },
   { sourcePath: "python/_manim_path_editing.py", runtimePath: "/tmp/_manim_path_editing.py", label: "Noon shared path editing wrappers" },
   { sourcePath: "python/_manim_plotting.py", runtimePath: "/tmp/_manim_plotting.py", label: "Noon shared coordinate and plotting wrappers" },
+  { sourcePath: "python/_manim_implicit.py", runtimePath: "/tmp/_manim_implicit.py", label: "Noon shared implicit contour wrappers" },
   { sourcePath: "python/_manim_number_labels.py", runtimePath: "/tmp/_manim_number_labels.py", label: "Noon shared numeric Text label wrappers" },
   { sourcePath: "python/_manim_typst.py", runtimePath: "/tmp/_manim_typst.py", label: "Noon retained Typst compatibility layer" },
   { sourcePath: "python/_manim_image.py", runtimePath: "/tmp/_manim_image.py", label: "Noon retained image compatibility layer" },
