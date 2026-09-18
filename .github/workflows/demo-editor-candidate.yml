@@ -12,9 +12,6 @@ jobs:
     timeout-minutes: 8
     permissions:
       contents: write
-    outputs:
-      sha: ${{ steps.publish.outputs.sha }}
-      branch: ${{ steps.publish.outputs.branch }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -22,69 +19,34 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v7
         with:
-          ref: be26da28e370e59efeb15f021f7eaf74e7dfd984
+          ref: 88da22552aa29193f9fbfb23ef4aad6240accca1
           path: candidate
-      - name: Apply exact locally tested file edits
+      - name: Verify exact correction and web tests
         working-directory: candidate
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import hashlib, json, os
-          from pathlib import Path
-          def blob(data):
-              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
-          parts = sorted(Path('../staging/.demo-editor-staging').glob('part-*.json'))
-          assert len(parts) == 4
-          seen = set()
-          result = {}
-          for part in parts:
-              for item in json.loads(part.read_text()):
-                  path = Path(item['path'])
-                  assert not path.is_absolute() and '..' not in path.parts
-                  assert path.parts[0] in {'web', 'scripts'} and path.suffix in {'.js', '.mjs', '.html'}
-                  assert str(path) not in seen
-                  seen.add(str(path))
-                  if item['before'] is None:
-                      assert not path.exists(), path
-                      original = b''
-                  else:
-                      original = path.read_bytes()
-                      assert blob(original) == item['before'], f'base mismatch: {path}'
-                  lines = original.decode().splitlines(keepends=True)
-                  upper = len(lines)
-                  for start, end, text in reversed(item['edits']):
-                      assert 0 <= start <= end <= upper, path
-                      lines[start:end] = text.splitlines(keepends=True)
-                      upper = start
-                  updated = ''.join(lines).encode()
-                  assert blob(updated) == item['after'], f'output mismatch: {path}; got {blob(updated)}'
-                  path.write_bytes(updated)
-                  result[str(path)] = item['after']
-                  print(f'verified {path}: {item["after"]}')
-          assert len(seen) == 25, len(seen)
-          Path(os.environ['RUNNER_TEMP'], 'demo-editor-hashes.json').write_text(json.dumps(result, indent=2))
-          PY
-          git diff --check
+          git apply --check ../staging/.demo-editor-staging/continuation.patch
+          git apply ../staging/.demo-editor-staging/continuation.patch
+          git add scripts
+          test "$(git write-tree)" = e51c100ac13bb86071b795ed4b1fc7ac8c0b1e88
+          git diff --cached --check
+          node --check scripts/playground-playback-controls-smoke.mjs
+          node --check scripts/playground-stress-edit-smoke.mjs
+          node --check scripts/python-editor-smoke.mjs
           node --test web/*.test.mjs > "$RUNNER_TEMP/demo-editor-unit-tests.log" 2>&1
           tail -12 "$RUNNER_TEMP/demo-editor-unit-tests.log"
-      - name: Publish clean candidate commit
-        id: publish
+      - name: Publish clean correction
         working-directory: candidate
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add web scripts
-          git diff --cached --check
-          git commit -m 'Fix demo live timeline, source restarts, fullscreen and Python editor tools'
+          git commit -m 'Correct playground browser tests for automatic source restarts'
           branch="prep/demo-editor-candidate-${GITHUB_RUN_ID}"
           git push origin "HEAD:refs/heads/$branch"
-          sha="$(git rev-parse HEAD)"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "$sha" "$branch" > "$RUNNER_TEMP/demo-editor-candidate.txt"
+          printf '%s\n' "$(git rev-parse HEAD)" "$branch" > "$RUNNER_TEMP/demo-editor-candidate.txt"
           git show --stat --oneline HEAD
       - uses: actions/upload-artifact@v7
         if: always()
@@ -92,19 +54,5 @@ jobs:
           name: demo-editor-candidate-evidence
           path: |
             ${{ runner.temp }}/demo-editor-candidate.txt
-            ${{ runner.temp }}/demo-editor-hashes.json
             ${{ runner.temp }}/demo-editor-unit-tests.log
           retention-days: 3
-  preflight:
-    needs: candidate
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
-    env:
-      NOON_WEB_PREFLIGHT_ONLY: '1'
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.candidate.outputs.sha }}
-          persist-credentials: false
-      - name: Full web preflight
-        run: bash scripts/build-web-demo.sh
