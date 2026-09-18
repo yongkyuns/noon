@@ -1,0 +1,69 @@
+name: Demo editor WebKit repeat diagnostic
+on:
+  push:
+    branches: [prep/demo-editor-publish]
+    paths: [.github/workflows/demo-editor-webkit-diagnostic.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 632a5516f4e9fac614e3491b068ce5be6d6b14cb
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: playground-cross-browser-web-runtime
+          run-id: 35341409937
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: web
+      - name: Install exact browser dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps webkit
+      - name: Prepare focused external diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p browser-smoke-artifacts/webkit-repeat
+          git rev-parse HEAD > browser-smoke-artifacts/webkit-repeat/source-sha.txt
+          cp web/runtime-build-identity.json browser-smoke-artifacts/webkit-repeat/
+          python3 - <<'PY'
+          from pathlib import Path
+          original = Path('scripts/playground-gallery-runtime-smoke.mjs').read_text()
+          changes = {
+              "const queue = entries.map(entry => ({ entry, noJspi: false }));": "const target = entries.find(entry => entry.id === 'noon-trigonometry-tutorial'); assert.ok(target); const queue = Array.from({ length: 3 }, (_, attempt) => ({ entry: target, noJspi: false, attempt }));",
+              "if (browserName !== 'firefox') for (const id of affected) queue.push({ entry: entries.find(e => e.id === id), noJspi: true });": "// Focused diagnostic only. The unmodified required matrix still covers all examples and no-JSPI controls.",
+              "async function check({ entry, noJspi })": "async function check({ entry, noJspi, attempt })",
+              "const name = `${entry.id}${noJspi ? '-no-jspi' : ''}`;": "const name = `${entry.id}-repeat-${attempt}`;",
+              "page.on('pageerror', error => result.errors.push(String(error)));": "page.on('pageerror', error => result.errors.push(String(error.stack ?? error)));",
+              "console.log(`All ${entries.length} selectable examples and ${queue.length - entries.length} no-JSPI controls passed.`);": "console.log('Focused WebKit diagnostic: all three tutorial repetitions passed. This is not a full gallery sweep.');",
+          }
+          source = original
+          for before, after in changes.items():
+              assert source.count(before) == 1, before
+              source = source.replace(before, after)
+          Path('scripts/.webkit-repeat-diagnostic.mjs').write_text(source)
+          Path('browser-smoke-artifacts/webkit-repeat/harness.mjs').write_text(source)
+          PY
+          node --check scripts/.webkit-repeat-diagnostic.mjs
+      - name: Repeat original tutorial with original assertions and concurrency
+        shell: bash
+        env:
+          NOON_PLAYGROUND_BROWSER: webkit
+          NOON_PLAYGROUND_PROFILE: mobile-dpr2
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/webkit-repeat
+        run: |
+          set -euo pipefail
+          xvfb-run -a node scripts/.webkit-repeat-diagnostic.mjs 2>&1 | tee browser-smoke-artifacts/webkit-repeat/run.log
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: demo-editor-webkit-repeat
+          path: browser-smoke-artifacts/webkit-repeat
+          if-no-files-found: error
+          retention-days: 3
