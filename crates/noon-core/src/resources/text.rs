@@ -45,10 +45,18 @@ pub struct TextResourceHandle {
 /// Complete compiler-owned identity for an immutable normalized text resource.
 /// The compact deterministic descriptor is paired with shared font buffers so a
 /// fingerprint collision cannot alias two distinct compiler inputs.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextCompilationIdentity {
     pub descriptor: Arc<[u8]>,
     pub font_contents: Arc<[Arc<[u8]>]>,
+}
+
+impl std::hash::Hash for TextCompilationIdentity {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Font buffers are compared by Eq after this descriptor hash selects a
+        // bucket; hashing them here would rescan megabytes on every lookup.
+        std::hash::Hash::hash(&self.descriptor, state);
+    }
 }
 
 /// UTF-8 byte range in [`TextResource::source`].

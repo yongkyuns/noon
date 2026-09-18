@@ -40,6 +40,23 @@ impl std::error::Error for SemanticTextImportError {
 }
 
 impl SemanticStore {
+    pub(super) fn forget_compiled_text_resource(
+        &mut self,
+        identity: &crate::TextCompilationIdentity,
+    ) {
+        if self.compiled_text_resources.remove(identity).is_some() {
+            self.compiled_text_resource_retained_bytes = self
+                .compiled_text_resource_retained_bytes
+                .saturating_sub(compiled_identity_bytes(identity));
+            if let Some(index) = self
+                .compiled_text_resource_order
+                .iter()
+                .position(|candidate| candidate == identity)
+            {
+                self.compiled_text_resource_order.remove(index);
+            }
+        }
+    }
     pub(super) fn remember_compiled_text_resource(
         &mut self,
         identity: crate::TextCompilationIdentity,
@@ -61,11 +78,7 @@ impl SemanticStore {
             || self.compiled_text_resource_retained_bytes > MAX_COMPILED_TEXT_IDENTITY_BYTES
         {
             if let Some(expired) = self.compiled_text_resource_order.pop_front() {
-                if self.compiled_text_resources.remove(&expired).is_some() {
-                    self.compiled_text_resource_retained_bytes = self
-                        .compiled_text_resource_retained_bytes
-                        .saturating_sub(compiled_identity_bytes(&expired));
-                }
+                self.forget_compiled_text_resource(&expired);
             }
         }
     }
@@ -149,7 +162,7 @@ impl SemanticStore {
             if self.text_resources.get(handle).is_some() {
                 return Ok(handle);
             }
-            self.compiled_text_resources.remove(&identity);
+            self.forget_compiled_text_resource(&identity);
         }
         let handle = self.import_text_resource(resource, fonts, geometries)?;
         self.remember_compiled_text_resource(identity, handle);

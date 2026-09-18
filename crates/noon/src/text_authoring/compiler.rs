@@ -46,6 +46,9 @@ pub struct TextCompilerDiagnostics {
     pub successful_compiles: u64,
     pub failed_compiles: u64,
     pub evictions: u64,
+    /// Aggregate native wall-clock compile time. `None` on WASM, where this
+    /// authoring layer has no portable monotonic clock and must not report a
+    /// fabricated zero-duration measurement.
     pub compile_nanos: Option<u128>,
     pub entries: usize,
     pub retained_bytes: usize,

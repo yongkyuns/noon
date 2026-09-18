@@ -324,7 +324,7 @@ mod tests {
         );
         assert_eq!(scene.integration_store().borrow().text_resources().len(), 1);
         assert_eq!(
-            crate::text_authoring::text_compiler_diagnostics().successful_compiles,
+            crate::text_authoring::compiler::text_compiler_diagnostics().successful_compiles,
             1
         );
     }
