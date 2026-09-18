@@ -436,6 +436,14 @@ export class AuthoringExecutionClient {
 
   #attachPointerInput() {
     this.#pointerAbortController?.abort();
+    this.#pointerAbortController = null;
+    // Headless contract tests intentionally use a minimal canvas double. Pointer
+    // collection is a DOM capability, not a startup requirement.
+    if (typeof this.#canvas.addEventListener !== "function" ||
+        typeof this.#canvas.getBoundingClientRect !== "function" ||
+        typeof window?.addEventListener !== "function") {
+      return;
+    }
     this.#pointerAbortController = new AbortController();
     const { signal } = this.#pointerAbortController;
     const submit = (kind, event = null) => {
