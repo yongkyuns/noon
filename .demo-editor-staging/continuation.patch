@@ -1,0 +1,154 @@
+diff --git a/scripts/playground-playback-controls-smoke.mjs b/scripts/playground-playback-controls-smoke.mjs
+index 68b4a71..5f29e00 100644
+--- a/scripts/playground-playback-controls-smoke.mjs
++++ b/scripts/playground-playback-controls-smoke.mjs
+@@ -343,7 +343,7 @@ try {
+     mobile.documentWidth <= mobile.viewportWidth + 1,
+     `source controls overflow mobile viewport (${mobile.documentWidth}px > ${mobile.viewportWidth}px)`,
+   );
+-  await runButton.screenshot({ path: path.join(artifactDir, "controls-mobile.png") });
++  await page.locator(".playback-controls").screenshot({ path: path.join(artifactDir, "controls-mobile.png") });
+   await page.screenshot({ path: path.join(artifactDir, "playground.png"), fullPage: true });
+ 
+   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);
+@@ -351,7 +351,7 @@ try {
+   diagnostics.pageErrors = pageErrors;
+   diagnostics.consoleErrors = consoleErrors;
+   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
+-  console.log("✓ first-pass source ownership transitions to a seekable completed replay without replacing the canvas");
++  console.log("✓ live progress, completed replay controls, fullscreen, and automatic source restart");
+ } catch (error) {
+   if (page !== null) {
+     try {
+diff --git a/scripts/playground-stress-edit-smoke.mjs b/scripts/playground-stress-edit-smoke.mjs
+index e2c2a20..d61e7b8 100644
+--- a/scripts/playground-stress-edit-smoke.mjs
++++ b/scripts/playground-stress-edit-smoke.mjs
+@@ -302,7 +302,7 @@ try {
+ 
+   await replaceSource(editor, page, rows5Source);
+   diagnostics.snapshots.rows5Edited = await snapshot(page);
+-  assert.match(diagnostics.snapshots.rows5Edited.patchText, /restarting/);
++  assert.match(diagnostics.snapshots.rows5Edited.patchText, /restarting/i);
+   assert.equal(diagnostics.snapshots.rows5Edited.objectCount, baselineObjectCount);
+   assert.equal(diagnostics.snapshots.rows5Edited.runInFlight, false);
+   assert.ok(diagnostics.snapshots.rows5Edited.runGeneration > diagnostics.snapshots.baseline.runGeneration);
+@@ -319,12 +319,12 @@ try {
+   assert.equal(await page.locator("#python-scene-source").inputValue(), source);
+   diagnostics.snapshots.resetDuringRows5 = await snapshot(page);
+   assert.ok(diagnostics.snapshots.resetDuringRows5.runGeneration > sourceOwnedGeneration);
+-  assert.match(diagnostics.snapshots.resetDuringRows5.patchText, /restarting/);
++  assert.match(diagnostics.snapshots.resetDuringRows5.patchText, /restarting/i);
+ 
+   await replaceSource(editor, page, rows7Source);
+   diagnostics.snapshots.rows7EditedDuringRows5 = await snapshot(page);
+   assert.ok(diagnostics.snapshots.rows7EditedDuringRows5.runGeneration > sourceOwnedGeneration);
+-  assert.match(diagnostics.snapshots.rows7EditedDuringRows5.patchText, /restarting/);
++  assert.match(diagnostics.snapshots.rows7EditedDuringRows5.patchText, /restarting/i);
+ 
+   diagnostics.snapshots.rows5Superseded = await waitForSupersedingRun(page, sourceOwnedGeneration);
+   diagnostics.snapshots.rows7Rerun = await waitForAppliedRun(page, baselineObjectCount);
+@@ -344,7 +344,7 @@ try {
+   await replaceSource(editor, page, rows20Source);
+   diagnostics.snapshots.rows20Edited = await snapshot(page);
+   assert.equal(diagnostics.snapshots.rows20Edited.objectCount, rows7ObjectCount);
+-  assert.match(diagnostics.snapshots.rows20Edited.patchText, /restarting/);
++  assert.match(diagnostics.snapshots.rows20Edited.patchText, /restarting/i);
+   await page.keyboard.press(runShortcut);
+   diagnostics.snapshots.rows20Rerun = await waitForAppliedRun(page, rows7ObjectCount);
+   assert.equal(diagnostics.snapshots.rows20Rerun.executionMode, "semantic");
+diff --git a/scripts/python-editor-smoke.mjs b/scripts/python-editor-smoke.mjs
+index 13e61db..59c2c76 100644
+--- a/scripts/python-editor-smoke.mjs
++++ b/scripts/python-editor-smoke.mjs
+@@ -63,7 +63,11 @@ async function waitForAppliedScene(page, errors, label, expectedText = null) {
+       const patch = document.querySelector("#patch-status");
+       const text = patch?.value ?? patch?.textContent ?? "";
+       if (patch?.dataset.state === "error") return true;
+-      return patch?.dataset.state === "applied" && (needle === null || text.includes(needle));
++      const gallery = window.__noonExampleGallery;
++      return patch?.dataset.state === "applied" &&
++        gallery?.runInFlight === false &&
++        patch.dataset.runGeneration === String(gallery.generationDiagnostics.runGeneration) &&
++        (needle === null || text.includes(needle));
+     },
+     expectedText,
+     { timeout: 60_000 },
+@@ -206,10 +210,8 @@ try {
+   );
+ 
+   const editorBaseline = await page.evaluate(() => {
+-    const canvas = document.querySelector("#scene");
+-    canvas.dataset.pythonEditorSmokeIdentity = "original";
++    window.__noonEditorSmokeView = document.querySelector("#python-scene-source").editorView;
+     return {
+-      patchSequence: document.querySelector("#patch-status")?.dataset.sequence ?? "",
+       runGeneration: window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? null,
+     };
+   });
+@@ -224,33 +226,22 @@ try {
+   assert.ok(lintRanges >= 1, "Ruff should report inline Python diagnostics after real editor input");
+   assert.ok(ruffRequests.length >= 1, "the first real editor input should load Ruff on demand");
+ 
+-  const inertEdit = await page.evaluate(() => ({
+-    patchState: document.querySelector("#patch-status")?.dataset.state ?? "",
+-    patchText: document.querySelector("#patch-status")?.value ?? "",
+-    patchSequence: document.querySelector("#patch-status")?.dataset.sequence ?? "",
+-    runGeneration: window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? null,
+-    canvasIdentity: document.querySelector("#scene")?.dataset.pythonEditorSmokeIdentity ?? null,
+-    canvasCount: document.querySelectorAll("canvas").length,
+-  }));
+-  assert.equal(inertEdit.patchState, "ready", "editing source must wait for explicit Run");
+-  assert.match(inertEdit.patchText, /current preview continues · Run to apply/);
+-  assert.equal(inertEdit.patchSequence, editorBaseline.patchSequence, "editing must not apply stale source");
+-  assert.equal(inertEdit.runGeneration, editorBaseline.runGeneration, "editing must not start a new run");
+-  assert.equal(inertEdit.canvasIdentity, "original", "editing must preserve the current canvas");
+-  assert.equal(inertEdit.canvasCount, 1, "editing must not allocate another canvas");
+-
+-  await page.locator("#replace-scene").click();
+-  await waitForAppliedScene(page, errors, "explicit Run after lint edit", "2 objects");
++  // Lint loading can outlast the edit debounce. Observe the eventual result,
++  // not a transient footer string, and do not click Run: real editor input must
++  // restart the preview by itself with the new source.
++  await waitForAppliedScene(page, errors, "automatic restart after lint edit", "2 objects");
+   const appliedEdit = await page.evaluate(() => ({
+     runGeneration: window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? null,
+     patchRunGeneration: document.querySelector("#patch-status")?.dataset.runGeneration ?? "",
+-    canvasIdentity: document.querySelector("#scene")?.dataset.pythonEditorSmokeIdentity ?? null,
++    editorPreserved: document.querySelector("#python-scene-source").editorView === window.__noonEditorSmokeView,
++    runInFlight: window.__noonExampleGallery?.runInFlight ?? true,
+     canvasCount: document.querySelectorAll("canvas").length,
+   }));
+-  assert.ok(appliedEdit.runGeneration > editorBaseline.runGeneration, "Run must apply the newest editor source");
++  assert.ok(appliedEdit.runGeneration > editorBaseline.runGeneration, "editing must automatically apply the newest source");
+   assert.equal(appliedEdit.patchRunGeneration, String(appliedEdit.runGeneration));
+-  assert.equal(appliedEdit.canvasIdentity, "original", "explicit Run must reuse the canvas");
+-  assert.equal(appliedEdit.canvasCount, 1, "explicit Run must not allocate another canvas");
++  assert.equal(appliedEdit.editorPreserved, true, "restart must preserve the editor, cursor and undo history");
++  assert.equal(appliedEdit.runInFlight, false, "the applied source must have completed its first pass");
++  assert.equal(appliedEdit.canvasCount, 1, "automatic restart must leave exactly one canvas");
+ 
+   assert.deepEqual(errors, [], `browser errors while loading Python editor:\n${errors.join("\n")}`);
+   await page.close();
+@@ -312,11 +303,10 @@ try {
+   await fallbackPage.locator("#python-scene-source").fill(
+     "from noon import *\n\nclass FallbackScene(Scene):\n    def construct(self):\n        self.add(Square())\n        self.add(Circle().shift(RIGHT * 2))\n",
+   );
+-  await fallbackPage.locator("#replace-scene").click();
+   await waitForAppliedScene(
+     fallbackPage,
+     fallbackErrors,
+-    "edited textarea fallback",
++    "automatic restart from edited textarea fallback",
+     "2 objects",
+   );
+   assert.ok(
+@@ -331,7 +321,7 @@ try {
+   await fallbackContext.close();
+ 
+   console.log(
+-    `Python editor smoke passed: automatic startup + one visible CodeMirror + explicit Run after deferred Ruff (${lintRanges} diagnostic(s)) + CDN-blocked textarea fallback with a fresh two-object render.`,
++    `Python editor smoke passed: automatic startup + one visible CodeMirror + automatic restart after deferred Ruff (${lintRanges} diagnostic(s)) + CDN-blocked textarea fallback with a fresh two-object render.`,
+   );
+ } finally {
+   await browser?.close();
