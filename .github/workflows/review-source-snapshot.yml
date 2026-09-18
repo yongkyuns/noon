@@ -1,0 +1,42 @@
+name: Isolated architecture source snapshot
+
+on:
+  push:
+    branches: [review/2026-09-17-architecture-diagnostics]
+    paths: [.github/workflows/review-source-snapshot.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: be26da28e370e59efeb15f021f7eaf74e7dfd984
+          fetch-depth: 100
+          persist-credentials: false
+      - name: Export the two immutable reviewed trees
+        shell: bash
+        run: |
+          set -euo pipefail
+          head=be26da28e370e59efeb15f021f7eaf74e7dfd984
+          base=088c746a2b658ce3ce2810c41924a7768edceba2
+          test "$(git rev-parse HEAD)" = "$head"
+          mkdir -p /tmp/noon-source-review
+          git archive --format=tar.gz "$head" > /tmp/noon-source-review/head.tar.gz
+          git archive --format=tar.gz "$base" > /tmp/noon-source-review/base.tar.gz
+          git diff --numstat --no-renames "$base" "$head" > /tmp/noon-source-review/changes.tsv
+          git log --format='%H %cI %s' "$base..$head" > /tmp/noon-source-review/commits.txt
+          git ls-tree -r "$head" > /tmp/noon-source-review/head-tree.txt
+          git ls-tree -r "$base" > /tmp/noon-source-review/base-tree.txt
+          printf 'head=%s\nbase=%s\ntree=%s\n' "$head" "$base" "$(git rev-parse HEAD^{tree})" > /tmp/noon-source-review/provenance.txt
+          (cd /tmp/noon-source-review && sha256sum head.tar.gz base.tar.gz > SHA256SUMS)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pinned-architecture-source
+          path: /tmp/noon-source-review/
+          if-no-files-found: error
+          retention-days: 1
