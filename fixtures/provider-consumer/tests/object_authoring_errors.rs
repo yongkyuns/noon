@@ -366,7 +366,10 @@ fn live_family_callback_failure_preserves_effective_and_authored_separation() ->
     let unaffected_id = session.execution_object_id(unaffected.node_id());
     let error = scene
         .live(&mut session)
-        .arrange_family(&family, 1.0, 0.0, 0.1, true)
+        .arrange_family_with_options(
+            &family,
+            &noon::FamilyArrangeOptions::new(1.0, 0.0, 0.1, true),
+        )
         .unwrap_err();
     assert!(matches!(
         error,
@@ -409,7 +412,10 @@ fn live_family_callback_failure_preserves_effective_and_authored_separation() ->
     let mut live = scene.live(&mut session);
     live.advance_segment_to(segment, segment.end_time())?;
     live.complete_segment(segment)?;
-    live.arrange_family(&family, 1.0, 0.0, 0.1, true)?;
+    live.arrange_family_with_options(
+        &family,
+        &noon::FamilyArrangeOptions::new(1.0, 0.0, 0.1, true),
+    )?;
     assert_eq!(
         session.execution_object_id(unaffected.node_id()),
         unaffected_id
