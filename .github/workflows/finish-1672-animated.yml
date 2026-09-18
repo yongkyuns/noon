@@ -1,0 +1,103 @@
+name: Verify final animated plotting examples
+on:
+  push:
+    branches: [prep/1672-animated-qualification]
+    paths: [.github/workflows/finish-1672-animated.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 33211110ea4330b77d5f240c227f8c7e4bfc14cb
+      - uses: actions/download-artifact@v8
+        with:
+          name: animated-plotting-correction-evidence
+          run-id: 35407035487
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/input
+      - name: Verify retained engine and apply the single example timing correction
+        run: |
+          set -euo pipefail
+          payload="$RUNNER_TEMP/input/_temp"
+          test "$(cat "$payload/intended-tree.txt")" = b64e755891b8010be44691874fbca152857c2f67
+          tar -xzf "$payload/formatted-source.tar.gz"
+          git add crates web scripts .github/workflows/manim-plotting-qualification.yml
+          test "$(git write-tree)" = b64e755891b8010be44691874fbca152857c2f67
+          tar -xzf "$payload/compiled-browser.tar.gz"
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          payload=Path(os.environ['RUNNER_TEMP'])/'input/_temp'
+          identity=json.loads(Path('web/runtime-build-identity.json').read_text())
+          original_sha=(payload/'compiled-source-sha.txt').read_text().strip()
+          assert identity['sourceRevision']==original_sha
+          for item in identity['files'].values():
+              p=Path('web')/item['path'].removeprefix('./')
+              assert hashlib.sha256(p.read_bytes()).hexdigest()==item['sha256'],p
+          p=Path('web/python/examples/animated_number_line.py')
+          def blob(b):return hashlib.sha1(b'blob '+str(len(b)).encode()+b'\0'+b).hexdigest()
+          b=p.read_bytes();assert blob(b)=='b94bc1c0637ff8b36a0fad40eff7c666140ec3f5'
+          old='        self.play(FadeIn(marker), Write(caption), run_time=0.5, rate_func=linear)\n'
+          new='        self.play(\n            FadeIn(marker, run_time=0.5), Write(caption, run_time=0.5),\n            run_time=0.5, rate_func=linear,\n        )\n'
+          s=b.decode();assert s.count(old)==1
+          b=s.replace(old,new).encode();assert blob(b)=='e29e882bfe2fb613e3f29f988ef4f59b5db75215'
+          p.write_bytes(b)
+          print('Retained Rust/WASM runtime:',original_sha)
+          print('The only source delta from its tested tree is the Python demo timing above.')
+          PY
+          git add web/python/examples/animated_number_line.py
+          test "$(git write-tree)" = 2d1ca64176476ec07caa0a0fb930d3e9cf1a633c
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Match explicit animated demo timing and qualify real continuation playback'
+          git diff --check
+          git rev-parse HEAD > "$RUNNER_TEMP/test-source-sha.txt"
+          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/intended-tree.txt"
+          cp .github/workflows/manim-plotting-qualification.yml "$RUNNER_TEMP/intended-workflow.yml"
+          node --test web/*.test.mjs > "$RUNNER_TEMP/web-tests.log" 2>&1
+          tail -12 "$RUNNER_TEMP/web-tests.log"
+      - name: Install browser
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Qualify static, animated and existing live coordinate contracts
+        run: |
+          set -euo pipefail
+          node scripts/plotting-qualification.mjs
+          node scripts/time-series-plotting-qualification.mjs coordinates
+          node scripts/time-series-plotting-qualification.mjs number-line
+          node scripts/time-series-plotting-qualification.mjs live
+      - name: Publish code candidate without modifying the PR
+        run: |
+          set -euo pipefail
+          git diff --exit-code HEAD
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/tested-source.tar.gz"
+          git restore --source=33211110ea4330b77d5f240c227f8c7e4bfc14cb --staged --worktree .github/workflows/manim-plotting-qualification.yml
+          tree="$(git write-tree)"
+          sha="$(git commit-tree "$tree" -p 33211110ea4330b77d5f240c227f8c7e4bfc14cb -m 'Fix animated plotting qualification and verify shared Rust and Python demos')"
+          branch="prep/1672-final-${GITHUB_RUN_ID}"
+          git push origin "$sha:refs/heads/$branch"
+          printf '%s\n' "$sha" "$branch" > "$RUNNER_TEMP/candidate.txt"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: final-animated-plotting-evidence
+          path: |
+            ${{ runner.temp }}/intended-tree.txt
+            ${{ runner.temp }}/intended-workflow.yml
+            ${{ runner.temp }}/test-source-sha.txt
+            ${{ runner.temp }}/tested-source.tar.gz
+            ${{ runner.temp }}/web-tests.log
+            ${{ runner.temp }}/candidate.txt
+            web/runtime-build-identity.json
+            plotting-artifacts/
+          retention-days: 7
+          if-no-files-found: error
