@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { inflateSync } from "node:zlib";
 
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
@@ -16,16 +17,20 @@ const repoRoot = path.resolve(here, "../../..");
 const serverPath = path.join(repoRoot, "tools/noon-mcp/src/server.mjs");
 const cliPath = path.join(repoRoot, "tools/noon-mcp/bin/noon-preview.mjs");
 const sourcePath = path.join(repoRoot, "web/python/examples/manim_parity_square_to_circle.py");
+const temporalSourcePath = path.join(repoRoot, "tools/noon-mcp/eval/scenes/agent_temporal_translation.py");
 const runtimeConfig = process.env.NOON_PREVIEW_RUNTIME_CONFIG;
 if (!runtimeConfig) throw new Error("NOON_PREVIEW_RUNTIME_CONFIG is required for Docker MCP rendering smoke");
 const python = execFileSync("python3", ["-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).trim();
 
 const sourceBytes = await readFile(sourcePath);
+const temporalSourceBytes = await readFile(temporalSourcePath);
+const temporalSource = temporalSourceBytes.toString("utf8");
 const source = sourceBytes.toString("utf8");
 const revisedSource = source.replace("PINK", "BLUE");
 assert.notEqual(revisedSource, source, "revision smoke requires a real source edit");
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const sourceSha256 = hash(sourceBytes);
+const temporalSourceSha256 = hash(temporalSourceBytes);
 const revisedSourceSha256 = hash(Buffer.from(revisedSource, "utf8"));
 const runtimeIdentity = JSON.parse(await readFile(path.join(repoRoot, "web/runtime-build-identity.json"), "utf8"));
 const expectedBuild = Object.freeze({
@@ -93,6 +98,119 @@ function imageHashes(result, artifacts, expectations) {
     assert.equal(artifact.byteLength, bytes.length, "MCP image byte length must match retained artifact identity");
     return sha256;
   });
+}
+
+function imageBytes(result) {
+  return result.content.filter((item) => item.type === "image")
+    .map((image) => Buffer.from(image.data, "base64"));
+}
+
+function pngCentroidX(bytes) {
+  const signature = bytes.subarray(0, 8);
+  assert.deepEqual([...signature], [137, 80, 78, 71, 13, 10, 26, 10]);
+  let offset = 8, width = null, height = null, bitDepth = null, colorType = null, interlace = null;
+  const idat = [];
+  while (offset < bytes.length) {
+    const length = bytes.readUInt32BE(offset);
+    const type = bytes.toString("ascii", offset + 4, offset + 8);
+    const data = bytes.subarray(offset + 8, offset + 8 + length);
+    offset += 12 + length;
+    if (type === "IHDR") {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data[8];
+      colorType = data[9];
+      interlace = data[12];
+    } else if (type === "IDAT") {
+      idat.push(data);
+    } else if (type === "IEND") {
+      break;
+    }
+  }
+  assert.equal(bitDepth, 8);
+  assert.equal(colorType, 6);
+  assert.equal(interlace, 0);
+  const raw = inflateSync(Buffer.concat(idat));
+  const stride = width * 4;
+  let previous = Buffer.alloc(stride);
+  let cursor = 0;
+  let weightedX = 0;
+  let weight = 0;
+  for (let y = 0; y < height; y += 1) {
+    const filter = raw[cursor++];
+    const encoded = raw.subarray(cursor, cursor + stride);
+    cursor += stride;
+    const row = Buffer.alloc(stride);
+    for (let x = 0; x < stride; x += 1) {
+      const left = x >= 4 ? row[x - 4] : 0;
+      const up = previous[x];
+      const upperLeft = x >= 4 ? previous[x - 4] : 0;
+      const value = encoded[x];
+      if (filter === 0) row[x] = value;
+      else if (filter === 1) row[x] = (value + left) & 255;
+      else if (filter === 2) row[x] = (value + up) & 255;
+      else if (filter === 3) row[x] = (value + Math.floor((left + up) / 2)) & 255;
+      else if (filter === 4) {
+        const p = left + up - upperLeft;
+        const pa = Math.abs(p - left);
+        const pb = Math.abs(p - up);
+        const pc = Math.abs(p - upperLeft);
+        row[x] = (value + (pa <= pb && pa <= pc ? left : pb <= pc ? up : upperLeft)) & 255;
+      } else {
+        assert.fail(`unsupported PNG filter ${filter}`);
+      }
+    }
+    for (let x = 0; x < width; x += 1) {
+      const i = x * 4;
+      const blueExcess = Math.max(0, row[i + 2] - Math.max(row[i], row[i + 1]));
+      const pixelWeight = blueExcess * (row[i + 3] / 255);
+      weightedX += x * pixelWeight;
+      weight += pixelWeight;
+    }
+    previous = row;
+  }
+  assert.ok(weight > 0, "temporal fixture must contain visible blue pixels");
+  return weightedX / weight;
+}
+
+async function qualifyTemporalTranslation(client) {
+  const opened = await client.callTool({
+    name: "noon_open_scene",
+    arguments: { source: temporalSource, loopDurationSeconds: 4 },
+  }, { timeout: 120_000 });
+  assertOk(opened, "temporal open_scene");
+  const sessionId = opened.structuredContent.session;
+  const sampled = await client.callTool({
+    name: "noon_sample_frames",
+    arguments: { session: sessionId, times: [1, 2, 3] },
+  }, { timeout: 120_000 });
+  assertOk(sampled, "temporal sample_frames");
+  const images = [imageBytes(opened)[0], ...imageBytes(sampled)];
+  const frames = [
+    { snapshot: opened.structuredContent.snapshot, artifact: opened.structuredContent.artifact },
+    ...sampled.structuredContent.frames,
+  ];
+  const expectedTimes = [0, 1, 2, 3];
+  for (let index = 0; index < frames.length; index += 1) {
+    assert.equal(frames[index].snapshot.frame.requestedTime, expectedTimes[index]);
+    assert.equal(frames[index].snapshot.frame.publishedTime, expectedTimes[index]);
+    assertArtifact(frames[index].artifact, {
+      sessionId,
+      expectedSourceSha256: temporalSourceSha256,
+      expectedTime: expectedTimes[index],
+      expectedBackend: frames[index].snapshot.frame.rendererBackend,
+    });
+  }
+  const centers = images.map(pngCentroidX);
+  assert.ok(centers[1] > centers[0] + 40, "1s sample must move marker right from start");
+  assert.ok(centers[2] > centers[1] + 40, "2s sample must move marker right from 1s");
+  assert.ok(centers[3] > centers[2] + 40, "3s sample must move marker right from 2s");
+  const steps = [centers[1] - centers[0], centers[2] - centers[1], centers[3] - centers[2]];
+  const meanStep = steps.reduce((sum, value) => sum + value, 0) / steps.length;
+  assert.ok(steps.every((step) => Math.abs(step - meanStep) < 8),
+    `linear temporal fixture must advance by near-equal pixel steps: ${JSON.stringify(steps)}`);
+  await closeScene(client, sessionId);
+  return centers;
 }
 
 async function renderRun(client, actualSource, expectedSourceSha256) {
@@ -182,6 +300,7 @@ try {
   assert.ok(sourceFailure.structuredContent.error.message.length > 0 && sourceFailure.structuredContent.error.message.length <= 1200);
   await waitForNoOwnedContainers();
 
+  const temporalCenters = await qualifyTemporalTranslation(client);
   const baseline = await renderRun(client, source, sourceSha256);
 
   const intruder = await connectClient("cross-transport");
@@ -313,6 +432,7 @@ try {
     revisedSourceSha256,
     baselineFrameSha256: baseline.hashes,
     revisedFrameSha256: revised.hashes,
+    temporalTranslationCentroidX: temporalCenters,
     sourceFailureRecovered: true,
     cancellationRecovered: true,
     disconnectCleanup: true,
