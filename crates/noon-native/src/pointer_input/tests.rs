@@ -292,6 +292,11 @@ fn resize_rebinding_does_not_reuse_an_old_cursor_for_release() {
 #[test]
 fn nonfinite_or_unrepresentable_input_leaves_publication_sequence_and_cache_unchanged() {
     let mut f = Fixture::new();
+    assert!(f
+        .app
+        .dispatch_pointer_position(PhysicalPosition::new(f64::NAN, 0.0), SIZE, 1.0)
+        .is_err());
+    assert!(!f.app.pointer.configured);
     f.move_to(200.0, 100.0);
     let publication = f.app.session().publication_context();
     let sequence = f.app.next_input_sequence;
@@ -302,7 +307,14 @@ fn nonfinite_or_unrepresentable_input_leaves_publication_sequence_and_cache_unch
             .dispatch_pointer_position(PhysicalPosition::new(x, 100.0), SIZE, 1.0)
             .is_err());
     }
-    for scale in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::MIN_POSITIVE] {
+    for scale in [
+        0.0,
+        -1.0,
+        f64::NAN,
+        f64::INFINITY,
+        f64::MIN_POSITIVE,
+        f64::MAX,
+    ] {
         assert!(f.app.pointer_scale_changed(SIZE, scale).is_err());
     }
     assert_eq!(f.app.session().publication_context(), publication);

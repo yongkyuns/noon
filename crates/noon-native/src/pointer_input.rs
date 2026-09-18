@@ -90,6 +90,22 @@ impl NativeApp {
             return self.pointer_left();
         }
         let surface = Vec2::new((physical.x / scale) as f32, (physical.y / scale) as f32);
+        if !surface.x.is_finite() || !surface.y.is_finite() {
+            return Err(NativeHostError::Platform(
+                "native pointer coordinates must be finite".to_owned(),
+            ));
+        }
+        if self.next_input_sequence == u64::MAX {
+            return Err(NativeHostError::Platform(
+                "native input event sequence exhausted".to_owned(),
+            ));
+        }
+        // Binding setup can reset a button-driven camera. Read the
+        // camera only afterwards, so conversion and token describe
+        // the same effective publication. Invalid raw data never binds.
+        if !self.ensure_pointer_input()? {
+            return Ok(());
+        }
         let position = pointer_position(surface, logical_size, self.execution.camera()?)?;
         self.dispatch_pointer_kind(NativePointerInputKind::Move(position))?;
         // Never let a rejected occurrence overwrite the position of a later edge.
@@ -188,7 +204,11 @@ fn logical_size(size: PhysicalSize<u32>, scale: f64) -> Result<Vec2, NativeHostE
         (f64::from(size.width) / scale) as f32,
         (f64::from(size.height) / scale) as f32,
     );
-    if !logical.x.is_finite() || !logical.y.is_finite() {
+    if !logical.x.is_finite()
+        || !logical.y.is_finite()
+        || (size.width > 0 && logical.x <= 0.0)
+        || (size.height > 0 && logical.y <= 0.0)
+    {
         return Err(NativeHostError::Platform(
             "native logical viewport is not representable".to_owned(),
         ));
