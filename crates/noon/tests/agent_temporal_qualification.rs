@@ -54,7 +54,7 @@ fn blue_centroid_x(pixels: &[u8]) -> f64 {
     assert_eq!(pixels.len(), (SIZE * SIZE * 4) as usize);
     let mut total_weight = 0.0;
     let mut weighted_x = 0.0;
-    for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+    for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
         let blue_excess = pixel[2].saturating_sub(pixel[0].max(pixel[1]));
         let weight = f64::from(blue_excess) * f64::from(pixel[3]) / 255.0;
         total_weight += weight;
