@@ -14,8 +14,7 @@ s=rep(s,"""use noon_core::{
 s=rep(s,"""    ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentState, ExecutionSession,
     ExecutionSessionInputError, LiveSession, RustHostCallbackError, RustHostCallbackTable, Scene,
 };""","""    ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentState, ExecutionSession,
-    ExecutionSessionInputError, LiveSession, NativePointerInputPublication, NativePointerInputToken,
-    RustHostCallbackError, RustHostCallbackTable, Scene,
+    ExecutionSessionInputError, LiveSession, RustHostCallbackError, RustHostCallbackTable, Scene,
 };""")
 s=rep(s,"""    /// Deliver one normalized sampled native value without exposing mutable session authority.
     pub fn set_native_state_input(""","""    /// Configure the platform pointer projected into the existing unkeyed native signals.
