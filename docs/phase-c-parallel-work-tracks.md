@@ -133,6 +133,8 @@ C7 specialization may begin only when a measured cost is isolated with represent
 
 **Can proceed independently from:** direct manipulation UI and most native input work. Generic `ReplaceContent` can be proven with semantic/runtime fixtures before editor hot reload is integrated.
 
+**Primary output:** CH4.
+
 ### Track CS — interactive session and direct manipulation
 
 **Owner:** C5/#846.
