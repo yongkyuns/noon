@@ -1,0 +1,70 @@
+name: Combined wait replay candidate
+on:
+  push:
+    branches: [prep/replay-forward-integration]
+    paths: [.github/workflows/wait-replay-combined-candidate.yml]
+permissions:
+  contents: read
+jobs:
+  combine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: bb9f4fc798422e11dd706a0819e0cf4c85e10b72
+          fetch-depth: 32
+      - name: Merge qualified replay work without dropping either regression set
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch --no-tags --depth=32 origin a7eb3713a262b07fff8569e9eb3cc1f08bc311bd
+          test "$(git merge-base HEAD FETCH_HEAD)" = e09709ca2ae36d7591f816d52e84c7dd0540c82d
+          git merge --no-commit --no-ff a7eb3713a262b07fff8569e9eb3cc1f08bc311bd || true
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+          conflicts=subprocess.check_output(['git','diff','--name-only','--diff-filter=U'],text=True).splitlines()
+          allowed={'.github/workflows/playground-playback-controls.yml','web/semantic-engine-endpoint.test.mjs'}
+          assert set(conflicts)<=allowed,conflicts
+          for name in conflicts:
+              parts=[]
+              for stage in (2,1,3):
+                  p=Path('/tmp')/('merge-'+str(stage)+'-'+Path(name).name)
+                  p.write_bytes(subprocess.check_output(['git','show',f':{stage}:{name}']))
+                  parts.append(str(p))
+              result=subprocess.run(['git','merge-file','--union','-p',*parts],capture_output=True,check=True)
+              Path(name).write_bytes(result.stdout)
+              subprocess.run(['git','add',name],check=True)
+          workflow=Path('.github/workflows/playground-playback-controls.yml').read_text()
+          for required in ['Verify wait clock against real time','Verify dynamic load membership and content history','Test native replay history and locality']:
+              assert required in workflow,required
+          assert 'REPLAY_DEPENDENT_CONTROLS' in Path('web/semantic-engine-endpoint.js').read_text()
+          assert 'player.playbackTimeAt(performance.now())' in Path('web/semantic-engine-endpoint.js').read_text()
+          PY
+          git diff --check
+          git diff --cached --check
+          node --test web/*.test.mjs > "$RUNNER_TEMP/combined-web-tests.log" 2>&1
+          tail -12 "$RUNNER_TEMP/combined-web-tests.log"
+      - name: Publish candidate branch, not either PR or master
+        run: |
+          set -euo pipefail
+          git commit -m 'Integrate wait-clock observation with finite replay history and preserve both regression suites'
+          branch="prep/wait-replay-combined-${GITHUB_RUN_ID}"
+          git push origin "HEAD:refs/heads/$branch"
+          printf '%s\n' "$(git rev-parse HEAD)" "$branch" "$(git rev-parse HEAD^{tree})" > "$RUNNER_TEMP/combined-candidate.txt"
+          git show --stat --oneline HEAD
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/combined-source.tar.gz"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: combined-wait-replay-proof
+          path: |
+            ${{ runner.temp }}/combined-web-tests.log
+            ${{ runner.temp }}/combined-candidate.txt
+            ${{ runner.temp }}/combined-source.tar.gz
+          retention-days: 7
+          if-no-files-found: error
