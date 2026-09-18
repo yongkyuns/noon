@@ -302,7 +302,7 @@ try {
 
   await replaceSource(editor, page, rows5Source);
   diagnostics.snapshots.rows5Edited = await snapshot(page);
-  assert.match(diagnostics.snapshots.rows5Edited.patchText, /restarting/);
+  assert.match(diagnostics.snapshots.rows5Edited.patchText, /restarting/i);
   assert.equal(diagnostics.snapshots.rows5Edited.objectCount, baselineObjectCount);
   assert.equal(diagnostics.snapshots.rows5Edited.runInFlight, false);
   assert.ok(diagnostics.snapshots.rows5Edited.runGeneration > diagnostics.snapshots.baseline.runGeneration);
@@ -319,12 +319,12 @@ try {
   assert.equal(await page.locator("#python-scene-source").inputValue(), source);
   diagnostics.snapshots.resetDuringRows5 = await snapshot(page);
   assert.ok(diagnostics.snapshots.resetDuringRows5.runGeneration > sourceOwnedGeneration);
-  assert.match(diagnostics.snapshots.resetDuringRows5.patchText, /restarting/);
+  assert.match(diagnostics.snapshots.resetDuringRows5.patchText, /restarting/i);
 
   await replaceSource(editor, page, rows7Source);
   diagnostics.snapshots.rows7EditedDuringRows5 = await snapshot(page);
   assert.ok(diagnostics.snapshots.rows7EditedDuringRows5.runGeneration > sourceOwnedGeneration);
-  assert.match(diagnostics.snapshots.rows7EditedDuringRows5.patchText, /restarting/);
+  assert.match(diagnostics.snapshots.rows7EditedDuringRows5.patchText, /restarting/i);
 
   diagnostics.snapshots.rows5Superseded = await waitForSupersedingRun(page, sourceOwnedGeneration);
   diagnostics.snapshots.rows7Rerun = await waitForAppliedRun(page, baselineObjectCount);
@@ -344,7 +344,7 @@ try {
   await replaceSource(editor, page, rows20Source);
   diagnostics.snapshots.rows20Edited = await snapshot(page);
   assert.equal(diagnostics.snapshots.rows20Edited.objectCount, rows7ObjectCount);
-  assert.match(diagnostics.snapshots.rows20Edited.patchText, /restarting/);
+  assert.match(diagnostics.snapshots.rows20Edited.patchText, /restarting/i);
   await page.keyboard.press(runShortcut);
   diagnostics.snapshots.rows20Rerun = await waitForAppliedRun(page, rows7ObjectCount);
   assert.equal(diagnostics.snapshots.rows20Rerun.executionMode, "semantic");

@@ -343,7 +343,7 @@ try {
     mobile.documentWidth <= mobile.viewportWidth + 1,
     `source controls overflow mobile viewport (${mobile.documentWidth}px > ${mobile.viewportWidth}px)`,
   );
-  await runButton.screenshot({ path: path.join(artifactDir, "controls-mobile.png") });
+  await page.locator(".playback-controls").screenshot({ path: path.join(artifactDir, "controls-mobile.png") });
   await page.screenshot({ path: path.join(artifactDir, "playground.png"), fullPage: true });
 
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);
@@ -351,7 +351,7 @@ try {
   diagnostics.pageErrors = pageErrors;
   diagnostics.consoleErrors = consoleErrors;
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
-  console.log("✓ first-pass source ownership transitions to a seekable completed replay without replacing the canvas");
+  console.log("✓ live progress, completed replay controls, fullscreen, and automatic source restart");
 } catch (error) {
   if (page !== null) {
     try {
