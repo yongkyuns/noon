@@ -554,6 +554,13 @@ export class ExecutionWorkerClient {
     return this.#requestEngine("native_state_input", { source, value });
   }
 
+  // Forward one occurrence-local browser pointer record. Surface coordinates
+  // remain CSS pixels; Rust converts them against the current camera/publication.
+  async submitBrowserPointerInput(input) {
+    this.#requireStarted();
+    return this.#requestEngine("browser_pointer_input", input);
+  }
+
   // Forward one normalized semantic native-event source to the canonical session.
   async emitNativeEvent(source) {
     this.#requireStarted();
