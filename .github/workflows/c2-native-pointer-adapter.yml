@@ -4,6 +4,7 @@ on:
     branches: [work/c2-native-pointer-adapter-20260918]
     paths:
       - .github/c2-native-pointer-adapter.py
+      - .github/c2-native-pointer-finish.py
       - .github/workflows/c2-native-pointer-adapter.yml
 permissions:
   contents: write
@@ -11,20 +12,28 @@ jobs:
   patch-and-verify:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
     steps:
       - uses: actions/checkout@v4
-      - run: python3 .github/c2-native-pointer-adapter.py
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - run: python3 .github/c2-native-pointer-finish.py
+      - name: Install repository-pinned Rust
+        run: rustup show active-toolchain && rustup component add rustfmt clippy
       - run: cargo fmt --all
-      - run: cargo test -p noon --lib live_program
-      - run: cargo test -p noon-native --lib
-      - run: cargo clippy -p noon-native -p noon --lib -- -D warnings
-      - name: Publish code-only snapshot
+      - name: Publish code-only staging snapshot
         run: |
-          git rm .github/c2-native-pointer-adapter.py .github/workflows/c2-native-pointer-adapter.yml
-          git add crates/noon/src/live_program.rs crates/noon-native/src/execution_source.rs crates/noon-native/src/lib.rs
+          git rm .github/c2-native-pointer-adapter.py .github/c2-native-pointer-finish.py .github/workflows/c2-native-pointer-adapter.yml
+          git add crates/noon/src/live_program.rs crates/noon/src/live_program/pointer_input_tests.rs crates/noon/src/execution_session/input.rs crates/noon-native/src/execution_source.rs crates/noon-native/src/lib.rs crates/noon-native/src/pointer_input.rs crates/noon-native/src/pointer_input/tests.rs
           git diff --cached --check
-          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'C2: route winit pointer occurrences through contextual session input'
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'C2: normalize native pointer lifecycle into atomic session input'
           git push origin HEAD:refs/heads/work/c2-native-pointer-adapter-20260918
+      - name: Live program pointer and continuation regressions
+        run: cargo test -p noon --lib live_program -- --nocapture
+      - name: Native pointer and host regressions
+        run: cargo test -p noon-native --lib -- --nocapture
+      - name: Workspace library regressions
+        run: cargo test --workspace --all-features --lib
+      - name: Strict workspace lint
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Direct WASM compatibility
+        run: cargo check -p noon --no-default-features --target wasm32-unknown-unknown
