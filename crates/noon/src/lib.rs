@@ -162,7 +162,7 @@ pub use execution_session::{
     ExecutionSegmentCompletionError, ExecutionSession, ExecutionSessionAnimationError,
     ExecutionSessionCallbackError, ExecutionSessionCallbackReadError, ExecutionSessionCameraError,
     ExecutionSessionCreateError, ExecutionSessionFadeError, ExecutionSessionInputError,
-    ExecutionSessionPublicationError, SignalTimelineAppendError,
+    ExecutionSessionPointerInputError, ExecutionSessionPublicationError, SignalTimelineAppendError,
 };
 pub use family_arrangement::FamilyArrangeOptions;
 pub use family_authoring::{MobjectFamily, MobjectTarget};

@@ -31,8 +31,8 @@ pub use crate::execution_session::{
     CallbackReadValue, CallbackRendererDirtyClassification, CallbackRendererObservationOutcome,
     CallbackSequence, CallbackTermination, CallbackTerminationKind,
     CommittedCallbackRendererObservation, EffectivePropertyBatch, EffectiveSemanticObject,
-    EffectiveSemanticPropertyWrite, ExecutionViewportQuery, RequiredCallbackInvocation,
-    StructuralPublicationStats,
+    EffectiveSemanticPropertyWrite, ExecutionViewportQuery, NativePointerInputReceipt,
+    RequiredCallbackInvocation, StructuralPublicationStats,
 };
 pub use crate::host_callbacks::{
     effective_style_with_color, effective_style_with_fill, effective_style_with_fill_color,
