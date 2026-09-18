@@ -17,7 +17,8 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v7
         with:
-          path: staging
+          ref: a8a0ce78bf3886ea0203e4f1e95e5c043c32111d
+          path: test-source
           persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
@@ -25,22 +26,18 @@ jobs:
           run-id: 35349143222
           github-token: ${{ github.token }}
           path: web
-      - name: Verify pinned runtime and install browser
+      - name: Verify pinned runtime and exact regression test
         run: |
           node --input-type=module -e "import fs from 'node:fs'; import assert from 'node:assert/strict'; assert.equal(JSON.parse(fs.readFileSync('web/runtime-build-identity.json')).sourceRevision,'83ac18f7b0974356bbb47e6cadcd4d1aceb5a1eb');"
+          cp test-source/scripts/playground-playback-morph-regression.mjs scripts/playground-playback-morph-regression.mjs
+          test "$(git hash-object scripts/playground-playback-morph-regression.mjs)" = 6844e9c0803b1e27cbeaddd6cb2b53bdcb8bfb0c
+          rm -rf test-source
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-      - name: Require old runtime to fail the intermediate-hold pixel regression
+      - name: Require old runtime to fail only the intermediate-hold pixel regression
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          item = next(x for x in json.loads(Path('staging/.demo-regression/fix-part-1.json').read_text()) if x['path'] == 'scripts/playground-playback-morph-regression.mjs')
-          assert item['before'] is None
-          Path(item['path']).write_text(item['edits'][0][2])
-          PY
           set +e
           node scripts/playground-playback-morph-regression.mjs > morph-baseline.log 2>&1
           code=$?
@@ -54,8 +51,12 @@ jobs:
           assert r['outcome'] == 'fail', r
           assert r['errors'] == [], r['errors']
           assert len(r['comparisons']) == 34, r
-          assert any(s['time']==2.7 and s['mismatch']>0.02 for s in r['comparisons']), r
-          print('Confirmed temporal regression: original runtime shows wrong shape in rocket hold.')
+          bad = [s for s in r['comparisons'] if s['mismatch'] >= .002]
+          expected = {(mode,t) for mode in ['seek','forward'] for t in [2.3,2.301,2.7,3.049]}
+          assert {(s['mode'],s['time']) for s in bad} == expected, bad
+          assert all(s['mismatch'] > .02 for s in bad), bad
+          assert 'completed replay must preserve the first-pass frame' in r['failure'], r['failure']
+          print('Confirmed: final regression test detects every wrong rocket hold on old runtime, with no other phase mismatches.')
           PY
       - uses: actions/upload-artifact@v7
         if: always()
