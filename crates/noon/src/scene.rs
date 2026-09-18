@@ -552,11 +552,14 @@ impl Scene {
         edge: (f64, f64),
         mask: (f64, f64),
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            crate::family_layout::publish_move_to(
-                store, root, execution, object, target, edge, mask,
-            )
-        })
+        if self.execution.is_some() {
+            return self.with_running_execution(|store, root, execution| {
+                crate::family_layout::publish_move_to(
+                    store, root, execution, object, target, edge, mask,
+                )
+            });
+        }
+        crate::family_layout::author_move_to(&self.store, object, target, edge, mask)
     }
 
     /// Move a family relative to an effective target through one transaction.
