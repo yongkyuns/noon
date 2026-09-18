@@ -617,29 +617,42 @@ impl Clone for SemanticStore {
                 }
             }
         }
+        let compiled_text_resources: HashMap<_, _> = self
+            .compiled_text_resources
+            .iter()
+            .filter_map(|(key, handle)| {
+                self.text_resources.get(*handle)?;
+                let mut handle = *handle;
+                handle.arena = text_namespace;
+                Some((key.clone(), handle))
+            })
+            .collect();
+        let compiled_text_resource_order = self
+            .compiled_text_resource_order
+            .iter()
+            .filter(|key| compiled_text_resources.contains_key(*key))
+            .cloned()
+            .collect::<VecDeque<_>>();
+        let compiled_text_resource_retained_bytes = compiled_text_resource_order
+            .iter()
+            .map(|identity| {
+                identity.descriptor.len()
+                    + identity
+                        .font_contents
+                        .iter()
+                        .map(|font| font.len())
+                        .sum::<usize>()
+            })
+            .sum();
         Self {
             identity: SemanticStoreIdentity::default(),
             geometry_resources,
             text_resources,
             raster_image_resources,
             font_resources,
-            compiled_text_resources: self
-                .compiled_text_resources
-                .iter()
-                .filter_map(|(key, handle)| {
-                    self.text_resources.get(*handle)?;
-                    let mut handle = *handle;
-                    handle.arena = text_namespace;
-                    Some((key.clone(), handle))
-                })
-                .collect(),
-            compiled_text_resource_order: self
-                .compiled_text_resource_order
-                .iter()
-                .filter(|key| self.compiled_text_resources.contains_key(*key))
-                .cloned()
-                .collect(),
-            compiled_text_resource_retained_bytes: self.compiled_text_resource_retained_bytes,
+            compiled_text_resources,
+            compiled_text_resource_order,
+            compiled_text_resource_retained_bytes,
             slots,
             free_head: self.free_head,
             live_nodes: self.live_nodes,
