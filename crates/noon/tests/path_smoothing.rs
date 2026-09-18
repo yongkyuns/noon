@@ -129,7 +129,7 @@ fn batch_resource_errors_reclaim_every_unpublished_path() {
 
 #[test]
 fn invalid_smooth_corners_leave_content_and_resources_unchanged() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut source = scene.square(2.).unwrap();
     let before = source.state().unwrap();
     let revision = scene.revision();

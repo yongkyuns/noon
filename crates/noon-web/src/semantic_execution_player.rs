@@ -3233,7 +3233,7 @@ mod tests {
         let mut scene = noon::Scene::new();
         let target = scene.circle(0.5).unwrap();
         let source = scene.circle(0.75).unwrap();
-        let other = noon::Scene::new();
+        let mut other = noon::Scene::new();
         let foreign = other.circle(0.5).unwrap();
         scene.add(&target).unwrap();
         let session = scene.execution_session().unwrap();
@@ -4022,7 +4022,8 @@ mod tests {
     #[test]
     fn unchanged_static_ticks_do_not_retransmit_geometry() {
         let mut scene = noon::Scene::new();
-        scene.add(&scene.circle(1.0).unwrap()).unwrap();
+        let circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
         let mut player =
             SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 1)
                 .unwrap();
@@ -4035,7 +4036,8 @@ mod tests {
     #[test]
     fn generic_wake_settles_a_playing_static_session() {
         let mut scene = noon::Scene::new();
-        scene.add(&scene.circle(1.0).unwrap()).unwrap();
+        let circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
         let mut player =
             SemanticExecutionPlayer::from_session(scene.execution_session().unwrap(), 2.0, 1)
                 .unwrap();

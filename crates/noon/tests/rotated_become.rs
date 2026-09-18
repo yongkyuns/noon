@@ -23,7 +23,7 @@ fn options() -> ManimBecomeOptions {
 
 #[test]
 fn rotated_become_preserves_world_controls_identity_and_unchanged_resources() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut source = scene.rectangle(4., 1.).unwrap();
     source.shift(-2., 1.).unwrap();
     let mut target = scene.square(2.).unwrap();

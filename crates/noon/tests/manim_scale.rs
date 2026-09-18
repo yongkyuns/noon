@@ -2,7 +2,7 @@ use noon::Scene;
 
 #[test]
 fn manim_scale_preserves_an_off_origin_geometry_center() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut line = scene.line((1.0, 1.0), (3.0, 1.0)).unwrap();
     let before = scene.revision();
 

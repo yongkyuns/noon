@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn declared_passing_flash_has_fixed_transient_lifecycle() {
-        let scene = crate::Scene::new();
+        let mut scene = crate::Scene::new();
         let line = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
         let animation = scene
             .declare_passing_flash(&line, 0.25, AnimationOptions::new().run_time(2.0))

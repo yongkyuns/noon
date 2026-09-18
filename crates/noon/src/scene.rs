@@ -5,9 +5,9 @@ use crate::{
     SceneMembershipRequest, ValueTracker,
 };
 use noon_core::{
-    AnimationOptions, GeometryRef, RateFunction, SemanticMutationImpact,
-    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
-    SemanticNodeId, SemanticStore, SemanticStyle, VectorPath,
+    AnimationOptions, RateFunction, SemanticMutationImpact, SemanticMutationTransaction,
+    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId, SemanticStore,
+    SemanticStyle, VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -140,28 +140,33 @@ impl Scene {
         self.cursor += duration;
         Ok(())
     }
-    pub fn circle(&self, radius: f64) -> Result<Mobject, crate::AuthoringError> {
-        Mobject::manim_circle(Rc::clone(&self.store), radius)
+    /// Construct a detached circle through the Scene-owned publication path.
+    pub fn circle(&mut self, radius: f64) -> Result<Mobject, crate::AuthoringError> {
+        self.geometry(crate::ManimGeometryOptions::circle(radius)?)
     }
-    pub fn square(&self, side: f64) -> Result<Mobject, crate::AuthoringError> {
-        Mobject::manim_square(Rc::clone(&self.store), side)
+    /// Construct a detached square through the Scene-owned publication path.
+    pub fn square(&mut self, side: f64) -> Result<Mobject, crate::AuthoringError> {
+        self.geometry(crate::ManimGeometryOptions::square(side)?)
     }
-    pub fn rectangle(&self, width: f64, height: f64) -> Result<Mobject, crate::AuthoringError> {
-        Mobject::manim_rectangle(Rc::clone(&self.store), width, height)
+    /// Construct a detached rectangle through the Scene-owned publication path.
+    pub fn rectangle(&mut self, width: f64, height: f64) -> Result<Mobject, crate::AuthoringError> {
+        self.geometry(crate::ManimGeometryOptions::rectangle(width, height)?)
     }
     pub fn line(
-        &self,
+        &mut self,
         start: (f64, f64),
         end: (f64, f64),
     ) -> Result<Mobject, crate::AuthoringError> {
-        Mobject::manim_line(Rc::clone(&self.store), start.0, start.1, end.0, end.1)
+        self.geometry(crate::ManimGeometryOptions::line(
+            start.0, start.1, end.0, end.1,
+        )?)
     }
     pub fn path(
-        &self,
+        &mut self,
         path: VectorPath,
         style: SemanticStyle,
     ) -> Result<Mobject, crate::AuthoringError> {
-        Mobject::from_geometry(Rc::clone(&self.store), GeometryRef::path(path), style)
+        self.geometry(crate::ManimGeometryOptions::path_with_style(path, style))
     }
     pub fn add(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
         self.edit_membership(SceneMembershipRequest::Add(&[MobjectTarget::Object(

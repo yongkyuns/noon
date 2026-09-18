@@ -113,7 +113,7 @@ fn late_invalid_selection_and_foreign_aligner_never_publish_a_prefix() {
     assert!(live.arrange_family_with_options(&family, &options).is_err());
     assert_eq!(scene.integration_store().borrow().scene_revision(), before);
     close(live.effective_layout(&second).unwrap().center, (0.0, 0.0));
-    let other = Scene::new();
+    let mut other = Scene::new();
     options.member_index = None;
     options.aligner = Some(LayoutAnchor::from(&other.square(1.0).unwrap()));
     assert!(live.arrange_family_with_options(&family, &options).is_err());

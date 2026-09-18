@@ -59,7 +59,7 @@ fn assert_live_unchanged(
 
 #[test]
 fn constructor_and_resource_rejections_do_not_allocate_and_recover() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let before = snapshot(&scene, &[]);
     assert!(matches!(
         scene.circle(0.0),
@@ -113,7 +113,7 @@ fn constructor_and_resource_rejections_do_not_allocate_and_recover() -> TestResu
 
 #[test]
 fn style_transform_and_query_categories_are_typed_and_atomic() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut object = scene.circle(1.0)?;
     let before = snapshot(&scene, &[&object]);
     assert!(matches!(
@@ -567,7 +567,7 @@ fn scalar_callback_paint_preserves_typed_rejection_and_composite_domain() -> Tes
 
 #[test]
 fn positive_number_rejection_retains_original_f64_and_recovers() -> TestResult {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let before = snapshot(&scene, &[]);
     for supplied in [
         f64::MIN_POSITIVE,

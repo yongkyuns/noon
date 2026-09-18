@@ -613,7 +613,7 @@ mod tests {
 
     #[test]
     fn scale_rejects_invalid_input_atomically_and_keeps_unrelated_state() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let arrow = ManimArrow::create(
             Rc::clone(scene.integration_store()),
             ManimArrowOptions::arrow(-1.0, 0.0, 1.0, 0.0).unwrap(),

@@ -49,7 +49,7 @@ fn alignment_changes_only_selected_content_and_preserves_identity_style_and_boun
 
 #[test]
 fn foreign_or_nonvector_operand_cannot_partially_publish() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let a = scene.square(1.).unwrap();
     let foreign = Scene::new().circle(1.).unwrap();
     let revision = scene.revision();

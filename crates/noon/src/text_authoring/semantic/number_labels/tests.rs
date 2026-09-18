@@ -131,7 +131,7 @@ fn second_axis_preparation_failure_is_atomic_including_fonts() {
 
 #[test]
 fn late_transaction_failure_discards_text_without_interning_fonts() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let sentinel = scene.circle(0.5).unwrap();
     let before = sentinel.state().unwrap();
     let revision = scene.revision();

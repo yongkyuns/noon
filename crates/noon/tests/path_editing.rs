@@ -125,7 +125,7 @@ fn empty_corner_inputs_and_nonfinite_rejection_follow_shared_semantics() {
 
 #[test]
 fn rejected_live_edit_does_not_allocate_or_publish_and_completion_allows_edit() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let object = scene.square(1.).unwrap();
     let mut session = scene.execution_session().unwrap();
     let segment = scene

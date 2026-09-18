@@ -63,7 +63,7 @@ fn foreign_and_stale_members_cannot_create_or_edit_a_family() {
     let mut scene = Scene::new();
     let local = scene.square(1.0).unwrap();
     let root = scene.family(&[(&local).into()]).unwrap();
-    let other = Scene::new();
+    let mut other = Scene::new();
     let foreign = other.square(1.0).unwrap();
     let stale = scene.square(1.0).unwrap();
     scene
@@ -180,7 +180,7 @@ fn authored_member_batches_roll_back_cycles_and_late_invalid_handles() {
             .unwrap(),
         vec![first.node_id()]
     );
-    let other = Scene::new();
+    let mut other = Scene::new();
     let foreign = other.circle(0.2).unwrap();
     assert!(nested
         .remove_many(&[(&first).into(), (&foreign).into()])

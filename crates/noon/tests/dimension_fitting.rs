@@ -6,7 +6,7 @@ use noon::{
 
 #[test]
 fn object_fit_and_dimension_match_use_shared_bounds() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let source = scene.rectangle(2.0, 1.0).unwrap();
     let target = scene.rectangle(6.0, 3.0).unwrap();
     let anchor = LayoutAnchor::from(&source);

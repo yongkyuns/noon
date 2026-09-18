@@ -168,7 +168,7 @@ mod tests {
             3.0
         );
 
-        let foreign_scene = Scene::new();
+        let mut foreign_scene = Scene::new();
         let foreign = foreign_scene.square(1.0).unwrap();
         assert!(matches!(
             scene.set_z_index(&LayoutAnchor::from(&foreign), 1.0, false),

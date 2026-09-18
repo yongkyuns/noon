@@ -7455,7 +7455,7 @@ mod tests {
 
     #[test]
     fn family_argument_batches_reject_scene_binding_metadata() {
-        let scene = noon::Scene::new();
+        let mut scene = noon::Scene::new();
         let object = scene.circle(0.2).unwrap();
         let revision = scene.integration_store().borrow().scene_revision();
         let mut batch = SceneMembershipBatch {
@@ -7659,7 +7659,7 @@ mod tests {
     #[test]
     fn typed_binding_rejects_cross_store_collisions_atomically() {
         let mut first = CanonicalAuthoringScene::default();
-        let second = CanonicalAuthoringScene::default();
+        let mut second = CanonicalAuthoringScene::default();
         let local = first.scene.circle(1.0).unwrap();
         let foreign = second.scene.circle(2.0).unwrap();
         assert_eq!(local.node_id(), foreign.node_id());
@@ -9294,7 +9294,7 @@ mod tests {
         assert!(context.live_contains_mobject(&lifecycle_target).unwrap());
 
         let revision = context.scene.integration_store().borrow().scene_revision();
-        let foreign = CanonicalAuthoringScene::default();
+        let mut foreign = CanonicalAuthoringScene::default();
         let foreign_target = foreign.scene.circle(0.2).unwrap();
         let invalid = [OrdinaryCompositionChild::Add {
             entering_id: ObjectId::new(9),

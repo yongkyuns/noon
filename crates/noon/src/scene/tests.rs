@@ -337,7 +337,7 @@ fn effective_path_query_is_scene_owned_and_requires_running_execution() {
     assert_eq!(query.start().unwrap(), (1.0, 2.0));
     assert_eq!(query.end().unwrap(), (4.0, 6.0));
 
-    let foreign_scene = Scene::new();
+    let mut foreign_scene = Scene::new();
     let foreign = foreign_scene.line((0.0, 0.0), (1.0, 0.0)).unwrap();
     assert!(matches!(
         scene.effective_path_query(&foreign),
