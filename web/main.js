@@ -358,7 +358,9 @@ let playerNeedsRestart = false;
 let busyDepth = 0;
 let galleryPage = 0;
 let metricsTimer = null;
-let metricsPending = false;
+let metricsPending = null;
+let playbackPending = null;
+let metricsNextPollAt = 0;
 let metricsEpoch = 0;
 
 function currentExample() {
@@ -1286,41 +1288,64 @@ document.addEventListener("keydown", (event) => {
 
 async function updateWorkerMetrics() {
   if (
-    metricsPending ||
     player === null ||
     document.visibilityState === "hidden" ||
     (busyDepth > 0 && activeSourceContinuation === null) ||
-    playerNeedsRestart
+    playerNeedsRestart ||
+    isCurrentMetricsObservation(playbackPending)
   ) {
     return;
   }
   const activePlayer = player;
-  const runGeneration = generations.diagnostics.runGeneration;
-  metricsPending = true;
+  const observation = {
+    player: activePlayer,
+    runGeneration: generations.diagnostics.runGeneration,
+    epoch: metricsEpoch,
+  };
+  playbackPending = observation;
+  // Renderer telemetry can be slow during GPU preparation. It must neither
+  // delay a ready Rust clock observation nor block the next playback poll.
+  void updateRendererMetrics(observation);
   try {
-    const [report, playbackState] = await Promise.all([
-      activePlayer.metrics(),
-      activePlayer.state(),
-    ]);
-    if (player !== activePlayer) return;
-    if (generations.diagnostics.runGeneration !== runGeneration) return;
-    const metrics = report.metrics;
-    const host = report.engineMetrics.host;
+    const playbackState = await activePlayer.state();
+    if (!isCurrentMetricsObservation(observation)) return;
     rendererBackend = activePlayer.rendererBackend;
     status.dataset.rendererBackend = rendererBackend;
-    status.dataset.executionMode = report.executionMode;
+    status.dataset.executionMode = activePlayer.mode;
     setPlaybackRuntimeStatus(
       playbackState,
-      `${metrics.objectCount} objects · ${rendererBackend} ${report.executionMode} worker`,
+      `${metricObjects.value} objects · ${rendererBackend} ${activePlayer.mode} worker`,
     );
-    metricObjects.value = String(metrics.objectCount);
-    metricDraws.value = String(metrics.drawCalls);
-    metricUpload.value = formatBytes(metrics.bytesUploaded);
     metricTime.value = `${playbackState.time.toFixed(2)} s`;
     playbackControls?.observe(playbackState);
     status.dataset.playbackPlaying = String(
       activeSourceContinuation !== null || playbackState.playing,
     );
+  } catch (error) {
+    if (isCurrentMetricsObservation(observation)) showError(error);
+  } finally {
+    if (playbackPending === observation) playbackPending = null;
+  }
+}
+
+function isCurrentMetricsObservation(observation) {
+  return observation !== null && player === observation.player && !playerNeedsRestart &&
+    generations.diagnostics.runGeneration === observation.runGeneration &&
+    metricsEpoch === observation.epoch;
+}
+
+async function updateRendererMetrics(observation) {
+  if (isCurrentMetricsObservation(metricsPending) || performance.now() < metricsNextPollAt) return;
+  metricsPending = observation;
+  metricsNextPollAt = performance.now() + METRICS_POLL_MS;
+  try {
+    const report = await observation.player.metrics();
+    if (!isCurrentMetricsObservation(observation)) return;
+    const metrics = report.metrics;
+    const host = report.engineMetrics.host;
+    metricObjects.value = String(metrics.objectCount);
+    metricDraws.value = String(metrics.drawCalls);
+    metricUpload.value = formatBytes(metrics.bytesUploaded);
     status.dataset.instances = String(metrics.instancesDrawn);
     status.dataset.uploadBytes = String(metrics.bytesUploaded);
     status.dataset.geometryCacheMisses = String(metrics.geometryCacheMisses);
@@ -1328,17 +1353,15 @@ async function updateWorkerMetrics() {
     status.dataset.hostDroppedLateResults = String(host.droppedLateResults);
     status.dataset.presentedFrames = String(metrics.presentedFrames);
   } catch (error) {
-    if (player === activePlayer && !playerNeedsRestart &&
-        generations.diagnostics.runGeneration === runGeneration) {
-      showError(error);
-    }
+    if (isCurrentMetricsObservation(observation)) showError(error);
   } finally {
-    metricsPending = false;
+    if (metricsPending === observation) metricsPending = null;
   }
 }
 
 function stopMetricsPolling() {
   metricsEpoch += 1;
+  metricsNextPollAt = 0;
   if (metricsTimer !== null) {
     clearTimeout(metricsTimer);
     metricsTimer = null;
