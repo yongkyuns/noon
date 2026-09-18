@@ -68,9 +68,10 @@ export async function attachSemanticEngine(
   let lastPresentedPublication = null;
   let pendingPresentation = null;
   let continuationActive = false;
-  // Read-only UI metadata sampled before transferring the runtime lease. The
-  // context cannot answer this query while the player is leased to this endpoint.
-  let continuationDurationSeconds = null;
+  // Read-only observation of the last completed lease. The authoring context's
+  // next segment horizon is future time, not elapsed playback time. Never use it
+  // as a clock while Python holds the returned player.
+  let returnedPlaybackTime = null;
   let continuationGeneration = continuation?.generation ?? null;
   let executionWakeCadence = null;
   let pendingRendererObservation = null;
@@ -199,15 +200,16 @@ export async function attachSemanticEngine(
       if (continuation === null) {
         throw new Error("semantic continuation is idle in its authoring context");
       }
-      const time = context.liveHandoffDuration();
+      const time = returnedPlaybackTime;
       if (!Number.isFinite(time) || time < 0) {
         throw new Error("returned semantic continuation has no valid authored time");
       }
-      return { type, time, playing: false, nextPatchSequence: "0", durationSeconds: time };
+      return { type, time, playing: false, nextPatchSequence: "0", durationSeconds: null };
     }
     return {
       type, time: player.time(), playing: player.isPlaying(), nextPatchSequence: "0",
-      ...(continuation === null ? {} : { durationSeconds: continuationDurationSeconds }),
+      // A Python continuation has not authored its complete future timeline.
+      ...(continuation === null ? {} : { durationSeconds: null }),
     };
   };
   const emitExecutionWake = (cadence, timerAfterMilliseconds, force = false) => {
@@ -525,6 +527,7 @@ export async function attachSemanticEngine(
       const completionPublication = send(player.drainDeltaJson());
       if (!await settleContinuationPublication(completionPublication)) return;
       const completedPlayer = player;
+      returnedPlaybackTime = completedPlayer.time();
       player = null;
       continuationActive = false;
       context.returnExecutionPlayer(completedPlayer);
@@ -580,6 +583,7 @@ export async function attachSemanticEngine(
         const completionPublication = send(player.drainDeltaJson());
         if (!await settleContinuationPublication(completionPublication)) return;
         const completedPlayer = player;
+        returnedPlaybackTime = completedPlayer.time();
         player = null;
         continuationActive = false;
         context.returnExecutionPlayer(completedPlayer);
@@ -791,7 +795,6 @@ export async function attachSemanticEngine(
     if (![EXECUTION_TRANSPORT_SHARED, EXECUTION_TRANSPORT_TRANSFERABLE].includes(transportMode)) {
       throw new Error("unsupported semantic execution transport");
     }
-    if (continuation !== null) continuationDurationSeconds = context.liveHandoffDuration();
     player = context.createExecutionPlayer(loopDurationSeconds, session);
     if (initiallyPaused) player.pause();
     continuation?.onCallbackReadAvailable?.(readCallbackPhase);
@@ -928,7 +931,6 @@ export async function attachSemanticEngine(
       if (!Number.isSafeInteger(generation) || generation !== continuation.generation) {
         throw new Error("stale semantic continuation generation");
       }
-      continuationDurationSeconds = context.liveHandoffDuration();
       player = context.resumeExecutionPlayer();
       continuationGeneration = generation;
       continuationActive = true;

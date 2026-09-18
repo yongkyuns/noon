@@ -6,14 +6,22 @@ on:
       - master
     paths:
       - ".github/workflows/playground-playback-controls.yml"
+      - "crates/noon-runtime/**"
       - "crates/noon-render-wgpu/**"
       - "crates/noon-web/**"
       - "scripts/build-web-demo.sh"
       - "scripts/playground-playback-controls-smoke.mjs"
       - "scripts/playground-playback-rerun-stress.mjs"
+      - "scripts/playground-playback-morph-regression.mjs"
+      - "scripts/manim-raster-support.mjs"
       - "web/**"
   pull_request:
     paths:
+      - "crates/noon-runtime/**"
+      - "web/playground-playback-controls*"
+      - "web/semantic-engine-endpoint*"
+      - "web/main.js"
+      - "scripts/manim-raster-support.mjs"
       - ".github/workflows/playground-playback-controls.yml"
       - "scripts/playground-playback-*.mjs"
   workflow_dispatch:
@@ -72,7 +80,7 @@ jobs:
           key: ${{ runner.os }}-playwright-chromium-1.62.1
       - name: Install Playwright Chromium
         run: |
-          npm install --no-save --ignore-scripts playwright@1.62.1
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
       - name: Test public playback controls
         env:
@@ -82,6 +90,10 @@ jobs:
         env:
           NOON_PLAYGROUND_RERUN_STRESS_ARTIFACTS: browser-smoke-artifacts/playground-playback-rerun-stress
         run: node scripts/playground-playback-rerun-stress.mjs
+      - name: Verify morph endpoints and holds against source playback
+        run: |
+          node scripts/playground-playback-morph-regression.mjs
+          NOON_MORPH_BACKEND=webgpu NOON_MORPH_REGRESSION_ARTIFACTS=browser-smoke-artifacts/playground-playback-morph-webgpu node scripts/playground-playback-morph-regression.mjs
       - name: Upload playback diagnostics
         if: always()
         uses: actions/upload-artifact@v7
@@ -90,5 +102,7 @@ jobs:
           path: |
             browser-smoke-artifacts/playground-playback-controls
             browser-smoke-artifacts/playground-playback-rerun-stress
+            browser-smoke-artifacts/playground-playback-morph
+            browser-smoke-artifacts/playground-playback-morph-webgpu
           if-no-files-found: error
           retention-days: 7

@@ -1468,7 +1468,13 @@ fn apply_group_to_row(
             group.channel.property,
             Property::Position | Property::Rotation | Property::Scale
         ) && prepared_morph_owns_render_frame(compiled, group.channel.object_index, time);
-    if track.reconciled && time >= track.timing.start_time + track.timing.duration {
+    // Authored base contains the latest completed endpoint, not the endpoint
+    // of every historical track. Earlier tracks must keep their own target
+    // through replay gaps until the next track on this channel starts.
+    if tracks.last().is_some_and(|last| last.id == track.id)
+        && track.reconciled
+        && time >= track.timing.start_time + track.timing.duration
+    {
         if group.channel.property == Property::Morph
             && matches!(track.values, TrackValues::PreparedMorph { .. })
         {
@@ -1631,7 +1637,9 @@ fn prepared_morph_owns_render_frame(
     cursor.checked_sub(1).is_some_and(|index| {
         let track = &tracks[index];
         matches!(track.values, TrackValues::PreparedMorph { .. })
-            && !(track.reconciled && time >= track.timing.start_time + track.timing.duration)
+            && !(cursor == tracks.len()
+                && track.reconciled
+                && time >= track.timing.start_time + track.timing.duration)
             && mapped_track_progress(track, time).is_some()
     })
 }

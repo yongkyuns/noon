@@ -23,10 +23,13 @@ test("source-owned progress moves despite busy/paused flags, without permitting 
   f.controls.setControllable(false);
   f.controls.setBusy(true);
   f.controls.observe({ time: 0.4, playing: false, durationSeconds: 2 });
-  assert.equal(f.range.value, "0.4");
-  assert.equal(f.output.value, "0.40 s · live");
+  assert.equal(f.controls.element.dataset.elapsedSeconds, "0.4");
+  assert.equal(f.range.hidden, true);
+  assert.equal(f.output.value, "0.40 / — s");
   f.controls.observe({ time: 2.5, playing: true, durationSeconds: 4 });
-  assert.equal(f.range.value, "2.5"); assert.equal(f.range.max, "4");
+  assert.equal(f.controls.element.dataset.elapsedSeconds, "2.5");
+  assert.equal(f.output.value, "2.50 / — s");
+  assert.equal(f.controls.durationSeconds, null, "future Python duration is not a segment horizon");
   assert.equal(f.range.disabled, true);
   for (const selector of [".playback-toggle", ".playback-restart", ".playback-scrubber"]) {
     f.preview.querySelector(selector).dispatchEvent(new Event(selector.includes("scrubber") ? "input" : "click"));
@@ -65,4 +68,33 @@ test("retired command completion cannot mutate a replacement's controls or error
   assert.equal(replacement.element.dataset.busy, "false");
   assert.equal(f.preview.querySelector(".playback-scrubber").value, "0.75");
   assert.deepEqual(f.errors, []);
+});
+
+
+test("first-pass segment changes never expose a misleading percentage, and completed replay uses the full duration", () => {
+  const f = fixture();
+  f.controls.setControllable(false);
+  for (const state of [
+    { time: 0.4, durationSeconds: 0.5 },
+    { time: 0.5, durationSeconds: 2.3 },
+    { time: 2.7, durationSeconds: 3.05 },
+    { time: 3.05, durationSeconds: 4.85 },
+    { time: 5.7, durationSeconds: 5.7 },
+  ]) {
+    f.controls.observe({ ...state, playing: false });
+    assert.equal(f.controls.element.dataset.elapsedSeconds, String(state.time));
+    assert.equal(f.controls.durationSeconds, null);
+    assert.equal(f.range.hidden, true);
+    assert.equal(f.preview.querySelector(".playback-live-status").hidden, false);
+  }
+  f.controls.setDuration(5.7);
+  f.controls.setControllable(true);
+  f.controls.setBusy(false);
+  f.controls.sync({ time: 2.7, playing: false });
+  assert.equal(f.range.hidden, false);
+  assert.equal(f.range.disabled, false);
+  assert.equal(f.range.max, "5.7");
+  assert.equal(f.range.value, "2.7");
+  assert.equal(f.output.value, "2.70 / 5.70 s");
+  assert.equal(f.preview.querySelector(".playback-live-status").hidden, true);
 });

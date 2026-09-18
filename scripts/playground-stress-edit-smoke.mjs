@@ -310,7 +310,7 @@ try {
   diagnostics.snapshots.rows5Playing = await waitForSourceOwnedPlayback(page);
   const sourceOwnedGeneration = diagnostics.snapshots.rows5Playing.runGeneration;
 
-  await page.waitForFunction(() => Number(document.querySelector(".playback-scrubber")?.value) > 0.1);
+  await page.waitForFunction(() => Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds) > 0.1);
   assert.equal(await page.locator(".playback-controls").getAttribute("data-controllable"), "false");
 
   // Reset stops the long continuation immediately. A subsequent edit replaces

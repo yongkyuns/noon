@@ -12,6 +12,7 @@ export class PlaygroundPlaybackControls {
   #restartButton;
   #scrubber;
   #timeOutput;
+  #liveStatus;
   #durationSeconds;
   #timeSeconds = 0;
   #playing = true;
@@ -72,7 +73,10 @@ export class PlaygroundPlaybackControls {
     this.#scrubber.step = "0.001";
     this.#scrubber.setAttribute("aria-label", "Animation playhead");
     this.#scrubber.addEventListener("input", this.#handleSeekInput);
-    timeline.append(this.#scrubber);
+    this.#liveStatus = document.createElement("span");
+    this.#liveStatus.className = "playback-live-status";
+    this.#liveStatus.textContent = "Duration pending";
+    timeline.append(this.#scrubber, this.#liveStatus);
 
     this.#timeOutput = document.createElement("output");
     this.#timeOutput.className = "playback-time";
@@ -88,12 +92,12 @@ export class PlaygroundPlaybackControls {
   }
 
   get durationSeconds() {
-    return this.#durationSeconds;
+    return this.#controllable ? this.#durationSeconds : null;
   }
 
   setDuration(durationSeconds) {
     this.#durationSeconds = validateDuration(durationSeconds);
-    this.#timeSeconds = Math.min(this.#timeSeconds, this.#durationSeconds);
+    if (this.#controllable) this.#timeSeconds = Math.min(this.#timeSeconds, this.#durationSeconds);
     this.#render();
   }
 
@@ -107,10 +111,9 @@ export class PlaygroundPlaybackControls {
   // A read-only observation must not fight a user's in-flight scrub or command.
   observe(state) {
     if (this.#destroyed || this.#seekActive || this.#commandPending) return;
-    const durationSeconds = this.#controllable
-      ? this.#durationSeconds
-      : Math.max(this.#durationSeconds, state.durationSeconds ?? 0, state.time);
-    this.sync({ ...state, durationSeconds });
+    // A continuation's current play/wait endpoint is not its full duration.
+    // Only the completed source result may set the replay range via setDuration.
+    this.sync({ time: state.time, playing: state.playing });
   }
 
   setBusy(busy) {
@@ -119,7 +122,7 @@ export class PlaygroundPlaybackControls {
   }
 
   sync({ time, playing, durationSeconds = undefined }) {
-    if (durationSeconds !== undefined) {
+    if (this.#controllable && durationSeconds !== undefined) {
       this.#durationSeconds = validateDuration(durationSeconds);
     }
     if (!Number.isFinite(time) || time < 0) {
@@ -128,7 +131,7 @@ export class PlaygroundPlaybackControls {
     if (typeof playing !== "boolean") {
       throw new TypeError("playback state playing must be boolean");
     }
-    this.#timeSeconds = Math.min(time, this.#durationSeconds);
+    this.#timeSeconds = this.#controllable ? Math.min(time, this.#durationSeconds) : time;
     this.#playing = playing;
     this.#render();
   }
@@ -143,7 +146,7 @@ export class PlaygroundPlaybackControls {
     ) {
       return;
     }
-    this.#timeSeconds = Math.min(time, this.#durationSeconds);
+    this.#timeSeconds = this.#controllable ? Math.min(time, this.#durationSeconds) : time;
     this.#renderTime();
   }
 
@@ -237,6 +240,8 @@ export class PlaygroundPlaybackControls {
       "aria-label",
       !this.#controllable ? "Python owns live playback" : this.#playing ? "Pause animation" : "Play animation",
     );
+    this.#scrubber.hidden = !this.#controllable;
+    this.#liveStatus.hidden = this.#controllable;
     this.#scrubber.max = String(this.#durationSeconds);
     this.#renderTime();
     this.#renderDisabled();
@@ -244,18 +249,21 @@ export class PlaygroundPlaybackControls {
 
   #renderTime() {
     if (this.#destroyed) return;
-    const clampedTime = Math.min(this.#timeSeconds, this.#durationSeconds);
-    this.#scrubber.value = String(clampedTime);
+    const time = this.#controllable
+      ? Math.min(this.#timeSeconds, this.#durationSeconds) : this.#timeSeconds;
+    this.#root.dataset.elapsedSeconds = String(time);
+    // Keep the layout slot, but do not draw a percentage thumb before the total
+    // is known. Expanding a segment-sized range makes forward time jump back.
+    this.#scrubber.value = String(Math.min(time, this.#durationSeconds));
     this.#scrubber.setAttribute(
       "aria-valuetext",
-      `${formatTime(clampedTime)} seconds of ${formatTime(this.#durationSeconds)} seconds`,
+      this.#controllable
+        ? `${formatTime(time)} seconds of ${formatTime(this.#durationSeconds)} seconds`
+        : `${formatTime(time)} seconds elapsed · total duration not yet known`,
     );
     this.#timeOutput.value = this.#controllable
-      ? `${formatTime(clampedTime)} / ${formatTime(this.#durationSeconds)} s`
-      : `${formatTime(clampedTime)} s · live`;
-    if (!this.#controllable) {
-      this.#scrubber.setAttribute("aria-valuetext", `${formatTime(clampedTime)} seconds elapsed · Python still authoring`);
-    }
+      ? `${formatTime(time)} / ${formatTime(this.#durationSeconds)} s`
+      : `${formatTime(time)} / — s`;
   }
 
   #renderDisabled() {
@@ -288,6 +296,7 @@ function renderPlaybackPlaceholder(root) {
   root.removeAttribute("data-busy");
   root.removeAttribute("data-playing");
   root.removeAttribute("data-controllable");
+  root.removeAttribute("data-elapsed-seconds");
   root.removeAttribute("title");
   root.setAttribute("aria-label", "Animation playback controls");
 
@@ -386,7 +395,15 @@ function installStyles() {
       cursor: default;
       opacity: 0.42;
     }
-    .playback-controls[data-controllable="false"] .playback-scrubber { opacity: 1; }
+    .playback-live-status {
+      display: block;
+      overflow: hidden;
+      color: #b9c3d6;
+      font-size: 0.68rem;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .playback-controls [hidden] { display: none !important; }
     .playback-controls[data-busy="true"] button:disabled,
     .playback-controls[data-busy="true"] input:disabled {
       cursor: wait;

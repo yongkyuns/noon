@@ -99,14 +99,21 @@ async function snapshot(page) {
   });
 }
 
-async function startDeferredRuntime(page, exampleId) {
+async function waitForInitialReplay(page, exampleId) {
   await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
-  const deferred = await snapshot(page);
+  // Preload starts after the first paint, so a later driver snapshot is not a
+  // cold-start observation. Verify the recorded deferred state after preload
+  // completes, then stress the same completed replay without a duplicate Run.
+  await waitForApplied(page, exampleId);
+  await page.waitForFunction(() =>
+    document.querySelector("#status")?.dataset.liveAuthoring === "ready" &&
+    window.__noonExampleGallery?.runInFlight === false, null, { timeout: 60_000 });
+  const deferred = await page.evaluate(() => window.__noonRerunStress.initialDeferred);
+  assert.ok(deferred, "rerun stress never observed deferred startup");
   assert.equal(deferred.runtimeStartup, "deferred", "rerun stress must begin without a runtime");
   assert.equal(deferred.rendererBackend, null, "deferred rerun stress must not initialize a renderer");
   assert.equal(deferred.playing, null, "deferred rerun stress must not allocate playback controls");
-  await page.locator("#replace-scene").click();
-  await waitForApplied(page, exampleId);
+  return deferred;
 }
 
 async function holdNextRun(page, exampleId) {
@@ -182,6 +189,7 @@ try {
   await page.addInitScript(() => {
     window.__noonRerunStress = {
       authoringCount: 0,
+      initialDeferred: null,
       holdExample: null,
       holdReached: false,
       release: null,
@@ -202,6 +210,13 @@ try {
     const observeSourceOwnership = () => {
       const status = document.querySelector("#status");
       const stress = window.__noonRerunStress;
+      if (status?.dataset.runtimeStartup === "deferred" && stress.initialDeferred === null) {
+        stress.initialDeferred = {
+          runtimeStartup: status.dataset.runtimeStartup,
+          rendererBackend: status.dataset.rendererBackend ?? null,
+          playing: document.querySelector(".playback-controls")?.dataset.playing ?? null,
+        };
+      }
       if (
         status?.dataset.playbackControls === "unavailable" &&
         window.__noonExampleGallery?.runInFlight === true
@@ -217,14 +232,14 @@ try {
     sourceOwnershipObserver.observe(document, {
       attributes: true,
       subtree: true,
-      attributeFilter: ["data-playback-controls"],
+      attributeFilter: ["data-playback-controls", "data-runtime-startup"],
     });
     observeSourceOwnership();
   });
 
   const exampleId = "parity-create-circle";
   await page.goto(`${baseUrl}/web/index.html?example=${exampleId}`, { waitUntil: "load" });
-  await startDeferredRuntime(page, exampleId);
+  diagnostics.deferred = await waitForInitialReplay(page, exampleId);
   await page.waitForSelector(".playback-controls");
   await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.busy === "false");
   await page.evaluate(() => {
@@ -233,6 +248,7 @@ try {
 
   const initial = await snapshot(page);
   diagnostics.phases.push({ phase: "initial", ...initial });
+  assert.equal(initial.authoringCount, 1, "automatic preload must author the initial scene exactly once");
   assert.equal(initial.playing, "false", "completed replay must begin paused");
   assert.equal(initial.playbackAvailability, "available");
   assert.ok(initial.sourceOwnedTransitions >= 1, "initial source pass never established exclusive playback ownership");
