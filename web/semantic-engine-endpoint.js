@@ -688,6 +688,7 @@ export async function attachSemanticEngine(
           }
           case "native_state_input":
           case "native_event":
+          case "browser_pointer_input":
             applyNativeInput(message);
             send(player.drainDeltaJson());
             if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) emitExecutionWake("idle", null);
