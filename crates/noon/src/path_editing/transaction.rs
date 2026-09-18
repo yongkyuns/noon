@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn unchanged_path_preserves_resource_and_still_publishes_target_paint() {
-        let scene = crate::Scene::new();
+        let mut scene = crate::Scene::new();
         let object = scene
             .path(
                 VectorPath::new()

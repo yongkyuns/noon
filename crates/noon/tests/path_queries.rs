@@ -9,7 +9,7 @@ fn near(actual: (f64, f64), expected: (f64, f64)) {
 
 #[test]
 fn nonuniform_world_measure_and_local_measure_are_distinct_immutable_observations() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let path = VectorPath::new()
         .move_to(Vec2::ZERO)
         .line_to(Vec2::new(1., 0.))
@@ -39,7 +39,7 @@ fn nonuniform_world_measure_and_local_measure_are_distinct_immutable_observation
 
 #[test]
 fn canonical_primitives_and_subpath_breaks_keep_their_path_order() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let rectangle = scene.rectangle(4., 2.).unwrap();
     let query = rectangle.path_query().unwrap();
     near(query.start().unwrap(), (2., 1.));
@@ -113,7 +113,7 @@ fn effective_queries_capture_one_live_affine_publication() {
 
 #[test]
 fn effective_reveal_queries_keep_curve_boundaries_transforms_and_snapshots() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut object = scene
         .path(
             VectorPath::new()

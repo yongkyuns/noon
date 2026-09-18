@@ -516,7 +516,7 @@ mod tests {
     #[test]
     fn brace_rejects_foreign_target_without_observing_it() {
         let mut scene = Scene::new();
-        let other = Scene::new();
+        let mut other = Scene::new();
         let target = other.square(1.0).unwrap();
         assert_eq!(
             scene

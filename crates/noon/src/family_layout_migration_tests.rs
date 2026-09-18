@@ -91,7 +91,7 @@ fn scene_family_arrangement_and_placement_publish_through_one_owner() {
         (5.0, 3.0)
     );
 
-    let foreign_scene = Scene::new();
+    let mut foreign_scene = Scene::new();
     let foreign = foreign_scene.square(1.0).unwrap();
     let revision = scene.revision();
     let publication = scene.owned_execution().publication_context();

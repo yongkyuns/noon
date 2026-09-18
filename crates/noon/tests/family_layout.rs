@@ -98,7 +98,7 @@ fn empty_family_observation_has_origin_bounds_without_scene_changes() {
 
 #[test]
 fn object_next_to_and_frame_corner_use_shared_bounds_and_buffers() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut left = scene.circle(1.0).unwrap();
     left.shift(-2.0, 0.0).unwrap();
     let mut right = scene.square(1.0).unwrap();

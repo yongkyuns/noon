@@ -2813,7 +2813,7 @@ mod tests {
 
     #[test]
     fn live_line_endpoints_reject_active_content_overrides() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let line = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
         let mut session = scene.execution_session().unwrap();
         let mut live = scene.live(&mut session);
@@ -3342,7 +3342,7 @@ mod tests {
 
     #[test]
     fn parallel_create_admits_all_detached_leaves_in_one_reveal_segment() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let circle = scene.circle(0.4).unwrap();
         let square = scene.square(0.8).unwrap();
         let mut session = scene.execution_session().unwrap();
@@ -3385,7 +3385,7 @@ mod tests {
 
     #[test]
     fn parallel_create_rejects_duplicate_detached_target_before_publication() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let circle = scene.circle(0.4).unwrap();
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
@@ -3419,7 +3419,7 @@ mod tests {
 
     #[test]
     fn affine_lifecycle_admits_from_effective_channels_then_removes_at_completion() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let authored = square.state().unwrap();
         let mut session = scene.execution_session().unwrap();
@@ -3467,7 +3467,7 @@ mod tests {
 
     #[test]
     fn detached_effective_center_removal_admits_and_removes_one_identity_atomically() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut square = scene.square(1.0).unwrap();
         square.set_translation(2.0, -1.0).unwrap();
         let detached_family = {
@@ -3516,7 +3516,7 @@ mod tests {
 
     #[test]
     fn grow_then_shrink_preserves_an_unmounted_family_membership() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let detached_family = {
             let mut store = scene.integration_store().borrow_mut();
@@ -3607,7 +3607,7 @@ mod tests {
 
     #[test]
     fn affine_removal_rejects_another_live_reachable_parent() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let live_family = {
             let mut store = scene.integration_store().borrow_mut();
@@ -3649,7 +3649,7 @@ mod tests {
 
     #[test]
     fn invalid_detached_affine_removal_does_not_admit_or_publish() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
@@ -3728,7 +3728,7 @@ mod tests {
 
     #[test]
     fn uncreate_honors_asymmetric_reversal_without_removing_kept_target() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
@@ -3758,7 +3758,7 @@ mod tests {
 
     #[test]
     fn uncreate_honors_explicit_forward_rate_and_keeps_membership() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
@@ -4014,7 +4014,7 @@ mod tests {
 
     #[test]
     fn mixed_composition_rejects_foreign_leaf_before_detached_admission() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.rectangle(2.0, 2.0).unwrap();
         let mut target = square.target_editor().unwrap();
         target.rotate(std::f64::consts::PI).unwrap();
@@ -4055,7 +4055,7 @@ mod tests {
 
     #[test]
     fn unsupported_point_correspondence_rolls_back_detached_admission() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let line = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
         let mut target = line.target_editor().unwrap();
         target.rotate(std::f64::consts::PI).unwrap();
@@ -4095,7 +4095,7 @@ mod tests {
 
     #[test]
     fn mixed_sequence_preserves_rotate_before_transform_order() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let rotating = scene.square(1.0).unwrap();
         let moving = scene.square(1.0).unwrap();
         let mut moving_target = moving.target_editor().unwrap();
@@ -4571,7 +4571,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn nested_add_and_wait_publish_one_membership_batch_and_one_segment() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
         let mut session = scene.execution_session().unwrap();
@@ -4636,7 +4636,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn repeated_detached_add_is_rejected_before_any_publication() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
@@ -4913,7 +4913,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn invalid_mixed_sibling_rolls_back_tracker_scope_and_object_admission() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let tracker = ValueTracker::detached(Rc::clone(scene.integration_store()), 0.0).unwrap();
         let mut session = scene.execution_session().unwrap();
@@ -5551,7 +5551,7 @@ mod recursive_composition_tests {
 
     #[test]
     fn draw_border_then_fill_holds_the_explicit_outline_through_the_reveal_phase() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut square = scene.square(1.0).unwrap();
         square
             .set_fill(

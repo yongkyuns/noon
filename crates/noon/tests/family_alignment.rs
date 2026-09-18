@@ -48,7 +48,7 @@ fn invalid_alignment_does_not_publish_or_partially_move_members() {
     let object = scene.square(1.0).unwrap();
     let family = scene.family(&[(&object).into()]).unwrap();
     let source = LayoutAnchor::from(&family);
-    let foreign_scene = Scene::new();
+    let mut foreign_scene = Scene::new();
     let foreign = LayoutAnchor::from(&foreign_scene.square(1.0).unwrap());
     let before = scene.integration_store().borrow().scene_revision();
     for invalid in [

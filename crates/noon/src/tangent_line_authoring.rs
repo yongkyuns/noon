@@ -95,7 +95,7 @@ mod tests {
 
     #[test]
     fn tangent_line_rejects_degenerate_sampling_before_publication() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let circle = scene.circle(2.0).unwrap();
         let revision = scene.revision();
         let resources = scene

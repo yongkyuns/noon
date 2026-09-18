@@ -107,7 +107,7 @@ fn tangent_line_sampling_is_read_only_until_candidate_publication() {
 
 #[test]
 fn degenerate_sample_rejects_without_semantic_publication() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let source = scene.circle(2.0).unwrap();
     let revision = scene.revision();
     let result = source.manim_tangent_line_options(0.5, 1.0, 0.0);

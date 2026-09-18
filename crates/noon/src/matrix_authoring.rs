@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn shear_bakes_analytic_rectangle_into_world_path() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut rectangle = scene.rectangle(2.0, 2.0).unwrap();
         rectangle.move_to(1.0, 0.0).unwrap();
         rectangle
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn matrix_about_point_transforms_bezier_controls_and_anchors() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut path = scene
             .path(
                 VectorPath::new().move_to(Vec2::new(1.0, 0.0)).cubic_to(
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn planar_three_by_three_matches_two_by_two_about_point() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let base = VectorPath::new()
             .move_to(Vec2::new(1.0, 0.0))
             .line_to(Vec2::new(2.0, 0.0));
@@ -318,7 +318,7 @@ mod tests {
 
     #[test]
     fn identity_matrix_is_a_resource_noop_and_invalid_shapes_fail_closed() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut path = scene
             .path(
                 VectorPath::new()

@@ -20,7 +20,7 @@ fn resources(scene: &Scene) -> usize {
 
 #[test]
 fn rotated_stretch_transforms_world_controls_and_only_replaces_affected_content() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut shape = scene.square(2.).unwrap();
     shape.rotate(0.37).unwrap();
     shape.shift(1., -2.).unwrap();
@@ -139,7 +139,7 @@ fn stretched_target_animates_and_reconciles_through_shared_transform() {
 
 #[test]
 fn rotated_replace_fits_both_world_dimensions_and_center() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut shape = scene.rectangle(2., 1.).unwrap();
     shape.rotate(0.37).unwrap();
     let mut target = scene.rectangle(4., 3.).unwrap();

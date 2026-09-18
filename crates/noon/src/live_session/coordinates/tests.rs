@@ -96,7 +96,7 @@ fn invalid_second_axis_and_tick_budget_publish_no_partial_family() {
 
 #[test]
 fn stale_execution_rejects_valid_coordinates_before_committing_nodes() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut execution = scene.execution_session().unwrap();
     let sentinel = scene.circle(0.2).unwrap(); // Deliberately bypass live routing.
     let before = sentinel.state().unwrap();
@@ -162,7 +162,7 @@ fn live_coordinate_copy_and_readd_keep_identity_and_frame_mapping() {
 
 #[test]
 fn detached_coordinate_queries_reject_stale_and_foreign_publications() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut execution = scene.execution_session().unwrap();
     let axes;
     let line;

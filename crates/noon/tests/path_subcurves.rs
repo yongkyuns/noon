@@ -197,7 +197,7 @@ fn live_subcurve_captures_effective_transform_and_rejects_reveal_override() {
     session.seek(2.).unwrap();
     assert_eq!(selected.path_query().unwrap().start().unwrap(), (1., 1.));
 
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let source = scene.circle(1.).unwrap();
     let mut session = scene.execution_session().unwrap();
     scene

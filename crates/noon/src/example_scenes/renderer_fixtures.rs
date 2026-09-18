@@ -107,7 +107,7 @@ pub fn filled_path_transform() -> Result<ExecutionSession, String> {
 
 /// Pair: `web/python/examples/ordinary_create_shapes.py`.
 pub fn create_shapes() -> Result<ExecutionSession, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut circle = scene.circle(0.9).map_err(|error| error.to_string())?;
     circle
         .set_translation(-3.0, 1.0)

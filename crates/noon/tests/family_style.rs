@@ -12,7 +12,7 @@ fn family() -> (Scene, MobjectFamily, [Mobject; 2], Mobject) {
 
 #[test]
 fn family_paint_matches_leaf_semantics_in_one_revision_and_leaves_other_objects_alone() {
-    let (scene, family, [a, b], unrelated) = family();
+    let (mut scene, family, [a, b], unrelated) = family();
     let untouched = unrelated.state().unwrap();
     let mut reference = scene.square(0.5).unwrap();
     let before = scene.revision();

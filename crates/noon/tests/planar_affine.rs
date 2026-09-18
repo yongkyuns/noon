@@ -16,7 +16,7 @@ fn reflections_preserve_retained_geometry_and_transform_world_endpoints_exactly(
         SemanticVec3::new(1., 1., 0.),
         SemanticVec3::new(0., 0., 1.),
     ] {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut line = scene.line((1., 2.), (3., 4.)).unwrap();
         line.scale(2., 0.5).unwrap();
         line.rotate(0.37).unwrap();

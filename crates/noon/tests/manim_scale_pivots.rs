@@ -2,7 +2,7 @@ use noon::Scene;
 
 #[test]
 fn manim_scale_about_point_moves_center_relative_to_pivot() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut line = scene.line((1.0, 1.0), (3.0, 1.0)).unwrap();
     let before = scene.revision();
 
@@ -17,7 +17,7 @@ fn manim_scale_about_point_moves_center_relative_to_pivot() {
 
 #[test]
 fn manim_scale_about_edge_keeps_the_selected_critical_point_fixed() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut line = scene.line((1.0, 1.0), (3.0, 1.0)).unwrap();
     let before = scene.revision();
 
@@ -125,7 +125,7 @@ fn paired_scale_example_uses_the_retained_execution_path() {
 #[test]
 fn quarter_turn_world_scaling_preserves_world_dimensions_and_live_example() {
     use noon::{LayoutAnchor, LayoutDimension, ManimRotationPivot as Pivot};
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     for angle in [
         std::f64::consts::FRAC_PI_2,
         -std::f64::consts::FRAC_PI_2,

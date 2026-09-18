@@ -128,7 +128,7 @@ impl LiveContinuation for OrdinaryDifferentRotations {
 
 pub fn ordinary_different_rotations_program(
 ) -> Result<LiveProgram<OrdinaryDifferentRotations>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut left = scene.square(2.0).map_err(|error| error.to_string())?;
     left.set_translation(-2.0, 0.0)
         .map_err(|error| error.to_string())?;
@@ -1632,7 +1632,7 @@ impl LiveContinuation for OrdinaryFadeContinuation {
 /// root membership change, and the final ordinary add reuses the original semantic handle.
 pub fn ordinary_fade_continuation_program() -> Result<LiveProgram<OrdinaryFadeContinuation>, String>
 {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut circle = scene.circle(0.4).map_err(|error| error.to_string())?;
     circle
         .set_fill(0.0, 0.4, 1.0, 1.0)
@@ -1705,7 +1705,7 @@ impl LiveContinuation for OrdinaryCreateContinuation {
 /// Build the paired ordinary Create program without selecting a platform host.
 pub fn ordinary_create_continuation_program(
 ) -> Result<LiveProgram<OrdinaryCreateContinuation>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut circle = scene.circle(1.0).map_err(|error| error.to_string())?;
     circle
         .set_fill(209.0 / 255.0, 71.0 / 255.0, 189.0 / 255.0, 0.5)
@@ -1868,7 +1868,7 @@ impl LiveContinuation for OrdinaryUncreateContinuation {
 
 pub fn ordinary_uncreate_continuation_program(
 ) -> Result<LiveProgram<OrdinaryUncreateContinuation>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let square = scene.square(2.0).map_err(|error| error.to_string())?;
     let semantic_id = square.node_id();
     scene
@@ -1957,7 +1957,7 @@ impl LiveContinuation for OrdinarySquareAndCircleCreateContinuation {
 /// Build the paired ordinary Square-and-Circle Create program without selecting a platform host.
 pub fn ordinary_square_and_circle_create_continuation_program(
 ) -> Result<LiveProgram<OrdinarySquareAndCircleCreateContinuation>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut circle = scene.circle(1.0).map_err(|error| error.to_string())?;
     circle
         .set_fill(209.0 / 255.0, 71.0 / 255.0, 189.0 / 255.0, 0.5)
@@ -2069,7 +2069,7 @@ impl LiveContinuation for OrdinaryCreateThenContentMorph {
 /// Build the target-neutral Rust counterpart of Manim's ordinary SquareToCircle sequence.
 pub fn ordinary_create_then_content_morph_program(
 ) -> Result<LiveProgram<OrdinaryCreateThenContentMorph>, String> {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut square = scene.square(2.0).map_err(|error| error.to_string())?;
     square
         .rotate(std::f64::consts::FRAC_PI_4)

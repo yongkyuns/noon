@@ -43,8 +43,8 @@ pub struct ManimLineEndpoints {
 
 /// Inert, fully typed input for one ordinary Manim geometry object.
 ///
-/// This owns no semantic identity, store, execution state, or clock. A live
-/// session consumes it in one semantic transaction after every requested
+/// This owns no semantic identity, store, execution state, or clock. A Scene or
+/// borrowed live session consumes it in one semantic transaction after every requested
 /// constructor option has been validated against the shared semantic state.
 #[derive(Clone, Debug)]
 pub struct ManimGeometryOptions {
@@ -102,6 +102,14 @@ impl ManimGeometryOptions {
             GeometryRef::path(path),
             manim_style(Color::WHITE),
         ))
+    }
+
+    /// Prepare one path with an explicit authored style for Scene-owned publication.
+    ///
+    /// This preserves the ordinary `Scene::path` defaults exactly: an identity
+    /// transform and priority zero, with the caller's complete semantic style.
+    pub(crate) fn path_with_style(path: VectorPath, style: SemanticStyle) -> Self {
+        Self::new(GeometryRef::path(path), style)
     }
 
     pub fn surrounding_rectangle(

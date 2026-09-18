@@ -120,7 +120,7 @@ mod tests {
 
     #[test]
     fn non_text_objects_are_rejected_without_mutation() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
         let before = circle.state().unwrap();
         assert!(matches!(

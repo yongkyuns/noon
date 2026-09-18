@@ -1,6 +1,6 @@
 use super::*;
 use crate::{geometry_authoring::manim_triangle_path, ManimGeometryOptions};
-use noon_core::{FrameEpoch, SemanticVec3, Vec2, VectorPath};
+use noon_core::{FrameEpoch, SemanticStyle, SemanticVec3, Vec2, VectorPath};
 
 #[test]
 fn geometry_is_detached_and_scene_owned_before_and_after_bootstrap() {
@@ -39,6 +39,145 @@ fn geometry_is_detached_and_scene_owned_before_and_after_bootstrap() {
         .owned_execution()
         .execution_object_id(running.node_id())
         .is_some());
+    assert_eq!(
+        scene
+            .owned_execution()
+            .publication_context()
+            .scene_revision(),
+        scene.revision()
+    );
+}
+
+#[test]
+fn convenience_geometry_constructors_preserve_cold_object_state() {
+    let expected_scene = Scene::new();
+    let expected_circle =
+        Mobject::manim_circle(Rc::clone(expected_scene.integration_store()), 0.5).unwrap();
+    let expected_square =
+        Mobject::manim_square(Rc::clone(expected_scene.integration_store()), 0.75).unwrap();
+    let expected_rectangle =
+        Mobject::manim_rectangle(Rc::clone(expected_scene.integration_store()), 1.5, 0.5).unwrap();
+    let expected_line = Mobject::manim_line(
+        Rc::clone(expected_scene.integration_store()),
+        -1.0,
+        -0.5,
+        1.0,
+        0.5,
+    )
+    .unwrap();
+    let style = SemanticStyle {
+        stroke_width: 3.5,
+        object_opacity: 0.4,
+        ..SemanticStyle::default()
+    };
+    let path = VectorPath::new()
+        .move_to(Vec2::new(-0.5, 0.0))
+        .line_to(Vec2::new(0.5, 0.0));
+    let expected_path = Mobject::from_geometry(
+        Rc::clone(expected_scene.integration_store()),
+        noon_core::GeometryRef::path(path.clone()),
+        style.clone(),
+    )
+    .unwrap();
+
+    let mut scene = Scene::new();
+    let circle = scene.circle(0.5).unwrap();
+    let square = scene.square(0.75).unwrap();
+    let rectangle = scene.rectangle(1.5, 0.5).unwrap();
+    let line = scene.line((-1.0, -0.5), (1.0, 0.5)).unwrap();
+    let path = scene.path(path, style).unwrap();
+
+    for (actual, expected) in [
+        (&circle, &expected_circle),
+        (&square, &expected_square),
+        (&rectangle, &expected_rectangle),
+        (&line, &expected_line),
+        (&path, &expected_path),
+    ] {
+        let mut actual_state = actual.state().unwrap();
+        let expected_state = expected.state().unwrap();
+        if let (
+            noon_core::SemanticObjectContent::Geometry(noon_core::StoredGeometry::Resource(actual)),
+            noon_core::SemanticObjectContent::Geometry(noon_core::StoredGeometry::Resource(
+                expected,
+            )),
+        ) = (actual_state.content, expected_state.content)
+        {
+            // Resource identities are arena-local; compare the immutable payload
+            // before normalizing that identity for the remaining state comparison.
+            let actual_store = scene.integration_store().borrow();
+            let expected_store = expected_scene.integration_store().borrow();
+            assert_eq!(
+                actual_store.geometry_resources().get(actual).unwrap(),
+                expected_store.geometry_resources().get(expected).unwrap()
+            );
+            actual_state.content = expected_state.content;
+        }
+        assert_eq!(actual_state, expected_state);
+    }
+}
+
+#[test]
+fn convenience_geometry_constructors_publish_through_the_running_scene() {
+    let mut scene = Scene::new();
+    let seed = scene.circle(0.25).unwrap();
+    scene.add(&seed).unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    let before = scene.revision();
+    let frame_len = scene.owned_execution().frame().objects.len();
+
+    let circle = scene.circle(0.5).unwrap();
+    let square = scene.square(0.75).unwrap();
+    let rectangle = scene.rectangle(1.5, 0.5).unwrap();
+    let line = scene.line((-1.0, -0.5), (1.0, 0.5)).unwrap();
+    let style = SemanticStyle {
+        stroke_width: 3.5,
+        object_opacity: 0.4,
+        ..SemanticStyle::default()
+    };
+    let path = scene
+        .path(
+            VectorPath::new()
+                .move_to(Vec2::new(-0.5, 0.0))
+                .line_to(Vec2::new(0.5, 0.0)),
+            style.clone(),
+        )
+        .unwrap();
+
+    assert_eq!(scene.revision().get(), before.get() + 5);
+    assert_eq!(scene.owned_execution().frame().objects.len(), frame_len);
+    assert_eq!(
+        scene
+            .owned_execution()
+            .publication_context()
+            .scene_revision(),
+        scene.revision()
+    );
+    assert_eq!(path.state().unwrap().style, style);
+    for object in [&circle, &square, &rectangle, &line, &path] {
+        assert!(scene
+            .owned_execution()
+            .execution_object_id(object.node_id())
+            .is_none());
+    }
+
+    scene
+        .add_many(&[
+            (&circle).into(),
+            (&square).into(),
+            (&rectangle).into(),
+            (&line).into(),
+            (&path).into(),
+        ])
+        .unwrap();
+    for object in [&circle, &square, &rectangle, &line, &path] {
+        assert!(scene
+            .owned_execution()
+            .execution_object_id(object.node_id())
+            .is_some());
+    }
+    assert_eq!(scene.owned_execution().frame().objects.len(), frame_len + 5);
     assert_eq!(
         scene
             .owned_execution()
@@ -146,7 +285,7 @@ fn running_geometry_rejects_stale_execution_before_importing_resources() {
         .stats();
 
     let error = scene
-        .geometry(ManimGeometryOptions::path(manim_triangle_path()).unwrap())
+        .path(manim_triangle_path(), SemanticStyle::default())
         .unwrap_err();
     assert!(matches!(
         error,

@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn family_layout_bounds_follow_nested_and_aliased_semantic_leaves() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let mut first = scene.rectangle(2.0, 1.0).unwrap();
         first.shift(-2.0, 0.0).unwrap();
         let mut second = scene.circle(0.5).unwrap();

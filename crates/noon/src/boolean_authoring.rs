@@ -120,7 +120,7 @@ mod tests {
             .effective_boolean_geometry_options(BooleanOperation::Union, &[a.clone(), b])
             .is_ok());
 
-        let foreign_scene = Scene::new();
+        let mut foreign_scene = Scene::new();
         let foreign = foreign_scene.square(1.0).unwrap();
         assert!(matches!(
             scene.effective_boolean_geometry_options(BooleanOperation::Union, &[a, foreign]),

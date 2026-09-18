@@ -39,7 +39,7 @@ fn constructor_is_inert_uses_world_geometry_and_leaves_operands_unchanged() {
 
 #[test]
 fn invalid_operand_set_cannot_allocate_resource_or_identity() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let a = scene.square(2.).unwrap();
     let foreign = Scene::new().square(2.).unwrap();
     let revision = scene.revision();
@@ -124,7 +124,7 @@ fn live_boolean_constructor_observes_current_affine_without_copying_paint() {
 fn live_boolean_constructor_rejects_active_content_override_atomically() {
     use noon::{AnimationOptions, AuthoringError, UnsupportedAuthoringOperation};
 
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let a = scene.circle(1.).unwrap();
     let b = scene.square(2.).unwrap();
     let mut session = scene.execution_session().unwrap();
@@ -163,7 +163,7 @@ fn live_boolean_constructor_rejects_active_content_override_atomically() {
 
 #[test]
 fn live_boolean_constructor_preserves_foreign_store_error() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let a = scene.square(2.).unwrap();
     let foreign = Scene::new().square(2.).unwrap();
     let session = scene.execution_session().unwrap();

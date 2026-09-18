@@ -3,7 +3,7 @@ use crate::Scene;
 
 #[test]
 fn aliases_and_copies_share_the_arena_but_only_aliases_share_state() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut circle = scene.circle(2.0).unwrap();
     let alias = circle.clone();
     let mut copy = circle.copy_handle().unwrap();
@@ -36,7 +36,7 @@ fn aliases_and_copies_share_the_arena_but_only_aliases_share_state() {
 
 #[test]
 fn no_op_edits_do_not_publish_and_invalid_compound_edits_roll_back() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut circle = scene.circle(1.0).unwrap();
     let revision = scene.integration_store().borrow().scene_revision();
     circle.shift(0.0, 0.0).unwrap();
@@ -59,7 +59,7 @@ fn no_op_edits_do_not_publish_and_invalid_compound_edits_roll_back() {
 
 #[test]
 fn become_matches_dimensions_in_manim_order_and_reuses_target_content() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut source = scene.rectangle(4.0, 2.0).unwrap();
     source.set_translation(3.0, -2.0).unwrap();
     let target_path = VectorPath::new()
@@ -187,7 +187,7 @@ fn ellipse_layout_is_shared_by_queries_live_admission_and_become() {
 
 #[test]
 fn become_stretch_is_atomic_for_zero_dimension_targets() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut source = scene.rectangle(3.0, 2.0).unwrap();
     let target = scene
         .path(VectorPath::new(), SemanticStyle::default())
@@ -226,8 +226,8 @@ fn become_stretch_is_atomic_for_zero_dimension_targets() {
 
 #[test]
 fn foreign_operands_and_stale_handles_fail_without_mutation_or_query_panics() {
-    let scene = Scene::new();
-    let other_scene = Scene::new();
+    let mut scene = Scene::new();
+    let mut other_scene = Scene::new();
     let mut circle = scene.circle(1.0).unwrap();
     let foreign = other_scene.circle(1.0).unwrap();
     assert_eq!(circle.node_id(), foreign.node_id());
@@ -399,7 +399,7 @@ fn invalid_typed_geometry_and_matcher_bounds_are_inert() {
 
 #[test]
 fn invalid_geometry_or_paint_does_not_allocate_or_publish() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let revision = scene.integration_store().borrow().scene_revision();
     let nodes = scene.integration_store().borrow().len();
     let resources = scene
@@ -468,7 +468,7 @@ fn invalid_geometry_or_paint_does_not_allocate_or_publish() {
 
 #[test]
 fn manim_line_endpoints_preserve_f64_transform_and_color_prefers_visible_fill() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     let mut line = scene.line((-1.0, -0.5), (1.0, 0.5)).unwrap();
     line.set_scale(1.5, 0.75).unwrap();
     line.set_rotation(std::f64::consts::FRAC_PI_6).unwrap();
