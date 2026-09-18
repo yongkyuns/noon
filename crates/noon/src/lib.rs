@@ -151,7 +151,8 @@ pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
 pub use boolean_authoring::{BooleanOperation, BooleanPathError};
 pub use coordinate_authoring::{
     CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
-    ManimNumberLineOptions, ManimNumberPlane, ManimNumberPlaneOptions,
+    ManimNumberLineOptions, ManimNumberPlane, ManimNumberPlaneOptions, RiemannRectangleOptions,
+    RiemannSample,
 };
 pub use dashed_line_authoring::DashedLineAuthoringError;
 pub use dimension_fit::LayoutDimension;
@@ -193,8 +194,8 @@ pub use noon_core::RasterImageSampling;
 pub use noon_core::{
     AnimationOptions, Bounds2D64, Color, ExecutionRevision, FrameEpoch, GeometryRef, PathCommand,
     PublicationContext, RateFunction, Rect, SceneRevision, SemanticAnimationCompositionKind,
-    SemanticFadeDirection, SemanticNodeId, SemanticObjectProperty, SemanticObjectState,
-    SemanticPaint, SemanticSignalValue, SemanticStyle, SemanticTransform2_5D,
+    SemanticFadeDirection, SemanticFunctionPlotRole, SemanticNodeId, SemanticObjectProperty,
+    SemanticObjectState, SemanticPaint, SemanticSignalValue, SemanticStyle, SemanticTransform2_5D,
     SemanticTransformInterpolation, SemanticVec3, StoredGeometry, StrokeCap, StrokeJoin,
     StrokeWidthMode, Style, TextPart, TextPartQueryError, TextSourceFill, TextSourceSpan,
     TextSourceStyleError, Transform2D, Vec2, VectorPath, BLACK, BLUE, BLUE_A, BLUE_B, BLUE_C,

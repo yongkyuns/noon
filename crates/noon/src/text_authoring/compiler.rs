@@ -196,7 +196,7 @@ pub(crate) fn compile_native(text: &Text) -> Result<Arc<CompiledTextArtifact>, T
 }
 
 #[cfg(feature = "typst")]
-pub(crate) fn compile_typst(
+pub(super) fn compile_typst(
     text: &TypstSpec,
     mode: TypstMode,
 ) -> Result<Arc<CompiledTextArtifact>, TextAuthoringError> {
@@ -318,7 +318,7 @@ fn typst_fingerprint(bytes: &[u8]) -> u64 {
 }
 
 #[cfg(feature = "typst")]
-pub(crate) fn typst_identity(
+pub(super) fn typst_identity(
     text: &TypstSpec,
     mode: TypstMode,
 ) -> noon_core::TextCompilationIdentity {

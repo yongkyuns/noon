@@ -2,6 +2,8 @@
 
 pub mod affine_fade;
 pub mod analytic_profile;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod area_helpers;
 #[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
 pub mod automatic_wait_text;
 pub mod cyclic_replace;

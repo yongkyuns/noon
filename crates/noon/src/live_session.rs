@@ -806,6 +806,33 @@ impl<'a> LiveSession<'a> {
         Mobject::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::from)
     }
 
+    /// Publish a detached family of prepared ordinary paths in the current
+    /// borrowed execution publication. Geometry admission and every family leaf
+    /// share one transaction and rollback scope.
+    pub fn create_path_family(
+        &mut self,
+        paths: Vec<(noon_core::VectorPath, noon_core::SemanticStyle)>,
+    ) -> Result<MobjectFamily, LiveSessionError> {
+        self.session
+            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        let family = crate::coordinate_authoring::area::publish_path_family_with(
+            &mut self.store.borrow_mut(),
+            paths,
+            |store, transaction| {
+                self.session
+                    .apply_semantic_transaction_at_root(store, self.root, transaction)
+                    .map_err(crate::AuthoringError::from)
+            },
+        )
+        .map_err(|error| match error {
+            crate::AuthoringError::ExecutionPublication(error) => {
+                LiveSessionError::Publication(error)
+            }
+            error => LiveSessionError::from(error),
+        })?;
+        MobjectFamily::from_node(Rc::clone(self.store), family).map_err(LiveSessionError::from)
+    }
+
     /// Construct a family while a continuation holds the only borrowed live
     /// execution capability.
     ///

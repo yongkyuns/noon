@@ -118,8 +118,8 @@ def _family(wrapper, handle, members):
     return wrapper
 
 
-def _leaf(handle):
-    wrapper = object.__new__(_compat.Line)
+def _leaf(handle, kind=_compat.Line):
+    wrapper = object.__new__(kind)
     _shared._attach_shared_handle(wrapper, handle)
     return wrapper
 
@@ -328,6 +328,67 @@ class Axes(_compat.Group):
         with _owned(self._coordinate_frame()) as frame:
             options = engine_call(frame.sampledPlot, _points(points))
         return _curve(object.__new__(_compat.VMobject), options, color, kwargs)
+
+    def get_area(self, graph, x_range=None, color=None, opacity=0.3,
+                 bounded_graph=None, **kwargs):
+        """Create one static closed path prepared by the shared Rust query."""
+        context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        if context is not None:
+            options = engine_call(
+                context.effectiveAxesAreaOptions, self._semantic_family_handle,
+                graph._semantic_handle, _array(() if x_range is None else x_range),
+                graph._semantic_handle if bounded_graph is None else bounded_graph._semantic_handle,
+                bounded_graph is not None,
+            )
+        else:
+            with _owned(self._coordinate_frame()) as frame:
+                options = engine_call(
+                    frame.area, graph._semantic_handle,
+                    _array(() if x_range is None else x_range),
+                    graph._semantic_handle if bounded_graph is None else bounded_graph._semantic_handle,
+                    bounded_graph is not None,
+                )
+        kwargs.setdefault("fill_opacity", float(opacity))
+        kwargs.setdefault("stroke_opacity", float(opacity))
+        colors = (_base.BLUE, _base.GREEN) if color is None else color
+        if isinstance(colors, (list, tuple)):
+            result = _curve(object.__new__(_compat.VMobject), options, None, kwargs)
+            return result.set_color_by_gradient(*colors)
+        return _curve(object.__new__(_compat.VMobject), options, colors, kwargs)
+
+    def get_riemann_rectangles(self, graph, x_range=None, dx=0.1,
+                               input_sample_type="left", stroke_width=1,
+                               stroke_color=_base.BLACK, fill_opacity=1,
+                               color=(_base.BLUE, _base.GREEN), show_signed_area=True,
+                               bounded_graph=None, blend=False, width_scale_factor=1.001):
+        """Publish one live Rust-owned rectangle family from effective snapshots."""
+        context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        sample = {"left": 0, "right": 1, "center": 2}.get(input_sample_type)
+        if sample is None:
+            raise ValueError("input_sample_type must be 'left', 'right', or 'center'")
+        colors = color if isinstance(color, (tuple, list)) else (color,)
+        colors = [_compat._as_color("Riemann color", value) for value in colors]
+        stroke_color = _compat._as_color("Riemann stroke color", stroke_color)
+        options = engine_call(_coordinate_options.riemann, _array(() if x_range is None else x_range),
+                              float(dx), sample, float(width_scale_factor))
+        try:
+            engine_call(options.setPaint, _shared._gradient_components(colors),
+                        _shared._gradient_components([stroke_color]), float(stroke_width),
+                        float(fill_opacity), bool(show_signed_area), bool(blend))
+        except BaseException:
+            options.free()
+            raise
+        bounded = graph if bounded_graph is None else bounded_graph
+        if context is None:
+            handle = engine_call(self._semantic_family_handle.riemannRectangles,
+                                 graph._semantic_handle, options, bounded._semantic_handle,
+                                 bounded_graph is not None)
+        else:
+            handle = engine_call(context.liveEffectiveRiemannRectangles, self._semantic_family_handle,
+                                 graph._semantic_handle, options, bounded._semantic_handle,
+                                 bounded_graph is not None)
+        members = [_leaf(member, _compat.Rectangle) for member in engine_call(handle.directMobjects)]
+        return _family(object.__new__(_compat.VGroup), handle, members)
 
     def plot_implicit_curve(self, func, min_depth=5, max_quads=1500, **kwargs):
         from _manim_implicit import plot_implicit_curve

@@ -11,13 +11,57 @@ use crate::{
     PlotAuthoringError, PlotPreparationError, PlotSamplingOptions, Scene,
 };
 use noon_core::{
-    SemanticLocalNodeToken, SemanticMutationTransaction, SemanticMutationTransactionResult,
-    SemanticNodeCreation, SemanticNodeId, SemanticNumberLineRole, SemanticObjectRole,
-    SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle, StoredGeometry, StrokeCap,
-    StrokeJoin, StrokeWidthMode, Vec2, WHITE,
+    SemanticFunctionPlotRole, SemanticLocalNodeToken, SemanticMutationTransaction,
+    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId,
+    SemanticNumberLineRole, SemanticObjectRole, SemanticObjectState, SemanticPaint, SemanticStore,
+    SemanticStyle, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Vec2, WHITE,
 };
 use noon_geometry::{number_line_tick_values, AxesFrame, CoordinateError, NumberLineFrame};
 
+/// Where each Riemann rectangle obtains its graph height.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RiemannSample {
+    Left,
+    Right,
+    Center,
+}
+
+/// Shared preparation inputs for ordinary retained rectangle leaves. Geometry
+/// sampling, gradient paint and signed-area classification are authored once.
+#[derive(Clone, Debug)]
+pub struct RiemannRectangleOptions {
+    pub colors: Vec<noon_core::Color>,
+    pub stroke_color: noon_core::Color,
+    pub stroke_width: f64,
+    pub fill_opacity: f64,
+    pub show_signed_area: bool,
+    pub blend: bool,
+    pub x_range: Option<[f64; 2]>,
+    pub dx: f64,
+    pub sample: RiemannSample,
+    pub width_scale_factor: f64,
+    pub bounded_graph: Option<SemanticNodeId>,
+}
+
+impl Default for RiemannRectangleOptions {
+    fn default() -> Self {
+        Self {
+            colors: vec![noon_core::BLUE, noon_core::GREEN],
+            stroke_color: noon_core::BLACK,
+            stroke_width: 1.0,
+            fill_opacity: 1.0,
+            show_signed_area: true,
+            blend: false,
+            x_range: None,
+            dx: 0.1,
+            sample: RiemannSample::Left,
+            width_scale_factor: 1.001,
+            bounded_graph: None,
+        }
+    }
+}
+
+pub(crate) mod area;
 mod number_plane;
 pub(crate) use number_plane::prepare_number_plane;
 pub use number_plane::{ManimNumberPlane, ManimNumberPlaneOptions};
@@ -376,12 +420,14 @@ impl ManimAxes {
         let frame = self.authored_frame()?;
         let sampling = PlotSamplingOptions::axes(frame.x().range(), range)
             .map_err(PlotAuthoringError::from)?;
-        let options =
+        let mut options =
             ManimGeometryOptions::axes_function_plot(frame, &sampling, function, use_smoothing)?;
-        Ok(Mobject::from_manim_geometry(
-            Rc::clone(self.family.integration_store()),
-            options,
-        )?)
+        options.set_semantic_role(SemanticObjectRole::FunctionPlot(
+            SemanticFunctionPlotRole::new([sampling.range[0], sampling.range[1]]),
+        ));
+        let graph =
+            Mobject::from_manim_geometry(Rc::clone(self.family.integration_store()), options)?;
+        Ok(graph)
     }
 
     /// Construct a detached static data polyline in this axes' semantic store.
@@ -389,11 +435,87 @@ impl ManimAxes {
     /// Supplied order and repeated x values are preserved. Mapping uses one
     /// authored coordinate-frame snapshot and creates no graph-side semantics.
     pub fn plot_samples(&self, points: &[[f64; 2]]) -> Result<Mobject, CoordinateAuthoringError> {
-        let options = ManimGeometryOptions::axes_sampled_plot(self.authored_frame()?, points)?;
+        if points.len() < 2 || points.iter().any(|[x, y]| !x.is_finite() || !y.is_finite()) {
+            return Err(CoordinateAuthoringError::InvalidOptions(
+                "graph samples require two finite points",
+            ));
+        }
+        let mut options = ManimGeometryOptions::axes_sampled_plot(self.authored_frame()?, points)?;
+        if points[0][0] < points[points.len() - 1][0] {
+            options.set_semantic_role(SemanticObjectRole::FunctionPlot(
+                SemanticFunctionPlotRole::new([points[0][0], points[points.len() - 1][0]]),
+            ));
+        }
         Ok(Mobject::from_manim_geometry(
             Rc::clone(self.family.integration_store()),
             options,
         )?)
+    }
+
+    /// Create a closed ordinary path between graph and baseline (or another graph).
+    pub fn get_area(
+        &self,
+        graph: &Mobject,
+        x_range: Option<[f64; 2]>,
+        bounded_graph: Option<&Mobject>,
+    ) -> Result<Mobject, CoordinateAuthoringError> {
+        self.require_graph_store(graph)?;
+        if let Some(bound) = bounded_graph {
+            self.require_graph_store(bound)?;
+        }
+        let frame = self.authored_frame()?;
+        let graph_path = graph.path_query()?;
+        let bounded_path = bounded_graph.map(Mobject::path_query).transpose()?;
+        let options = ManimGeometryOptions::axes_area(
+            frame,
+            graph,
+            &graph_path,
+            x_range,
+            bounded_graph.zip(bounded_path.as_ref()),
+        )?;
+        Ok(Mobject::from_manim_geometry(
+            Rc::clone(self.family.integration_store()),
+            options,
+        )?)
+    }
+
+    /// Create a family of ordinary closed rectangle paths.  Partitioning is
+    /// half-open, matching NumPy/Manim `arange(start, end, dx)`.
+    pub fn get_riemann_rectangles(
+        &self,
+        graph: &Mobject,
+        options: RiemannRectangleOptions,
+    ) -> Result<MobjectFamily, CoordinateAuthoringError> {
+        self.require_graph_store(graph)?;
+        let bounded = match options.bounded_graph {
+            Some(id) => Some(Mobject::from_node(
+                Rc::clone(self.family.integration_store()),
+                id,
+            )?),
+            None => None,
+        };
+        if let Some(ref bound) = bounded {
+            self.require_graph_store(bound)?;
+        }
+        let frame = self.authored_frame()?;
+        let graph_path = graph.path_query()?;
+        let bounded_path = bounded.as_ref().map(Mobject::path_query).transpose()?;
+        let paths = area::prepare_riemann_paths(
+            frame,
+            graph,
+            &graph_path,
+            bounded.as_ref().zip(bounded_path.as_ref()),
+            options,
+        )?;
+        area::publish_path_family(Rc::clone(self.family.integration_store()), paths)
+    }
+
+    fn require_graph_store(&self, graph: &Mobject) -> Result<(), CoordinateAuthoringError> {
+        if !Rc::ptr_eq(self.family.integration_store(), graph.integration_store()) {
+            return Err(AuthoringError::ForeignStore.into());
+        }
+        area::graph_range(graph)?;
+        Ok(())
     }
 
     pub(crate) fn snapshot_with(
@@ -451,9 +573,94 @@ impl Scene {
     ) -> Result<AxesFrame, CoordinateAuthoringError> {
         axes.snapshot_with(&mut |shaft| self.effective_path_query(shaft))
     }
+
+    /// Materialize an area from one currently published effective observation.
+    /// The result is ordinary authored geometry; it does not subscribe to later
+    /// source animation frames.
+    pub fn effective_axes_area(
+        &mut self,
+        axes: &ManimAxes,
+        graph: &Mobject,
+        x_range: Option<[f64; 2]>,
+        bounded_graph: Option<&Mobject>,
+    ) -> Result<Mobject, CoordinateAuthoringError> {
+        if !Rc::ptr_eq(self.integration_store(), axes.family().integration_store())
+            || !Rc::ptr_eq(self.integration_store(), graph.integration_store())
+            || bounded_graph.is_some_and(|bound| {
+                !Rc::ptr_eq(self.integration_store(), bound.integration_store())
+            })
+        {
+            return Err(AuthoringError::ForeignStore.into());
+        }
+        let frame = self.effective_axes_frame(axes)?;
+        let graph_path = self.effective_path_query(graph)?;
+        let bounded_path = bounded_graph
+            .map(|bound| self.effective_path_query(bound))
+            .transpose()?;
+        let options = ManimGeometryOptions::axes_area(
+            frame,
+            graph,
+            &graph_path,
+            x_range,
+            bounded_graph.zip(bounded_path.as_ref()),
+        )?;
+        Ok(self.geometry(options)?)
+    }
+
+    /// Capture the axes and graph paths from one Runtime publication, prepare
+    /// every rectangle without rereading authored state, then publish the whole
+    /// family through one Scene-owned resource/semantic transaction.
+    pub fn effective_riemann_rectangles(
+        &mut self,
+        axes: &ManimAxes,
+        graph: &Mobject,
+        options: RiemannRectangleOptions,
+    ) -> Result<MobjectFamily, CoordinateAuthoringError> {
+        if !Rc::ptr_eq(self.integration_store(), axes.family().integration_store())
+            || !Rc::ptr_eq(self.integration_store(), graph.integration_store())
+        {
+            return Err(AuthoringError::ForeignStore.into());
+        }
+        let bounded = options
+            .bounded_graph
+            .map(|id| Mobject::from_node(Rc::clone(self.integration_store()), id))
+            .transpose()?;
+        if bounded
+            .as_ref()
+            .is_some_and(|bound| !Rc::ptr_eq(self.integration_store(), bound.integration_store()))
+        {
+            return Err(AuthoringError::ForeignStore.into());
+        }
+        let frame = self.effective_axes_frame(axes)?;
+        let graph_path = self.effective_path_query(graph)?;
+        let bounded_path = bounded
+            .as_ref()
+            .map(|bound| self.effective_path_query(bound))
+            .transpose()?;
+        let paths = area::prepare_riemann_paths(
+            frame,
+            graph,
+            &graph_path,
+            bounded.as_ref().zip(bounded_path.as_ref()),
+            options,
+        )?;
+        crate::scene::publish_path_family(self, paths).map_err(Into::into)
+    }
 }
 
 impl ManimGeometryOptions {
+    /// Prepare an ordinary closed graph-area path from one captured coordinate
+    /// frame. This retains no callback and owns no scene identity.
+    pub fn axes_area(
+        frame: AxesFrame,
+        graph: &Mobject,
+        graph_path: &PathQuery,
+        x_range: Option<[f64; 2]>,
+        bounded: Option<(&Mobject, &PathQuery)>,
+    ) -> Result<Self, CoordinateAuthoringError> {
+        area::axes_area(frame, graph, graph_path, x_range, bounded)
+    }
+
     /// Prepare y=f(x) in a captured coordinate frame. Capture once before calling
     /// this method; evaluation cannot mix axis publications between samples.
     pub fn axes_function_plot(
@@ -486,6 +693,20 @@ impl ManimGeometryOptions {
             mapped.push(frame.coords_to_point(x, y)?);
         }
         Ok(Self::sampled_plot(&mapped)?)
+    }
+}
+
+impl ManimAxes {
+    /// Prepare rectangle paths from already captured axes and graph snapshots.
+    /// Publication remains owned by `Scene` or `LiveSession`.
+    pub fn riemann_rectangle_paths(
+        frame: AxesFrame,
+        graph: &Mobject,
+        graph_path: &PathQuery,
+        bounded: Option<(&Mobject, &PathQuery)>,
+        options: RiemannRectangleOptions,
+    ) -> Result<Vec<(noon_core::VectorPath, SemanticStyle)>, CoordinateAuthoringError> {
+        area::prepare_riemann_paths(frame, graph, graph_path, bounded, options)
     }
 }
 

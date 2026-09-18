@@ -6,6 +6,8 @@ use crate::{
 
 mod coordinate_role;
 pub use coordinate_role::SemanticNumberLineRole;
+mod function_plot_role;
+pub use function_plot_role::SemanticFunctionPlotRole;
 
 /// Target authored content carried by one semantic object.
 ///
@@ -142,6 +144,8 @@ pub enum SemanticObjectRole {
     ArrowStartTip,
     /// Scalar range of an ordinary coordinate shaft; no renderer specialization.
     NumberLine(SemanticNumberLineRole),
+    /// Parameter interval of an ordinary sampled graph path.
+    FunctionPlot(SemanticFunctionPlotRole),
 }
 
 impl SemanticObjectRole {
@@ -149,6 +153,7 @@ impl SemanticObjectRole {
         match self {
             Self::ArrowShaft(policy) => policy.is_valid(),
             Self::NumberLine(range) => range.is_valid(),
+            Self::FunctionPlot(range) => range.is_valid(),
             Self::Ordinary | Self::Camera2D | Self::ArrowEndTip | Self::ArrowStartTip => true,
         }
     }

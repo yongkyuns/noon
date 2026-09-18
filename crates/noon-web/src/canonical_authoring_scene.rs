@@ -2141,6 +2141,23 @@ impl CanonicalAuthoringScene {
         }
     }
 
+    pub(crate) fn live_create_path_family(
+        &mut self,
+        paths: Vec<(noon::VectorPath, noon_core::SemanticStyle)>,
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        match &mut self.player_ownership {
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.live_create_path_family(paths)
+            }
+            PlayerOwnership::Unstarted => {
+                Err("live path-family construction requires an active canonical session".into())
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
+        }
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn live_create_image(
         &mut self,
@@ -2798,6 +2815,13 @@ mod wasm {
 
     #[wasm_bindgen]
     impl CanonicalAuthoringSceneContext {
+        pub(crate) fn publish_live_path_family(
+            &mut self,
+            paths: Vec<(noon::VectorPath, noon_core::SemanticStyle)>,
+        ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+            self.inner.live_create_path_family(paths)
+        }
+
         /// Reconcile wrapper IDs only after Rust has published the completion.
         #[wasm_bindgen(js_name = associatePublishedMobjects)]
         pub fn associate_published_mobjects(

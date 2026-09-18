@@ -30,6 +30,42 @@ pub(crate) fn publish_geometry_options(
     })
 }
 
+/// Publish a detached family of ordinary path leaves through this Scene's one
+/// semantic publication route. Paths are admitted only after preparation has
+/// completed, and admission, family creation, and leaf creation share one
+/// rollback boundary.
+pub(crate) fn publish_path_family(
+    scene: &mut Scene,
+    paths: Vec<(VectorPath, noon_core::SemanticStyle)>,
+) -> Result<MobjectFamily, AuthoringError> {
+    let root = scene.root;
+    let store_rc = Rc::clone(&scene.store);
+    if let Some(execution) = scene.execution.as_mut() {
+        {
+            let store = store_rc.borrow();
+            execution
+                .require_resource_creation_at_root(&store, root)
+                .map_err(AuthoringError::from)?;
+        }
+        let family = crate::coordinate_authoring::area::publish_path_family_with(
+            &mut store_rc.borrow_mut(),
+            paths,
+            |store, transaction| {
+                execution
+                    .apply_semantic_transaction_at_root(store, root, transaction)
+                    .map_err(AuthoringError::from)
+            },
+        )?;
+        return MobjectFamily::from_node(store_rc, family);
+    }
+    let family = crate::coordinate_authoring::area::publish_path_family_with(
+        &mut store_rc.borrow_mut(),
+        paths,
+        |store, transaction| transaction.apply(store).map_err(AuthoringError::from),
+    )?;
+    MobjectFamily::from_node(store_rc, family)
+}
+
 /// A scene owns its shared semantic store/root and, after bootstrap, the one
 /// execution component lowered from them. The optional execution slot is control
 /// ownership only; Runtime state remains owned by the contained [`ExecutionSession`].
