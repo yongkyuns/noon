@@ -1,0 +1,40 @@
+name: C2 session input workbench
+on:
+  push:
+    branches: [work/c2-session-input-20260918]
+    paths:
+      - .github/workflows/c2-session-input-workbench.yml
+      - .github/c2-session-input-assemble.py
+permissions:
+  contents: write
+jobs:
+  assemble-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble checked source edit
+        run: python3 .github/c2-session-input-assemble.py
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - name: Format source
+        run: cargo fmt --all
+      - name: Publish code-only staging snapshot
+        run: |
+          git rm .github/c2-session-input-assemble.py .github/workflows/c2-session-input-workbench.yml
+          git add crates/noon/src/execution_session.rs crates/noon/src/execution_session/input.rs crates/noon/src/execution_session/input/tests.rs crates/noon/src/integration.rs
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'C2: publish contextual pointer records atomically through ExecutionSession'
+          git push origin HEAD:refs/heads/work/c2-session-input-20260918
+      - name: Focused input regressions
+        run: cargo test -p noon --lib execution_session::input::tests -- --nocapture
+      - name: Workspace library regressions
+        run: cargo test --workspace --all-features --lib
+      - name: Direct WASM compile
+        run: cargo check -p noon --no-default-features --target wasm32-unknown-unknown
+      - name: Strict crate lint
+        run: cargo clippy -p noon --lib -- -D warnings
