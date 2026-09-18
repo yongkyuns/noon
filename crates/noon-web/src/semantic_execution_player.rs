@@ -2183,6 +2183,13 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(test)]
+    fn browser_pointer_input_for_test(&mut self, json: &str) -> Result<(), String> {
+        let wire: BrowserPointerInputWire = serde_json::from_str(json)
+            .map_err(|error| error.to_string())?;
+        self.submit_browser_pointer_input(wire)
+    }
+
+    #[cfg(test)]
     pub(crate) fn session_mut_for_test(&mut self) -> &mut ExecutionSession {
         &mut self.session
     }
