@@ -227,6 +227,8 @@ pub use state_replacement::ManimBecomeOptions;
 pub use svg_authoring::{SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature};
 #[cfg(any(feature = "native-text", feature = "typst"))]
 pub use text_authoring::TextAuthoringError;
+#[cfg(any(feature = "native-text", feature = "typst"))]
+pub use text_authoring::{compiler::text_compiler_diagnostics, TextCompilerDiagnostics};
 #[cfg(feature = "native-text")]
 pub use text_authoring::{
     MarkupText, NativeFontFace, Text, DEFAULT_NATIVE_TEXT_FONT_FAMILY,

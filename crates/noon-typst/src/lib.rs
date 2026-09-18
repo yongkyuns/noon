@@ -27,7 +27,8 @@ use typst_library::{
 use typst_svg::{svg, SvgOptions};
 
 pub const TYPST_BACKEND_VERSION: &str = "0.15.1";
-const TEMPLATE_VERSION: &str = "noon-typst-page-v2";
+/// Deterministic identity of Noon's Typst normalization template.
+pub const TYPST_TEMPLATE_VERSION: &str = "noon-typst-page-v2";
 const TEMPLATE_PREFIX: &str =
     "#set page(width: auto, height: auto, margin: 0pt, fill: none)\n#set text(size: 10pt)\n";
 
@@ -329,13 +330,13 @@ fn one_page(document: &PagedDocument) -> Result<&typst_layout::Page, TypstBacken
 
 fn layout_artifact(prepared_source: &str) -> TextLayoutArtifact {
     let artifact_identity =
-        format!("{TYPST_BACKEND_VERSION}\0{TEMPLATE_VERSION}\0{prepared_source}");
+        format!("{TYPST_BACKEND_VERSION}\0{TYPST_TEMPLATE_VERSION}\0{prepared_source}");
     TextLayoutArtifact {
         backend: TextLayoutBackend {
             kind: TextLayoutBackendKind::Typst,
             version: Arc::from(TYPST_BACKEND_VERSION),
         },
-        template_fingerprint: Arc::from(fingerprint_hex(TEMPLATE_VERSION.as_bytes())),
+        template_fingerprint: Arc::from(fingerprint_hex(TYPST_TEMPLATE_VERSION.as_bytes())),
         artifact_fingerprint: Arc::from(fingerprint_hex(artifact_identity.as_bytes())),
         backend_payload_key: None,
     }
