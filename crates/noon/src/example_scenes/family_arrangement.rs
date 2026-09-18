@@ -140,8 +140,11 @@ pub fn program() -> Result<LiveProgram<FamilyArrangement>, String> {
     if (bounds.width() - 2.4).abs() > 1e-6 || (bounds.height() - 0.4).abs() > 1e-6 {
         return Err("shared family bounds differ from its authored members".into());
     }
-    family
-        .arrange(1.0, 0.0, 0.2, true)
+    scene
+        .arrange_family_with_options(
+            &family,
+            &crate::FamilyArrangeOptions::new(1.0, 0.0, 0.2, true),
+        )
         .map_err(|error| error.to_string())?;
     scene.add(&first).map_err(|error| error.to_string())?;
     scene.add(&second).map_err(|error| error.to_string())?;

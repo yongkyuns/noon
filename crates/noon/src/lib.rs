@@ -1,8 +1,12 @@
 //! Direct Rust authoring and coherent live execution for Noon.
 //!
-//! Start with [`Scene`] and [`Mobject`]. Before execution, their edits author the
-//! scene. After lowering, use [`Scene::live`] for edits and effective observations:
-//! it publishes through the existing [`ExecutionSession`], not a second scene.
+//! Start with [`Scene`] and [`Mobject`]. Scene-owned persistent operations such as
+//! geometry creation, family translation and linear/grid arrangement use the same
+//! route before and after execution bootstrap. Raw handle edits remain authored
+//! operations; they do not publish to an already running execution.
+//!
+//! [`Scene::live`] is for explicit borrowed-execution integration. Continuations
+//! also receive a [`LiveSession`] for their segment and callback capabilities.
 //!
 //! # Public surface
 //!
@@ -12,8 +16,8 @@
 //!   renderer observations. These are advanced facilities, not ordinary authoring.
 //! - `diagnostics` (feature gated) provides explicit debug/export observations.
 //!
-//! Use [`LiveSession::authored`] for base state and [`LiveSession::effective`] for
-//! the current published value. Complete a segment with
+//! Use [`Scene::authored`] for base state and [`Scene::effective`] for the current
+//! published value; a cold scene has no effective observation. Complete a segment with
 //! [`LiveSession::complete_segment`] before resuming dependent authoring. Ordinary
 //! completion is not a GPU-retirement fence. See the `shared_authoring` example.
 //!

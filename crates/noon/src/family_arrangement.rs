@@ -78,23 +78,8 @@ impl MobjectFamily {
         self.commit_arrangement(FamilyArrangePlan::grid(self, options)?)
     }
 
-    fn commit_arrangement(&self, mut plan: FamilyArrangePlan) -> Result<(), AuthoringError> {
-        plan.observe_leaf_bounds(|leaf| {
-            let object = Mobject::from_node(Rc::clone(self.integration_store()), leaf)?;
-            Ok::<_, AuthoringError>(ArrangementBounds {
-                dimensions: object.layout_bounds()?,
-                anchors: object.boundary_bounds()?,
-            })
-        })?;
-        let transaction = plan.transaction::<AuthoringError>(|leaf| {
-            Ok(
-                Mobject::from_node(Rc::clone(self.integration_store()), leaf)?
-                    .state()?
-                    .transform
-                    .translation,
-            )
-        })?;
-        transaction
+    fn commit_arrangement(&self, plan: FamilyArrangePlan) -> Result<(), AuthoringError> {
+        plan.authored_transaction(self.integration_store())?
             .apply(&mut self.integration_store().borrow_mut())
             .map(|_| ())
             .map_err(AuthoringError::from)
@@ -127,6 +112,27 @@ pub(crate) struct FamilyArrangePlan {
 }
 
 impl FamilyArrangePlan {
+    /// Prepare from authored observations without publishing. Scene-owned cold
+    /// placement and explicit raw-store authoring share this exact preparation.
+    pub(crate) fn authored_transaction(
+        mut self,
+        store: &Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
+        self.observe_leaf_bounds(|leaf| {
+            let object = Mobject::from_node(Rc::clone(store), leaf)?;
+            Ok::<_, AuthoringError>(ArrangementBounds {
+                dimensions: object.layout_bounds()?,
+                anchors: object.boundary_bounds()?,
+            })
+        })?;
+        self.transaction(|leaf| {
+            Ok(Mobject::from_node(Rc::clone(store), leaf)?
+                .state()?
+                .transform
+                .translation)
+        })
+    }
+
     pub(crate) fn begin(
         family: &MobjectFamily,
         options: &FamilyArrangeOptions,

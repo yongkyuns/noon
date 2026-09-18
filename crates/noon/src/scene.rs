@@ -449,41 +449,78 @@ impl Scene {
         crate::family_layout::effective_family_layout(&self.store, execution, family)
     }
 
-    /// Shift a family through the Scene-owned running publication authority.
-    /// Use `MobjectFamily::shift` for cold authored placement.
+    /// Shift a family through one persistent transaction before or after bootstrap.
+    /// Each aliased leaf is translated once; running publication remains local.
     pub fn shift_family(
         &mut self,
         family: &MobjectFamily,
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            crate::family_layout::publish_shift_family(store, root, execution, family, x, y)
-        })
+        if let Some(execution) = self.execution.as_mut() {
+            return crate::family_layout::publish_shift_family(
+                &self.store,
+                self.root,
+                execution,
+                family,
+                x,
+                y,
+            );
+        }
+        MobjectTarget::Family(family).require_store(&self.store)?;
+        let transaction = crate::family_authoring::FamilyTranslation::begin(
+            &self.store.borrow(),
+            family.node_id(),
+            x,
+            y,
+        )?
+        .transaction(&self.store.borrow())?;
+        self.apply_semantic_transaction(transaction)
     }
 
-    /// Arrange a family from current effective bounds and publish once.
+    /// Arrange a family atomically before or after bootstrap. Cold placement
+    /// measures authored bounds; running placement observes coherent effective
+    /// bounds and rejects unresolved affine drivers rather than overwriting them.
     pub fn arrange_family_with_options(
         &mut self,
         family: &MobjectFamily,
         options: &crate::FamilyArrangeOptions,
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            crate::family_layout::publish_arrange_family(store, root, execution, family, options)
-        })
+        if let Some(execution) = self.execution.as_mut() {
+            return crate::family_layout::publish_arrange_family(
+                &self.store,
+                self.root,
+                execution,
+                family,
+                options,
+            );
+        }
+        MobjectTarget::Family(family).require_store(&self.store)?;
+        let transaction = crate::family_arrangement::FamilyArrangePlan::begin(family, options)?
+            .authored_transaction(&self.store)?;
+        self.apply_semantic_transaction(transaction)
     }
 
-    /// Arrange a family grid from current effective bounds and publish once.
+    /// Arrange a family grid through the same durable route before and after
+    /// bootstrap, with the observation policy of [`Self::arrange_family_with_options`].
     pub fn arrange_family_in_grid_with_options(
         &mut self,
         family: &MobjectFamily,
         options: &crate::FamilyGridOptions,
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            crate::family_layout::publish_arrange_family_in_grid(
-                store, root, execution, family, options,
-            )
-        })
+        if let Some(execution) = self.execution.as_mut() {
+            return crate::family_layout::publish_arrange_family_in_grid(
+                &self.store,
+                self.root,
+                execution,
+                family,
+                options,
+            );
+        }
+        MobjectTarget::Family(family).require_store(&self.store)?;
+        let transaction = crate::family_arrangement::FamilyArrangePlan::grid(family, options)?
+            .authored_transaction(&self.store)?;
+        self.apply_semantic_transaction(transaction)
     }
 
     /// Move one object relative to an effective target through one transaction.
