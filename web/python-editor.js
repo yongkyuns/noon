@@ -179,7 +179,7 @@ async function enhancePythonEditors() {
     .python-code-editor .cm-focused { outline: 2px solid #aa9cff; outline-offset: -2px; }
     .python-code-editor + textarea[hidden] { display: none !important; }
     @media (max-width: 44rem) {
-      .python-code-editor { min-height: 25rem; }
+      .python-code-editor { min-height: 0; }
       .python-code-editor .cm-editor { font-size: 0.76rem; }
     }
   `;
