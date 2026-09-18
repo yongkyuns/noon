@@ -2,7 +2,7 @@ name: C2 session preparation
 on:
   push:
     branches: [work/c2-session-input-preparation]
-    paths: [.github/workflows/c2-session-preparation.yml, .c2-session.patch.gz]
+    paths: [.github/workflows/c2-session-preparation.yml, .c2-session.patch.gz, .c2-session-review.patch]
 permissions:
   contents: write
 concurrency:
@@ -27,12 +27,15 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/c2-results"
           gzip -dc .c2-session.patch.gz > "$RUNNER_TEMP/c2-session.patch"
+          cp .c2-session-review.patch "$RUNNER_TEMP/c2-session-review.patch"
           echo "1699990cba7709264f6d5f133dc89a18222f1d07a54f515ae21d50b14ee53872  $RUNNER_TEMP/c2-session.patch" | sha256sum --check
           git fetch --no-tags --depth=1 origin fdb985b10fc60adce269049030dc4245552ab7be
           git checkout --detach fdb985b10fc60adce269049030dc4245552ab7be
           test "$(git hash-object crates/noon/src/execution_session.rs)" = 327d5818326bafc30891789750c0fe75347eb1e3
           git apply --check "$RUNNER_TEMP/c2-session.patch"
           git apply "$RUNNER_TEMP/c2-session.patch"
+          git apply --check "$RUNNER_TEMP/c2-session-review.patch"
+          git apply "$RUNNER_TEMP/c2-session-review.patch"
           git add -N crates/noon/src/execution_session/native_input.rs crates/noon/src/execution_session/native_input/tests.rs
           git diff --check
           git rev-parse HEAD > "$RUNNER_TEMP/c2-results/parent.txt"
@@ -59,6 +62,7 @@ jobs:
           cargo fmt --all
           git diff --check
           cargo test -p noon --all-features --lib execution_session::native_input::tests -- --nocapture 2>&1 | tee "$RUNNER_TEMP/c2-results/focused.log"
+          cargo test -p noon-runtime --lib prepared_frame::tests -- --nocapture 2>&1 | tee "$RUNNER_TEMP/c2-results/prepared-frame.log"
       - name: Repository fast gate
         shell: bash
         run: |
@@ -73,8 +77,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git add crates/noon/src/execution_session.rs crates/noon/src/execution_session/native_input.rs crates/noon/src/execution_session/native_input/tests.rs crates/noon/src/integration.rs crates/noon/src/lib.rs
-          test "$(git diff --cached --name-only | wc -l)" = 5
+          git add crates/noon/src/execution_session.rs crates/noon/src/execution_session/native_input.rs crates/noon/src/execution_session/native_input/tests.rs crates/noon/src/integration.rs crates/noon/src/lib.rs crates/noon-runtime/src/prepared_frame.rs
+          test "$(git diff --cached --name-only | wc -l)" = 6
           test -z "$(git diff --name-only)"
           git diff --cached --check
           git -c user.name='Noon validation' -c user.email='noon-validation@users.noreply.github.com' commit -m 'C2: admit contextual pointer occurrences atomically through ExecutionSession'
@@ -87,9 +91,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git diff fdb985b10fc60adce269049030dc4245552ab7be -- crates/noon > "$RUNNER_TEMP/c2-results/candidate.patch"
-          tar -czf "$RUNNER_TEMP/c2-results/candidate-sources.tar.gz" crates/noon/src/execution_session.rs crates/noon/src/execution_session/native_input.rs crates/noon/src/execution_session/native_input/tests.rs crates/noon/src/integration.rs crates/noon/src/lib.rs
-          git hash-object crates/noon/src/execution_session.rs crates/noon/src/execution_session/native_input.rs crates/noon/src/execution_session/native_input/tests.rs crates/noon/src/integration.rs crates/noon/src/lib.rs > "$RUNNER_TEMP/c2-results/source-blobs.txt"
+          git diff fdb985b10fc60adce269049030dc4245552ab7be -- crates/noon crates/noon-runtime > "$RUNNER_TEMP/c2-results/candidate.patch"
+          tar -czf "$RUNNER_TEMP/c2-results/candidate-sources.tar.gz" crates/noon/src/execution_session.rs crates/noon/src/execution_session/native_input.rs crates/noon/src/execution_session/native_input/tests.rs crates/noon/src/integration.rs crates/noon/src/lib.rs crates/noon-runtime/src/prepared_frame.rs
+          git hash-object crates/noon/src/execution_session.rs crates/noon/src/execution_session/native_input.rs crates/noon/src/execution_session/native_input/tests.rs crates/noon/src/integration.rs crates/noon/src/lib.rs crates/noon-runtime/src/prepared_frame.rs > "$RUNNER_TEMP/c2-results/source-blobs.txt"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

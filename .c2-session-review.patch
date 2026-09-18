@@ -1,0 +1,125 @@
+diff --git a/crates/noon-runtime/src/prepared_frame.rs b/crates/noon-runtime/src/prepared_frame.rs
+index 2024021..9b1a099 100644
+--- a/crates/noon-runtime/src/prepared_frame.rs
++++ b/crates/noon-runtime/src/prepared_frame.rs
+@@ -173,9 +173,13 @@ impl SceneInstance {
+         let effective = self
+             .prepare_effective_property_batch(&[])
+             .expect("an empty effective-property batch is always valid");
+-        Ok(self
+-            .commit_prepared_frame(prepared, effective)
+-            .expect("an immediately committed prepared frame cannot become stale"))
++        match self.commit_prepared_frame(prepared, effective) {
++            Ok(frame) => Ok(frame),
++            Err(PreparedFrameCommitError::FrameEpochExhausted(epoch)) => {
++                Err(EvaluationError::FrameEpochExhausted(epoch))
++            }
++            Err(error) => unreachable!("an immediately committed prepared frame cannot stale: {error}"),
++        }
+     }
+ 
+     /// Read effective properties from an unpublished phase. Unchanged bounds can
+@@ -499,13 +503,13 @@ impl SceneInstance {
+         effective: PreparedEffectivePropertyBatch,
+     ) -> Result<&FrameState, PreparedFrameCommitError> {
+         self.preflight_prepared_frame_commit(&prepared, &effective)?;
++        // Signal values are part of the coherent runtime publication even when
++        // change-stopping leaves every drawable row unchanged.
++        let reactive_changed = prepared.reactive.as_ref().is_some_and(|update| !update.is_empty());
+         let may_publish = prepared.time != self.frame.time
+             || !prepared.rows.is_empty()
+             || !prepared.requested_family_animations.is_empty()
+-            || prepared
+-                .reactive
+-                .as_ref()
+-                .is_some_and(|update| !update.is_empty())
++            || reactive_changed
+             || !effective.writes.is_empty();
+         let next_frame = if may_publish {
+             Some(self.publication.frame_epoch().checked_next().ok_or(
+@@ -570,7 +574,7 @@ impl SceneInstance {
+         }
+         self.effective_driver_rows = next_drivers;
+         self.last_stats = prepared.stats;
+-        if time_changed || changed {
++        if time_changed || changed || reactive_changed {
+             self.publication = self.publication.with_frame_epoch(
+                 next_frame.expect("a changed prepared frame reserved a frame epoch"),
+             );
+@@ -856,4 +860,76 @@ mod tests {
+         ));
+         assert_eq!(instance.frame().time, 0.0);
+     }
++
++    fn signal_only_instance() -> (SceneInstance, SignalId) {
++        let mut store = SemanticStore::new();
++        let object = store.insert_semantic_object(SemanticObjectState::new(
++            StoredGeometry::Circle { radius: 1.0 },
++        ));
++        store.attach_to_scene(object).unwrap();
++        let mut index = SemanticExecutionIndex::new();
++        let lowered = lower_semantic_execution(&store, &mut index).unwrap();
++        let mut instance = SceneInstance::from_semantic_execution(lowered);
++        let signal = SignalId::new(0);
++        let enrollment = instance.prepare_reactive_signal_enrollment(
++            Some(signal), ReactiveValue::Scalar(1.0),
++        ).unwrap();
++        instance.commit_reactive_signal_enrollment(enrollment, signal);
++        instance.take_frame_changes();
++        (instance, signal)
++    }
++
++    #[test]
++    fn prepared_signal_only_change_publishes_once_without_dirty_rows() {
++        let (mut instance, signal) = signal_only_instance();
++        let before = instance.publication_context();
++        let frame = instance.frame().clone();
++        let prepared = instance.prepare_advance_to_with_reactive_inputs(
++            0.0, &[(signal, ReactiveValue::Scalar(2.0))],
++        ).unwrap();
++        assert_eq!(instance.publication_context(), before);
++        assert_eq!(instance.reactive_value(signal), Some(&ReactiveValue::Scalar(1.0)));
++        let effective = instance.prepare_effective_property_batch(&[]).unwrap();
++        instance.commit_prepared_frame(prepared, effective).unwrap();
++        let after = before.with_frame_epoch(before.frame_epoch().checked_next().unwrap());
++        assert_eq!(instance.publication_context(), after);
++        assert_eq!(instance.reactive_value(signal), Some(&ReactiveValue::Scalar(2.0)));
++        assert_eq!(instance.frame(), &frame);
++        assert!(instance.take_frame_changes().is_empty());
++        instance.advance_to_with_reactive_inputs(0.0, &[(signal, ReactiveValue::Scalar(2.0))]).unwrap();
++        assert_eq!(instance.publication_context(), after);
++        assert!(instance.take_frame_changes().is_empty());
++    }
++
++    #[test]
++    fn signal_only_commit_invalidates_older_prepared_reads() {
++        let (mut instance, signal) = signal_only_instance();
++        let old = instance.prepare_advance_to(0.0).unwrap();
++        let effective = instance.prepare_effective_property_batch(&[]).unwrap();
++        instance.advance_to_with_reactive_inputs(0.0, &[(signal, ReactiveValue::Scalar(2.0))]).unwrap();
++        let current = instance.publication_context();
++        assert!(matches!(instance.commit_prepared_frame(old, effective),
++            Err(PreparedFrameCommitError::StalePublication { .. })));
++        assert_eq!(instance.publication_context(), current);
++        assert_eq!(instance.reactive_value(signal), Some(&ReactiveValue::Scalar(2.0)));
++        assert!(instance.take_frame_changes().is_empty());
++    }
++
++    #[test]
++    fn signal_only_epoch_exhaustion_is_a_typed_atomic_input_error() {
++        let (mut instance, signal) = signal_only_instance();
++        let max_epoch = noon_core::FrameEpoch::new(u64::MAX);
++        instance.publication = instance.publication_context().with_frame_epoch(max_epoch);
++        let before = instance.publication_context();
++        let frame = instance.frame().clone();
++        assert_eq!(instance.advance_to_with_reactive_inputs(0.0, &[(signal, ReactiveValue::Scalar(2.0))]),
++            Err(EvaluationError::FrameEpochExhausted(max_epoch)));
++        assert_eq!(instance.publication_context(), before);
++        assert_eq!(instance.reactive_value(signal), Some(&ReactiveValue::Scalar(1.0)));
++        assert_eq!(instance.frame(), &frame);
++        assert!(instance.take_frame_changes().is_empty());
++        instance.advance_to_with_reactive_inputs(0.0, &[(signal, ReactiveValue::Scalar(1.0))]).unwrap();
++        assert_eq!(instance.publication_context(), before);
++    }
++
+ }
