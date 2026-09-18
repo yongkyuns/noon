@@ -1,6 +1,6 @@
 use super::*;
 use crate::{execution_source::LiveProgramExecutionSource, NativeViewportConfig};
-use noon::{ExecutionSession, RustHostCallbackTable};
+use noon::ExecutionSession;
 use noon_core::{
     NativeEventOccurrence, NativeEventSource, ReactiveValue, SemanticMutationTransaction,
     SemanticNativeInputSource, SemanticNodeCreation, SemanticNodeId, SemanticObjectProperty,

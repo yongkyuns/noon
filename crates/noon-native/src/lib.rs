@@ -609,7 +609,10 @@ impl NativeApp {
 
 impl ApplicationHandler for NativeApp {
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {
-        if let Err(error) = self.pointer_left() {
+        if let Err(error) = self
+            .pointer_focus_lost()
+            .and_then(|()| self.rebind_pointer_view())
+        {
             self.fail(event_loop, error);
         }
         self.gpu = None;
@@ -693,7 +696,6 @@ impl ApplicationHandler for NativeApp {
                 }
                 if let Err(error) = self.rebind_pointer_view() {
                     self.fail(event_loop, error);
-                    return;
                 }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
