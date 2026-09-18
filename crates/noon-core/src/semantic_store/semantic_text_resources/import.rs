@@ -208,23 +208,80 @@ mod tests {
         }
     }
 
+    fn import_cached(
+        store: &mut SemanticStore,
+        key: crate::TextCompilationIdentity,
+    ) -> TextResourceHandle {
+        store
+            .import_compiled_text_resource(
+                key,
+                empty_text(),
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new(),
+            )
+            .unwrap()
+    }
+
     #[test]
-    fn stale_compiled_identity_is_forgotten_before_reinsertion() {
+    fn retired_compiled_resource_is_reimported_without_duplicate_accounting() {
         let mut store = SemanticStore::new();
-        let identity = identity("stale");
-        let handle = crate::TextResourceHandle {
-            arena: 1,
-            id: crate::TextResourceId::new(1),
-            version: 0,
-        };
-        store.remember_compiled_text_resource(identity.clone(), handle);
-        assert!(store.compiled_text_resource_retained_bytes > 0);
-        store.forget_compiled_text_resource(&identity);
-        assert!(store.compiled_text_resources.is_empty());
-        assert!(store.compiled_text_resource_order.is_empty());
+        let key = identity("retired");
+        let first = import_cached(&mut store, key.clone());
+        let retained_bytes = store.compiled_text_resource_retained_bytes;
+        store.text_resources.remove(first.id).unwrap();
+        let replacement = import_cached(&mut store, key.clone());
+        assert_ne!(first, replacement);
+        assert!(store.text_resources().get(first).is_none());
+        assert!(store.text_resources().get(replacement).is_some());
+        assert_eq!(store.compiled_text_resource_retained_bytes, retained_bytes);
+        assert_eq!(store.compiled_text_resource_order.len(), 1);
+        assert_eq!(import_cached(&mut store, key), replacement);
+        assert_eq!(store.text_resources().len(), 1);
+    }
+
+    #[test]
+    fn cloned_compiled_resources_rebind_live_handles_and_drop_retired_identities() {
+        let mut store = SemanticStore::new();
+        let live_key = identity("live");
+        let live = import_cached(&mut store, live_key.clone());
+        let retired_key = identity("retired");
+        let retired = import_cached(&mut store, retired_key.clone());
+        store.text_resources.remove(retired.id).unwrap();
+        let mut cloned = store.clone();
+        let cloned_live = import_cached(&mut cloned, live_key.clone());
+        assert_ne!(cloned_live.arena, live.arena);
+        assert!(cloned.text_resources().get(cloned_live).is_some());
+        assert!(cloned.text_resources().get(live).is_none());
+        assert_eq!(
+            cloned.compiled_text_resource_retained_bytes,
+            compiled_identity_bytes(&live_key)
+        );
+        assert_eq!(cloned.compiled_text_resource_order.len(), 1);
+        assert!(!cloned.compiled_text_resources.contains_key(&retired_key));
+        let restored = import_cached(&mut cloned, retired_key);
+        assert!(cloned.text_resources().get(restored).is_some());
+        assert_eq!(cloned.text_resources().len(), 2);
+    }
+
+    #[test]
+    fn failed_compiled_import_does_not_cache_an_identity() {
+        let mut store = SemanticStore::new();
+        let key = identity("invalid");
+        let mut invalid = empty_text();
+        invalid.render_items = Arc::from([crate::TextRenderItem::Vector(0)]);
+        assert!(store
+            .import_compiled_text_resource(
+                key.clone(),
+                invalid,
+                &FontResourceArena::new(),
+                &GeometryResourceArena::new()
+            )
+            .is_err());
         assert_eq!(store.compiled_text_resource_retained_bytes, 0);
-        store.remember_compiled_text_resource(identity, handle);
-        assert_eq!(store.compiled_text_resources.len(), 1);
+        assert!(store.compiled_text_resource_order.is_empty());
+        assert!(store.compiled_text_resources.is_empty());
+        let restored = import_cached(&mut store, key);
+        assert!(store.text_resources().get(restored).is_some());
     }
 
     #[test]
