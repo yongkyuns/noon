@@ -281,6 +281,21 @@
       "order": 1170
     },
     {
+      "id": "noon-number-plane",
+      "title": "NumberPlane",
+      "summary": "A retained NumberPlane with major and faded subdivisions, a plotted curve, a coordinate marker, and one group transform.",
+      "status": "ready",
+      "path": "python/examples/number_plane.py",
+      "category": "manim-compatible/plotting",
+      "features": ["NumberPlane", "faded subdivisions", "c2p", "p2c", "plot", "group transform", "Manim-compatible"],
+      "reuse": "manim-compatible-parity-v0.21",
+      "parity_status": "candidate",
+      "thumbnail": "thumbnails/manim/generated/number-plane.png",
+      "thumbnail_alt": "Retained coordinate grid with faded subdivisions, a parabola, and a highlighted point",
+      "thumbnail_time": 0,
+      "order": 1171
+    },
+    {
       "id": "noon-raster-image",
       "title": "RasterImage",
       "summary": "Immutable ImageMobject resources with endpoint-qualified transforms and retained texture reuse.",

@@ -4,6 +4,15 @@ use crate::Scene;
 fn options() -> ManimAxesOptions {
     ManimAxesOptions::new([-2.0, 2.0, 1.0], [-1.0, 1.0, 1.0], 4.0, 2.0)
 }
+
+fn plane_options() -> crate::ManimNumberPlaneOptions {
+    let mut options = crate::ManimNumberPlaneOptions::new();
+    options.x_range = [-2.0, 2.0, 1.0];
+    options.y_range = [-1.0, 1.0, 1.0];
+    options.x_length = Some(4.0);
+    options.y_length = Some(2.0);
+    options
+}
 fn resources(scene: &Scene) -> (usize, usize, usize) {
     let store = scene.integration_store().borrow();
     (
@@ -92,6 +101,55 @@ fn invalid_second_axis_and_tick_budget_publish_no_partial_family() {
     assert_eq!(scene.integration_store().borrow().len(), count);
     assert_eq!(execution.publication_context(), context);
     assert_eq!(resources(&scene), (0, 0, 0));
+}
+
+#[test]
+fn running_number_plane_construction_is_detached_atomic_and_local() {
+    let mut scene = Scene::new();
+    let sentinel = scene.circle(0.2).unwrap();
+    scene.add(&sentinel).unwrap();
+    scene.wait(0.25).unwrap();
+    let mut execution = scene.execution_session().unwrap();
+    let before_time = scene.time();
+    let before_frame = execution.frame().objects.clone();
+    let before_context = execution.publication_context();
+    let before_revision = scene.revision();
+    let before_sentinel = sentinel.state().unwrap();
+    let plane;
+    {
+        let mut live = LiveSession::new(scene.integration_store(), scene.root(), &mut execution);
+        plane = live.number_plane(&plane_options()).unwrap();
+        near(
+            live.effective_number_plane_frame(&plane)
+                .unwrap()
+                .coords_to_point(1.0, 0.5)
+                .unwrap(),
+            [1.0, 0.5],
+        );
+        live.add_many(&[plane.family().into()]).unwrap();
+        live.shift_family(plane.family(), 2.0, -1.0).unwrap();
+        near(
+            live.effective_number_plane_frame(&plane)
+                .unwrap()
+                .coords_to_point(0.0, 0.0)
+                .unwrap(),
+            [2.0, -1.0],
+        );
+    }
+    assert_eq!(scene.time(), before_time);
+    assert_eq!(sentinel.state().unwrap(), before_sentinel);
+    assert!(execution.frame().objects.len() > before_frame.len());
+    assert_ne!(execution.publication_context(), before_context);
+
+    let revision = scene.revision();
+    let frame = execution.frame().objects.clone();
+    let mut invalid = plane_options();
+    invalid.x_length = Some(f64::NAN);
+    let mut live = LiveSession::new(scene.integration_store(), scene.root(), &mut execution);
+    assert!(live.number_plane(&invalid).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(execution.frame().objects, frame);
+    assert!(scene.revision().get() > before_revision.get());
 }
 
 #[test]

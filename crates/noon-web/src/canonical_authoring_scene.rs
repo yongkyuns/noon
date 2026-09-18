@@ -6249,6 +6249,10 @@ mod wasm {
                     .inner
                     .live_create_axes(&options)
                     .map(|axes| axes.family().clone()),
+                CoordinateRequest::NumberPlane(options) => self
+                    .inner
+                    .live_create_number_plane(&options)
+                    .map(|plane| plane.family().clone()),
             };
             family
                 .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)

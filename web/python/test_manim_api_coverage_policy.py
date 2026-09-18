@@ -60,10 +60,10 @@ class ManimApiCoveragePolicyTests(unittest.TestCase):
         )
         self.assertEqual(policy["overrides"]["Text"]["status"], "partial")
         self.assertEqual(policy["overrides"]["Typst"]["status"], "partial")
+        self.assertEqual(policy["overrides"]["NumberPlane"]["status"], "partial")
         for name in (
             "Axes",
             "NumberLine",
-            "NumberPlane",
             "ComplexPlane",
             "PolarPlane",
             "ParametricFunction",

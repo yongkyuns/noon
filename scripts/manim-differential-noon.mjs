@@ -37,6 +37,9 @@ try {
     // Geometry, identities, family traversal and all observations remain Rust-owned.
     globalThis.noonCreateCanonicalAuthoringSceneContext = () => store.createSceneContext();
     globalThis.noonAuthoringGeometryOptions = wasm.WasmManimGeometryOptions;
+    globalThis.noonAuthoringCoordinateOptions = wasm.WasmCoordinateOptions;
+    globalThis.noonPlotSamplingPlan = wasm.WasmPlotSamplingPlan;
+    globalThis.noonCreateAuthoringCoordinateHandle = options => store.createCoordinates(options);
     globalThis.noonAuthoringVectorPath = () => new wasm.WasmAuthoringVectorPath();
     globalThis.noonCreateAuthoringGeometryHandle = options => store.createManimGeometry(options);
     globalThis.noonTextColorBatch = () => new wasm.WasmTextColorBatch();

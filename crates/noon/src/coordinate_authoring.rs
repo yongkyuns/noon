@@ -18,6 +18,10 @@ use noon_core::{
 };
 use noon_geometry::{number_line_tick_values, AxesFrame, CoordinateError, NumberLineFrame};
 
+mod number_plane;
+pub(crate) use number_plane::prepare_number_plane;
+pub use number_plane::{ManimNumberPlane, ManimNumberPlaneOptions};
+
 #[cfg(test)]
 mod tests;
 
