@@ -60,7 +60,10 @@ fn blue_centroid_x(pixels: &[u8]) -> f64 {
         total_weight += weight;
         weighted_x += (index % SIZE as usize) as f64 * weight;
     }
-    assert!(total_weight > 0.0, "rendered frame must contain the blue marker");
+    assert!(
+        total_weight > 0.0,
+        "rendered frame must contain the blue marker"
+    );
     weighted_x / total_weight
 }
 
@@ -83,8 +86,15 @@ fn native_temporal_translation_matches_published_states() {
                 "time {time}: rendered centroid {centroid}, expected {expected_pixel_x}"
             );
             let repeated = raster.capture(&session.take_renderer_publication());
-            assert!(pixels == repeated, "repeat capture changed pixels at {time}");
-            assert_eq!(session.frame().time, time, "capture must not advance execution");
+            assert!(
+                pixels == repeated,
+                "repeat capture changed pixels at {time}"
+            );
+            assert_eq!(
+                session.frame().time,
+                time,
+                "capture must not advance execution"
+            );
             eprintln!("native temporal sample: time={time}, centroid_x={centroid}");
             frames.push(pixels);
         });
@@ -95,6 +105,9 @@ fn native_temporal_translation_matches_published_states() {
     assert_eq!(first.len(), 4);
     assert_eq!(second.len(), 4);
     for (index, (left, right)) in first.iter().zip(&second).enumerate() {
-        assert!(left == right, "fresh-session pixels differ at sample {index}");
+        assert!(
+            left == right,
+            "fresh-session pixels differ at sample {index}"
+        );
     }
 }
