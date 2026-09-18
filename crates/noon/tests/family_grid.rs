@@ -68,7 +68,14 @@ fn nested_aliases_use_one_live_transaction_and_foreign_grids_are_rejected() {
     let mut session = scene.execution_session().unwrap();
     let mut live = scene.live(&mut session);
     let result = live
-        .arrange_family_in_grid(&family, Some(1), None, 0.25, 0.25)
+        .arrange_family_in_grid_with_options(
+            &family,
+            &noon::FamilyGridOptions {
+                rows: Some(1),
+                gap: (0.25, 0.25),
+                ..Default::default()
+            },
+        )
         .unwrap();
     assert_eq!(result.impacts().len(), 2);
     assert_eq!(
@@ -81,7 +88,13 @@ fn nested_aliases_use_one_live_transaction_and_foreign_grids_are_rejected() {
     let mut foreign_scene = Scene::new();
     let foreign = foreign_scene.family(&[]).unwrap();
     assert!(live
-        .arrange_family_in_grid(&foreign, None, None, 0.2, 0.2)
+        .arrange_family_in_grid_with_options(
+            &foreign,
+            &noon::FamilyGridOptions {
+                gap: (0.2, 0.2),
+                ..Default::default()
+            }
+        )
         .is_err());
     assert_eq!(live.effective(&a).unwrap(), before);
 }

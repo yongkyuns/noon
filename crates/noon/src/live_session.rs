@@ -2036,22 +2036,6 @@ impl<'a> LiveSession<'a> {
         .map_err(LiveSessionError::from)
     }
 
-    /// Arrange direct family members from effective runtime layout and publish
-    /// every resulting leaf translation in one semantic transaction.
-    pub fn arrange_family(
-        &mut self,
-        family: &MobjectFamily,
-        direction_x: f64,
-        direction_y: f64,
-        buff: f64,
-        center: bool,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.arrange_family_with_options(
-            family,
-            &crate::FamilyArrangeOptions::new(direction_x, direction_y, buff, center),
-        )
-    }
-
     /// Stage sequential layout observations and publish one atomic family edit.
     pub fn arrange_family_with_options(
         &mut self,
@@ -2066,26 +2050,6 @@ impl<'a> LiveSession<'a> {
             options,
         )
         .map_err(LiveSessionError::from)
-    }
-
-    /// Arrange a family using coherent live bounds and one shared translation transaction.
-    pub fn arrange_family_in_grid(
-        &mut self,
-        family: &MobjectFamily,
-        rows: Option<usize>,
-        columns: Option<usize>,
-        gap_x: f64,
-        gap_y: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.arrange_family_in_grid_with_options(
-            family,
-            &crate::FamilyGridOptions {
-                rows,
-                columns,
-                gap: (gap_x, gap_y),
-                ..Default::default()
-            },
-        )
     }
 
     /// Grid alignment and sizing consume coherent live bounds and publish atomically.
@@ -5088,7 +5052,11 @@ mod recursive_composition_tests {
         let before = session.publication_context();
         let mut live = scene.live(&mut session);
 
-        live.arrange_family(&family, 1.0, 0.0, 0.2, true).unwrap();
+        live.arrange_family_with_options(
+            &family,
+            &crate::FamilyArrangeOptions::new(1.0, 0.0, 0.2, true),
+        )
+        .unwrap();
         let publication = live.session.publication_context();
         let first_center = first.center().unwrap();
         let second_center = second.center().unwrap();
@@ -5128,13 +5096,20 @@ mod recursive_composition_tests {
             let unrelated_before = live.effective(&unrelated).unwrap();
 
             assert!(live
-                .arrange_family(&outer, 1.0, 0.0, f64::NAN, true)
+                .arrange_family_with_options(
+                    &outer,
+                    &crate::FamilyArrangeOptions::new(1.0, 0.0, f64::NAN, true)
+                )
                 .is_err());
             assert_eq!(live.session.publication_context(), before);
             assert_eq!(first.center().unwrap(), (0.0, 0.0));
             assert_eq!(second.center().unwrap(), (2.0, 0.0));
 
-            live.arrange_family(&outer, 1.0, 0.0, 0.2, true).unwrap();
+            live.arrange_family_with_options(
+                &outer,
+                &crate::FamilyArrangeOptions::new(1.0, 0.0, 0.2, true),
+            )
+            .unwrap();
             assert_eq!(
                 live.session.publication_context().scene_revision(),
                 before.scene_revision().checked_next().unwrap()
