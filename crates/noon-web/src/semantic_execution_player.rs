@@ -2113,8 +2113,14 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn submit_browser_pointer_input(&mut self, wire: BrowserPointerInputWire) -> Result<(), String> {
-        const BROWSER_CURSOR: NativePointerId = NativePointerId { source: 2, pointer: 0 };
+    fn submit_browser_pointer_input(
+        &mut self,
+        wire: BrowserPointerInputWire,
+    ) -> Result<(), String> {
+        const BROWSER_CURSOR: NativePointerId = NativePointerId {
+            source: 2,
+            pointer: 0,
+        };
         if self.browser_pointer_view_revision != Some(wire.view_revision) {
             self.session
                 .configure_native_pointer_input(BROWSER_CURSOR, wire.view_revision)
@@ -2137,12 +2143,16 @@ impl SemanticExecutionPlayer {
         };
         let positioned = || -> Result<NativePointerPosition, String> {
             let surface = Vec2::new(
-                wire.surface_x.ok_or("browser pointer position is missing x")?,
-                wire.surface_y.ok_or("browser pointer position is missing y")?,
+                wire.surface_x
+                    .ok_or("browser pointer position is missing x")?,
+                wire.surface_y
+                    .ok_or("browser pointer position is missing y")?,
             );
             let viewport = Vec2::new(
-                wire.viewport_width.ok_or("browser pointer viewport width is missing")?,
-                wire.viewport_height.ok_or("browser pointer viewport height is missing")?,
+                wire.viewport_width
+                    .ok_or("browser pointer viewport width is missing")?,
+                wire.viewport_height
+                    .ok_or("browser pointer viewport height is missing")?,
             );
             if viewport.x <= 0.0 || viewport.y <= 0.0 {
                 return Err("browser pointer viewport must be positive".into());
@@ -2150,9 +2160,7 @@ impl SemanticExecutionPlayer {
             let camera = self.session.camera().map_err(|error| error.to_string())?;
             let scene = Vec2::new(
                 camera.center.x
-                    + (surface.x / viewport.x - 0.5)
-                        * camera.height
-                        * (viewport.x / viewport.y),
+                    + (surface.x / viewport.x - 0.5) * camera.height * (viewport.x / viewport.y),
                 camera.center.y + (0.5 - surface.y / viewport.y) * camera.height,
             );
             NativePointerPosition::new(scene, surface).map_err(|error| error.to_string())
@@ -2161,11 +2169,15 @@ impl SemanticExecutionPlayer {
             BrowserPointerKindWire::Move => NativePointerInputKind::Move(positioned()?),
             BrowserPointerKindWire::Press => NativePointerInputKind::Press {
                 position: positioned()?,
-                button: wire.button.ok_or("browser pointer press is missing button")?,
+                button: wire
+                    .button
+                    .ok_or("browser pointer press is missing button")?,
             },
             BrowserPointerKindWire::Release => NativePointerInputKind::Release {
                 position: positioned()?,
-                button: wire.button.ok_or("browser pointer release is missing button")?,
+                button: wire
+                    .button
+                    .ok_or("browser pointer release is missing button")?,
             },
             BrowserPointerKindWire::Cancel => {
                 NativePointerInputKind::Cancel(NativePointerCancellation::Cancelled)
@@ -2174,7 +2186,8 @@ impl SemanticExecutionPlayer {
                 NativePointerInputKind::Cancel(NativePointerCancellation::FocusLost)
             }
         };
-        let input = NativePointerInput::new(sequence, token.pointer(), token.context(), modifiers, kind);
+        let input =
+            NativePointerInput::new(sequence, token.pointer(), token.context(), modifiers, kind);
         self.session
             .submit_native_pointer_input(&token, input)
             .map_err(|error| error.to_string())?;
@@ -3135,15 +3148,15 @@ mod tests {
     fn pointer_fixture() -> PointerFixture {
         let mut store = SemanticStore::new();
         let root = store.insert_family();
-        let target = store.insert_semantic_object(SemanticObjectState::new(
-            StoredGeometry::Circle { radius: 0.5 },
-        ));
+        let target =
+            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
+                radius: 0.5,
+            }));
         store.add_semantic_family_member(root, target).unwrap();
         let mut add_signal = |source, initial| {
             let mut tx = SemanticMutationTransaction::new();
-            let pending = tx.create_node(
-                SemanticNodeCreation::native_input_signal(initial, source).unwrap(),
-            );
+            let pending =
+                tx.create_node(SemanticNodeCreation::native_input_signal(initial, source).unwrap());
             tx.scope_signal(root, pending);
             tx.apply(&mut store).unwrap().resolve(pending).unwrap()
         };
@@ -3173,7 +3186,13 @@ mod tests {
         }
     }
 
-    fn browser_pointer_json(kind: &str, x: Option<f32>, y: Option<f32>, button: Option<u8>, view: u64) -> String {
+    fn browser_pointer_json(
+        kind: &str,
+        x: Option<f32>,
+        y: Option<f32>,
+        button: Option<u8>,
+        view: u64,
+    ) -> String {
         serde_json::json!({
             "kind": kind,
             "surface_x": x,
@@ -3186,7 +3205,8 @@ mod tests {
             "control": false,
             "alt": true,
             "meta": false
-        }).to_string()
+        })
+        .to_string()
     }
 
     #[test]
