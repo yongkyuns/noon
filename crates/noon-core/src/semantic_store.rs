@@ -4,7 +4,7 @@
 //! live with the store they mutate. Immutable resources are shared contracts in
 //! the sibling resources module; execution and rendering remain downstream.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
@@ -551,6 +551,11 @@ pub struct SemanticStore {
     text_resources: crate::TextResourceArena,
     raster_image_resources: crate::RasterImageResourceArena,
     font_resources: crate::FontResourceArena,
+    // Bounded compiler registries supply deterministic complete identities. This
+    // store-local index maps those identities to one immutable retained resource;
+    // semantic nodes still retain independent identity and presentation state.
+    compiled_text_resources: HashMap<crate::TextCompilationIdentity, crate::TextResourceHandle>,
+    compiled_text_resource_order: VecDeque<crate::TextCompilationIdentity>,
     slots: Vec<SemanticSlot>,
     free_head: Option<u32>,
     live_nodes: usize,
@@ -617,6 +622,22 @@ impl Clone for SemanticStore {
             text_resources,
             raster_image_resources,
             font_resources,
+            compiled_text_resources: self
+                .compiled_text_resources
+                .iter()
+                .filter_map(|(key, handle)| {
+                    self.text_resources.get(*handle)?;
+                    let mut handle = *handle;
+                    handle.arena = text_namespace;
+                    Some((key.clone(), handle))
+                })
+                .collect(),
+            compiled_text_resource_order: self
+                .compiled_text_resource_order
+                .iter()
+                .filter(|key| self.compiled_text_resources.contains_key(*key))
+                .cloned()
+                .collect(),
             slots,
             free_head: self.free_head,
             live_nodes: self.live_nodes,
