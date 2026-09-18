@@ -442,7 +442,8 @@ export async function attachSemanticEngine(
     } else if (message.type === "native_event") {
       player.emitNativeEventJson(JSON.stringify({ source: message.source }));
     } else if (message.type === "browser_pointer_input") {
-      player.submitBrowserPointerInputJson(JSON.stringify(message.input));
+      const { type: _type, requestId: _requestId, ...input } = message;
+      player.submitBrowserPointerInputJson(JSON.stringify(input));
     } else {
       throw new Error(`unsupported continuation input ${message.type}`);
     }
