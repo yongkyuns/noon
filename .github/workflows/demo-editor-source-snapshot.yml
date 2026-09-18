@@ -2,6 +2,7 @@ name: Demo editor source snapshot
 on:
   push:
     branches: [prep/demo-editor-source-snapshot]
+    paths: [.github/workflows/demo-editor-source-snapshot.yml]
 permissions:
   contents: read
 jobs:
@@ -11,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 83ac18f7b0974356bbb47e6cadcd4d1aceb5a1eb
+          ref: 295abd185a4ef396c73c450aa404c4cfdce8a599
           persist-credentials: false
       - name: Export pinned source
         shell: bash
@@ -22,7 +23,7 @@ jobs:
           git archive --format=tar.gz HEAD > "$RUNNER_TEMP/noon-source/noon-source.tar.gz"
       - uses: actions/upload-artifact@v7
         with:
-          name: noon-demo-source-83ac18f
+          name: noon-demo-source-295abd1
           path: ${{ runner.temp }}/noon-source
           retention-days: 1
           if-no-files-found: error
