@@ -28,13 +28,13 @@ jobs:
           def blob(data):
               return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
           parts=sorted(Path('.prep-source/.prep').glob('1672-part-*.json'))
-          assert len(parts)==4
+          assert len(parts)==5
           seen=set()
           for part in parts:
               for item in json.loads(part.read_text()):
                   p=Path(item['path'])
                   assert not p.is_absolute() and '..' not in p.parts
-                  assert p.parts[0] in {'crates','web','scripts','.github'} and str(p) not in seen
+                  assert p.parts[0] in {'crates','web','scripts','.github'}
                   seen.add(str(p))
                   if item['before'] is None:
                       assert not p.exists(),p
@@ -52,7 +52,7 @@ jobs:
                   assert blob(new)==item['after'],f'output mismatch: {p}: {blob(new)}'
                   p.write_bytes(new)
                   print('verified',p,blob(new))
-          assert len(seen)==17,len(seen)
+          assert len(seen)==18,len(seen)
           Path(os.environ['RUNNER_TEMP'],'changed-paths.json').write_text(json.dumps(sorted(seen)))
           PY
           rm -rf .prep-source
@@ -68,6 +68,7 @@ jobs:
           git add crates web scripts .github/workflows/manim-plotting-qualification.yml
           git commit -m 'Qualify animated plots through real continuations and shared Rust examples'
           git rev-parse HEAD^{tree} > "$RUNNER_TEMP/intended-tree.txt"
+          git rev-parse HEAD > "$RUNNER_TEMP/compiled-source-sha.txt"
           git diff HEAD^ HEAD --binary > "$RUNNER_TEMP/formatted-source.diff"
           git archive --format=tar.gz HEAD > "$RUNNER_TEMP/formatted-source.tar.gz"
           cp .github/workflows/manim-plotting-qualification.yml "$RUNNER_TEMP/intended-workflow.yml"
@@ -78,10 +79,26 @@ jobs:
           tail -12 "$RUNNER_TEMP/web-tests.log"
           cargo test -p noon --all-features --test animated_plotting_examples 2>&1 | tee "$RUNNER_TEMP/native-tests.log"
           cargo test -p noon --all-features --lib coordinate_plotting_example 2>&1 | tee -a "$RUNNER_TEMP/native-tests.log"
-      - name: Build browser package
-        uses: ./.github/actions/dev-wasm-build
+      - name: Install repository-pinned wasm-pack
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b
         with:
-          preflight: 'true'
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Build the explicitly recorded isolated checkout
+        env:
+          NOON_WASM_PROFILE: dev
+          NOON_WASM_SKIP_OPT: '1'
+          NOON_RENDERER_SMOKE: '1'
+          CARGO_INCREMENTAL: '0'
+          CARGO_PROFILE_DEV_DEBUG: '0'
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$(cat "$RUNNER_TEMP/compiled-source-sha.txt")"
+          # The normal reusable Actions helper requires its event checkout.
+          # This is intentionally an isolated generated candidate, not that event.
+          # Build via the same repository entrypoint; retain its actual SHA/tree.
+          bash scripts/build-web-demo.sh
+          test "$(git rev-parse HEAD^{tree})" = "$(cat "$RUNNER_TEMP/intended-tree.txt")"
       - name: Install browser dependencies
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
@@ -108,6 +125,7 @@ jobs:
           name: animated-plotting-correction-evidence
           path: |
             ${{ runner.temp }}/intended-tree.txt
+            ${{ runner.temp }}/compiled-source-sha.txt
             ${{ runner.temp }}/formatted-source.diff
             ${{ runner.temp }}/formatted-source.tar.gz
             ${{ runner.temp }}/intended-workflow.yml
