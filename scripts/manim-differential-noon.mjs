@@ -39,6 +39,8 @@ try {
     globalThis.noonAuthoringGeometryOptions = wasm.WasmManimGeometryOptions;
     globalThis.noonAuthoringVectorPath = () => new wasm.WasmAuthoringVectorPath();
     globalThis.noonCreateAuthoringGeometryHandle = options => store.createManimGeometry(options);
+    globalThis.noonTextColorBatch = () => new wasm.WasmTextColorBatch();
+    globalThis.noonCreateAuthoringTextHandle = (...args) => store.createManimText(...args);
     globalThis.noonAuthoringMembershipBatch = kind => new wasm.WasmSceneMembershipBatch(kind);
     globalThis.noonCreateAuthoringFamilyHandle = (batch, zIndex) => store.createFamily(batch, zIndex);
     for (const { runtimePath, source } of modules) pyodide.FS.writeFile(runtimePath, source);

@@ -740,6 +740,14 @@
       "expected_duration": 0.2,
       "qualification_status": "candidate",
       "notes": "Representative source fixture; exact raster qualification remains pending."
+    },
+    {
+      "id": "text-range-colors",
+      "scene": "TextRangeColors",
+      "source": "parity/manim-v0.21/core-examples/text_range_colors.py",
+      "expected_duration": 0.2,
+      "qualification_status": "candidate",
+      "notes": "Repeated substring, Unicode, whitespace/newline, and nonoverlapping positive/negative source ranges."
     }
   ],
   "sample_fractions": [

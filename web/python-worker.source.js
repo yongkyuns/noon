@@ -7,6 +7,7 @@ import initNoonWeb, {
   WasmManimGeometryOptions,
   WasmImageMobjectOptions,
   WasmSceneMembershipBatch,
+  WasmTextColorBatch,
   resolveAnimationOptions,
   resolveTransformAnimationOptions,
 } from "./pkg/noon_web.js";
@@ -169,8 +170,9 @@ async function initializePyodide() {
     authoringStore.createManimArrow(options);
   self.noonCreateAuthoringSvgHandle = (source, shouldCenter, height, width) =>
     authoringStore.createSvgFromString(source, shouldCenter, height, width);
-  self.noonCreateAuthoringTextHandle = (source, fontFamily, fontSize, lineSpacing) =>
-    authoringStore.createManimText(source, fontFamily, fontSize, lineSpacing);
+  self.noonTextColorBatch = () => new WasmTextColorBatch();
+  self.noonCreateAuthoringTextHandle = (source, fontFamily, fontSize, lineSpacing, colors) =>
+    authoringStore.createManimText(source, fontFamily, fontSize, lineSpacing, colors);
   self.noonCreateAuthoringMarkupTextHandle = (source, fontFamily, fontSize, lineSpacing) =>
     authoringStore.createManimMarkupText(source, fontFamily, fontSize, lineSpacing);
   self.noonCreateAuthoringTypstHandle = (source, math, fontSize) =>

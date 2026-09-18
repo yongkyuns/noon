@@ -831,6 +831,13 @@ try {
       endpointTime: null,
       expectText: true,
     },
+    {
+      filename: "text_range_colors.py",
+      objectCount: 1,
+      expectedDuration: 0.2,
+      endpointTime: null,
+      expectText: true,
+    },
   ]) {
     const source = await readFile(path.join(repoRoot, "web/python/examples", filename), "utf8");
     const result = await page.evaluate(async ({

@@ -9,6 +9,7 @@ store rather than from a Python-owned text document.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 from _noon_errors import engine_call
 
 import math
@@ -21,6 +22,11 @@ try:
     from js import noonCreateAuthoringTextHandle as _create_authoring_text_handle
 except ImportError:  # Import remains possible for source-only CPython tests.
     _create_authoring_text_handle = None
+
+try:
+    from js import noonTextColorBatch as _new_text_color_batch
+except ImportError:
+    _new_text_color_batch = None
 
 try:
     from js import noonCreateAuthoringMarkupTextHandle as _create_authoring_markup_text_handle
@@ -109,6 +115,8 @@ def _new_native_text_handle(
     line_spacing: float,
     *,
     markup: bool = False,
+    colors=(),
+    base_color=_base.WHITE,
 ):
     source, font_family, font_size, line_spacing = _validated_native_text_options(
         source, font_family, font_size, line_spacing
@@ -119,7 +127,41 @@ def _new_native_text_handle(
     label = "MarkupText" if markup else "Text"
     if constructor is None:
         raise RuntimeError(f"{label} requires Noon's shared Rust authoring runtime")
-    return engine_call(constructor, source, font_family, font_size, line_spacing)
+    return _invoke_native_text_constructor(
+        constructor, (source, font_family, font_size, line_spacing), colors, base_color
+    )
+
+
+def _text_colors(value):
+    """Coerce Python arguments; Rust resolves selectors and validates overlaps."""
+    if value is None:
+        return ()
+    if not isinstance(value, Mapping):
+        raise TypeError("t2c/text2color must be a mapping of strings to colors")
+    colors = []
+    for selector, color in value.items():
+        if not isinstance(selector, str):
+            raise TypeError("text color selectors must be strings")
+        colors.append((selector, _compat._as_color("text range color", color)))
+    return colors
+
+
+def _invoke_native_text_constructor(constructor, arguments, colors, base_color):
+    if not colors:
+        return engine_call(constructor, *arguments)
+    if _new_text_color_batch is None:
+        raise RuntimeError("Text range colors require Noon's shared Rust authoring runtime")
+    batch = _new_text_color_batch()
+    try:
+        engine_call(batch.setBaseColor, base_color.red, base_color.green, base_color.blue, base_color.alpha)
+        for selector, color in colors:
+            engine_call(batch.push, selector, color.red, color.green, color.blue, color.alpha)
+    except BaseException:
+        batch.free()
+        raise
+    # The by-value WASM argument transfers ownership. Rust drops it on success
+    # or constructor failure; freeing the transferred wrapper would double-free.
+    return engine_call(constructor, *arguments, batch)
 
 
 def _as_color(value: object) -> _base.Color:
@@ -362,8 +404,12 @@ class Text(_RetainedTextMobject):
         font_size: float = 48.0,
         line_spacing: float = -1.0,
         color: _base.Color = _base.WHITE,
+        t2c=None,
         **kwargs: Any,
     ) -> None:
+        colors = _text_colors(kwargs.pop("text2color", t2c))
+        if self._markup and colors:
+            raise NotImplementedError("MarkupText range colors must use foreground markup")
         opacity = _validated_opacity(kwargs.pop("opacity", 1.0))
         if kwargs:
             unsupported = ", ".join(sorted(kwargs))
@@ -375,7 +421,8 @@ class Text(_RetainedTextMobject):
         live_context = _live_text_context()
         if live_context is None:
             handle = _new_native_text_handle(
-                text, font, font_size, line_spacing, markup=self._markup
+                text, font, font_size, line_spacing, markup=self._markup,
+                colors=colors, base_color=color,
             )
         else:
             live_constructor = (
@@ -383,17 +430,21 @@ class Text(_RetainedTextMobject):
                 if self._markup
                 else live_context.liveCreateManimText
             )
-            handle = engine_call(
+            handle = _invoke_native_text_constructor(
                 live_constructor,
-                text,
-                font,
-                font_size,
-                line_spacing,
-                float(color.red),
-                float(color.green),
-                float(color.blue),
-                float(color.alpha),
-                opacity,
+                (
+                    text,
+                    font,
+                    font_size,
+                    line_spacing,
+                    float(color.red),
+                    float(color.green),
+                    float(color.blue),
+                    float(color.alpha),
+                    opacity,
+                ),
+                colors,
+                color,
             )
         self._font = str(font)
         self._line_spacing = float(line_spacing)
