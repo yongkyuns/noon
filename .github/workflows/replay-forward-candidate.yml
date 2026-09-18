@@ -1,0 +1,94 @@
+name: Replay forward integration candidate
+on:
+  push:
+    branches: [prep/replay-forward-integration]
+    paths: [.github/workflows/replay-forward-candidate.yml]
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: staging
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: 3f055bcb7cd9569ee2b0a8fd9754733099a6e393
+          path: candidate
+      - name: Apply exact checked edits
+        working-directory: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          def blob(data):
+              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          items = json.loads(Path('../staging/.replay-forward-staging/edits.json').read_text())
+          allowed = {'docs/architecture.md', 'web/semantic-engine-endpoint.js', 'web/semantic-engine-endpoint.test.mjs'}
+          assert len(items) == 3 and {x['path'] for x in items} == allowed
+          for item in items:
+              path = Path(item['path'])
+              original = path.read_bytes()
+              assert blob(original) == item['before'], f'base mismatch: {path}'
+              lines = original.decode().splitlines(keepends=True)
+              upper = len(lines)
+              for start, end, text in reversed(item['edits']):
+                  assert 0 <= start <= end <= upper
+                  lines[start:end] = text.splitlines(keepends=True)
+                  upper = start
+              updated = ''.join(lines).encode()
+              assert blob(updated) == item['after'], f'result mismatch: {path}'
+              path.write_bytes(updated)
+              print(f'verified {path}: {item["after"]}')
+          PY
+          git diff --check
+      - name: Negative control and complete web suite
+        working-directory: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp web/semantic-engine-endpoint.js "$RUNNER_TEMP/fixed-endpoint.js"
+          git show HEAD:web/semantic-engine-endpoint.js > web/semantic-engine-endpoint.js
+          set +e
+          node --test --test-name-pattern='replay rejection|non-replayable callback observation' web/semantic-engine-endpoint.test.mjs > "$RUNNER_TEMP/forward-red.log" 2>&1
+          red=$?
+          set -e
+          cp "$RUNNER_TEMP/fixed-endpoint.js" web/semantic-engine-endpoint.js
+          test "$red" -ne 0
+          grep -q '^# fail 4$' "$RUNNER_TEMP/forward-red.log"
+          grep -q 'Replay unavailable:' "$RUNNER_TEMP/forward-red.log"
+          node --test web/*.test.mjs > "$RUNNER_TEMP/forward-web-tests.log" 2>&1
+          tail -12 "$RUNNER_TEMP/forward-web-tests.log"
+          node --check web/semantic-engine-endpoint.js
+          git diff --check
+      - name: Publish only the three reviewed files
+        working-directory: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=3f055bcb7cd9569ee2b0a8fd9754733099a6e393
+          actual="$(git ls-remote origin refs/heads/fix/dynamic-replay-history | cut -f1)"
+          test "$actual" = "$expected"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/architecture.md web/semantic-engine-endpoint.js web/semantic-engine-endpoint.test.mjs
+          git commit -m 'Preserve forward callback observations when historical replay is unavailable'
+          git push origin HEAD:refs/heads/fix/dynamic-replay-history
+          git rev-parse HEAD > "$RUNNER_TEMP/forward-commit.txt"
+          git show --stat --oneline HEAD
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: replay-forward-candidate-proof
+          path: |
+            ${{ runner.temp }}/forward-red.log
+            ${{ runner.temp }}/forward-web-tests.log
+            ${{ runner.temp }}/forward-commit.txt
+          retention-days: 7
