@@ -1,0 +1,83 @@
+name: Wait clock candidate
+on:
+  push:
+    branches: [prep/demo-editor-source-snapshot]
+    paths: [.github/workflows/wait-clock-candidate.yml]
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 295abd185a4ef396c73c450aa404c4cfdce8a599
+      - uses: actions/checkout@v7
+        with:
+          path: staging
+          persist-credentials: false
+      - name: Apply exact candidate source
+        run: |
+          set -euo pipefail
+          python3 staging/.dynamic-regression/wait-fix.py
+          cp staging/.dynamic-regression/wait-clock-regression.mjs scripts/playground-wait-clock-regression.mjs
+          rm -rf staging
+          python3 - <<'PY'
+          import subprocess
+          expected = {
+            'crates/noon-web/src/semantic_execution_player.rs': 'f7233ba5cf4533106a6608a935a2b56e76ddd44f',
+            'web/semantic-engine-endpoint.js': 'cb749321d6e50a23b7e19b6063383bba1038aedf',
+            'web/semantic-engine-endpoint.test.mjs': '6b4e798064398e34d00a35fd291adc229edb546a',
+            'scripts/playground-wait-clock-regression.mjs': '9badcbb87b3ee6dc817d9b7b714460c2bde00183',
+          }
+          for path, sha in expected.items():
+              actual = subprocess.check_output(['git','hash-object',path],text=True).strip()
+              assert actual == sha, (path,actual,sha)
+          PY
+          node --check scripts/playground-wait-clock-regression.mjs
+          node --test web/*.test.mjs > "$RUNNER_TEMP/wait-web-tests.log" 2>&1
+          tail -12 "$RUNNER_TEMP/wait-web-tests.log"
+      - name: Use pinned Rust
+        run: rustup install && rustup show active-toolchain
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - name: Native wait, playback, callback and locality tests
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo test -p noon-web --lib > "$RUNNER_TEMP/wait-native-tests.log" 2>&1
+          tail -20 "$RUNNER_TEMP/wait-native-tests.log"
+          cargo clippy -p noon-web --all-targets -- -D warnings
+          cargo fmt --all -- --check
+          git diff --check
+      - name: Publish clean candidate
+        run: |
+          set -euo pipefail
+          git add crates/noon-web/src/semantic_execution_player.rs web/semantic-engine-endpoint.js web/semantic-engine-endpoint.test.mjs scripts/playground-wait-clock-regression.mjs
+          test "$(git diff --cached --name-only | wc -l)" -eq 4
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Observe real playback time during static waits without redrawing'
+          git push origin HEAD:refs/heads/fix/wait-clock-observation
+          git rev-parse HEAD > "$RUNNER_TEMP/wait-candidate-sha.txt"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/wait-candidate.tar.gz"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: wait-clock-native-proof
+          path: |
+            ${{ runner.temp }}/wait-*.log
+            ${{ runner.temp }}/wait-candidate-sha.txt
+            ${{ runner.temp }}/wait-candidate.tar.gz
+          retention-days: 3
