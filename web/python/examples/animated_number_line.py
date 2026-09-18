@@ -33,5 +33,8 @@ class AnimatedNumberLine(Scene):
         # Exercise transformed NumberLine queries too: n2p() must continue to
         # follow the retained shared geometry after an ordinary animation.
         self.play(number_line.animate.shift(0.6 * UP), run_time=0.8)
+        # n2p() after playback is a live coordinate observation. Keep the line
+        # admitted and query only after the previous play has returned its owner.
+        self.add(number_line)
         self.play(marker.animate.move_to(number_line.n2p(-2)), run_time=1.5)
         self.wait(0.8)
