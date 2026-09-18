@@ -7894,7 +7894,9 @@ mod tests {
         assert_eq!(text.source.as_ref(), "A\nB");
         assert_eq!(text.runs.len(), 2);
         assert_eq!(text.runs[0].font_size, 36.0);
-        assert!((text.runs[0].transform.ty - text.runs[1].transform.ty - 54.0).abs() < 1e-6);
+        // Manim's 11.25 SVG-unit step at 36pt and 50% extra spacing maps to
+        // 40.5 units in the shared point-sized shaping coordinates.
+        assert!((text.runs[0].transform.ty - text.runs[1].transform.ty - 40.5).abs() < 1e-6);
         assert_eq!(
             state.transform.scale.x,
             f64::from(noon::integration::NATIVE_POINT_TO_SCENE_SCALE)
