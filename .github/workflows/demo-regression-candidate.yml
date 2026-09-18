@@ -1,0 +1,118 @@
+name: Morph replay regression candidate
+on:
+  push:
+    branches: [prep/demo-editor-source-snapshot]
+    paths: [.github/workflows/demo-regression-candidate.yml]
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: write
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 83ac18f7b0974356bbb47e6cadcd4d1aceb5a1eb
+      - uses: actions/checkout@v7
+        with:
+          path: staging
+          persist-credentials: false
+      - name: Apply checksum-verified regression patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, hashlib, os
+          from pathlib import Path
+          def blob(data):
+              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          seen = set()
+          for part in sorted(Path('staging/.demo-regression').glob('fix-part-*.json')):
+              for item in json.loads(part.read_text()):
+                  path = Path(item['path'])
+                  assert not path.is_absolute() and '..' not in path.parts
+                  assert path.parts[0] in {'web', 'scripts', 'crates'} or str(path) == '.github/workflows/playground-playback-controls.yml'
+                  assert str(path) not in seen
+                  seen.add(str(path))
+                  original = path.read_bytes() if path.exists() else b''
+                  if item['before'] is None: assert not path.exists()
+                  else: assert blob(original) == item['before'], path
+                  lines = original.decode().splitlines(keepends=True)
+                  upper = len(lines)
+                  for start, end, text in reversed(item['edits']):
+                      assert 0 <= start <= end <= upper
+                      lines[start:end] = text.splitlines(keepends=True)
+                      upper = start
+                  updated = ''.join(lines).encode()
+                  assert blob(updated) == item['after'], f'output mismatch {path}: {blob(updated)}'
+                  path.write_bytes(updated)
+                  print(f'verified {path}: {item["after"]}')
+          assert len(seen) == 10
+          Path(os.environ['RUNNER_TEMP'], 'allowed-paths.json').write_text(json.dumps(sorted(seen)))
+          PY
+          rm -rf staging
+          git diff --check
+          node --test web/*.test.mjs > "$RUNNER_TEMP/morph-web-tests.log" 2>&1
+          tail -12 "$RUNNER_TEMP/morph-web-tests.log"
+      - name: Use pinned Rust
+        run: rustup install && rustup show active-toolchain
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - name: Prove regression fails on original runtime then passes on repaired runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cp crates/noon-runtime/src/lib.rs "$RUNNER_TEMP/fixed-runtime.rs"
+          git show HEAD:crates/noon-runtime/src/lib.rs > crates/noon-runtime/src/lib.rs
+          set +e
+          cargo test -p noon-runtime --test reconciled_replay > "$RUNNER_TEMP/morph-runtime-before.log" 2>&1
+          code=$?
+          set -e
+          cp "$RUNNER_TEMP/fixed-runtime.rs" crates/noon-runtime/src/lib.rs
+          cat "$RUNNER_TEMP/morph-runtime-before.log"
+          test "$code" -ne 0
+          grep -F 'test reconciled_replay_preserves_completed_target_during_intermediate_hold ... FAILED' "$RUNNER_TEMP/morph-runtime-before.log"
+          grep -F 'test result: FAILED' "$RUNNER_TEMP/morph-runtime-before.log"
+          cargo test -p noon-runtime > "$RUNNER_TEMP/morph-runtime-after.log" 2>&1
+          tail -25 "$RUNNER_TEMP/morph-runtime-after.log"
+          cargo clippy -p noon-runtime --all-targets -- -D warnings
+          cargo fmt --all -- --check
+          git diff --check
+      - name: Publish clean regression candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add crates/noon-runtime web scripts .github/workflows/playground-playback-controls.yml
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          actual = subprocess.check_output(['git','diff','--cached','--name-only'], text=True).splitlines()
+          assert sorted(actual) == json.loads(Path(os.environ['RUNNER_TEMP'], 'allowed-paths.json').read_text()), actual
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Preserve completed morph targets through replay holds and report honest live progress'
+          git push origin HEAD:refs/heads/fix/morph-replay-timeline
+          git rev-parse HEAD > "$RUNNER_TEMP/morph-candidate-sha.txt"
+          git show --stat --oneline HEAD
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/morph-candidate-source.tar.gz"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: morph-candidate-proof
+          path: |
+            ${{ runner.temp }}/morph-*.log
+            ${{ runner.temp }}/morph-candidate-sha.txt
+            ${{ runner.temp }}/morph-candidate-source.tar.gz
+          retention-days: 3
