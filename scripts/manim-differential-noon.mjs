@@ -37,6 +37,9 @@ try {
     // Geometry, identities, family traversal and all observations remain Rust-owned.
     globalThis.noonCreateCanonicalAuthoringSceneContext = () => store.createSceneContext();
     globalThis.noonAuthoringGeometryOptions = wasm.WasmManimGeometryOptions;
+    globalThis.noonAuthoringCoordinateOptions = wasm.WasmCoordinateOptions;
+    globalThis.noonPlotSamplingPlan = wasm.WasmPlotSamplingPlan;
+    globalThis.noonCreateAuthoringCoordinateHandle = options => store.createCoordinates(options);
     globalThis.noonAuthoringVectorPath = () => new wasm.WasmAuthoringVectorPath();
     globalThis.noonCreateAuthoringGeometryHandle = options => store.createManimGeometry(options);
     globalThis.noonTextColorBatch = () => new wasm.WasmTextColorBatch();
@@ -49,6 +52,38 @@ try {
 import sys, json
 sys.path.insert(0, "/tmp")
 from noon_differential import noon_observations
+import noon
+# Exercise the real Python -> WASM scalar callback boundary, beyond mock tests.
+calls = []
+def forbidden_sample(x, y):
+    calls.append((x, y))
+    return x + y
+try:
+    noon.ImplicitFunction(forbidden_sample, min_depth=20)
+    raise AssertionError("oversized implicit request was accepted")
+except noon.NoonError as error:
+    assert error.category in ("invalid_input", "resource_limit")
+assert not calls, "admission must precede scalar evaluation"
+failure = ValueError("implicit callback sentinel")
+def failed_sample(x, y):
+    calls.append((x, y))
+    raise failure
+try:
+    noon.ImplicitFunction(failed_sample, min_depth=2, max_quads=16)
+    raise AssertionError("callback failure was swallowed")
+except ValueError as error:
+    assert error is failure
+assert len(calls) == 1, "do not reinvoke a failed callback"
+axes = noon.Axes([-1, 1, 1], [-1, 1, 1], x_length=2, y_length=2, include_ticks=False)
+shifted = []
+def moving_sample(x, y):
+    if not shifted:
+        axes.shift(3 * noon.RIGHT)
+        shifted.append(True)
+    return y
+curve = axes.plot_implicit_curve(moving_sample, min_depth=2, max_quads=16, use_smoothing=False)
+assert abs(curve.get_center().x) < 1e-5, "contour must use its captured frame"
+assert abs(axes.get_origin().x - 3) < 1e-5
 json.dumps(noon_observations(), allow_nan=False)
 `));
   }, { modules, probes, pyodideUrl });

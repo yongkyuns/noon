@@ -2,6 +2,14 @@
 use super::*;
 
 impl SemanticExecutionPlayer {
+    pub(crate) fn live_create_number_plane(
+        &mut self,
+        options: &noon::ManimNumberPlaneOptions,
+    ) -> Result<noon::ManimNumberPlane, AuthoringFailure> {
+        self.with_live_session(|live| Ok(live.number_plane(options)))?
+            .map_err(crate::plot_error::coordinate_failure)
+    }
+
     pub(crate) fn live_create_axes(
         &mut self,
         options: &noon::ManimAxesOptions,

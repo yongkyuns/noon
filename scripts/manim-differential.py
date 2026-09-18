@@ -1071,7 +1071,75 @@ def _text_range_color_observation(api):
     }
 
 
+def _number_plane_probe(api, ratio, ranges=None, explicit_style=False):
+    options = {"faded_line_ratio": ratio}
+    if ranges:
+        options.update(x_range=ranges[0], y_range=ranges[1], x_length=5, y_length=3)
+    if explicit_style:
+        options["background_line_style"] = {"stroke_color": api.GREEN, "stroke_width": 3, "stroke_opacity": 0.8}
+        options["faded_line_style"] = {}
+    plane = api.NumberPlane(**options)
+    def lines(group):
+        return [{"start": _point_observation(line.get_start()),
+                 "end": _point_observation(line.get_end()),
+                 "width": float(line.get_stroke_width()),
+                 "color": _paint_rgb(line.get_stroke_color()),
+                 "opacity": float(line.get_stroke_opacity())}
+                for line in group.submobjects]
+    groups = list(plane.submobjects)
+    result = {
+        "major": lines(plane.background_lines), "faded": lines(plane.faded_lines),
+        "root_order": [groups.index(part) for part in
+                       (plane.faded_lines, plane.background_lines, plane.x_axis, plane.y_axis)],
+        "origin": _point_observation(plane.c2p(0, 0)),
+    }
+    plane.rotate(0.23).shift(0.4 * api.RIGHT)
+    point = plane.c2p(0.75, -0.25)
+    result["transformed"] = _point_observation(point)
+    result["roundtrip"] = _point_observation(plane.p2c(point))
+    return result
+
+
+def _implicit_curve_probe(api, case, smooth):
+    fields = {
+        "circle": lambda x, y: x * x + y * y - 1.0,
+        "hyperbola": lambda x, y: x * y - 0.35,
+        "empty": lambda x, y: 1.0,
+        "nan_boundary": lambda x, y: y if x >= 0 else float("nan"),
+        "asymptote": lambda x, y: 1.0 / (x - 0.123),
+        "disconnected": lambda x, y: ((x + 1) ** 2 + y * y - 0.4) * ((x - 1) ** 2 + y * y - 0.4),
+    }
+    if case == "axes":
+        axes = api.Axes([-2, 2, 1], [-1.5, 1.5, 0.5], x_length=7, y_length=3, tips=False)
+        axes.shift(0.3 * api.RIGHT + 0.25 * api.DOWN)
+        curve = axes.plot_implicit_curve(fields["circle"], min_depth=3, max_quads=100, use_smoothing=smooth)
+    elif case == "default_domain":
+        curve = api.ImplicitFunction(fields["circle"], min_depth=3, max_quads=100, use_smoothing=smooth)
+    else:
+        curve = api.ImplicitFunction(fields[case], [-2, 2], [-1.5, 1.5],
+                                     min_depth=3, max_quads=100, use_smoothing=smooth)
+    return {"curves": curve.get_num_curves(),
+            "subpaths": [[_point_observation(p) for p in subpath] for subpath in curve.get_subpaths()]}
+
+
 FIXTURES = [
+    Fixture("number_plane_explicit_empty_faded_style",
+            lambda: _number_plane_probe(noon, 2, explicit_style=True),
+            lambda: _number_plane_probe(manim, 2, explicit_style=True), tolerance=2e-6),
+    *[Fixture(f"number_plane_{ratio}_{case}",
+              lambda r=ratio, p=ranges: _number_plane_probe(noon, r, p),
+              lambda r=ratio, p=ranges: _number_plane_probe(manim, r, p), tolerance=2e-6)
+      for ratio in (0, 1, 2, 3)
+      for case, ranges in (("default", None),
+                           ("asymmetric", ([2, 6, 1], [-3, 1, 0.75])),
+                           ("negative", ([-6, -2, 1], [-2, 2, 1])))],
+    *[Fixture(f"implicit_{case}_{smooth}",
+              lambda c=case, s=smooth: _implicit_curve_probe(noon, c, s),
+              lambda c=case, s=smooth: _implicit_curve_probe(manim, c, s), tolerance=2e-5)
+      for case, smooth in (("circle", False), ("circle", True),
+                           ("hyperbola", False), ("hyperbola", True),
+                           ("axes", True), ("empty", True), ("nan_boundary", False),
+                           ("asymptote", False), ("disconnected", True), ("default_domain", False))],
     Fixture("native_text_range_colors", lambda: _text_range_color_observation(noon),
             lambda: _text_range_color_observation(manim)),
     Fixture("effective_reveal_path", _noon_effective_reveal_path, _manim_effective_reveal_path, 1e-5),

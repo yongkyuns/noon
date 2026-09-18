@@ -98,6 +98,7 @@ mod host_callbacks;
 mod image_authoring;
 #[cfg(feature = "image-decode")]
 mod image_decode;
+mod implicit_plotting;
 pub mod integration;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod live_coordinate_plotting_example;
@@ -150,7 +151,7 @@ pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
 pub use boolean_authoring::{BooleanOperation, BooleanPathError};
 pub use coordinate_authoring::{
     CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
-    ManimNumberLineOptions,
+    ManimNumberLineOptions, ManimNumberPlane, ManimNumberPlaneOptions,
 };
 pub use dashed_line_authoring::DashedLineAuthoringError;
 pub use dimension_fit::LayoutDimension;
@@ -177,6 +178,7 @@ pub use host_callbacks::{RustHostCallbackContext, RustHostCallbackError, RustHos
 pub use image_authoring::{ImageMobjectOptions, DEFAULT_IMAGE_SCALE_TO_RESOLUTION};
 #[cfg(feature = "image-decode")]
 pub use image_decode::{ImageDecodeError, ImageDecodeLimits};
+pub use implicit_plotting::ImplicitPlotOptions;
 pub use live_program::{
     ContinuationStep, LiveContinuation, LiveProgram, LiveProgramError, LiveProgramStatus,
 };
@@ -204,7 +206,9 @@ pub use noon_core::{
     TEAL_C, TEAL_D, TEAL_E, UL, UP, UR, WHITE, YELLOW, YELLOW_A, YELLOW_B, YELLOW_C, YELLOW_D,
     YELLOW_E,
 };
-pub use noon_geometry::{AxesFrame, CoordinateError, NumberLineFrame};
+pub use noon_geometry::{
+    AxesFrame, CoordinateError, IsolineBounds, IsolineOptions, IsolinePoint, NumberLineFrame,
+};
 pub use noon_geometry::{
     PlotPreparationError, PlotSamplingOptions, PlotSamplingPlan, StaticVectorFieldError,
     VectorFieldAxis, VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D,
@@ -240,13 +244,14 @@ pub mod prelude {
     pub use crate::{
         AnimationOptions, ArrowScaleError, ArrowVectorFieldAuthoringError, AuthoringError,
         BooleanOperation, Color, ContinuationStep, DeclaredAnimation, DrawBorderThenFillOptions,
-        EffectiveMobjectState, ExecutionSession, FadeEndpoint, FadeTranslation, LiveContinuation,
-        LiveProgram, LiveSession, LiveSessionError, ManimArrow, ManimArrowOptions,
-        ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget, NativeBoolSignal,
-        NativeVectorSignal, PlotAuthoringError, PlotSamplingOptions, RateFunction, Scene,
-        SemanticObjectState, SemanticStyle, StoredGeometry, StyleUpdate, SvgAuthoringError,
-        SvgImportOptions, SvgUnsupportedFeature, TrackerPosition, ValueTracker, Vec2,
-        VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, VectorPath,
+        EffectiveMobjectState, ExecutionSession, FadeEndpoint, FadeTranslation,
+        ImplicitPlotOptions, LiveContinuation, LiveProgram, LiveSession, LiveSessionError,
+        ManimArrow, ManimArrowOptions, ManimArrowVectorField, Mobject, MobjectFamily,
+        MobjectTarget, NativeBoolSignal, NativeVectorSignal, PlotAuthoringError,
+        PlotSamplingOptions, RateFunction, Scene, SemanticObjectState, SemanticStyle,
+        StoredGeometry, StyleUpdate, SvgAuthoringError, SvgImportOptions, SvgUnsupportedFeature,
+        TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange, VectorFieldPoint,
+        VectorFieldRanges2D, VectorPath,
     };
     pub use crate::{
         CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
