@@ -2197,8 +2197,8 @@ impl SemanticExecutionPlayer {
 
     #[cfg(test)]
     fn browser_pointer_input_for_test(&mut self, json: &str) -> Result<(), String> {
-        let wire: BrowserPointerInputWire = serde_json::from_str(json)
-            .map_err(|error| error.to_string())?;
+        let wire: BrowserPointerInputWire =
+            serde_json::from_str(json).map_err(|error| error.to_string())?;
         self.submit_browser_pointer_input(wire)
     }
 
@@ -3243,12 +3243,24 @@ mod tests {
     #[test]
     fn browser_cancel_and_view_rebind_clear_buttons_without_release() {
         let mut f = pointer_fixture();
-        f.player.browser_pointer_input_for_test(
-            &browser_pointer_json("press", Some(200.0), Some(100.0), Some(0), 3),
-        ).unwrap();
-        f.player.browser_pointer_input_for_test(
-            &browser_pointer_json("focus_lost", None, None, None, 3),
-        ).unwrap();
+        f.player
+            .browser_pointer_input_for_test(&browser_pointer_json(
+                "press",
+                Some(200.0),
+                Some(100.0),
+                Some(0),
+                3,
+            ))
+            .unwrap();
+        f.player
+            .browser_pointer_input_for_test(&browser_pointer_json(
+                "focus_lost",
+                None,
+                None,
+                None,
+                3,
+            ))
+            .unwrap();
         assert_eq!(
             f.player.session.effective_signal_value(f.button),
             Some(&ReactiveValue::Bool(false))
@@ -3257,15 +3269,26 @@ mod tests {
             f.player.session.effective_signal_value(f.up),
             Some(&ReactiveValue::Scalar(0.0))
         );
-        f.player.browser_pointer_input_for_test(
-            &browser_pointer_json("press", Some(600.0), Some(300.0), Some(0), 4),
-        ).unwrap();
+        f.player
+            .browser_pointer_input_for_test(&browser_pointer_json(
+                "press",
+                Some(600.0),
+                Some(300.0),
+                Some(0),
+                4,
+            ))
+            .unwrap();
         assert_eq!(
             f.player.session.effective_signal_value(f.down),
             Some(&ReactiveValue::Scalar(2.0))
         );
         assert_eq!(
-            f.player.session.native_pointer_input_token().unwrap().context().view_revision,
+            f.player
+                .session
+                .native_pointer_input_token()
+                .unwrap()
+                .context()
+                .view_revision,
             4
         );
     }
@@ -3282,15 +3305,22 @@ mod tests {
             "viewport_height": 400.0,
             "button": null,
             "view_revision": 0
-        }).to_string();
+        })
+        .to_string();
         assert!(f.player.browser_pointer_input_for_test(&invalid).is_err());
         assert_eq!(f.player.next_native_event_sequence, 0);
         // Binding itself is configuration, but malformed positional data cannot
         // publish a sampled position or event.
         assert_eq!(f.player.session.publication_context(), before);
-        f.player.browser_pointer_input_for_test(
-            &browser_pointer_json("move", Some(200.0), Some(100.0), None, 0),
-        ).unwrap();
+        f.player
+            .browser_pointer_input_for_test(&browser_pointer_json(
+                "move",
+                Some(200.0),
+                Some(100.0),
+                None,
+                0,
+            ))
+            .unwrap();
         assert_eq!(f.player.next_native_event_sequence, 1);
     }
 
