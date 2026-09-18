@@ -1,6 +1,6 @@
 //! Retained NumberPlane semantics over the shared coordinate transaction substrate.
 use super::*;
-use noon_core::BLUE_D;
+use noon_core::{StrokeCap, StrokeJoin, BLUE_D};
 
 /// Inert Manim-compatible cartesian plane request.  The result contains only
 /// ordinary line objects and families; it does not introduce a grid primitive.
@@ -31,6 +31,9 @@ impl ManimNumberPlaneOptions {
             stroke: Some(SemanticPaint::Solid(WHITE)),
             stroke_width: 0.04,
             stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            // Manim's AUTO cap/join leaves Cairo's butt/miter defaults.
+            stroke_join: StrokeJoin::Miter,
+            stroke_cap: StrokeCap::Butt,
             ..SemanticStyle::default()
         }
     }
@@ -48,6 +51,8 @@ impl Default for ManimNumberPlaneOptions {
             stroke: Some(SemanticPaint::Solid(BLUE_D)),
             stroke_width: 0.02,
             stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            stroke_join: StrokeJoin::Miter,
+            stroke_cap: StrokeCap::Butt,
             ..SemanticStyle::default()
         };
         Self {
@@ -55,13 +60,21 @@ impl Default for ManimNumberPlaneOptions {
             y_range: [-4.0, 4.0, 1.0],
             x_length: None,
             y_length: None,
-            axis_style: default_axis_style(),
+            axis_style: number_plane_axis_style(),
             background_line_style,
             faded_line_style: None,
             faded_line_ratio: 1,
             line_limit: 20_000,
         }
     }
+}
+
+fn number_plane_axis_style() -> SemanticStyle {
+    let mut style = default_axis_style();
+    // Manim's NumberPlane leaves Line's cap/join at Cairo's AUTO defaults.
+    style.stroke_join = StrokeJoin::Miter;
+    style.stroke_cap = StrokeCap::Butt;
+    style
 }
 
 /// Handle to one ordinary grid/axes family; all topology remains semantic-owned.

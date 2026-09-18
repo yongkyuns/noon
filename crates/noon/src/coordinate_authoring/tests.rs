@@ -3,6 +3,7 @@ use crate::{
     AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveProgramStatus,
     LiveSession, ManimRotationPivot, RateFunction, RustHostCallbackTable,
 };
+use noon_core::{StrokeCap, StrokeJoin};
 
 fn near(actual: [f64; 2], expected: [f64; 2]) {
     for (actual, expected) in actual.into_iter().zip(expected) {
@@ -223,6 +224,18 @@ fn number_plane_defaults_faded_style_from_background_without_changing_color() {
         faded.style.stroke_opacity,
         background.style.stroke_opacity * 0.5
     );
+    for style in [&background.style, &faded.style] {
+        assert_eq!(style.stroke_width_mode, StrokeWidthMode::ScreenSpace);
+        assert_eq!(style.stroke_join, StrokeJoin::Miter);
+        assert_eq!(style.stroke_cap, StrokeCap::Butt);
+    }
+    let options = ManimNumberPlaneOptions::default();
+    assert_eq!(
+        options.axis_style.stroke_width_mode,
+        StrokeWidthMode::ScreenSpace
+    );
+    assert_eq!(options.axis_style.stroke_join, StrokeJoin::Miter);
+    assert_eq!(options.axis_style.stroke_cap, StrokeCap::Butt);
 }
 
 #[test]
