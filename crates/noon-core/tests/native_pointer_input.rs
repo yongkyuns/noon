@@ -60,7 +60,10 @@ fn move_has_one_position_update_and_no_discrete_button_event() {
     let updates: Vec<_> = sample.state_updates().collect();
     assert_eq!(updates.len(), 1);
     assert_eq!(updates[0].source, NativeStateSource::PointerPosition);
-    assert_eq!(updates[0].value, NativeInputValue::Vec2(Vec2::new(2.0, -1.0)));
+    assert_eq!(
+        updates[0].value,
+        NativeInputValue::Vec2(Vec2::new(2.0, -1.0))
+    );
     assert_eq!(sample.button_event(), None);
 }
 
@@ -79,7 +82,10 @@ fn press_keeps_its_position_after_a_later_pointer_sample() {
     let latest_position = later_move.position().unwrap();
     assert_eq!(latest_position.scene(), Vec2::new(4.0, 5.0));
     assert_eq!(press.position().unwrap().scene(), Vec2::new(1.0, 2.0));
-    assert_eq!(press.position().unwrap().surface(), Vec2::new(100.0, -200.0));
+    assert_eq!(
+        press.position().unwrap().surface(),
+        Vec2::new(100.0, -200.0)
+    );
     let projected: Vec<_> = press.state_updates().collect();
     assert_eq!(
         projected[0].value,
@@ -140,7 +146,10 @@ fn repeated_identical_button_occurrences_keep_distinct_sequences() {
         .map(|sequence| input(sequence, kind).button_event().unwrap())
         .collect();
     assert_eq!(
-        events.iter().map(|event| event.sequence).collect::<Vec<_>>(),
+        events
+            .iter()
+            .map(|event| event.sequence)
+            .collect::<Vec<_>>(),
         vec![100, 101, 102, 103]
     );
     assert!(events

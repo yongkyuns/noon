@@ -61,7 +61,8 @@ pub struct NativePointerPosition {
 
 impl NativePointerPosition {
     pub fn new(scene: Vec2, surface: Vec2) -> Result<Self, NativeInputRuntimeError> {
-        if !NativeInputValue::Vec2(scene).is_finite() || !NativeInputValue::Vec2(surface).is_finite()
+        if !NativeInputValue::Vec2(scene).is_finite()
+            || !NativeInputValue::Vec2(surface).is_finite()
         {
             return Err(NativeInputRuntimeError::NonFiniteValue);
         }
@@ -196,8 +197,12 @@ impl NativePointerInput {
     /// the original `kind()`; this projection is not the interaction dispatcher.
     pub fn button_event(self) -> Option<NativeEventOccurrence> {
         let source = match self.kind {
-            NativePointerInputKind::Press { button, .. } => NativeEventSource::PointerDown { button },
-            NativePointerInputKind::Release { button, .. } => NativeEventSource::PointerUp { button },
+            NativePointerInputKind::Press { button, .. } => {
+                NativeEventSource::PointerDown { button }
+            }
+            NativePointerInputKind::Release { button, .. } => {
+                NativeEventSource::PointerUp { button }
+            }
             NativePointerInputKind::Move(_) | NativePointerInputKind::Cancel(_) => return None,
         };
         Some(NativeEventOccurrence::new(self.sequence, source))
