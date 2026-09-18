@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { PNG } from "pngjs";
-import { playgroundLaunchOptions } from "./playground-browser-support.mjs";
+import { browserArgs } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -44,12 +44,11 @@ try {
   const worker = await fetch(new URL("python-worker.js", base));
   assert.ok(worker.ok);
   const cache = createPyodideResourceCache(await worker.text());
-  const launch = backend === "webgl" ? playgroundLaunchOptions("chromium") : {
-    headless: true,
-    args: ["--enable-unsafe-webgpu", "--enable-unsafe-swiftshader", "--use-webgpu-adapter=swiftshader",
-      "--disable-gpu-sandbox", "--disable-dev-shm-usage", "--enable-features=Vulkan", "--use-angle=vulkan", "--disable-vulkan-surface"],
-  };
-  browser = await playwright.chromium.launch(launch);
+  // Use the same Chromium compositor and software-adapter configuration as
+  // the existing raster qualification gates, rather than the headless shell.
+  browser = await playwright.chromium.launch({
+    channel: "chromium", headless: true, args: browserArgs(backend),
+  });
   const context = await browser.newContext({ viewport: { width: 900, height: 600 }, deviceScaleFactor: 1 });
   await cache.install(context);
   await context.route("**/morph-regression.html", route => route.fulfill({
@@ -83,6 +82,8 @@ try {
     window.morphRegression = { authoring, execution, run };
     await attached;
   }, source);
+  report.initialRenderer = await page.evaluate(() => window.morphRegression.execution.metrics());
+  assert.equal(report.initialRenderer.metrics.backend, backend === "webgl" ? "WebGL2" : "WebGPU");
   const originals = new Map();
   for (const time of times) {
     const state = await page.evaluate(t => window.morphRegression.execution.sampleToAuthoredTime(t), time);
