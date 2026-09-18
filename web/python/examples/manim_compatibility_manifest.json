@@ -13,19 +13,12 @@
       "status": "ready",
       "path": "python/examples/manim_compatible_affine_fade.py",
       "category": "manim-compatible/fading",
-      "features": [
-        "FadeIn",
-        "FadeOut",
-        "shift",
-        "scale",
-        "target_position",
-        "Manim-compatible"
-      ],
+      "features": ["FadeIn", "FadeOut", "shift", "scale", "target_position", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/compatible-affine-fade.svg",
       "thumbnail_alt": "Blue circle illustrating shifted and scaled fade endpoints",
-      "thumbnail_time": 1,
+      "thumbnail_time": 1.0,
       "order": 1010
     },
     {
@@ -35,13 +28,7 @@
       "status": "ready",
       "path": "python/examples/manim_compatible_family_indicate.py",
       "category": "manim-compatible/transform",
-      "features": [
-        "VGroup",
-        "animate",
-        "Indicate",
-        "lag_ratio",
-        "Manim-compatible"
-      ],
+      "features": ["VGroup", "animate", "Indicate", "lag_ratio", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/compatible-family-indicate.svg",
@@ -56,14 +43,7 @@
       "status": "ready",
       "path": "python/examples/ordinary_timed_composition.py",
       "category": "manim-compatible/composition",
-      "features": [
-        "Succession",
-        "Add",
-        "Wait",
-        "LaggedStartMap",
-        "FadeOut",
-        "Manim-compatible"
-      ],
+      "features": ["Succession", "Add", "Wait", "LaggedStartMap", "FadeOut", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/compatible-timed-composition.svg",
@@ -78,13 +58,7 @@
       "status": "ready",
       "path": "python/examples/manim_compatible_family_write.py",
       "category": "manim-compatible/creation",
-      "features": [
-        "Write",
-        "VGroup",
-        "lag_ratio",
-        "style",
-        "Manim-compatible"
-      ],
+      "features": ["Write", "VGroup", "lag_ratio", "style", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/compatible-family-write.svg",
@@ -99,17 +73,12 @@
       "status": "ready",
       "path": "python/examples/ordinary_subset_display.py",
       "category": "manim-compatible/creation",
-      "features": [
-        "ShowIncreasingSubsets",
-        "ShowSubmobjectsOneByOne",
-        "VGroup",
-        "Manim-compatible"
-      ],
+      "features": ["ShowIncreasingSubsets", "ShowSubmobjectsOneByOne", "VGroup", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/compatible-subset-display.svg",
       "thumbnail_alt": "Colored circle rows illustrating increasing and one-by-one subset display",
-      "thumbnail_time": 4,
+      "thumbnail_time": 4.0,
       "order": 1050
     },
     {
@@ -119,12 +88,7 @@
       "status": "ready",
       "path": "python/examples/manim_parity_scale_in_place.py",
       "category": "manim-compatible/transform",
-      "features": [
-        "ScaleInPlace",
-        "Square",
-        "transform",
-        "Manim-compatible"
-      ],
+      "features": ["ScaleInPlace", "Square", "transform", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/compatible-scale-in-place.svg",
@@ -139,12 +103,7 @@
       "status": "ready",
       "path": "python/examples/manim_parity_indicate_square.py",
       "category": "manim-compatible/indication",
-      "features": [
-        "Indicate",
-        "Square",
-        "indication",
-        "Manim-compatible"
-      ],
+      "features": ["Indicate", "Square", "indication", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/compatible-indicate-square.svg",
@@ -159,18 +118,12 @@
       "status": "ready",
       "path": "python/examples/manim_parity_affine_lifecycle.py",
       "category": "manim-compatible/creation",
-      "features": [
-        "SpinInFromNothing",
-        "ShrinkToCenter",
-        "Square",
-        "lifecycle",
-        "Manim-compatible"
-      ],
+      "features": ["SpinInFromNothing", "ShrinkToCenter", "Square", "lifecycle", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/compatible-affine-lifecycle.svg",
       "thumbnail_alt": "Blue square illustrating spin-in and shrink-to-center lifecycle",
-      "thumbnail_time": 1,
+      "thumbnail_time": 1.0,
       "order": 1080
     },
     {
@@ -180,18 +133,12 @@
       "status": "ready",
       "path": "python/examples/ordinary_text_write.py",
       "category": "manim-compatible/text",
-      "features": [
-        "Text",
-        "Write",
-        "Unwrite",
-        "animate",
-        "Manim-compatible"
-      ],
+      "features": ["Text", "Write", "Unwrite", "animate", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/compatible-text-write.svg",
       "thumbnail_alt": "MOVE text shifting horizontally while WRITE is revealed above it",
-      "thumbnail_time": 1,
+      "thumbnail_time": 1.0,
       "order": 1090
     },
     {
@@ -201,20 +148,12 @@
       "status": "ready",
       "path": "python/examples/ordinary_text_family_fade.py",
       "category": "manim-compatible/text",
-      "features": [
-        "Text",
-        "VGroup",
-        "FadeIn",
-        "FadeOut",
-        "Write",
-        "lag_ratio",
-        "Manim-compatible"
-      ],
+      "features": ["Text", "VGroup", "FadeIn", "FadeOut", "Write", "lag_ratio", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/compatible-text-family-fade.svg",
       "thumbnail_alt": "LEFT and RIGHT text fading in as a family while WRITE appears below",
-      "thumbnail_time": 1,
+      "thumbnail_time": 1.0,
       "order": 1100
     },
     {
@@ -224,20 +163,12 @@
       "status": "ready",
       "path": "python/examples/ordinary_text_family_reveal.py",
       "category": "manim-compatible/text",
-      "features": [
-        "Text",
-        "VGroup",
-        "Create",
-        "Uncreate",
-        "animate",
-        "lag_ratio",
-        "Manim-compatible"
-      ],
+      "features": ["Text", "VGroup", "Create", "Uncreate", "animate", "lag_ratio", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/compatible-text-family-reveal.svg",
       "thumbnail_alt": "I and LONG text revealing from left to right above a moving square",
-      "thumbnail_time": 1,
+      "thumbnail_time": 1.0,
       "order": 1110
     },
     {
@@ -247,19 +178,13 @@
       "status": "ready",
       "path": "python/examples/manim_compatible_group_slicing.py",
       "category": "manim-compatible/grouping",
-      "features": [
-        "VGroup",
-        "slice",
-        "shared identity",
-        "shift",
-        "Manim-compatible"
-      ],
+      "features": ["VGroup", "slice", "shared identity", "shift", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "parity-qualified",
       "parity_fixture": "group-slicing",
       "thumbnail": "thumbnails/manim/compatible-group-slicing.svg",
       "thumbnail_alt": "Square below a circle and rectangle shifted upward through a VGroup slice",
-      "thumbnail_time": 1,
+      "thumbnail_time": 1.0,
       "order": 1120
     },
     {
@@ -269,16 +194,7 @@
       "status": "ready",
       "path": "python/examples/manim_compatible_arrow_vector_field.py",
       "category": "manim-compatible/visualization",
-      "features": [
-        "ArrowVectorField",
-        "explicit 2D ranges",
-        "static field",
-        "default length",
-        "default norm colors",
-        "pixel-parity",
-        "time-parity",
-        "Manim-compatible"
-      ],
+      "features": ["ArrowVectorField", "explicit 2D ranges", "static field", "default length", "default norm colors", "pixel-parity", "time-parity", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "parity-qualified",
       "parity_fixture": "arrow-vector-field-static",
@@ -294,16 +210,7 @@
       "status": "ready",
       "path": "python/examples/manim_compatible_svg_tiger_morph.py",
       "category": "manim-compatible/svg",
-      "features": [
-        "SVGMobject",
-        "Transform",
-        "SVG morph",
-        "unequal SVG family",
-        "independent target SVG",
-        "Vello Ghostscript Tiger",
-        "complex SVG",
-        "Manim-compatible"
-      ],
+      "features": ["SVGMobject", "Transform", "SVG morph", "unequal SVG family", "independent target SVG", "Vello Ghostscript Tiger", "complex SVG", "Manim-compatible"],
       "upstream": "https://github.com/linebender/vello/blob/1e63b4a40ccb484f82e1d85b83df97ab95bcfbe7/assets/Ghostscript_Tiger.svg",
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
@@ -319,22 +226,12 @@
       "status": "ready",
       "path": "python/examples/noon_trigonometry_tutorial.py",
       "category": "manim-compatible/tutorial",
-      "features": [
-        "Text",
-        "Write",
-        "Line",
-        "Dot",
-        "Create",
-        "FadeOut",
-        "right-triangle",
-        "SOH-CAH-TOA",
-        "Manim-compatible"
-      ],
+      "features": ["Text", "Write", "Line", "Dot", "Create", "FadeOut", "right-triangle", "SOH-CAH-TOA", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/noon-trigonometry-tutorial.svg",
       "thumbnail_alt": "Right triangle with theta, side names, and SOH CAH TOA formulas",
-      "thumbnail_time": 38,
+      "thumbnail_time": 38.0,
       "order": 1150
     },
     {
@@ -344,19 +241,13 @@
       "status": "ready",
       "path": "python/examples/ordinary_transform_matching_shapes.py",
       "category": "manim-compatible/animation",
-      "features": [
-        "TransformMatchingShapes",
-        "shape-keyed pairing",
-        "family replacement",
-        "Indicate",
-        "Manim-compatible"
-      ],
+      "features": ["TransformMatchingShapes", "shape-keyed pairing", "family replacement", "Indicate", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "parity_fixture": "matching-shapes-reordered",
       "thumbnail": "thumbnails/manim/transform-matching-shapes.svg",
       "thumbnail_alt": "Pink triangle and blue kite swap positions while retaining shape-keyed identity",
-      "thumbnail_time": 1,
+      "thumbnail_time": 1.0,
       "order": 1160
     },
     {
@@ -366,48 +257,33 @@
       "status": "ready",
       "path": "python/examples/matching_shapes_breadth.py",
       "category": "manim-compatible/animation",
-      "features": [
-        "TransformMatchingShapes",
-        "duplicate signatures",
-        "unmatched fades",
-        "Indicate",
-        "Manim-compatible"
-      ],
+      "features": ["TransformMatchingShapes", "duplicate signatures", "unmatched fades", "Indicate", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/transform-matching-shapes.svg",
       "thumbnail_alt": "Candidate duplicate-key matching with unmatched source and target shapes",
-      "thumbnail_time": 1,
+      "thumbnail_time": 1.0,
       "order": 1161
     },
     {
       "id": "noon-coordinate-plotting",
       "title": "CoordinatePlotting",
-      "summary": "Animated coordinate frame that creates the axes, draws a sampled sine function, and reveals illustrative data points.",
+      "summary": "Create the axes, draw a sine curve, then reveal illustrative sampled data through the shared Rust plotting API.",
       "status": "ready",
       "path": "python/examples/coordinate_plotting.py",
       "category": "manim-compatible/plotting",
-      "features": [
-        "Axes",
-        "plot",
-        "plot_samples",
-        "Create",
-        "Write",
-        "wait",
-        "axis labels",
-        "Manim-compatible"
-      ],
+      "features": ["Axes", "plot", "plot_samples", "Create", "Write", "axis labels", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/coordinate-plotting.svg",
       "thumbnail_alt": "Blue sine curve and yellow sampled data over labeled coordinate axes",
-      "thumbnail_time": 3,
+      "thumbnail_time": 4.3,
       "order": 1170
     },
     {
       "id": "noon-animated-number-line",
       "title": "AnimatedNumberLine",
-      "summary": "Animate the shared Rust-backed Manim-compatible NumberLine, numeric labels, transform-safe n2p mapping, and a marker moving through negative and positive values.",
+      "summary": "Create a labeled NumberLine, move its marker, then shift the line and use live n2p/p2n queries in its new coordinate frame.",
       "status": "ready",
       "path": "python/examples/animated_number_line.py",
       "category": "manim-compatible/plotting",
@@ -428,7 +304,7 @@
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/animated-number-line.svg",
       "thumbnail_alt": "Number line with a yellow marker moving between labeled values",
-      "thumbnail_time": 3,
+      "thumbnail_time": 5.2,
       "order": 1171
     },
     {
@@ -438,15 +314,7 @@
       "status": "ready",
       "path": "python/examples/raster_image.py",
       "category": "manim-compatible/images",
-      "features": [
-        "ImageMobject",
-        "FadeIn",
-        "Transform",
-        "FadeOut",
-        "retained-image",
-        "endpoint-parity",
-        "Manim-compatible"
-      ],
+      "features": ["ImageMobject", "FadeIn", "Transform", "FadeOut", "retained-image", "endpoint-parity", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "thumbnail": "thumbnails/manim/raster-image.svg",
@@ -461,16 +329,7 @@
       "status": "ready",
       "path": "python/examples/markup_text.py",
       "category": "manim-compatible/text",
-      "features": [
-        "MarkupText",
-        "b",
-        "i",
-        "tt",
-        "span",
-        "entities",
-        "newlines",
-        "Manim-compatible"
-      ],
+      "features": ["MarkupText", "b", "i", "tt", "span", "entities", "newlines", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "parity_fixture": "markup-text",
@@ -486,17 +345,7 @@
       "status": "ready",
       "path": "python/examples/text_range_colors.py",
       "category": "manim-compatible/text",
-      "features": [
-        "Text",
-        "t2c",
-        "text2color",
-        "substring selectors",
-        "Unicode",
-        "whitespace",
-        "newlines",
-        "negative ranges",
-        "Manim-compatible"
-      ],
+      "features": ["Text", "t2c", "text2color", "substring selectors", "Unicode", "whitespace", "newlines", "negative ranges", "Manim-compatible"],
       "reuse": "manim-compatible-parity-v0.21",
       "parity_status": "candidate",
       "parity_fixture": "text-range-colors",

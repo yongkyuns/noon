@@ -1,6 +1,5 @@
-//! Native host for the same typed plotting scene used by direct Rust/WASM.
-
+//! Native host for the same animated plotting program used by direct Rust/WASM.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    noon_native::run(noon::coordinate_plotting_example::session()?)?;
+    noon_native::run_live_program(noon::coordinate_plotting_example::program()?)?;
     Ok(())
 }

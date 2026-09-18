@@ -225,4 +225,17 @@ assert.match(plottingSource, /\.plot\(/, "coordinate plotting gallery example mu
 assert.match(plottingSource, /\.plot_samples\(/, "coordinate plotting gallery example must plot samples");
 assert.match(plottingSource, /Time \(s\)/, "coordinate plotting gallery example must include its label");
 
+assert.match(plottingSource, /Create\(axes\)/, "plotting must animate actual axes");
+assert.match(plottingSource, /Create\(curve\)/, "plotting must animate the function path");
+assert.match(plottingSource, /Create\(data\)/, "plotting must animate the sampled-data path");
+const numberLineEntry = readyEntries.find(entry => entry.id === "noon-animated-number-line");
+assert.ok(numberLineEntry, "NumberLine demo must remain discoverable");
+const numberLineSource = await readFile(new URL(`./${numberLineEntry.path}`, import.meta.url), "utf8");
+assert.match(numberLineSource, /NumberLine\(/);
+assert.match(numberLineSource, /\.add_numbers\(/);
+assert.match(numberLineSource, /Create\(number_line\)/);
+assert.match(numberLineSource, /target = number_line\.n2p\(-2\)/, "query the transformed live line");
+assert.match(numberLineSource, /number_line\.p2n\(target\)/, "check the live coordinate round-trip");
+assert.doesNotMatch(numberLineSource, /positions =|x = value|value \* 1\.1/);
+
 console.log("✓ Noon-authored Manim-compatible gallery examples");
