@@ -201,6 +201,51 @@ mod tests {
         }
     }
 
+    fn identity(label: &str) -> crate::TextCompilationIdentity {
+        crate::TextCompilationIdentity {
+            descriptor: Arc::from(label.as_bytes()),
+            font_contents: Arc::from([Arc::<[u8]>::from([1_u8, 2, 3])]),
+        }
+    }
+
+    #[test]
+    fn stale_compiled_identity_is_forgotten_before_reinsertion() {
+        let mut store = SemanticStore::new();
+        let identity = identity("stale");
+        let handle = crate::TextResourceHandle {
+            arena: 1,
+            id: crate::TextResourceId::new(1),
+            version: 0,
+        };
+        store.remember_compiled_text_resource(identity.clone(), handle);
+        assert!(store.compiled_text_resource_retained_bytes > 0);
+        store.forget_compiled_text_resource(&identity);
+        assert!(store.compiled_text_resources.is_empty());
+        assert!(store.compiled_text_resource_order.is_empty());
+        assert_eq!(store.compiled_text_resource_retained_bytes, 0);
+        store.remember_compiled_text_resource(identity, handle);
+        assert_eq!(store.compiled_text_resources.len(), 1);
+    }
+
+    #[test]
+    fn compiled_identity_index_is_byte_bounded() {
+        let mut store = SemanticStore::new();
+        let oversized = crate::TextCompilationIdentity {
+            descriptor: vec![0_u8; 32 * 1024 * 1024 + 1].into(),
+            font_contents: Arc::from([]),
+        };
+        store.remember_compiled_text_resource(
+            oversized,
+            crate::TextResourceHandle {
+                arena: 1,
+                id: crate::TextResourceId::new(1),
+                version: 0,
+            },
+        );
+        assert!(store.compiled_text_resources.is_empty());
+        assert_eq!(store.compiled_text_resource_retained_bytes, 0);
+    }
+
     #[test]
     fn canonical_import_rebinds_text_to_the_target_store_arena() {
         let mut source_texts = TextResourceArena::new();
