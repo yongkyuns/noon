@@ -13,17 +13,20 @@ on:
       - "scripts/playground-playback-controls-smoke.mjs"
       - "scripts/playground-playback-rerun-stress.mjs"
       - "scripts/playground-playback-morph-regression.mjs"
+      - "scripts/playground-wait-clock-regression.mjs"
       - "scripts/manim-raster-support.mjs"
       - "web/**"
   pull_request:
     paths:
       - "crates/noon-runtime/**"
+      - "crates/noon-web/**"
       - "web/playground-playback-controls*"
       - "web/semantic-engine-endpoint*"
       - "web/main.js"
       - "scripts/manim-raster-support.mjs"
       - ".github/workflows/playground-playback-controls.yml"
       - "scripts/playground-playback-*.mjs"
+      - "scripts/playground-wait-clock-regression.mjs"
   workflow_dispatch:
 
 permissions:
@@ -90,6 +93,10 @@ jobs:
         env:
           NOON_PLAYGROUND_RERUN_STRESS_ARTIFACTS: browser-smoke-artifacts/playground-playback-rerun-stress
         run: node scripts/playground-playback-rerun-stress.mjs
+      - name: Verify wait clock against real time
+        run: |
+          node scripts/playground-wait-clock-regression.mjs
+          NOON_WAIT_BACKEND=webgpu NOON_WAIT_ARTIFACTS=browser-smoke-artifacts/playground-wait-clock-webgpu node scripts/playground-wait-clock-regression.mjs
       - name: Verify morph endpoints and holds against source playback
         run: |
           node scripts/playground-playback-morph-regression.mjs
@@ -104,5 +111,7 @@ jobs:
             browser-smoke-artifacts/playground-playback-rerun-stress
             browser-smoke-artifacts/playground-playback-morph
             browser-smoke-artifacts/playground-playback-morph-webgpu
+            browser-smoke-artifacts/playground-wait-clock
+            browser-smoke-artifacts/playground-wait-clock-webgpu
           if-no-files-found: error
           retention-days: 7
