@@ -1,0 +1,202 @@
+diff --git a/web/main.js b/web/main.js
+index 843987a..3bb51e4 100644
+--- a/web/main.js
++++ b/web/main.js
+@@ -1130,7 +1130,7 @@ const runRequestRouter = createRunRequestRouter({
+ 
+ const sourceRestart = createSourceRestart({
+   stop: stopForSourceEdit,
+-  run: () => runRequestRouter.request(),
++  run: (isCurrent) => runRequestRouter.request(isCurrent),
+   currentSelection: () => selectedExampleId,
+   onError: showSceneError,
+ });
+diff --git a/web/playground-restart-integration.test.mjs b/web/playground-restart-integration.test.mjs
+new file mode 100644
+index 0000000..b029e7b
+--- /dev/null
++++ b/web/playground-restart-integration.test.mjs
+@@ -0,0 +1,82 @@
++import assert from "node:assert/strict";
++import test from "node:test";
++import { createSourceRestart } from "./playground-source-restart.js";
++import { createRunRequestRouter } from "./playground-run-request-router.js";
++
++function deferred() {
++  let resolve;
++  const promise = new Promise((done) => { resolve = done; });
++  return { promise, resolve };
++}
++async function flush() {
++  for (let i = 0; i < 30; i += 1) await Promise.resolve();
++}
++function fixture() {
++  let source = "original";
++  let selection = "one";
++  let active = null;
++  const cancellation = deferred();
++  const starts = [];
++  const timers = new Map();
++  const errors = [];
++  let timerId = 0;
++  const run = () => {
++    const gate = deferred();
++    const request = { token: {}, source };
++    active = { gate, request };
++    starts.push({ gate, source });
++    return gate.promise.finally(() => { if (active?.gate === gate) active = null; });
++  };
++  const router = createRunRequestRouter({
++    currentSource: () => source,
++    currentRun: () => active?.gate.promise ?? null,
++    activeSourceContinuation: () => active,
++    activeRunRequest: () => active?.request,
++    isActiveRunCurrent: (token) => token === active?.request.token,
++    run,
++    supersede: () => cancellation.promise.then(() => true),
++    onQueued() {},
++  });
++  const restart = createSourceRestart({
++    stop: () => Promise.all([cancellation.promise, active?.gate.promise]),
++    run: (isCurrent) => router.request(isCurrent),
++    currentSelection: () => selection,
++    onError: (error) => errors.push(error),
++    setTimer(callback) { const id = ++timerId; timers.set(id, callback); return id; },
++    clearTimer(id) { timers.delete(id); },
++  });
++  return {
++    restart, starts, errors,
++    edit() { source = "edited"; restart.edited(); },
++    select() { selection = "two"; restart.cancel(); },
++    retire() { cancellation.resolve(); active?.gate.resolve(); },
++    tick() { const pending = [...timers.values()]; timers.clear(); for (const callback of pending) callback(); },
++  };
++}
++
++test("an edit during an explicit Run's cancellation cannot bypass the new typing debounce", async () => {
++  const f = fixture();
++  const initial = f.restart.runNow(); await flush();
++  const explicit = f.restart.runNow(); await flush();
++  f.edit();
++  f.retire(); await flush();
++  assert.equal(f.starts.length, 1, "the obsolete explicit request must not restart before the edit timer");
++  f.tick(); await flush();
++  assert.deepEqual(f.starts.map((entry) => entry.source), ["original", "edited"]);
++  f.retire();
++  await Promise.all([initial, explicit]);
++  assert.deepEqual(f.errors, []);
++});
++
++test("selection change and disposal prevent a queued explicit Run from reviving source", async () => {
++  for (const dispose of [false, true]) {
++    const f = fixture();
++    const initial = f.restart.runNow(); await flush();
++    const explicit = f.restart.runNow(); await flush();
++    if (dispose) f.restart.dispose(); else f.select();
++    f.retire(); await flush();
++    assert.equal(f.starts.length, 1);
++    await Promise.all([initial, explicit]);
++    assert.deepEqual(f.errors, []);
++  }
++});
+diff --git a/web/playground-run-request-router.js b/web/playground-run-request-router.js
+index 081e0a4..a08d8c1 100644
+--- a/web/playground-run-request-router.js
++++ b/web/playground-run-request-router.js
+@@ -8,11 +8,15 @@ export function createRunRequestRouter({
+   supersede,
+   onQueued,
+ }) {
+-  let transitionPromise = null;
++  let pendingTransition = null;
+ 
+-  async function request() {
+-    if (transitionPromise !== null) {
+-      const { replacement } = await transitionPromise;
++  async function request(isCurrent = () => true) {
++    if (!isCurrent()) return;
++    if (pendingTransition !== null) {
++      // A newer admitted Run can join cancellation, but an edit that has not
++      // reached its debounce deadline must invalidate the earlier request.
++      pendingTransition.isCurrent = isCurrent;
++      const { replacement } = await pendingTransition.promise;
+       return replacement;
+     }
+     const priorRun = currentRun();
+@@ -27,21 +31,22 @@ export function createRunRequestRouter({
+     }
+     if (priorRun === null) return run();
+ 
+-    const transition = (async () => {
++    const transition = { isCurrent, promise: null };
++    transition.promise = (async () => {
+       const superseded = await supersede();
+-      if (!superseded) onQueued();
++      if (!superseded && transition.isCurrent()) onQueued();
+       await priorRun;
+       // Publish the replacement without awaiting it here. The transition gate
+       // protects only cancellation/retirement and replacement startup; once
+       // the new source owns playback, a later explicit Run may supersede it.
+-      return { replacement: run() };
++      return { replacement: transition.isCurrent() ? run() : undefined };
+     })();
+-    transitionPromise = transition;
++    pendingTransition = transition;
+     try {
+-      const { replacement } = await transition;
++      const { replacement } = await transition.promise;
+       return replacement;
+     } finally {
+-      if (transitionPromise === transition) transitionPromise = null;
++      if (pendingTransition === transition) pendingTransition = null;
+     }
+   }
+ 
+diff --git a/web/playground-run-request-router.test.mjs b/web/playground-run-request-router.test.mjs
+index 719ba3a..d6167e6 100644
+--- a/web/playground-run-request-router.test.mjs
++++ b/web/playground-run-request-router.test.mjs
+@@ -161,3 +161,24 @@ test("every request joining cancellation awaits the replacement result", async (
+   assert.deepEqual(await Promise.all([replacement, joined]), ["replacement result", "replacement result"]);
+   await initial;
+ });
++
++
++test("a fresh Run joining an invalidated cancellation still starts exactly one replacement", async () => {
++  const cancellation = deferred();
++  const state = harness({ activeContinuation: true, cancellation });
++  const initial = state.router.request();
++  let current = true;
++  const superseded = state.router.request(() => current);
++  current = false;
++  state.setSource("newest explicitly requested source");
++  const latest = state.router.request(() => true);
++  cancellation.resolve();
++  state.resolveActive();
++  await flush();
++  assert.equal(state.starts.length, 2);
++  assert.equal(state.supersedes, 1);
++  assert.equal(state.starts[1].source, "newest explicitly requested source");
++  state.starts[1].gate.resolve("latest result");
++  assert.deepEqual(await Promise.all([superseded, latest]), ["latest result", "latest result"]);
++  await initial;
++});
+diff --git a/web/playground-source-restart.js b/web/playground-source-restart.js
+index 075965d..3b454fc 100644
+--- a/web/playground-source-restart.js
++++ b/web/playground-source-restart.js
+@@ -47,9 +47,12 @@ export function createSourceRestart({
+   async function start(requestVersion, selection, retirement, onStarted = () => {}) {
+     try {
+       await retirement;
+-      if (disposed || version !== requestVersion || currentSelection() !== selection) return;
++      const isCurrent = () => !disposed && version === requestVersion && currentSelection() === selection;
++      if (!isCurrent()) return;
+       onStarted();
+-      return await run();
++      // Run may itself await cancellation. Keep the same freshness check alive
++      // through that boundary so a later edit, selection or disposal wins.
++      return await run(isCurrent);
+     } catch (error) {
+       report(error, requestVersion);
+     }
