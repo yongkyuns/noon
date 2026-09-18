@@ -1,0 +1,67 @@
+name: Publish verified issue 1603 candidate
+on:
+  push:
+    branches: [prep/1603-scene-convergence]
+    paths: [.github/workflows/1603-publish.yml]
+permissions: {}
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: be26da28e370e59efeb15f021f7eaf74e7dfd984
+          persist-credentials: false
+      - name: Download and verify the reviewed qualification artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/1603-evidence"
+          curl --fail --silent --show-error --location \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/10546080757/zip" \
+            -o "$RUNNER_TEMP/1603-evidence.zip"
+          echo "98bc9d949808cd8d127565a92ab1d66760d46e8eaf2908b82be2dfffd602bc29  $RUNNER_TEMP/1603-evidence.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/1603-evidence.zip" -d "$RUNNER_TEMP/1603-evidence"
+          test -f "$RUNNER_TEMP/1603-evidence/PASSED"
+          echo "5a409d2c74954c2f874f5da43d3cdd10ce70a5b3ce8fe25dbd4a3b440592df9f  $RUNNER_TEMP/1603-evidence/qualified.patch" | sha256sum -c -
+      - name: Verify exact source tree and publish one clean commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          base=be26da28e370e59efeb15f021f7eaf74e7dfd984
+          branch=cleanup/1603-scene-family-operations
+          test "$(git rev-parse HEAD)" = "$base"
+          test "$(git ls-remote origin "refs/heads/$branch" | cut -f1)" = "$base"
+          git apply --check "$RUNNER_TEMP/1603-evidence/qualified.patch"
+          git apply --index "$RUNNER_TEMP/1603-evidence/qualified.patch"
+          git diff --cached --check
+          test "$(git write-tree)" = 81fda0c9d74b33e330fa5e7443f55e02db9f1ccf
+          git diff --cached --name-only > "$RUNNER_TEMP/1603-paths.txt"
+          diff -u "$RUNNER_TEMP/1603-evidence/paths.txt" "$RUNNER_TEMP/1603-paths.txt"
+          test "$(wc -l < "$RUNNER_TEMP/1603-paths.txt")" -eq 9
+          ! grep -E '^\.github/|^scripts/' "$RUNNER_TEMP/1603-paths.txt"
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m 'refactor: unify Scene family translation and arrangement across bootstrap' \
+            -m 'Reuse authored preparation, retain effective publication, and delete redundant live convenience methods. Refs #1603.'
+          test "$(git rev-parse HEAD^)" = "$base"
+          git -c 'credential.helper=!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f' \
+            push origin "HEAD:refs/heads/$branch"
+          git rev-parse HEAD > "$RUNNER_TEMP/1603-evidence/published-commit.txt"
+          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/1603-evidence/published-tree.txt"
+          git show --stat --oneline HEAD
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: issue-1603-publication-evidence
+          path: ${{ runner.temp }}/1603-evidence
+          retention-days: 3
