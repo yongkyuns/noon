@@ -17,7 +17,106 @@ use super::ExecutionSession;
 pub(super) const NATIVE_EVENT_SEQUENCE_WRAP: f32 = 1_000_000.0;
 
 // Keep the existing input error at the session's public re-export.
-// INPUT_ERROR_DEFINITION
+/// Error produced when semantic/native reactive input cannot be applied to this execution session.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ExecutionSessionInputError {
+    PointerNotConfigured,
+    ForeignPointerRuntime,
+    StalePointerBinding,
+    PointerContextMismatch,
+    StalePointerPublication {
+        expected: PublicationContext,
+        actual: PublicationContext,
+    },
+    WrongPointer {
+        expected: NativePointerId,
+        actual: NativePointerId,
+    },
+    PointerBindingSequenceExhausted,
+    ContextualPointerRequired,
+    RequiredCallbackPending,
+    RequiredCallbacksConfigured,
+    UnknownSemanticSignal(SemanticNodeId),
+    NativeInput(NativeInputRuntimeError),
+    NativeEventOutOfOrder {
+        previous: u64,
+        next: u64,
+    },
+    Reactive(ReactiveError),
+    Evaluation(EvaluationError),
+    TimelineOwnedSignal {
+        signal: SemanticNodeId,
+    },
+    NativeOwnedSignal {
+        signal: SemanticNodeId,
+    },
+}
+
+impl std::fmt::Display for ExecutionSessionInputError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PointerNotConfigured => formatter.write_str("contextual pointer input is not configured"),
+            Self::ForeignPointerRuntime => formatter.write_str("pointer token belongs to another runtime incarnation"),
+            Self::StalePointerBinding => formatter.write_str("pointer binding has been replaced"),
+            Self::PointerContextMismatch => formatter.write_str("pointer record does not match its captured view/publication context"),
+            Self::StalePointerPublication { expected, actual } => write!(formatter, "pointer publication {actual:?} is not the current publication {expected:?}"),
+            Self::WrongPointer { expected, actual } => write!(formatter, "pointer {actual:?} is not the configured pointer {expected:?}"),
+            Self::PointerBindingSequenceExhausted => formatter.write_str("pointer binding sequence is exhausted"),
+            Self::ContextualPointerRequired => formatter.write_str("configured pointer input requires an occurrence-local context"),
+            Self::RequiredCallbackPending => {
+                formatter.write_str("a required callback publication is pending")
+            }
+            Self::RequiredCallbacksConfigured => formatter.write_str(
+                "direct native/reactive input is unsupported while required callbacks are configured",
+            ),
+            Self::UnknownSemanticSignal(signal) => write!(
+                formatter,
+                "semantic signal {}:{} is not present in this execution session",
+                signal.slot(),
+                signal.generation()
+            ),
+            Self::NativeInput(error) => error.fmt(formatter),
+            Self::NativeEventOutOfOrder { previous, next } => write!(
+                formatter,
+                "native input event sequence must increase: previous {previous}, next {next}"
+            ),
+            Self::Reactive(error) => error.fmt(formatter),
+            Self::Evaluation(error) => error.fmt(formatter),
+            Self::TimelineOwnedSignal { signal } => write!(
+                formatter,
+                "semantic signal {}:{} is timeline-owned and cannot be set directly",
+                signal.slot(),
+                signal.generation()
+            ),
+            Self::NativeOwnedSignal { signal } => write!(
+                formatter,
+                "semantic signal {}:{} is native-owned and cannot be set directly",
+                signal.slot(),
+                signal.generation()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ExecutionSessionInputError {}
+
+impl From<NativeInputRuntimeError> for ExecutionSessionInputError {
+    fn from(value: NativeInputRuntimeError) -> Self {
+        Self::NativeInput(value)
+    }
+}
+
+impl From<ReactiveError> for ExecutionSessionInputError {
+    fn from(value: ReactiveError) -> Self {
+        Self::Reactive(value)
+    }
+}
+
+impl From<EvaluationError> for ExecutionSessionInputError {
+    fn from(value: EvaluationError) -> Self {
+        Self::Evaluation(value)
+    }
+}
 
 /// Session-issued association between a collector's coordinates and a publication.
 ///
@@ -226,7 +325,7 @@ impl ExecutionSession {
         let update = NativeStateUpdate::new(source, value)?;
         if self.pointer_input.binding.is_some()
             && matches!(
-                update.source,
+                &update.source,
                 NativeStateSource::PointerPosition | NativeStateSource::PointerButton { .. }
             )
         {
@@ -249,7 +348,7 @@ impl ExecutionSession {
     ) -> Result<&FrameState, ExecutionSessionInputError> {
         if self.pointer_input.binding.is_some()
             && matches!(
-                occurrence.source,
+                &occurrence.source,
                 NativeEventSource::PointerDown { .. } | NativeEventSource::PointerUp { .. }
             )
         {
@@ -266,10 +365,7 @@ impl ExecutionSession {
         Ok(self.runtime.frame())
     }
 
-    fn require_native_event_sequence(
-        &self,
-        next: u64,
-    ) -> Result<(), ExecutionSessionInputError> {
+    fn require_native_event_sequence(&self, next: u64) -> Result<(), ExecutionSessionInputError> {
         if let Some(previous) = self.last_native_event_sequence {
             if next <= previous {
                 return Err(ExecutionSessionInputError::NativeEventOutOfOrder { previous, next });
@@ -334,10 +430,34 @@ impl ExecutionSession {
         inputs
     }
 
-    // INPUT_BATCH_DEFINITION
+    pub(super) fn apply_reactive_input_batch(
+        &mut self,
+        inputs: Vec<(noon_core::SignalId, ReactiveValue)>,
+    ) -> Result<&FrameState, ExecutionSessionInputError> {
+        let current = self.runtime.frame().time;
+        let signal_timeline = (!self.signal_timeline.is_empty()
+            && !self.signal_timeline.is_coherent_at(current, current))
+        .then(|| self.signal_timeline.preview(current, current));
+        let mut combined = signal_timeline
+            .as_ref()
+            .map_or_else(Vec::new, |preview| preview.inputs().to_vec());
+        combined.extend(inputs);
+        self.runtime
+            .advance_to_with_reactive_inputs(current, &combined)?;
+        if let Some(preview) = signal_timeline {
+            self.signal_timeline.commit(preview);
+        }
+        Ok(self.runtime.frame())
+    }
 }
 
-// NATIVE_VALUE_CONVERSION
+fn reactive_value_from_native(value: NativeInputValue) -> ReactiveValue {
+    match value {
+        NativeInputValue::Scalar(value) => ReactiveValue::Scalar(value),
+        NativeInputValue::Bool(value) => ReactiveValue::Bool(value),
+        NativeInputValue::Vec2(value) => ReactiveValue::Vec2(value),
+    }
+}
 
 #[cfg(test)]
 mod tests;
