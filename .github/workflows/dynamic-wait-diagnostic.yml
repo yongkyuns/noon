@@ -1,0 +1,46 @@
+name: Dynamic load and wait diagnosis
+on:
+  push:
+    branches: [prep/demo-editor-source-snapshot]
+    paths: [.github/workflows/dynamic-wait-diagnostic.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 295abd185a4ef396c73c450aa404c4cfdce8a599
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          path: staging
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: github-pages
+          run-id: 35359947257
+          github-token: ${{ github.token }}
+          path: published
+      - name: Use exact public package and diagnostic harness
+        run: |
+          set -euo pipefail
+          tar -xf published/artifact.tar -C web
+          node -e 'const fs=require("fs");if(JSON.parse(fs.readFileSync("web/build-info.json")).commit!=="295abd185a4ef396c73c450aa404c4cfdce8a599")process.exit(1)'
+          cp staging/.dynamic-regression/diagnostic.mjs scripts/dynamic-diagnostic.mjs
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Record first-pass, replay and wait behavior
+        run: node scripts/dynamic-diagnostic.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: dynamic-wait-baseline
+          path: |
+            dynamic-diagnostics
+            web/build-info.json
+          retention-days: 3
+          if-no-files-found: error
