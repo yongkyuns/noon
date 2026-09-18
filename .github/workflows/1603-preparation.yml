@@ -1,0 +1,30 @@
+name: Issue 1603 preparation
+on:
+  push:
+    branches: [prep/1603-scene-convergence]
+    paths:
+      - .github/workflows/1603-preparation.yml
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: be26da28e370e59efeb15f021f7eaf74e7dfd984
+          persist-credentials: false
+      - name: Archive tracked source at the inspected base
+        run: |
+          git rev-parse HEAD > source-commit.txt
+          git archive --format=tar.gz HEAD > source.tar.gz
+          sha256sum source.tar.gz > source.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-1603-source
+          path: |
+            source.tar.gz
+            source-commit.txt
+            source.sha256
+          retention-days: 3
