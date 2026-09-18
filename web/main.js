@@ -1354,7 +1354,7 @@ function startMetricsPolling() {
       metricsTimer = setTimeout(poll, delay);
     }
   };
-  metricsTimer = setTimeout(poll, METRICS_POLL_MS);
+  metricsTimer = setTimeout(poll, PLAYBACK_POLL_MS);
 }
 
 document.addEventListener("visibilitychange", () => {
