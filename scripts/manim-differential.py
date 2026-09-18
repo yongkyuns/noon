@@ -1122,7 +1122,29 @@ def _implicit_curve_probe(api, case, smooth):
             "subpaths": [[_point_observation(p) for p in subpath] for subpath in curve.get_subpaths()]}
 
 
+def _unit_interval_probe(api, case):
+    if case == "offset_tolerance":
+        line = api.NumberLine([1000, 1001, 0.5],
+                              numbers_with_elongated_ticks=[1000.000000001, 1000.500001],
+                              longer_tick_multiple=3)
+    else:
+        options = {"unit_size": 4} if case == "sized" else {}
+        if case == "no_elongation":
+            options["numbers_with_elongated_ticks"] = []
+        line = api.UnitInterval(**options)
+    before = [[_point_observation(tick.get_start()), _point_observation(tick.get_end())]
+              for tick in line.ticks.submobjects]
+    line.rotate(0.27).shift(0.4 * api.RIGHT + 0.25 * api.UP)
+    point = line.n2p(1000.25 if case == "offset_tolerance" else 0.25)
+    return {"ticks": before, "point": _point_observation(point), "inverse": line.p2n(point),
+            "unit_size": line.get_unit_size()}
+
+
 FIXTURES = [
+    *[Fixture(f"unit_interval_{case}",
+              lambda c=case: _unit_interval_probe(noon, c),
+              lambda c=case: _unit_interval_probe(manim, c), tolerance=2e-5)
+      for case in ("default", "sized", "no_elongation", "offset_tolerance")],
     Fixture("number_plane_explicit_empty_faded_style",
             lambda: _number_plane_probe(noon, 2, explicit_style=True),
             lambda: _number_plane_probe(manim, 2, explicit_style=True), tolerance=2e-6),

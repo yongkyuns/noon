@@ -31,6 +31,16 @@ class PlottingAdapterTests(unittest.TestCase):
         self.array_bridge.start()
         self.addCleanup(self.array_bridge.stop)
 
+    def test_unit_interval_adapts_only_constructor_defaults(self):
+        with patch.object(plotting.NumberLine, "__init__", return_value=None) as create:
+            plotting.UnitInterval()
+        create.assert_called_once_with((0, 1, 0.1), unit_size=10,
+                                       numbers_with_elongated_ticks=(0, 1))
+        with patch.object(plotting.NumberLine, "__init__", return_value=None) as create:
+            plotting.UnitInterval(unit_size=4, numbers_with_elongated_ticks=[], include_ticks=False)
+        create.assert_called_once_with((0, 1, 0.1), unit_size=4,
+                                       numbers_with_elongated_ticks=[], include_ticks=False)
+
     def test_function_uses_each_shared_parameter_once_and_releases_plan(self):
         plan = Plan()
         calls = []

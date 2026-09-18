@@ -71,6 +71,14 @@ class ManimApiCoveragePolicyTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(policy["overrides"][name]["status"], "missing")
 
+    def test_retained_geometry_and_image_exports_are_classified_with_evidence(self) -> None:
+        policy = json.loads((ROOT / "compat/manim-v0.21.0.json").read_text())
+        for name in ("Brace", "BraceBetweenPoints", "ImageMobject"):
+            with self.subTest(name=name):
+                self.assertIn(name, coverage.noon_public_exports())
+                self.assertEqual(policy["overrides"][name]["status"], "partial")
+                self.assertTrue(policy["overrides"][name]["evidence"])
+
     def test_static_export_audit_captures_dynamic_public_mapping(self) -> None:
         self.assertIn("Write", coverage.noon_public_exports())
         self.assertIn("Unwrite", coverage.noon_public_exports())

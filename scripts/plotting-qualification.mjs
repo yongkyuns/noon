@@ -13,7 +13,7 @@ import { browserArgs } from "./manim-raster-support.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const output = path.join(root, "plotting-artifacts");
 const fixtures = await Promise.all([
-  { id: "coordinates", file: "coordinate_plotting.py", factory: "createCoordinatePlottingRenderer", objectCount: 17 },
+  { id: "coordinates", file: "coordinate_plotting.py", factory: "createCoordinatePlottingRenderer", objectCount: 30 },
   { id: "number-plane", file: "number_plane.py", factory: "createNumberPlaneRenderer", objectCount: 24 },
   { id: "implicit", file: "implicit_plotting.py", factory: "createImplicitPlottingRenderer", objectCount: 16 },
 ].map(async fixture => {

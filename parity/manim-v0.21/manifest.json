@@ -11,6 +11,14 @@
   },
   "fixtures": [
     {
+      "id": "number-line-ticks",
+      "scene": "NumberLineTicks",
+      "source": "parity/manim-v0.21/core-examples/number_line.py",
+      "expected_duration": 0.2,
+      "qualification_status": "candidate",
+      "notes": "Shared UnitInterval defaults and elongated ticks, pinned offset tolerance, and rotated ordinary number lines."
+    },
+    {
       "id": "implicit-curves",
       "scene": "RetainedImplicitCurves",
       "source": "parity/manim-v0.21/core-examples/implicit_curves.py",

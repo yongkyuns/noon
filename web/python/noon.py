@@ -722,6 +722,7 @@ Object = Mobject
 # Public wrappers resolve from their defining modules without startup mutation.
 _PUBLIC_EXPORTS = {
     "NumberLine": "_manim_plotting",
+    "UnitInterval": "_manim_plotting",
     "Axes": "_manim_plotting",
     "NumberPlane": "_manim_number_plane",
     "FunctionGraph": "_manim_plotting",

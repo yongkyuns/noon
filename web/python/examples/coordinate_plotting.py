@@ -20,4 +20,6 @@ class CoordinatePlotting(Scene):
         data = axes.plot_samples(samples, color=YELLOW)
         title = Text("Shared axes: function and sampled data", font_size=28).shift(3 * UP)
         label = Text("Time (s)", font_size=22).shift(2.7 * DOWN)
-        self.add(axes, curve, data, title, label)
+        interval = UnitInterval(unit_size=4, color=GREEN).shift(3.45 * DOWN)
+        interval_label = Text("Unit interval", font_size=16).shift(3.5 * LEFT + 3.45 * DOWN)
+        self.add(axes, curve, data, title, label, interval, interval_label)
