@@ -15,12 +15,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p assets/pyodide
-          for file in pyodide.mjs pyodide.asm.js pyodide.asm.wasm python_stdlib.zip pyodide-lock.json; do
+          for file in pyodide.mjs pyodide.asm.mjs pyodide.asm.wasm python_stdlib.zip pyodide-lock.json; do
             curl --fail --location --retry 2 "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/$file" -o "assets/pyodide/$file"
           done
           curl --fail --location --retry 2 'https://cdn.jsdelivr.net/gh/linebender/vello@1e63b4a40ccb484f82e1d85b83df97ab95bcfbe7/assets/Ghostscript_Tiger.svg' -o assets/tiger.svg
           sha256sum assets/pyodide/* assets/tiger.svg > assets/SHA256SUMS
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
           name: demo-regression-dependencies
           path: assets
