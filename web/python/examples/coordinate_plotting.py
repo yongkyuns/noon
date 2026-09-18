@@ -1,8 +1,4 @@
-"""Paired with noon::coordinate_plotting_example.
-
-Explicit linear ranges, a sampled function and an illustrative data series.
-Curves are independent retained paths; group them with axes to move them together.
-"""
+"""Animated coordinate plotting with the shared Manim-compatible path."""
 from noon import *
 from math import sin
 
@@ -18,6 +14,11 @@ class CoordinatePlotting(Scene):
             (6, -0.9), (8, 0.2), (10, 1.0),
         ]
         data = axes.plot_samples(samples, color=YELLOW)
-        title = Text("Shared axes: function and sampled data", font_size=28).shift(3 * UP)
+        title = Text("Animated function and sampled data", font_size=28).shift(3 * UP)
         label = Text("Time (s)", font_size=22).shift(2.7 * DOWN)
-        self.add(axes, curve, data, title, label)
+
+        self.play(Write(title), run_time=0.5)
+        self.play(Create(axes), Write(label), run_time=0.8)
+        self.play(Create(curve), run_time=2.0)
+        self.play(Create(data), run_time=1.0)
+        self.wait(0.8)
