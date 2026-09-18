@@ -395,7 +395,9 @@ impl CanonicalAuthoringScene {
         if let Some(player) = self.player_ownership.local_mut() {
             player.set_loop_duration(duration)?;
         } else {
-            self.player_ownership = PlayerOwnership::Active(self.build_live_player(duration, 0)?);
+            let mut player = self.build_live_player(duration, 0)?;
+            player.begin_replay_retention()?;
+            self.player_ownership = PlayerOwnership::Active(player);
         }
         Ok(self
             .player_ownership
@@ -940,6 +942,7 @@ impl CanonicalAuthoringScene {
             // A wait has no animation extent, but the presentation clock still needs a
             // positive valid range before its session-derived deadline replaces it.
             let mut player = self.build_live_player(duration.max(1.0), 0)?;
+            player.begin_replay_retention()?;
             let end_time = player.live_wait(duration)?;
             // Shared admission is fallible. Publish the first runtime only once
             // it owns a valid segment; rejection leaves this context unstarted.
@@ -1381,6 +1384,7 @@ impl CanonicalAuthoringScene {
         let end = if self.player_ownership.is_unstarted() {
             self.prepare_local_player_for_run()?;
             let mut player = self.build_live_player(bootstrap_duration, 0)?;
+            player.begin_replay_retention()?;
             if !allow_required_callbacks && player.has_required_callbacks() {
                 return Err("ordinary composition with required callbacks needs an asynchronous continuation".into());
             }

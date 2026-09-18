@@ -59,12 +59,12 @@ test("source-owned first pass keeps playback controls unavailable until replay i
   const runtimeEnd = main.indexOf("async function ensureExecutionReady(", runtimeStart);
   const runtime = main.slice(runtimeStart, runtimeEnd);
   assert.match(runtime, /semanticExecution\.continuationGeneration != null/);
-  assert.match(runtime, /updatePlaybackControls\(\{\s*supported: !sourceOwnsExecution,/);
+  assert.match(runtime, /updatePlaybackControls\(\{\s*supported: !sourceOwnsExecution && initialState\.replaySupported !== false,/);
   assert.match(
     runScene,
     /updatePlaybackControls\(\{\s*supported: false,[\s\S]*?Python source continuing/,
   );
-  assert.match(runScene, /continuationGeneration: null,[\s\S]*?updatePlaybackControls\(\{\s*supported: true,/);
+  assert.match(runScene, /continuationGeneration: null,[\s\S]*?updatePlaybackControls\(\{\s*supported: result\.replaySupported !== false,/);
   assert.match(runScene, /patchStatus\.dataset\.runGeneration = String\(runToken\.runGeneration\)/);
 });
 

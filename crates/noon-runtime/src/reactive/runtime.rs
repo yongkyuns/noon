@@ -65,6 +65,9 @@ impl PreparedReactiveRuntimeUpdate {
 }
 
 impl ReactiveRuntime {
+    pub(crate) fn has_property_bindings(&self) -> bool {
+        !self.targets.is_empty()
+    }
     pub(crate) fn state_value(&self, signal: noon_core::SignalId) -> Option<&ReactiveValue> {
         self.state.value(signal)
     }

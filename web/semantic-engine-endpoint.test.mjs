@@ -39,6 +39,7 @@ function fixture(
   const executionWakeTimes = [];
   const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 4, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
+    sealReplay: () => {},
     initialDeltaJson: () => { initialSnapshots += 1; return json(); },
     debugFrameJson: () => JSON.stringify({ time, source: "active" }),
     initialCallbackPhaseJson: () => null,
@@ -1802,3 +1803,32 @@ for (const pacing of ["realtime", "external_samples"]) {
     } finally { endpoint?.stop(); f.close(); }
   });
 }
+
+
+test("unavailable replay preserves final presentation and rejects transport commands", async () => {
+  const f = fixture();
+  f.player.sealReplay = () => { throw new Error("RetentionLimit"); };
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach(); await ready;
+    const observed = await request(f.control.port2, "state", 901);
+    assert.equal(observed.replaySupported, false);
+    assert.equal(observed.playing, false);
+    assert.match(observed.replayUnavailable, /RetentionLimit/);
+    for (const command of ["seek", "resume", "restart_playback"]) {
+      const reply = await request(f.control.port2, command, 902, { time: 0 });
+      assert.equal(reply.type, "error");
+      assert.match(reply.message, /Replay unavailable/);
+    }
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("source continuation never seals a still-growing execution plan", async () => {
+  const f = fixture("transferable", null, { generation: 901, onComplete() {}, onError() {} });
+  f.player.sealReplay = () => { throw new Error("must not seal source-owned playback"); };
+  let endpoint;
+  try { const ready = next(f.control.port2); endpoint = await f.attach(); await ready;
+    assert.equal((await request(f.control.port2, "state", 903)).durationSeconds, null);
+  } finally { endpoint?.stop(); f.close(); }
+});
