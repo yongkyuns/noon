@@ -192,6 +192,33 @@ impl Default for PointerInputState {
 }
 
 impl ExecutionSession {
+    /// Whether any native reactive route observes this collector's pointer vocabulary.
+    ///
+    /// This bounded lookup inspects lowered routes, not objects or authored scene
+    /// graphs. It is an adapter-interest query, not admission: explicit typed
+    /// callers still deliver unbound records through the normal session contract.
+    /// Future interaction consumers must extend input interest at the same owner.
+    pub fn has_native_pointer_subscribers(&self) -> bool {
+        !self
+            .reactive_projection
+            .native_state_targets(&NativeStateSource::PointerPosition)
+            .is_empty()
+            || (0..=u8::MAX).any(|button| {
+                !self
+                    .reactive_projection
+                    .native_state_targets(&NativeStateSource::PointerButton { button })
+                    .is_empty()
+                    || !self
+                        .reactive_projection
+                        .native_event_targets(&NativeEventSource::PointerDown { button })
+                        .is_empty()
+                    || !self
+                        .reactive_projection
+                        .native_event_targets(&NativeEventSource::PointerUp { button })
+                        .is_empty()
+            })
+    }
+
     /// Select the one exact pointer projected into the current unkeyed native
     /// pointer signals. Other pointers are rejected, never implicitly merged.
     ///
