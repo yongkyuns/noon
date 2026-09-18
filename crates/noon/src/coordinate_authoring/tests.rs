@@ -3,6 +3,7 @@ use crate::{
     AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveProgramStatus,
     LiveSession, ManimRotationPivot, RateFunction, RustHostCallbackTable,
 };
+use noon_core::{StrokeCap, StrokeJoin};
 
 fn near(actual: [f64; 2], expected: [f64; 2]) {
     for (actual, expected) in actual.into_iter().zip(expected) {
@@ -12,6 +13,16 @@ fn near(actual: [f64; 2], expected: [f64; 2]) {
 
 fn axes_options() -> ManimAxesOptions {
     ManimAxesOptions::new([-2.0, 2.0, 1.0], [-1.0, 1.0, 1.0], 4.0, 2.0)
+}
+
+fn plane_options() -> ManimNumberPlaneOptions {
+    let mut options = ManimNumberPlaneOptions::new();
+    options.x_range = [-2.0, 3.0, 1.0];
+    options.y_range = [-1.0, 2.0, 1.0];
+    options.x_length = Some(5.0);
+    options.y_length = Some(3.0);
+    options.faded_line_ratio = 2;
+    options
 }
 
 fn resources(scene: &Scene) -> usize {
@@ -148,6 +159,116 @@ fn cold_scene_effective_query_does_not_fall_back() {
     let axes = scene.axes(&axes_options()).unwrap();
     assert!(scene.effective_axes_frame(&axes).is_err());
     assert!(axes.authored_frame().is_ok());
+}
+
+#[test]
+fn number_plane_uses_pinned_flat_family_order_and_grid_classification() {
+    let mut scene = Scene::new();
+    let plane = scene.number_plane(&plane_options()).unwrap();
+    let root = scene
+        .integration_store()
+        .borrow()
+        .semantic_family_members_checked(plane.family().node_id())
+        .unwrap();
+    assert_eq!(root.len(), 4);
+    assert_eq!(root[0], plane.faded_lines().unwrap().node_id());
+    assert_eq!(root[1], plane.background_lines().unwrap().node_id());
+    assert_eq!(root[2], plane.x_axis().unwrap().family().node_id());
+    assert_eq!(root[3], plane.y_axis().unwrap().family().node_id());
+    let store = scene.integration_store().borrow();
+    assert_eq!(
+        store
+            .semantic_family_members_checked(plane.background_lines().unwrap().node_id())
+            .unwrap()
+            .len(),
+        4
+    );
+    assert_eq!(
+        store
+            .semantic_family_members_checked(plane.faded_lines().unwrap().node_id())
+            .unwrap()
+            .len(),
+        10
+    );
+    drop(store);
+    near(
+        plane
+            .authored_frame()
+            .unwrap()
+            .coords_to_point(0.0, 0.0)
+            .unwrap(),
+        [-0.5, -0.5],
+    );
+    assert_eq!(resources(&scene), 0);
+}
+
+#[test]
+fn number_plane_defaults_faded_style_from_background_without_changing_color() {
+    let mut scene = Scene::new();
+    let plane = scene.number_plane(&plane_options()).unwrap();
+    let store = scene.integration_store().borrow();
+    let background = store
+        .semantic_family_members_checked(plane.background_lines().unwrap().node_id())
+        .unwrap()[0];
+    let faded = store
+        .semantic_family_members_checked(plane.faded_lines().unwrap().node_id())
+        .unwrap()[0];
+    let background = store.semantic_object_state_checked(background).unwrap();
+    let faded = store.semantic_object_state_checked(faded).unwrap();
+    assert_eq!(background.style.stroke, faded.style.stroke);
+    assert_eq!(
+        faded.style.stroke_width,
+        background.style.stroke_width * 0.5
+    );
+    assert_eq!(
+        faded.style.stroke_opacity,
+        background.style.stroke_opacity * 0.5
+    );
+    for style in [&background.style, &faded.style] {
+        assert_eq!(style.stroke_width_mode, StrokeWidthMode::ScreenSpace);
+        assert_eq!(style.stroke_join, StrokeJoin::Miter);
+        assert_eq!(style.stroke_cap, StrokeCap::Butt);
+    }
+    let options = ManimNumberPlaneOptions::default();
+    assert_eq!(
+        options.axis_style.stroke_width_mode,
+        StrokeWidthMode::ScreenSpace
+    );
+    assert_eq!(options.axis_style.stroke_join, StrokeJoin::Miter);
+    assert_eq!(options.axis_style.stroke_cap, StrokeCap::Butt);
+}
+
+#[test]
+fn number_plane_preparation_is_atomic_and_budgeted() {
+    let mut scene = Scene::new();
+    let sentinel = scene.circle(0.5).unwrap();
+    let revision = scene.revision();
+    let nodes = scene.integration_store().borrow().len();
+    let mut invalid = plane_options();
+    invalid.y_length = Some(f64::NAN);
+    assert!(scene.number_plane(&invalid).is_err());
+    invalid.y_length = Some(3.0);
+    invalid.line_limit = 2;
+    assert!(scene.number_plane(&invalid).is_err());
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(scene.integration_store().borrow().len(), nodes);
+    assert!(sentinel.validate().is_ok());
+}
+
+#[test]
+fn number_plane_coordinate_queries_ignore_appended_family_members() {
+    let mut scene = Scene::new();
+    let plane = scene.number_plane(&plane_options()).unwrap();
+    let extra = scene.circle(0.25).unwrap();
+    plane.family().add_many(&[(&extra).into()]).unwrap();
+    near(
+        plane
+            .authored_frame()
+            .unwrap()
+            .coords_to_point(1.0, -0.5)
+            .unwrap(),
+        [0.5, -1.0],
+    );
 }
 
 #[test]
@@ -400,4 +521,108 @@ fn exact_tick_capacity_constructs_and_one_less_rejects_atomically() {
     assert_eq!(scene.revision(), revision);
     assert_eq!(line.shaft().unwrap().state().unwrap(), shaft_before);
     assert_eq!(resources(&scene), 0);
+}
+
+#[test]
+fn number_plane_effective_coordinates_seek_without_resource_or_revision_churn() {
+    let mut scene = Scene::new();
+    let plane = scene.number_plane(&plane_options()).unwrap();
+    let target = plane.family().copy_family().unwrap();
+    target.root().shift(2.0, 4.0).unwrap();
+    scene.add_many(&[plane.family().into()]).unwrap();
+    let mut execution = scene.execution_session().unwrap();
+    scene
+        .live(&mut execution)
+        .declare_and_activate_family_transform_to(
+            plane.family(),
+            target.root(),
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    let revision = scene.revision();
+    let resources = scene
+        .integration_store()
+        .borrow()
+        .geometry_resources()
+        .stats();
+    execution.seek(0.5).unwrap();
+    let direct = plane.effective_frame(&execution).unwrap();
+    near(direct.coords_to_point(0.0, 0.0).unwrap(), [0.5, 1.5]);
+    near(
+        plane
+            .authored_frame()
+            .unwrap()
+            .coords_to_point(0.0, 0.0)
+            .unwrap(),
+        [-0.5, -0.5],
+    );
+    execution.seek(0.0).unwrap();
+    execution.seek(0.25).unwrap();
+    execution.seek(0.5).unwrap();
+    assert_eq!(plane.effective_frame(&execution).unwrap(), direct);
+    assert_eq!(scene.revision(), revision);
+    assert_eq!(
+        scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .stats(),
+        resources
+    );
+}
+
+#[test]
+fn number_plane_thirds_preserve_numpy_arange_boundary_classification() {
+    let mut scene = Scene::new();
+    let plane = scene
+        .number_plane(&ManimNumberPlaneOptions {
+            x_range: [-6.0, -2.0, 1.0],
+            y_range: [-2.0, 2.0, 1.0],
+            faded_line_ratio: 3,
+            ..Default::default()
+        })
+        .unwrap();
+    let store = scene.integration_store().borrow();
+    assert_eq!(
+        store
+            .node(plane.background_lines().unwrap().node_id())
+            .unwrap()
+            .member_count(),
+        7
+    );
+    assert_eq!(
+        store
+            .node(plane.faded_lines().unwrap().node_id())
+            .unwrap()
+            .member_count(),
+        18
+    );
+}
+
+#[test]
+fn number_plane_grid_offsets_respect_nonuniform_axis_units() {
+    let mut scene = Scene::new();
+    let plane = scene
+        .number_plane(&ManimNumberPlaneOptions {
+            x_range: [2.0, 6.0, 1.0],
+            y_range: [-3.0, 1.0, 0.75],
+            x_length: Some(5.0),
+            y_length: Some(3.0),
+            faded_line_ratio: 0,
+            ..Default::default()
+        })
+        .unwrap();
+    let members = scene
+        .integration_store()
+        .borrow()
+        .semantic_family_members_checked(plane.background_lines().unwrap().node_id())
+        .unwrap();
+    let horizontal = Mobject::from_node(Rc::clone(scene.integration_store()), members[1]).unwrap();
+    let vertical = Mobject::from_node(Rc::clone(scene.integration_store()), members[6]).unwrap();
+    let (x, y) = horizontal.path_query().unwrap().start().unwrap();
+    near([x, y], [-2.5, 1.3125]);
+    let (x, y) = vertical.path_query().unwrap().start().unwrap();
+    near([x, y], [-1.25, -1.5]);
 }

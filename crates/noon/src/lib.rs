@@ -150,7 +150,7 @@ pub use authoring_error::{AuthoringError, UnsupportedAuthoringOperation};
 pub use boolean_authoring::{BooleanOperation, BooleanPathError};
 pub use coordinate_authoring::{
     CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions, ManimNumberLine,
-    ManimNumberLineOptions,
+    ManimNumberLineOptions, ManimNumberPlane, ManimNumberPlaneOptions,
 };
 pub use dashed_line_authoring::DashedLineAuthoringError;
 pub use dimension_fit::LayoutDimension;

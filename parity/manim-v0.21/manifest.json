@@ -742,6 +742,14 @@
       "notes": "Representative source fixture; exact raster qualification remains pending."
     },
     {
+      "id": "number-plane-grid",
+      "scene": "NumberPlaneGrid",
+      "source": "parity/manim-v0.21/core-examples/number_plane.py",
+      "expected_duration": 0.2,
+      "qualification_status": "candidate",
+      "notes": "Ordinary retained lines: ratio zero and three, asymmetric ranges, custom lengths/styles, family scaling and painter order."
+    },
+    {
       "id": "text-range-colors",
       "scene": "TextRangeColors",
       "source": "parity/manim-v0.21/core-examples/text_range_colors.py",

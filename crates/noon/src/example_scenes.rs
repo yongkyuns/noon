@@ -22,6 +22,8 @@ pub mod live_updater_lifecycle;
 pub mod markup_text;
 pub mod mixed_scalar_composition;
 pub mod moving_around;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod number_plane;
 pub mod ordinary_become_semantics;
 pub mod ordinary_membership;
 pub mod ordinary_subset_display;

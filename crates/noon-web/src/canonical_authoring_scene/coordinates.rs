@@ -3,6 +3,13 @@
 use super::*;
 
 impl CanonicalAuthoringScene {
+    pub(super) fn live_create_number_plane(
+        &mut self,
+        options: &noon::ManimNumberPlaneOptions,
+    ) -> Result<noon::ManimNumberPlane, AuthoringFailure> {
+        self.active_live_player()?.live_create_number_plane(options)
+    }
+
     pub(super) fn live_create_axes(
         &mut self,
         options: &noon::ManimAxesOptions,
@@ -31,11 +38,17 @@ mod tests {
         let mut context = CanonicalAuthoringScene::default();
         let before = context.scene.integration_store().borrow().len();
         assert!(context.live_create_axes(&options()).is_err());
+        assert!(context
+            .live_create_number_plane(&noon::ManimNumberPlaneOptions::default())
+            .is_err());
         assert_eq!(context.scene.integration_store().borrow().len(), before);
         let player = context.take_execution_player(1.0, 41).unwrap();
         let identity = player.ownership_identity();
         let revision = context.scene.integration_store().borrow().scene_revision();
         assert!(context.live_create_axes(&options()).is_err());
+        assert!(context
+            .live_create_number_plane(&noon::ManimNumberPlaneOptions::default())
+            .is_err());
         assert!(context
             .live_create_number_line(&noon::ManimNumberLineOptions::new([0.0, 2.0, 1.0]))
             .is_err());
@@ -46,6 +59,9 @@ mod tests {
         );
         context.return_execution_player(player).unwrap();
         let axes = context.live_create_axes(&options()).unwrap();
+        context
+            .live_create_number_plane(&noon::ManimNumberPlaneOptions::default())
+            .unwrap();
         assert_eq!(
             context.active_live_player().unwrap().ownership_identity(),
             identity

@@ -18,6 +18,8 @@ mod authoring_image;
 mod authoring_mobject;
 #[cfg(target_arch = "wasm32")]
 mod authoring_number_labels;
+#[cfg(target_arch = "wasm32")]
+mod authoring_number_plane;
 mod authoring_options;
 #[cfg(target_arch = "wasm32")]
 mod authoring_plot_presentation;
