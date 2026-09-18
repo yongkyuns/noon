@@ -10,6 +10,50 @@ use std::{collections::BTreeMap, sync::Arc};
 type PreparedGlyphFonts = BTreeMap<FontResourceKey, (FontFaceIdentity, Arc<[u8]>)>;
 
 impl SemanticStore {
+    /// Cold/live admission for a compiler-identified glyph resource. A live
+    /// cached handle is reused only after its resource liveness has been checked;
+    /// a failed first publication never installs the identity.
+    pub fn publish_compiled_glyph_detached_text<T, E>(
+        &mut self,
+        identity: crate::TextCompilationIdentity,
+        resource: TextResource,
+        fonts: FontResourceArena,
+        build_state: impl FnOnce(TextResourceHandle) -> crate::SemanticObjectState,
+        publish: impl FnOnce(&mut Self, SemanticMutationTransaction) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<SemanticTextImportError> + From<std::collections::TryReserveError>,
+    {
+        if let Some(handle) = self.compiled_text_resources.get(&identity).copied() {
+            if self.text_resources.get(handle).is_some() {
+                let mut transaction = SemanticMutationTransaction::new();
+                transaction.add_node(crate::SemanticNodeCreation::object(build_state(handle)));
+                return publish(self, transaction);
+            }
+            self.compiled_text_resources.remove(&identity);
+        }
+
+        let installed = std::cell::Cell::new(None);
+        let result = self.publish_glyph_detached_text(
+            resource,
+            fonts,
+            |handle| {
+                installed.set(Some(handle));
+                build_state(handle)
+            },
+            publish,
+        );
+        if result.is_ok() {
+            self.remember_compiled_text_resource(
+                identity,
+                installed
+                    .get()
+                    .expect("successful text admission has one handle"),
+            );
+        }
+        result
+    }
+
     /// Publish exactly one detached glyph-text object through a caller-owned
     /// cold or live semantic publication route.
     ///

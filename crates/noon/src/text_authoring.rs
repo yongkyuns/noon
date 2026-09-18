@@ -5,9 +5,11 @@
 //! keep shaped glyph/vector resources in explicit arenas; no placeholder geometry,
 //! SVG payload, or frontend-owned glyph state is introduced at the authoring boundary.
 
+mod compiler;
 #[cfg(feature = "native-text")]
 mod markup;
 mod semantic;
+pub use compiler::text_compiler_diagnostics;
 #[cfg(feature = "native-text")]
 pub use markup::MarkupText;
 #[cfg(feature = "native-text")]
@@ -36,9 +38,7 @@ use noon_text::shaping::{
 #[cfg(feature = "typst")]
 pub use noon_typst::TypstBackendError;
 #[cfg(feature = "typst")]
-use noon_typst::{
-    compile_typst_resource, compile_typst_resource_with_fonts, TypstMode, TypstResourceArtifact,
-};
+use noon_typst::TypstMode;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 use swash::{FontRef, Stretch, StringId, Style as FontStyle, Weight};
 
@@ -129,15 +129,8 @@ impl TypstSpec {
     fn compile_artifact(
         &self,
         mode: TypstMode,
-    ) -> Result<TypstResourceArtifact, TextAuthoringError> {
-        match &self.fonts {
-            Some(fonts) => Ok(compile_typst_resource_with_fonts(
-                self.source.as_ref(),
-                mode,
-                fonts.iter(),
-            )?),
-            None => Ok(compile_typst_resource(self.source.as_ref(), mode)?),
-        }
+    ) -> Result<Arc<compiler::CompiledTextArtifact>, TextAuthoringError> {
+        compiler::compile_typst(self, mode)
     }
 
     fn authored_transform(&self) -> Transform2D {
@@ -414,30 +407,15 @@ impl Text {
         self.presentation.validate()
     }
 
-    fn compile_artifact(&self) -> Result<NativeTextResourceArtifact, TextAuthoringError> {
-        self.compile_artifact_with_fill(Some(self.presentation.color))
+    fn compile_artifact(&self) -> Result<Arc<compiler::CompiledTextArtifact>, TextAuthoringError> {
+        self.compile_artifact_with_fill(None)
     }
 
     fn compile_artifact_with_fill(
         &self,
-        fill: Option<Color>,
-    ) -> Result<NativeTextResourceArtifact, TextAuthoringError> {
-        self.validate()?;
-        let font = match &self.font_face {
-            Some(font) => font.clone(),
-            None => bundled_native_font(self.font_family.as_ref())?,
-        };
-        let mut options = NativeTextOptions::new(self.font_size);
-        options.line_spacing = self.line_spacing;
-        options.fill = fill;
-        let mut compiler = NativeTextCompiler::new();
-        let mut artifact = if self.markup {
-            markup::compile(self, &font, &options, &mut compiler)?
-        } else {
-            compiler.compile_plain(self.source.as_ref(), &font, &options)?
-        };
-        self.apply_source_fills(&mut artifact.resource)?;
-        Ok(artifact)
+        _fill: Option<Color>,
+    ) -> Result<Arc<compiler::CompiledTextArtifact>, TextAuthoringError> {
+        compiler::compile_native(self)
     }
 
     fn apply_source_fills(&self, resource: &mut TextResource) -> Result<(), TextAuthoringError> {
@@ -869,20 +847,20 @@ impl RetainedScene {
     #[cfg(feature = "native-text")]
     fn import_native_text_artifact(
         &mut self,
-        artifact: NativeTextResourceArtifact,
+        artifact: Arc<compiler::CompiledTextArtifact>,
     ) -> Result<noon_core::TextResourceHandle, TextAuthoringError> {
-        self.import_font_dependencies(&artifact.resource, &artifact.fonts)?;
-        Ok(self.texts.insert(artifact.resource)?)
+        self.import_font_dependencies(artifact.resource.as_ref(), artifact.fonts.as_ref())?;
+        Ok(self.texts.insert(artifact.resource.as_ref().clone())?)
     }
 
     #[cfg(feature = "typst")]
     fn import_typst_artifact(
         &mut self,
-        artifact: TypstResourceArtifact,
+        artifact: Arc<compiler::CompiledTextArtifact>,
     ) -> Result<noon_core::TextResourceHandle, TextAuthoringError> {
-        self.import_font_dependencies(&artifact.resource, &artifact.fonts)?;
+        self.import_font_dependencies(artifact.resource.as_ref(), artifact.fonts.as_ref())?;
 
-        let mut resource: TextResource = artifact.resource;
+        let mut resource: TextResource = artifact.resource.as_ref().clone();
         let mut vectors = Vec::with_capacity(resource.vector_items.len());
         for item in resource.vector_items.iter() {
             let GeometryResource::VectorPath(path) = artifact

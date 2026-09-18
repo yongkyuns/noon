@@ -40,6 +40,25 @@ impl std::error::Error for SemanticTextImportError {
 }
 
 impl SemanticStore {
+    pub(super) fn remember_compiled_text_resource(
+        &mut self,
+        identity: crate::TextCompilationIdentity,
+        handle: TextResourceHandle,
+    ) {
+        const MAX_COMPILED_TEXT_IDENTITIES: usize = 128;
+        if self
+            .compiled_text_resources
+            .insert(identity.clone(), handle)
+            .is_none()
+        {
+            self.compiled_text_resource_order.push_back(identity);
+        }
+        while self.compiled_text_resource_order.len() > MAX_COMPILED_TEXT_IDENTITIES {
+            if let Some(expired) = self.compiled_text_resource_order.pop_front() {
+                self.compiled_text_resources.remove(&expired);
+            }
+        }
+    }
     pub fn text_resources(&self) -> &TextResourceArena {
         &self.text_resources
     }
@@ -104,6 +123,27 @@ impl SemanticStore {
             .text_resources
             .insert(resource)
             .expect("text resource preflighted"))
+    }
+
+    /// Import a normalized compiled resource, or reuse its existing immutable
+    /// payload in this semantic store. The key is compiler-owned complete input
+    /// identity, never a presentation or node identity.
+    pub fn import_compiled_text_resource(
+        &mut self,
+        identity: crate::TextCompilationIdentity,
+        resource: TextResource,
+        fonts: &FontResourceArena,
+        geometries: &GeometryResourceArena,
+    ) -> Result<TextResourceHandle, SemanticTextImportError> {
+        if let Some(handle) = self.compiled_text_resources.get(&identity).copied() {
+            if self.text_resources.get(handle).is_some() {
+                return Ok(handle);
+            }
+            self.compiled_text_resources.remove(&identity);
+        }
+        let handle = self.import_text_resource(resource, fonts, geometries)?;
+        self.remember_compiled_text_resource(identity, handle);
+        Ok(handle)
     }
 }
 

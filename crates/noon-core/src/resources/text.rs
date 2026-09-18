@@ -42,6 +42,15 @@ pub struct TextResourceHandle {
     pub version: u64,
 }
 
+/// Complete compiler-owned identity for an immutable normalized text resource.
+/// The compact deterministic descriptor is paired with shared font buffers so a
+/// fingerprint collision cannot alias two distinct compiler inputs.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TextCompilationIdentity {
+    pub descriptor: Arc<[u8]>,
+    pub font_contents: Arc<[Arc<[u8]>]>,
+}
+
 /// UTF-8 byte range in [`TextResource::source`].
 /// Native markup uses decoded text without tags; backends that retain their
 /// source language (such as Typst) use that backend's original source.

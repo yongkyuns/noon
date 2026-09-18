@@ -13,6 +13,7 @@ use noon_typst::TypstMode;
 
 #[cfg(feature = "native-text")]
 pub(crate) struct NativeTextAdmission {
+    identity: noon_core::TextCompilationIdentity,
     resource: noon_core::TextResource,
     fonts: noon_core::FontResourceArena,
     transform: noon_core::SemanticTransform2_5D,
@@ -30,12 +31,14 @@ impl NativeTextAdmission {
         ) -> Result<T, TextAuthoringError>,
     ) -> Result<T, TextAuthoringError> {
         let Self {
+            identity,
             resource,
             fonts,
             transform,
             style,
         } = self;
-        store.publish_glyph_detached_text(
+        store.publish_compiled_glyph_detached_text(
+            identity,
             resource,
             fonts,
             move |handle| semantic_text_state(handle, transform, style),
@@ -51,6 +54,7 @@ pub(crate) fn prepare_native_text(text: Text) -> Result<NativeTextAdmission, Tex
         NATIVE_POINT_TO_SCENE_SCALE,
         NATIVE_POINT_TO_SCENE_SCALE,
     ));
+    let identity = super::super::compiler::native_identity(&text)?;
     let artifact = text.compile_artifact_with_fill(None)?;
     let (transform, style) = text_artifact_presentation(
         transform,
@@ -58,8 +62,9 @@ pub(crate) fn prepare_native_text(text: Text) -> Result<NativeTextAdmission, Tex
         text.presentation.opacity,
     )?;
     Ok(NativeTextAdmission {
-        resource: artifact.resource,
-        fonts: artifact.fonts,
+        identity,
+        resource: artifact.resource.as_ref().clone(),
+        fonts: artifact.fonts.as_ref().clone(),
         transform,
         style,
     })
@@ -155,21 +160,24 @@ fn typst_spec_state(
         return Err(TextAuthoringError::InvalidFontSize(text.font_size));
     }
     text.presentation.validate()?;
+    let identity = super::super::compiler::typst_identity(&text, mode);
     let artifact = text.compile_artifact(mode)?;
     text_artifact_state(
         store,
+        identity,
         text.authored_transform(),
         text.presentation.color,
         text.presentation.opacity,
-        artifact.resource,
-        artifact.fonts,
-        artifact.geometry,
+        artifact.resource.as_ref().clone(),
+        artifact.fonts.as_ref().clone(),
+        artifact.geometry.as_ref().clone(),
     )
 }
 
 #[cfg(feature = "typst")]
 fn text_artifact_state(
     store: &std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    identity: noon_core::TextCompilationIdentity,
     transform: noon_core::Transform2D,
     color: noon_core::Color,
     opacity: f32,
@@ -180,7 +188,7 @@ fn text_artifact_state(
     let (transform, style) = text_artifact_presentation(transform, color, opacity)?;
     let handle = store
         .borrow_mut()
-        .import_text_resource(resource, &fonts, &geometries)
+        .import_compiled_text_resource(identity, resource, &fonts, &geometries)
         .map_err(TextAuthoringError::Import)?;
     Ok(semantic_text_state(handle, transform, style))
 }
@@ -297,6 +305,27 @@ mod tests {
         assert_eq!(
             scene.integration_store().borrow().text_resources().stats(),
             before
+        );
+    }
+
+    #[test]
+    fn identical_native_objects_share_one_retained_resource_but_not_node_identity() {
+        crate::text_authoring::compiler::clear_text_compiler_cache();
+        let scene = crate::Scene::new();
+        let first = scene.text(super::Text::new("shared")).unwrap();
+        let second = scene
+            .text(super::Text::new("shared").color(noon_core::RED))
+            .unwrap();
+        assert_ne!(first.node_id(), second.node_id());
+        assert_eq!(
+            first.state().unwrap().content.text(),
+            second.state().unwrap().content.text(),
+            "presentation state must not duplicate immutable normalized text"
+        );
+        assert_eq!(scene.integration_store().borrow().text_resources().len(), 1);
+        assert_eq!(
+            crate::text_authoring::text_compiler_diagnostics().successful_compiles,
+            1
         );
     }
 
