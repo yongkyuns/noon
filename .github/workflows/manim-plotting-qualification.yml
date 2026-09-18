@@ -13,6 +13,8 @@ on:
       - 'scripts/plotting-qualification.mjs'
       - 'scripts/time-series-plotting-qualification.mjs'
       - 'scripts/live-coordinate-checks.mjs'
+      - 'scripts/animated-plotting-checks.mjs'
+      - 'scripts/animated-plotting-samples.mjs'
       - 'scripts/gapped-plotting-checks.mjs'
       - '.github/workflows/manim-plotting-qualification.yml'
   workflow_dispatch:
@@ -63,6 +65,10 @@ jobs:
           npx playwright install chromium
       - name: Qualify paired plotting and resumed Python authoring
         run: node scripts/plotting-qualification.mjs
+      - name: Qualify animated axes and graph reveals
+        run: node scripts/time-series-plotting-qualification.mjs coordinates
+      - name: Qualify animated NumberLine and transformed live queries
+        run: node scripts/time-series-plotting-qualification.mjs number-line
       - name: Qualify numeric labels and timestamp-synchronized playback
         run: node scripts/time-series-plotting-qualification.mjs
       - name: Qualify synchronized multi-series playback
