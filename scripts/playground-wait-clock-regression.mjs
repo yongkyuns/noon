@@ -21,10 +21,11 @@ class WaitClock(Scene):
         self.wait(3)
         self.play(dot.animate.shift(LEFT), run_time=0.4)
 `;
-const report = { backend, errors: [], samples: {} };
+const report = { backend, errors: [], samples: {}, controls: {} };
 await mkdir(out, { recursive: true });
 const server = await serveRepository(root, Number(process.env.NOON_WAIT_PORT ?? 4197));
 let browser;
+let page;
 function checkClock(samples, label, tolerance) {
   assert.ok(samples.length >= 8, `${label}: missing clock samples`);
   const start = samples[0];
@@ -35,11 +36,26 @@ function checkClock(samples, label, tolerance) {
   }
   assert.ok(samples.at(-1).time - start.time > 0.8, `${label}: wait clock did not advance`);
 }
+async function controlSnapshot() {
+  return page.evaluate(() => {
+    const controls = document.querySelector(".playback-controls");
+    return { ...controls?.dataset,
+      toggle: controls?.querySelector(".playback-toggle")?.getAttribute("aria-label"),
+      status: document.querySelector("#status-text")?.textContent };
+  });
+}
+async function waitForSettledPlayback(playing) {
+  await page.waitForFunction(expected => {
+    const controls = document.querySelector(".playback-controls");
+    return controls?.dataset.controllable === "true" && controls.dataset.busy === "false" &&
+      controls.dataset.playing === String(expected);
+  }, playing);
+}
 try {
   browser = await playwright.chromium.launch({ channel: "chromium", headless: true, args: browserArgs(backend) });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   await createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.js"), "utf8")).install(context);
-  const page = await context.newPage();
+  page = await context.newPage();
   page.setDefaultTimeout(60_000);
   page.on("pageerror", error => report.errors.push(error.stack ?? String(error)));
   page.on("console", message => { if (message.type() === "error") report.errors.push(message.text()); });
@@ -91,19 +107,29 @@ try {
     window.__noonExampleGallery?.runInFlight === false);
   const duration = await page.locator(".playback-scrubber").getAttribute("max");
   assert.ok(Math.abs(Number(duration) - 6.8) < 1e-9, "both waits must contribute to replay duration");
-  await page.locator(".playback-toggle").click(); // Pause the completed replay.
-  await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.playing === "false");
+  await page.waitForFunction(() => {
+    const controls = document.querySelector(".playback-controls");
+    return controls?.dataset.controllable === "true" && controls.dataset.busy === "false";
+  });
+  report.controls.completed = await controlSnapshot();
+  // Completion may already be paused. Blindly toggling would start playback;
+  // observing playing=false while that command is pending is not an acknowledgement.
+  if (report.controls.completed.playing === "true") await page.locator(".playback-toggle").click();
+  await waitForSettledPlayback(false);
   await page.locator(".playback-scrubber").evaluate(range => {
     range.value = "0"; range.dispatchEvent(new Event("input", { bubbles: true }));
   });
-  await page.waitForFunction(() => Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds) < 0.05 &&
-    document.querySelector(".playback-controls")?.dataset.busy === "false");
+  await waitForSettledPlayback(false);
+  report.controls.seek = await controlSnapshot();
+  assert.equal(Number(report.controls.seek.elapsedSeconds), 0, "seek must acknowledge the exact replay origin");
   await page.locator(".playback-toggle").click();
+  await waitForSettledPlayback(true);
+  report.controls.resumed = await controlSnapshot();
   await page.waitForFunction(() => Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds) > 0.1);
   const replay = await sample("replay-wait");
   assert.ok(replay.every(s => s.controllable === "true" && s.time < 3), "must sample inside the completed replay wait");
   await page.locator(".playback-toggle").click();
-  await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.playing === "false");
+  await waitForSettledPlayback(false);
   const held = await page.evaluate(async () => {
     const get = () => Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds);
     const before = get(); await new Promise(resolve => setTimeout(resolve, 350)); return { before, after: get() };
@@ -112,6 +138,7 @@ try {
   assert.ok(held.before >= replay.at(-1).time, "pause must not rewind to the last rendered frame");
   assert.equal(held.before, held.after, "paused time must be frozen");
   await page.locator(".playback-toggle").click();
+  await waitForSettledPlayback(true);
   await page.waitForFunction(held => Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds) > held + 0.2, held.after);
   report.resumed = Number(await page.locator(".playback-controls").getAttribute("data-elapsed-seconds"));
   assert.ok(report.resumed > held.after, "resume must continue from the paused wait position");
@@ -119,6 +146,8 @@ try {
   console.log(`wait clock tracks wall time in source and replay, preserves pause/resume (${backend})`);
 } catch (error) {
   report.failure = error.stack ?? String(error);
+  report.controls.failure = await controlSnapshot().catch(() => null);
+  await page?.screenshot({ path: path.join(out, "failure.png") }).catch(() => {});
   throw error;
 } finally {
   await writeFile(path.join(out, "report.json"), JSON.stringify(report, null, 2));
