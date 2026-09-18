@@ -1,0 +1,88 @@
+name: Wait clock and product diagnostic
+on:
+  push:
+    branches: [prep/replay-forward-integration]
+    paths: [.github/workflows/wait-qualification-diagnostic.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: bb9f4fc798422e11dd706a0819e0cf4c85e10b72
+          path: candidate
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: e09709ca2ae36d7591f816d52e84c7dd0540c82d
+          path: baseline
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: product-candidate-1
+          run-id: 35388175324
+          github-token: ${{ github.token }}
+          path: candidate/web
+      - uses: actions/download-artifact@v8
+        with:
+          name: product-baseline-1
+          run-id: 35388175324
+          github-token: ${{ github.token }}
+          path: baseline/web
+      - name: Verify pinned compiled artifacts
+        run: |
+          python3 - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          for name,sha in [('candidate','75bdb7dedcb10c2c63f24680dc639112af8c977c'),('baseline','e09709ca2ae36d7591f816d52e84c7dd0540c82d')]:
+              root=Path(name)/'web'; ident=json.loads((root/'runtime-build-identity.json').read_text())
+              assert ident['sourceRevision']==sha,(name,ident)
+              for role in ('worker','wasm','glue'):
+                  item=ident['files'][role]
+                  assert hashlib.sha256((root/item['path']).read_bytes()).hexdigest()==item['sha256'],(name,role)
+              print(name,json.dumps(ident))
+          PY
+      - name: Install browser
+        working-directory: candidate
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Check source, replay and paused waits on WebGL and WebGPU
+        working-directory: candidate
+        run: |
+          node scripts/playground-wait-clock-regression.mjs
+          NOON_WAIT_BACKEND=webgpu NOON_WAIT_ARTIFACTS=browser-smoke-artifacts/playground-wait-clock-webgpu node scripts/playground-wait-clock-regression.mjs
+      - name: Retain unmodified FPS estimator input
+        if: always()
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('candidate/scripts/playground-product-e2e.mjs');s=p.read_text()
+          old='  const fps = sampleRendererFps(cold.frameSamples);'
+          assert s.count(old)==1
+          s=s.replace(old,'  await writeFile(path.join(artifactDir, "frame-samples.json"), JSON.stringify(cold.frameSamples, null, 2));\n'+old)
+          p.write_text(s)
+          PY
+      - name: Measure candidate then baseline, then reverse order
+        if: always()
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          root="$GITHUB_WORKSPACE"
+          for pair in 1 2; do
+            if [ "$pair" = 1 ]; then names='candidate baseline'; else names='baseline candidate'; fi
+            for name in $names; do
+              NOON_PRODUCT_SITE_ROOT="$root/$name" NOON_PRODUCT_LABEL="$name" NOON_PRODUCT_ARTIFACT_DIR="$root/candidate/browser-smoke-artifacts/pair-$pair/$name" node scripts/playground-product-e2e.mjs
+            done
+          done
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: wait-clock-product-diagnostic
+          path: candidate/browser-smoke-artifacts
+          retention-days: 7
+          if-no-files-found: error
