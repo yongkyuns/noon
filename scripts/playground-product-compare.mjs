@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import pngjs from "pngjs";
 
-const { PNG } = pngjs;
 const [baselineDirArg, candidateDirArg] = process.argv.slice(2);
 assert.ok(
   baselineDirArg && candidateDirArg,
@@ -22,6 +20,15 @@ const latencySlackMs = Number(process.env.NOON_PRODUCT_LATENCY_SLACK_MS ?? "350"
 const minFpsRatio = Number(process.env.NOON_PRODUCT_MIN_FPS_RATIO ?? "0.80");
 const maxVisualDiffRatio = Number(process.env.NOON_PRODUCT_MAX_VISUAL_DIFF_RATIO ?? "0.015");
 
+assert.ok(Number.isFinite(maxLatencyRatio) && maxLatencyRatio > 0,
+  "NOON_PRODUCT_MAX_LATENCY_RATIO must be finite and positive");
+assert.ok(Number.isFinite(latencySlackMs) && latencySlackMs >= 0,
+  "NOON_PRODUCT_LATENCY_SLACK_MS must be finite and non-negative");
+assert.ok(Number.isFinite(minFpsRatio) && minFpsRatio > 0,
+  "NOON_PRODUCT_MIN_FPS_RATIO must be finite and positive");
+assert.ok(Number.isFinite(maxVisualDiffRatio) && maxVisualDiffRatio >= 0 && maxVisualDiffRatio <= 1,
+  "NOON_PRODUCT_MAX_VISUAL_DIFF_RATIO must be between zero and one");
+
 const latency = [
   ["shell ready", baseline.shellReadyMs, candidate.shellReadyMs],
   ["cold Run → applied", baseline.coldRunMs, candidate.coldRunMs],
@@ -30,16 +37,21 @@ const latency = [
 ];
 const failures = [];
 for (const [name, before, after] of latency) {
-  assert.ok(Number.isFinite(before) && Number.isFinite(after), `${name}: non-finite latency`);
+  assert.ok(Number.isFinite(before) && before >= 0 && Number.isFinite(after) && after >= 0,
+    `${name}: latency must be finite and non-negative`);
   const limit = before * maxLatencyRatio + latencySlackMs;
   if (after > limit) {
     failures.push(`${name} regressed from ${before.toFixed(0)} ms to ${after.toFixed(0)} ms (limit ${limit.toFixed(0)} ms)`);
   }
 }
 
-const baselineFps = Number(baseline.fps?.effectiveFps);
-const candidateFps = Number(candidate.fps?.effectiveFps);
-assert.ok(Number.isFinite(baselineFps) && Number.isFinite(candidateFps), "effective FPS must be finite");
+const baselineFps = baseline.fps?.effectiveFps;
+const candidateFps = candidate.fps?.effectiveFps;
+assert.ok(
+  Number.isFinite(baselineFps) && baselineFps > 0 &&
+    Number.isFinite(candidateFps) && candidateFps > 0,
+  "effective FPS must be a finite positive number",
+);
 const fpsFloor = baselineFps * minFpsRatio;
 if (candidateFps < fpsFloor) {
   failures.push(
@@ -47,6 +59,9 @@ if (candidateFps < fpsFloor) {
   );
 }
 
+// Reject malformed reports/configuration before decoding any image resources.
+const { default: pngjs } = await import("pngjs");
+const { PNG } = pngjs;
 const baselineImage = PNG.sync.read(await readFile(path.join(baselineDir, baseline.screenshot)));
 const candidateImage = PNG.sync.read(await readFile(path.join(candidateDir, candidate.screenshot)));
 assert.equal(candidateImage.width, baselineImage.width, "visual comparison width changed");
