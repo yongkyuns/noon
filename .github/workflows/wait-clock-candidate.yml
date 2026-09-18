@@ -33,7 +33,7 @@ jobs:
           expected = {
             'crates/noon-web/src/semantic_execution_player.rs': 'f7233ba5cf4533106a6608a935a2b56e76ddd44f',
             'web/semantic-engine-endpoint.js': 'cb749321d6e50a23b7e19b6063383bba1038aedf',
-            'web/semantic-engine-endpoint.test.mjs': '6b4e798064398e34d00a35fd291adc229edb546a',
+            'web/semantic-engine-endpoint.test.mjs': 'f57d6dbcacc2da6dd6ecffe5c04eed6e0014707a',
             'scripts/playground-wait-clock-regression.mjs': '9badcbb87b3ee6dc817d9b7b714460c2bde00183',
           }
           for path, sha in expected.items():
