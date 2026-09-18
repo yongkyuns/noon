@@ -1,39 +1,37 @@
-"""Animated number-line walkthrough using only the supported shared API."""
+"""Animate Noon's shared Rust-backed Manim-compatible NumberLine."""
 from noon import *
 
 
 class AnimatedNumberLine(Scene):
     def construct(self):
-        title = Text("Number line: position and direction", font_size=28).shift(3 * UP)
-
-        baseline = Line(5 * LEFT, 5 * RIGHT, color=WHITE)
-        ticks = []
-        labels = []
-        for value in range(-4, 5):
-            x = value * 1.1
-            tick = Line(
-                x * RIGHT + 0.12 * DOWN,
-                x * RIGHT + 0.12 * UP,
-                color=GRAY,
-            )
-            label = Text(str(value), font_size=18).move_to(x * RIGHT + 0.42 * DOWN)
-            ticks.append(tick)
-            labels.append(label)
-
-        marker = Dot((-4 * 1.1) * RIGHT, color=YELLOW, radius=0.11)
+        title = Text("NumberLine: position and direction", font_size=28).shift(3 * UP)
         caption = Text("Move right: values increase", font_size=22).shift(2 * UP)
 
-        self.play(Write(title), run_time=0.5)
-        self.play(
-            Create(baseline),
-            *[Create(tick) for tick in ticks],
-            *[FadeIn(label) for label in labels],
-            run_time=1.0,
+        number_line = NumberLine(
+            [-4, 4, 1],
+            length=8.8,
+            include_ticks=True,
+            color=WHITE,
         )
+        number_line.add_numbers(
+            [-4, -3, -2, -1, 0, 1, 2, 3, 4],
+            font_size=18,
+        )
+        marker = Dot(number_line.n2p(-4), color=YELLOW, radius=0.11)
+
+        self.play(Write(title), run_time=0.5)
+        self.play(Create(number_line), run_time=1.0)
         self.play(FadeIn(marker), Write(caption), run_time=0.5)
-        self.play(marker.animate.move_to(0 * RIGHT), run_time=1.5)
+
+        # Positions come from the authoritative NumberLine mapping rather than
+        # duplicated Python coordinate math.
+        self.play(marker.animate.move_to(number_line.n2p(0)), run_time=1.5)
         self.wait(0.5)
-        self.play(marker.animate.move_to((3 * 1.1) * RIGHT), run_time=1.2)
+        self.play(marker.animate.move_to(number_line.n2p(3)), run_time=1.2)
         self.wait(0.5)
-        self.play(marker.animate.move_to((-2 * 1.1) * RIGHT), run_time=1.5)
+
+        # Exercise transformed NumberLine queries too: n2p() must continue to
+        # follow the retained shared geometry after an ordinary animation.
+        self.play(number_line.animate.shift(0.6 * UP), run_time=0.8)
+        self.play(marker.animate.move_to(number_line.n2p(-2)), run_time=1.5)
         self.wait(0.8)
