@@ -152,13 +152,13 @@ s=rep(s,"const CLEAR_COLOR: wgpu::Color = wgpu::Color {","""const NATIVE_MOUSE_P
 
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {""")
 s=rep(s,"""    next_input_sequence: u64,
-    force_full_redraw: bool,"","""    next_input_sequence: u64,
+    force_full_redraw: bool,""","""    next_input_sequence: u64,
     pointer_view_revision: u64,
     last_pointer_surface: Option<Vec2>,
     modifiers: ModifiersState,
     force_full_redraw: bool,""")
 s=rep(s,"""            next_input_sequence: 0,
-            force_full_redraw: false,"","""            next_input_sequence: 0,
+            force_full_redraw: false,""","""            next_input_sequence: 0,
             pointer_view_revision: 0,
             last_pointer_surface: None,
             modifiers: ModifiersState::empty(),
