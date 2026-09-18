@@ -1,0 +1,48 @@
+name: Demo morph regression diagnostic
+on:
+  push:
+    branches: [prep/demo-editor-source-snapshot]
+    paths: [.github/workflows/demo-morph-regression.yml]
+permissions:
+  contents: read
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'false'
+      SCCACHE_DIR: /home/runner/.cache/noon-sccache-wasm
+      SCCACHE_CACHE_SIZE: '1G'
+      SCCACHE_LOCAL_RW_MODE: READ_ONLY
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: staging
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: 83ac18f7b0974356bbb47e6cadcd4d1aceb5a1eb
+          persist-credentials: false
+      - uses: ./.github/actions/dev-wasm-build
+      - name: Install browser
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Record source and replay transitions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp staging/.demo-regression/morph-diagnostic.mjs scripts/morph-diagnostic.mjs
+          node scripts/morph-diagnostic.mjs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: morph-regression-baseline
+          path: |
+            morph-diagnostics
+            web/runtime-build-identity.json
+          if-no-files-found: error
+          retention-days: 3
