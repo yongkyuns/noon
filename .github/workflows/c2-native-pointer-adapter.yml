@@ -1,0 +1,30 @@
+name: C2 native pointer adapter workbench
+on:
+  push:
+    branches: [work/c2-native-pointer-adapter-20260918]
+    paths:
+      - .github/c2-native-pointer-adapter.py
+      - .github/workflows/c2-native-pointer-adapter.yml
+permissions:
+  contents: write
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 .github/c2-native-pointer-adapter.py
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all
+      - run: cargo test -p noon --lib live_program
+      - run: cargo test -p noon-native --lib
+      - run: cargo clippy -p noon-native -p noon --lib -- -D warnings
+      - name: Publish code-only snapshot
+        run: |
+          git rm .github/c2-native-pointer-adapter.py .github/workflows/c2-native-pointer-adapter.yml
+          git add crates/noon/src/live_program.rs crates/noon-native/src/execution_source.rs crates/noon-native/src/lib.rs
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'C2: route winit pointer occurrences through contextual session input'
+          git push origin HEAD:refs/heads/work/c2-native-pointer-adapter-20260918
