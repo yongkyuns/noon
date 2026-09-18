@@ -24,7 +24,6 @@ await mkdir(artifacts, { recursive: true });
 const server = spawn("python3", ["-m", "http.server", String(port), "--bind", "127.0.0.1",
   "--directory", root], { stdio: "ignore" });
 let browser;
-let page;
 function difference(left, right) {
   const a = PNG.sync.read(left), b = PNG.sync.read(right);
   assert.equal(a.width, b.width); assert.equal(a.height, b.height);
@@ -47,7 +46,8 @@ try {
   const cache = createPyodideResourceCache(await worker.text());
   const launch = backend === "webgl" ? playgroundLaunchOptions("chromium") : {
     headless: true,
-    args: ["--enable-unsafe-webgpu", "--enable-features=Vulkan", "--use-angle=vulkan", "--disable-vulkan-surface"],
+    args: ["--enable-unsafe-webgpu", "--enable-unsafe-swiftshader", "--use-webgpu-adapter=swiftshader",
+      "--disable-gpu-sandbox", "--disable-dev-shm-usage", "--enable-features=Vulkan", "--use-angle=vulkan", "--disable-vulkan-surface"],
   };
   browser = await playwright.chromium.launch(launch);
   const context = await browser.newContext({ viewport: { width: 900, height: 600 }, deviceScaleFactor: 1 });
@@ -56,7 +56,7 @@ try {
     contentType: "text/html",
     body: '<!doctype html><canvas id="scene" width="704" height="396" style="width:704px;height:396px"></canvas>',
   }));
-  page = await context.newPage();
+  const page = await context.newPage();
   page.setDefaultTimeout(60_000);
   page.on("pageerror", error => report.errors.push(error.stack ?? String(error)));
   page.on("console", message => { if (message.type() === "error") report.errors.push(message.text()); });
@@ -137,7 +137,11 @@ try {
   report.failure = error.stack ?? String(error);
   throw error;
 } finally {
-  await writeFile(path.join(artifacts, "morph-regression.json"), JSON.stringify(report, null, 2));
-  await browser?.close();
-  server.kill("SIGTERM");
+  try {
+    await writeFile(path.join(artifacts, "morph-regression.json"),
+      JSON.stringify(report, (_, value) => typeof value === "bigint" ? value.toString() : value, 2));
+  } finally {
+    await browser?.close();
+    server.kill("SIGTERM");
+  }
 }
