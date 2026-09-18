@@ -1,0 +1,87 @@
+name: Independent clock observation candidate
+on:
+  push:
+    branches: [prep/replay-forward-integration]
+    paths: [.github/workflows/clock-observation-candidate.yml]
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: staging
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          path: candidate
+          ref: dd388b21b67694e6bc4c05befb5d04fe8b7b1f3f
+      - name: Verify and stage exact file changes
+        working-directory: candidate
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          def blob(data): return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+          items=json.loads(Path('../staging/.clock-observation-staging.json').read_text())
+          assert len(items)==4
+          allowed={'docs/architecture.md','web/main.js','web/playground-edit-reset.test.mjs','web/playground-clock-observation.test.mjs'}
+          assert {item['path'] for item in items}==allowed
+          for item in items:
+              path=Path(item['path'])
+              old=path.read_bytes() if path.exists() else None
+              assert (None if old is None else blob(old))==item['before'],str(path)
+              lines=(old or b'').decode().splitlines(keepends=True)
+              upper=len(lines)
+              for start,end,text in reversed(item['edits']):
+                  assert 0<=start<=end<=upper,str(path)
+                  lines[start:end]=text.splitlines(keepends=True);upper=start
+              new=''.join(lines).encode()
+              assert blob(new)==item['after'],f'output mismatch {path}: {blob(new)}'
+              if path.name=='main.js':
+                  Path(os.environ['RUNNER_TEMP'],'main-after.js').write_bytes(new)
+              else: path.write_bytes(new)
+              print(str(path),item['before'],item['after'])
+          PY
+      - name: Negative control on the original coupled observer
+        working-directory: candidate
+        run: |
+          set +e
+          node --test web/playground-clock-observation.test.mjs > "$RUNNER_TEMP/clock-before.log" 2>&1
+          status=$?
+          set -e
+          test "$status" = 1
+          grep -q '^# fail 6$' "$RUNNER_TEMP/clock-before.log"
+          grep -q '^# cancelled 0$' "$RUNNER_TEMP/clock-before.log"
+      - name: Apply correction and run every web test
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/main-after.js" web/main.js
+          node --check web/main.js
+          node --test web/*.test.mjs > "$RUNNER_TEMP/clock-after.log" 2>&1
+          tail -12 "$RUNNER_TEMP/clock-after.log"
+          grep -q '^# pass 391$' "$RUNNER_TEMP/clock-after.log"
+          git diff --check
+          git add web docs
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Keep Rust playback observations independent of slow renderer telemetry'
+          branch="prep/clock-observation-${GITHUB_RUN_ID}"
+          printf '%s\n' "$(git rev-parse HEAD)" "$branch" "$(git rev-parse HEAD^{tree})" > "$RUNNER_TEMP/clock-candidate.txt"
+          git push origin "HEAD:refs/heads/$branch"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: independent-clock-observation-proof
+          path: |
+            ${{ runner.temp }}/clock-before.log
+            ${{ runner.temp }}/clock-after.log
+            ${{ runner.temp }}/clock-candidate.txt
+          retention-days: 7
+          if-no-files-found: error
