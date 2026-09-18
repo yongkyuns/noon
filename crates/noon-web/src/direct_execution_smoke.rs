@@ -64,6 +64,15 @@ pub async fn create_direct_ordinary_membership_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Browser proof that native Text substring and source-range colors use the shared retained path.
+#[wasm_bindgen(js_name = createDirectTextRangeColorsSmokeRenderer)]
+pub async fn create_direct_text_range_colors_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::text_range_colors::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_execution_session(canvas, session).await
+}
+
 /// Direct browser host for exact authored property tracks through the shared compiler/runtime.
 #[wasm_bindgen(js_name = createDirectExactPropertyTracksSmokeRenderer)]
 pub async fn create_direct_exact_property_tracks_smoke_renderer(

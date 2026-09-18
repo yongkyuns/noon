@@ -40,6 +40,7 @@ const examples = [
   { name: "Path smoothing", factory: "createDirectPathSmoothingSmokeRenderer", objectCount: 4, duration: 0.2 },
   { name: "Text source parts", factory: "createDirectTextSourcePartsSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "MarkupText", factory: "createDirectMarkupTextSmokeRenderer", objectCount: 1, duration: 0.2 },
+  { name: "Text range colors", factory: "createDirectTextRangeColorsSmokeRenderer", objectCount: 1, duration: 0.2 },
   { name: "Path editing", factory: "createDirectPathEditingSmokeRenderer", objectCount: 3, duration: 0.2 },
   { name: "Paint queries and gradients", factory: "createDirectPaintQueriesGradientsSmokeRenderer", objectCount: 5, duration: 0.2 },
   { name: "Filled path Transform", factory: "createDirectFilledPathTransformRenderer", objectCount: 1, duration: 3.2 },
@@ -182,6 +183,21 @@ function markupTextColorStats(buffer) {
     }
   }
   return { cyan, orange, upperInk, lowerInk };
+}
+
+function textRangeColorStats(buffer) {
+  const png = PNG.sync.read(buffer);
+  const counts = { red: 0, blue: 0, green: 0, white: 0 };
+  for (let offset = 0; offset < png.data.length; offset += 4) {
+    const r = png.data[offset];
+    const g = png.data[offset + 1];
+    const b = png.data[offset + 2];
+    if (r > 170 && g < 130 && b < 130) counts.red += 1;
+    if (b > 130 && r < 130 && g < 170) counts.blue += 1;
+    if (g > 130 && r < 150 && b < 150) counts.green += 1;
+    if (r > 180 && g > 180 && b > 180) counts.white += 1;
+  }
+  return counts;
 }
 
 function differingPixelCount(beforeBuffer, afterBuffer, region) {
@@ -713,6 +729,14 @@ try {
       assert.ok(metrics.instances > 0, `${example.name}: renderer emitted no instances at t=${time}`);
 
       const { changedPixels: visiblePixels } = visiblePixelStats(screenshot, example.name);
+
+      if (example.name === "Text range colors") {
+        const colors = textRangeColorStats(screenshot);
+        assert.ok(colors.red > 10, `Text range colors: expected red substring, got ${colors.red}`);
+        assert.ok(colors.blue > 10, `Text range colors: expected blue range, got ${colors.blue}`);
+        assert.ok(colors.green > 10, `Text range colors: expected green negative range, got ${colors.green}`);
+        assert.ok(colors.white > 10, `Text range colors: expected white base text, got ${colors.white}`);
+      }
 
       if (example.name === "MarkupText") {
         const colors = markupTextColorStats(screenshot);

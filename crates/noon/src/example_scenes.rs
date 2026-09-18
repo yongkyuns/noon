@@ -39,6 +39,8 @@ pub mod text_family_reveal;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_family_write;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod text_range_colors;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_source_parts;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_write;

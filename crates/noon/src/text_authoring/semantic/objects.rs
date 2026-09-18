@@ -460,6 +460,132 @@ mod tests {
     }
 
     #[test]
+    fn constructor_range_colors_project_paint_before_cold_admission() {
+        let scene = crate::Scene::new();
+        let label = scene
+            .text(
+                super::Text::new("Noon blue Noon")
+                    .color(noon_core::WHITE)
+                    .with_text2color([("Noon", noon_core::RED), ("[5:9]", noon_core::BLUE)]),
+            )
+            .unwrap();
+        let resource = label.state().unwrap().content.text().unwrap();
+        let resource = scene
+            .integration_store()
+            .borrow()
+            .text_resources()
+            .get(resource)
+            .unwrap()
+            .clone();
+        assert!(resource
+            .runs
+            .iter()
+            .any(|run| run.fill == Some(noon_core::RED)));
+        assert!(resource
+            .runs
+            .iter()
+            .any(|run| run.fill == Some(noon_core::BLUE)));
+        assert_eq!(resource.source.as_ref(), "Noon blue Noon");
+    }
+
+    #[test]
+    fn invalid_constructor_range_colors_publish_nothing_cold_or_live() {
+        let scene = crate::Scene::new();
+        let revision = scene.integration_store().borrow().scene_revision();
+        let resources = scene.integration_store().borrow().text_resources().stats();
+        assert!(matches!(
+            scene.text(
+                super::Text::new("abcdef")
+                    .with_text2color([("[1:5]", noon_core::RED), ("[3:]", noon_core::BLUE),])
+            ),
+            Err(super::TextAuthoringError::TextSourceStyle(
+                noon_core::TextSourceStyleError::AmbiguousFillOverlap { .. }
+            ))
+        ));
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+        assert_eq!(
+            scene.integration_store().borrow().text_resources().stats(),
+            resources
+        );
+
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let publication = session.publication_context();
+        {
+            let mut live = scene.live(&mut session);
+            assert!(matches!(
+                live.create_text(super::Text::new("é").with_source_fills([
+                    noon_core::TextSourceFill::new(
+                        noon_core::TextSourceSpan::new(1, 2),
+                        noon_core::RED,
+                    ),
+                ])),
+                Err(crate::LiveSessionError::Text(
+                    super::TextAuthoringError::TextSourceStyle(
+                        noon_core::TextSourceStyleError::InvalidSourceSpan
+                    )
+                ))
+            ));
+        }
+        assert_eq!(session.publication_context(), publication);
+        assert!(session.take_frame_changes().is_empty());
+    }
+
+    #[test]
+    fn constructor_range_colors_treat_the_nonwhite_base_color_as_default() {
+        let scene = crate::Scene::new();
+        let label = scene
+            .text(
+                super::Text::new("abcdef")
+                    .color(noon_core::YELLOW)
+                    .with_text2color([("[0:6]", noon_core::YELLOW), ("[1:5]", noon_core::RED)]),
+            )
+            .unwrap();
+        let handle = label.state().unwrap().content.text().unwrap();
+        let resource = scene
+            .integration_store()
+            .borrow()
+            .text_resources()
+            .get(handle)
+            .unwrap()
+            .clone();
+        assert!(resource
+            .runs
+            .iter()
+            .any(|run| run.fill == Some(noon_core::RED)));
+        assert!(resource.runs.iter().any(|run| run.fill.is_none()));
+    }
+
+    #[test]
+    fn live_constructor_range_colors_admit_and_publish_normally() {
+        let scene = crate::Scene::new();
+        let mut session = scene.execution_session().unwrap();
+        session.take_frame_changes();
+        let label = {
+            let mut live = scene.live(&mut session);
+            let label = live
+                .create_text(
+                    super::Text::new("live color").with_text2color([("color", noon_core::RED)]),
+                )
+                .unwrap();
+            live.add(&label).unwrap();
+            label
+        };
+        let handle = label.state().unwrap().content.text().unwrap();
+        assert!(session
+            .text_resources()
+            .get(handle)
+            .unwrap()
+            .runs
+            .iter()
+            .any(|run| run.fill == Some(noon_core::RED)));
+        assert_eq!(session.take_frame_changes().added_indices().len(), 1);
+    }
+
+    #[test]
     fn live_typst_created_after_an_empty_wait_reuses_the_same_session() {
         let scene = crate::Scene::new();
         let mut session = scene.execution_session().unwrap();

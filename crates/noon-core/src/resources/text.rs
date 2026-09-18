@@ -51,6 +51,79 @@ pub struct TextSourceSpan {
     pub end: u32,
 }
 
+/// One intrinsic fill override addressed by a UTF-8 source range.
+///
+/// Range colors are projected after shaping. They preserve the source, cluster,
+/// glyph, vector and layout identities of the shaped resource.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextSourceFill {
+    pub source_span: TextSourceSpan,
+    pub color: Color,
+}
+
+impl TextSourceFill {
+    pub const fn new(source_span: TextSourceSpan, color: Color) -> Self {
+        Self { source_span, color }
+    }
+}
+
+/// Failure to project source-addressed paint onto an already shaped resource.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TextSourceStyleError {
+    InvalidSourceSpan,
+    AmbiguousFillOverlap {
+        left: TextSourceSpan,
+        right: TextSourceSpan,
+    },
+    SplitsCluster {
+        source_span: TextSourceSpan,
+        cluster_span: TextSourceSpan,
+    },
+    TargetsVector {
+        source_span: TextSourceSpan,
+    },
+    InvalidResource(TextResourceValidationError),
+}
+
+impl std::fmt::Display for TextSourceStyleError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidSourceSpan => formatter.write_str("invalid text source span"),
+            Self::AmbiguousFillOverlap { left, right } => write!(
+                formatter,
+                "ambiguous text fill overlap {}..{} with {}..{}",
+                left.start, left.end, right.start, right.end
+            ),
+            Self::SplitsCluster {
+                source_span,
+                cluster_span,
+            } => write!(
+                formatter,
+                "text style span {}..{} splits shaped cluster {}..{}",
+                source_span.start, source_span.end, cluster_span.start, cluster_span.end
+            ),
+            Self::TargetsVector { source_span } => write!(
+                formatter,
+                "text style span {}..{} targets unsupported vector content",
+                source_span.start, source_span.end
+            ),
+            Self::InvalidResource(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for TextSourceStyleError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidResource(error) => Some(error),
+            Self::InvalidSourceSpan
+            | Self::AmbiguousFillOverlap { .. }
+            | Self::SplitsCluster { .. }
+            | Self::TargetsVector { .. } => None,
+        }
+    }
+}
+
 impl TextSourceSpan {
     pub const fn new(start: u32, end: u32) -> Self {
         Self { start, end }
@@ -459,6 +532,167 @@ impl TextResource {
 
         bytes
     }
+
+    /// Return an immutable paint projection over this shaped resource.
+    ///
+    /// This never reshapes or alters layout. Glyph runs are split only where
+    /// their effective intrinsic fill changes, while glyph/cluster identities,
+    /// vector items, painter ordering, metrics and layout artifact remain the
+    /// original shaped values.
+    pub fn with_source_fills(
+        &self,
+        fills: &[TextSourceFill],
+    ) -> Result<Self, TextSourceStyleError> {
+        if fills.is_empty() {
+            return Ok(self.clone());
+        }
+
+        let mut fills = fills.to_vec();
+        fills.sort_unstable_by_key(|fill| (fill.source_span.start, fill.source_span.end));
+        let source_len = u32::try_from(self.source.len()).unwrap_or(u32::MAX);
+        for fill in &fills {
+            let span = fill.source_span;
+            let start =
+                usize::try_from(span.start).map_err(|_| TextSourceStyleError::InvalidSourceSpan)?;
+            let end =
+                usize::try_from(span.end).map_err(|_| TextSourceStyleError::InvalidSourceSpan)?;
+            if span.end > source_len
+                || start > end
+                || !self.source.is_char_boundary(start)
+                || !self.source.is_char_boundary(end)
+            {
+                return Err(TextSourceStyleError::InvalidSourceSpan);
+            }
+        }
+        fills.retain(|fill| !fill.source_span.is_empty());
+        if fills.is_empty() {
+            return Ok(self.clone());
+        }
+
+        // Explicit settings for the same paint property must not depend on map
+        // iteration order, including whitespace-only overlapping ranges.
+        for pair in fills.windows(2) {
+            if spans_overlap(pair[0].source_span, pair[1].source_span) {
+                return Err(TextSourceStyleError::AmbiguousFillOverlap {
+                    left: pair[0].source_span,
+                    right: pair[1].source_span,
+                });
+            }
+        }
+
+        for vector in self.vector_items.iter() {
+            let Some(span) = vector.source_span else {
+                continue;
+            };
+            let index = fills.partition_point(|fill| fill.source_span.end <= span.start);
+            if fills
+                .get(index)
+                .is_some_and(|fill| spans_overlap(fill.source_span, span))
+            {
+                return Err(TextSourceStyleError::TargetsVector { source_span: span });
+            }
+        }
+
+        // A partial cluster cannot be recolored without choosing a new shaping
+        // boundary, so reject it rather than silently approximating it.
+        for run in self.runs.iter() {
+            for glyph in run.glyphs.iter() {
+                let cluster_span = glyph.cluster.source_span;
+                let index =
+                    fills.partition_point(|fill| fill.source_span.end <= cluster_span.start);
+                if let Some(fill) = fills.get(index) {
+                    if spans_overlap(fill.source_span, cluster_span)
+                        && !span_contains(fill.source_span, cluster_span)
+                    {
+                        return Err(TextSourceStyleError::SplitsCluster {
+                            source_span: fill.source_span,
+                            cluster_span,
+                        });
+                    }
+                }
+            }
+        }
+
+        let mut runs = Vec::new();
+        let mut render_items = Vec::with_capacity(self.render_items.len());
+        for item in self.render_items.iter().copied() {
+            match item {
+                TextRenderItem::GlyphRun(index) => {
+                    let run = &self.runs[index as usize];
+                    for styled in split_run_by_fill(run, &fills) {
+                        let index = u32::try_from(runs.len()).map_err(|_| {
+                            TextSourceStyleError::InvalidResource(
+                                TextResourceValidationError::InvalidRenderItem,
+                            )
+                        })?;
+                        runs.push(styled);
+                        render_items.push(TextRenderItem::GlyphRun(index));
+                    }
+                }
+                TextRenderItem::Vector(index) => render_items.push(TextRenderItem::Vector(index)),
+            }
+        }
+
+        let mut styled = self.clone();
+        styled.runs = runs.into();
+        styled.render_items = render_items.into();
+        styled
+            .validate()
+            .map_err(TextSourceStyleError::InvalidResource)?;
+        Ok(styled)
+    }
+}
+
+fn split_run_by_fill(run: &GlyphRun, fills: &[TextSourceFill]) -> Vec<GlyphRun> {
+    if run.glyphs.is_empty() {
+        return vec![run.clone()];
+    }
+
+    let mut result = Vec::new();
+    let mut segment_start = 0;
+    let mut current_fill = effective_fill(run.fill, run.glyphs[0].cluster.source_span, fills);
+    for index in 1..run.glyphs.len() {
+        let fill = effective_fill(run.fill, run.glyphs[index].cluster.source_span, fills);
+        if fill != current_fill {
+            result.push(run_segment(run, segment_start, index, current_fill));
+            segment_start = index;
+            current_fill = fill;
+        }
+    }
+    result.push(run_segment(
+        run,
+        segment_start,
+        run.glyphs.len(),
+        current_fill,
+    ));
+    result
+}
+
+fn effective_fill(
+    base: Option<Color>,
+    cluster_span: TextSourceSpan,
+    fills: &[TextSourceFill],
+) -> Option<Color> {
+    let index = fills.partition_point(|fill| fill.source_span.end <= cluster_span.start);
+    fills
+        .get(index)
+        .filter(|fill| span_contains(fill.source_span, cluster_span))
+        .map_or(base, |fill| Some(fill.color))
+}
+
+fn spans_overlap(left: TextSourceSpan, right: TextSourceSpan) -> bool {
+    left.start < right.end && right.start < left.end
+}
+
+fn span_contains(outer: TextSourceSpan, inner: TextSourceSpan) -> bool {
+    outer.start <= inner.start && inner.end <= outer.end
+}
+
+fn run_segment(run: &GlyphRun, start: usize, end: usize, fill: Option<Color>) -> GlyphRun {
+    let mut segment = run.clone();
+    segment.fill = fill;
+    segment.glyphs = Arc::from(run.glyphs[start..end].to_vec());
+    segment
 }
 
 fn validate_span(span: TextSourceSpan, source_len: u32) -> Result<(), TextResourceValidationError> {
@@ -1213,5 +1447,89 @@ mod tests {
         };
         assert_eq!(outline.key.text, text);
         assert_eq!(outline.geometry, geometry);
+    }
+
+    #[test]
+    fn source_fills_preserve_glyph_identity_layout_and_painter_order() {
+        let original = sample_text("abcd");
+        let styled = original
+            .with_source_fills(&[TextSourceFill::new(TextSourceSpan::new(1, 3), Color::RED)])
+            .unwrap();
+
+        assert_eq!(styled.bounds, original.bounds);
+        assert_eq!(styled.baseline, original.baseline);
+        assert_eq!(styled.vector_items, original.vector_items);
+        assert_eq!(styled.layout_artifact, original.layout_artifact);
+        assert_eq!(
+            styled
+                .runs
+                .iter()
+                .flat_map(|run| run.glyphs.iter())
+                .collect::<Vec<_>>(),
+            original
+                .runs
+                .iter()
+                .flat_map(|run| run.glyphs.iter())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(styled.runs.len(), 3);
+        assert_eq!(styled.runs[0].fill, None);
+        assert_eq!(styled.runs[1].fill, Some(Color::RED));
+        assert_eq!(styled.runs[2].fill, None);
+        assert_eq!(styled.parts, original.parts);
+    }
+
+    #[test]
+    fn source_fill_rejects_invalid_utf8_and_ambiguous_overlap() {
+        let original = sample_text("éx");
+        assert_eq!(
+            original
+                .with_source_fills(&[TextSourceFill::new(TextSourceSpan::new(1, 2), Color::RED,)]),
+            Err(TextSourceStyleError::InvalidSourceSpan)
+        );
+        assert_eq!(
+            original.with_source_fills(&[
+                TextSourceFill::new(TextSourceSpan::new(0, 2), Color::RED),
+                TextSourceFill::new(TextSourceSpan::new(0, 3), Color::BLUE),
+            ]),
+            Err(TextSourceStyleError::AmbiguousFillOverlap {
+                left: TextSourceSpan::new(0, 2),
+                right: TextSourceSpan::new(0, 3),
+            })
+        );
+    }
+
+    #[test]
+    fn source_fill_rejects_a_shaped_cluster_cut() {
+        let mut original = sample_text("fi");
+        let mut glyph = original.runs[0].glyphs[0].clone();
+        glyph.cluster.source_span = TextSourceSpan::new(0, 2);
+        original.runs = Arc::from([GlyphRun {
+            glyphs: Arc::from([glyph]),
+            ..original.runs[0].clone()
+        }]);
+        assert_eq!(
+            original
+                .with_source_fills(&[TextSourceFill::new(TextSourceSpan::new(1, 2), Color::RED,)]),
+            Err(TextSourceStyleError::SplitsCluster {
+                source_span: TextSourceSpan::new(1, 2),
+                cluster_span: TextSourceSpan::new(0, 2),
+            })
+        );
+    }
+
+    #[test]
+    fn source_fill_projection_handles_many_repeated_source_spans() {
+        let source = "a ".repeat(10_000);
+        let original = sample_text(&source);
+        let fills = (0..10_000_u32)
+            .map(|index| {
+                let start = index * 2;
+                TextSourceFill::new(TextSourceSpan::new(start, start + 1), Color::RED)
+            })
+            .collect::<Vec<_>>();
+        let styled = original.with_source_fills(&fills).unwrap();
+        assert_eq!(styled.glyph_count(), original.glyph_count());
+        assert_eq!(styled.bounds, original.bounds);
     }
 }

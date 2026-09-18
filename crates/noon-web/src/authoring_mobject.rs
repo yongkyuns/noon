@@ -259,9 +259,15 @@ mod wasm {
             font_family: &str,
             font_size: f64,
             line_spacing: f64,
+            colors: Option<crate::WasmTextColorBatch>,
         ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
             let text = super::manim_text(source, font_family, font_size, line_spacing)
                 .map_err(js_error)?;
+            let text = if let Some(batch) = colors {
+                text.color(batch.base_color).with_text2color(batch.colors)
+            } else {
+                text
+            };
             Mobject::from_text(Rc::clone(&self.semantics), text)
                 .map(|handle| WasmAuthoringMobjectHandle { handle })
                 .map_err(js_error)

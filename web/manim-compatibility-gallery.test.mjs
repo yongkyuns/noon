@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 20);
+assert.equal(gallery.examples.length, 21);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -37,6 +37,7 @@ assert.deepEqual(
     "noon-coordinate-plotting",
     "noon-raster-image",
     "noon-markup-text",
+    "noon-text-range-colors",
   ],
 );
 
@@ -76,6 +77,17 @@ for (const entry of readyEntries) {
       pattern,
       `${entry.id}: Manim-compatible source must not depend on Noon-only helper ${pattern}`,
     );
+  }
+
+  if (entry.id === "noon-text-range-colors") {
+    assert.match(source, /Text\(/, "Text range gallery example must construct Text");
+    assert.match(source, /t2c=|text2color=/, "Text range gallery example must exercise t2c/text2color");
+    assert.match(source, /\[6:10\]/, "Text range gallery example must exercise a positive source slice");
+    assert.match(source, /\[-1:\]/, "Text range gallery example must exercise a negative source slice");
+    assert.match(source, /café|Ω/, "Text range gallery example must exercise Unicode");
+    assert.match(source, /\\n/, "Text range gallery example must exercise multiline text");
+    assert.match(source, /DejaVu Sans Mono/, "Text range gallery example must pin its font");
+    assert.equal(entry.parity_fixture, "text-range-colors");
   }
 
   if (entry.id === "noon-markup-text") {
