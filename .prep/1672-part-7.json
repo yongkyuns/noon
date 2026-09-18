@@ -1,0 +1,1 @@
+[{"path":"web/python/examples/animated_number_line.py","before":"b94bc1c0637ff8b36a0fad40eff7c666140ec3f5","after":"e29e882bfe2fb613e3f29f988ef4f59b5db75215","edits":[[14,15,"        self.play(\n            FadeIn(marker, run_time=0.5), Write(caption, run_time=0.5),\n            run_time=0.5, rate_func=linear,\n        )\n"]]}]
