@@ -19,21 +19,21 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v7
         with:
-          ref: 88da22552aa29193f9fbfb23ef4aad6240accca1
+          ref: 1f0501b3c12f6c252125bdf1f00ff746280ed8a9
           path: candidate
       - name: Verify exact correction and web tests
         working-directory: candidate
         shell: bash
         run: |
           set -euo pipefail
-          git apply --check ../staging/.demo-editor-staging/continuation.patch
-          git apply ../staging/.demo-editor-staging/continuation.patch
-          git add scripts
-          test "$(git write-tree)" = e51c100ac13bb86071b795ed4b1fc7ac8c0b1e88
+          git apply --check ../staging/.demo-editor-staging/freshness.patch
+          git apply ../staging/.demo-editor-staging/freshness.patch
+          git add web
+          test "$(git write-tree)" = 11d1ffe7d0aaa8ab52964250efbaa75bcbfcc745
           git diff --cached --check
-          node --check scripts/playground-playback-controls-smoke.mjs
-          node --check scripts/playground-stress-edit-smoke.mjs
-          node --check scripts/python-editor-smoke.mjs
+          node --check web/main.js
+          node --check web/playground-source-restart.js
+          node --check web/playground-run-request-router.js
           node --test web/*.test.mjs > "$RUNNER_TEMP/demo-editor-unit-tests.log" 2>&1
           tail -12 "$RUNNER_TEMP/demo-editor-unit-tests.log"
       - name: Publish clean correction
@@ -43,7 +43,7 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'Correct playground browser tests for automatic source restarts'
+          git commit -m 'Guard queued source restarts against newer edits and disposal'
           branch="prep/demo-editor-candidate-${GITHUB_RUN_ID}"
           git push origin "HEAD:refs/heads/$branch"
           printf '%s\n' "$(git rev-parse HEAD)" "$branch" > "$RUNNER_TEMP/demo-editor-candidate.txt"
