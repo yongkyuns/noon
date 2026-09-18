@@ -1,0 +1,38 @@
+name: Replay repair offline kit
+on:
+  push:
+    branches: [prep/replay-history-repair]
+    paths: [.github/workflows/replay-repair-kit.yml]
+permissions:
+  contents: read
+jobs:
+  kit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: e09709ca2ae36d7591f816d52e84c7dd0540c82d
+          persist-credentials: false
+      - name: Resolve pinned public build inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup install
+          cargo fetch --target x86_64-unknown-linux-gnu --target wasm32-unknown-unknown
+          mkdir -p "$RUNNER_TEMP/kit"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/kit/source.tar.gz"
+          cp Cargo.lock "$RUNNER_TEMP/kit/Cargo.lock"
+          git rev-parse HEAD > "$RUNNER_TEMP/kit/source-sha.txt"
+          toolchain="$(rustc --print sysroot)"
+          tar -C "$toolchain" --zstd -cf "$RUNNER_TEMP/kit/rust-toolchain.tar.zst" bin lib libexec
+          tar -C "$HOME/.cargo" --zstd -cf "$RUNNER_TEMP/kit/cargo-registry.tar.zst" registry
+          cd "$RUNNER_TEMP/kit"
+          sha256sum source.tar.gz Cargo.lock rust-toolchain.tar.zst cargo-registry.tar.zst > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: replay-repair-offline-kit
+          path: ${{ runner.temp }}/kit
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
