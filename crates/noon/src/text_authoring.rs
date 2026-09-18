@@ -5,11 +5,11 @@
 //! keep shaped glyph/vector resources in explicit arenas; no placeholder geometry,
 //! SVG payload, or frontend-owned glyph state is introduced at the authoring boundary.
 
-mod compiler;
+pub mod compiler;
 #[cfg(feature = "native-text")]
 mod markup;
 mod semantic;
-pub use compiler::text_compiler_diagnostics;
+pub use compiler::TextCompilerDiagnostics;
 #[cfg(feature = "native-text")]
 pub use markup::MarkupText;
 #[cfg(feature = "native-text")]
