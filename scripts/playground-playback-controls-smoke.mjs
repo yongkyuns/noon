@@ -200,7 +200,8 @@ try {
         hasControls: document.querySelector(".playback-controls") !== null,
         controllable: document.querySelector(".playback-controls")?.dataset.controllable,
         scrubberDisabled: document.querySelector(".playback-scrubber")?.disabled,
-        time: Number(document.querySelector(".playback-scrubber")?.value ?? 0),
+        time: Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds ?? 0),
+        scrubberHidden: document.querySelector(".playback-scrubber")?.hidden,
         phase: currentStatus.dataset.playbackPhase,
         runInFlight: window.__noonExampleGallery?.runInFlight ?? false,
       };
@@ -237,14 +238,14 @@ try {
   assert.ok(
     diagnostics.lifecycle.samples
       .filter((sample) => sample.controls === "unavailable" && sample.phase === "playing")
-      .every((sample) => sample.hasControls && sample.controllable === "false" && sample.scrubberDisabled),
+      .every((sample) => sample.hasControls && sample.controllable === "false" && sample.scrubberDisabled && sample.scrubberHidden),
     "source-owned playback must expose live progress but reject host commands",
   );
   const liveTimes = diagnostics.lifecycle.samples
     .filter((sample) => sample.controls === "unavailable" && sample.phase === "playing")
     .map((sample) => sample.time);
   assert.ok(liveTimes.length >= 2 && Math.max(...liveTimes) > Math.min(...liveTimes),
-    "the visible playhead must advance during the first Python-owned pass");
+    "live elapsed time must advance without a misleading percentage during the first Python-owned pass");
   assert.equal(initial.hasControls, true, "completed source playback must expose its replay lease");
   assert.equal(initial.playbackAvailability, "available");
   assert.equal(initial.runText, "Run");

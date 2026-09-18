@@ -1731,7 +1731,7 @@ test("source result waits for final edits without another segment or callback dr
 });
 
 
-test("live progress exposes the Rust-authored horizon even while its context is leased", async () => {
+test("live state reports elapsed time without presenting a segment horizon as the total duration", async () => {
   const f = fixture("transferable", null, { generation: 81, onComplete() {}, onError() {} });
   let endpoint;
   try {
@@ -1740,11 +1740,65 @@ test("live progress exposes the Rust-authored horizon even while its context is 
     await ready;
     assert.equal(f.context.liveHandoffDuration(), undefined, "a leased context must not be queried for its player duration");
     const before = await request(f.control.port2, "state", 501);
-    assert.equal(before.durationSeconds, 1);
+    assert.equal(before.durationSeconds, null);
     f.player.seekDeltaJson(0.4);
     const after = await request(f.control.port2, "state", 502);
     assert.equal(after.time, 0.4);
-    assert.equal(after.durationSeconds, 1);
+    assert.equal(after.durationSeconds, null);
     assert.deepEqual(f.stats().continuationDriveTimes, [], "observing progress must not schedule or drive animation");
   } finally { endpoint?.stop(); f.close(); }
 });
+
+
+for (const pacing of ["realtime", "external_samples"]) {
+  test(`returned ${pacing} state cannot jump to the next unplayed segment endpoint`, async () => {
+    let completed;
+    const returned = new Promise((resolve) => { completed = resolve; });
+    const f = fixture("transferable", null, {
+      generation: 91,
+      onComplete: completed,
+      onError: (_generation, error) => { throw error; },
+    }, { pacing });
+    let endpoint;
+    try {
+      // Presentation acknowledgement is independent of playback-state reads.
+      f.render.port2.on("message", (message) => {
+        if (message.type !== "execution_delta") return;
+        f.render.port2.postMessage({ type: "execution_ack", session: message.session, sequence: message.sequence });
+        f.render.port2.postMessage({ type: "execution_presented", session: message.session, sequence: message.sequence });
+      });
+      const ready = next(f.control.port2);
+      endpoint = await f.attach();
+      await ready;
+      let sampled;
+      if (pacing === "external_samples") {
+        f.player.driveLiveSegmentToAuthoredTime = () => {
+          f.player.seekDeltaJson(1);
+          return { callbackPhaseJson: null, reachedEndpoint: true };
+        };
+        sampled = nextMatching(f.control.port2, (message) => message.requestId === 700);
+        f.control.port2.postMessage({ channel: "noon.engine", protocolVersion: 1,
+          type: "sample_to_authored_time", requestId: 700, time: 1 });
+      } else {
+        f.render.port2.postMessage({ type: "tick", timestamp: 1 });
+      }
+      await returned;
+      const reads = f.stats().continuationDriveTimes.length;
+      // Python has authored its next await but has not transferred the player.
+      // Querying its horizon here used to publish 100 as the elapsed time.
+      f.context.liveHandoffDuration = () => 100;
+      const state = await request(f.control.port2, "state", 701);
+      assert.equal(state.time, 1);
+      assert.equal(state.playing, false);
+      assert.equal(state.durationSeconds, null);
+      assert.equal(f.stats().continuationDriveTimes.length, reads);
+      if (sampled) {
+        f.context.liveHandoffDuration = () => 1;
+        await endpoint.publishContinuationResult(91);
+        const result = await sampled;
+        assert.equal(result.time, 1);
+        assert.equal(result.sourceCompleted, true);
+      }
+    } finally { endpoint?.stop(); f.close(); }
+  });
+}

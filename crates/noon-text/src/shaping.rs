@@ -14,8 +14,12 @@ use noon_core::{
 use swash::{scale::ScaleContext, shape::ShapeContext, text::Script, FontRef, GlyphId};
 
 pub const NATIVE_TEXT_BACKEND_VERSION: &str = "swash-0.2.10";
-const NATIVE_TEXT_TEMPLATE_VERSION: &str = "noon-native-styled-multiline-v3";
+const NATIVE_TEXT_TEMPLATE_VERSION: &str = "noon-native-styled-multiline-v4";
 const MANIM_DEFAULT_LINE_SPACING: f32 = 0.3;
+// `Text` sends its line step through ManimPango after dividing by 4.8. Pango
+// uses 96 device units per inch for its point-sized font metrics, so the SVG
+// coordinate step is three quarters of the equivalent Swash distance.
+const MANIM_PLAIN_LINE_ADVANCE_SCALE: f32 = 0.75;
 // Manim sends MarkupText's point size through ManimPango after dividing by
 // TEXT2SVG_ADJUSTMENT_FACTOR (4.8). Pango/Cairo then converts points at 96 DPI,
 // so one Cairo layout pixel is 3.6 units in Noon's point-sized shaping space.
@@ -745,7 +749,7 @@ fn configured_line_advance(options: &NativeTextOptions) -> f32 {
     } else {
         options.line_spacing
     };
-    options.font_size * (1.0 + extra)
+    options.font_size * (1.0 + extra) * MANIM_PLAIN_LINE_ADVANCE_SCALE
 }
 
 fn split_source_lines(source: &str) -> Result<Vec<SourceLine<'_>>, NativeTextError> {
@@ -977,6 +981,33 @@ mod tests {
             >= 3));
         assert!(artifact.resource.bounds.height() > 24.0);
     }
+
+    #[test]
+    fn plain_text_line_spacing_matches_manim_pango_svg_coordinates() {
+        let font = bundled_font();
+        let mut compiler = NativeTextCompiler::new();
+
+        let default = compiler
+            .compile_plain("A\nB", &font, &NativeTextOptions::new(42.0))
+            .unwrap();
+        let mut explicit_options = NativeTextOptions::new(42.0);
+        explicit_options.line_spacing = 0.5;
+        let explicit = compiler
+            .compile_plain("A\nB", &font, &explicit_options)
+            .unwrap();
+
+        let default_delta =
+            default.resource.runs[0].transform.ty - default.resource.runs[1].transform.ty;
+        let explicit_delta =
+            explicit.resource.runs[0].transform.ty - explicit.resource.runs[1].transform.ty;
+        // Manim passes 54.6 / 4.8 = 11.375 SVG units to Pango for its default,
+        // then Pango's 96-DPI point conversion maps it to 40.95 Swash units.
+        assert!((default_delta - 40.95).abs() < 1e-4);
+        // The same conversion gives 13.125 SVG units and 47.25 Swash units
+        // when `line_spacing=0.5`.
+        assert!((explicit_delta - 47.25).abs() < 1e-4);
+    }
+
     #[test]
     fn blank_lines_are_retained_as_layout_spacing_without_fake_glyphs() {
         let font = bundled_font();
