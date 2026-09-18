@@ -1,0 +1,297 @@
+diff --git a/crates/noon/src/arrow_authoring.rs b/crates/noon/src/arrow_authoring.rs
+index 0f9e027..d456f29 100644
+--- a/crates/noon/src/arrow_authoring.rs
++++ b/crates/noon/src/arrow_authoring.rs
+@@ -8,7 +8,8 @@
+ 
+ use crate::{AuthoringError, ManimGeometryOptions, Mobject, MobjectFamily};
+ use noon_core::{
+-    Color, SemanticArrowShaftRole, SemanticMutationTransaction, SemanticNodeCreation,
++    Color, SemanticArrowShaftRole, SemanticMutationTransaction, SemanticMutationTransactionResult,
++    SemanticNodeCreation,
+     SemanticObjectRole, SemanticObjectState, SemanticPaint, SemanticStore, StoredGeometry, Vec2,
+     VectorPath,
+ };
+@@ -231,8 +232,9 @@ impl ManimArrow {
+     ) -> Result<Self, AuthoringError> {
+         let committed = {
+             let mut store_ref = store.borrow_mut();
+-            let prepared = options.prepare(&mut store_ref)?;
+-            commit_prepared(&mut store_ref, prepared)?
++            publish_arrow_options(options, &mut store_ref, |store, transaction| {
++                transaction.apply(store).map_err(AuthoringError::from)
++            })?
+         };
+         Self::from_committed(store, committed)
+     }
+@@ -271,7 +273,7 @@ impl ManimArrow {
+         }
+     }
+ 
+-    fn from_committed(
++    pub(crate) fn from_committed(
+         store: Rc<RefCell<SemanticStore>>,
+         committed: CommittedArrow,
+     ) -> Result<Self, AuthoringError> {
+@@ -371,7 +373,8 @@ struct StagedArrow {
+     start_tip: Option<noon_core::SemanticLocalNodeToken>,
+ }
+ 
+-struct CommittedArrow {
++#[derive(Debug)]
++pub(crate) struct CommittedArrow {
+     family: noon_core::SemanticNodeId,
+     shaft: noon_core::SemanticNodeId,
+     end_tip: noon_core::SemanticNodeId,
+@@ -385,34 +388,34 @@ struct ShortenedLine {
+     length: f64,
+ }
+ 
+-fn commit_prepared(
++/// Materialize one Arrow request inside the existing resource rollback scope.
++/// Both raw-store integration and Scene-owned execution publish this same transaction.
++pub(crate) fn publish_arrow_options(
++    options: ManimArrowOptions,
+     store: &mut SemanticStore,
+-    prepared: PreparedArrow,
++    publish: impl FnOnce(
++        &mut SemanticStore,
++        SemanticMutationTransaction,
++    ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
+ ) -> Result<CommittedArrow, AuthoringError> {
+-    let end_path = prepared.end_tip.clone();
+-    store.with_geometry_path(end_path, |store, end_tip_handle| {
+-        if let Some(start_path) = prepared.start_tip.clone() {
+-            store.with_geometry_path(start_path, |store, start_tip_handle| {
+-                commit_transaction(store, &prepared, end_tip_handle, Some(start_tip_handle))
+-            })
+-        } else {
+-            commit_transaction(store, &prepared, end_tip_handle, None)
+-        }
++    let prepared = options.prepare(store)?;
++    let mut paths = vec![prepared.end_tip.clone()];
++    if let Some(path) = &prepared.start_tip {
++        paths.push(path.clone());
++    }
++    store.with_geometry_paths(paths, |store, handles| {
++        let mut transaction = SemanticMutationTransaction::new();
++        let staged = stage_prepared_arrow(
++            &mut transaction,
++            &prepared,
++            handles[0],
++            handles.get(1).copied(),
++        );
++        let result = publish(store, transaction)?;
++        resolve_staged_arrow(staged, |token| result.resolve(token))
+     })
+ }
+ 
+-fn commit_transaction(
+-    store: &mut SemanticStore,
+-    prepared: &PreparedArrow,
+-    end_tip_handle: noon_core::GeometryResourceHandle,
+-    start_tip_handle: Option<noon_core::GeometryResourceHandle>,
+-) -> Result<CommittedArrow, AuthoringError> {
+-    let mut transaction = SemanticMutationTransaction::new();
+-    let staged = stage_prepared_arrow(&mut transaction, prepared, end_tip_handle, start_tip_handle);
+-    let result = transaction.apply(store).map_err(AuthoringError::from)?;
+-    resolve_staged_arrow(staged, |token| result.resolve(token))
+-}
+-
+ fn stage_prepared_arrow(
+     transaction: &mut SemanticMutationTransaction,
+     prepared: &PreparedArrow,
+diff --git a/crates/noon/src/scene.rs b/crates/noon/src/scene.rs
+index bb57a0a..b20b64c 100644
+--- a/crates/noon/src/scene.rs
++++ b/crates/noon/src/scene.rs
+@@ -118,13 +118,34 @@ impl Scene {
+         Mobject::from_node(store_rc, node)
+     }
+ 
+-    /// Construct one detached Arrow-family object through the shared Rust
+-    /// transaction. The options select Arrow, Vector, or DoubleArrow semantics.
++    /// Construct one detached Arrow family before or after execution bootstrap.
++    /// The options select Arrow, Vector, or DoubleArrow semantics. Membership
++    /// remains explicit, and both tip resources share the atomic publication scope.
+     pub fn manim_arrow(
+-        &self,
++        &mut self,
+         options: crate::ManimArrowOptions,
+     ) -> Result<crate::ManimArrow, crate::AuthoringError> {
+-        crate::ManimArrow::create(Rc::clone(&self.store), options)
++        let Some(execution) = self.execution.as_mut() else {
++            return crate::ManimArrow::create(Rc::clone(&self.store), options);
++        };
++        let store_rc = Rc::clone(&self.store);
++        let root = self.root;
++        {
++            let store = store_rc.borrow();
++            execution
++                .require_resource_creation_at_root(&store, root)
++                .map_err(AuthoringError::from)?;
++        }
++        let committed = crate::arrow_authoring::publish_arrow_options(
++            options,
++            &mut store_rc.borrow_mut(),
++            |store, transaction| {
++                execution
++                    .apply_semantic_transaction_at_root(store, root, transaction)
++                    .map_err(AuthoringError::from)
++            },
++        )?;
++        crate::ManimArrow::from_committed(store_rc, committed)
+     }
+ 
+     pub fn root(&self) -> SemanticNodeId {
+@@ -717,6 +738,8 @@ impl Scene {
+     }
+ }
+ #[cfg(test)]
++mod arrow_atomicity_tests;
++#[cfg(test)]
+ mod geometry_atomicity_tests;
+ #[cfg(test)]
+ mod tests;
+diff --git a/crates/noon/src/scene/arrow_atomicity_tests.rs b/crates/noon/src/scene/arrow_atomicity_tests.rs
+new file mode 100644
+index 0000000..e58386d
+--- /dev/null
++++ b/crates/noon/src/scene/arrow_atomicity_tests.rs
+@@ -0,0 +1,123 @@
++use super::*;
++use crate::{arrow_authoring::publish_arrow_options, ManimArrowOptions};
++use noon_core::SemanticObjectProperty;
++
++fn running_scene() -> (Scene, Mobject) {
++    let mut scene = Scene::new();
++    let seed = scene.circle(0.25).unwrap();
++    scene.add(&seed).unwrap();
++    let execution = scene.execution_session().unwrap();
++    scene.install_execution(execution);
++    scene.owned_execution_mut().take_frame_changes();
++    (scene, seed)
++}
++
++#[test]
++fn arrow_variants_publish_detached_then_admit_without_staling_execution() {
++    let (mut scene, seed) = running_scene();
++    let seed_id = scene.owned_execution().execution_object_id(seed.node_id());
++    for options in [
++        ManimArrowOptions::arrow(-2.0, 0.0, 2.0, 0.0).unwrap(),
++        ManimArrowOptions::vector(1.0, 1.0).unwrap(),
++        ManimArrowOptions::double_arrow(-2.0, 1.0, 2.0, 1.0).unwrap(),
++    ] {
++        let before_revision = scene.revision();
++        let before_frame = scene.owned_execution().frame().clone();
++        let arrow = scene.manim_arrow(options).unwrap();
++        assert_eq!(scene.revision().get(), before_revision.get() + 1);
++        assert_eq!(
++            scene.owned_execution().publication_context().scene_revision(),
++            scene.revision()
++        );
++        assert_eq!(scene.owned_execution().frame(), &before_frame);
++        assert!(scene.owned_execution_mut().take_frame_changes().is_empty());
++        let leaves = [Some(arrow.shaft()), Some(arrow.end_tip()), arrow.start_tip()];
++        for object in leaves.into_iter().flatten() {
++            assert!(scene.owned_execution().execution_object_id(object.node_id()).is_none());
++        }
++        scene.add_many(&[arrow.family().into()]).unwrap();
++        assert_eq!(
++            scene.owned_execution().frame().objects.len(),
++            before_frame.objects.len() + if arrow.start_tip().is_some() { 3 } else { 2 }
++        );
++        for object in leaves.into_iter().flatten() {
++            assert!(scene.owned_execution().execution_object_id(object.node_id()).is_some());
++        }
++        assert_eq!(scene.owned_execution().execution_object_id(seed.node_id()), seed_id);
++        scene.owned_execution_mut().take_frame_changes();
++    }
++}
++
++#[test]
++fn running_arrow_rejects_stale_execution_before_import() {
++    let (mut scene, seed) = running_scene();
++    let mut external = SemanticMutationTransaction::new();
++    external.set_property(seed.node_id(), SemanticObjectProperty::RotationZ, 0.5);
++    external.apply(&mut scene.integration_store().borrow_mut()).unwrap();
++    let before_revision = scene.revision();
++    let before_resources = scene.integration_store().borrow().geometry_resources().stats();
++    let before_nodes = scene.integration_store().borrow().len();
++    let before_context = scene.owned_execution().publication_context();
++    let before_frame = scene.owned_execution().frame().clone();
++    let error = scene.manim_arrow(
++        ManimArrowOptions::double_arrow(-2.0, 0.0, 2.0, 0.0).unwrap(),
++    ).unwrap_err();
++    assert!(matches!(
++        error,
++        AuthoringError::ExecutionPublication(
++            crate::ExecutionSessionPublicationError::StaleSceneRevision { .. }
++        )
++    ));
++    assert_eq!(scene.revision(), before_revision);
++    assert_eq!(scene.integration_store().borrow().geometry_resources().stats(), before_resources);
++    assert_eq!(scene.integration_store().borrow().len(), before_nodes);
++    assert_eq!(scene.owned_execution().publication_context(), before_context);
++    assert_eq!(scene.owned_execution().frame(), &before_frame);
++    assert!(scene.owned_execution_mut().take_frame_changes().is_empty());
++}
++
++#[test]
++fn arrow_scope_rolls_back_both_tips_on_real_late_lowering_failure() {
++    let (mut scene, seed) = running_scene();
++    // Retain an existing Arrow resource so rollback cannot simply reset the store.
++    let retained = scene.manim_arrow(ManimArrowOptions::vector(0.0, 2.0).unwrap()).unwrap();
++    scene.add_many(&[retained.family().into()]).unwrap();
++    scene.owned_execution_mut().take_frame_changes();
++    let store_rc = Rc::clone(scene.integration_store());
++    let root = scene.root();
++    let before_resources = store_rc.borrow().geometry_resources().stats();
++    let before_nodes = store_rc.borrow().len();
++    let before_members = store_rc.borrow().node(root).unwrap().members().to_vec();
++    let before_revision = scene.revision();
++    let before_frame = scene.owned_execution().frame().clone();
++    let before_context = scene.owned_execution().publication_context();
++    let before_seed = seed.state().unwrap();
++    let before_retained = retained.end_tip().state().unwrap();
++    let options = ManimArrowOptions::double_arrow(-2.0, 1.0, 2.0, 1.0).unwrap();
++    let error = publish_arrow_options(options.clone(), &mut store_rc.borrow_mut(), |store, mut transaction| {
++        assert_eq!(store.geometry_resources().len(), before_resources.live_resources + 2);
++        // Finite semantic input which the renderer cannot represent: exercise the
++        // actual shared publication preflight after both paths have been admitted.
++        transaction.set_property(seed.node_id(), SemanticObjectProperty::RotationZ, f64::MAX);
++        scene.owned_execution_mut()
++            .apply_semantic_transaction_at_root(store, root, transaction)
++            .map_err(AuthoringError::from)
++    }).unwrap_err();
++    assert!(matches!(error, AuthoringError::ExecutionPublication(
++        crate::ExecutionSessionPublicationError::Lowering(_)
++    )));
++    assert_eq!(store_rc.borrow().geometry_resources().stats(), before_resources);
++    assert_eq!(store_rc.borrow().len(), before_nodes);
++    assert_eq!(store_rc.borrow().node(root).unwrap().members(), before_members);
++    assert_eq!(scene.revision(), before_revision);
++    assert_eq!(scene.owned_execution().frame(), &before_frame);
++    assert_eq!(scene.owned_execution().publication_context(), before_context);
++    assert_eq!(seed.state().unwrap(), before_seed);
++    assert_eq!(retained.end_tip().state().unwrap(), before_retained);
++    assert!(scene.owned_execution_mut().take_frame_changes().is_empty());
++
++    let retry = scene.manim_arrow(options).unwrap();
++    assert_eq!(store_rc.borrow().geometry_resources().len(), before_resources.live_resources + 2);
++    scene.add_many(&[retry.family().into()]).unwrap();
++    assert_eq!(scene.owned_execution().frame().objects.len(), before_frame.objects.len() + 3);
++}
+diff --git a/crates/noon/tests/manim_arrow_geometry.rs b/crates/noon/tests/manim_arrow_geometry.rs
+index 4283d91..813c85d 100644
+--- a/crates/noon/tests/manim_arrow_geometry.rs
++++ b/crates/noon/tests/manim_arrow_geometry.rs
+@@ -99,7 +99,7 @@ fn arrow_construction_rejects_invalid_values_without_publishing() {
+ 
+ #[test]
+ fn buff_and_tip_caps_match_pinned_manim_reference_cases() {
+-    let scene = Scene::new();
++    let mut scene = Scene::new();
+ 
+     let mut oversized_buff = ManimArrowOptions::arrow(-0.2, 0.0, 0.2, 0.0).unwrap();
+     oversized_buff.set_buff(0.25).unwrap();

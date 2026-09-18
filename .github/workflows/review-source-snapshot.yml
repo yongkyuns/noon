@@ -1,42 +1,110 @@
-name: Isolated architecture source snapshot
+name: Isolated architecture qualification
 
 on:
   push:
     branches: [review/2026-09-17-architecture-diagnostics]
-    paths: [.github/workflows/review-source-snapshot.yml]
+    paths:
+      - .github/workflows/review-source-snapshot.yml
+      - .github/ci/architecture-review.patch
 
 permissions:
   contents: read
 
 jobs:
-  snapshot:
+  qualify:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 25
+    outputs:
+      artifact-id: ${{ steps.artifact.outputs.artifact-id }}
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: driver
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          path: candidate
+          ref: be26da28e370e59efeb15f021f7eaf74e7dfd984
+          persist-credentials: false
+      - name: Apply the bounded candidate
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/noon-arrow-review
+          git apply --index ../driver/.github/ci/architecture-review.patch
+          rustup install
+          rustup component add rustfmt clippy
+          cargo fmt --all
+          git add -u
+          git diff --cached --check
+          git diff --cached --binary > /tmp/noon-arrow-review/candidate.patch
+          git write-tree > /tmp/noon-arrow-review/tree.txt
+      - name: Check minimal-provider library and Arrow contracts
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          cargo test -p noon --no-default-features --lib --test manim_arrow_geometry --test arrow_tip_regression --test family_copy 2>&1 | tee /tmp/noon-arrow-review/tests.log
+          cargo clippy -p noon --no-default-features --all-targets -- -D warnings 2>&1 | tee /tmp/noon-arrow-review/clippy.log
+      - name: Prove the old Scene route fails the new regression
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          cp crates/noon/src/scene.rs /tmp/noon-arrow-review/scene.candidate.rs
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/noon/src/scene.rs')
+          s = p.read_text()
+          start = s.index('        let Some(execution) = self.execution.as_mut() else {', s.index('    pub fn manim_arrow('))
+          end = s.index('\n    }', start)
+          s = s[:start] + '        crate::ManimArrow::create(Rc::clone(&self.store), options)' + s[end:]
+          p.write_text(s)
+          PY
+          set +e
+          cargo test -p noon --no-default-features --lib scene::arrow_atomicity_tests::arrow_variants_publish_detached_then_admit_without_staling_execution -- --exact > /tmp/noon-arrow-review/negative-control.log 2>&1
+          result=$?
+          set -e
+          cp /tmp/noon-arrow-review/scene.candidate.rs crates/noon/src/scene.rs
+          test "$result" -ne 0
+          grep -q 'test result: FAILED. 0 passed; 1 failed' /tmp/noon-arrow-review/negative-control.log
+          git diff --exit-code
+          printf 'Old raw-store constructor failed the exact new regression as expected.\n' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        id: artifact
+        if: always()
+        with:
+          name: arrow-review-evidence
+          path: /tmp/noon-arrow-review/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: qualify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
         with:
           ref: be26da28e370e59efeb15f021f7eaf74e7dfd984
-          fetch-depth: 100
-          persist-credentials: false
-      - name: Export the two immutable reviewed trees
-        shell: bash
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.qualify.outputs.artifact-id }}
+          path: /tmp/noon-arrow-review
+      - name: Publish only the qualified source tree to an isolated branch
         run: |
           set -euo pipefail
-          head=be26da28e370e59efeb15f021f7eaf74e7dfd984
-          base=088c746a2b658ce3ce2810c41924a7768edceba2
-          test "$(git rev-parse HEAD)" = "$head"
-          mkdir -p /tmp/noon-source-review
-          git archive --format=tar.gz "$head" > /tmp/noon-source-review/head.tar.gz
-          git archive --format=tar.gz "$base" > /tmp/noon-source-review/base.tar.gz
-          git diff --numstat --no-renames "$base" "$head" > /tmp/noon-source-review/changes.tsv
-          git log --format='%H %cI %s' "$base..$head" > /tmp/noon-source-review/commits.txt
-          git ls-tree -r "$head" > /tmp/noon-source-review/head-tree.txt
-          git ls-tree -r "$base" > /tmp/noon-source-review/base-tree.txt
-          printf 'head=%s\nbase=%s\ntree=%s\n' "$head" "$base" "$(git rev-parse HEAD^{tree})" > /tmp/noon-source-review/provenance.txt
-          (cd /tmp/noon-source-review && sha256sum head.tar.gz base.tar.gz > SHA256SUMS)
-      - uses: actions/upload-artifact@v7
-        with:
-          name: pinned-architecture-source
-          path: /tmp/noon-source-review/
-          if-no-files-found: error
-          retention-days: 1
+          git apply --index /tmp/noon-arrow-review/candidate.patch
+          test "$(git write-tree)" = "$(cat /tmp/noon-arrow-review/tree.txt)"
+          python3 - <<'PY'
+          import subprocess
+          expected = {'crates/noon/src/arrow_authoring.rs', 'crates/noon/src/scene.rs', 'crates/noon/src/scene/arrow_atomicity_tests.rs', 'crates/noon/tests/manim_arrow_geometry.rs'}
+          actual = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines())
+          assert actual == expected, actual
+          PY
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' -c core.hooksPath=/dev/null commit -m 'fix: publish Arrow-family constructors through the owning Scene'
+          git push origin HEAD:refs/heads/review/2026-09-17-scene-arrow-publication
+          git rev-parse HEAD >> "$GITHUB_STEP_SUMMARY"
