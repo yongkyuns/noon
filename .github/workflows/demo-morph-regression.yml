@@ -5,30 +5,29 @@ on:
     paths: [.github/workflows/demo-morph-regression.yml]
 permissions:
   contents: read
+  actions: read
 jobs:
   diagnostic:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      CARGO_INCREMENTAL: '0'
-      CARGO_PROFILE_DEV_DEBUG: '0'
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: 'false'
-      SCCACHE_DIR: /home/runner/.cache/noon-sccache-wasm
-      SCCACHE_CACHE_SIZE: '1G'
-      SCCACHE_LOCAL_RW_MODE: READ_ONLY
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-        with:
-          path: staging
-          persist-credentials: false
       - uses: actions/checkout@v7
         with:
           ref: 83ac18f7b0974356bbb47e6cadcd4d1aceb5a1eb
           persist-credentials: false
-      - uses: ./.github/actions/dev-wasm-build
-      - name: Install browser
+      - uses: actions/checkout@v7
+        with:
+          path: staging
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: playground-cross-browser-web-runtime
+          run-id: 35349143222
+          github-token: ${{ github.token }}
+          path: web
+      - name: Verify pinned runtime and install browser
         run: |
+          node --input-type=module -e "import fs from 'node:fs'; import assert from 'node:assert/strict'; assert.equal(JSON.parse(fs.readFileSync('web/runtime-build-identity.json')).sourceRevision,'83ac18f7b0974356bbb47e6cadcd4d1aceb5a1eb');"
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
       - name: Record source and replay transitions
