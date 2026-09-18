@@ -45,7 +45,7 @@ try {
   page.on("console", message => { if (message.type() === "error") report.errors.push(message.text()); });
   // The public editor lifecycle must submit the source; there is no parallel test
   // animation driver, fake UI clock or page-side interpolation in this regression.
-  await page.goto(`${server.baseUrl}/web/`);
+  await page.goto(`${server.baseUrl}/web/index.html`);
   await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" &&
     window.__noonExampleGallery?.runInFlight === false);
   await page.evaluate(source => {
@@ -77,6 +77,16 @@ try {
   const live = await sample("initial-wait");
   assert.ok(live.every(s => s.controllable === "false" && s.time < 3), "must sample inside the first source-owned wait");
   await page.screenshot({ path: path.join(out, "initial-wait.png") });
+  assert.equal(await page.locator("#status").getAttribute("data-renderer-backend"),
+    backend === "webgl" ? "WebGL2" : "WebGPU");
+  await page.waitForFunction(() => {
+    const controls = document.querySelector(".playback-controls");
+    const time = Number(controls?.dataset.elapsedSeconds);
+    return controls?.dataset.controllable === "false" && time > 3.55 && time < 4.9;
+  });
+  const later = await sample("wait-after-animation");
+  assert.ok(later.every(s => s.controllable === "false" && s.time > 3.4 && s.time < 6.4),
+    "must also tick during the wait following an active animation");
   await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" &&
     window.__noonExampleGallery?.runInFlight === false);
   const duration = await page.locator(".playback-scrubber").getAttribute("max");
