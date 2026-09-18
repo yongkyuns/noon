@@ -1,0 +1,120 @@
+name: Prepare animated plotting correction
+on:
+  push:
+    branches: [prep/1672-animated-qualification]
+    paths: [.github/workflows/prepare-1672-animated.yml]
+permissions:
+  contents: read
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 33211110ea4330b77d5f240c227f8c7e4bfc14cb
+      - uses: actions/checkout@v7
+        with:
+          path: .prep-source
+          persist-credentials: false
+      - name: Apply checked source changes
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          def blob(data):
+              return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+          parts=sorted(Path('.prep-source/.prep').glob('1672-part-*.json'))
+          assert len(parts)==4
+          seen=set()
+          for part in parts:
+              for item in json.loads(part.read_text()):
+                  p=Path(item['path'])
+                  assert not p.is_absolute() and '..' not in p.parts
+                  assert p.parts[0] in {'crates','web','scripts','.github'} and str(p) not in seen
+                  seen.add(str(p))
+                  if item['before'] is None:
+                      assert not p.exists(),p
+                      old=b''
+                  else:
+                      old=p.read_bytes()
+                      assert blob(old)==item['before'],f'base hash mismatch: {p}'
+                  lines=old.decode().splitlines(keepends=True)
+                  upper=len(lines)
+                  for a,b,text in reversed(item['edits']):
+                      assert 0<=a<=b<=upper,p
+                      lines[a:b]=text.splitlines(keepends=True)
+                      upper=a
+                  new=''.join(lines).encode()
+                  assert blob(new)==item['after'],f'output mismatch: {p}: {blob(new)}'
+                  p.write_bytes(new)
+                  print('verified',p,blob(new))
+          assert len(seen)==17,len(seen)
+          Path(os.environ['RUNNER_TEMP'],'changed-paths.json').write_text(json.dumps(sorted(seen)))
+          PY
+          rm -rf .prep-source
+      - name: Format with the pinned toolchain and retain the exact source
+        run: |
+          set -euo pipefail
+          toolchain="$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml","rb"))["toolchain"]["channel"])')"
+          rustup toolchain install "$toolchain" --profile minimal --component rustfmt --component clippy --target wasm32-unknown-unknown
+          cargo fmt --all
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates web scripts .github/workflows/manim-plotting-qualification.yml
+          git commit -m 'Qualify animated plots through real continuations and shared Rust examples'
+          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/intended-tree.txt"
+          git diff HEAD^ HEAD --binary > "$RUNNER_TEMP/formatted-source.diff"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/formatted-source.tar.gz"
+          cp .github/workflows/manim-plotting-qualification.yml "$RUNNER_TEMP/intended-workflow.yml"
+      - name: Execute focused native and web regressions
+        run: |
+          set -euo pipefail
+          node --test web/*.test.mjs > "$RUNNER_TEMP/web-tests.log" 2>&1
+          tail -12 "$RUNNER_TEMP/web-tests.log"
+          cargo test -p noon --all-features --test animated_plotting_examples 2>&1 | tee "$RUNNER_TEMP/native-tests.log"
+          cargo test -p noon --all-features --lib coordinate_plotting_example 2>&1 | tee -a "$RUNNER_TEMP/native-tests.log"
+      - name: Build browser package
+        uses: ./.github/actions/dev-wasm-build
+        with:
+          preflight: 'true'
+      - name: Install browser dependencies
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Verify original static pair and both real animated pairs
+        run: |
+          set -euo pipefail
+          node scripts/plotting-qualification.mjs
+          node scripts/time-series-plotting-qualification.mjs coordinates
+          node scripts/time-series-plotting-qualification.mjs number-line
+          node scripts/time-series-plotting-qualification.mjs live
+      - name: Publish code-only verified candidate
+        run: |
+          set -euo pipefail
+          git restore --source=33211110ea4330b77d5f240c227f8c7e4bfc14cb --staged --worktree .github/workflows/manim-plotting-qualification.yml
+          tree="$(git write-tree)"
+          sha="$(git commit-tree "$tree" -p 33211110ea4330b77d5f240c227f8c7e4bfc14cb -m 'Fix animated plotting qualification and verify shared Rust and Python demos')"
+          branch="prep/1672-verified-${GITHUB_RUN_ID}"
+          git push origin "$sha:refs/heads/$branch"
+          printf '%s\n' "$sha" "$branch" > "$RUNNER_TEMP/candidate.txt"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: animated-plotting-correction-evidence
+          path: |
+            ${{ runner.temp }}/intended-tree.txt
+            ${{ runner.temp }}/formatted-source.diff
+            ${{ runner.temp }}/formatted-source.tar.gz
+            ${{ runner.temp }}/intended-workflow.yml
+            ${{ runner.temp }}/changed-paths.json
+            ${{ runner.temp }}/web-tests.log
+            ${{ runner.temp }}/native-tests.log
+            ${{ runner.temp }}/candidate.txt
+            plotting-artifacts/
+          retention-days: 7
+          if-no-files-found: error
