@@ -1,0 +1,95 @@
+name: Wait first poll candidate
+on:
+  push:
+    branches: [prep/replay-forward-integration]
+    paths: [.github/workflows/wait-first-poll-candidate.yml]
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: staging
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: 3df8cbfd7c0d0ba39a75316fe49c997106f6cd71
+          path: candidate
+      - name: Verify source and install regression
+        working-directory: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          def blob(data):
+              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          main = Path('web/main.js').read_bytes()
+          assert blob(main) == '3bb51e4a7631e22d5597052012a03c8b05262188'
+          test = Path('../staging/.replay-forward-staging/playground-metrics-poll.test.mjs').read_bytes()
+          assert blob(test) == '23b4d84d5abbcda9ace3e4d2a364ac12f2b6c157'
+          path = Path('web/playground-metrics-poll.test.mjs')
+          assert not path.exists()
+          path.write_bytes(test)
+          PY
+      - name: Prove old first-poll cadence fails the three regressions
+        working-directory: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          node --test web/playground-metrics-poll.test.mjs > "$RUNNER_TEMP/wait-poll-red.log" 2>&1
+          red=$?
+          set -e
+          test "$red" -ne 0
+          grep -q '^# fail 3$' "$RUNNER_TEMP/wait-poll-red.log"
+      - name: Apply one-line host correction and run complete web suite
+        working-directory: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          p = Path('web/main.js')
+          data = p.read_bytes()
+          before = b'  metricsTimer = setTimeout(poll, METRICS_POLL_MS);'
+          after = b'  metricsTimer = setTimeout(poll, PLAYBACK_POLL_MS);'
+          assert data.count(before) == 1
+          data = data.replace(before, after)
+          digest = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          assert digest == '5753883527e1a233b55a807210de644ebabb2f67'
+          p.write_bytes(data)
+          PY
+          node --check web/main.js
+          node --test web/*.test.mjs > "$RUNNER_TEMP/wait-poll-web-tests.log" 2>&1
+          tail -12 "$RUNNER_TEMP/wait-poll-web-tests.log"
+          git diff --check
+      - name: Publish clean candidate branch only
+        working-directory: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web/main.js web/playground-metrics-poll.test.mjs
+          git commit -m 'Observe playback promptly on startup and visibility restoration'
+          branch="prep/wait-first-poll-candidate-${GITHUB_RUN_ID}"
+          git push origin "HEAD:refs/heads/$branch"
+          printf '%s\n' "$(git rev-parse HEAD)" "$branch" > "$RUNNER_TEMP/wait-poll-commit.txt"
+          git show --stat --oneline HEAD
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: wait-first-poll-proof
+          path: |
+            ${{ runner.temp }}/wait-poll-red.log
+            ${{ runner.temp }}/wait-poll-web-tests.log
+            ${{ runner.temp }}/wait-poll-commit.txt
+          retention-days: 7
