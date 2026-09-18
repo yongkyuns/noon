@@ -1,0 +1,64 @@
+name: Morph playback repeat verification
+on:
+  push:
+    branches: [prep/demo-editor-source-snapshot]
+    paths: [.github/workflows/morph-playback-repeat.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 215c346129b6d496e4423fc4529ede6f0234dd52
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: ed30b0931e025ea1ca64e3c890cb69e8610ee909
+          path: test-source
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: playground-cross-browser-web-runtime
+          run-id: 35352997922
+          github-token: ${{ github.token }}
+          path: web
+      - name: Verify unchanged production code and final test scripts
+        run: |
+          node --input-type=module -e "import fs from 'node:fs'; import assert from 'node:assert/strict'; assert.equal(JSON.parse(fs.readFileSync('web/runtime-build-identity.json')).sourceRevision,'215c346129b6d496e4423fc4529ede6f0234dd52');"
+          for file in crates/noon-runtime/src/lib.rs web/semantic-engine-endpoint.js web/playground-playback-controls.js; do
+            cmp "$file" "test-source/$file"
+          done
+          for file in playground-playback-controls-smoke.mjs playground-playback-rerun-stress.mjs playground-playback-morph-regression.mjs; do
+            cp "test-source/scripts/$file" "scripts/$file"
+          done
+          test "$(git hash-object scripts/playground-playback-rerun-stress.mjs)" = 4f63098df498d3710bc3d4a5a0f05cfae7faaf99
+          test "$(git hash-object scripts/playground-playback-morph-regression.mjs)" = 4e0e2558e7e6d194bf1b8a5e93071c049d45fb66
+          rm -rf test-source
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Verify public controls and three independent cold-start rerun stress runs
+        run: |
+          set -euo pipefail
+          NOON_PLAYGROUND_PLAYBACK_ARTIFACTS=playback-proof/controls node scripts/playground-playback-controls-smoke.mjs
+          for n in 1 2 3; do
+            NOON_PLAYGROUND_RERUN_STRESS_ARTIFACTS="playback-proof/stress-$n" node scripts/playground-playback-rerun-stress.mjs
+          done
+      - name: Verify both morph raster backends
+        run: |
+          set -euo pipefail
+          for backend in webgl webgpu; do
+            NOON_MORPH_BACKEND="$backend" NOON_MORPH_REGRESSION_ARTIFACTS="playback-proof/$backend" node scripts/playground-playback-morph-regression.mjs
+          done
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: morph-playback-repeat
+          path: |
+            playback-proof
+            web/runtime-build-identity.json
+          if-no-files-found: error
+          retention-days: 3
