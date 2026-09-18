@@ -159,6 +159,63 @@ Serialization is not a fifth scene model. It is an optional codec around one of 
 
 **Normal in-process engine boundaries are typed Rust boundaries.** `Rust API -> Semantic Scene -> Execution Plan -> Runtime -> Renderer` must not serialize to JSON or any other wire representation as part of ordinary native authoring, lowering, execution, mutation, or rendering. The same rule applies when the Rust engine is compiled to WASM and all layers execute in one browser context.
 
+### Common Rust input and interaction seam
+
+Platform input and authored interaction declarations converge on a common typed Rust seam before interaction policy or engine execution. Browser DOM events, native window-system events, embedded/platform adapters, tests, and replay are collectors only; Python, JavaScript/TypeScript, and other language frontends are authoring adapters only. Neither platform nor authoring language owns interaction semantics.
+
+The canonical flow is:
+
+```text
+platform collectors
+  browser DOM / native host / embedded / test-replay
+        |
+        v
+typed Rust InputIngress
+        |
+        +--> sampled state ------> native reactive inputs
+        |
+        +--> ordered occurrences -> InteractiveSession
+                                      |
+                                      +--> spatial candidates
+                                      +--> precise hit testing
+                                      +--> trigger synthesis
+                                      +--> hover/selection/capture
+                                      |
+                                      v
+                              interaction binding
+                                      |
+                                      v
+                                    action
+                          +-----------+-----------+
+                          |           |           |
+                    runtime driver  signal   host callback
+                          |           |      when required
+                          +-----------+-----------+
+                                      |
+                                      v
+                              ExecutionSession
+```
+
+The normalized Rust input occurrence must carry the information needed to interpret the occurrence coherently, including source/pointer identity where applicable, position for pointer occurrences, button/modifier context, ingress sequence, and compatible scene/view publication context. Sampled latest-value state may still coalesce by exact source. Coalescing must never retroactively change the position or identity of an already ordered press/release/click occurrence.
+
+The platform adapter may perform platform-only mechanics such as DOM pointer capture, coordinate conversion, focus handling, and event-listener lifetime, but it does not choose scene targets or actions. Browser and native adapters must lower equivalent physical input to equivalent Rust input semantics.
+
+Interaction declarations are language-neutral authored semantics. Rust, Python and future JS/TS wrappers may expose different syntax for declarations such as `click -> highlight`, but they lower to the same semantic trigger/action binding. Common native actions execute entirely in Rust after authoring; arbitrary host-language callbacks remain an explicit slow/compatibility path rather than the implementation of ordinary click, hover or drag behavior.
+
+Keep these domains distinct:
+
+- **Input occurrence** — normalized platform-independent Rust input.
+- **Trigger** — scene interpretation such as click, hover enter/leave, drag start/update/end, or key activation.
+- **Interaction binding** — authored mapping from a target/trigger to an action; this belongs to Semantic Scene truth.
+- **Action** — canonical engine behavior such as session highlight, effective property write, signal update, animation start, or explicit host callback.
+- **InteractiveSession state** — transient hovered/selected/captured targets, active gesture/tool, driver ownership, drag references and overlays; this is not authored scene content.
+
+Hit testing uses the execution-owned spatial index as broad phase and performs precise tests only on returned candidates in painter-correct order. No frontend, platform adapter, or renderer may create a second authoritative picking index. Picking observes one coherent effective publication so moving/animated objects are targeted where the user sees them.
+
+Selection/editor highlighting is a session overlay and must not mutate the authored object, family order, compatibility output or serialized scene. A scene-authored click action that changes style, signals or animation is different: it is an authored interaction binding whose action executes through the normal Rust runtime/semantic contracts.
+
+Pointer capture has split ownership: the platform shell owns OS/DOM capture mechanics, while `InteractiveSession` owns the semantic captured target and gesture lifecycle. Release, cancellation, lost platform capture, target retirement/replacement, seek/reload policy and stale generations must terminate or reconcile the gesture deterministically.
+
 ### Live-session control plane
 
 A continuously live authoring experience requires coordination, but coordination is not another state authority. `ExecutionSession`/`LiveProgram` may order script continuations, wake/sleep, input delivery, callback barriers, revision checks, and publication receipts while semantic truth stays in the Semantic Scene and effective time-varying truth stays in the Runtime.
