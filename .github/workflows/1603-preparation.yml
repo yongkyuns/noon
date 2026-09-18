@@ -2,29 +2,128 @@ name: Issue 1603 preparation
 on:
   push:
     branches: [prep/1603-scene-convergence]
-    paths:
-      - .github/workflows/1603-preparation.yml
+    paths: [.github/workflows/1603-preparation.yml]
 permissions:
   contents: read
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_GHA_RW_MODE: READ_ONLY
 jobs:
-  source:
+  qualify:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          path: preparation
+          persist-credentials: false
+      - uses: actions/checkout@v7
         with:
           ref: be26da28e370e59efeb15f021f7eaf74e7dfd984
+          path: candidate
           persist-credentials: false
-      - name: Archive tracked source at the inspected base
+      - name: Verify and apply bounded candidate
+        shell: bash
         run: |
-          git rev-parse HEAD > source-commit.txt
-          git archive --format=tar.gz HEAD > source.tar.gz
-          sha256sum source.tar.gz > source.sha256
-      - uses: actions/upload-artifact@v4
+          set -euo pipefail
+          mkdir evidence
+          base64 -d preparation/.github/1603-candidate.patch.gz.b64 | gzip -d > evidence/input.patch
+          echo 'bf7de241ea27d6ba900b02494ec80051a8e2691df222a128058d88fe0ca4e9b6  evidence/input.patch' | sha256sum -c -
+          cd candidate
+          test "$(git rev-parse HEAD^{tree})" = 60be857c4c00469e1581b85dab7f0db1061a8e69
+          git apply --check ../evidence/input.patch
+          git apply ../evidence/input.patch
+      - name: Use pinned Rust
+        working-directory: candidate
+        run: rustup install
+      - uses: actions/cache/restore@v6
         with:
-          name: issue-1603-source
           path: |
-            source.tar.gz
-            source-commit.txt
-            source.sha256
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('candidate/Cargo.toml', 'candidate/crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Format and record exact candidate
+        working-directory: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          git diff --check
+          git diff --binary > ../evidence/qualified.patch
+          git diff --name-only > ../evidence/paths.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          expected = {
+              'crates/noon/src/example_scenes/family_arrangement.rs',
+              'crates/noon/src/example_scenes/family_grid.rs',
+              'crates/noon/src/family_arrangement.rs',
+              'crates/noon/src/family_layout_migration_tests.rs',
+              'crates/noon/src/lib.rs',
+              'crates/noon/src/live_session.rs',
+              'crates/noon/src/scene.rs',
+              'crates/noon/tests/family_grid.rs',
+              'crates/noon/tests/path_family_arrangement.rs',
+          }
+          assert set(Path('../evidence/paths.txt').read_text().splitlines()) == expected
+          PY
+          git add crates/noon
+          git write-tree > ../evidence/tree.txt
+          git diff --cached --stat > ../evidence/diffstat.txt
+          sha256sum ../evidence/qualified.patch > ../evidence/qualified.sha256
+          rustc --version --verbose > ../evidence/toolchain.txt
+      - name: Architecture guardrails
+        working-directory: candidate
+        shell: bash
+        run: |
+          set -o pipefail
+          bash scripts/check.sh architecture HEAD 2>&1 | tee ../evidence/architecture.log
+      - name: Focused library and family tests
+        working-directory: candidate
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test -p noon --no-default-features --lib --test family_arrangement --test family_grid --test path_family_arrangement --test family_translation --test family_callback_translation --test live_family_layout 2>&1 | tee ../evidence/tests.log
+      - name: Strict minimal-provider all-target Clippy
+        working-directory: candidate
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy -p noon --no-default-features --all-targets -- -D warnings 2>&1 | tee ../evidence/clippy.log
+      - name: Prove old Scene routes fail the new regressions
+        working-directory: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp crates/noon/src/scene.rs ../evidence/scene.rs
+          trap 'cp ../evidence/scene.rs crates/noon/src/scene.rs' EXIT
+          git show HEAD:crates/noon/src/scene.rs > crates/noon/src/scene.rs
+          for test in scene_family_shift_uses_the_same_route_before_and_after_bootstrap scene_arrangement_is_mode_independent_and_preserves_detached_admission; do
+            set +e
+            cargo test -p noon --no-default-features --lib "$test" > "../evidence/negative-$test.log" 2>&1
+            status=$?
+            set -e
+            test "$status" -ne 0
+            grep -F 'test result: FAILED. 0 passed; 1 failed;' "../evidence/negative-$test.log"
+          done
+      - name: Verify restored exact tree
+        working-directory: candidate
+        run: |
+          git add crates/noon
+          test "$(git write-tree)" = "$(cat ../evidence/tree.txt)"
+          cargo fmt --all -- --check
+          git diff --check
+          echo 'All isolated qualification steps passed.' > ../evidence/PASSED
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: issue-1603-candidate-evidence
+          path: evidence
           retention-days: 3
