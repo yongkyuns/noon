@@ -1873,15 +1873,7 @@ impl SemanticExecutionPlayer {
     ) -> Result<WasmExecutionWake, String> {
         let callback_blocked =
             self.pending_callback_phase.is_some() || self.session.callback_termination().is_some();
-        let mut wake = self.session.wake_state();
-        if callback_blocked || !self.clock.is_playing() {
-            wake = wake.without_timeline_wake();
-        } else if let Some(loop_duration) = self.clock.loop_duration() {
-            if self.session.has_replay_timeline_work() {
-                wake = wake.with_additional_timeline(TimelineWakeState::Deadline(loop_duration));
-            }
-        }
-        let plan = BrowserExecutionWakePlan::from_runtime(wake);
+        let plan = self.execution_wake_plan();
         let timer_after_milliseconds = if callback_blocked {
             None
         } else {
@@ -1900,6 +1892,69 @@ impl SemanticExecutionPlayer {
             }
         };
         Ok(WasmExecutionWake::from_plan(plan, timer_after_milliseconds))
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn execution_wake_plan(&self) -> BrowserExecutionWakePlan {
+        let callback_blocked =
+            self.pending_callback_phase.is_some() || self.session.callback_termination().is_some();
+        let mut wake = self.session.wake_state();
+        if callback_blocked || !self.clock.is_playing() {
+            wake = wake.without_timeline_wake();
+        } else if let Some(loop_duration) = self.clock.loop_duration() {
+            // A completed authored wait has duration even without animated
+            // channels. An un-authored static scene still remains fully idle.
+            let authored_interval = self
+                .live_segment
+                .is_some_and(|receipt| receipt.segment().end_time() > 0.0);
+            if self.session.has_replay_timeline_work() || authored_interval {
+                wake = wake.with_additional_timeline(TimelineWakeState::Deadline(loop_duration));
+            }
+        }
+        BrowserExecutionWakePlan::from_runtime(wake)
+    }
+
+    /// Observe elapsed playback during a visually static interval without evaluating
+    /// a frame, publishing a delta, invoking callbacks or changing either clock.
+    /// Active animation/callback work stays pinned to its coherent runtime sample.
+    /// Sleeping waits project the existing Rust clock only up to the next runtime
+    /// barrier; they cannot speculate past a source segment or a loop boundary.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn playback_time_at(&self, wall_time_ms: f64) -> Result<f64, String> {
+        if !wall_time_ms.is_finite() {
+            return Err("playback observation requires a finite wall timestamp".to_owned());
+        }
+        let current = self.time();
+        if self.pending_callback_phase.is_some() || self.session.callback_termination().is_some() {
+            return Ok(current);
+        }
+        if let Some(LiveSegmentReceipt::Pending(segment)) = self.live_segment {
+            return Ok(match self.session.segment_state(segment).timeline() {
+                TimelineWakeState::Deadline(deadline) => self
+                    .live_wake_clock
+                    .scene_time_at(wall_time_ms)
+                    .unwrap_or(current)
+                    .min(deadline)
+                    .max(current),
+                TimelineWakeState::Continuous | TimelineWakeState::Quiescent => current,
+            });
+        }
+        if !self.clock.is_playing() {
+            return Ok(current);
+        }
+        let BrowserExecutionCadence::TimerAtSceneTime(deadline) =
+            self.execution_wake_plan().cadence()
+        else {
+            return Ok(current);
+        };
+        // Project through the same loop-aware deadline conversion used by wake
+        // delivery. A copy keeps observation from starting/reanchoring playback.
+        let remaining = self
+            .clock
+            .clone()
+            .timer_delay_milliseconds(deadline, wall_time_ms, current)
+            .map_err(|error| error.to_string())?;
+        Ok((deadline - remaining / 1_000.0).min(deadline).max(current))
     }
 
     /// Begin the next browser wall-time interval after required host work.
@@ -2749,6 +2804,13 @@ impl SemanticExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = executionWake))]
     pub fn execution_wake_wasm(&mut self, wall_time_ms: f64) -> Result<WasmExecutionWake, String> {
         self.execution_wake(wall_time_ms)
+    }
+
+    /// Current playback position during a static wait, without a new runtime frame.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = playbackTimeAt))]
+    pub fn playback_time_at_wasm(&self, wall_time_ms: f64) -> Result<f64, String> {
+        self.playback_time_at(wall_time_ms)
     }
 
     /// Reanchor the next browser interval after a required callback completes.
@@ -3970,7 +4032,9 @@ mod tests {
         )
         .unwrap();
         let phase = player.initial_callback_phase_json().unwrap().unwrap();
+        assert_eq!(player.playback_time_at(50_000.0).unwrap(), player.time());
         player.interrupt_callback_phase_json(&phase).unwrap();
+        assert_eq!(player.playback_time_at(60_000.0).unwrap(), player.time());
         let termination: serde_json::Value =
             serde_json::from_str(&player.callback_termination_json().unwrap().unwrap()).unwrap();
         assert_eq!(termination["kind"], "interrupted");
@@ -4093,6 +4157,84 @@ mod tests {
         assert!(player.tick_callback_phase_json(12_100.0).unwrap().is_none());
         let replaying = player.execution_wake(12_100.0).unwrap();
         assert_eq!(replaying.cadence(), "animation_frame");
+    }
+
+    #[test]
+    fn wait_observations_advance_without_runtime_frames_or_publications() {
+        let mut scene = noon::Scene::new();
+        let circle = scene.circle(0.4).unwrap();
+        scene.add(&circle).unwrap();
+        let session = scene.execution_session().unwrap();
+        let mut player = SemanticExecutionPlayer::from_live_session(
+            session,
+            std::rc::Rc::clone(scene.integration_store()),
+            scene.root(),
+            3.0,
+            71,
+        )
+        .unwrap();
+        player.initial_delta_json().unwrap();
+        player.live_wait(2.0).unwrap();
+        assert_eq!(player.playback_time_at(900.0).unwrap(), 0.0);
+        let wake = player.live_segment_wake(1_000.0).unwrap();
+        assert_eq!(wake.cadence(), "timer");
+        let frame = player.session.frame().clone();
+        let clock = player.clock.clone();
+        for (wall, elapsed) in [
+            (1_250.0, 0.25),
+            (1_500.0, 0.5),
+            (2_500.0, 1.5),
+            (4_000.0, 2.0),
+        ] {
+            assert_eq!(player.playback_time_at(wall).unwrap(), elapsed);
+            assert_eq!(player.session.frame(), &frame);
+            assert_eq!(player.clock, clock);
+            assert!(player.drain_delta_json().unwrap().is_none());
+        }
+        assert!(player.playback_time_at(f64::NAN).is_err());
+        assert!(player
+            .live_drive_segment_from_wall_time(3_000.0)
+            .unwrap()
+            .reached_endpoint());
+        player.live_complete_segment().unwrap();
+        assert_eq!(player.time(), 2.0);
+        player.live_wait(1.0).unwrap();
+        player.live_segment_wake(8_000.0).unwrap();
+        assert_eq!(player.playback_time_at(8_500.0).unwrap(), 2.5);
+        assert_eq!(player.playback_time_at(10_000.0).unwrap(), 3.0);
+        player.live_drive_segment_to_authored_time(3.0).unwrap();
+        player.live_complete_segment().unwrap();
+        player.drain_delta_json().unwrap();
+        // Pure waits still have a replay clock, even with zero animation tracks.
+        assert!(!player.session.has_replay_timeline_work());
+        player.seek_delta_json(0.0).unwrap();
+        player.resume();
+        assert_eq!(player.execution_wake(20_000.0).unwrap().cadence(), "timer");
+        assert_eq!(player.playback_time_at(20_500.0).unwrap(), 0.5);
+        assert_eq!(player.time(), 0.0);
+    }
+
+    #[test]
+    fn replay_wait_observation_is_loop_bounded_and_does_not_advance_active_animation() {
+        let mut player = animated_player();
+        player.initial_delta_json().unwrap();
+        player.execution_wake(10_000.0).unwrap();
+        assert_eq!(player.playback_time_at(10_500.0).unwrap(), 0.0);
+        player.tick_callback_phase_json(11_000.0).unwrap();
+        player.drain_delta_json().unwrap();
+        let frame = player.session.frame().clone();
+        let clock = player.clock.clone();
+        assert_eq!(player.playback_time_at(11_250.0).unwrap(), 1.25);
+        assert_eq!(player.playback_time_at(11_750.0).unwrap(), 1.75);
+        assert_eq!(player.playback_time_at(12_500.0).unwrap(), 2.0);
+        assert_eq!(player.session.frame(), &frame);
+        assert_eq!(player.clock, clock);
+        assert!(player.drain_delta_json().unwrap().is_none());
+        player.pause();
+        assert_eq!(player.playback_time_at(20_000.0).unwrap(), 1.0);
+        player.resume();
+        player.execution_wake(30_000.0).unwrap();
+        assert_eq!(player.playback_time_at(30_250.0).unwrap(), 1.25);
     }
 
     #[test]

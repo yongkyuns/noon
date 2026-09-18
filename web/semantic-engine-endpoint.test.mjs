@@ -91,7 +91,7 @@ function fixture(
     },
     completeLiveSegment: () => { completedSegments += 1; },
     setLoopDuration: () => {}, pause: () => { playing = false; }, resume: () => { playing = true; },
-    time: () => time, isPlaying: () => playing,
+    time: () => time, playbackTimeAt: () => time, isPlaying: () => playing,
   };
   const context = {
     createExecutionPlayer: () => { leased = true; created += 1; return player; },
@@ -1927,5 +1927,63 @@ test("non-replayable callback observation still waits for matching renderer evid
     assert.equal(result.replaySupported, false);
     assert.deepEqual(result.rendererObservation, evidence);
     assert.equal(callbacks, 1, "observation must not re-execute the callback");
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("real-time state observes the Rust wait clock without driving or publishing", async () => {
+  const f = fixture();
+  let endpoint;
+  const observations = [];
+  f.player.playbackTimeAt = now => { observations.push(now); return 0.75; };
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach(); await ready;
+    const before = f.stats();
+    const observed = await request(f.control.port2, "state", 900);
+    assert.equal(observed.time, 0.75);
+    assert.equal(f.player.time(), 0);
+    assert.equal(observations.length, 1);
+    assert.ok(Number.isFinite(observations[0]));
+    assert.equal(f.stats().drained, before.drained);
+    assert.deepEqual(f.stats().continuationDriveTimes, []);
+    assert.deepEqual(f.stats().authoredSampleTimes, []);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("pausing in a wait commits the observed time before freezing the replay clock", async () => {
+  const f = fixture(); let endpoint;
+  f.player.playbackTimeAt = () => f.player.isPlaying() ? 0.75 : f.player.time();
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach(); await ready;
+    const paused = await request(f.control.port2, "pause", 901);
+    assert.equal(paused.time, 0.75);
+    assert.equal(paused.playing, false);
+    assert.equal(f.player.time(), 0.75);
+    assert.equal((await request(f.control.port2, "state", 902)).time, 0.75);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+
+test("external-sample state never projects wall time", async () => {
+  const f = fixture("transferable", null, { generation: 93, onComplete() {}, onError() {} }, { pacing: "external_samples" });
+  let endpoint;
+  f.player.playbackTimeAt = () => { throw new Error("unexpected wall-time projection"); };
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach(); await ready;
+    f.player.seekDeltaJson(0.25);
+    assert.equal((await request(f.control.port2, "state", 903)).time, 0.25);
+    assert.deepEqual(f.stats().authoredSampleTimes, []);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("seek acknowledgements retain the exact evaluated time", async () => {
+  const f = fixture(); let endpoint;
+  f.player.playbackTimeAt = () => { throw new Error("unexpected wall-time projection"); };
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach(); await ready;
+    assert.equal((await request(f.control.port2, "seek", 904, { time: 0.25 })).time, 0.25);
   } finally { endpoint?.stop(); f.close(); }
 });

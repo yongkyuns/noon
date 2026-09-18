@@ -651,6 +651,10 @@ rendering may sleep. The existing Rust clock and runtime deadlines bound that
 observation; pause and required dependency barriers remain authoritative. Unknown
 future source duration does not justify a frozen elapsed-time counter or a second
 JavaScript animation clock.
+Clock observations must also remain independent of renderer telemetry latency.
+A ready engine time sample may not wait for GPU metrics or readbacks, and a slow
+telemetry request must not stall subsequent time observations. Hosts retain only
+bounded in-flight requests and reject replies from superseded runs.
 
 **Implementation finding, September 18, 2026:** #1660 records premature missing
 columns and absent pulse objects in Dynamic Load Stress replay, caused by current
