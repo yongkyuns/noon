@@ -441,6 +441,8 @@ export async function attachSemanticEngine(
       }));
     } else if (message.type === "native_event") {
       player.emitNativeEventJson(JSON.stringify({ source: message.source }));
+    } else if (message.type === "browser_pointer_input") {
+      player.submitBrowserPointerInputJson(JSON.stringify(message.input));
     } else {
       throw new Error(`unsupported continuation input ${message.type}`);
     }
@@ -456,7 +458,9 @@ export async function attachSemanticEngine(
       // for the resulting coherent publication before completion or return.
       let appliedInput = false;
       while (controls.length > 0 &&
-             (controls[0].type === "native_state_input" || controls[0].type === "native_event")) {
+             (controls[0].type === "native_state_input" ||
+              controls[0].type === "native_event" ||
+              controls[0].type === "browser_pointer_input")) {
         const message = controls.shift();
         try {
           applyNativeInput(message);
