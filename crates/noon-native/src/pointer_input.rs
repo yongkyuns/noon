@@ -18,7 +18,10 @@ use winit::keyboard::ModifiersState;
 
 use super::{native_pointer_button, NativeApp, NativeHostError};
 
-const WINDOW_CURSOR: NativePointerId = NativePointerId { source: 1, pointer: 0 };
+const WINDOW_CURSOR: NativePointerId = NativePointerId {
+    source: 1,
+    pointer: 0,
+};
 
 /// Only collector lifetime and the last valid OS cursor sample are retained.
 /// The session owns sampled button values, event counters and publications.
@@ -39,16 +42,17 @@ impl NativeApp {
             if !self.execution.session().has_native_pointer_subscribers() {
                 return Ok(false);
             }
-            self.execution.configure_native_pointer_input(
-                WINDOW_CURSOR,
-                self.pointer.view_revision,
-            )?;
+            self.execution
+                .configure_native_pointer_input(WINDOW_CURSOR, self.pointer.view_revision)?;
             self.pointer.configured = true;
         }
         Ok(true)
     }
 
-    fn dispatch_pointer_kind(&mut self, kind: NativePointerInputKind) -> Result<(), NativeHostError> {
+    fn dispatch_pointer_kind(
+        &mut self,
+        kind: NativePointerInputKind,
+    ) -> Result<(), NativeHostError> {
         let sequence = self.next_input_sequence;
         let next = sequence.checked_add(1).ok_or_else(|| {
             NativeHostError::Platform("native input event sequence exhausted".to_owned())
@@ -103,10 +107,16 @@ impl NativeApp {
         scale: f64,
     ) -> Result<(), NativeHostError> {
         let button = native_pointer_button(button).ok_or_else(|| {
-            NativeHostError::Platform("native pointer button is outside the u8 input vocabulary".to_owned())
+            NativeHostError::Platform(
+                "native pointer button is outside the u8 input vocabulary".to_owned(),
+            )
         })?;
         let logical_size = logical_size(size, scale)?;
-        let Some(surface) = self.pointer.surface.filter(|_| size.width > 0 && size.height > 0) else {
+        let Some(surface) = self
+            .pointer
+            .surface
+            .filter(|_| size.width > 0 && size.height > 0)
+        else {
             // Winit button edges do not include position. After focus/resize or
             // before the first move, acknowledge an explicit cancellation rather
             // than inventing a press/release at the origin or at a stale sample.
@@ -145,7 +155,8 @@ impl NativeApp {
             NativeHostError::Platform("native pointer view revision exhausted".to_owned())
         })?;
         if self.pointer.configured {
-            self.execution.configure_native_pointer_input(WINDOW_CURSOR, next)?;
+            self.execution
+                .configure_native_pointer_input(WINDOW_CURSOR, next)?;
         }
         // Only successful session rebinding invalidates the local coordinate cache.
         self.pointer.view_revision = next;
@@ -160,17 +171,27 @@ impl NativeApp {
     ) -> Result<(), NativeHostError> {
         let logical = logical_size(size, scale)?;
         self.rebind_pointer_view()?;
-        self.dispatch_state(NativeStateSource::ViewportSize, NativeInputValue::Vec2(logical))
+        self.dispatch_state(
+            NativeStateSource::ViewportSize,
+            NativeInputValue::Vec2(logical),
+        )
     }
 }
 
 fn logical_size(size: PhysicalSize<u32>, scale: f64) -> Result<Vec2, NativeHostError> {
     if !scale.is_finite() || scale <= 0.0 {
-        return Err(NativeHostError::Platform("native pointer scale must be finite and positive".to_owned()));
+        return Err(NativeHostError::Platform(
+            "native pointer scale must be finite and positive".to_owned(),
+        ));
     }
-    let logical = Vec2::new((f64::from(size.width) / scale) as f32, (f64::from(size.height) / scale) as f32);
+    let logical = Vec2::new(
+        (f64::from(size.width) / scale) as f32,
+        (f64::from(size.height) / scale) as f32,
+    );
     if !logical.x.is_finite() || !logical.y.is_finite() {
-        return Err(NativeHostError::Platform("native logical viewport is not representable".to_owned()));
+        return Err(NativeHostError::Platform(
+            "native logical viewport is not representable".to_owned(),
+        ));
     }
     Ok(logical)
 }
@@ -181,10 +202,15 @@ fn pointer_position(
     camera: Camera2DState,
 ) -> Result<NativePointerPosition, NativeHostError> {
     if logical_size.x <= 0.0 || logical_size.y <= 0.0 {
-        return Err(NativeHostError::Platform("native pointer viewport must be positive".to_owned()));
+        return Err(NativeHostError::Platform(
+            "native pointer viewport must be positive".to_owned(),
+        ));
     }
     let scene = Vec2::new(
-        camera.center.x + (surface.x / logical_size.x - 0.5) * camera.height * (logical_size.x / logical_size.y),
+        camera.center.x
+            + (surface.x / logical_size.x - 0.5)
+                * camera.height
+                * (logical_size.x / logical_size.y),
         camera.center.y + (0.5 - surface.y / logical_size.y) * camera.height,
     );
     NativePointerPosition::new(scene, surface)

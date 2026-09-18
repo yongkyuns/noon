@@ -1,10 +1,11 @@
+use noon::integration::NativePointerInputToken;
 use noon::integration::{ExecutionViewportQuery, RendererPublication, TimelineWakeState};
 use noon::{
     ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RustHostCallbackTable,
 };
 use noon_core::{
-    Camera2DState, NativeEventOccurrence, NativeInputValue, NativeStateSource, PublicationContext,
-    Rect,
+    Camera2DState, NativeEventOccurrence, NativeInputValue, NativePointerId, NativePointerInput,
+    NativeStateSource, PublicationContext, Rect,
 };
 
 use crate::NativeHostError;
@@ -34,6 +35,17 @@ pub(crate) trait NativeExecutionSource {
     /// The return value lets the platform clock reanchor only when application
     /// code actually supplied the next segment.
     fn resume_ready(&mut self) -> Result<bool, NativeHostError>;
+    fn configure_native_pointer_input(
+        &mut self,
+        pointer: NativePointerId,
+        view_revision: u64,
+    ) -> Result<NativePointerInputToken, NativeHostError>;
+    fn native_pointer_input_token(&self) -> Result<NativePointerInputToken, NativeHostError>;
+    fn submit_native_pointer_input(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+    ) -> Result<(), NativeHostError>;
     fn set_native_state_input(
         &mut self,
         source: NativeStateSource,
@@ -46,7 +58,6 @@ pub(crate) trait NativeExecutionSource {
         publication: PublicationContext,
     ) -> Result<(), NativeHostError>;
 
-    #[cfg(test)]
     fn session(&self) -> &ExecutionSession;
 
     #[cfg(test)]
@@ -99,6 +110,31 @@ impl NativeExecutionSource for StaticExecutionSource {
         Ok(false)
     }
 
+    fn configure_native_pointer_input(
+        &mut self,
+        pointer: NativePointerId,
+        view_revision: u64,
+    ) -> Result<NativePointerInputToken, NativeHostError> {
+        self.session
+            .configure_native_pointer_input(pointer, view_revision)
+            .map_err(Into::into)
+    }
+    fn native_pointer_input_token(&self) -> Result<NativePointerInputToken, NativeHostError> {
+        self.session
+            .native_pointer_input_token()
+            .map_err(Into::into)
+    }
+    fn submit_native_pointer_input(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+    ) -> Result<(), NativeHostError> {
+        self.session
+            .submit_native_pointer_input(token, input)
+            .map(|_| ())
+            .map_err(Into::into)
+    }
+
     fn set_native_state_input(
         &mut self,
         source: NativeStateSource,
@@ -128,7 +164,6 @@ impl NativeExecutionSource for StaticExecutionSource {
         Ok(())
     }
 
-    #[cfg(test)]
     fn session(&self) -> &ExecutionSession {
         &self.session
     }
@@ -203,6 +238,31 @@ where
         Ok(false)
     }
 
+    fn configure_native_pointer_input(
+        &mut self,
+        pointer: NativePointerId,
+        view_revision: u64,
+    ) -> Result<NativePointerInputToken, NativeHostError> {
+        self.program
+            .configure_native_pointer_input(pointer, view_revision)
+            .map_err(|error| NativeHostError::Program(error.to_string()))
+    }
+    fn native_pointer_input_token(&self) -> Result<NativePointerInputToken, NativeHostError> {
+        self.program
+            .native_pointer_input_token()
+            .map_err(|error| NativeHostError::Program(error.to_string()))
+    }
+    fn submit_native_pointer_input(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+    ) -> Result<(), NativeHostError> {
+        self.program
+            .submit_native_pointer_input(token, input)
+            .map(|_| ())
+            .map_err(|error| NativeHostError::Program(error.to_string()))
+    }
+
     fn set_native_state_input(
         &mut self,
         source: NativeStateSource,
@@ -242,7 +302,6 @@ where
         Ok(())
     }
 
-    #[cfg(test)]
     fn session(&self) -> &ExecutionSession {
         self.program.session()
     }
