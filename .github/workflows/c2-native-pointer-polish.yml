@@ -1,0 +1,35 @@
+name: C2 native pointer source cleanup
+on:
+  push:
+    branches: [work/c2-native-pointer-adapter-20260918]
+    paths: [.github/workflows/c2-native-pointer-polish.yml]
+permissions:
+  contents: write
+jobs:
+  finish-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply reviewed source cleanup
+        shell: python
+        run: |
+          from pathlib import Path
+          def rep(text, old, new):
+              assert text.count(old) == 1, (old, text.count(old))
+              return text.replace(old, new, 1)
+          p = Path('crates/noon-native/src/pointer_input/tests.rs')
+          s = rep(p.read_text(), 'use noon::{ExecutionSession, RustHostCallbackTable};', 'use noon::ExecutionSession;')
+          p.write_text(s)
+          p = Path('crates/noon-native/src/lib.rs')
+          s = rep(p.read_text(), 'if let Err(error) = self.rebind_pointer_view() {\n                    self.fail(event_loop, error);\n                    return;\n                }', 'if let Err(error) = self.rebind_pointer_view() {\n                    self.fail(event_loop, error);\n                }')
+          s = rep(s, 'fn suspended(&mut self, event_loop: &ActiveEventLoop) {\n        if let Err(error) = self.pointer_left() {', 'fn suspended(&mut self, event_loop: &ActiveEventLoop) {\n        if let Err(error) = self.pointer_focus_lost().and_then(|()| self.rebind_pointer_view()) {')
+          p.write_text(s)
+      - name: Format and publish code-only snapshot
+        run: |
+          cargo fmt --all
+          git rm .github/workflows/c2-native-pointer-polish.yml
+          git add crates/noon-native/src/lib.rs crates/noon-native/src/pointer_input/tests.rs
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'C2: finish native collector lint and suspend cleanup'
+          git push origin HEAD:refs/heads/work/c2-native-pointer-adapter-20260918
