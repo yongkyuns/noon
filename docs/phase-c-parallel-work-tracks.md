@@ -6,7 +6,7 @@ This document is an execution/scheduling overlay for Phase C of `docs/architectu
 
 It does **not** define a second architecture, roadmap, goal set, acceptance criterion, interaction model, or optimization policy. The architecture, Phase C cases, gates, and completion checklist remain exactly those stated in `docs/architecture.md` and the owning issues. If this document conflicts with them, the architecture and owning case win.
 
-The purpose of this document is only to make explicit which existing interaction/locality/live-authoring cases can progress independently and where they must synchronize.
+The purpose of this document is only to make explicit which existing interaction/locality/live-authoring cases can progress independently and where they must synchronize. The [common Rust input and interaction seam](architecture.md#common-rust-input-and-interaction-seam) defines the shared contract; the [ordered interaction/callback rules](architecture.md#9-host-callbacks-and-interaction) define its execution ordering.
 
 ## Principle
 
@@ -35,26 +35,31 @@ Owned by C1/#70 on top of the Phase A mutation vocabulary.
 
 The handoff covers:
 - coherent callback snapshots;
-- one validated/batched semantic transaction;
+- one coherent staged batch of effective driver writes and/or validated authored semantic transactions;
 - generation-safe mutation targeting;
 - explicit driver/conflict arbitration;
 - replay/seek classification;
 - bounded impact/locality reporting.
 
-C4 and C5 consume the same mutation semantics; neither gets a separate editor/content patch model.
+C4 and C5 consume the same effective-write and authored-mutation contracts; neither gets a separate editor/content patch model. Ordinary effective interaction updates do not require authored semantic transactions or relowering.
 
-### CH2 — normalized native input contract
+### CH2 — common typed Rust input contract
 
 Owned by C2/#69.
 
 The handoff covers:
-- sampled latest-value state versus ordered discrete events;
-- source identity and ingress sequence/generation;
-- deterministic coalescing rules;
-- runtime/reactive delivery;
+- one backend-neutral Rust ingress vocabulary shared by browser, native, embedded/platform and test/replay collectors;
+- sampled latest-value state versus ordered discrete occurrences;
+- occurrence-local pointer/source identity, position and button/modifier context where applicable;
+- ingress sequence plus compatible scene/view publication context;
+- deterministic coalescing rules that cannot rewrite already ordered occurrence context;
+- native-reactive projection of sampled state and subscribed ordered events, plus coherent delivery to the interaction session;
+- platform capture/cancel/lost-capture normalization;
 - paused-scene wake behavior.
 
-C5 consumes normalized input without requiring C2 to own selection, pointer capture, tools, or session state.
+C5 consumes this Rust input contract without requiring C2 to own hit testing, semantic selection/capture, trigger synthesis, tools, actions or session state. Platform shells may own DOM/OS pointer-capture mechanics but not the captured scene target.
+
+These are projections of one admitted input stream, not mutually exclusive input classes or independent schedulers. Discrete events remain usable by native reactive bindings, and the session also consumes pointer samples needed for hover/drag. Delivery preserves the existing session/updater order and required callback barriers from CH1.
 
 ### CH3 — spatial/locality contract
 
@@ -67,7 +72,7 @@ The handoff covers:
 - bounded refit/dirty preparation/upload work;
 - deterministic locality counters.
 
-C2 hit-test integration, C4 replacement, and C5 selection/manipulation can consume this contract independently.
+C4 replacement and C5 precise picking/selection/manipulation can consume this contract independently. C2 supplies normalized input; scene-target interpretation stays with C5.
 
 ### CH4 — localized replacement and reconciliation contract
 
@@ -104,7 +109,7 @@ C7 specialization may begin only when a measured cost is isolated with represent
 
 **Owner:** C2/#69.
 
-**Owns:** normalized pointer/keyboard/viewport/control/wheel/gesture ingress and native reactive delivery.
+**Owns:** the common typed Rust pointer/keyboard/viewport/control/wheel/gesture ingress, sampled/event native-reactive projection, and coherent interaction delivery.
 
 **Can proceed independently from:** editor/session state, host callbacks, and hot reload. It may validate input delivery with ordinary reactive fixtures before C5 exists.
 
@@ -140,7 +145,9 @@ This is primarily an **integration/convergence track**. It consumes:
 - CH1 for mutation/driver ownership;
 - CH4 for hot-reload reference migration.
 
-Session identity, overlay projection, and other state explicitly outside authored scene content can be developed before every integration is available. Hit/select, drag, and hot-reload integration land as their specific handoffs become usable.
+Session identity, overlay projection, and other state explicitly outside authored scene content can be developed before every integration is available. C5 also owns language-neutral trigger synthesis and semantic interaction-binding/action dispatch: Rust, Python and future language wrappers declare the same bindings, while ordinary native actions execute on the shared Rust path without host callbacks. Hit/select, click/highlight, drag, and hot-reload integration land as their specific handoffs become usable.
+
+The names `InputIngress`, `Trigger`, `InteractionBinding`, `Action`, and `InteractiveSession` identify shared Rust responsibilities, not mandatory new public types, crates, or a second scheduler. Action execution reuses existing session, signal, driver, animation, callback and authored-mutation operations. Qualification and the concrete click/highlight integration sequence belong in #69 and #846.
 
 ### Track CB — browser startup/topology measurement
 
@@ -179,9 +186,9 @@ This is a synchronization graph, not a new phase order. C1–C4 remain their exi
 
 ## Practical isolation rules
 
-1. **One mutation vocabulary.** Host callbacks, editor manipulation, hot reload, and native edits all converge on `MutationTransaction` semantics.
+1. **One authored mutation vocabulary.** Persistent host/editor/hot-reload/native changes converge on the shared semantic transaction contract. Effective-only interaction writes use the existing driver/publication path without authored mutation or relowering.
 2. **One spatial authority.** Input/session/render work consumes the execution-owned spatial index; no frontend or renderer duplicate index is added for convenience.
-3. **Separate input from session policy.** C2 owns event delivery; C5 owns selection/capture/tools/undo/overlays.
+3. **Separate input from session policy.** C2 owns the common Rust ingress and delivery contract; C5 owns hit testing, trigger synthesis, semantic selection/capture, interaction actions, tools/undo/overlays. Platform shells own only platform capture mechanics.
 4. **Separate replacement from producer.** Text edits, host callbacks, hot reload, images, and paths reuse generic content replacement rather than defining producer-specific patch systems.
 5. **Use fixtures to unblock producer tracks.** C1–C4 can prove their contracts without waiting for the complete editor workflow.
 6. **Instrument locality at each handoff.** A feature that is functionally correct but silently scans/rebuilds the whole scene has not satisfied the existing Phase C contract.
