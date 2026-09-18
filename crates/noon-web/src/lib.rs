@@ -15,6 +15,8 @@ mod authoring_error;
 mod authoring_geometry;
 #[cfg(target_arch = "wasm32")]
 mod authoring_image;
+#[cfg(target_arch = "wasm32")]
+mod authoring_implicit_plotting;
 mod authoring_mobject;
 #[cfg(target_arch = "wasm32")]
 mod authoring_number_labels;

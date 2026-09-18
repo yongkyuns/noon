@@ -61,6 +61,7 @@ class ManimApiCoveragePolicyTests(unittest.TestCase):
         self.assertEqual(policy["overrides"]["Text"]["status"], "partial")
         self.assertEqual(policy["overrides"]["Typst"]["status"], "partial")
         self.assertEqual(policy["overrides"]["NumberPlane"]["status"], "partial")
+        self.assertEqual(policy["overrides"]["ImplicitFunction"]["status"], "partial")
         for name in (
             "Axes",
             "NumberLine",
@@ -68,7 +69,6 @@ class ManimApiCoveragePolicyTests(unittest.TestCase):
             "PolarPlane",
             "ParametricFunction",
             "FunctionGraph",
-            "ImplicitFunction",
         ):
             with self.subTest(name=name):
                 self.assertEqual(policy["overrides"][name]["status"], "missing")

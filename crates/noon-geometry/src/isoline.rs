@@ -1,5 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 
+mod path;
+pub use path::IsolinePathError;
+
 /// One point in the coordinate space sampled by the implicit-function planner.
 ///
 /// The planner keeps f64 coordinates until the later retained-path conversion so
@@ -119,15 +122,8 @@ pub fn plan_isoline<F>(
 where
     F: FnMut(IsolinePoint) -> f64,
 {
-    validate_bounds(bounds)?;
+    let max_leaves = validate_isoline_request(bounds, options)?;
     let tolerance = effective_tolerance(bounds, options)?;
-    let mandatory_leaves =
-        4usize
-            .checked_pow(options.min_depth)
-            .ok_or(IsolineError::MinimumDepthBudgetOverflow {
-                min_depth: options.min_depth,
-            })?;
-    let max_leaves = mandatory_leaves.max(options.max_quads);
 
     let mut sampler = Sampler::new(function);
     let (cells, leaf_quads) = build_tree(
@@ -148,6 +144,25 @@ where
         sampled_points: sampler.evaluations,
         triangles,
     })
+}
+
+/// Validate a contour request before any callback evaluation or planner storage.
+///
+/// The returned planner budget excludes the documented two-leaf adaptive
+/// overshoot. Callers with an external admission cap must account for it.
+pub fn validate_isoline_request(
+    bounds: IsolineBounds,
+    options: IsolineOptions,
+) -> Result<usize, IsolineError> {
+    validate_bounds(bounds)?;
+    effective_tolerance(bounds, options)?;
+    let mandatory_leaves =
+        4usize
+            .checked_pow(options.min_depth)
+            .ok_or(IsolineError::MinimumDepthBudgetOverflow {
+                min_depth: options.min_depth,
+            })?;
+    Ok(mandatory_leaves.max(options.max_quads))
 }
 
 fn validate_bounds(bounds: IsolineBounds) -> Result<(), IsolineError> {
@@ -802,5 +817,33 @@ mod tests {
             ),
             Err(IsolineError::InvalidTolerance)
         );
+    }
+
+    #[test]
+    fn retained_path_preserves_curve_order_and_explicit_closure() {
+        let plan = IsolinePlan {
+            curves: vec![
+                vec![IsolinePoint::new(-1.0, 0.0), IsolinePoint::new(0.0, 0.0)],
+                vec![
+                    IsolinePoint::new(1.0, 0.0),
+                    IsolinePoint::new(1.0, 1.0),
+                    IsolinePoint::new(1.0, 0.0),
+                ],
+            ],
+            leaf_quads: 0,
+            sampled_points: 0,
+            triangles: 0,
+        };
+        let path = plan.path().unwrap();
+        assert!(matches!(
+            path.commands(),
+            [
+                noon_core::PathCommand::MoveTo { .. },
+                noon_core::PathCommand::LineTo { .. },
+                noon_core::PathCommand::MoveTo { .. },
+                noon_core::PathCommand::LineTo { .. },
+                noon_core::PathCommand::Close,
+            ]
+        ));
     }
 }

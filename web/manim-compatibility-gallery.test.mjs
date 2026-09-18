@@ -13,7 +13,7 @@ const readyEntries = manifest.entries.filter((entry) => entry.status === "ready"
 const gallery = normalizeGalleryManifest(manifest);
 
 assert.equal(manifest.reference.version, "0.21.0");
-assert.equal(gallery.examples.length, 22);
+assert.equal(gallery.examples.length, 23);
 assert.deepEqual(
   gallery.examples.map((entry) => entry.id),
   [
@@ -36,6 +36,7 @@ assert.deepEqual(
     "noon-transform-matching-shapes-breadth",
     "noon-coordinate-plotting",
     "noon-number-plane",
+    "noon-implicit-plotting",
     "noon-raster-image",
     "noon-markup-text",
     "noon-text-range-colors",
@@ -235,5 +236,11 @@ assert.match(numberPlaneSource, /faded_line_ratio/, "NumberPlane gallery example
 assert.match(numberPlaneSource, /\.c2p\(/, "NumberPlane gallery example must use coordinate conversion");
 assert.match(numberPlaneSource, /\.plot\(/, "NumberPlane gallery example must plot a function");
 assert.match(numberPlaneSource, /\.scale\(/, "NumberPlane gallery example must exercise grouped transforms");
+const implicitEntry = readyEntries.find(entry => entry.id === "noon-implicit-plotting");
+assert.ok(implicitEntry);
+assert.equal(implicitEntry.parity_status, "candidate");
+const implicitSource = await readFile(new URL(`./${implicitEntry.path}`, import.meta.url), "utf8");
+assert.match(implicitSource, /plot_implicit_curve\(/);
+assert.match(implicitSource, /min_depth=4, max_quads=600/);
 
 console.log("✓ Noon-authored Manim-compatible gallery examples");

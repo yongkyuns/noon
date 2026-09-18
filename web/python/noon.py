@@ -726,6 +726,7 @@ _PUBLIC_EXPORTS = {
     "NumberPlane": "_manim_number_plane",
     "FunctionGraph": "_manim_plotting",
     "ParametricFunction": "_manim_plotting",
+    "ImplicitFunction": "_manim_implicit",
     "Transform": "_manim_animate",
     "ReplacementTransform": "_manim_animate",
     "TransformFromCopy": "_manim_animate",

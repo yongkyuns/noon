@@ -11,11 +11,14 @@ pub(crate) fn plot_failure(error: noon::PlotAuthoringError) -> AuthoringFailure 
 pub(crate) fn sampling_failure(error: noon::PlotPreparationError) -> AuthoringFailure {
     use noon::PlotPreparationError::*;
     let category = match &error {
-        AllocationFailed | SampleLimitExceeded => "resource_limit",
+        AllocationFailed | SampleLimitExceeded | ImplicitLeafLimitExceeded => "resource_limit",
         SmoothingFailed => "unsupported_operation",
-        InvalidRange | InvalidDiscontinuity | InvalidPoint { .. } | SampleCountMismatch { .. } => {
-            "invalid_input"
-        }
+        InvalidRange
+        | InvalidDiscontinuity
+        | InvalidPoint { .. }
+        | SampleCountMismatch { .. }
+        | InvalidImplicitOptions
+        | InvalidImplicitPoint { .. } => "invalid_input",
     };
     AuthoringFailure::new(category, "plot.preparation", error)
 }
