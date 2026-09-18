@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: be26da28e370e59efeb15f021f7eaf74e7dfd984
+          ref: 88da22552aa29193f9fbfb23ef4aad6240accca1
           persist-credentials: false
       - name: Export pinned source
         shell: bash
@@ -22,7 +22,7 @@ jobs:
           git archive --format=tar.gz HEAD > "$RUNNER_TEMP/noon-source/noon-source.tar.gz"
       - uses: actions/upload-artifact@v7
         with:
-          name: noon-demo-source-be26da2
+          name: noon-demo-source-88da225
           path: ${{ runner.temp }}/noon-source
           retention-days: 1
           if-no-files-found: error
